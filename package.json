@@ -1,0 +1,56 @@
+{
+  "name": "anime-dl-app",
+  "version": "1.0.2",
+  "description": "Anime episode downloader",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack:win": "electron-vite build && electron-builder --win --dir",
+    "pack:linux": "electron-vite build && electron-builder --linux --dir",
+    "pack:mac": "electron-vite build && electron-builder --mac --dir",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+  },
+  "build": {
+    "appId": "com.anime-dl.app",
+    "productName": "Anime DL",
+    "icon": "resources/icon.png",
+    "win": {
+      "target": "portable",
+      "icon": "resources/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "mac": {
+      "target": "zip"
+    },
+    "files": [
+      "out/**/*"
+    ]
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/fluent-ffmpeg": "^2.1.28",
+    "@vitejs/plugin-vue": "^6.0.5",
+    "electron": "^41.1.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "typescript": "^6.0.2",
+    "vite": "^7.3.1",
+    "vue-tsc": "^3.2.6"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "electron-store": "^8.2.0",
+    "ffbinaries": "^1.1.6",
+    "fluent-ffmpeg": "^2.1.3",
+    "vue": "^3.5.31"
+  }
+}

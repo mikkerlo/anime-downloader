@@ -1,0 +1,423 @@
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { join } from 'path'
+import { is } from '@electron-toolkit/utils'
+import Store from 'electron-store'
+import { DownloadManager, sanitizeFilename } from './download-manager'
+import type { DownloadRequest } from './download-manager'
+import * as fs from 'fs'
+import * as path from 'path'
+import ffbinaries from 'ffbinaries'
+import { execFile } from 'child_process'
+
+const store = new Store({
+  defaults: {
+    token: '',
+    translationType: 'subRu',
+    downloadDir: '',
+    library: {} as Record<string, AnimeSearchResult>,
+    autoMerge: false,
+    videoCodec: 'copy' as string,
+    downloadedAnime: {} as Record<string, AnimeSearchResult>,
+    downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+  }
+})
+
+interface AnimeSearchResult {
+  id: number
+  title: string
+  titles: { ru?: string; romaji?: string; ja?: string }
+  posterUrlSmall: string
+  numberOfEpisodes: number
+  type: string
+  typeTitle: string
+  year: number
+  season: string
+}
+
+const API_BASE = 'https://smotret-anime.ru/api'
+const USER_AGENT = 'smotret-anime-dl'
+
+let downloadManager: DownloadManager
+let ffmpegPath = ''
+
+function getFfmpegDir(): string {
+  return path.join(app.getPath('userData'), 'ffmpeg')
+}
+
+function ensureFfmpeg(): Promise<string> {
+  const dest = getFfmpegDir()
+  const ext = process.platform === 'win32' ? '.exe' : ''
+  const bin = path.join(dest, `ffmpeg${ext}`)
+
+  if (fs.existsSync(bin)) {
+    ffmpegPath = bin
+    return Promise.resolve(bin)
+  }
+
+  fs.mkdirSync(dest, { recursive: true })
+
+  return new Promise((resolve, reject) => {
+    console.log('[ffmpeg] Downloading ffmpeg binary via ffbinaries...')
+    ffbinaries.downloadBinaries(['ffmpeg'], {
+      platform: ffbinaries.detectPlatform(),
+      quiet: false,
+      destination: dest,
+      version: '6.1'
+    }, (err, results) => {
+      if (err) {
+        console.error('[ffmpeg] Download failed:', err)
+        reject(err)
+        return
+      }
+      console.log('[ffmpeg] Download results:', results)
+      // Make binary executable on unix
+      if (process.platform !== 'win32') {
+        try { fs.chmodSync(bin, 0o755) } catch { /* ignore */ }
+      }
+      ffmpegPath = bin
+      resolve(bin)
+    })
+  })
+}
+
+interface FfmpegInfo {
+  available: boolean
+  version: string
+  path: string
+  encoders: string[]
+}
+
+function checkFfmpeg(): Promise<FfmpegInfo> {
+  const result: FfmpegInfo = { available: false, version: '', path: ffmpegPath, encoders: [] }
+  if (!ffmpegPath || !fs.existsSync(ffmpegPath)) return Promise.resolve(result)
+
+  return new Promise((resolve) => {
+    execFile(ffmpegPath, ['-version'], { timeout: 5000 }, (error, stdout) => {
+      if (error) {
+        console.error(`[ffmpeg] Not available at ${ffmpegPath}:`, error.message)
+        resolve(result)
+        return
+      }
+
+      const firstLine = stdout.split('\n')[0] || ''
+      const versionMatch = firstLine.match(/ffmpeg version (\S+)/)
+      result.available = true
+      result.version = versionMatch ? versionMatch[1] : firstLine
+      console.log(`[ffmpeg] Found: ${result.version} at ${ffmpegPath}`)
+
+      // Detect available HEVC encoders
+      execFile(ffmpegPath, ['-encoders'], { timeout: 5000 }, (err2, stdout2) => {
+        if (!err2) {
+          const candidates = ['libx265', 'hevc_nvenc', 'hevc_amf', 'hevc_qsv', 'hevc_videotoolbox']
+          for (const enc of candidates) {
+            if (stdout2.includes(enc)) {
+              result.encoders.push(enc)
+            }
+          }
+          console.log(`[ffmpeg] Available HEVC encoders: ${result.encoders.join(', ') || 'none'}`)
+        }
+        resolve(result)
+      })
+    })
+  })
+}
+
+function getDownloadDir(): string {
+  const dir = store.get('downloadDir') as string
+  if (dir) return dir
+  return join(app.getPath('downloads'), 'anime-dl')
+}
+
+async function apiRequest(path: string): Promise<unknown> {
+  const token = store.get('token') as string
+  const url = token ? `${API_BASE}${path}${path.includes('?') ? '&' : '?'}access_token=${token}` : `${API_BASE}${path}`
+
+  const response = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT }
+  })
+
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status} ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+function registerIpcHandlers(): void {
+  ipcMain.handle('search-anime', async (_event, query: string) => {
+    return apiRequest(`/series/?query=${encodeURIComponent(query)}&fields=id,title,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,titles`)
+  })
+
+  ipcMain.handle('get-anime', async (_event, id: number) => {
+    return apiRequest(`/series/${id}`)
+  })
+
+  ipcMain.handle('get-episode', async (_event, id: number) => {
+    return apiRequest(`/episodes/${id}`)
+  })
+
+  ipcMain.handle('library-get', () => {
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const merged = new Map<string, AnimeSearchResult>()
+    for (const [k, v] of Object.entries(lib)) merged.set(k, v)
+    for (const [k, v] of Object.entries(downloaded)) {
+      if (!merged.has(k)) merged.set(k, v)
+    }
+    return [...merged.values()]
+  })
+
+  ipcMain.handle('library-is-downloaded', (_event, id: number) => {
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    return !!downloaded[String(id)]
+  })
+
+  ipcMain.handle('library-toggle', (_event, anime: AnimeSearchResult) => {
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    const key = String(anime.id)
+    if (lib[key]) {
+      delete lib[key]
+      store.set('library', lib)
+      return false
+    } else {
+      lib[key] = anime
+      store.set('library', lib)
+      return true
+    }
+  })
+
+  ipcMain.handle('library-has', (_event, id: number) => {
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    return !!lib[String(id)]
+  })
+
+  ipcMain.handle('downloaded-anime-add', (_event, anime: AnimeSearchResult) => {
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    downloaded[String(anime.id)] = anime
+    store.set('downloadedAnime', downloaded)
+  })
+
+  ipcMain.handle('downloaded-anime-delete', (_event, animeId: number, animeName: string) => {
+    // Remove from store
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    delete downloaded[String(animeId)]
+    store.set('downloadedAnime', downloaded)
+    // Delete the folder
+    const dirName = sanitizeFilename(animeName)
+    const dirPath = path.join(getDownloadDir(), dirName)
+    try { fs.rmSync(dirPath, { recursive: true }) } catch { /* ignore */ }
+  })
+
+  ipcMain.handle('get-setting', (_event, key: string) => {
+    if (key === 'downloadDir') return getDownloadDir()
+    return store.get(key)
+  })
+
+  ipcMain.handle('set-setting', (_event, key: string, value: unknown) => {
+    store.set(key, value)
+  })
+
+  // Download handlers
+  ipcMain.handle('download:enqueue', async (_event, requests: DownloadRequest[]) => {
+    await downloadManager.enqueue(requests)
+    // Save episode metadata
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    for (const req of requests) {
+      episodes[`${req.animeId}:${req.episodeInt}`] = {
+        translationType: req.translationType,
+        author: req.author,
+        quality: req.height,
+        translationId: req.translationId
+      }
+    }
+    store.set('downloadedEpisodes', episodes)
+  })
+
+  ipcMain.handle('download:pause', (_event, id: string) => {
+    downloadManager.pause(id)
+  })
+
+  ipcMain.handle('download:resume', (_event, id: string) => {
+    downloadManager.resume(id)
+  })
+
+  ipcMain.handle('download:restart', async (_event, id: string) => {
+    await downloadManager.restart(id)
+  })
+
+  ipcMain.handle('download:cancel', (_event, id: string) => {
+    downloadManager.cancel(id)
+  })
+
+  ipcMain.handle('download:get-queue', () => {
+    return downloadManager.getEpisodeGroups()
+  })
+
+  ipcMain.handle('download:cancel-by-episode', (_event, animeName: string, episodeLabel?: string) => {
+    downloadManager.cancelByEpisode(animeName, episodeLabel)
+  })
+
+  ipcMain.handle('downloaded-episodes-get', (_event, animeId: number) => {
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    const result: Record<string, { translationType: string; author: string; quality: number; translationId: number }> = {}
+    const prefix = `${animeId}:`
+    for (const [key, val] of Object.entries(episodes)) {
+      if (key.startsWith(prefix)) {
+        result[key.substring(prefix.length)] = val
+      }
+    }
+    return result
+  })
+
+  ipcMain.handle('download:clear-completed', () => {
+    downloadManager.clearCompleted()
+  })
+
+  ipcMain.handle('download:merge', async () => {
+    if (!ffmpegPath) throw new Error('ffmpeg binary not found')
+    const codec = store.get('videoCodec') as string || 'copy'
+    await downloadManager.mergeCompleted(ffmpegPath, codec)
+  })
+
+  ipcMain.handle('ffmpeg:check', () => checkFfmpeg())
+
+  ipcMain.handle('download:scan-merge', async () => {
+    if (!ffmpegPath) throw new Error('ffmpeg binary not found')
+    const codec = store.get('videoCodec') as string || 'copy'
+    const result = await downloadManager.scanAndMerge(ffmpegPath, codec, (current, total, file, percent) => {
+      const windows = BrowserWindow.getAllWindows()
+      for (const win of windows) {
+        win.webContents.send('scan-merge:progress', { current, total, file, percent })
+      }
+    })
+    return result
+  })
+
+  // File management handlers
+  ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {
+    const animeDirName = sanitizeFilename(animeName)
+    const animeDir = path.join(getDownloadDir(), animeDirName)
+
+    if (!fs.existsSync(animeDir)) return {}
+
+    const result: Record<string, { type: 'mkv' | 'mp4'; filePath: string }> = {}
+    for (const epInt of episodeInts) {
+      const padded = epInt.padStart(2, '0')
+      const base = sanitizeFilename(`${animeName} - ${padded}`)
+      const mkvPath = path.join(animeDir, `${base}.mkv`)
+      const mp4Path = path.join(animeDir, `${base}.mp4`)
+
+      if (fs.existsSync(mkvPath)) {
+        result[epInt] = { type: 'mkv', filePath: mkvPath }
+      } else if (fs.existsSync(mp4Path)) {
+        result[epInt] = { type: 'mp4', filePath: mp4Path }
+      }
+    }
+    return result
+  })
+
+  ipcMain.handle('file:open', async (_event, filePath: string) => {
+    return shell.openPath(filePath)
+  })
+
+  ipcMain.handle('file:show-in-folder', (_event, filePath: string) => {
+    shell.showItemInFolder(filePath)
+  })
+
+  ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number) => {
+    const animeDirName = sanitizeFilename(animeName)
+    const animeDir = path.join(getDownloadDir(), animeDirName)
+    const padded = episodeInt.padStart(2, '0')
+    const base = sanitizeFilename(`${animeName} - ${padded}`)
+
+    for (const ext of ['.mkv', '.mp4', '.ass']) {
+      const fp = path.join(animeDir, `${base}${ext}`)
+      try { fs.unlinkSync(fp) } catch { /* ignore */ }
+    }
+
+    // Clean up episode metadata
+    if (animeId) {
+      const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
+      delete episodes[`${animeId}:${episodeInt}`]
+      store.set('downloadedEpisodes', episodes)
+    }
+  })
+
+  ipcMain.handle('download:pick-dir', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select download directory'
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const dir = result.filePaths[0]
+    store.set('downloadDir', dir)
+    downloadManager.setDownloadDir(dir)
+    return dir
+  })
+}
+
+function createWindow(): void {
+  const mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    autoHideMenuBar: true,
+    icon: join(__dirname, process.platform === 'win32' ? '../../resources/icon.ico' : '../../resources/icon.png'),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow.show()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+app.whenReady().then(async () => {
+  try {
+    await ensureFfmpeg()
+  } catch (err) {
+    console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
+  }
+  const ffmpegInfo = await checkFfmpeg()
+  downloadManager = new DownloadManager(getDownloadDir(), () => store.get('token') as string)
+  downloadManager.onEpisodeComplete(async () => {
+    const autoMerge = store.get('autoMerge') as boolean
+    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
+      const codec = store.get('videoCodec') as string || 'copy'
+      await downloadManager.mergeCompleted(ffmpegPath, codec)
+    }
+  })
+  registerIpcHandlers()
+  createWindow()
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('before-quit', () => {
+  downloadManager?.destroy()
+})

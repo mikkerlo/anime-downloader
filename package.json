@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "scripts": {
@@ -33,7 +33,10 @@
     ]
   },
   "keywords": [],
-  "author": "",
+  "author": {
+    "name": "mikkerlo",
+    "email": "mikhail.semenov.al@gmail.com"
+  },
   "license": "ISC",
   "devDependencies": {
     "@types/fluent-ffmpeg": "^2.1.28",

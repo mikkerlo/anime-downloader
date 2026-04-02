@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "scripts": {
@@ -19,14 +19,14 @@
     "productName": "Anime DL",
     "icon": "resources/icon.png",
     "win": {
-      "target": "portable",
+      "target": ["portable", "nsis"],
       "icon": "resources/icon.ico"
     },
     "linux": {
-      "target": "AppImage"
+      "target": ["AppImage", "deb"]
     },
     "mac": {
-      "target": "zip"
+      "target": ["zip", "dmg"]
     },
     "files": [
       "out/**/*"

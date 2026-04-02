@@ -76,6 +76,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.AppImage
+            dist/*.deb
             dist/*.zip
             dist/*.dmg
           if-no-files-found: ignore

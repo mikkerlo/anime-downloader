@@ -119,7 +119,7 @@ const episodeRows = computed((): EpisodeRow[] => {
     }
 
     // Priority 2: In download queue (active)
-    if (!isLocked && group && !['completed', 'cancelled'].includes(group.video?.status || '')) {
+    if (!isLocked && group && group.video && !['completed', 'cancelled', 'failed'].includes(group.video.status)) {
       selectedTr = sorted.find(tr => tr.id === group.translationId) || null
       if (selectedTr) {
         isLocked = true

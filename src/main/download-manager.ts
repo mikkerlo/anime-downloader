@@ -137,7 +137,16 @@ export class DownloadManager {
       const baseFilename = sanitizeFilename(`${req.animeName} - ${padded}`)
 
       const videoId = `video-${req.translationId}`
-      if (this.queue.find(i => i.id === videoId)) continue
+      const existing = this.queue.find(i => i.id === videoId)
+      if (existing) {
+        if (existing.status === 'completed' || existing.status === 'cancelled' || existing.status === 'failed') {
+          // Remove stale entry so it can be re-enqueued
+          this.queue = this.queue.filter(i => i.translationId !== req.translationId)
+          this.mergeStatuses.delete(req.translationId)
+        } else {
+          continue // still active — skip
+        }
+      }
 
       try {
         const embed = await this.fetchEmbed(req.translationId)
@@ -219,8 +228,7 @@ export class DownloadManager {
       this.abortControllers.delete(id)
       item.status = 'paused'
       item.speed = 0
-      this.activeCount--
-      this.processQueue()
+      // Don't decrement activeCount here — the finally block in startDownload handles it
     } else if (item.status === 'queued') {
       item.status = 'paused'
     }
@@ -278,12 +286,24 @@ export class DownloadManager {
       const controller = this.abortControllers.get(id)
       controller?.abort()
       this.abortControllers.delete(id)
-      this.activeCount--
+      // Don't decrement activeCount here — the finally block in startDownload handles it
     }
     item.status = 'cancelled'
     item.speed = 0
-    const filePath = path.join(this.downloadDir, item.filename + '.part')
+    // Delete .part file and completed file
+    const partPath = path.join(this.downloadDir, item.filename + '.part')
+    const filePath = path.join(this.downloadDir, item.filename)
+    try { fs.unlinkSync(partPath) } catch { /* ignore */ }
     try { fs.unlinkSync(filePath) } catch { /* ignore */ }
+
+    // Also cancel and clean up the subtitle for this translation
+    if (item.kind === 'video') {
+      const subItem = this.queue.find(i => i.translationId === item.translationId && i.kind === 'subtitle')
+      if (subItem && subItem.status !== 'cancelled') {
+        this.cancel(subItem.id)
+      }
+    }
+
     this.processQueue()
   }
 

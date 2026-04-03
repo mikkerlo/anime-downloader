@@ -17,6 +17,8 @@ export interface DownloadItem {
   animeName: string
   episodeLabel: string
   quality: number
+  translationType: string
+  author: string
   status: DownloadStatus
   bytesReceived: number
   totalBytes: number
@@ -29,6 +31,8 @@ export interface EpisodeGroup {
   animeName: string
   episodeLabel: string
   quality: number
+  translationType: string
+  author: string
   video: DownloadItem | null
   subtitle: DownloadItem | null
   mergeStatus: MergeStatus
@@ -60,6 +64,12 @@ const PROGRESS_INTERVAL_MS = 500
 
 export function sanitizeFilename(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim()
+}
+
+function subtitleLanguage(translationType: string): string {
+  if (translationType.endsWith('Ru') || translationType === 'voiceRu' || translationType === 'subRu') return 'rus'
+  if (translationType.endsWith('En') || translationType === 'voiceEn' || translationType === 'subEn') return 'eng'
+  return 'und'
 }
 
 export class DownloadManager {
@@ -102,6 +112,8 @@ export class DownloadManager {
           animeName: item.animeName,
           episodeLabel: item.episodeLabel,
           quality: item.quality,
+          translationType: item.translationType,
+          author: item.author,
           video: null,
           subtitle: null,
           mergeStatus: merge?.status || 'pending',
@@ -168,6 +180,8 @@ export class DownloadManager {
             animeName: req.animeName,
             episodeLabel: req.episodeLabel,
             quality: best.height,
+            translationType: req.translationType,
+            author: req.author,
             status: 'queued',
             bytesReceived: 0,
             totalBytes: 0,
@@ -190,6 +204,8 @@ export class DownloadManager {
               animeName: req.animeName,
               episodeLabel: req.episodeLabel,
               quality: best?.height || req.height,
+              translationType: req.translationType,
+              author: req.author,
               status: 'queued',
               bytesReceived: 0,
               totalBytes: 0,
@@ -210,6 +226,8 @@ export class DownloadManager {
           animeName: req.animeName,
           episodeLabel: req.episodeLabel,
           quality: req.height,
+          translationType: req.translationType,
+          author: req.author,
           status: 'queued',
           bytesReceived: 0,
           totalBytes: 0,
@@ -387,10 +405,15 @@ export class DownloadManager {
       this.mergeStatuses.set(group.translationId, { status: 'merging' })
       this.activeMergeTranslationId = group.translationId
 
+      const subMeta = hasSubtitle ? {
+        language: subtitleLanguage(group.translationType),
+        title: group.author || 'Subtitles'
+      } : undefined
+
       try {
         await this.runFfmpeg(ffmpegPath, ffprobePath, videoPath, subtitlePath, mkvPath, videoCodec, (pct) => {
           this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
-        })
+        }, subMeta)
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
         console.log(`[merge] Completed: ${mkvFilename}`)
         // Delete source files after successful merge
@@ -433,7 +456,7 @@ export class DownloadManager {
     })
   }
 
-  private async runFfmpeg(ffmpegPath: string, ffprobePath: string, videoPath: string, subtitlePath: string | null, outputPath: string, videoCodec = 'copy', onPercent?: (pct: number) => void): Promise<void> {
+  private async runFfmpeg(ffmpegPath: string, ffprobePath: string, videoPath: string, subtitlePath: string | null, outputPath: string, videoCodec = 'copy', onPercent?: (pct: number) => void, subMeta?: { language: string; title: string }): Promise<void> {
     const totalDuration = await this.probeDuration(ffmpegPath, ffprobePath, videoPath)
     console.log(`[merge] Probed duration: ${totalDuration}s for ${videoPath}`)
 
@@ -450,6 +473,12 @@ export class DownloadManager {
           .input(subtitlePath)
           .outputOptions(['-map', '0:v', '-map', '0:a', '-map', '1:s'])
           .outputOptions('-c:s', 'ass')
+          .outputOptions('-disposition:s:0', 'default')
+        if (subMeta) {
+          cmd = cmd
+            .outputOptions('-metadata:s:s:0', `language=${subMeta.language}`)
+            .outputOptions('-metadata:s:s:0', `title=${subMeta.title}`)
+        }
       }
 
       console.log(`[merge] Running ffmpeg: ${videoPath} -> ${outputPath} (codec: ${videoCodec})`)

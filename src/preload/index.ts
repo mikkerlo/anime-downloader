@@ -37,6 +37,13 @@ const api = {
     ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId),
 
   downloadScanMerge: () => ipcRenderer.invoke('download:scan-merge'),
+  downloadFixMetadata: () => ipcRenderer.invoke('download:fix-metadata'),
+  onFixMetadataProgress: (callback: (data: unknown) => void) => {
+    ipcRenderer.on('fix-metadata:progress', (_event, data) => callback(data))
+  },
+  offFixMetadataProgress: () => {
+    ipcRenderer.removeAllListeners('fix-metadata:progress')
+  },
 
   onDownloadProgress: (callback: (data: unknown) => void) => {
     ipcRenderer.on('download:progress', (_event, data) => callback(data))

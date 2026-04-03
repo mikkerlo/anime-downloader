@@ -17,6 +17,11 @@ const scanMerging = ref(false)
 const scanProgress = ref<{ current: number; total: number; file: string; percent: number } | null>(null)
 const scanResult = ref<{ merged: number; failed: string[] } | null>(null)
 
+// Fix metadata state
+const fixingMetadata = ref(false)
+const fixProgress = ref<{ current: number; total: number; file: string } | null>(null)
+const fixResult = ref<{ fixed: number; failed: string[] } | null>(null)
+
 function onScanProgress(data: ScanMergeProgress): void {
   scanProgress.value = data
 }
@@ -36,12 +41,33 @@ async function scanAndMerge(): Promise<void> {
   }
 }
 
+function onFixProgress(data: { current: number; total: number; file: string }): void {
+  fixProgress.value = data
+}
+
+async function fixMetadata(): Promise<void> {
+  fixingMetadata.value = true
+  fixProgress.value = null
+  fixResult.value = null
+  try {
+    const result = await window.api.downloadFixMetadata()
+    fixResult.value = result
+  } catch (err) {
+    fixResult.value = { fixed: 0, failed: [String(err)] }
+  } finally {
+    fixingMetadata.value = false
+    fixProgress.value = null
+  }
+}
+
 onMounted(() => {
   window.api.onScanMergeProgress(onScanProgress)
+  window.api.onFixMetadataProgress(onFixProgress)
 })
 
 onUnmounted(() => {
   window.api.offScanMergeProgress()
+  window.api.offFixMetadataProgress()
 })
 
 const TRANSLATION_TYPES = [
@@ -205,6 +231,29 @@ async function save(): Promise<void> {
             <div v-if="scanResult.failed.length > 0" class="scan-result-errors">
               <div>Failed ({{ scanResult.failed.length }}):</div>
               <div v-for="(err, i) in scanResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Fix old files</label>
+          <p class="setting-hint">Re-mux existing MKV files to set subtitle language, title (translator name), and default track. Uses stored episode metadata.</p>
+          <button class="merge-all-btn" @click="fixMetadata" :disabled="fixingMetadata || !ffmpeg?.available">
+            {{ fixingMetadata ? 'Fixing...' : 'Fix subtitle metadata' }}
+          </button>
+
+          <div v-if="fixProgress" class="scan-progress">
+            <div class="scan-progress-header">
+              <span>{{ fixProgress.current }} / {{ fixProgress.total }}</span>
+            </div>
+            <div class="scan-progress-file">{{ fixProgress.file }}</div>
+          </div>
+
+          <div v-if="fixResult" class="scan-result" :class="{ 'has-errors': fixResult.failed.length > 0 }">
+            <div class="scan-result-ok">Fixed: {{ fixResult.fixed }} file(s)</div>
+            <div v-if="fixResult.failed.length > 0" class="scan-result-errors">
+              <div>Failed ({{ fixResult.failed.length }}):</div>
+              <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
             </div>
           </div>
         </div>

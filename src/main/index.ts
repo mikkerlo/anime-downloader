@@ -8,6 +8,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
+import Ffmpeg from 'fluent-ffmpeg'
 
 const store = new Store({
   defaults: {
@@ -326,6 +327,100 @@ function registerIpcHandlers(): void {
         win.webContents.send('scan-merge:progress', { current, total, file, percent })
       }
     })
+    return result
+  })
+
+  ipcMain.handle('download:fix-metadata', async () => {
+    if (!ffmpegPath || !ffprobePath) throw new Error('ffmpeg/ffprobe not found')
+
+    Ffmpeg.setFfmpegPath(ffmpegPath)
+    Ffmpeg.setFfprobePath(ffprobePath)
+
+    const downloadDir = getDownloadDir()
+    if (!fs.existsSync(downloadDir)) return { fixed: 0, failed: [] as string[] }
+
+    const episodeMeta = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+
+    // Build lookup: animeName -> { episodeInt -> meta }
+    const downloadedAnime = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const metaByFile = new Map<string, { language: string; title: string }>()
+
+    for (const [key, meta] of Object.entries(episodeMeta)) {
+      const [animeIdStr, epInt] = key.split(':')
+      const animeEntry = downloadedAnime[animeIdStr]
+      if (!animeEntry) continue
+      const animeName = animeEntry.titles?.romaji || animeEntry.titles?.ru || animeEntry.title
+      const padded = epInt.padStart(2, '0')
+      const base = sanitizeFilename(`${animeName} - ${padded}`)
+      const dirName = sanitizeFilename(animeName)
+      const mkvPath = path.join(downloadDir, dirName, `${base}.mkv`)
+
+      const lang = meta.translationType.endsWith('Ru') || meta.translationType === 'subRu' || meta.translationType === 'voiceRu' ? 'rus'
+        : meta.translationType.endsWith('En') || meta.translationType === 'subEn' || meta.translationType === 'voiceEn' ? 'eng'
+        : 'und'
+      metaByFile.set(mkvPath, { language: lang, title: meta.author || 'Subtitles' })
+    }
+
+    const toFix: { mkvPath: string; language: string; title: string; label: string }[] = []
+
+    for (const [mkvPath, meta] of metaByFile) {
+      if (!fs.existsSync(mkvPath)) continue
+
+      // Check if MKV has subtitle tracks using ffprobe
+      const hasSubs = await new Promise<boolean>((resolve) => {
+        Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
+          if (err) { resolve(false); return }
+          const subStream = metadata.streams?.find(s => s.codec_type === 'subtitle')
+          resolve(!!subStream)
+        })
+      })
+
+      if (hasSubs) {
+        const label = path.relative(downloadDir, mkvPath)
+        toFix.push({ mkvPath, ...meta, label })
+      }
+    }
+
+    console.log(`[fix-metadata] Found ${toFix.length} MKV files to fix`)
+    const result = { fixed: 0, failed: [] as string[] }
+
+    for (let i = 0; i < toFix.length; i++) {
+      const item = toFix[i]
+      const tempPath = item.mkvPath + '.fixing.mkv'
+
+      // Broadcast progress
+      const windows = BrowserWindow.getAllWindows()
+      for (const win of windows) {
+        win.webContents.send('fix-metadata:progress', { current: i + 1, total: toFix.length, file: item.label })
+      }
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          Ffmpeg(item.mkvPath)
+            .outputOptions('-y')
+            .outputOptions('-c', 'copy')
+            .outputOptions('-disposition:s:0', 'default')
+            .outputOptions('-metadata:s:s:0', `language=${item.language}`)
+            .outputOptions('-metadata:s:s:0', `title=${item.title}`)
+            .output(tempPath)
+            .on('end', () => resolve())
+            .on('error', (err) => reject(err))
+            .run()
+        })
+
+        // Replace original with fixed file
+        fs.unlinkSync(item.mkvPath)
+        fs.renameSync(tempPath, item.mkvPath)
+        result.fixed++
+        console.log(`[fix-metadata] Fixed: ${item.label}`)
+      } catch (err) {
+        try { fs.unlinkSync(tempPath) } catch { /* ignore */ }
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        result.failed.push(`${item.label}: ${msg}`)
+        console.error(`[fix-metadata] Failed: ${item.label} - ${msg}`)
+      }
+    }
+
     return result
   })
 

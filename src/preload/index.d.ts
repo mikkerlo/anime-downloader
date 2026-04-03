@@ -24,6 +24,9 @@ interface Api {
   downloadCancelMerge: () => Promise<void>
   downloadMerge: () => Promise<void>
   downloadScanMerge: () => Promise<{ merged: number; failed: string[] }>
+  downloadFixMetadata: () => Promise<{ fixed: number; failed: string[] }>
+  onFixMetadataProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
+  offFixMetadataProgress: () => void
   ffmpegCheck: () => Promise<{ available: boolean; version: string; path: string; encoders: string[] }>
   downloadPickDir: () => Promise<string | null>
   // File management

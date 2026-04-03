@@ -260,6 +260,33 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('download:cancel-by-episode', (_event, animeName: string, episodeLabel?: string) => {
     downloadManager.cancelByEpisode(animeName, episodeLabel)
+
+    // If no active downloads remain for this anime and no files on disk, remove from downloaded list
+    const groups = downloadManager.getEpisodeGroups()
+    const hasActive = groups.some(g => g.animeName === animeName)
+    if (!hasActive) {
+      const animeDirName = sanitizeFilename(animeName)
+      const animeDir = path.join(getDownloadDir(), animeDirName)
+      let hasFiles = false
+      try {
+        const files = fs.readdirSync(animeDir)
+        hasFiles = files.some(f => f.endsWith('.mkv') || f.endsWith('.mp4'))
+      } catch { /* dir doesn't exist */ }
+
+      if (!hasFiles) {
+        // Remove from downloadedAnime store
+        const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+        const key = Object.keys(downloaded).find(k => {
+          const a = downloaded[k]
+          const name = a.titles?.romaji || a.titles?.ru || a.title
+          return name === animeName
+        })
+        if (key) {
+          delete downloaded[key]
+          store.set('downloadedAnime', downloaded)
+        }
+      }
+    }
   })
 
   ipcMain.handle('downloaded-episodes-get', (_event, animeId: number) => {

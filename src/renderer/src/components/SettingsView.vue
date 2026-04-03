@@ -22,6 +22,11 @@ const fixingMetadata = ref(false)
 const fixProgress = ref<{ current: number; total: number; file: string } | null>(null)
 const fixResult = ref<{ fixed: number; failed: string[] } | null>(null)
 
+// Quality mismatch dump
+const dumpingMismatches = ref(false)
+const dumpResult = ref<{ count: number; path: string } | null>(null)
+const mismatchCount = ref(0)
+
 function onScanProgress(data: ScanMergeProgress): void {
   scanProgress.value = data
 }
@@ -45,6 +50,22 @@ function onFixProgress(data: { current: number; total: number; file: string }): 
   fixProgress.value = data
 }
 
+async function refreshMismatchCount(): Promise<void> {
+  mismatchCount.value = await window.api.getQualityMismatchCount()
+}
+
+async function dumpMismatches(): Promise<void> {
+  dumpingMismatches.value = true
+  dumpResult.value = null
+  try {
+    dumpResult.value = await window.api.dumpQualityMismatches()
+  } catch (err) {
+    dumpResult.value = { count: -1, path: String(err) }
+  } finally {
+    dumpingMismatches.value = false
+  }
+}
+
 async function fixMetadata(): Promise<void> {
   fixingMetadata.value = true
   fixProgress.value = null
@@ -63,6 +84,7 @@ async function fixMetadata(): Promise<void> {
 onMounted(() => {
   window.api.onScanMergeProgress(onScanProgress)
   window.api.onFixMetadataProgress(onFixProgress)
+  refreshMismatchCount()
 })
 
 onUnmounted(() => {
@@ -128,7 +150,7 @@ async function save(): Promise<void> {
     <div class="tabs">
       <button class="tab" :class="{ active: activeTab === 'general' }" @click="activeTab = 'general'">General</button>
       <button class="tab" :class="{ active: activeTab === 'merging' }" @click="activeTab = 'merging'">Merging</button>
-      <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">Debug</button>
+      <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount()">Debug</button>
     </div>
     <div class="body">
       <!-- General tab -->
@@ -255,6 +277,21 @@ async function save(): Promise<void> {
               <div>Failed ({{ fixResult.failed.length }}):</div>
               <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
             </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Dump quality mismatches</label>
+          <p class="setting-hint">Probe the embed API for all translations in your downloaded anime and save a report of cases where the reported quality differs from actual stream quality.</p>
+          <button class="merge-all-btn" @click="dumpMismatches" :disabled="dumpingMismatches || mismatchCount === 0">
+            {{ dumpingMismatches ? 'Saving...' : `Dump ${mismatchCount} mismatch(es) to file` }}
+          </button>
+
+          <div v-if="dumpResult" class="scan-result">
+            <div class="scan-result-ok" :style="{ color: '#6ab04c' }">
+              Saved {{ dumpResult.count }} mismatch(es)
+            </div>
+            <div class="scan-error-item">{{ dumpResult.path }}</div>
           </div>
         </div>
       </template>

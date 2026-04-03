@@ -158,6 +158,41 @@ function registerIpcHandlers(): void {
     return apiRequest(`/series/${id}`)
   })
 
+  ipcMain.handle('probe-embed-quality', async (_event, translationId: number) => {
+    const token = store.get('token') as string
+    const url = `https://smotret-anime.ru/api/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
+    try {
+      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
+      if (!response.ok) return null
+      const json = await response.json() as { data: { stream: { height: number; urls: string[] }[] } }
+      const streams = json.data?.stream || []
+      if (streams.length === 0) return null
+      const best = streams.reduce((a, b) => a.height > b.height ? a : b)
+      return best.height
+    } catch {
+      return null
+    }
+  })
+
+  const qualityMismatches = new Map<number, { translationId: number; author: string; type: string; reported: number; actual: number }>()
+
+  ipcMain.handle('report-quality-mismatch', (_event, data: { translationId: number; author: string; type: string; reported: number; actual: number }) => {
+    qualityMismatches.set(data.translationId, data)
+  })
+
+  ipcMain.handle('get-quality-mismatch-count', () => {
+    return qualityMismatches.size
+  })
+
+  ipcMain.handle('dump-quality-mismatches', () => {
+    const outPath = path.join(getDownloadDir(), 'quality-mismatches.json')
+    const data = [...qualityMismatches.values()]
+    fs.mkdirSync(path.dirname(outPath), { recursive: true })
+    fs.writeFileSync(outPath, JSON.stringify(data, null, 2))
+    console.log(`[debug] Wrote ${data.length} quality mismatches to ${outPath}`)
+    return { count: data.length, path: outPath }
+  })
+
   ipcMain.handle('get-episode', async (_event, id: number) => {
     return apiRequest(`/episodes/${id}`)
   })

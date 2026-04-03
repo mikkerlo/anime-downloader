@@ -19,6 +19,7 @@ const translationType = ref('subRu')
 const selectedAuthor = ref('')
 
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
+const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
@@ -77,7 +78,7 @@ function bestPerAuthor(translations: Translation[]): Translation[] {
   for (const tr of translations) {
     const key = `${tr.type}:${tr.authorsSummary}`
     const existing = best.get(key)
-    if (!existing || tr.height > existing.height) {
+    if (!existing || getRealHeight(tr) > getRealHeight(existing)) {
       best.set(key, tr)
     }
   }
@@ -97,7 +98,8 @@ const episodeRows = computed((): EpisodeRow[] => {
       const aMatch = a.type === translationType.value ? 0 : 1
       const bMatch = b.type === translationType.value ? 0 : 1
       if (aMatch !== bMatch) return aMatch - bMatch
-      if (a.height !== b.height) return b.height - a.height
+      const aH = getRealHeight(a), bH = getRealHeight(b)
+      if (aH !== bH) return bH - aH
       const typeOrder = TRANSLATION_TYPES.map(t => t.value)
       return typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type)
     })
@@ -212,6 +214,53 @@ async function loadEpisodes(): Promise<void> {
   }
 
   loadingEpisodes.value = false
+  probeSelectedQualities()
+}
+
+async function probeSelectedQualities(): Promise<void> {
+  // Build a lookup of translation metadata for mismatch logging
+  const trMeta = new Map<number, Translation>()
+  for (const row of episodeRows.value) {
+    for (const tr of row.allTranslations) {
+      trMeta.set(tr.id, tr)
+    }
+  }
+
+  // Collect unique translation IDs to probe
+  const toProbe = new Set<number>()
+  for (const id of trMeta.keys()) {
+    if (!realQuality.value.has(id)) {
+      toProbe.add(id)
+    }
+  }
+
+  // Probe in batches of 5
+  const ids = [...toProbe]
+  for (let i = 0; i < ids.length; i += 5) {
+    const batch = ids.slice(i, i + 5)
+    const results = await Promise.all(
+      batch.map(id => window.api.probeEmbedQuality(id).then(h => ({ id, height: h })))
+    )
+    const updated = new Map(realQuality.value)
+    for (const r of results) {
+      if (r.height !== null) {
+        updated.set(r.id, r.height)
+        const tr = trMeta.get(r.id)
+        if (tr && tr.height !== r.height) {
+          console.warn(`[quality-mismatch] Translation ${r.id} (${tr.authorsSummary}, ${tr.type}): reported=${tr.height}p, actual=${r.height}p`)
+          window.api.reportQualityMismatch({
+            translationId: r.id, author: tr.authorsSummary, type: tr.type,
+            reported: tr.height, actual: r.height
+          })
+        }
+      }
+    }
+    realQuality.value = updated
+  }
+}
+
+function getRealHeight(tr: Translation): number {
+  return realQuality.value.get(tr.id) ?? tr.height
 }
 
 function qualityLabel(height: number): string {
@@ -253,7 +302,7 @@ async function downloadAll(): Promise<void> {
     if (row.selectedTr && !row.isLocked) {
       requests.push({
         translationId: row.selectedTr.id,
-        height: row.selectedTr.height,
+        height: getRealHeight(row.selectedTr),
         animeName: name,
         episodeLabel: row.episode.episodeFull,
         episodeInt: row.episode.episodeInt,
@@ -345,6 +394,7 @@ function getGroup(episodeFull: string): EpisodeGroup | undefined {
 watch([translationType, selectedAuthor], () => {
   episodeOverrides.value = new Map()
   emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value)
+  probeSelectedQualities()
 })
 
 async function checkFileStatus(): Promise<void> {
@@ -477,9 +527,9 @@ function typeChip(type: string): { short: string; color: string } {
               <template v-for="type in [TRANSLATION_TYPES.find(t => t.value === translationType)!, ...TRANSLATION_TYPES.filter(t => t.value !== translationType)]" :key="type.value">
                 <optgroup v-if="row.allTranslations.some(tr => tr.type === type.value)"
                           :label="type.label">
-                  <option v-for="tr in row.allTranslations.filter(t => t.type === type.value).sort((a, b) => b.height - a.height)"
+                  <option v-for="tr in row.allTranslations.filter(t => t.type === type.value).sort((a, b) => getRealHeight(b) - getRealHeight(a))"
                           :key="tr.id" :value="tr.id">
-                    {{ tr.authorsSummary }} ({{ qualityLabel(tr.height) }})
+                    {{ tr.authorsSummary }} ({{ qualityLabel(getRealHeight(tr)) }})
                   </option>
                 </optgroup>
               </template>
@@ -511,7 +561,7 @@ function typeChip(type: string): { short: string; color: string } {
           </div>
           <div class="ep-right">
             <span v-if="row.selectedTr" class="type-chip" :style="{ backgroundColor: typeChip(row.selectedTr.type).color + '22', color: typeChip(row.selectedTr.type).color }">{{ typeChip(row.selectedTr.type).short }}</span>
-            <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: row.selectedTr.height >= 1080 }">{{ qualityLabel(row.selectedTr.height) }}</span>
+            <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }">{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span>
             <template v-if="fileStatus[row.episode.episodeInt]">
               <span class="file-type-badge">{{ fileStatus[row.episode.episodeInt].type.toUpperCase() }}</span>
             </template>

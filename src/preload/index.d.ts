@@ -2,6 +2,10 @@ interface Api {
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<{ data: AnimeDetail }>
   getEpisode: (id: number) => Promise<{ data: EpisodeDetail }>
+  probeEmbedQuality: (translationId: number) => Promise<number | null>
+  reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
+  getQualityMismatchCount: () => Promise<number>
+  dumpQualityMismatches: () => Promise<{ count: number; path: string }>
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
   libraryHas: (id: number) => Promise<boolean>

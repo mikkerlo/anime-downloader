@@ -46,7 +46,8 @@ function groupStatus(g: EpisodeGroup): string {
   if (items.every(i => i.status === 'completed')) {
     if (g.mergeStatus === 'completed') return 'merged'
     if (g.mergeStatus === 'merging') return 'merging'
-    return 'completed'
+    if (g.mergeStatus === 'failed') return 'merge-failed'
+    return 'ready-for-merge'
   }
   if (items.some(i => i.status === 'failed')) return 'failed'
   if (items.some(i => i.status === 'downloading')) return 'downloading'
@@ -57,7 +58,7 @@ function groupStatus(g: EpisodeGroup): string {
 const hasFinished = computed(() =>
   groups.value.some(g => {
     const s = groupStatus(g)
-    return s === 'completed' || s === 'merged' || s === 'failed'
+    return s === 'merged' || s === 'failed'
   })
 )
 
@@ -74,6 +75,7 @@ function pauseItem(id: string): void { window.api.downloadPause(id) }
 function resumeItem(id: string): void { window.api.downloadResume(id) }
 function restartItem(id: string): void { window.api.downloadRestart(id) }
 function cancelItem(id: string): void { window.api.downloadCancel(id) }
+function cancelMerge(): void { window.api.downloadCancelMerge() }
 
 async function clearCompleted(): Promise<void> {
   await window.api.downloadClearCompleted()
@@ -113,11 +115,16 @@ async function mergeFinished(): Promise<void> {
             <span class="group-quality">{{ g.quality }}p</span>
             <span class="group-status" :class="groupStatus(g)">
               <template v-if="g.mergeStatus === 'merging'">merging {{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</template>
+              <template v-else-if="groupStatus(g) === 'ready-for-merge'">ready for merge</template>
+              <template v-else-if="groupStatus(g) === 'merge-failed'">merge failed</template>
               <template v-else>{{ groupStatus(g) }}</template>
             </span>
             <div v-if="g.mergeStatus === 'merging'" class="progress-bar-wrap merge-bar">
               <div class="progress-bar merge" :style="{ width: (g.mergePercent || 0) + '%' }"></div>
             </div>
+            <button v-if="g.mergeStatus === 'merging'" class="action-btn cancel" @click="cancelMerge()" title="Cancel merge">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
             <span v-if="g.mergeStatus === 'failed' && g.mergeError" class="merge-error">{{ g.mergeError }}</span>
           </div>
 
@@ -275,10 +282,11 @@ async function mergeFinished(): Promise<void> {
 }
 
 .episode-group.downloading { border-left-color: #3498db; }
-.episode-group.completed { border-left-color: #6ab04c; }
+.episode-group.ready-for-merge { border-left-color: #f39c12; }
 .episode-group.merged { border-left-color: #9b59b6; }
 .episode-group.merging { border-left-color: #f39c12; }
 .episode-group.failed { border-left-color: #e94560; }
+.episode-group.merge-failed { border-left-color: #e94560; }
 .episode-group.paused { border-left-color: #f39c12; }
 
 .group-header {
@@ -320,10 +328,11 @@ async function mergeFinished(): Promise<void> {
 .group-status.downloading { color: #3498db; }
 .group-status.queued { color: #6a6a8a; }
 .group-status.paused { color: #f39c12; }
-.group-status.completed { color: #6ab04c; }
+.group-status.ready-for-merge { color: #f39c12; }
 .group-status.merged { color: #9b59b6; }
 .group-status.merging { color: #f39c12; }
 .group-status.failed { color: #e94560; }
+.group-status.merge-failed { color: #e94560; }
 
 .merge-error {
   font-size: 0.7rem;

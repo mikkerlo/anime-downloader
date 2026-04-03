@@ -530,7 +530,7 @@ function typeChip(type: string): { short: string; color: string } {
                 </svg>
               </button>
             </template>
-            <button v-if="getGroup(row.episode.episodeFull) && !['completed','cancelled'].includes(getGroup(row.episode.episodeFull)?.video?.status || '')" class="link-btn cancel" @click="cancelEpisodeDownload(row.episode.episodeFull)" title="Cancel download">
+            <button v-if="getGroup(row.episode.episodeFull) && (!['completed','cancelled'].includes(getGroup(row.episode.episodeFull)?.video?.status || '') || getGroup(row.episode.episodeFull)?.mergeStatus === 'merging')" class="link-btn cancel" @click="cancelEpisodeDownload(row.episode.episodeFull)" title="Cancel">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
               </svg>

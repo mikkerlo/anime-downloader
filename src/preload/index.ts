@@ -24,6 +24,7 @@ const api = {
     ipcRenderer.invoke('download:cancel-by-episode', animeName, episodeLabel),
   downloadedEpisodesGet: (animeId: number) => ipcRenderer.invoke('downloaded-episodes-get', animeId),
   downloadClearCompleted: () => ipcRenderer.invoke('download:clear-completed'),
+  downloadCancelMerge: () => ipcRenderer.invoke('download:cancel-merge'),
   downloadMerge: () => ipcRenderer.invoke('download:merge'),
   ffmpegCheck: () => ipcRenderer.invoke('ffmpeg:check'),
   downloadPickDir: () => ipcRenderer.invoke('download:pick-dir'),

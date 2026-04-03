@@ -72,6 +72,9 @@ export class DownloadManager {
   private getToken: () => string
   private episodeCompleteCallback: (() => void) | null = null
   private merging = false
+  private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
+  private activeMergeTranslationId: number | null = null
+  private mergeCancelled = false
 
   constructor(downloadDir: string, getToken: () => string) {
     this.downloadDir = downloadDir
@@ -307,11 +310,28 @@ export class DownloadManager {
     this.processQueue()
   }
 
+  cancelMerge(translationId?: number): void {
+    if (this.activeFfmpegCmd) {
+      if (translationId && this.activeMergeTranslationId !== translationId) return
+      this.mergeCancelled = true
+      this.activeFfmpegCmd.kill('SIGKILL')
+    }
+    // Also cancel pending merges by resetting their status
+    if (translationId) {
+      this.mergeStatuses.delete(translationId)
+    }
+  }
+
   cancelByEpisode(animeName: string, episodeLabel?: string): void {
     for (const item of [...this.queue]) {
       if (item.animeName !== animeName) continue
       if (episodeLabel && item.episodeLabel !== episodeLabel) continue
       if (item.status === 'completed' || item.status === 'cancelled') continue
+      // Also cancel merge if active for this translation
+      const mergeStatus = this.mergeStatuses.get(item.translationId)
+      if (mergeStatus?.status === 'merging') {
+        this.cancelMerge(item.translationId)
+      }
       this.cancel(item.id)
     }
   }
@@ -319,34 +339,39 @@ export class DownloadManager {
   clearCompleted(): void {
     const removedTrIds = new Set<number>()
     for (const item of this.queue) {
-      if (item.status === 'completed' || item.status === 'cancelled' || item.status === 'failed') {
+      if (item.status === 'cancelled' || item.status === 'failed') {
         removedTrIds.add(item.translationId)
+      } else if (item.status === 'completed') {
+        // Only clear completed items if merge is done (or no merge needed)
+        const merge = this.mergeStatuses.get(item.translationId)
+        if (merge?.status === 'completed' || merge?.status === 'failed') {
+          removedTrIds.add(item.translationId)
+        }
       }
     }
-    this.queue = this.queue.filter(i => i.status !== 'completed' && i.status !== 'cancelled' && i.status !== 'failed')
+    this.queue = this.queue.filter(i => !removedTrIds.has(i.translationId))
     for (const trId of removedTrIds) {
-      // only remove merge status if no items left for this translation
-      if (!this.queue.find(i => i.translationId === trId)) {
-        this.mergeStatuses.delete(trId)
-      }
+      this.mergeStatuses.delete(trId)
     }
   }
 
-  async mergeCompleted(ffmpegPath: string, videoCodec = 'copy'): Promise<void> {
+  async mergeCompleted(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy'): Promise<void> {
     if (this.merging) return
     this.merging = true
 
     try {
-      await this._mergeAll(ffmpegPath, videoCodec)
+      await this._mergeAll(ffmpegPath, ffprobePath, videoCodec)
     } finally {
       this.merging = false
     }
   }
 
-  private async _mergeAll(ffmpegPath: string, videoCodec: string): Promise<void> {
+  private async _mergeAll(ffmpegPath: string, ffprobePath: string, videoCodec: string): Promise<void> {
+    this.mergeCancelled = false
     const groups = this.getEpisodeGroups()
 
     for (const group of groups) {
+      if (this.mergeCancelled) break
       if (!group.video || group.video.status !== 'completed') continue
       if (group.mergeStatus === 'completed' || group.mergeStatus === 'merging') continue
 
@@ -360,9 +385,10 @@ export class DownloadManager {
       const mkvPath = path.join(this.downloadDir, mkvFilename)
 
       this.mergeStatuses.set(group.translationId, { status: 'merging' })
+      this.activeMergeTranslationId = group.translationId
 
       try {
-        await this.runFfmpeg(ffmpegPath, videoPath, subtitlePath, mkvPath, videoCodec, (pct) => {
+        await this.runFfmpeg(ffmpegPath, ffprobePath, videoPath, subtitlePath, mkvPath, videoCodec, (pct) => {
           this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
         })
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
@@ -373,28 +399,42 @@ export class DownloadManager {
           try { fs.unlinkSync(subtitlePath) } catch { /* ignore */ }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error'
-        this.mergeStatuses.set(group.translationId, { status: 'failed', error: msg })
-        console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
+        // Clean up partial output file
+        try { fs.unlinkSync(mkvPath) } catch { /* ignore */ }
+        if (this.mergeCancelled) {
+          this.mergeStatuses.delete(group.translationId)
+          console.log(`[merge] Cancelled: ${mkvFilename}`)
+        } else {
+          const msg = err instanceof Error ? err.message : 'Unknown error'
+          this.mergeStatuses.set(group.translationId, { status: 'failed', error: msg })
+          console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
+        }
       }
     }
+    this.activeMergeTranslationId = null
   }
 
-  private probeDuration(ffmpegPath: string, videoPath: string): Promise<number> {
+  private probeDuration(ffmpegPath: string, ffprobePath: string, videoPath: string): Promise<number> {
     return new Promise((resolve) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
+      Ffmpeg.setFfprobePath(ffprobePath)
       Ffmpeg.ffprobe(videoPath, (err, metadata) => {
-        if (err || !metadata?.format?.duration) {
+        if (err) {
+          console.error(`[ffprobe] Error probing ${videoPath}:`, err.message)
+          resolve(0)
+        } else if (!metadata?.format?.duration) {
+          console.warn(`[ffprobe] No duration in metadata for ${videoPath}`)
           resolve(0)
         } else {
+          console.log(`[ffprobe] Duration: ${metadata.format.duration}s for ${videoPath}`)
           resolve(metadata.format.duration)
         }
       })
     })
   }
 
-  private async runFfmpeg(ffmpegPath: string, videoPath: string, subtitlePath: string | null, outputPath: string, videoCodec = 'copy', onPercent?: (pct: number) => void): Promise<void> {
-    const totalDuration = await this.probeDuration(ffmpegPath, videoPath)
+  private async runFfmpeg(ffmpegPath: string, ffprobePath: string, videoPath: string, subtitlePath: string | null, outputPath: string, videoCodec = 'copy', onPercent?: (pct: number) => void): Promise<void> {
+    const totalDuration = await this.probeDuration(ffmpegPath, ffprobePath, videoPath)
     console.log(`[merge] Probed duration: ${totalDuration}s for ${videoPath}`)
 
     return new Promise((resolve, reject) => {
@@ -426,13 +466,23 @@ export class DownloadManager {
           }
           onPercent?.(Math.min(100, Math.round(pct)))
         })
-        .on('end', () => resolve())
-        .on('error', (err) => reject(err))
-        .run()
+        .on('end', () => {
+          this.activeFfmpegCmd = null
+          this.activeMergeTranslationId = null
+          resolve()
+        })
+        .on('error', (err) => {
+          this.activeFfmpegCmd = null
+          this.activeMergeTranslationId = null
+          reject(err)
+        })
+
+      this.activeFfmpegCmd = cmd
+      cmd.run()
     })
   }
 
-  async scanAndMerge(ffmpegPath: string, videoCodec = 'copy', onProgress?: (current: number, total: number, file: string, percent: number) => void): Promise<{ merged: number; failed: string[] }> {
+  async scanAndMerge(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy', onProgress?: (current: number, total: number, file: string, percent: number) => void): Promise<{ merged: number; failed: string[] }> {
     if (this.merging) return { merged: 0, failed: [] }
     this.merging = true
 
@@ -472,7 +522,7 @@ export class DownloadManager {
         onProgress?.(i + 1, toMerge.length, item.label, 0)
 
         try {
-          await this.runFfmpeg(ffmpegPath, item.videoPath, item.subtitlePath, item.outputPath, videoCodec, (pct) => {
+          await this.runFfmpeg(ffmpegPath, ffprobePath, item.videoPath, item.subtitlePath, item.outputPath, videoCodec, (pct) => {
             onProgress?.(i + 1, toMerge.length, item.label, pct)
           })
 

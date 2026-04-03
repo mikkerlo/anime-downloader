@@ -39,6 +39,7 @@ const USER_AGENT = 'smotret-anime-dl'
 
 let downloadManager: DownloadManager
 let ffmpegPath = ''
+let ffprobePath = ''
 
 function getFfmpegDir(): string {
   return path.join(app.getPath('userData'), 'ffmpeg')
@@ -47,18 +48,20 @@ function getFfmpegDir(): string {
 function ensureFfmpeg(): Promise<string> {
   const dest = getFfmpegDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
-  const bin = path.join(dest, `ffmpeg${ext}`)
+  const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
+  const ffprobeBin = path.join(dest, `ffprobe${ext}`)
 
-  if (fs.existsSync(bin)) {
-    ffmpegPath = bin
-    return Promise.resolve(bin)
+  if (fs.existsSync(ffmpegBin) && fs.existsSync(ffprobeBin)) {
+    ffmpegPath = ffmpegBin
+    ffprobePath = ffprobeBin
+    return Promise.resolve(ffmpegBin)
   }
 
   fs.mkdirSync(dest, { recursive: true })
 
   return new Promise((resolve, reject) => {
-    console.log('[ffmpeg] Downloading ffmpeg binary via ffbinaries...')
-    ffbinaries.downloadBinaries(['ffmpeg'], {
+    console.log('[ffmpeg] Downloading ffmpeg + ffprobe binaries via ffbinaries...')
+    ffbinaries.downloadBinaries(['ffmpeg', 'ffprobe'], {
       platform: ffbinaries.detectPlatform(),
       quiet: false,
       destination: dest,
@@ -70,12 +73,14 @@ function ensureFfmpeg(): Promise<string> {
         return
       }
       console.log('[ffmpeg] Download results:', results)
-      // Make binary executable on unix
+      // Make binaries executable on unix
       if (process.platform !== 'win32') {
-        try { fs.chmodSync(bin, 0o755) } catch { /* ignore */ }
+        try { fs.chmodSync(ffmpegBin, 0o755) } catch { /* ignore */ }
+        try { fs.chmodSync(ffprobeBin, 0o755) } catch { /* ignore */ }
       }
-      ffmpegPath = bin
-      resolve(bin)
+      ffmpegPath = ffmpegBin
+      ffprobePath = ffprobeBin
+      resolve(ffmpegBin)
     })
   })
 }
@@ -269,6 +274,10 @@ function registerIpcHandlers(): void {
     return result
   })
 
+  ipcMain.handle('download:cancel-merge', () => {
+    downloadManager.cancelMerge()
+  })
+
   ipcMain.handle('download:clear-completed', () => {
     downloadManager.clearCompleted()
   })
@@ -276,7 +285,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('download:merge', async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = store.get('videoCodec') as string || 'copy'
-    await downloadManager.mergeCompleted(ffmpegPath, codec)
+    await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
   })
 
   ipcMain.handle('ffmpeg:check', () => checkFfmpeg())
@@ -284,7 +293,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('download:scan-merge', async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = store.get('videoCodec') as string || 'copy'
-    const result = await downloadManager.scanAndMerge(ffmpegPath, codec, (current, total, file, percent) => {
+    const result = await downloadManager.scanAndMerge(ffmpegPath, ffprobePath, codec, (current, total, file, percent) => {
       const windows = BrowserWindow.getAllWindows()
       for (const win of windows) {
         win.webContents.send('scan-merge:progress', { current, total, file, percent })
@@ -401,7 +410,7 @@ app.whenReady().then(async () => {
     const autoMerge = store.get('autoMerge') as boolean
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {
       const codec = store.get('videoCodec') as string || 'copy'
-      await downloadManager.mergeCompleted(ffmpegPath, codec)
+      await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
     }
   })
   registerIpcHandlers()

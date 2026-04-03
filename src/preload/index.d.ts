@@ -21,6 +21,7 @@ interface Api {
   downloadCancelByEpisode: (animeName: string, episodeLabel?: string) => Promise<void>
   downloadedEpisodesGet: (animeId: number) => Promise<Record<string, EpisodeMeta>>
   downloadClearCompleted: () => Promise<void>
+  downloadCancelMerge: () => Promise<void>
   downloadMerge: () => Promise<void>
   downloadScanMerge: () => Promise<{ merged: number; failed: string[] }>
   ffmpegCheck: () => Promise<{ available: boolean; version: string; path: string; encoders: string[] }>

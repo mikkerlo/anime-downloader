@@ -3,12 +3,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   searchAnime: (query: string) => ipcRenderer.invoke('search-anime', query),
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
-  getEpisode: (id: number) => ipcRenderer.invoke('get-episode', id),
-  probeEmbedQuality: (translationId: number) => ipcRenderer.invoke('probe-embed-quality', translationId) as Promise<number | null>,
+  getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),
+  probeEmbedQuality: (translationId: number, animeId?: number) => ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) =>
     ipcRenderer.invoke('report-quality-mismatch', data),
   getQualityMismatchCount: () => ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,
   dumpQualityMismatches: () => ipcRenderer.invoke('dump-quality-mismatches') as Promise<{ count: number; path: string }>,
+  getCachedPoster: (animeId: number) => ipcRenderer.invoke('cache-get-poster', animeId) as Promise<string | null>,
   libraryGet: () => ipcRenderer.invoke('library-get'),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke('library-toggle', anime),
   libraryHas: (id: number) => ipcRenderer.invoke('library-has', id),

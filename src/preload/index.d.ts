@@ -1,8 +1,14 @@
+interface ApiResponse<T> {
+  data: T
+  source: 'api' | 'cache'
+}
+
 interface Api {
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
-  getAnime: (id: number) => Promise<{ data: AnimeDetail }>
-  getEpisode: (id: number) => Promise<{ data: EpisodeDetail }>
-  probeEmbedQuality: (translationId: number) => Promise<number | null>
+  getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
+  getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
+  probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
+  getCachedPoster: (animeId: number) => Promise<string | null>
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>

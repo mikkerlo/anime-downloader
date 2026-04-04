@@ -91,6 +91,21 @@ Each episode row shows colored type chip (RU SUB, EN DUB, etc.) + quality badge.
 Dropdown groups translations by type (user's selected type first), sorted by quality desc.
 ```
 
+### Quality Probing
+
+```
+AnimeDetailView probes actual stream quality from the embed API:
+  1. On episode load + on translation type/author change
+  2. Collects all visible translation IDs
+  3. Probes embed API in batches of 5 → returns best stream height
+  4. Stores in realQuality Map (translationId → actual height)
+  5. All quality displays and download requests use probed height
+  6. If reported height ≠ actual height, reports mismatch to main process
+     (stored in-memory Map, dumpable to JSON from Debug tab)
+
+getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
+```
+
 ### Download Pipeline
 
 ```
@@ -121,16 +136,27 @@ mergeCompleted(ffmpegPath, videoCodec):
   For each EpisodeGroup where video=completed:
     1. Probe input duration via ffprobe (for accurate progress)
     2. With subtitle:  ffmpeg -i video.mp4 -i subs.ass -map 0:v -map 0:a -map 1:s
-                       -c:v [copy|libx265|hevc_nvenc|...] -c:a copy -c:s ass output.mkv
+                       -c:v [copy|libx265|hevc_nvenc|...] -c:a copy -c:s ass
+                       -disposition:s:0 default -metadata:s:s:0 language=<lang>
+                       -metadata:s:s:0 title=<author> output.mkv
        Without:        ffmpeg -i video.mp4 -c:v [codec] -c:a copy output.mkv
-    3. Progress calculated from timemark/duration (works for all codecs including GPU)
-    4. Delete source .mp4 and .ass after successful merge
-    5. Sequential merging (one at a time) enforced via lock
+    3. Subtitle language derived from translationType (subRu/voiceRu → rus, subEn/voiceEn → eng, else und)
+    4. Subtitle track title set to translator name (authorsSummary)
+    5. Progress calculated from timemark/duration (works for all codecs including GPU)
+    6. Delete source .mp4 and .ass after successful merge
+    7. Sequential merging (one at a time) enforced via lock
+    8. Merge can be cancelled (kills ffmpeg process, cleans up partial output)
 
 scanAndMerge(ffmpegPath, videoCodec):
   Scans all download folders for .mp4 without matching .mkv
   Merges with .ass subtitle if available
   Reports per-file progress via IPC callback
+  Available from Settings > Debug tab
+
+fixMetadata(ffmpegPath, ffprobePath):
+  Scans downloaded MKVs with stored episode metadata
+  Re-muxes with -c copy to set subtitle language, title, and default disposition
+  Uses temp file + atomic rename to avoid corruption
   Available from Settings > Debug tab
 ```
 
@@ -171,6 +197,10 @@ LibraryView shows both with indicators:
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID |
 | `get-episode` | invoke | Fetch episode translations |
+| `probe-embed-quality` | invoke | Probe embed API for actual stream height |
+| `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |
+| `get-quality-mismatch-count` | invoke | Get number of collected mismatches |
+| `dump-quality-mismatches` | invoke | Write mismatches to JSON file in download dir |
 | `library-get` | invoke | List all starred + downloaded anime (merged) |
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |
@@ -186,13 +216,16 @@ LibraryView shows both with indicators:
 | `download:restart` | invoke | Restart from scratch (re-fetch embed URLs) |
 | `download:cancel` | invoke | Cancel and cleanup download |
 | `download:cancel-by-episode` | invoke | Cancel downloads for anime/episode |
+| `download:cancel-merge` | invoke | Cancel active ffmpeg merge process |
 | `download:get-queue` | invoke | Get episode groups |
-| `download:clear-completed` | invoke | Remove finished items |
+| `download:clear-completed` | invoke | Remove finished items (skips unmerged) |
 | `download:merge` | invoke | Trigger ffmpeg merge for completed downloads |
 | `download:scan-merge` | invoke | Scan folders and merge all unmerged files |
+| `download:fix-metadata` | invoke | Re-mux MKVs to fix subtitle metadata |
 | `download:pick-dir` | invoke | Open folder picker dialog |
 | `download:progress` | send | Real-time download progress broadcast (500ms) |
 | `scan-merge:progress` | send | Scan-merge per-file progress |
+| `fix-metadata:progress` | send | Fix-metadata per-file progress |
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `file:check-episodes` | invoke | Check which episodes exist on disk |
 | `file:open` | invoke | Open file with default app |
@@ -255,7 +288,7 @@ interface EpisodeMeta {
 
 ## FFmpeg
 
-FFmpeg is auto-downloaded on first app launch via `ffbinaries` (v6.1) to the app's userData directory. Platform is auto-detected.
+Both `ffmpeg` and `ffprobe` are auto-downloaded on first app launch via `ffbinaries` (v6.1) to the app's userData directory. Platform is auto-detected. ffprobe is required for duration probing (used in merge progress calculation).
 
 Available video codecs for merge (filtered by what ffmpeg reports):
 - `copy` — no re-encode, fastest
@@ -263,8 +296,9 @@ Available video codecs for merge (filtered by what ffmpeg reports):
 - `hevc_nvenc` — H.265 NVIDIA GPU
 - `hevc_amf` — H.265 AMD GPU
 - `hevc_qsv` — H.265 Intel QuickSync
+- `hevc_videotoolbox` — H.265 macOS hardware
 
-Merge progress is calculated from `timemark / probed_duration` (works for all codecs). Sequential merging enforced (one merge at a time).
+Merge progress is calculated from `timemark / probed_duration` (works for all codecs). Sequential merging enforced (one merge at a time). Active merge can be cancelled (kills ffmpeg, cleans partial output).
 
 ## File Layout on Disk
 

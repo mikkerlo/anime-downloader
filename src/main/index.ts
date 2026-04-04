@@ -10,6 +10,49 @@ import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
 import Ffmpeg from 'fluent-ffmpeg'
 
+interface AnimeCacheEntry {
+  animeDetail: AnimeDetail | null
+  episodes: Record<number, EpisodeDetail>
+  qualityProbes: Record<number, number>
+  cachedAt: number
+  posterCached: boolean
+}
+
+interface AnimeDetail extends AnimeSearchResult {
+  posterUrl: string
+  descriptions: { source: string; value: string }[]
+  episodes: EpisodeSummary[]
+  genres: { id: number; title: string }[]
+}
+
+interface EpisodeSummary {
+  id: number
+  episodeFull: string
+  episodeInt: string
+  episodeType: string
+  isActive: number
+}
+
+interface EpisodeDetail {
+  id: number
+  episodeFull: string
+  episodeInt: string
+  episodeType: string
+  translations: Translation[]
+}
+
+interface Translation {
+  id: number
+  type: string
+  typeKind: string
+  typeLang: string
+  authorsSummary: string
+  isActive: number
+  width: number
+  height: number
+  duration: string
+}
+
 const store = new Store({
   defaults: {
     token: '',
@@ -19,7 +62,8 @@ const store = new Store({
     autoMerge: false,
     videoCodec: 'copy' as string,
     downloadedAnime: {} as Record<string, AnimeSearchResult>,
-    downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>,
+    animeCache: {} as Record<string, AnimeCacheEntry>
   }
 })
 
@@ -37,6 +81,107 @@ interface AnimeSearchResult {
 
 const API_BASE = 'https://smotret-anime.ru/api'
 const USER_AGENT = 'smotret-anime-dl'
+
+// --- Anime cache helpers (for offline support of downloaded anime) ---
+
+function isDownloadedAnime(animeId: number): boolean {
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  return !!downloaded[String(animeId)]
+}
+
+function getCacheEntry(animeId: number): AnimeCacheEntry | null {
+  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+  return cache[String(animeId)] || null
+}
+
+function setCacheEntry(animeId: number, entry: AnimeCacheEntry): void {
+  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+  cache[String(animeId)] = entry
+  store.set('animeCache', cache)
+}
+
+function deleteCacheEntry(animeId: number): void {
+  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+  delete cache[String(animeId)]
+  store.set('animeCache', cache)
+  // Also delete cached poster
+  const posterPath = getPosterCachePath(animeId)
+  try { fs.unlinkSync(posterPath) } catch { /* ignore */ }
+}
+
+function getPosterCacheDir(): string {
+  return path.join(app.getPath('userData'), 'poster-cache')
+}
+
+function getPosterCachePath(animeId: number): string {
+  return path.join(getPosterCacheDir(), `${animeId}.jpg`)
+}
+
+async function cachePosterImage(animeId: number, posterUrl: string): Promise<void> {
+  if (!posterUrl) return
+  const destPath = getPosterCachePath(animeId)
+  if (fs.existsSync(destPath)) return
+  try {
+    fs.mkdirSync(getPosterCacheDir(), { recursive: true })
+    const response = await fetch(posterUrl, { headers: { 'User-Agent': USER_AGENT } })
+    if (!response.ok || !response.body) return
+    const buffer = Buffer.from(await response.arrayBuffer())
+    fs.writeFileSync(destPath, buffer)
+  } catch {
+    // Non-critical, ignore
+  }
+}
+
+function ensureCacheEntry(animeId: number): AnimeCacheEntry {
+  const existing = getCacheEntry(animeId)
+  if (existing) return existing
+  return { animeDetail: null, episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false }
+}
+
+function updateAnimeDetailCache(animeId: number, detail: AnimeDetail): void {
+  if (!isDownloadedAnime(animeId)) return
+  const entry = ensureCacheEntry(animeId)
+  entry.animeDetail = detail
+  entry.cachedAt = Date.now()
+  setCacheEntry(animeId, entry)
+  // Cache poster in background
+  if (!entry.posterCached) {
+    cachePosterImage(animeId, detail.posterUrl || detail.posterUrlSmall).then(() => {
+      entry.posterCached = true
+      setCacheEntry(animeId, entry)
+    }).catch(() => {})
+  }
+}
+
+function updateEpisodeCache(animeId: number, episodeId: number, detail: EpisodeDetail): void {
+  if (!isDownloadedAnime(animeId)) return
+  const entry = ensureCacheEntry(animeId)
+  entry.episodes[episodeId] = detail
+  entry.cachedAt = Date.now()
+  setCacheEntry(animeId, entry)
+}
+
+function updateQualityProbeCache(animeId: number, translationId: number, height: number): void {
+  if (!isDownloadedAnime(animeId)) return
+  const entry = ensureCacheEntry(animeId)
+  entry.qualityProbes[translationId] = height
+  setCacheEntry(animeId, entry)
+}
+
+function cleanupStaleCache(): void {
+  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  let changed = false
+  for (const key of Object.keys(cache)) {
+    if (!downloaded[key]) {
+      delete cache[key]
+      const posterPath = getPosterCachePath(Number(key))
+      try { fs.unlinkSync(posterPath) } catch { /* ignore */ }
+      changed = true
+    }
+  }
+  if (changed) store.set('animeCache', cache)
+}
 
 let downloadManager: DownloadManager
 let ffmpegPath = ''
@@ -155,10 +300,20 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('get-anime', async (_event, id: number) => {
-    return apiRequest(`/series/${id}`)
+    try {
+      const result = await apiRequest(`/series/${id}`) as { data: AnimeDetail }
+      updateAnimeDetailCache(id, result.data)
+      return { ...result, source: 'api' }
+    } catch (err) {
+      const cached = getCacheEntry(id)
+      if (cached?.animeDetail) {
+        return { data: cached.animeDetail, source: 'cache' }
+      }
+      throw err
+    }
   })
 
-  ipcMain.handle('probe-embed-quality', async (_event, translationId: number) => {
+  ipcMain.handle('probe-embed-quality', async (_event, translationId: number, animeId?: number) => {
     const token = store.get('token') as string
     const url = `https://smotret-anime.ru/api/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
     try {
@@ -168,8 +323,13 @@ function registerIpcHandlers(): void {
       const streams = json.data?.stream || []
       if (streams.length === 0) return null
       const best = streams.reduce((a, b) => a.height > b.height ? a : b)
+      if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
       return best.height
     } catch {
+      if (animeId) {
+        const cached = getCacheEntry(animeId)
+        return cached?.qualityProbes[translationId] ?? null
+      }
       return null
     }
   })
@@ -193,8 +353,20 @@ function registerIpcHandlers(): void {
     return { count: data.length, path: outPath }
   })
 
-  ipcMain.handle('get-episode', async (_event, id: number) => {
-    return apiRequest(`/episodes/${id}`)
+  ipcMain.handle('get-episode', async (_event, id: number, animeId?: number) => {
+    try {
+      const result = await apiRequest(`/episodes/${id}`) as { data: EpisodeDetail }
+      if (animeId) updateEpisodeCache(animeId, id, result.data)
+      return { ...result, source: 'api' }
+    } catch (err) {
+      if (animeId) {
+        const cached = getCacheEntry(animeId)
+        if (cached?.episodes[id]) {
+          return { data: cached.episodes[id], source: 'cache' }
+        }
+      }
+      throw err
+    }
   })
 
   ipcMain.handle('library-get', () => {
@@ -247,6 +419,8 @@ function registerIpcHandlers(): void {
     const dirName = sanitizeFilename(animeName)
     const dirPath = path.join(getDownloadDir(), dirName)
     try { fs.rmSync(dirPath, { recursive: true }) } catch { /* ignore */ }
+    // Clean cache
+    deleteCacheEntry(animeId)
   })
 
   ipcMain.handle('get-setting', (_event, key: string) => {
@@ -320,6 +494,7 @@ function registerIpcHandlers(): void {
         if (key) {
           delete downloaded[key]
           store.set('downloadedAnime', downloaded)
+          deleteCacheEntry(Number(key))
         }
       }
     }
@@ -459,6 +634,12 @@ function registerIpcHandlers(): void {
     return result
   })
 
+  ipcMain.handle('cache-get-poster', (_event, animeId: number) => {
+    const posterPath = getPosterCachePath(animeId)
+    if (fs.existsSync(posterPath)) return `file://${posterPath}`
+    return null
+  })
+
   // File management handlers
   ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {
     const animeDirName = sanitizeFilename(animeName)
@@ -556,6 +737,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  cleanupStaleCache()
   try {
     await ensureFfmpeg()
   } catch (err) {

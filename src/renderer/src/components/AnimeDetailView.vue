@@ -18,6 +18,9 @@ const loadingEpisodes = ref(false)
 const translationType = ref('subRu')
 const selectedAuthor = ref('')
 
+const dataSource = ref<'api' | 'cache' | null>(null)
+const isOffline = computed(() => dataSource.value === 'cache')
+
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
 const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
 
@@ -167,6 +170,7 @@ onMounted(async () => {
   try {
     const res = await window.api.getAnime(props.animeId)
     anime.value = res.data
+    dataSource.value = res.source
   } catch (err) {
     console.error('Failed to load anime:', err)
   } finally {
@@ -175,6 +179,11 @@ onMounted(async () => {
 
   await loadEpisodes()
   await checkFileStatus()
+
+  // If served from cache, try a background refresh
+  if (dataSource.value === 'cache') {
+    backgroundRefresh()
+  }
 
   // Subscribe to download progress
   const queue = await window.api.downloadGetQueue()
@@ -197,7 +206,7 @@ async function loadEpisodes(): Promise<void> {
   for (let i = 0; i < tvEpisodes.value.length; i += batch) {
     const chunk = tvEpisodes.value.slice(i, i + batch)
     const fetched = await Promise.all(
-      chunk.map(ep => window.api.getEpisode(ep.id).then(r => r.data))
+      chunk.map(ep => window.api.getEpisode(ep.id, props.animeId).then(r => r.data))
     )
     for (const ep of fetched) {
       results.set(ep.id, ep)
@@ -239,7 +248,7 @@ async function probeSelectedQualities(): Promise<void> {
   for (let i = 0; i < ids.length; i += 5) {
     const batch = ids.slice(i, i + 5)
     const results = await Promise.all(
-      batch.map(id => window.api.probeEmbedQuality(id).then(h => ({ id, height: h })))
+      batch.map(id => window.api.probeEmbedQuality(id, props.animeId).then(h => ({ id, height: h })))
     )
     const updated = new Map(realQuality.value)
     for (const r of results) {
@@ -330,7 +339,7 @@ async function downloadEpisode(row: EpisodeRow): Promise<void> {
   await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)))
   await window.api.downloadEnqueue([{
     translationId: row.selectedTr.id,
-    height: row.selectedTr.height,
+    height: getRealHeight(row.selectedTr),
     animeName: getAnimeName(),
     episodeLabel: row.episode.episodeFull,
     episodeInt: row.episode.episodeInt,
@@ -396,6 +405,36 @@ watch([translationType, selectedAuthor], () => {
   emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value)
   probeSelectedQualities()
 })
+
+async function backgroundRefresh(): Promise<void> {
+  try {
+    const res = await window.api.getAnime(props.animeId)
+    if (res.source === 'api') {
+      anime.value = res.data
+      dataSource.value = 'api'
+      await loadEpisodes()
+    }
+  } catch {
+    // Stay on cached data
+  }
+}
+
+const posterSrc = ref('')
+const posterFallbackAttempted = ref(false)
+
+watch(anime, async (val) => {
+  if (val) {
+    posterSrc.value = val.posterUrl || val.posterUrlSmall
+    posterFallbackAttempted.value = false
+  }
+}, { immediate: true })
+
+async function onPosterError(): Promise<void> {
+  if (posterFallbackAttempted.value) return
+  posterFallbackAttempted.value = true
+  const cached = await window.api.getCachedPoster(props.animeId)
+  if (cached) posterSrc.value = cached
+}
 
 async function checkFileStatus(): Promise<void> {
   if (!anime.value || tvEpisodes.value.length === 0) return
@@ -466,9 +505,12 @@ function typeChip(type: string): { short: string; color: string } {
 
     <div v-else-if="anime" class="body">
       <div class="anime-header">
-        <img :src="anime.posterUrl || anime.posterUrlSmall" :alt="anime.title" class="detail-poster" />
+        <img :src="posterSrc" :alt="anime.title" class="detail-poster" @error="onPosterError" />
         <div class="anime-info">
-          <h2 class="anime-title">{{ anime.titles?.romaji || anime.titles?.ru || anime.title }}</h2>
+          <h2 class="anime-title">
+            {{ anime.titles?.romaji || anime.titles?.ru || anime.title }}
+            <span v-if="isOffline" class="offline-badge">OFFLINE</span>
+          </h2>
           <div class="anime-meta">
             <span v-if="anime.typeTitle">{{ anime.typeTitle }}</span>
             <span v-if="anime.year"> · {{ anime.year }}</span>
@@ -655,6 +697,20 @@ function typeChip(type: string): { short: string; color: string } {
   font-weight: 700;
   color: #e0e0e0;
   margin-bottom: 6px;
+}
+
+.offline-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: rgba(243, 156, 18, 0.15);
+  border: 1px solid #f39c12;
+  border-radius: 4px;
+  color: #f39c12;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  margin-left: 10px;
+  vertical-align: middle;
 }
 
 .anime-meta {

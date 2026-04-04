@@ -10,7 +10,14 @@ declare module 'ffbinaries' {
   function listPlatforms(): string[]
   function downloadBinaries(
     components: string | string[],
-    options: { platform?: string; quiet?: boolean; destination?: string; version?: string },
+    options: {
+      platform?: string
+      quiet?: boolean
+      destination?: string
+      version?: string
+      tickerFn?: (data: { filename: string; progress: number }) => void
+      tickerInterval?: number
+    },
     callback: (err: Error | null, results: DownloadResult[]) => void
   ): void
 }

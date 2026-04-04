@@ -33,6 +33,7 @@ const api = {
   downloadCancelMerge: () => ipcRenderer.invoke('download:cancel-merge'),
   downloadMerge: () => ipcRenderer.invoke('download:merge'),
   ffmpegCheck: () => ipcRenderer.invoke('ffmpeg:check'),
+  ffmpegDelete: () => ipcRenderer.invoke('ffmpeg:delete'),
   downloadPickDir: () => ipcRenderer.invoke('download:pick-dir'),
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
@@ -62,6 +63,12 @@ const api = {
   },
   offScanMergeProgress: () => {
     ipcRenderer.removeAllListeners('scan-merge:progress')
+  },
+  onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => {
+    ipcRenderer.on('ffmpeg:download-progress', (_event, data) => callback(data))
+  },
+  offFfmpegDownloadProgress: () => {
+    ipcRenderer.removeAllListeners('ffmpeg:download-progress')
   }
 }
 

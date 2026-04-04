@@ -66,6 +66,11 @@ async function dumpMismatches(): Promise<void> {
   }
 }
 
+async function deleteFfmpeg(): Promise<void> {
+  await window.api.ffmpegDelete()
+  ffmpeg.value = await window.api.ffmpegCheck()
+}
+
 async function fixMetadata(): Promise<void> {
   fixingMetadata.value = true
   fixProgress.value = null
@@ -279,6 +284,14 @@ async function save(): Promise<void> {
               <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
             </div>
           </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Delete ffmpeg binaries</label>
+          <p class="setting-hint">Remove downloaded ffmpeg/ffprobe binaries. They will be re-downloaded on next app launch (useful for testing the download progress indicator).</p>
+          <button class="merge-all-btn" style="background-color: #e94560;" @click="deleteFfmpeg" :disabled="!ffmpeg?.available">
+            Delete ffmpeg + ffprobe
+          </button>
         </div>
 
         <div class="setting-group">

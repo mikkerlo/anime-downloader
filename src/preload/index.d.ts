@@ -38,6 +38,7 @@ interface Api {
   onFixMetadataProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
   offFixMetadataProgress: () => void
   ffmpegCheck: () => Promise<{ available: boolean; version: string; path: string; encoders: string[] }>
+  ffmpegDelete: () => Promise<void>
   downloadPickDir: () => Promise<string | null>
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
@@ -50,6 +51,8 @@ interface Api {
   offDownloadProgress: () => void
   onScanMergeProgress: (callback: (data: ScanMergeProgress) => void) => void
   offScanMergeProgress: () => void
+  onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
+  offFfmpegDownloadProgress: () => void
 }
 
 interface AnimeSearchResult {

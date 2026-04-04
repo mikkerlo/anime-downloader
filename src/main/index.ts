@@ -8,6 +8,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
+import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 
 interface AnimeCacheEntry {
@@ -191,7 +192,7 @@ function getFfmpegDir(): string {
   return path.join(app.getPath('userData'), 'ffmpeg')
 }
 
-function ensureFfmpeg(): Promise<string> {
+function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
   const dest = getFfmpegDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
   const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
@@ -205,16 +206,28 @@ function ensureFfmpeg(): Promise<string> {
 
   fs.mkdirSync(dest, { recursive: true })
 
+  const sendProgress = (status: string, progress?: number): void => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ffmpeg:download-progress', { status, progress })
+    }
+  }
+
   return new Promise((resolve, reject) => {
     console.log('[ffmpeg] Downloading ffmpeg + ffprobe binaries via ffbinaries...')
+    sendProgress('downloading', 0)
     ffbinaries.downloadBinaries(['ffmpeg', 'ffprobe'], {
       platform: ffbinaries.detectPlatform(),
       quiet: false,
       destination: dest,
-      version: '6.1'
+      version: '6.1',
+      tickerFn: (data) => {
+        sendProgress('downloading', Math.round(data.progress * 100))
+      },
+      tickerInterval: 500
     }, (err, results) => {
       if (err) {
         console.error('[ffmpeg] Download failed:', err)
+        sendProgress('failed')
         reject(err)
         return
       }
@@ -226,6 +239,7 @@ function ensureFfmpeg(): Promise<string> {
       }
       ffmpegPath = ffmpegBin
       ffprobePath = ffprobeBin
+      sendProgress('done', 100)
       resolve(ffmpegBin)
     })
   })
@@ -528,6 +542,24 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('ffmpeg:check', () => checkFfmpeg())
 
+  ipcMain.handle('ffmpeg:delete', () => {
+    const dest = getFfmpegDir()
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
+    const ffprobeBin = path.join(dest, `ffprobe${ext}`)
+    try { fs.unlinkSync(ffmpegBin) } catch { /* ignore */ }
+    try { fs.unlinkSync(ffprobeBin) } catch { /* ignore */ }
+    // Also clear ffbinaries zip cache so next download is a real network fetch
+    const cacheDir = path.join(os.tmpdir(), 'ffbinaries-cache')
+    try {
+      for (const f of fs.readdirSync(cacheDir)) {
+        fs.unlinkSync(path.join(cacheDir, f))
+      }
+    } catch { /* ignore */ }
+    ffmpegPath = ''
+    ffprobePath = ''
+  })
+
   ipcMain.handle('download:scan-merge', async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = store.get('videoCodec') as string || 'copy'
@@ -738,8 +770,11 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   cleanupStaleCache()
+  createWindow()
+  const mainWin = BrowserWindow.getAllWindows()[0]
+
   try {
-    await ensureFfmpeg()
+    await ensureFfmpeg(mainWin)
   } catch (err) {
     console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
   }
@@ -753,7 +788,6 @@ app.whenReady().then(async () => {
     }
   })
   registerIpcHandlers()
-  createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

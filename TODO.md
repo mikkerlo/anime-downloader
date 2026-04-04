@@ -7,7 +7,7 @@
 
 ## UX / Robustness
 
-- [ ] Show progress/message during ffmpeg+ffprobe download on first launch — currently the app appears frozen with no feedback, causing users to reboot
+- [x] Show progress/message during ffmpeg+ffprobe download on first launch — currently the app appears frozen with no feedback, causing users to reboot
 - [ ] Add "Retry all" button in DownloadsView for all failed downloads at once
 - [ ] No confirmation dialogs for destructive actions (delete file, remove files from library, cancel all downloads)
 - [ ] Download queue not persisted — app crash loses all queue state, no resume-on-restart

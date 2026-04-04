@@ -105,7 +105,8 @@ const CODEC_OPTIONS: { value: string; label: string; encoder?: string }[] = [
   { value: 'libx265', label: 'H.265 (CPU)', encoder: 'libx265' },
   { value: 'hevc_nvenc', label: 'H.265 (NVIDIA GPU)', encoder: 'hevc_nvenc' },
   { value: 'hevc_amf', label: 'H.265 (AMD GPU)', encoder: 'hevc_amf' },
-  { value: 'hevc_qsv', label: 'H.265 (Intel QSV)', encoder: 'hevc_qsv' }
+  { value: 'hevc_qsv', label: 'H.265 (Intel QSV)', encoder: 'hevc_qsv' },
+  { value: 'hevc_videotoolbox', label: 'H.265 (macOS VideoToolbox)', encoder: 'hevc_videotoolbox' }
 ]
 
 const availableCodecs = computed(() => {

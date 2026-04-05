@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 
 const activeTab = ref<'general' | 'merging' | 'debug'>('general')
 
 const token = ref('')
 const translationType = ref('subRu')
 const downloadDir = ref('')
-const saved = ref(false)
+const loaded = ref(false)
+const savedVisible = ref(false)
+let savedTimeout: ReturnType<typeof setTimeout> | null = null
 
 const autoMerge = ref(false)
 const videoCodec = ref('copy')
@@ -131,21 +133,41 @@ onMounted(async () => {
   if (!availableCodecs.value.find(c => c.value === videoCodec.value)) {
     videoCodec.value = 'copy'
   }
+
+  loaded.value = true
 })
 
 async function pickDir(): Promise<void> {
   const dir = await window.api.downloadPickDir()
-  if (dir) downloadDir.value = dir
+  if (dir) {
+    downloadDir.value = dir
+    autoSave('downloadDir', dir)
+  }
 }
 
-async function save(): Promise<void> {
-  await window.api.setSetting('token', token.value.trim())
-  await window.api.setSetting('translationType', translationType.value)
-  await window.api.setSetting('autoMerge', autoMerge.value)
-  await window.api.setSetting('videoCodec', videoCodec.value)
-  saved.value = true
-  setTimeout(() => { saved.value = false }, 2000)
+function showSaved(): void {
+  savedVisible.value = true
+  if (savedTimeout) clearTimeout(savedTimeout)
+  savedTimeout = setTimeout(() => { savedVisible.value = false }, 1500)
 }
+
+function autoSave(key: string, value: string | boolean): void {
+  window.api.setSetting(key, value)
+  showSaved()
+}
+
+// Debounced watcher for token (user typing)
+let tokenTimer: ReturnType<typeof setTimeout> | null = null
+watch(token, (val) => {
+  if (!loaded.value) return
+  if (tokenTimer) clearTimeout(tokenTimer)
+  tokenTimer = setTimeout(() => autoSave('token', val.trim()), 800)
+})
+
+// Immediate watchers for dropdowns/toggles
+watch(translationType, (val) => { if (loaded.value) autoSave('translationType', val) })
+watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 </script>
 
 <template>
@@ -310,10 +332,10 @@ async function save(): Promise<void> {
         </div>
       </template>
 
-      <button v-if="activeTab !== 'debug'" class="save-btn" @click="save">
-        {{ saved ? 'Saved!' : 'Save' }}
-      </button>
     </div>
+    <transition name="saved-fade">
+      <div v-if="savedVisible" class="saved-toast">Saved</div>
+    </transition>
   </main>
 </template>
 
@@ -323,6 +345,7 @@ async function save(): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .topbar {
@@ -520,19 +543,27 @@ async function save(): Promise<void> {
   color: #a0a0b8;
 }
 
-.save-btn {
-  padding: 10px 28px;
-  background-color: #e94560;
-  border: none;
+.saved-toast {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  padding: 8px 18px;
+  background-color: #2d6a30;
+  color: #6ab04c;
+  font-size: 0.85rem;
+  font-weight: 600;
   border-radius: 8px;
-  color: white;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
+  pointer-events: none;
 }
 
-.save-btn:hover {
-  background-color: #d63851;
+.saved-fade-enter-active,
+.saved-fade-leave-active {
+  transition: opacity 0.3s;
+}
+
+.saved-fade-enter-from,
+.saved-fade-leave-to {
+  opacity: 0;
 }
 
 .merge-all-btn {

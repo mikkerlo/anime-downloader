@@ -41,7 +41,7 @@ Duplicated code across renderer components:
 
 ---
 
-## 3. Auto-save settings
+## ~~3. Auto-save settings~~
 
 **Priority:** Medium | **Effort:** Small
 

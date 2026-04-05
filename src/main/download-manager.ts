@@ -300,6 +300,13 @@ export class DownloadManager {
     this.processQueue()
   }
 
+  async restartAllFailed(): Promise<void> {
+    const failed = this.queue.filter(i => i.status === 'failed')
+    for (const item of failed) {
+      await this.restart(item.id)
+    }
+  }
+
   cancel(id: string): void {
     const item = this.queue.find(i => i.id === id)
     if (!item) return

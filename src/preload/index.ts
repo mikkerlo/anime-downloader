@@ -24,6 +24,7 @@ const api = {
   downloadPause: (id: string) => ipcRenderer.invoke('download:pause', id),
   downloadResume: (id: string) => ipcRenderer.invoke('download:resume', id),
   downloadRestart: (id: string) => ipcRenderer.invoke('download:restart', id),
+  downloadRestartAllFailed: () => ipcRenderer.invoke('download:restart-all-failed'),
   downloadCancel: (id: string) => ipcRenderer.invoke('download:cancel', id),
   downloadGetQueue: () => ipcRenderer.invoke('download:get-queue'),
   downloadCancelByEpisode: (animeName: string, episodeLabel?: string) =>

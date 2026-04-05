@@ -55,6 +55,13 @@ function groupStatus(g: EpisodeGroup): string {
   return 'queued'
 }
 
+const hasFailed = computed(() =>
+  groups.value.some(g => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
+    return items.some(i => i.status === 'failed')
+  })
+)
+
 const hasFinished = computed(() =>
   groups.value.some(g => {
     const s = groupStatus(g)
@@ -76,6 +83,7 @@ function resumeItem(id: string): void { window.api.downloadResume(id) }
 function restartItem(id: string): void { window.api.downloadRestart(id) }
 function cancelItem(id: string): void { window.api.downloadCancel(id) }
 function cancelMerge(): void { window.api.downloadCancelMerge() }
+function retryAllFailed(): void { window.api.downloadRestartAllFailed() }
 
 async function clearCompleted(): Promise<void> {
   await window.api.downloadClearCompleted()
@@ -98,6 +106,7 @@ async function mergeFinished(): Promise<void> {
     <header class="topbar">
       <h2>Downloads</h2>
       <div class="topbar-actions">
+        <button v-if="hasFailed" class="retry-all-btn" @click="retryAllFailed">Retry all failed</button>
         <button v-if="hasMergeable" class="merge-btn" @click="mergeFinished" :disabled="merging">
           {{ merging ? 'Merging...' : 'Merge finished' }}
         </button>
@@ -222,7 +231,7 @@ async function mergeFinished(): Promise<void> {
   gap: 8px;
 }
 
-.clear-btn, .merge-btn {
+.clear-btn, .merge-btn, .retry-all-btn {
   padding: 6px 14px;
   border: none;
   border-radius: 6px;
@@ -239,6 +248,15 @@ async function mergeFinished(): Promise<void> {
 .clear-btn:hover {
   background-color: #1a4a7a;
   color: #e0e0e0;
+}
+
+.retry-all-btn {
+  background-color: #e94560;
+  color: white;
+}
+
+.retry-all-btn:hover {
+  background-color: #d63851;
 }
 
 .merge-btn {

@@ -26,6 +26,7 @@ interface Api {
   downloadPause: (id: string) => Promise<void>
   downloadResume: (id: string) => Promise<void>
   downloadRestart: (id: string) => Promise<void>
+  downloadRestartAllFailed: () => Promise<void>
   downloadCancel: (id: string) => Promise<void>
   downloadGetQueue: () => Promise<EpisodeGroup[]>
   downloadCancelByEpisode: (animeName: string, episodeLabel?: string) => Promise<void>

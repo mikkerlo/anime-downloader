@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName } from '../utils'
 
 const props = defineProps<{
   animeId: number
@@ -304,7 +305,7 @@ const errorMessage = ref('')
 
 function getAnimeName(): string {
   if (!anime.value) return ''
-  return anime.value.titles?.romaji || anime.value.titles?.ru || anime.value.title
+  return _getAnimeName(anime.value)
 }
 
 async function checkToken(): Promise<boolean> {
@@ -393,25 +394,6 @@ function dlProgress(item: DownloadProgressItem | null): number {
   return (item.bytesReceived / item.totalBytes) * 100
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i]
-}
-
-function formatSpeed(bps: number): string {
-  return formatBytes(bps) + '/s'
-}
-
-function formatEta(item: DownloadProgressItem): string {
-  if (item.speed <= 0 || item.totalBytes <= 0) return '--'
-  const remaining = item.totalBytes - item.bytesReceived
-  const seconds = Math.ceil(remaining / item.speed)
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
 
 function getGroup(episodeFull: string): EpisodeGroup | undefined {
   return downloadGroups.value.get(episodeFull)
@@ -525,7 +507,7 @@ function typeChip(type: string): { short: string; color: string } {
         <img :src="posterSrc" :alt="anime.title" class="detail-poster" @error="onPosterError" />
         <div class="anime-info">
           <h2 class="anime-title">
-            {{ anime.titles?.romaji || anime.titles?.ru || anime.title }}
+            {{ getAnimeName() }}
             <span v-if="isOffline" class="offline-badge">OFFLINE</span>
           </h2>
           <div class="anime-meta">

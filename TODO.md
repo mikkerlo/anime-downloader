@@ -9,7 +9,7 @@
 
 ---
 
-## 1. Extract shared utilities
+## ~~1. Extract shared utilities~~
 
 **Priority:** Low | **Effort:** Small
 

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { getAnimeName } from '../utils'
+
 defineProps<{
   anime: AnimeSearchResult
   starred: boolean
@@ -20,7 +22,7 @@ const emit = defineEmits<{
       </button>
     </div>
     <div class="info">
-      <div class="title" :title="anime.title">{{ anime.titles?.romaji || anime.titles?.ru || anime.title }}</div>
+      <div class="title" :title="anime.title">{{ getAnimeName(anime) }}</div>
       <div class="meta">
         <span v-if="anime.typeTitle">{{ anime.typeTitle }}</span>
         <span v-if="anime.year"> · {{ anime.year }}</span>

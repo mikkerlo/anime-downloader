@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import AnimeCard from './AnimeCard.vue'
+import { getAnimeName } from '../utils'
 
 const emit = defineEmits<{
   openAnime: [id: number]
@@ -34,7 +35,7 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
 }
 
 async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
-  const name = anime.titles?.romaji || anime.titles?.ru || anime.title
+  const name = getAnimeName(anime)
   await window.api.downloadedAnimeDelete(anime.id, name)
   await loadLibrary()
 }

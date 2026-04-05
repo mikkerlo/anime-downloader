@@ -11,6 +11,10 @@ import { execFile } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 
+// Suppress EPIPE errors from broken stdout/stderr pipes (common on WSL2)
+process.stdout?.on('error', () => {})
+process.stderr?.on('error', () => {})
+
 interface AnimeCacheEntry {
   animeDetail: AnimeDetail | null
   episodes: Record<number, EpisodeDetail>

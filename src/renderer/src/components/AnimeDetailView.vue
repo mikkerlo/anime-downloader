@@ -37,6 +37,16 @@ const tvEpisodes = computed(() => {
   return anime.value.episodes.filter(ep => ep.episodeType === 'tv' && ep.isActive === 1)
 })
 
+const PAGE_SIZE = 30
+const currentPage = ref(0)
+const totalPages = computed(() => Math.max(1, Math.ceil(tvEpisodes.value.length / PAGE_SIZE)))
+const isPaginated = computed(() => tvEpisodes.value.length > PAGE_SIZE)
+const pagedEpisodes = computed(() => {
+  if (!isPaginated.value) return tvEpisodes.value
+  const start = currentPage.value * PAGE_SIZE
+  return tvEpisodes.value.slice(start, start + PAGE_SIZE)
+})
+
 // Count unique episodes per translation type
 const translationTypeCounts = computed(() => {
   const counts = new Map<string, number>()
@@ -89,7 +99,7 @@ function bestPerAuthor(translations: Translation[]): Translation[] {
 }
 
 const episodeRows = computed((): EpisodeRow[] => {
-  return tvEpisodes.value.map(ep => {
+  return pagedEpisodes.value.map(ep => {
     const detail = episodes.value.get(ep.id)
     const rawTranslations = detail
       ? detail.translations.filter(tr => tr.isActive === 1)
@@ -177,7 +187,7 @@ onMounted(async () => {
     loading.value = false
   }
 
-  await loadEpisodes()
+  await loadPageEpisodes()
   await checkFileStatus()
 
   // If served from cache, try a background refresh
@@ -196,22 +206,23 @@ onUnmounted(() => {
   window.api.offDownloadProgress()
 })
 
-async function loadEpisodes(): Promise<void> {
-  if (!anime.value || tvEpisodes.value.length === 0) return
+async function loadPageEpisodes(): Promise<void> {
+  if (!anime.value || pagedEpisodes.value.length === 0) return
   loadingEpisodes.value = true
 
-  const results = new Map<number, EpisodeDetail>()
   const batch = 5
+  const toLoad = pagedEpisodes.value.filter(ep => !episodes.value.has(ep.id))
 
-  for (let i = 0; i < tvEpisodes.value.length; i += batch) {
-    const chunk = tvEpisodes.value.slice(i, i + batch)
+  for (let i = 0; i < toLoad.length; i += batch) {
+    const chunk = toLoad.slice(i, i + batch)
     const fetched = await Promise.all(
       chunk.map(ep => window.api.getEpisode(ep.id, props.animeId).then(r => r.data))
     )
+    const updated = new Map(episodes.value)
     for (const ep of fetched) {
-      results.set(ep.id, ep)
+      updated.set(ep.id, ep)
     }
-    episodes.value = new Map(results)
+    episodes.value = updated
   }
 
   if (availableAuthors.value.length > 0 && !selectedAuthor.value) {
@@ -224,6 +235,12 @@ async function loadEpisodes(): Promise<void> {
 
   loadingEpisodes.value = false
   probeSelectedQualities()
+}
+
+async function goToPage(page: number): Promise<void> {
+  currentPage.value = page
+  await loadPageEpisodes()
+  await checkFileStatus()
 }
 
 async function probeSelectedQualities(): Promise<void> {
@@ -412,7 +429,7 @@ async function backgroundRefresh(): Promise<void> {
     if (res.source === 'api') {
       anime.value = res.data
       dataSource.value = 'api'
-      await loadEpisodes()
+      await loadPageEpisodes()
     }
   } catch {
     // Stay on cached data
@@ -539,7 +556,7 @@ function typeChip(type: string): { short: string; color: string } {
           </select>
         </div>
         <button class="download-btn" @click="downloadAll" :disabled="episodeRows.every(r => !r.selectedTr) || downloading">
-          {{ downloading ? 'Enqueuing...' : 'Download All' }}
+          {{ downloading ? 'Enqueuing...' : isPaginated ? `Download Page ${currentPage + 1}` : 'Download All' }}
         </button>
         <button v-if="hasActiveDownloads" class="cancel-all-btn" @click="cancelAllDownloads">
           Cancel All
@@ -549,6 +566,25 @@ function typeChip(type: string): { short: string; color: string } {
       <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
 
       <div v-if="loadingEpisodes" class="status-text">Loading episodes...</div>
+
+      <div v-if="isPaginated" class="pagination">
+        <button class="page-btn" :disabled="currentPage === 0" @click="goToPage(currentPage - 1)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <button v-for="p in totalPages" :key="p - 1"
+          class="page-btn" :class="{ active: currentPage === p - 1 }"
+          @click="goToPage(p - 1)">
+          {{ p }}
+        </button>
+        <button class="page-btn" :disabled="currentPage === totalPages - 1" @click="goToPage(currentPage + 1)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+        <span class="page-info">{{ tvEpisodes.length }} episodes</span>
+      </div>
 
       <div class="episode-list">
         <div v-for="row in episodeRows" :key="row.episode.id" class="episode-row">
@@ -794,6 +830,51 @@ function typeChip(type: string): { short: string; color: string } {
 .download-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.page-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  color: #a0a0b8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: #e94560;
+  color: #e0e0e0;
+}
+
+.page-btn.active {
+  background-color: #e94560;
+  border-color: #e94560;
+  color: white;
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.page-info {
+  margin-left: 8px;
+  color: #6a6a8a;
+  font-size: 0.8rem;
 }
 
 .cancel-all-btn {

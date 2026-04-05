@@ -79,6 +79,10 @@ AnimeDetailView  -->  getAnime(id) --> full anime with episode list
                  -->  checkFileStatus() --> which episodes exist on disk
                  -->  downloadedEpisodesGet(animeId) --> translation metadata for files
 
+Episode list is paginated (30 per page) when anime has >30 TV episodes.
+Only translations for the visible page are fetched (in batches of 5).
+Cached translations are reused when revisiting a page.
+
 Per-episode translation selector with priority chain:
   1. Downloaded file on disk → locked to saved translation
   2. In download queue → locked to queued translation
@@ -226,7 +230,11 @@ LibraryView shows both with indicators:
 | `download:progress` | send | Real-time download progress broadcast (500ms) |
 | `scan-merge:progress` | send | Scan-merge per-file progress |
 | `fix-metadata:progress` | send | Fix-metadata per-file progress |
+| `download:restart-all-failed` | invoke | Restart all failed downloads (re-fetch URLs) |
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
+| `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |
+| `ffmpeg:download-progress` | send | FFmpeg/ffprobe download progress on first launch |
+| `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
 | `file:check-episodes` | invoke | Check which episodes exist on disk |
 | `file:open` | invoke | Open file with default app |
 | `file:show-in-folder` | invoke | Reveal file in explorer |
@@ -285,6 +293,7 @@ interface EpisodeMeta {
 | `videoCodec` | string | `'copy'` | FFmpeg video codec for merge |
 | `downloadedAnime` | object | `{}` | Map of anime with downloaded files |
 | `downloadedEpisodes` | object | `{}` | Per-episode translation metadata (key: `animeId:episodeInt`) |
+| `animeCache` | object | `{}` | Offline cache: anime details, episodes, quality probes, posters |
 
 ## FFmpeg
 

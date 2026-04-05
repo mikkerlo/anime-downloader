@@ -422,6 +422,17 @@ function registerIpcHandlers(): void {
     return !!lib[String(id)]
   })
 
+  ipcMain.handle('library-get-status', (_event, ids: number[]) => {
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const result: Record<number, { starred: boolean; downloaded: boolean }> = {}
+    for (const id of ids) {
+      const key = String(id)
+      result[id] = { starred: !!lib[key], downloaded: !!downloaded[key] }
+    }
+    return result
+  })
+
   ipcMain.handle('downloaded-anime-add', (_event, anime: AnimeSearchResult) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     downloaded[String(anime.id)] = anime

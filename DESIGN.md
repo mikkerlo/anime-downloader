@@ -209,6 +209,7 @@ LibraryView shows both with indicators:
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |
 | `library-is-downloaded` | invoke | Check if anime has downloads |
+| `library-get-status` | invoke | Batch check starred + downloaded status for multiple anime IDs |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
 | `downloaded-anime-delete` | invoke | Remove anime + delete folder |
 | `downloaded-episodes-get` | invoke | Get translation metadata per episode |

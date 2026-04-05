@@ -27,7 +27,7 @@ Duplicated code across renderer components:
 
 ---
 
-## 2. Batch library status loading
+## ~~2. Batch library status loading~~
 
 **Priority:** Medium | **Effort:** Small
 

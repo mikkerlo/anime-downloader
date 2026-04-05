@@ -15,15 +15,13 @@ onMounted(loadLibrary)
 
 async function loadLibrary(): Promise<void> {
   library.value = await window.api.libraryGet()
+  const ids = library.value.map(a => a.id)
+  const statuses = await window.api.libraryGetStatus(ids)
   const starred = new Set<number>()
   const downloaded = new Set<number>()
-  for (const anime of library.value) {
-    const [isStar, isDl] = await Promise.all([
-      window.api.libraryHas(anime.id),
-      window.api.libraryIsDownloaded(anime.id)
-    ])
-    if (isStar) starred.add(anime.id)
-    if (isDl) downloaded.add(anime.id)
+  for (const [id, s] of Object.entries(statuses)) {
+    if (s.starred) starred.add(Number(id))
+    if (s.downloaded) downloaded.add(Number(id))
   }
   starredIds.value = starred
   downloadedIds.value = downloaded

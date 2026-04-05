@@ -15,6 +15,7 @@ interface Api {
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
   libraryHas: (id: number) => Promise<boolean>
+  libraryGetStatus: (ids: number[]) => Promise<Record<number, { starred: boolean; downloaded: boolean }>>
   libraryIsDownloaded: (id: number) => Promise<boolean>
   downloadedAnimeAdd: (anime: AnimeSearchResult) => Promise<void>
   downloadedAnimeDelete: (animeId: number, animeName: string) => Promise<void>

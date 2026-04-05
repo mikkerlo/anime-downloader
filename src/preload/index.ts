@@ -13,6 +13,7 @@ const api = {
   libraryGet: () => ipcRenderer.invoke('library-get'),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke('library-toggle', anime),
   libraryHas: (id: number) => ipcRenderer.invoke('library-has', id),
+  libraryGetStatus: (ids: number[]) => ipcRenderer.invoke('library-get-status', ids) as Promise<Record<number, { starred: boolean; downloaded: boolean }>>,
   libraryIsDownloaded: (id: number) => ipcRenderer.invoke('library-is-downloaded', id),
   downloadedAnimeAdd: (anime: unknown) => ipcRenderer.invoke('downloaded-anime-add', anime),
   downloadedAnimeDelete: (animeId: number, animeName: string) => ipcRenderer.invoke('downloaded-anime-delete', animeId, animeName),

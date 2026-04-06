@@ -29,6 +29,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 |------|------|
 | `src/main/index.ts` | App lifecycle, IPC handlers, API proxy, ffmpeg auto-download, settings |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
+| `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
@@ -40,7 +41,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
-| `src/renderer/src/components/SettingsView.vue` | General + Merging + Debug settings tabs |
+| `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Debug settings tabs |
 
 ## Data Flow
 
@@ -256,6 +257,13 @@ LibraryView shows both with indicators:
 | `file:open` | invoke | Open file with default app |
 | `file:show-in-folder` | invoke | Reveal file in explorer |
 | `file:delete-episode` | invoke | Delete episode files + clean metadata |
+| `shikimori:get-auth-url` | invoke | Get Shikimori OAuth authorize URL |
+| `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user |
+| `shikimori:logout` | invoke | Clear Shikimori credentials and user |
+| `shikimori:get-user` | invoke | Get cached Shikimori user profile |
+| `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
+| `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score) |
+| `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 
 ## Key Types
 
@@ -316,6 +324,8 @@ interface EpisodeMeta {
 | `downloadSpeedLimit` | number | `0` | Download speed limit in bytes/sec (0 = unlimited), shared across active downloads |
 | `concurrentDownloads` | number | `2` | Max simultaneous downloads (1–3) |
 | `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D'}` | Configurable keyboard shortcut bindings |
+| `shikimoriCredentials` | object\|null | `null` | Shikimori OAuth tokens (access_token, refresh_token, created_at, expires_in) |
+| `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
 
 ## Auto-Update
 
@@ -326,6 +336,34 @@ Uses `electron-updater` with GitHub releases as the update source. The CI upload
 - Manual check via Settings > General > "Check for updates" button
 - Flow: check → show available version → download with progress bar → "Restart to update"
 - Publish config in `package.json` points to `github:mikkerlo/anime-downloader`
+
+## Shikimori Integration
+
+Syncs anime watch status and episode progress with [Shikimori](https://shikimori.one). Uses MAL IDs as the shared key between smotret-anime and Shikimori (`myAnimeListId` field on anime series).
+
+### OAuth Flow (OOB)
+
+```
+1. User clicks "Connect Shikimori" in Settings > General
+2. App opens Shikimori authorize URL in external browser
+3. User authorizes → Shikimori displays authorization code
+4. User pastes code into app → exchangeCode() → tokens stored
+5. Token auto-refresh: ensureFreshToken() checks expiry before each API call
+```
+
+### Module: `src/main/shikimori.ts`
+
+Standalone API client with hardcoded client credentials. All methods throw `ShikiApiError` on failure. Rate limit handling: retries on 429 with `retry-after` header.
+
+### AnimeDetailView Panel
+
+Shown when user is logged in AND anime has `myAnimeListId`. Displays:
+- Status dropdown (planned/watching/rewatching/completed/on_hold/dropped)
+- Episode count input
+- Score dropdown (1–10)
+- Save button to push changes
+- Link to anime on Shikimori
+- Auto-status: episodes > 0 → watching (from planned) / rewatching (from completed); episodes = max → completed
 
 ## FFmpeg
 

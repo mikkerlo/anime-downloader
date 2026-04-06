@@ -76,6 +76,17 @@ const api = {
     ipcRenderer.removeAllListeners('ffmpeg:download-progress')
   },
 
+  shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
+
+  // Shikimori
+  shikimoriGetAuthUrl: () => ipcRenderer.invoke('shikimori:get-auth-url') as Promise<string>,
+  shikimoriExchangeCode: (code: string) => ipcRenderer.invoke('shikimori:exchange-code', code),
+  shikimoriLogout: () => ipcRenderer.invoke('shikimori:logout'),
+  shikimoriGetUser: () => ipcRenderer.invoke('shikimori:get-user'),
+  shikimoriGetRate: (malId: number) => ipcRenderer.invoke('shikimori:get-rate', malId),
+  shikimoriUpdateRate: (malId: number, episodes: number, status: string, score: number) =>
+    ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score),
+
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),
   updateCheck: () => ipcRenderer.invoke('update:check'),

@@ -11,6 +11,7 @@ import { execFile } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
+import * as shikimori from './shikimori'
 
 // Suppress EPIPE errors from broken stdout/stderr pipes (common on WSL2)
 process.stdout?.on('error', () => {})
@@ -29,6 +30,7 @@ interface AnimeDetail extends AnimeSearchResult {
   descriptions: { source: string; value: string }[]
   episodes: EpisodeSummary[]
   genres: { id: number; title: string }[]
+  myAnimeListId?: number
 }
 
 interface EpisodeSummary {
@@ -78,7 +80,9 @@ const store = new Store({
       back: 'Escape',
       focusSearch: 'CmdOrCtrl+F',
       goDownloads: 'CmdOrCtrl+D'
-    } as Record<string, string>
+    } as Record<string, string>,
+    shikimoriCredentials: null as shikimori.ShikiCredentials | null,
+    shikimoriUser: null as shikimori.ShikiUser | null
   }
 })
 
@@ -826,6 +830,58 @@ function registerIpcHandlers(): void {
     store.set('downloadDir', dir)
     downloadManager.setDownloadDir(dir)
     return dir
+  })
+
+  // Shikimori integration
+  ipcMain.handle('shikimori:get-auth-url', () => {
+    return shikimori.getAuthUrl()
+  })
+
+  ipcMain.handle('shikimori:exchange-code', async (_event, code: string) => {
+    const creds = await shikimori.exchangeCode(code)
+    store.set('shikimoriCredentials', creds)
+    const user = await shikimori.getUser(creds.access_token)
+    store.set('shikimoriUser', user)
+    return user
+  })
+
+  ipcMain.handle('shikimori:logout', () => {
+    store.set('shikimoriCredentials', null)
+    store.set('shikimoriUser', null)
+  })
+
+  ipcMain.handle('shikimori:get-user', () => {
+    return store.get('shikimoriUser') as shikimori.ShikiUser | null
+  })
+
+  ipcMain.handle('shikimori:get-rate', async (_event, malId: number) => {
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) throw new Error('Not logged in to Shikimori')
+    return shikimori.getUserRate(accessToken, user.id, malId)
+  })
+
+  ipcMain.handle(
+    'shikimori:update-rate',
+    async (_event, malId: number, episodes: number, status: shikimori.ShikiUserRateStatus, score: number) => {
+      const accessToken = await shikimori.ensureFreshToken(store)
+      const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+      if (!user) throw new Error('Not logged in to Shikimori')
+      const existing = await shikimori.getUserRate(accessToken, user.id, malId)
+      if (existing) {
+        return shikimori.updateUserRate(accessToken, existing.id, episodes, status, score)
+      }
+      return shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score)
+    }
+  )
+
+  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch {
+      return false
+    }
   })
 }
 

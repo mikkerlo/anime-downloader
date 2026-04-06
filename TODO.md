@@ -93,7 +93,7 @@ Support two storage paths: a "hot" path (for active downloads, in-progress merge
 
 ---
 
-## 2. Shikimori Integration — OAuth + Episode Tracking
+## ~~2. Shikimori Integration — OAuth + Episode Tracking~~
 
 **Priority:** High | **Effort:** Large
 

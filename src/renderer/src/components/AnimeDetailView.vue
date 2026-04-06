@@ -25,6 +25,16 @@ const isOffline = computed(() => dataSource.value === 'cache')
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
 const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
 
+// Shikimori state
+const shikiUser = ref<ShikiUser | null>(null)
+const shikiRate = ref<ShikiUserRate | null>(null)
+const shikiStatus = ref<ShikiUserRateStatus>('planned')
+const shikiEpisodes = ref(0)
+const shikiScore = ref(0)
+const shikiLoading = ref(false)
+const shikiSaving = ref(false)
+const shikiError = ref('')
+
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
   { value: 'subEn', label: 'English Subtitles', short: 'EN SUB', color: '#3498db' },
@@ -200,12 +210,71 @@ onMounted(async () => {
   const queue = await window.api.downloadGetQueue()
   updateDownloadGroups(queue)
   window.api.onDownloadProgress(updateDownloadGroups)
+
+  // Load Shikimori data
+  shikiUser.value = await window.api.shikimoriGetUser()
+  if (shikiUser.value && anime.value?.myAnimeListId) {
+    shikiLoading.value = true
+    try {
+      const rate = await window.api.shikimoriGetRate(anime.value.myAnimeListId)
+      shikiRate.value = rate
+      if (rate) {
+        shikiStatus.value = rate.status
+        shikiEpisodes.value = rate.episodes
+        shikiScore.value = rate.score
+      }
+    } catch (err) {
+      console.error('Failed to load Shikimori rate:', err)
+    } finally {
+      shikiLoading.value = false
+    }
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('mouseup', onMouseBack)
   window.api.offDownloadProgress()
 })
+
+const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
+  { value: 'planned', label: 'Planned' },
+  { value: 'watching', label: 'Watching' },
+  { value: 'rewatching', label: 'Rewatching' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'on_hold', label: 'On Hold' },
+  { value: 'dropped', label: 'Dropped' }
+]
+
+watch(shikiEpisodes, (eps) => {
+  if (anime.value?.numberOfEpisodes && eps >= anime.value.numberOfEpisodes) {
+    shikiStatus.value = 'completed'
+  } else if (eps > 0) {
+    if (shikiStatus.value === 'completed') {
+      shikiStatus.value = 'rewatching'
+    } else if (shikiStatus.value === 'planned') {
+      shikiStatus.value = 'watching'
+    }
+  }
+})
+
+async function shikiSave(): Promise<void> {
+  if (!anime.value?.myAnimeListId) return
+  shikiSaving.value = true
+  shikiError.value = ''
+  try {
+    const rate = await window.api.shikimoriUpdateRate(
+      anime.value.myAnimeListId,
+      shikiEpisodes.value,
+      shikiStatus.value,
+      shikiScore.value
+    )
+    shikiRate.value = rate
+  } catch (err) {
+    shikiError.value = String(err)
+  } finally {
+    shikiSaving.value = false
+  }
+}
 
 async function loadPageEpisodes(): Promise<void> {
   if (!anime.value || pagedEpisodes.value.length === 0) return
@@ -520,6 +589,43 @@ function typeChip(type: string): { short: string; color: string } {
           </div>
           <p v-if="anime.descriptions?.length" class="description">{{ anime.descriptions[0].value }}</p>
         </div>
+      </div>
+
+      <div v-if="shikiUser && anime.myAnimeListId" class="shiki-panel">
+        <div class="shiki-header">
+          <span class="shiki-label">Shikimori</span>
+          <a :href="`https://shikimori.one/animes/${anime.myAnimeListId}`" target="_blank" class="shiki-link">
+            Open on Shikimori
+          </a>
+        </div>
+        <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
+        <div v-else class="shiki-controls">
+          <select v-model="shikiStatus" class="select shiki-select">
+            <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+          <div class="shiki-episodes">
+            <span>Episodes:</span>
+            <input
+              v-model.number="shikiEpisodes"
+              type="number"
+              min="0"
+              :max="anime.numberOfEpisodes || undefined"
+              class="shiki-ep-input"
+            />
+            <span v-if="anime.numberOfEpisodes" class="shiki-ep-total">/ {{ anime.numberOfEpisodes }}</span>
+          </div>
+          <div class="shiki-episodes">
+            <span>Score:</span>
+            <select v-model.number="shikiScore" class="select shiki-score-select">
+              <option :value="0">—</option>
+              <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
+            </select>
+          </div>
+          <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
+            {{ shikiSaving ? 'Saving...' : 'Save' }}
+          </button>
+        </div>
+        <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
       </div>
 
       <div class="controls">
@@ -1111,5 +1217,110 @@ function typeChip(type: string): { short: string; color: string } {
   color: #4a4a6a;
   font-size: 1.1rem;
   padding-top: 100px;
+}
+
+.shiki-panel {
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+
+.shiki-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.shiki-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #a0a0b8;
+}
+
+.shiki-link {
+  font-size: 0.8rem;
+  color: #3498db;
+  text-decoration: none;
+}
+
+.shiki-link:hover {
+  text-decoration: underline;
+}
+
+.shiki-loading {
+  font-size: 0.85rem;
+  color: #6a6a8a;
+}
+
+.shiki-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.shiki-select {
+  min-width: 130px;
+}
+
+.shiki-episodes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #a0a0b8;
+}
+
+.shiki-ep-input {
+  width: 60px;
+  padding: 6px 8px;
+  background-color: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.shiki-ep-input:focus {
+  outline: none;
+  border-color: #e94560;
+}
+
+.shiki-ep-total {
+  color: #6a6a8a;
+}
+
+.shiki-score-select {
+  width: 60px;
+}
+
+.shiki-save-btn {
+  padding: 6px 16px;
+  background-color: #0f3460;
+  border: none;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.shiki-save-btn:hover {
+  background-color: #1a4a7a;
+}
+
+.shiki-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.shiki-error {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: #e94560;
 }
 </style>

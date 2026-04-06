@@ -59,6 +59,16 @@ interface Api {
   onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
   offFfmpegDownloadProgress: () => void
 
+  shellOpenExternal: (url: string) => Promise<boolean>
+
+  // Shikimori
+  shikimoriGetAuthUrl: () => Promise<string>
+  shikimoriExchangeCode: (code: string) => Promise<ShikiUser>
+  shikimoriLogout: () => Promise<void>
+  shikimoriGetUser: () => Promise<ShikiUser | null>
+  shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
+  shikimoriUpdateRate: (malId: number, episodes: number, status: ShikiUserRateStatus, score: number) => Promise<ShikiUserRate>
+
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
@@ -85,6 +95,7 @@ interface AnimeDetail extends AnimeSearchResult {
   descriptions: { source: string; value: string }[]
   episodes: EpisodeSummary[]
   genres: { id: number; title: string }[]
+  myAnimeListId?: number
 }
 
 interface EpisodeSummary {
@@ -173,6 +184,23 @@ interface UpdateStatus {
   version?: string
   percent?: number
   error?: string
+}
+
+interface ShikiUser {
+  id: number
+  nickname: string
+  avatar: string
+}
+
+type ShikiUserRateStatus = 'planned' | 'watching' | 'rewatching' | 'completed' | 'on_hold' | 'dropped'
+
+interface ShikiUserRate {
+  id: number
+  score: number
+  status: ShikiUserRateStatus
+  episodes: number
+  target_id: number
+  target_type: string
 }
 
 declare global {

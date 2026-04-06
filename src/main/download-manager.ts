@@ -337,6 +337,25 @@ export class DownloadManager {
     }
   }
 
+  pauseAll(): void {
+    for (const item of this.queue) {
+      if (item.status === 'downloading' || item.status === 'queued') {
+        this.pause(item.id)
+      }
+    }
+  }
+
+  resumeAll(): void {
+    for (const item of this.queue) {
+      if (item.status === 'paused') {
+        item.status = 'queued'
+        item.error = undefined
+      }
+    }
+    this.schedulePersist()
+    this.processQueue()
+  }
+
   async restart(id: string): Promise<void> {
     const item = this.queue.find(i => i.id === id)
     if (!item || (item.status !== 'failed' && item.status !== 'paused')) return

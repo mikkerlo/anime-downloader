@@ -57,6 +57,20 @@ const hasMergeable = computed(() =>
   })
 )
 
+const hasActive = computed(() =>
+  groups.value.some(g => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
+    return items.some(i => i.status === 'downloading' || i.status === 'queued')
+  })
+)
+
+const hasPaused = computed(() =>
+  groups.value.some(g => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
+    return items.some(i => i.status === 'paused')
+  })
+)
+
 const merging = ref(false)
 
 function pauseItem(id: string): void { window.api.downloadPause(id) }
@@ -65,6 +79,8 @@ function restartItem(id: string): void { window.api.downloadRestart(id) }
 function cancelItem(id: string): void { window.api.downloadCancel(id) }
 function cancelMerge(): void { window.api.downloadCancelMerge() }
 function retryAllFailed(): void { window.api.downloadRestartAllFailed() }
+function pauseAll(): void { window.api.downloadPauseAll() }
+function resumeAll(): void { window.api.downloadResumeAll() }
 
 async function clearCompleted(): Promise<void> {
   await window.api.downloadClearCompleted()
@@ -87,6 +103,8 @@ async function mergeFinished(): Promise<void> {
     <header class="topbar">
       <h2>Downloads</h2>
       <div class="topbar-actions">
+        <button v-if="hasActive" class="pause-all-btn" @click="pauseAll">Pause all</button>
+        <button v-if="hasPaused" class="resume-all-btn" @click="resumeAll">Resume all</button>
         <button v-if="hasFailed" class="retry-all-btn" @click="retryAllFailed">Retry all failed</button>
         <button v-if="hasMergeable" class="merge-btn" @click="mergeFinished" :disabled="merging">
           {{ merging ? 'Merging...' : 'Merge finished' }}
@@ -212,7 +230,7 @@ async function mergeFinished(): Promise<void> {
   gap: 8px;
 }
 
-.clear-btn, .merge-btn, .retry-all-btn {
+.clear-btn, .merge-btn, .retry-all-btn, .pause-all-btn, .resume-all-btn {
   padding: 6px 14px;
   border: none;
   border-radius: 6px;
@@ -238,6 +256,24 @@ async function mergeFinished(): Promise<void> {
 
 .retry-all-btn:hover {
   background-color: #d63851;
+}
+
+.pause-all-btn {
+  background-color: #f39c12;
+  color: white;
+}
+
+.pause-all-btn:hover {
+  background-color: #d68910;
+}
+
+.resume-all-btn {
+  background-color: #6ab04c;
+  color: white;
+}
+
+.resume-all-btn:hover {
+  background-color: #5a9a3c;
 }
 
 .merge-btn {

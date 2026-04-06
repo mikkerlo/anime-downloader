@@ -556,6 +556,14 @@ function registerIpcHandlers(): void {
     await downloadManager.restartAllFailed()
   })
 
+  ipcMain.handle('download:pause-all', () => {
+    downloadManager.pauseAll()
+  })
+
+  ipcMain.handle('download:resume-all', () => {
+    downloadManager.resumeAll()
+  })
+
   ipcMain.handle('download:cancel', (_event, id: string) => {
     downloadManager.cancel(id)
   })

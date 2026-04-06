@@ -240,6 +240,8 @@ LibraryView shows both with indicators:
 | `download:progress` | send | Real-time download progress broadcast (500ms) |
 | `scan-merge:progress` | send | Scan-merge per-file progress |
 | `fix-metadata:progress` | send | Fix-metadata per-file progress |
+| `download:pause-all` | invoke | Pause all downloading/queued items |
+| `download:resume-all` | invoke | Resume all paused items |
 | `download:restart-all-failed` | invoke | Restart all failed downloads (re-fetch URLs) |
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |

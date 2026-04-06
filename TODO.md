@@ -99,6 +99,8 @@ Support two storage paths: a "hot" path (for active downloads, in-progress merge
 
 Integrate with [Shikimori](https://shikimori.one) anime list service so users can update their watch status and episode progress directly from the app. Uses OAuth 2.0 for auth. Shikimori uses MAL (MyAnimeList) IDs — the smotret-anime API exposes `myAnimeListId` on series objects, which serves as the shared key.
 
+API docs: https://shikimori.io/api/doc
+
 This is the first phase: API client module, OAuth flow, and manual episode/status updates from AnimeDetailView. Auto-sync on download/open can be added later.
 
 **Plan:**

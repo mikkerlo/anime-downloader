@@ -16,21 +16,8 @@
 - [x] System notifications on download/merge complete — configurable Off/Each Episode/Queue Complete
 - [x] Pause All / Resume All buttons in Downloads — bulk pause/resume for active/paused downloads
 
----
 
-## 1. Episode range selection
-
-**Priority:** Low | **Effort:** Small
-
-**Plan:**
-1. In `AnimeDetailView.vue`, add a "Select range" button next to "Download All/Page"
-2. On click, show two inputs (from episode, to episode) — pre-filled with the current page range if paginated
-3. "Download range" button filters `episodeRows` to the selected range and enqueues only those
-4. Could also add quick presets like "First 12", "First 24" for common season lengths
-
----
-
-## 2. Download speed throttle / bandwidth limiting
+## 1. Download speed throttle / bandwidth limiting
 
 **Priority:** Low | **Effort:** Medium
 
@@ -39,5 +26,6 @@
 2. In `DownloadManager.startDownload()`, wrap the response stream in a `Transform` that throttles throughput — track bytes written per second and pause/resume the readable stream to stay under the limit
 3. Add a slider or input in `SettingsView.vue` (General tab) with presets: Unlimited, 1 MB/s, 5 MB/s, 10 MB/s, Custom
 4. Apply limit changes to active downloads (update the throttle transform dynamically)
+5. We should also have an option to set amount of concurent downloads, no more then 3 is allowed.
 
 ---

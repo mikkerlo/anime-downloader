@@ -48,6 +48,17 @@ const api = {
   fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number) =>
     ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId),
 
+  // Storage
+  storagePickHotDir: () => ipcRenderer.invoke('storage:pick-hot-dir'),
+  storagePickColdDir: () => ipcRenderer.invoke('storage:pick-cold-dir'),
+  storageMoveToCold: () => ipcRenderer.invoke('storage:move-to-cold'),
+  onStorageMoveToColdProgress: (callback: (data: { current: number; total: number; file: string }) => void) => {
+    ipcRenderer.on('storage:move-to-cold-progress', (_event, data) => callback(data))
+  },
+  offStorageMoveToColdProgress: () => {
+    ipcRenderer.removeAllListeners('storage:move-to-cold-progress')
+  },
+
   downloadScanMerge: () => ipcRenderer.invoke('download:scan-merge'),
   downloadFixMetadata: () => ipcRenderer.invoke('download:fix-metadata'),
   onFixMetadataProgress: (callback: (data: unknown) => void) => {

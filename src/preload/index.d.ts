@@ -45,6 +45,12 @@ interface Api {
   ffmpegCheck: () => Promise<{ available: boolean; version: string; path: string; encoders: string[] }>
   ffmpegDelete: () => Promise<void>
   downloadPickDir: () => Promise<string | null>
+  // Storage
+  storagePickHotDir: () => Promise<string | null>
+  storagePickColdDir: () => Promise<string | null>
+  storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>
+  onStorageMoveToColdProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
+  offStorageMoveToColdProgress: () => void
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
     Promise<Record<string, { type: 'mkv' | 'mp4'; filePath: string }>>

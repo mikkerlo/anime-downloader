@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 
-const activeTab = ref<'general' | 'connectors' | 'merging' | 'shortcuts' | 'debug'>('general')
+const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'shortcuts' | 'debug'>('general')
 
 const token = ref('')
 const translationType = ref('subRu')
 const downloadDir = ref('')
+const storageMode = ref<'simple' | 'advanced'>('simple')
+const hotStorageDir = ref('')
+const coldStorageDir = ref('')
+const autoMoveToCold = ref(false)
+const movingToCold = ref(false)
+const moveProgress = ref<{ current: number; total: number; file: string } | null>(null)
+const moveResult = ref<{ moved: number; failed: string[] } | null>(null)
 const loaded = ref(false)
 const savedVisible = ref(false)
 let savedTimeout: ReturnType<typeof setTimeout> | null = null
@@ -210,10 +217,46 @@ function installUpdate(): void {
   window.api.updateInstall()
 }
 
+function onMoveProgress(data: { current: number; total: number; file: string }): void {
+  moveProgress.value = data
+}
+
+async function pickHotDir(): Promise<void> {
+  const dir = await window.api.storagePickHotDir()
+  if (dir) {
+    hotStorageDir.value = dir
+    showSaved()
+  }
+}
+
+async function pickColdDir(): Promise<void> {
+  const dir = await window.api.storagePickColdDir()
+  if (dir) {
+    coldStorageDir.value = dir
+    showSaved()
+  }
+}
+
+async function moveToCold(): Promise<void> {
+  movingToCold.value = true
+  moveProgress.value = null
+  moveResult.value = null
+  try {
+    const result = await window.api.storageMoveToCold()
+    moveResult.value = result
+  } catch (err) {
+    moveResult.value = { moved: 0, failed: [String(err)] }
+  } finally {
+    movingToCold.value = false
+    moveProgress.value = null
+  }
+}
+
 onMounted(async () => {
   window.api.onScanMergeProgress(onScanProgress)
   window.api.onFixMetadataProgress(onFixProgress)
   window.api.onUpdateStatus(onUpdateStatus)
+  window.api.onStorageMoveToColdProgress(onMoveProgress)
   refreshMismatchCount()
 
   appVersion.value = await window.api.appVersion()
@@ -223,6 +266,7 @@ onUnmounted(() => {
   window.api.offScanMergeProgress()
   window.api.offFixMetadataProgress()
   window.api.offUpdateStatus()
+  window.api.offStorageMoveToColdProgress()
 })
 
 const TRANSLATION_TYPES = [
@@ -251,6 +295,10 @@ onMounted(async () => {
   token.value = (await window.api.getSetting('token') as string) || ''
   translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
   downloadDir.value = (await window.api.getSetting('downloadDir') as string) || ''
+  storageMode.value = (await window.api.getSetting('storageMode') as 'simple' | 'advanced') || 'simple'
+  hotStorageDir.value = (await window.api.getSetting('hotStorageDir') as string) || ''
+  coldStorageDir.value = (await window.api.getSetting('coldStorageDir') as string) || ''
+  autoMoveToCold.value = (await window.api.getSetting('autoMoveToCold') as boolean) || false
   notificationMode.value = (await window.api.getSetting('notificationMode') as string) || 'off'
   concurrentDownloads.value = (await window.api.getSetting('concurrentDownloads') as number) || 2
   const savedSpeedLimit = (await window.api.getSetting('downloadSpeedLimit') as number) || 0
@@ -376,6 +424,8 @@ watch(customSpeedLimit, (val) => {
   window.api.setSetting('downloadSpeedLimit', Math.round(val * 1024 * 1024))
   showSaved()
 })
+watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
+watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 </script>
@@ -387,6 +437,7 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
     </header>
     <div class="tabs">
       <button class="tab" :class="{ active: activeTab === 'general' }" @click="activeTab = 'general'">General</button>
+      <button class="tab" :class="{ active: activeTab === 'storage' }" @click="activeTab = 'storage'">Storage</button>
       <button class="tab" :class="{ active: activeTab === 'connectors' }" @click="activeTab = 'connectors'">Connectors</button>
       <button class="tab" :class="{ active: activeTab === 'merging' }" @click="activeTab = 'merging'">Merging</button>
       <button class="tab" :class="{ active: activeTab === 'shortcuts' }" @click="activeTab = 'shortcuts'">Shortcuts</button>
@@ -401,15 +452,6 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
           <select id="tr-type" v-model="translationType" class="setting-input setting-select">
             <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
           </select>
-        </div>
-
-        <div class="setting-group">
-          <label class="setting-label">Download Directory</label>
-          <p class="setting-hint">Where downloaded anime files are saved.</p>
-          <div class="dir-row">
-            <span class="dir-path">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
-            <button class="browse-btn" @click="pickDir">Browse</button>
-          </div>
         </div>
 
         <div class="setting-group">
@@ -500,6 +542,99 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
           </div>
         </div>
 
+      </template>
+
+      <!-- Storage tab -->
+      <template v-if="activeTab === 'storage'">
+        <div class="setting-group">
+          <label class="setting-label">Storage Mode</label>
+          <p class="setting-hint">Simple mode uses a single directory. Advanced mode separates active downloads (hot) from finished files (cold).</p>
+          <div class="storage-mode-toggle">
+            <button
+              class="mode-btn"
+              :class="{ active: storageMode === 'simple' }"
+              @click="storageMode = 'simple'"
+            >Simple</button>
+            <button
+              class="mode-btn"
+              :class="{ active: storageMode === 'advanced' }"
+              @click="storageMode = 'advanced'"
+            >Advanced</button>
+          </div>
+        </div>
+
+        <template v-if="storageMode === 'simple'">
+          <div class="setting-group">
+            <label class="setting-label">Download Directory</label>
+            <p class="setting-hint">Where downloaded anime files are saved.</p>
+            <div class="dir-row">
+              <span class="dir-path">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
+              <button class="browse-btn" @click="pickDir">Browse</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="setting-group">
+            <label class="setting-label">Hot Storage (Active Downloads)</label>
+            <p class="setting-hint">Where new downloads and in-progress files are saved.</p>
+            <div class="dir-row">
+              <span class="dir-path">{{ hotStorageDir || 'Default (Downloads/anime-dl)' }}</span>
+              <button class="browse-btn" @click="pickHotDir">Browse</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">Cold Storage (Finished Files)</label>
+            <p class="setting-hint">Where completed files are moved for long-term storage.</p>
+            <div class="dir-row">
+              <span class="dir-path" :class="{ 'dir-warning': !coldStorageDir }">{{ coldStorageDir || 'Not set' }}</span>
+              <button class="browse-btn" @click="pickColdDir">Browse</button>
+            </div>
+            <div v-if="!coldStorageDir" class="token-result token-invalid">Cold storage directory must be set in advanced mode.</div>
+            <div v-if="coldStorageDir && coldStorageDir === hotStorageDir" class="token-result token-invalid">Cold storage must be different from hot storage.</div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">Auto-move to cold storage</label>
+            <p class="setting-hint">Automatically move finished files to cold storage after download (or merge, if enabled).</p>
+            <label class="toggle-row" :class="{ disabled: !coldStorageDir }">
+              <input type="checkbox" v-model="autoMoveToCold" :disabled="!coldStorageDir" class="toggle-input" />
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">{{ autoMoveToCold ? 'Enabled' : 'Disabled' }}</span>
+            </label>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">Move all to cold storage</label>
+            <p class="setting-hint">Move all finished files from hot to cold storage now.</p>
+            <button
+              class="merge-all-btn"
+              @click="moveToCold"
+              :disabled="movingToCold || !coldStorageDir || coldStorageDir === hotStorageDir"
+            >
+              {{ movingToCold ? 'Moving...' : 'Move all to cold storage' }}
+            </button>
+
+            <div v-if="moveProgress" class="scan-progress">
+              <div class="scan-progress-header">
+                <span>{{ moveProgress.current }} / {{ moveProgress.total }}</span>
+              </div>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar" :style="{ width: (moveProgress.total > 0 ? Math.round(moveProgress.current / moveProgress.total * 100) : 0) + '%' }"></div>
+              </div>
+              <div class="scan-progress-file">{{ moveProgress.file }}</div>
+            </div>
+
+            <div v-if="moveResult" class="scan-result" :class="{ 'has-errors': moveResult.failed.length > 0 }">
+              <div class="scan-result-ok">Moved: {{ moveResult.moved }} file(s)</div>
+              <div v-if="moveResult.failed.length > 0" class="scan-result-errors">
+                <div>Failed ({{ moveResult.failed.length }}):</div>
+                <div v-for="(err, i) in moveResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
+              </div>
+            </div>
+          </div>
+        </template>
       </template>
 
       <!-- Connectors tab -->
@@ -903,6 +1038,44 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dir-path.dir-warning {
+  border-color: #e94560;
+  color: #6a6a8a;
+}
+
+.storage-mode-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #0f3460;
+  width: fit-content;
+}
+
+.mode-btn {
+  padding: 8px 20px;
+  background: #16213e;
+  border: none;
+  color: #6a6a8a;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mode-btn:not(:last-child) {
+  border-right: 1px solid #0f3460;
+}
+
+.mode-btn.active {
+  background: #0f3460;
+  color: #e0e0e0;
+}
+
+.mode-btn:hover:not(.active) {
+  color: #a0a0b8;
 }
 
 .browse-btn {

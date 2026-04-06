@@ -20,11 +20,11 @@
 
 ---
 
-## 1. Advanced File Management — Hot/Cold Storage
+## ~~1. Advanced File Management — Hot/Cold Storage~~
 
-**Priority:** Medium | **Effort:** Large
+~~**Priority:** Medium | **Effort:** Large~~
 
-Support two storage paths: a "hot" path (for active downloads, in-progress merges) and a "cold" path (for finished media). In simple mode (default), behavior is unchanged — one download dir. In advanced mode, downloads land in hot storage and finished files are moved to cold storage either automatically or on demand.
+~~Support two storage paths: a "hot" path (for active downloads, in-progress merges) and a "cold" path (for finished media). In simple mode (default), behavior is unchanged — one download dir. In advanced mode, downloads land in hot storage and finished files are moved to cold storage either automatically or on demand.~~
 
 **Plan:**
 

@@ -623,36 +623,38 @@ export class DownloadManager {
     })
   }
 
-  async scanAndMerge(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy', onProgress?: (current: number, total: number, file: string, percent: number) => void): Promise<{ merged: number; failed: string[] }> {
+  async scanAndMerge(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy', onProgress?: (current: number, total: number, file: string, percent: number) => void, extraDirs?: string[]): Promise<{ merged: number; failed: string[] }> {
     if (this.merging) return { merged: 0, failed: [] }
     this.merging = true
 
     const result = { merged: 0, failed: [] as string[] }
 
     try {
-      if (!fs.existsSync(this.downloadDir)) return result
-
-      const animeDirs = fs.readdirSync(this.downloadDir, { withFileTypes: true })
-        .filter(d => d.isDirectory())
-        .map(d => d.name)
+      const scanDirs = [this.downloadDir, ...(extraDirs || [])].filter(d => fs.existsSync(d))
 
       // Collect all mp4 files that have no matching mkv
       const toMerge: { videoPath: string; subtitlePath: string | null; outputPath: string; label: string }[] = []
 
-      for (const dir of animeDirs) {
-        const dirPath = path.join(this.downloadDir, dir)
-        const files = fs.readdirSync(dirPath)
+      for (const scanDir of scanDirs) {
+        const animeDirs = fs.readdirSync(scanDir, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name)
 
-        const mp4Files = files.filter(f => f.endsWith('.mp4'))
-        for (const mp4 of mp4Files) {
-          const base = mp4.replace(/\.mp4$/, '')
-          const mkvPath = path.join(dirPath, `${base}.mkv`)
-          if (fs.existsSync(mkvPath)) continue // already merged
+        for (const dir of animeDirs) {
+          const dirPath = path.join(scanDir, dir)
+          const files = fs.readdirSync(dirPath)
 
-          const videoPath = path.join(dirPath, mp4)
-          const assFile = `${base}.ass`
-          const subtitlePath = files.includes(assFile) ? path.join(dirPath, assFile) : null
-          toMerge.push({ videoPath, subtitlePath, outputPath: mkvPath, label: `${dir}/${mp4}` })
+          const mp4Files = files.filter(f => f.endsWith('.mp4'))
+          for (const mp4 of mp4Files) {
+            const base = mp4.replace(/\.mp4$/, '')
+            const mkvPath = path.join(dirPath, `${base}.mkv`)
+            if (fs.existsSync(mkvPath)) continue // already merged
+
+            const videoPath = path.join(dirPath, mp4)
+            const assFile = `${base}.ass`
+            const subtitlePath = files.includes(assFile) ? path.join(dirPath, assFile) : null
+            toMerge.push({ videoPath, subtitlePath, outputPath: mkvPath, label: `${dir}/${mp4}` })
+          }
         }
       }
 

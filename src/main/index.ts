@@ -5,6 +5,7 @@ import Store from 'electron-store'
 import { DownloadManager, sanitizeFilename } from './download-manager'
 import type { DownloadRequest } from './download-manager'
 import * as fs from 'fs'
+import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
@@ -82,7 +83,11 @@ const store = new Store({
       goDownloads: 'CmdOrCtrl+D'
     } as Record<string, string>,
     shikimoriCredentials: null as shikimori.ShikiCredentials | null,
-    shikimoriUser: null as shikimori.ShikiUser | null
+    shikimoriUser: null as shikimori.ShikiUser | null,
+    storageMode: 'simple' as 'simple' | 'advanced',
+    hotStorageDir: '' as string,
+    coldStorageDir: '' as string,
+    autoMoveToCold: false
   }
 })
 
@@ -306,9 +311,105 @@ function checkFfmpeg(): Promise<FfmpegInfo> {
 }
 
 function getDownloadDir(): string {
+  const mode = store.get('storageMode') as string
+  if (mode === 'advanced') {
+    const hotDir = store.get('hotStorageDir') as string
+    if (hotDir) return hotDir
+  }
   const dir = store.get('downloadDir') as string
   if (dir) return dir
   return join(app.getPath('downloads'), 'anime-dl')
+}
+
+function getColdStorageDir(): string {
+  return (store.get('coldStorageDir') as string) || ''
+}
+
+function isAdvancedStorage(): boolean {
+  return (store.get('storageMode') as string) === 'advanced'
+}
+
+async function moveFileToCold(src: string, dest: string): Promise<void> {
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  try {
+    fs.renameSync(src, dest)
+  } catch {
+    // Cross-filesystem: copy + delete
+    await fsPromises.copyFile(src, dest)
+    fs.unlinkSync(src)
+  }
+}
+
+async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void> {
+  const coldDir = getColdStorageDir()
+  if (!coldDir) return
+  const hotDir = getDownloadDir()
+
+  const animeDirName = sanitizeFilename(animeName)
+  const hotAnimeDir = path.join(hotDir, animeDirName)
+  const coldAnimeDir = path.join(coldDir, animeDirName)
+
+  if (!fs.existsSync(hotAnimeDir)) return
+
+  // episodeLabel is like "01", we need to find matching files
+  const padded = episodeLabel.padStart(2, '0')
+  const base = sanitizeFilename(`${animeName} - ${padded}`)
+
+  for (const ext of ['.mkv', '.mp4', '.ass']) {
+    const src = path.join(hotAnimeDir, `${base}${ext}`)
+    // Never move .part files or files with in-progress downloads
+    if (ext === '.mp4' && fs.existsSync(src + '.part')) continue
+    if (fs.existsSync(src)) {
+      await moveFileToCold(src, path.join(coldAnimeDir, `${base}${ext}`))
+    }
+  }
+}
+
+async function moveAllFilesToColdStorage(
+  onProgress?: (current: number, total: number, file: string) => void
+): Promise<{ moved: number; failed: string[] }> {
+  const coldDir = getColdStorageDir()
+  const hotDir = getDownloadDir()
+  const result = { moved: 0, failed: [] as string[] }
+
+  if (!coldDir || !fs.existsSync(hotDir)) return result
+
+  // Collect all finished files
+  const filesToMove: { src: string; dest: string; label: string }[] = []
+  const animeDirs = fs.readdirSync(hotDir, { withFileTypes: true }).filter(d => d.isDirectory())
+
+  for (const dir of animeDirs) {
+    const dirPath = path.join(hotDir, dir.name)
+    const files = fs.readdirSync(dirPath)
+
+    for (const file of files) {
+      // Skip .part files (in-progress downloads)
+      if (file.endsWith('.part')) continue
+      // Skip mp4 if a .part exists (download in progress)
+      if (file.endsWith('.mp4') && files.includes(file + '.part')) continue
+      // Only move media/subtitle files
+      if (!['.mkv', '.mp4', '.ass'].some(ext => file.endsWith(ext))) continue
+
+      filesToMove.push({
+        src: path.join(dirPath, file),
+        dest: path.join(coldDir, dir.name, file),
+        label: `${dir.name}/${file}`
+      })
+    }
+  }
+
+  for (let i = 0; i < filesToMove.length; i++) {
+    const item = filesToMove[i]
+    onProgress?.(i + 1, filesToMove.length, item.label)
+    try {
+      await moveFileToCold(item.src, item.dest)
+      result.moved++
+    } catch (err) {
+      result.failed.push(`${item.label}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  return result
 }
 
 async function apiRequest(path: string): Promise<unknown> {
@@ -513,10 +614,17 @@ function registerIpcHandlers(): void {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     delete downloaded[String(animeId)]
     store.set('downloadedAnime', downloaded)
-    // Delete the folder
+    // Delete the folder from all storage dirs
     const dirName = sanitizeFilename(animeName)
-    const dirPath = path.join(getDownloadDir(), dirName)
-    try { fs.rmSync(dirPath, { recursive: true }) } catch { /* ignore */ }
+    const dirsToCheck = [getDownloadDir()]
+    if (isAdvancedStorage()) {
+      const coldDir = getColdStorageDir()
+      if (coldDir) dirsToCheck.push(coldDir)
+    }
+    for (const dir of dirsToCheck) {
+      const dirPath = path.join(dir, dirName)
+      try { fs.rmSync(dirPath, { recursive: true }) } catch { /* ignore */ }
+    }
     // Clean cache
     deleteCacheEntry(animeId)
   })
@@ -659,12 +767,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle('download:scan-merge', async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = store.get('videoCodec') as string || 'copy'
+    const extraDirs = isAdvancedStorage() && getColdStorageDir() ? [getColdStorageDir()] : undefined
     const result = await downloadManager.scanAndMerge(ffmpegPath, ffprobePath, codec, (current, total, file, percent) => {
       const windows = BrowserWindow.getAllWindows()
       for (const win of windows) {
         win.webContents.send('scan-merge:progress', { current, total, file, percent })
       }
-    })
+    }, extraDirs)
     return result
   })
 
@@ -771,21 +880,29 @@ function registerIpcHandlers(): void {
   // File management handlers
   ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {
     const animeDirName = sanitizeFilename(animeName)
-    const animeDir = path.join(getDownloadDir(), animeDirName)
-
-    if (!fs.existsSync(animeDir)) return {}
+    const dirsToCheck = [getDownloadDir()]
+    if (isAdvancedStorage()) {
+      const coldDir = getColdStorageDir()
+      if (coldDir) dirsToCheck.push(coldDir)
+    }
 
     const result: Record<string, { type: 'mkv' | 'mp4'; filePath: string }> = {}
-    for (const epInt of episodeInts) {
-      const padded = epInt.padStart(2, '0')
-      const base = sanitizeFilename(`${animeName} - ${padded}`)
-      const mkvPath = path.join(animeDir, `${base}.mkv`)
-      const mp4Path = path.join(animeDir, `${base}.mp4`)
+    // Check dirs in reverse so cold storage (last) takes priority
+    for (const dir of dirsToCheck) {
+      const animeDir = path.join(dir, animeDirName)
+      if (!fs.existsSync(animeDir)) continue
 
-      if (fs.existsSync(mkvPath)) {
-        result[epInt] = { type: 'mkv', filePath: mkvPath }
-      } else if (fs.existsSync(mp4Path)) {
-        result[epInt] = { type: 'mp4', filePath: mp4Path }
+      for (const epInt of episodeInts) {
+        const padded = epInt.padStart(2, '0')
+        const base = sanitizeFilename(`${animeName} - ${padded}`)
+        const mkvPath = path.join(animeDir, `${base}.mkv`)
+        const mp4Path = path.join(animeDir, `${base}.mp4`)
+
+        if (fs.existsSync(mkvPath)) {
+          result[epInt] = { type: 'mkv', filePath: mkvPath }
+        } else if (fs.existsSync(mp4Path)) {
+          result[epInt] = { type: 'mp4', filePath: mp4Path }
+        }
       }
     }
     return result
@@ -801,13 +918,21 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number) => {
     const animeDirName = sanitizeFilename(animeName)
-    const animeDir = path.join(getDownloadDir(), animeDirName)
+    const dirsToCheck = [getDownloadDir()]
+    if (isAdvancedStorage()) {
+      const coldDir = getColdStorageDir()
+      if (coldDir) dirsToCheck.push(coldDir)
+    }
+
     const padded = episodeInt.padStart(2, '0')
     const base = sanitizeFilename(`${animeName} - ${padded}`)
 
-    for (const ext of ['.mkv', '.mp4', '.ass']) {
-      const fp = path.join(animeDir, `${base}${ext}`)
-      try { fs.unlinkSync(fp) } catch { /* ignore */ }
+    for (const dir of dirsToCheck) {
+      const animeDir = path.join(dir, animeDirName)
+      for (const ext of ['.mkv', '.mp4', '.ass']) {
+        const fp = path.join(animeDir, `${base}${ext}`)
+        try { fs.unlinkSync(fp) } catch { /* ignore */ }
+      }
     }
 
     // Clean up episode metadata
@@ -830,6 +955,42 @@ function registerIpcHandlers(): void {
     store.set('downloadDir', dir)
     downloadManager.setDownloadDir(dir)
     return dir
+  })
+
+  ipcMain.handle('storage:pick-hot-dir', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select hot storage directory (active downloads)'
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const dir = result.filePaths[0]
+    store.set('hotStorageDir', dir)
+    downloadManager.setDownloadDir(dir)
+    return dir
+  })
+
+  ipcMain.handle('storage:pick-cold-dir', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select cold storage directory (finished files)'
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const dir = result.filePaths[0]
+    store.set('coldStorageDir', dir)
+    return dir
+  })
+
+  ipcMain.handle('storage:move-to-cold', async () => {
+    const result = await moveAllFilesToColdStorage((current, total, file) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('storage:move-to-cold-progress', { current, total, file })
+      }
+    })
+    return result
   })
 
   // Shikimori integration
@@ -946,6 +1107,10 @@ app.whenReady().then(async () => {
       const codec = store.get('videoCodec') as string || 'copy'
       await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
     } else {
+      // Auto-move to cold if merge is disabled
+      if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
+        await moveEpisodeToColdStorage(animeName, episodeLabel)
+      }
       const mode = store.get('notificationMode') as string
       if (mode === 'each') {
         showBackgroundNotification('Download complete', `${animeName} \u2014 ${episodeLabel}`)
@@ -953,7 +1118,11 @@ app.whenReady().then(async () => {
     }
   })
 
-  downloadManager.onMergeComplete((animeName, episodeLabel) => {
+  downloadManager.onMergeComplete(async (animeName, episodeLabel) => {
+    // Auto-move to cold after merge
+    if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
+      await moveEpisodeToColdStorage(animeName, episodeLabel)
+    }
     const mode = store.get('notificationMode') as string
     if (mode === 'each') {
       showBackgroundNotification('Merge complete', `${animeName} \u2014 ${episodeLabel}`)

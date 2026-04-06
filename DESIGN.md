@@ -263,6 +263,10 @@ LibraryView shows both with indicators:
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score) |
+| `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
+| `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
+| `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
+| `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 
 ## Key Types
@@ -326,6 +330,32 @@ interface EpisodeMeta {
 | `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D'}` | Configurable keyboard shortcut bindings |
 | `shikimoriCredentials` | object\|null | `null` | Shikimori OAuth tokens (access_token, refresh_token, created_at, expires_in) |
 | `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
+| `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |
+| `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode) |
+| `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |
+| `autoMoveToCold` | boolean | `false` | Auto-move finished files to cold storage |
+
+## Hot/Cold Storage
+
+In advanced storage mode, files are managed across two directories:
+
+- **Hot storage**: Where downloads land and in-progress files live (replaces `downloadDir` in advanced mode)
+- **Cold storage**: Where finished files are moved for long-term storage
+
+### File movement
+
+- `moveEpisodeToColdStorage()`: Moves a single episode's files (.mkv, .mp4, .ass) from hot → cold. Skips files with .part (in-progress). Uses `fs.rename` with `fs.copyFile` + `fs.unlink` fallback for cross-filesystem moves.
+- `moveAllFilesToColdStorage()`: Scans hot dir for all finished files and moves them to cold. Reports progress via `storage:move-to-cold-progress` IPC.
+
+### Auto-move triggers
+
+- If merge disabled: after `onEpisodeComplete` callback
+- If merge enabled: after `onMergeComplete` callback
+- Manual: "Move all to cold storage" button in Settings > Storage
+
+### File scanning
+
+In advanced mode, `file:check-episodes`, `file:delete-episode`, and `downloaded-anime-delete` check/delete from both hot and cold dirs. Cold storage takes priority when a file exists in both locations. `scanAndMerge` also scans both directories.
 
 ## Auto-Update
 

@@ -29,20 +29,17 @@
 
 ---
 
-## 2. System notifications on download/merge complete
+## ~~2. System notifications on download/merge complete~~
 
-**Priority:** Low | **Effort:** Small
+~~**Priority:** Low | **Effort:** Small~~
 
-Useful when app is in background or minimized.
+~~Useful when app is in background or minimized.~~
 
-**Plan:**
-1. In `src/main/download-manager.ts`, after `checkEpisodeComplete()` detects a completed episode (and after merge if auto-merge is on), use Electron's `Notification` API:
-   ```
-   new Notification({ title: 'Download complete', body: `${animeName} - ${episodeLabel}` }).show()
-   ```
-2. For merge completion, similar notification in the merge callback
-3. Only show when the app window is not focused — check `BrowserWindow.getFocusedWindow() === null`
-4. Optionally add a setting to disable notifications
+~~**Plan:**~~
+~~1. In `src/main/download-manager.ts`, after `checkEpisodeComplete()` detects a completed episode (and after merge if auto-merge is on), use Electron's `Notification` API~~
+~~2. For merge completion, similar notification in the merge callback~~
+~~3. Only show when the app window is not focused — check `BrowserWindow.getFocusedWindow() === null`~~
+~~4. Optionally add a setting to disable notifications~~
 
 ---
 

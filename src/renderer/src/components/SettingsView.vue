@@ -17,6 +17,7 @@ const tokenError = ref('')
 const appVersion = ref('')
 const updateStatus = ref<{ status: string; version?: string; percent?: number; error?: string }>({ status: 'idle' })
 
+const notificationMode = ref('off')
 const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
@@ -239,6 +240,7 @@ onMounted(async () => {
   token.value = (await window.api.getSetting('token') as string) || ''
   translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
   downloadDir.value = (await window.api.getSetting('downloadDir') as string) || ''
+  notificationMode.value = (await window.api.getSetting('notificationMode') as string) || 'off'
   autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
   videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
   ffmpeg.value = await window.api.ffmpegCheck()
@@ -301,6 +303,7 @@ watch(token, (val) => {
 
 // Immediate watchers for dropdowns/toggles
 watch(translationType, (val) => { if (loaded.value) autoSave('translationType', val) })
+watch(notificationMode, (val) => { if (loaded.value) autoSave('notificationMode', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 </script>
@@ -353,6 +356,16 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
             <span class="dir-path">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
             <button class="browse-btn" @click="pickDir">Browse</button>
           </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="notif-mode">Notifications</label>
+          <p class="setting-hint">Desktop notifications when downloads or merges complete (only when app is not focused).</p>
+          <select id="notif-mode" v-model="notificationMode" class="setting-input setting-select">
+            <option value="off">Off</option>
+            <option value="each">Each Episode</option>
+            <option value="queue">Queue Complete</option>
+          </select>
         </div>
 
         <div class="setting-group">

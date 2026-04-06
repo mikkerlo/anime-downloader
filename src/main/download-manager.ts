@@ -80,7 +80,9 @@ export class DownloadManager {
   private progressTimer: ReturnType<typeof setInterval> | null = null
   private downloadDir: string
   private getToken: () => string
-  private episodeCompleteCallback: (() => void) | null = null
+  private episodeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
+  private mergeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
+  private queueCompleteCallback: (() => void) | null = null
   private merging = false
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
@@ -152,8 +154,16 @@ export class DownloadManager {
     }
   }
 
-  onEpisodeComplete(callback: () => void): void {
+  onEpisodeComplete(callback: (animeName: string, episodeLabel: string) => void): void {
     this.episodeCompleteCallback = callback
+  }
+
+  onMergeComplete(callback: (animeName: string, episodeLabel: string) => void): void {
+    this.mergeCompleteCallback = callback
+  }
+
+  onQueueComplete(callback: () => void): void {
+    this.queueCompleteCallback = callback
   }
 
   setDownloadDir(dir: string): void {
@@ -492,6 +502,9 @@ export class DownloadManager {
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
         this.schedulePersist()
         console.log(`[merge] Completed: ${mkvFilename}`)
+        if (this.mergeCompleteCallback) {
+          this.mergeCompleteCallback(group.animeName, group.episodeLabel)
+        }
         // Delete source files after successful merge
         try { fs.unlinkSync(videoPath) } catch { /* ignore */ }
         if (subtitlePath) {
@@ -789,9 +802,24 @@ export class DownloadManager {
   private checkEpisodeComplete(translationId: number): void {
     const items = this.queue.filter(i => i.translationId === translationId && i.status !== 'cancelled')
     const allDone = items.length > 0 && items.every(i => i.status === 'completed')
-    if (allDone && this.episodeCompleteCallback) {
-      // Defer to avoid blocking the download pipeline
-      setTimeout(() => this.episodeCompleteCallback?.(), 100)
+    if (allDone) {
+      const first = items[0]
+      if (this.episodeCompleteCallback) {
+        const animeName = first.animeName
+        const episodeLabel = first.episodeLabel
+        setTimeout(() => this.episodeCompleteCallback?.(animeName, episodeLabel), 100)
+      }
+      this.checkQueueComplete()
+    }
+  }
+
+  private checkQueueComplete(): void {
+    if (!this.queueCompleteCallback) return
+    const hasRemaining = this.queue.some(i =>
+      i.status === 'queued' || i.status === 'downloading'
+    )
+    if (!hasRemaining) {
+      setTimeout(() => this.queueCompleteCallback?.(), 200)
     }
   }
 

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, Notification } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
@@ -71,6 +71,7 @@ const store = new Store({
     downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>,
     animeCache: {} as Record<string, AnimeCacheEntry>,
     lastUpdateCheck: 0,
+    notificationMode: 'off' as string,
     keyboardShortcuts: {
       back: 'Escape',
       focusSearch: 'CmdOrCtrl+F',
@@ -862,13 +863,38 @@ app.whenReady().then(async () => {
   const ffmpegInfo = await checkFfmpeg()
   downloadManager = new DownloadManager(getDownloadDir(), () => store.get('token') as string, app.getPath('userData'))
   downloadManager.loadQueue()
-  downloadManager.onEpisodeComplete(async () => {
+  const showBackgroundNotification = (title: string, body: string): void => {
+    if (BrowserWindow.getFocusedWindow() !== null) return
+    new Notification({ title, body }).show()
+  }
+
+  downloadManager.onEpisodeComplete(async (animeName, episodeLabel) => {
     const autoMerge = store.get('autoMerge') as boolean
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {
       const codec = store.get('videoCodec') as string || 'copy'
       await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
+    } else {
+      const mode = store.get('notificationMode') as string
+      if (mode === 'each') {
+        showBackgroundNotification('Download complete', `${animeName} \u2014 ${episodeLabel}`)
+      }
     }
   })
+
+  downloadManager.onMergeComplete((animeName, episodeLabel) => {
+    const mode = store.get('notificationMode') as string
+    if (mode === 'each') {
+      showBackgroundNotification('Merge complete', `${animeName} \u2014 ${episodeLabel}`)
+    }
+  })
+
+  downloadManager.onQueueComplete(() => {
+    const mode = store.get('notificationMode') as string
+    if (mode === 'queue') {
+      showBackgroundNotification('Downloads complete', 'All downloads have finished')
+    }
+  })
+
   registerIpcHandlers()
 
   // Auto-updater setup

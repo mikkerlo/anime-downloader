@@ -10,6 +10,7 @@
 - [x] Batch library status loading — single `library-get-status` IPC replacing per-anime round-trips
 - [x] Auto-save settings with debounced watchers, removed Save button
 - [x] Download queue persistence — queue saved to queue.json, restored on startup
+- [x] API token validation — "Test" button in Settings validates token against embed API
 
 ---
 
@@ -33,18 +34,18 @@
 
 ---
 
-## 2. API token validation
+## ~~2. API token validation~~
 
-**Priority:** Medium | **Effort:** Small
+~~**Priority:** Medium | **Effort:** Small~~
 
-No feedback until the first download fails. Users don't know if their token is valid.
+~~No feedback until the first download fails. Users don't know if their token is valid.~~
 
-**Plan:**
-1. Add IPC handler `validate-token` in `src/main/index.ts` that calls a lightweight API endpoint (e.g. `GET /api/series/?query=test&limit=1`) with the provided token and returns `{ valid: boolean; error?: string }`
-2. Add to preload: `validateToken: () => Promise<{ valid: boolean; error?: string }>`
-3. In `SettingsView.vue`, add a "Test token" button next to the token input
-4. On click: call `validateToken()`, show green checkmark or red error inline
-5. Optionally auto-validate on token change (debounced, after auto-save fires)
+~~**Plan:**~~
+~~1. Add IPC handler `validate-token` in `src/main/index.ts` that calls a lightweight API endpoint (e.g. `GET /api/series/?query=test&limit=1`) with the provided token and returns `{ valid: boolean; error?: string }`~~
+~~2. Add to preload: `validateToken: () => Promise<{ valid: boolean; error?: string }>`~~
+~~3. In `SettingsView.vue`, add a "Test token" button next to the token input~~
+~~4. On click: call `validateToken()`, show green checkmark or red error inline~~
+~~5. Optionally auto-validate on token change (debounced, after auto-save fires)~~
 
 ---
 

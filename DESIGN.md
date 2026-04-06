@@ -206,6 +206,7 @@ LibraryView shows both with indicators:
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
+| `validate-token` | invoke | Validate API token against smotret-anime.ru |
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID |
 | `get-episode` | invoke | Fetch episode translations |

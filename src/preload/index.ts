@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {
+  validateToken: () => ipcRenderer.invoke('validate-token'),
   searchAnime: (query: string) => ipcRenderer.invoke('search-anime', query),
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
   getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),

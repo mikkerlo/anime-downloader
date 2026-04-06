@@ -4,6 +4,7 @@ interface ApiResponse<T> {
 }
 
 interface Api {
+  validateToken: () => Promise<{ valid: boolean; error?: string }>
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>

@@ -64,3 +64,6 @@ Requirements for the plan:
 - Number the new entry sequentially after the last existing entry in TODO.md
 
 Append the new entry at the end of TODO.md (before any trailing whitespace), separated by `---`.
+
+After that make a CL and push it using jj.
+

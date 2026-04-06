@@ -313,6 +313,21 @@ async function apiRequest(path: string): Promise<unknown> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.handle('validate-token', async () => {
+    const token = store.get('token') as string
+    if (!token) return { valid: false, error: 'No token configured' }
+    try {
+      const response = await fetch(`${API_BASE}/translations/embed/4336179?access_token=${token}`, {
+        headers: { 'User-Agent': USER_AGENT }
+      })
+      const json = await response.json() as { error?: { code: number; message: string }; data?: unknown }
+      if (json.error?.code === 403) return { valid: false, error: 'Invalid token' }
+      return { valid: true }
+    } catch (err) {
+      return { valid: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   ipcMain.handle('search-anime', async (_event, query: string) => {
     return apiRequest(`/series/?query=${encodeURIComponent(query)}&fields=id,title,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,titles`)
   })

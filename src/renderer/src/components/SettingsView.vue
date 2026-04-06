@@ -10,6 +10,9 @@ const loaded = ref(false)
 const savedVisible = ref(false)
 let savedTimeout: ReturnType<typeof setTimeout> | null = null
 
+const tokenStatus = ref<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
+const tokenError = ref('')
+
 const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
@@ -156,10 +159,28 @@ function autoSave(key: string, value: string | boolean): void {
   showSaved()
 }
 
+async function testToken(): Promise<void> {
+  tokenStatus.value = 'checking'
+  tokenError.value = ''
+  try {
+    const result = await window.api.validateToken()
+    if (result.valid) {
+      tokenStatus.value = 'valid'
+    } else {
+      tokenStatus.value = 'invalid'
+      tokenError.value = result.error || 'Invalid token'
+    }
+  } catch (err) {
+    tokenStatus.value = 'invalid'
+    tokenError.value = String(err)
+  }
+}
+
 // Debounced watcher for token (user typing)
 let tokenTimer: ReturnType<typeof setTimeout> | null = null
 watch(token, (val) => {
   if (!loaded.value) return
+  tokenStatus.value = 'idle'
   if (tokenTimer) clearTimeout(tokenTimer)
   tokenTimer = setTimeout(() => autoSave('token', val.trim()), 800)
 })
@@ -186,13 +207,20 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
         <div class="setting-group">
           <label class="setting-label" for="token-input">API Token</label>
           <p class="setting-hint">Token for smotret-anime.ru API access. Used for direct download links.</p>
-          <input
-            id="token-input"
-            v-model="token"
-            type="password"
-            class="setting-input"
-            placeholder="Enter your API token..."
-          />
+          <div class="token-row">
+            <input
+              id="token-input"
+              v-model="token"
+              type="password"
+              class="setting-input"
+              placeholder="Enter your API token..."
+            />
+            <button class="test-token-btn" :disabled="!token || tokenStatus === 'checking'" @click="testToken">
+              {{ tokenStatus === 'checking' ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <div v-if="tokenStatus === 'valid'" class="token-result token-valid">Token is valid</div>
+          <div v-if="tokenStatus === 'invalid'" class="token-result token-invalid">{{ tokenError }}</div>
         </div>
 
         <div class="setting-group">
@@ -435,6 +463,51 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 
 .setting-select {
   cursor: pointer;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.token-row .setting-input {
+  flex: 1;
+}
+
+.test-token-btn {
+  padding: 10px 16px;
+  background-color: #0f3460;
+  border: none;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.test-token-btn:hover {
+  background-color: #1a4a7a;
+}
+
+.test-token-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.token-result {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.token-valid {
+  color: #6ab04c;
+}
+
+.token-invalid {
+  color: #e94560;
 }
 
 .dir-row {

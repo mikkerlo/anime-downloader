@@ -383,7 +383,7 @@ async function mergeFinished(): Promise<void> {
 }
 
 .dl-kind {
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;

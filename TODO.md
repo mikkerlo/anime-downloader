@@ -94,38 +94,11 @@ Support two storage paths: a "hot" path (for active downloads, in-progress merge
 
 ---
 
-## 2. Custom Dark Scrollbar Styling
+## ~~2. Custom Dark Scrollbar Styling~~
 
-**Priority:** Medium | **Effort:** Small
+~~**Priority:** Medium | **Effort:** Small~~
 
-The app uses default Chromium scrollbars which look jarring against the dark theme. Add thin, minimal custom scrollbar styles that blend with the existing color palette.
-
-**Plan:**
-
-### Global scrollbar styles
-
-1. Add `::-webkit-scrollbar` rules to the global `<style>` block in `src/renderer/src/App.vue` (after the `body` rule ~line 150):
-   - `::-webkit-scrollbar` — width: 8px, height: 8px (for horizontal)
-   - `::-webkit-scrollbar-track` — background: `#1a1a2e` (matches body background)
-   - `::-webkit-scrollbar-thumb` — background: `#2a2a4a`, border-radius: 4px
-   - `::-webkit-scrollbar-thumb:hover` — background: `#3a3a5a`
-   - `::-webkit-scrollbar-corner` — background: `#1a1a2e` (where horizontal and vertical meet)
-
-### Scrollable areas affected
-
-These components have `overflow-y: auto` and will inherit the global scrollbar:
-
-- `src/renderer/src/components/SearchView.vue` — search results grid (~line 159)
-- `src/renderer/src/components/AnimeDetailView.vue` — episode list (~line 797), left panel (~line 866)
-- `src/renderer/src/components/DownloadsView.vue` — download queue list (~line 295)
-- `src/renderer/src/components/SettingsView.vue` — settings content area (~line 780)
-- `src/renderer/src/components/LibraryView.vue` — library grid (~line 97)
-
-No per-component changes needed — global `::-webkit-scrollbar` in an unscoped `<style>` block applies everywhere.
-
-### Dropdowns and selects
-
-2. Also style `select` element scrollbars if needed — Chromium `<select>` dropdowns use OS-native rendering and won't be affected by `::-webkit-scrollbar`, so no action required there.
+~~The app uses default Chromium scrollbars which look jarring against the dark theme. Add thin, minimal custom scrollbar styles that blend with the existing color palette.~~
 
 ---
 

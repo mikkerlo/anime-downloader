@@ -154,6 +154,12 @@ body {
   overflow: hidden;
 }
 
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1a1a2e; }
+::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a5a; }
+::-webkit-scrollbar-corner { background: #1a1a2e; }
+
 .app {
   display: flex;
   height: 100vh;

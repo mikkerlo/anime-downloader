@@ -313,6 +313,8 @@ interface EpisodeMeta {
 | `animeCache` | object | `{}` | Offline cache: anime details, episodes, quality probes, posters |
 | `lastUpdateCheck` | number | `0` | Timestamp of last successful update check |
 | `notificationMode` | string | `'off'` | Desktop notification mode: `off`, `each` (per episode), `queue` (when queue empties) |
+| `downloadSpeedLimit` | number | `0` | Download speed limit in bytes/sec (0 = unlimited), shared across active downloads |
+| `concurrentDownloads` | number | `2` | Max simultaneous downloads (1–3) |
 | `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D'}` | Configurable keyboard shortcut bindings |
 
 ## Auto-Update

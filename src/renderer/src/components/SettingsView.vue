@@ -18,6 +18,9 @@ const appVersion = ref('')
 const updateStatus = ref<{ status: string; version?: string; percent?: number; error?: string }>({ status: 'idle' })
 
 const notificationMode = ref('off')
+const speedLimitPreset = ref('0')
+const customSpeedLimit = ref(1)
+const concurrentDownloads = ref(2)
 const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
@@ -241,6 +244,15 @@ onMounted(async () => {
   translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
   downloadDir.value = (await window.api.getSetting('downloadDir') as string) || ''
   notificationMode.value = (await window.api.getSetting('notificationMode') as string) || 'off'
+  concurrentDownloads.value = (await window.api.getSetting('concurrentDownloads') as number) || 2
+  const savedSpeedLimit = (await window.api.getSetting('downloadSpeedLimit') as number) || 0
+  const PRESETS = [0, 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024]
+  if (PRESETS.includes(savedSpeedLimit)) {
+    speedLimitPreset.value = String(savedSpeedLimit)
+  } else {
+    speedLimitPreset.value = 'custom'
+    customSpeedLimit.value = Math.round(savedSpeedLimit / (1024 * 1024) * 10) / 10
+  }
   autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
   videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
   ffmpeg.value = await window.api.ffmpegCheck()
@@ -304,6 +316,22 @@ watch(token, (val) => {
 // Immediate watchers for dropdowns/toggles
 watch(translationType, (val) => { if (loaded.value) autoSave('translationType', val) })
 watch(notificationMode, (val) => { if (loaded.value) autoSave('notificationMode', val) })
+watch(concurrentDownloads, (val) => { if (loaded.value) autoSave('concurrentDownloads', val) })
+watch(speedLimitPreset, (val) => {
+  if (!loaded.value) return
+  if (val !== 'custom') {
+    window.api.setSetting('downloadSpeedLimit', Number(val))
+    showSaved()
+  } else {
+    window.api.setSetting('downloadSpeedLimit', Math.round(customSpeedLimit.value * 1024 * 1024))
+    showSaved()
+  }
+})
+watch(customSpeedLimit, (val) => {
+  if (!loaded.value || speedLimitPreset.value !== 'custom') return
+  window.api.setSetting('downloadSpeedLimit', Math.round(val * 1024 * 1024))
+  showSaved()
+})
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 </script>
@@ -365,6 +393,38 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
             <option value="off">Off</option>
             <option value="each">Each Episode</option>
             <option value="queue">Queue Complete</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="speed-limit">Download Speed Limit</label>
+          <p class="setting-hint">Limit download bandwidth. The limit is shared across all active downloads.</p>
+          <select id="speed-limit" v-model="speedLimitPreset" class="setting-input setting-select">
+            <option value="0">Unlimited</option>
+            <option :value="String(1024 * 1024)">1 MB/s</option>
+            <option :value="String(5 * 1024 * 1024)">5 MB/s</option>
+            <option :value="String(10 * 1024 * 1024)">10 MB/s</option>
+            <option value="custom">Custom</option>
+          </select>
+          <div v-if="speedLimitPreset === 'custom'" class="custom-speed-row">
+            <input
+              v-model.number="customSpeedLimit"
+              type="number"
+              min="0.1"
+              step="0.1"
+              class="setting-input speed-input"
+            />
+            <span class="speed-unit">MB/s</span>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="concurrent-dl">Concurrent Downloads</label>
+          <p class="setting-hint">Maximum number of simultaneous downloads.</p>
+          <select id="concurrent-dl" v-model.number="concurrentDownloads" class="setting-input setting-select">
+            <option :value="1">1</option>
+            <option :value="2">2</option>
+            <option :value="3">3</option>
           </select>
         </div>
 
@@ -712,6 +772,22 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 
 .token-invalid {
   color: #e94560;
+}
+
+.custom-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.speed-input {
+  width: 100px !important;
+}
+
+.speed-unit {
+  color: #a0a0b8;
+  font-size: 0.85rem;
 }
 
 .dir-row {

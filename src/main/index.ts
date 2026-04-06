@@ -72,6 +72,8 @@ const store = new Store({
     animeCache: {} as Record<string, AnimeCacheEntry>,
     lastUpdateCheck: 0,
     notificationMode: 'off' as string,
+    downloadSpeedLimit: 0,
+    concurrentDownloads: 2,
     keyboardShortcuts: {
       back: 'Escape',
       focusSearch: 'CmdOrCtrl+F',
@@ -869,7 +871,13 @@ app.whenReady().then(async () => {
     console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
   }
   const ffmpegInfo = await checkFfmpeg()
-  downloadManager = new DownloadManager(getDownloadDir(), () => store.get('token') as string, app.getPath('userData'))
+  downloadManager = new DownloadManager(
+    getDownloadDir(),
+    () => store.get('token') as string,
+    app.getPath('userData'),
+    () => store.get('downloadSpeedLimit') as number || 0,
+    () => store.get('concurrentDownloads') as number || 2
+  )
   downloadManager.loadQueue()
   const showBackgroundNotification = (title: string, body: string): void => {
     if (BrowserWindow.getFocusedWindow() !== null) return

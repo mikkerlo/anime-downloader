@@ -58,7 +58,6 @@ interface EmbedData {
 }
 
 const USER_AGENT = 'smotret-anime-dl'
-const MAX_CONCURRENT = 2
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
 
@@ -80,6 +79,8 @@ export class DownloadManager {
   private progressTimer: ReturnType<typeof setInterval> | null = null
   private downloadDir: string
   private getToken: () => string
+  private getSpeedLimit: () => number
+  private getConcurrentLimit: () => number
   private episodeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
   private mergeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
   private queueCompleteCallback: (() => void) | null = null
@@ -90,9 +91,11 @@ export class DownloadManager {
   private queueFilePath: string
   private persistScheduled = false
 
-  constructor(downloadDir: string, getToken: () => string, userDataPath: string) {
+  constructor(downloadDir: string, getToken: () => string, userDataPath: string, getSpeedLimit: () => number = () => 0, getConcurrentLimit: () => number = () => 2) {
     this.downloadDir = downloadDir
     this.getToken = getToken
+    this.getSpeedLimit = getSpeedLimit
+    this.getConcurrentLimit = getConcurrentLimit
     this.queueFilePath = path.join(userDataPath, 'queue.json')
     this.progressTimer = setInterval(() => this.broadcastProgress(), PROGRESS_INTERVAL_MS)
   }
@@ -686,7 +689,7 @@ export class DownloadManager {
   }
 
   private processQueue(): void {
-    while (this.activeCount < MAX_CONCURRENT) {
+    while (this.activeCount < this.getConcurrentLimit()) {
       const next = this.queue.find(i => i.status === 'queued')
       if (!next) break
       this.startDownload(next)
@@ -780,8 +783,42 @@ export class DownloadManager {
         }
       })
 
+      const getSpeedLimit = this.getSpeedLimit
+      const getActiveCount = (): number => this.activeCount
+      let throttleTokens = 0
+      let throttleLastTime = Date.now()
+
+      const throttle = new (await import('stream')).Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          const limit = getSpeedLimit()
+          if (limit <= 0) {
+            callback(null, chunk)
+            return
+          }
+
+          const perDownload = limit / Math.max(1, getActiveCount())
+          const now = Date.now()
+          const elapsed = (now - throttleLastTime) / 1000
+          throttleTokens += elapsed * perDownload
+          if (throttleTokens > perDownload) throttleTokens = perDownload
+          throttleLastTime = now
+
+          if (chunk.length <= throttleTokens) {
+            throttleTokens -= chunk.length
+            callback(null, chunk)
+          } else {
+            const delay = ((chunk.length - throttleTokens) / perDownload) * 1000
+            throttleTokens = 0
+            setTimeout(() => {
+              throttleLastTime = Date.now()
+              callback(null, chunk)
+            }, delay)
+          }
+        }
+      })
+
       const readable = Readable.fromWeb(response.body as import('stream/web').ReadableStream)
-      await pipeline(readable, trackProgress, fileStream)
+      await pipeline(readable, trackProgress, throttle, fileStream)
 
       fs.renameSync(partPath, filePath)
       item.status = 'completed'

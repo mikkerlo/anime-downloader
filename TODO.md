@@ -124,3 +124,26 @@ Useful when app is in background or minimized.
 2. In `DownloadManager.startDownload()`, wrap the response stream in a `Transform` that throttles throughput — track bytes written per second and pause/resume the readable stream to stay under the limit
 3. Add a slider or input in `SettingsView.vue` (General tab) with presets: Unlimited, 1 MB/s, 5 MB/s, 10 MB/s, Custom
 4. Apply limit changes to active downloads (update the throttle transform dynamically)
+
+---
+
+## 8. Pause All / Resume All buttons in Downloads
+
+**Priority:** Low | **Effort:** Small
+
+The Downloads view has per-item pause/resume buttons and bulk actions for "Retry all failed", "Merge finished", and "Clear finished" — but no way to pause or resume the entire queue at once. Useful when managing large download batches.
+
+**Plan:**
+1. In `src/main/download-manager.ts`, add two methods following the `restartAllFailed()` pattern (line ~367):
+   - `pauseAll()` — iterate `this.queue`, call `this.pause(id)` for items with status `downloading` or `queued`, then `this.schedulePersist()`
+   - `resumeAll()` — iterate `this.queue`, call `this.resume(id)` for items with status `paused`, then `this.schedulePersist()`
+2. Add IPC handlers in `src/main/index.ts`:
+   - `download:pause-all` → `downloadManager.pauseAll()`
+   - `download:resume-all` → `downloadManager.resumeAll()`
+3. Add preload bindings in `src/preload/index.ts`:
+   - `downloadPauseAll: () => ipcRenderer.invoke('download:pause-all')`
+   - `downloadResumeAll: () => ipcRenderer.invoke('download:resume-all')`
+4. Add type declarations in `src/preload/index.d.ts`:
+   - `downloadPauseAll: () => Promise<void>`
+   - `downloadResumeAll: () => Promise<void>`
+5. In `src/renderer/src/components/DownloadsView.vue`, add "Pause all" and "Resume all" buttons in the topbar (line ~87) next to existing bulk action buttons. Show/hide based on whether any items are active or paused

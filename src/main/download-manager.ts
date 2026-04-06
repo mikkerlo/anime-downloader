@@ -85,11 +85,71 @@ export class DownloadManager {
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
   private mergeCancelled = false
+  private queueFilePath: string
+  private persistScheduled = false
 
-  constructor(downloadDir: string, getToken: () => string) {
+  constructor(downloadDir: string, getToken: () => string, userDataPath: string) {
     this.downloadDir = downloadDir
     this.getToken = getToken
+    this.queueFilePath = path.join(userDataPath, 'queue.json')
     this.progressTimer = setInterval(() => this.broadcastProgress(), PROGRESS_INTERVAL_MS)
+  }
+
+  private persistQueue(): void {
+    const activeItems = this.queue.filter(i => i.status !== 'cancelled')
+    if (activeItems.length === 0) {
+      try { fs.unlinkSync(this.queueFilePath) } catch { /* ignore */ }
+      return
+    }
+    const data = {
+      queue: activeItems.map(item => ({ ...item, speed: 0 })),
+      mergeStatuses: Object.fromEntries(this.mergeStatuses)
+    }
+    const tmpPath = this.queueFilePath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, this.queueFilePath)
+  }
+
+  private schedulePersist(): void {
+    if (this.persistScheduled) return
+    this.persistScheduled = true
+    queueMicrotask(() => {
+      this.persistScheduled = false
+      this.persistQueue()
+    })
+  }
+
+  loadQueue(): void {
+    try {
+      if (!fs.existsSync(this.queueFilePath)) return
+      const raw = fs.readFileSync(this.queueFilePath, 'utf-8')
+      const data = JSON.parse(raw)
+
+      if (Array.isArray(data.queue)) {
+        for (const item of data.queue) {
+          if (item.status === 'downloading' || item.status === 'queued') {
+            item.status = 'paused'
+            item.speed = 0
+          }
+          this.queue.push(item)
+        }
+      }
+
+      if (data.mergeStatuses && typeof data.mergeStatuses === 'object') {
+        for (const [key, value] of Object.entries(data.mergeStatuses)) {
+          const ms = value as { status: MergeStatus; error?: string; percent?: number }
+          if (ms.status === 'merging') {
+            ms.status = 'pending'
+            ms.percent = undefined
+          }
+          this.mergeStatuses.set(Number(key), ms)
+        }
+      }
+
+      console.log(`[download] Restored ${this.queue.length} items from queue.json`)
+    } catch (err) {
+      console.error('[download] Failed to load queue from disk:', err)
+    }
   }
 
   onEpisodeComplete(callback: () => void): void {
@@ -237,6 +297,7 @@ export class DownloadManager {
       }
     }
 
+    this.persistQueue()
     this.processQueue()
   }
 
@@ -253,6 +314,7 @@ export class DownloadManager {
     } else if (item.status === 'queued') {
       item.status = 'paused'
     }
+    this.schedulePersist()
   }
 
   resume(id: string): void {
@@ -260,6 +322,7 @@ export class DownloadManager {
     if (item && (item.status === 'paused' || item.status === 'failed')) {
       item.status = 'queued'
       item.error = undefined
+      this.schedulePersist()
       this.processQueue()
     }
   }
@@ -297,6 +360,7 @@ export class DownloadManager {
     item.speed = 0
     item.error = undefined
     item.status = 'queued'
+    this.schedulePersist()
     this.processQueue()
   }
 
@@ -305,6 +369,7 @@ export class DownloadManager {
     for (const item of failed) {
       await this.restart(item.id)
     }
+    this.schedulePersist()
   }
 
   cancel(id: string): void {
@@ -332,6 +397,7 @@ export class DownloadManager {
       }
     }
 
+    this.schedulePersist()
     this.processQueue()
   }
 
@@ -359,6 +425,7 @@ export class DownloadManager {
       }
       this.cancel(item.id)
     }
+    this.schedulePersist()
   }
 
   clearCompleted(): void {
@@ -378,6 +445,7 @@ export class DownloadManager {
     for (const trId of removedTrIds) {
       this.mergeStatuses.delete(trId)
     }
+    this.schedulePersist()
   }
 
   async mergeCompleted(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy'): Promise<void> {
@@ -422,6 +490,7 @@ export class DownloadManager {
           this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
         }, subMeta)
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
+        this.schedulePersist()
         console.log(`[merge] Completed: ${mkvFilename}`)
         // Delete source files after successful merge
         try { fs.unlinkSync(videoPath) } catch { /* ignore */ }
@@ -437,6 +506,7 @@ export class DownloadManager {
         } else {
           const msg = err instanceof Error ? err.message : 'Unknown error'
           this.mergeStatuses.set(group.translationId, { status: 'failed', error: msg })
+          this.schedulePersist()
           console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
         }
       }
@@ -684,6 +754,7 @@ export class DownloadManager {
       fs.renameSync(partPath, filePath)
       item.status = 'completed'
       item.speed = 0
+      this.schedulePersist()
 
       this.checkEpisodeComplete(item.translationId)
 
@@ -705,6 +776,7 @@ export class DownloadManager {
       item.status = 'failed'
       item.error = err instanceof Error ? err.message : 'Unknown error'
       item.speed = 0
+      this.schedulePersist()
     } finally {
       if (item.status !== 'queued') {
         this.abortControllers.delete(item.id)
@@ -723,6 +795,8 @@ export class DownloadManager {
     }
   }
 
+  private broadcastTick = 0
+
   private broadcastProgress(): void {
     const windows = BrowserWindow.getAllWindows()
     if (windows.length === 0) return
@@ -730,9 +804,16 @@ export class DownloadManager {
     for (const win of windows) {
       win.webContents.send('download:progress', data)
     }
+    // Periodic persist every 10 ticks (5s) while downloads are active
+    this.broadcastTick++
+    if (this.broadcastTick >= 10 && this.activeCount > 0) {
+      this.broadcastTick = 0
+      this.persistQueue()
+    }
   }
 
   destroy(): void {
+    this.persistQueue()
     if (this.progressTimer) {
       clearInterval(this.progressTimer)
       this.progressTimer = null

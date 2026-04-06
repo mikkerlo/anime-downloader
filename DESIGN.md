@@ -131,6 +131,14 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    e. On failure: retry up to 3x with exponential backoff
 8. broadcastProgress() every 500ms --> renderer updates
 9. checkEpisodeComplete() --> trigger auto-merge if enabled
+10. persistQueue() on every state change --> queue.json in userData
+    - Atomic writes (tmp + rename) to prevent corruption
+    - Debounced via queueMicrotask for bulk operations
+    - Periodic persist every 5s while downloads are active
+11. On app start: loadQueue() restores items from queue.json
+    - In-progress/queued items restored as paused (URLs expire)
+    - Active merges reset to pending
+    - .part files resumed via existing Range header logic
 ```
 
 ### Merge Pipeline

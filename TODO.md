@@ -9,26 +9,27 @@
 - [x] Extract shared utilities (`formatBytes`, `formatSpeed`, `formatEta`, `getAnimeName`) into `renderer/utils.ts`
 - [x] Batch library status loading — single `library-get-status` IPC replacing per-anime round-trips
 - [x] Auto-save settings with debounced watchers, removed Save button
+- [x] Download queue persistence — queue saved to queue.json, restored on startup
 
 ---
 
-## 1. Download queue persistence
+## ~~1. Download queue persistence~~
 
-**Priority:** High | **Effort:** Medium
+~~**Priority:** High | **Effort:** Medium~~
 
-App crash or accidental close loses all queue state. No resume on restart.
+~~App crash or accidental close loses all queue state. No resume on restart.~~
 
-**Plan:**
-1. In `DownloadManager`, add a `persistQueue()` method that serializes the queue to a JSON file in `app.getPath('userData')/queue.json`. Store: `{ translationId, animeName, episodeLabel, episodeInt, animeId, height, translationType, author, status, bytesReceived }` for each item
-2. Call `persistQueue()` on: enqueue, status change (start/pause/complete/fail), cancel, clear
-3. On app start (`DownloadManager` constructor or init), load `queue.json` if it exists:
-   - Items with status `completed` + `mergeStatus === 'completed'` — skip (already done)
-   - Items with status `downloading` or `queued` — re-enqueue as fresh downloads (URLs expire, so must re-fetch embed)
-   - Items with status `paused` — restore as paused
-   - Items with status `failed` — restore as failed (user can retry)
-   - Items with `completed` video but `pending` merge — restore and trigger merge
-4. Delete `queue.json` when queue is empty (all cleared)
-5. Handle edge case: `.part` files may exist from interrupted downloads — the existing resume logic (Range headers + 416 handling) already covers this
+~~**Plan:**~~
+~~1. In `DownloadManager`, add a `persistQueue()` method that serializes the queue to a JSON file in `app.getPath('userData')/queue.json`. Store: `{ translationId, animeName, episodeLabel, episodeInt, animeId, height, translationType, author, status, bytesReceived }` for each item~~
+~~2. Call `persistQueue()` on: enqueue, status change (start/pause/complete/fail), cancel, clear~~
+~~3. On app start (`DownloadManager` constructor or init), load `queue.json` if it exists:~~
+   ~~- Items with status `completed` + `mergeStatus === 'completed'` — skip (already done)~~
+   ~~- Items with status `downloading` or `queued` — re-enqueue as fresh downloads (URLs expire, so must re-fetch embed)~~
+   ~~- Items with status `paused` — restore as paused~~
+   ~~- Items with status `failed` — restore as failed (user can retry)~~
+   ~~- Items with `completed` video but `pending` merge — restore and trigger merge~~
+~~4. Delete `queue.json` when queue is empty (all cleared)~~
+~~5. Handle edge case: `.part` files may exist from interrupted downloads — the existing resume logic (Range headers + 416 handling) already covers this~~
 
 ---
 

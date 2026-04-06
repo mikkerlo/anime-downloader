@@ -798,7 +798,8 @@ app.whenReady().then(async () => {
     console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
   }
   const ffmpegInfo = await checkFfmpeg()
-  downloadManager = new DownloadManager(getDownloadDir(), () => store.get('token') as string)
+  downloadManager = new DownloadManager(getDownloadDir(), () => store.get('token') as string, app.getPath('userData'))
+  downloadManager.loadQueue()
   downloadManager.onEpisodeComplete(async () => {
     const autoMerge = store.get('autoMerge') as boolean
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {

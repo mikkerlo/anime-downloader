@@ -244,6 +244,11 @@ LibraryView shows both with indicators:
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |
 | `ffmpeg:download-progress` | send | FFmpeg/ffprobe download progress on first launch |
+| `app:version` | invoke | Get app version from package.json |
+| `update:check` | invoke | Check GitHub for newer version via electron-updater |
+| `update:download` | invoke | Download available update |
+| `update:install` | invoke | Quit and install downloaded update |
+| `update:status` | send | Update check/download progress and status |
 | `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
 | `file:check-episodes` | invoke | Check which episodes exist on disk |
 | `file:open` | invoke | Open file with default app |
@@ -304,6 +309,17 @@ interface EpisodeMeta {
 | `downloadedAnime` | object | `{}` | Map of anime with downloaded files |
 | `downloadedEpisodes` | object | `{}` | Per-episode translation metadata (key: `animeId:episodeInt`) |
 | `animeCache` | object | `{}` | Offline cache: anime details, episodes, quality probes, posters |
+| `lastUpdateCheck` | number | `0` | Timestamp of last successful update check |
+
+## Auto-Update
+
+Uses `electron-updater` with GitHub releases as the update source. The CI uploads `latest.yml` / `latest-linux.yml` / `latest-mac.yml` alongside platform artifacts — electron-updater reads these to determine available versions.
+
+- `autoDownload = false` — user must explicitly click "Download update"
+- Auto-checks on app launch if the last check was >24 hours ago (`lastUpdateCheck` setting)
+- Manual check via Settings > General > "Check for updates" button
+- Flow: check → show available version → download with progress bar → "Restart to update"
+- Publish config in `package.json` points to `github:mikkerlo/anime-downloader`
 
 ## FFmpeg
 

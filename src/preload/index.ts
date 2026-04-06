@@ -72,6 +72,18 @@ const api = {
   },
   offFfmpegDownloadProgress: () => {
     ipcRenderer.removeAllListeners('ffmpeg:download-progress')
+  },
+
+  // Updates
+  appVersion: () => ipcRenderer.invoke('app:version'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback: (data: unknown) => void) => {
+    ipcRenderer.on('update:status', (_event, data) => callback(data))
+  },
+  offUpdateStatus: () => {
+    ipcRenderer.removeAllListeners('update:status')
   }
 }
 

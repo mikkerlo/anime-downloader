@@ -79,6 +79,7 @@ jobs:
             dist/*.deb
             dist/*.zip
             dist/*.dmg
+            dist/*.yml
           if-no-files-found: ignore
 
   release:

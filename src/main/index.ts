@@ -10,6 +10,7 @@ import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
+import { autoUpdater } from 'electron-updater'
 
 // Suppress EPIPE errors from broken stdout/stderr pipes (common on WSL2)
 process.stdout?.on('error', () => {})
@@ -68,7 +69,8 @@ const store = new Store({
     videoCodec: 'copy' as string,
     downloadedAnime: {} as Record<string, AnimeSearchResult>,
     downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>,
-    animeCache: {} as Record<string, AnimeCacheEntry>
+    animeCache: {} as Record<string, AnimeCacheEntry>,
+    lastUpdateCheck: 0
   }
 })
 
@@ -313,6 +315,46 @@ async function apiRequest(path: string): Promise<unknown> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.handle('app:version', () => app.getVersion())
+
+  ipcMain.handle('update:check', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      if (!result) {
+        for (const win of BrowserWindow.getAllWindows()) {
+          win.webContents.send('update:status', {
+            status: 'error',
+            error: 'Update check not available in development mode'
+          })
+        }
+      }
+    } catch (err) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('update:status', {
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+  })
+
+  ipcMain.handle('update:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (err) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('update:status', {
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+  })
+
+  ipcMain.handle('update:install', () => {
+    autoUpdater.quitAndInstall()
+  })
+
   ipcMain.handle('validate-token', async () => {
     const token = store.get('token') as string
     if (!token) return { valid: false, error: 'No token configured' }
@@ -823,6 +865,43 @@ app.whenReady().then(async () => {
     }
   })
   registerIpcHandlers()
+
+  // Auto-updater setup
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
+
+  const broadcastUpdateStatus = (data: Record<string, unknown>): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('update:status', data)
+    }
+  }
+
+  autoUpdater.on('update-available', (info) => {
+    broadcastUpdateStatus({ status: 'available', version: info.version })
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    store.set('lastUpdateCheck', Date.now())
+    broadcastUpdateStatus({ status: 'up-to-date' })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    broadcastUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent) })
+  })
+
+  autoUpdater.on('update-downloaded', () => {
+    broadcastUpdateStatus({ status: 'ready' })
+  })
+
+  autoUpdater.on('error', (err) => {
+    broadcastUpdateStatus({ status: 'error', error: err.message })
+  })
+
+  // Auto-check on launch if last check was >24h ago
+  const lastCheck = store.get('lastUpdateCheck') as number
+  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

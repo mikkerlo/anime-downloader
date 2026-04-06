@@ -11,6 +11,7 @@
 - [x] Auto-save settings with debounced watchers, removed Save button
 - [x] Download queue persistence — queue saved to queue.json, restored on startup
 - [x] API token validation — "Test" button in Settings validates token against embed API
+- [x] Auto-update mechanism — check/download/install via electron-updater from GitHub releases
 
 ---
 
@@ -49,28 +50,28 @@
 
 ---
 
-## 3. Auto-update mechanism
+## ~~3. Auto-update mechanism~~
 
-**Priority:** Medium | **Effort:** Medium
+~~**Priority:** Medium | **Effort:** Medium~~
 
-The CI already creates GitHub releases with platform-specific artifacts via `softprops/action-gh-release`. We can use the GitHub API to check for new versions.
+~~The CI already creates GitHub releases with platform-specific artifacts via `softprops/action-gh-release`. We can use the GitHub API to check for new versions.~~
 
-**Plan:**
-1. Add a `checkForUpdate()` function in `src/main/index.ts`:
-   - Fetch `https://api.github.com/repos/{owner}/{repo}/releases/latest` (no auth needed for public repos)
-   - Compare `tag_name` (e.g. `v1.1.1`) against `app.getVersion()` from package.json
-   - If remote version is newer, return `{ available: true, version, releaseUrl, assets }` where `assets` is the list of download URLs filtered by current platform (`process.platform`: win32 → `.exe`, linux → `.AppImage`, darwin → `.dmg`)
-   - If same or older, return `{ available: false }`
-2. Add IPC handler `update:check` and preload binding `updateCheck()`
-3. In `SettingsView.vue` (General tab), add an "Updates" section:
-   - Show current version from package.json
-   - "Check for updates" button
-   - If update available: show new version + "Download" button that opens the asset URL in the default browser via `shell.openExternal(url)`
-4. Optionally check on app start (once per day, store last check timestamp in electron-store) and show a subtle badge on the Settings sidebar icon if update is available
-5. GitHub API rate limit is 60 req/hour for unauthenticated — more than enough for a desktop app checking once per launch
-6. The repo owner/name should be a constant in main (e.g. `const GITHUB_REPO = 'mikkerlo/anime-dl-app'`) — update this to match the actual repo
+~~**Plan:**~~
+~~1. Add a `checkForUpdate()` function in `src/main/index.ts`:~~
+   ~~- Fetch `https://api.github.com/repos/{owner}/{repo}/releases/latest` (no auth needed for public repos)~~
+   ~~- Compare `tag_name` (e.g. `v1.1.1`) against `app.getVersion()` from package.json~~
+   ~~- If remote version is newer, return `{ available: true, version, releaseUrl, assets }` where `assets` is the list of download URLs filtered by current platform (`process.platform`: win32 → `.exe`, linux → `.AppImage`, darwin → `.dmg`)~~
+   ~~- If same or older, return `{ available: false }`~~
+~~2. Add IPC handler `update:check` and preload binding `updateCheck()`~~
+~~3. In `SettingsView.vue` (General tab), add an "Updates" section:~~
+   ~~- Show current version from package.json~~
+   ~~- "Check for updates" button~~
+   ~~- If update available: show new version + "Download" button that opens the asset URL in the default browser via `shell.openExternal(url)`~~
+~~4. Optionally check on app start (once per day, store last check timestamp in electron-store) and show a subtle badge on the Settings sidebar icon if update is available~~
+~~5. GitHub API rate limit is 60 req/hour for unauthenticated — more than enough for a desktop app checking once per launch~~
+~~6. The repo owner/name should be a constant in main (e.g. `const GITHUB_REPO = 'mikkerlo/anime-dl-app'`) — update this to match the actual repo~~
 
-**Future enhancement:** Full auto-download + replace using electron-updater, but the manual "open browser to download" approach is simpler and safer as a first step.
+~~**Future enhancement:** Full auto-download + replace using electron-updater, but the manual "open browser to download" approach is simpler and safer as a first step.~~
 
 ---
 

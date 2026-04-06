@@ -13,6 +13,10 @@ let savedTimeout: ReturnType<typeof setTimeout> | null = null
 const tokenStatus = ref<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
 const tokenError = ref('')
 
+// Update state
+const appVersion = ref('')
+const updateStatus = ref<{ status: string; version?: string; percent?: number; error?: string }>({ status: 'idle' })
+
 const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
@@ -91,15 +95,44 @@ async function fixMetadata(): Promise<void> {
   }
 }
 
-onMounted(() => {
+function onUpdateStatus(data: UpdateStatus): void {
+  updateStatus.value = data
+}
+
+async function checkForUpdates(): Promise<void> {
+  updateStatus.value = { status: 'checking' }
+  try {
+    await window.api.updateCheck()
+  } catch {
+    updateStatus.value = { status: 'error', error: 'Failed to check for updates' }
+  }
+}
+
+async function downloadUpdate(): Promise<void> {
+  try {
+    await window.api.updateDownload()
+  } catch {
+    updateStatus.value = { status: 'error', error: 'Failed to download update' }
+  }
+}
+
+function installUpdate(): void {
+  window.api.updateInstall()
+}
+
+onMounted(async () => {
   window.api.onScanMergeProgress(onScanProgress)
   window.api.onFixMetadataProgress(onFixProgress)
+  window.api.onUpdateStatus(onUpdateStatus)
   refreshMismatchCount()
+
+  appVersion.value = await window.api.appVersion()
 })
 
 onUnmounted(() => {
   window.api.offScanMergeProgress()
   window.api.offFixMetadataProgress()
+  window.api.offUpdateStatus()
 })
 
 const TRANSLATION_TYPES = [
@@ -237,6 +270,52 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
           <div class="dir-row">
             <span class="dir-path">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
             <button class="browse-btn" @click="pickDir">Browse</button>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Updates</label>
+          <p class="setting-hint">Version {{ appVersion }}</p>
+
+          <button
+            v-if="updateStatus.status === 'idle' || updateStatus.status === 'up-to-date' || updateStatus.status === 'error'"
+            class="test-token-btn"
+            :disabled="updateStatus.status === 'checking'"
+            @click="checkForUpdates"
+          >
+            Check for updates
+          </button>
+
+          <span v-else-if="updateStatus.status === 'checking'" class="setting-hint" style="margin-bottom: 0">Checking...</span>
+
+          <div v-else-if="updateStatus.status === 'available'">
+            <div class="token-result token-valid" style="margin-bottom: 8px">
+              v{{ updateStatus.version }} available
+            </div>
+            <button class="browse-btn" @click="downloadUpdate">Download update</button>
+          </div>
+
+          <div v-else-if="updateStatus.status === 'downloading'" class="scan-progress">
+            <div class="scan-progress-header">
+              <span>Downloading update...</span>
+              <span>{{ updateStatus.percent }}%</span>
+            </div>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar" :style="{ width: (updateStatus.percent || 0) + '%' }"></div>
+            </div>
+          </div>
+
+          <div v-else-if="updateStatus.status === 'ready'">
+            <button class="merge-all-btn" @click="installUpdate">
+              Restart to update
+            </button>
+          </div>
+
+          <div v-if="updateStatus.status === 'error'" class="token-result token-invalid" style="margin-top: 6px">
+            {{ updateStatus.error }}
+          </div>
+          <div v-if="updateStatus.status === 'up-to-date'" class="token-result token-valid" style="margin-top: 6px">
+            Up to date
           </div>
         </div>
       </template>

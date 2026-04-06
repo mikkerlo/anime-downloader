@@ -24,6 +24,8 @@ Argument passed: $ARGUMENTS
 - If no argument was provided, find the **first non-completed** item in TODO.md. Completed items are struck through (~~strikethrough~~) or marked done.
 - Show the user which item you picked and confirm before proceeding.
 
+Ask if you shoud proceed via AskUserQuestion.
+
 ## Step 2: Plan
 
 Enter plan mode. Create a detailed implementation plan for the chosen TODO item:
@@ -64,7 +66,7 @@ Ask the user how to bump the version in package.json:
 3. **Major** (first number, e.g. 1.1.2 → 2.0.0) — for breaking changes
 4. **No bump** — skip version change
 
-Apply the chosen bump to package.json if applicable.
+Apply the chosen bump to package.json if applicable. Show the correct option in the option varians by your understanding.
 
 ## Step 6: Finalize and push
 

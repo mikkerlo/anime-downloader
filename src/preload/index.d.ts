@@ -56,6 +56,14 @@ interface Api {
   offScanMergeProgress: () => void
   onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
   offFfmpegDownloadProgress: () => void
+
+  // Updates
+  appVersion: () => Promise<string>
+  updateCheck: () => Promise<void>
+  updateDownload: () => Promise<void>
+  updateInstall: () => void
+  onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
+  offUpdateStatus: () => void
 }
 
 interface AnimeSearchResult {
@@ -156,6 +164,13 @@ interface ScanMergeProgress {
   total: number
   file: string
   percent: number
+}
+
+interface UpdateStatus {
+  status: 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error'
+  version?: string
+  percent?: number
+  error?: string
 }
 
 declare global {

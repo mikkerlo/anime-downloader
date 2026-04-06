@@ -12,7 +12,7 @@
 - [x] Download queue persistence — queue saved to queue.json, restored on startup
 - [x] API token validation — "Test" button in Settings validates token against embed API
 - [x] Auto-update mechanism — check/download/install via electron-updater from GitHub releases
-- [x] Pause All / Resume All buttons in Downloads
+- [x] ~~Pause All / Resume All buttons in Downloads~~ (was marked done prematurely, re-added as TODO #4)
 
 ---
 
@@ -58,7 +58,35 @@ Useful when app is in background or minimized.
 
 ---
 
-## 4. Download speed throttle / bandwidth limiting
+## 4. Pause All / Resume All buttons in Downloads
+
+**Priority:** Medium | **Effort:** Small
+
+Previously marked done but never implemented. Individual pause/resume per item exists, but there are no bulk buttons.
+
+**Plan:**
+1. In `src/main/download-manager.ts`, add `pauseAll()` and `resumeAll()` methods:
+   - `pauseAll()` — iterate `this.queue`, call `pause(id)` for every item with status `downloading` or `queued`
+   - `resumeAll()` — iterate `this.queue`, call `resume(id)` for every item with status `paused`
+2. Add IPC handlers in `src/main/index.ts`:
+   - `ipcMain.handle('download:pause-all', () => downloadManager.pauseAll())`
+   - `ipcMain.handle('download:resume-all', () => downloadManager.resumeAll())`
+3. Expose in `src/preload/index.ts`:
+   - `downloadPauseAll: () => ipcRenderer.invoke('download:pause-all')`
+   - `downloadResumeAll: () => ipcRenderer.invoke('download:resume-all')`
+4. Add types in `src/preload/index.d.ts`:
+   - `downloadPauseAll: () => Promise<void>`
+   - `downloadResumeAll: () => Promise<void>`
+5. In `src/renderer/src/components/DownloadsView.vue`:
+   - Add computed `hasActive` — true if any item is `downloading` or `queued`
+   - Add computed `hasPaused` — true if any item is `paused`
+   - Add "Pause All" button (shown when `hasActive`) and "Resume All" button (shown when `hasPaused`) in `.topbar-actions`
+   - Wire to `window.api.downloadPauseAll()` / `window.api.downloadResumeAll()`
+6. Update `DESIGN.md` IPC table with the two new channels
+
+---
+
+## 5. Download speed throttle / bandwidth limiting
 
 **Priority:** Low | **Effort:** Medium
 

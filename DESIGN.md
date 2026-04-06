@@ -310,6 +310,7 @@ interface EpisodeMeta {
 | `downloadedEpisodes` | object | `{}` | Per-episode translation metadata (key: `animeId:episodeInt`) |
 | `animeCache` | object | `{}` | Offline cache: anime details, episodes, quality probes, posters |
 | `lastUpdateCheck` | number | `0` | Timestamp of last successful update check |
+| `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D'}` | Configurable keyboard shortcut bindings |
 
 ## Auto-Update
 

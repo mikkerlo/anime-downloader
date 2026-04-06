@@ -7,6 +7,14 @@ const emit = defineEmits<{
 }>()
 
 const query = ref('')
+const searchInput = ref<HTMLInputElement | null>(null)
+
+function focusInput(): void {
+  searchInput.value?.focus()
+  searchInput.value?.select()
+}
+
+defineExpose({ focusInput })
 const results = ref<AnimeSearchResult[]>([])
 const loading = ref(false)
 const searched = ref(false)
@@ -51,6 +59,7 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
     <header class="topbar">
       <form class="search-form" @submit.prevent="search">
         <input
+          ref="searchInput"
           v-model="query"
           type="text"
           class="search-input"

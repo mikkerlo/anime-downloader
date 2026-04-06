@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import SearchView from './components/SearchView.vue'
 import LibraryView from './components/LibraryView.vue'
@@ -8,6 +8,8 @@ import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
 
 const currentView = ref('search')
+const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
+const shortcuts = ref<Record<string, string>>({})
 const animeByView = ref<Record<string, number | null>>({
   search: null,
   library: null
@@ -31,13 +33,75 @@ function saveAnimePrefs(animeId: number, translationType: string, author: string
 }
 
 function navigate(view: string): void {
+  if (currentView.value === 'settings' && view !== 'settings') loadShortcuts()
   currentView.value = view
+}
+
+const isMac = navigator.platform.toUpperCase().includes('MAC')
+
+function matchesBinding(e: KeyboardEvent, binding: string): boolean {
+  const parts = binding.split('+')
+  const key = parts[parts.length - 1]
+  const mods = parts.slice(0, -1).map((m) => m.toLowerCase())
+
+  const needCtrl = mods.includes('ctrl')
+  const needMeta = mods.includes('meta')
+  const needCmdOrCtrl = mods.includes('cmdorctrl')
+  const needShift = mods.includes('shift')
+  const needAlt = mods.includes('alt')
+
+  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac)
+  const wantMeta = needMeta || (needCmdOrCtrl && isMac)
+
+  if (e.ctrlKey !== wantCtrl) return false
+  if (e.metaKey !== wantMeta) return false
+  if (e.shiftKey !== needShift) return false
+  if (e.altKey !== needAlt) return false
+
+  return e.key.toLowerCase() === key.toLowerCase()
+}
+
+function executeAction(action: string): void {
+  switch (action) {
+    case 'back':
+      if (activeAnimeId.value) closeAnime()
+      break
+    case 'focusSearch':
+      navigate('search')
+      animeByView.value.search = null
+      nextTick(() => searchViewRef.value?.focusInput())
+      break
+    case 'goDownloads':
+      navigate('downloads')
+      break
+  }
+}
+
+function handleKeydown(e: KeyboardEvent): void {
+  const tag = (e.target as HTMLElement).tagName
+  const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+
+  for (const [action, binding] of Object.entries(shortcuts.value)) {
+    if (!binding) continue
+    if (matchesBinding(e, binding)) {
+      if (action === 'back' && isInput) continue
+      e.preventDefault()
+      executeAction(action)
+      return
+    }
+  }
+}
+
+async function loadShortcuts(): Promise<void> {
+  shortcuts.value = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string>
 }
 
 const ffmpegDownloading = ref(false)
 const ffmpegProgress = ref(0)
 
-onMounted(() => {
+onMounted(async () => {
+  await loadShortcuts()
+  window.addEventListener('keydown', handleKeydown)
   window.api.onFfmpegDownloadProgress((data) => {
     if (data.status === 'downloading') {
       ffmpegDownloading.value = true
@@ -49,6 +113,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
   window.api.offFfmpegDownloadProgress()
 })
 </script>
@@ -57,7 +122,7 @@ onBeforeUnmount(() => {
   <div class="app">
     <Sidebar :current-view="currentView" @navigate="navigate" />
     <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" />
-    <SearchView v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
+    <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />

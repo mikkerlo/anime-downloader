@@ -16,16 +16,16 @@
 
 ---
 
-## 1. Keyboard shortcuts
+## ~~1. Keyboard shortcuts~~
 
-**Priority:** Low | **Effort:** Small
+~~**Priority:** Low | **Effort:** Small~~
 
-**Plan:**
-1. In `App.vue`, add a global `keydown` listener in `onMounted`
-2. `Escape` — if in AnimeDetailView, emit `back` (navigate to list); could use a ref like `currentView` to decide context
-3. `Ctrl+F` / `Cmd+F` — switch to Search tab and focus the search input (emit an event or use a ref)
-4. Potentially `Ctrl+D` — switch to Downloads tab
-5. Clean up listener in `onUnmounted`
+~~**Plan:**~~
+~~1. In `App.vue`, add a global `keydown` listener in `onMounted`~~
+~~2. `Escape` — if in AnimeDetailView, emit `back` (navigate to list); could use a ref like `currentView` to decide context~~
+~~3. `Ctrl+F` / `Cmd+F` — switch to Search tab and focus the search input (emit an event or use a ref)~~
+~~4. Potentially `Ctrl+D` — switch to Downloads tab~~
+~~5. Clean up listener in `onUnmounted`~~
 
 ---
 

@@ -70,7 +70,12 @@ const store = new Store({
     downloadedAnime: {} as Record<string, AnimeSearchResult>,
     downloadedEpisodes: {} as Record<string, { translationType: string; author: string; quality: number; translationId: number }>,
     animeCache: {} as Record<string, AnimeCacheEntry>,
-    lastUpdateCheck: 0
+    lastUpdateCheck: 0,
+    keyboardShortcuts: {
+      back: 'Escape',
+      focusSearch: 'CmdOrCtrl+F',
+      goDownloads: 'CmdOrCtrl+D'
+    } as Record<string, string>
   }
 })
 

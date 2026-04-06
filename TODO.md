@@ -12,38 +12,13 @@
 - [x] Download queue persistence — queue saved to queue.json, restored on startup
 - [x] API token validation — "Test" button in Settings validates token against embed API
 - [x] Auto-update mechanism — check/download/install via electron-updater from GitHub releases
-- [x] ~~Pause All / Resume All buttons in Downloads~~ (was marked done prematurely, re-added as TODO #4)
+- [x] Keyboard shortcuts — configurable Escape/Ctrl+F/Ctrl+D with rebinding in Settings > Shortcuts
+- [x] System notifications on download/merge complete — configurable Off/Each Episode/Queue Complete
+- [x] Pause All / Resume All buttons in Downloads — bulk pause/resume for active/paused downloads
 
 ---
 
-## ~~1. Keyboard shortcuts~~
-
-~~**Priority:** Low | **Effort:** Small~~
-
-~~**Plan:**~~
-~~1. In `App.vue`, add a global `keydown` listener in `onMounted`~~
-~~2. `Escape` — if in AnimeDetailView, emit `back` (navigate to list); could use a ref like `currentView` to decide context~~
-~~3. `Ctrl+F` / `Cmd+F` — switch to Search tab and focus the search input (emit an event or use a ref)~~
-~~4. Potentially `Ctrl+D` — switch to Downloads tab~~
-~~5. Clean up listener in `onUnmounted`~~
-
----
-
-## ~~2. System notifications on download/merge complete~~
-
-~~**Priority:** Low | **Effort:** Small~~
-
-~~Useful when app is in background or minimized.~~
-
-~~**Plan:**~~
-~~1. In `src/main/download-manager.ts`, after `checkEpisodeComplete()` detects a completed episode (and after merge if auto-merge is on), use Electron's `Notification` API~~
-~~2. For merge completion, similar notification in the merge callback~~
-~~3. Only show when the app window is not focused — check `BrowserWindow.getFocusedWindow() === null`~~
-~~4. Optionally add a setting to disable notifications~~
-
----
-
-## 3. Episode range selection
+## 1. Episode range selection
 
 **Priority:** Low | **Effort:** Small
 
@@ -55,23 +30,7 @@
 
 ---
 
-## ~~4. Pause All / Resume All buttons in Downloads~~
-
-~~**Priority:** Medium | **Effort:** Small~~
-
-~~Previously marked done but never implemented. Individual pause/resume per item exists, but there are no bulk buttons.~~
-
-~~**Plan:**~~
-~~1. In `src/main/download-manager.ts`, add `pauseAll()` and `resumeAll()` methods~~
-~~2. Add IPC handlers in `src/main/index.ts`~~
-~~3. Expose in `src/preload/index.ts`~~
-~~4. Add types in `src/preload/index.d.ts`~~
-~~5. In `src/renderer/src/components/DownloadsView.vue`: Pause All / Resume All buttons in topbar~~
-~~6. Update `DESIGN.md` IPC table with the two new channels~~
-
----
-
-## 5. Download speed throttle / bandwidth limiting
+## 2. Download speed throttle / bandwidth limiting
 
 **Priority:** Low | **Effort:** Medium
 
@@ -82,4 +41,3 @@
 4. Apply limit changes to active downloads (update the throttle transform dynamically)
 
 ---
-

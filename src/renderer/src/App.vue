@@ -6,14 +6,18 @@ import LibraryView from './components/LibraryView.vue'
 import SettingsView from './components/SettingsView.vue'
 import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
+import ShikimoriView from './components/ShikimoriView.vue'
 
 const currentView = ref('search')
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
 const shortcuts = ref<Record<string, string>>({})
 const animeByView = ref<Record<string, number | null>>({
   search: null,
-  library: null
+  library: null,
+  shikimori: null
 })
+
+const shikimoriLoggedIn = ref(false)
 
 // Persist translation type and author selections per anime across re-mounts
 const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({})
@@ -101,6 +105,8 @@ const ffmpegProgress = ref(0)
 
 onMounted(async () => {
   await loadShortcuts()
+  const shikiUser = await window.api.shikimoriGetUser()
+  shikimoriLoggedIn.value = !!shikiUser
   window.addEventListener('keydown', handleKeydown)
   window.api.onFfmpegDownloadProgress((data) => {
     if (data.status === 'downloading') {
@@ -120,10 +126,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app">
-    <Sidebar :current-view="currentView" @navigate="navigate" />
+    <Sidebar :current-view="currentView" :shikimori-logged-in="shikimoriLoggedIn" @navigate="navigate" />
     <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" />
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
+    <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">

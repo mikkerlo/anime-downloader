@@ -87,7 +87,8 @@ const store = new Store({
     storageMode: 'simple' as 'simple' | 'advanced',
     hotStorageDir: '' as string,
     coldStorageDir: '' as string,
-    autoMoveToCold: false
+    autoMoveToCold: false,
+    malIdMap: {} as Record<string, AnimeSearchResult>
   }
 })
 
@@ -425,6 +426,41 @@ async function apiRequest(path: string): Promise<unknown> {
   }
 
   return response.json()
+}
+
+async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSearchResult>> {
+  const cached = store.get('malIdMap') as Record<string, AnimeSearchResult>
+  const result: Record<number, AnimeSearchResult> = {}
+  const uncachedIds: number[] = []
+
+  for (const id of malIds) {
+    if (cached[String(id)]) {
+      result[id] = cached[String(id)]
+    } else {
+      uncachedIds.push(id)
+    }
+  }
+
+  const BATCH_SIZE = 50
+  for (let i = 0; i < uncachedIds.length; i += BATCH_SIZE) {
+    const batch = uncachedIds.slice(i, i + BATCH_SIZE)
+    const params = batch.map((id) => `myAnimeListId[]=${id}`).join('&')
+    const fields = 'id,title,titles,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,myAnimeListId'
+    const response = (await apiRequest(`/series/?${params}&fields=${fields}`)) as {
+      data: (AnimeSearchResult & { myAnimeListId?: number })[]
+    }
+    for (const anime of response.data) {
+      if (anime.myAnimeListId) {
+        result[anime.myAnimeListId] = anime
+        cached[String(anime.myAnimeListId)] = anime
+      }
+    }
+  }
+
+  if (uncachedIds.length > 0) {
+    store.set('malIdMap', cached)
+  }
+  return result
 }
 
 function registerIpcHandlers(): void {
@@ -1035,6 +1071,34 @@ function registerIpcHandlers(): void {
       return shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score)
     }
   )
+
+  ipcMain.handle('shikimori:get-anime-rates', async (_event, status?: string) => {
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) throw new Error('Not logged in to Shikimori')
+
+    const rates = await shikimori.getUserAnimeRates(
+      accessToken,
+      user.id,
+      status as shikimori.ShikiUserRateStatus | undefined
+    )
+
+    const malIds = rates.map((r) => r.anime.id)
+    const malMap = await lookupByMalIds(malIds)
+
+    return rates.map((rate) => ({
+      rate: {
+        id: rate.id,
+        score: rate.score,
+        status: rate.status,
+        episodes: rate.episodes,
+        updated_at: rate.updated_at,
+        target_id: rate.target_id
+      },
+      shikiAnime: rate.anime,
+      smotretAnime: malMap[rate.anime.id] ?? null
+    }))
+  })
 
   ipcMain.handle('shell:open-external', async (_event, url: string) => {
     try {

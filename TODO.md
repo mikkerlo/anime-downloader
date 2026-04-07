@@ -19,10 +19,11 @@
 - [x] Shikimori Integration — OAuth login, episode/status tracking, MAL ID resolution from AnimeDetailView
 - [x] Advanced File Management — Hot/Cold storage mode with auto-move support
 - [x] Custom Dark Scrollbar Styling — thin scrollbars matching dark theme
+- [x] Shikimori Anime List — Browse & sync watchlist with status filters, MAL ID resolution, To Watch view
 
 ---
 
-## 1. Shikimori Anime List — Browse & Sync Your Watchlist
+## ~~1. Shikimori Anime List — Browse & Sync Your Watchlist~~
 
 **Priority:** Medium | **Effort:** Large
 

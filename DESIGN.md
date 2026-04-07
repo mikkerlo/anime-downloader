@@ -29,7 +29,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 |------|------|
 | `src/main/index.ts` | App lifecycle, IPC handlers, API proxy, ffmpeg auto-download, settings |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
-| `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates |
+| `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
@@ -41,6 +41,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
+| `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Debug settings tabs |
 
 ## Data Flow
@@ -263,6 +264,7 @@ LibraryView shows both with indicators:
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score) |
+| `shikimori:get-anime-rates` | invoke | Fetch user's anime list from Shikimori, resolve MAL IDs to smotret-anime |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -334,6 +336,7 @@ interface EpisodeMeta {
 | `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode) |
 | `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |
 | `autoMoveToCold` | boolean | `false` | Auto-move finished files to cold storage |
+| `malIdMap` | object | `{}` | Persistent cache of MAL ID → smotret-anime entry for Shikimori list resolution |
 
 ## Hot/Cold Storage
 

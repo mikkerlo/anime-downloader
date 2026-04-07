@@ -30,6 +30,27 @@ export interface ShikiUserRate {
   target_type: string
 }
 
+export interface ShikiAnimeRateEntry {
+  id: number
+  score: number
+  status: ShikiUserRateStatus
+  episodes: number
+  updated_at: string
+  target_id: number
+  target_type: string
+  anime: {
+    id: number
+    name: string
+    russian: string
+    image: { original: string; preview: string; x96: string; x48: string }
+    episodes: number
+    episodes_aired: number
+    kind: string
+    score: string
+    status: string
+  }
+}
+
 export class ShikiApiError extends Error {
   constructor(
     message: string,
@@ -183,4 +204,17 @@ export async function updateUserRate(
     })
   })
   return response.json() as Promise<ShikiUserRate>
+}
+
+export async function getUserAnimeRates(
+  accessToken: string,
+  userId: number,
+  status?: ShikiUserRateStatus
+): Promise<ShikiAnimeRateEntry[]> {
+  const params = new URLSearchParams({ limit: '5000', censored: 'true' })
+  if (status) params.set('status', status)
+  const response = await shikiFetch(`/api/users/${userId}/anime_rates?${params}`, {
+    headers: authHeaders(accessToken)
+  })
+  return response.json() as Promise<ShikiAnimeRateEntry[]>
 }

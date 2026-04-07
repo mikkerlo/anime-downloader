@@ -74,6 +74,7 @@ interface Api {
   shikimoriGetUser: () => Promise<ShikiUser | null>
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
   shikimoriUpdateRate: (malId: number, episodes: number, status: ShikiUserRateStatus, score: number) => Promise<ShikiUserRate>
+  shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
 
   // Updates
   appVersion: () => Promise<string>
@@ -207,6 +208,31 @@ interface ShikiUserRate {
   episodes: number
   target_id: number
   target_type: string
+}
+
+interface ShikiAnimeInfo {
+  id: number
+  name: string
+  russian: string
+  image: { original: string; preview: string; x96: string; x48: string }
+  episodes: number
+  episodes_aired: number
+  kind: string
+  score: string
+  status: string
+}
+
+interface ShikiAnimeRateEntry {
+  rate: {
+    id: number
+    score: number
+    status: ShikiUserRateStatus
+    episodes: number
+    updated_at: string
+    target_id: number
+  }
+  shikiAnime: ShikiAnimeInfo
+  smotretAnime: AnimeSearchResult | null
 }
 
 declare global {

@@ -43,19 +43,31 @@ const TRANSLATION_TYPES = [
   { value: 'raw', label: 'RAW', short: 'RAW', color: '#6a6a8a' }
 ]
 
-const tvEpisodes = computed(() => {
+const filteredEpisodes = computed(() => {
   if (!anime.value) return []
-  return anime.value.episodes.filter(ep => ep.episodeType === anime.value!.type && ep.isActive === 1)
+
+  const allActive = anime.value.episodes.filter(ep => ep.isActive === 1 && ep.episodeType !== 'preview')
+
+  if (!anime.value.type) return allActive
+
+  const matchedEpisodes = anime.value.episodes.filter(
+    ep => ep.isActive === 1 && ep.episodeType === anime.value!.type
+  )
+
+  if (matchedEpisodes.length === 0) return allActive
+  if (anime.value.numberOfEpisodes && matchedEpisodes.length !== anime.value.numberOfEpisodes) return allActive
+
+  return matchedEpisodes
 })
 
 const PAGE_SIZE = 30
 const currentPage = ref(0)
-const totalPages = computed(() => Math.max(1, Math.ceil(tvEpisodes.value.length / PAGE_SIZE)))
-const isPaginated = computed(() => tvEpisodes.value.length > PAGE_SIZE)
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredEpisodes.value.length / PAGE_SIZE)))
+const isPaginated = computed(() => filteredEpisodes.value.length > PAGE_SIZE)
 const pagedEpisodes = computed(() => {
-  if (!isPaginated.value) return tvEpisodes.value
+  if (!isPaginated.value) return filteredEpisodes.value
   const start = currentPage.value * PAGE_SIZE
-  return tvEpisodes.value.slice(start, start + PAGE_SIZE)
+  return filteredEpisodes.value.slice(start, start + PAGE_SIZE)
 })
 
 // Count unique episodes per translation type
@@ -505,9 +517,9 @@ async function onPosterError(): Promise<void> {
 }
 
 async function checkFileStatus(): Promise<void> {
-  if (!anime.value || tvEpisodes.value.length === 0) return
+  if (!anime.value || filteredEpisodes.value.length === 0) return
   const name = getAnimeName()
-  const episodeInts = tvEpisodes.value.map(ep => ep.episodeInt)
+  const episodeInts = filteredEpisodes.value.map(ep => ep.episodeInt)
   fileStatus.value = await window.api.fileCheckEpisodes(name, episodeInts)
   episodeMeta.value = await window.api.downloadedEpisodesGet(props.animeId)
 }
@@ -528,7 +540,7 @@ async function deleteFile(episodeInt: string): Promise<void> {
   const info = fileStatus.value[episodeInt]
   if (!info) return
   // Clear override so it reverts to global default
-  const ep = tvEpisodes.value.find(e => e.episodeInt === episodeInt)
+  const ep = filteredEpisodes.value.find(e => e.episodeInt === episodeInt)
   if (ep) {
     episodeOverrides.value.delete(ep.id)
     episodeOverrides.value = new Map(episodeOverrides.value)
@@ -632,14 +644,14 @@ function typeChip(type: string): { short: string; color: string } {
         <div class="control-group">
           <label>Translation type</label>
           <select v-model="translationType" class="select">
-            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">{{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{ tvEpisodes.length }})</option>
+            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">{{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{ filteredEpisodes.length }})</option>
           </select>
         </div>
         <div class="control-group">
           <label>Author</label>
           <select v-model="selectedAuthor" class="select">
             <option v-for="[author, count] in availableAuthors" :key="author" :value="author">
-              {{ author }} ({{ count }}/{{ tvEpisodes.length }})
+              {{ author }} ({{ count }}/{{ filteredEpisodes.length }})
             </option>
           </select>
         </div>
@@ -671,7 +683,7 @@ function typeChip(type: string): { short: string; color: string } {
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
           </svg>
         </button>
-        <span class="page-info">{{ tvEpisodes.length }} episodes</span>
+        <span class="page-info">{{ filteredEpisodes.length }} episodes</span>
       </div>
 
       <div class="episode-list">

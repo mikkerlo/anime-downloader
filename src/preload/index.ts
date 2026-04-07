@@ -89,6 +89,12 @@ const api = {
 
   shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 
+  // Player
+  playerGetStreamUrl: (translationId: number, maxHeight: number) =>
+    ipcRenderer.invoke('player:get-stream-url', translationId, maxHeight),
+  playerGetLocalSubtitles: (filePath: string) =>
+    ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
+
   // Shikimori
   shikimoriGetAuthUrl: () => ipcRenderer.invoke('shikimori:get-auth-url') as Promise<string>,
   shikimoriExchangeCode: (code: string) => ipcRenderer.invoke('shikimori:exchange-code', code),

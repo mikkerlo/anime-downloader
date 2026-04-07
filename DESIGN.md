@@ -42,7 +42,8 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
-| `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Debug settings tabs |
+| `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, keyboard controls |
+| `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
 ## Data Flow
 
@@ -269,6 +270,8 @@ LibraryView shows both with indicators:
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
+| `player:get-stream-url` | invoke | Fetch CDN stream URL + subtitle content (ASS→VTT) for a translation |
+| `player:get-local-subtitles` | invoke | Read local .ass file alongside video, convert to VTT |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 
 ## Key Types
@@ -337,6 +340,8 @@ interface EpisodeMeta {
 | `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |
 | `autoMoveToCold` | boolean | `false` | Auto-move finished files to cold storage |
 | `malIdMap` | object | `{}` | Persistent cache of MAL ID → smotret-anime entry for Shikimori list resolution |
+| `playerMode` | string | `'system'` | Default player: `system` (OS default) or `builtin` (in-app HTML5 player) |
+| `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |
 
 ## Hot/Cold Storage
 
@@ -359,6 +364,44 @@ In advanced storage mode, files are managed across two directories:
 ### File scanning
 
 In advanced mode, `file:check-episodes`, `file:delete-episode`, and `downloaded-anime-delete` check/delete from both hot and cold dirs. Cold storage takes priority when a file exists in both locations. `scanAndMerge` also scans both directories.
+
+## Built-in Video Player
+
+In-app HTML5 video player with optional Anime4K WebGPU upscaling shaders. Uses `anime4k-webgpu` npm package for GPU-accelerated real-time upscaling.
+
+### Custom Protocol
+
+`anime-video://` protocol registered via `protocol.handle` serves local video files to the `<video>` element. The `stream: true` privilege enables HTTP range requests for seeking. The handler manually parses `Range` headers and returns 206 Partial Content responses using `fs.createReadStream({ start, end })` for proper seeking support. Files are encoded as `anime-video://{encodeURIComponent(filePath)}`.
+
+### Video Playback
+
+- **Local .mp4**: Served via `anime-video://` protocol
+- **Local .mkv**: Not supported by HTML5 video — streams from CDN instead (shows warning banner)
+- **Non-downloaded episodes**: Streams directly from smotret-anime CDN via `player:get-stream-url` IPC
+
+### Anime4K WebGPU Pipeline
+
+When shaders are enabled and WebGPU is available:
+1. Video frames copied to GPU texture via `device.queue.copyExternalImageToTexture()`
+2. Anime4K preset pipeline processes the texture (compute shaders)
+3. Output rendered to canvas via fullscreen quad render pass
+4. Frame loop driven by `video.requestVideoFrameCallback()`
+
+Preset modes: Mode A (1080p source), Mode B (720p source), Mode C (480p source). Falls back to plain `<video>` when WebGPU is unavailable.
+
+### Subtitles
+
+ASS subtitles are converted to WebVTT in the main process and displayed via native HTML5 `<track>` element:
+- **Local files**: `player:get-local-subtitles` reads `.ass` file alongside the `.mp4`, converts to VTT
+- **Streaming**: `player:get-stream-url` fetches ASS from smotret-anime API, converts to VTT
+- Conversion strips ASS style tags (`{\b1}`, `{\an8}`, etc.), converts `\N` newlines, and maps ASS timestamps to VTT format
+- Subtitles positioned at `line:85%` to stay above player controls
+
+### WebGPU Requirements
+
+- `enable-unsafe-webgpu` CLI flag set before app ready
+- `enable-features=Vulkan` for Linux Vulkan backend support
+- GPU benchmark available in Settings > Debug (100 frames of Mode A at 720p→screen resolution)
 
 ## Auto-Update
 

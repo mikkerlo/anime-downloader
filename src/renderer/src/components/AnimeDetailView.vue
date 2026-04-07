@@ -45,7 +45,7 @@ const TRANSLATION_TYPES = [
 
 const tvEpisodes = computed(() => {
   if (!anime.value) return []
-  return anime.value.episodes.filter(ep => ep.episodeType !== 'preview' && ep.isActive === 1)
+  return anime.value.episodes.filter(ep => ep.episodeType === anime.value!.type && ep.isActive === 1)
 })
 
 const PAGE_SIZE = 30

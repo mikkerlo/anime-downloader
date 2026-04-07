@@ -454,10 +454,6 @@ const presetLabel = computed(() => {
 })
 
 function qualityLabel(height: number): string {
-  if (height >= 1080) return '1080p'
-  if (height >= 720) return '720p'
-  if (height >= 480) return '480p'
-  if (height >= 360) return '360p'
   return height + 'p'
 }
 
@@ -509,7 +505,7 @@ onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
 
   // Initialize quality from available streams
-  if (props.availableStreams.length > 0) {
+  if (props.streamUrl && props.availableStreams.length > 0) {
     const current = props.availableStreams.find(s => s.url === props.streamUrl)
     selectedHeight.value = current ? current.height : props.availableStreams[0].height
   }

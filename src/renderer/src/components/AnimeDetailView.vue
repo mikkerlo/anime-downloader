@@ -10,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
+  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -34,6 +35,8 @@ const shikiScore = ref(0)
 const shikiLoading = ref(false)
 const shikiSaving = ref(false)
 const shikiError = ref('')
+
+const playerMode = ref<'system' | 'builtin'>('system')
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
@@ -194,6 +197,7 @@ function onMouseBack(e: MouseEvent): void {
 
 onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack)
+  playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   if (props.initialPrefs?.translationType) {
     translationType.value = props.initialPrefs.translationType
   } else {
@@ -527,7 +531,38 @@ async function checkFileStatus(): Promise<void> {
 async function openFile(episodeInt: string): Promise<void> {
   const info = fileStatus.value[episodeInt]
   if (!info) return
-  await window.api.fileOpen(info.filePath)
+
+  if (playerMode.value === 'builtin') {
+    const name = anime.value ? getAnimeName() : ''
+    if (info.type === 'mp4') {
+      const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
+      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt)
+    } else {
+      // MKV not supported in HTML5 — stream from CDN
+      const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)
+      if (row?.selectedTr) {
+        const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
+        if (result) {
+          emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, episodeInt)
+        } else {
+          await window.api.fileOpen(info.filePath)
+        }
+      } else {
+        await window.api.fileOpen(info.filePath)
+      }
+    }
+  } else {
+    await window.api.fileOpen(info.filePath)
+  }
+}
+
+async function playStream(row: EpisodeRow): Promise<void> {
+  if (!row.selectedTr) return
+  const name = anime.value ? getAnimeName() : ''
+  const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
+  if (result) {
+    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt)
+  }
 }
 
 function showInFolder(episodeInt: string): void {
@@ -761,6 +796,11 @@ function typeChip(type: string): { short: string; color: string } {
             <button v-if="getGroup(row.episode.episodeFull) && (!['completed','cancelled'].includes(getGroup(row.episode.episodeFull)?.video?.status || '') || getGroup(row.episode.episodeFull)?.mergeStatus === 'merging')" class="link-btn cancel" @click="cancelEpisodeDownload(row.episode.episodeFull)" title="Cancel">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+            <button v-if="playerMode === 'builtin' && row.selectedTr && !fileStatus[row.episode.episodeInt]" class="link-btn play" @click="playStream(row)" title="Play (stream)">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                <path d="M8 5v14l11-7z"/>
               </svg>
             </button>
             <button v-if="row.selectedTr && !row.isLocked" class="link-btn dl" @click="downloadEpisode(row)" title="Download this episode">
@@ -1125,6 +1165,14 @@ function typeChip(type: string): { short: string; color: string } {
 
 .link-btn:hover {
   background-color: #1a4a7a;
+}
+
+.link-btn.play {
+  color: #e94560;
+  cursor: pointer;
+  border: none;
+  font-weight: 600;
+  font-size: 0.75rem;
 }
 
 .link-btn.dl {

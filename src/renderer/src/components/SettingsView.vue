@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 
-const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'shortcuts' | 'debug'>('general')
+const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'player' | 'shortcuts' | 'debug'>('general')
 
 const token = ref('')
 const translationType = ref('subRu')
@@ -54,6 +54,16 @@ const shikimoriCode = ref('')
 const shikimoriConnecting = ref(false)
 const shikimoriError = ref('')
 const shikimoriShowUrl = ref(false)
+
+// Player settings
+const playerMode = ref<'system' | 'builtin'>('system')
+const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
+const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
+
+// GPU benchmark state
+const benchmarking = ref(false)
+const benchmarkResult = ref<{ preset: string; fps: number; avgMs: number } | null>(null)
+const benchmarkError = ref('')
 
 const DEFAULT_SHORTCUTS: Record<string, string> = {
   back: 'Escape',
@@ -175,6 +185,68 @@ async function dumpMismatches(): Promise<void> {
 async function deleteFfmpeg(): Promise<void> {
   await window.api.ffmpegDelete()
   ffmpeg.value = await window.api.ffmpegCheck()
+}
+
+async function runGpuBenchmark(): Promise<void> {
+  benchmarking.value = true
+  benchmarkResult.value = null
+  benchmarkError.value = ''
+
+  try {
+    if (!navigator.gpu) throw new Error('WebGPU not available')
+    const adapter = await navigator.gpu.requestAdapter()
+    if (!adapter) throw new Error('No GPU adapter found')
+    const device = await adapter.requestDevice()
+
+    const { ModeA } = await import('anime4k-webgpu')
+
+    // Use 720p as source, upscale to actual screen resolution
+    const SRC_WIDTH = 1280
+    const SRC_HEIGHT = 720
+    const targetWidth = window.screen.width
+    const targetHeight = window.screen.height
+    const testTexture = device.createTexture({
+      size: [SRC_WIDTH, SRC_HEIGHT, 1],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+    })
+
+    const pipeline = new ModeA({
+      device,
+      inputTexture: testTexture,
+      nativeDimensions: { width: SRC_WIDTH, height: SRC_HEIGHT },
+      targetDimensions: { width: targetWidth, height: targetHeight }
+    })
+
+    // Warm up (5 frames)
+    for (let i = 0; i < 5; i++) {
+      const enc = device.createCommandEncoder()
+      pipeline.pass(enc)
+      device.queue.submit([enc.finish()])
+    }
+    await device.queue.onSubmittedWorkDone()
+
+    // Benchmark 100 frames
+    const FRAMES = 100
+    const start = performance.now()
+    for (let i = 0; i < FRAMES; i++) {
+      const enc = device.createCommandEncoder()
+      pipeline.pass(enc)
+      device.queue.submit([enc.finish()])
+    }
+    await device.queue.onSubmittedWorkDone()
+    const elapsed = performance.now() - start
+
+    const avgMs = elapsed / FRAMES
+    const fps = 1000 / avgMs
+
+    benchmarkResult.value = { preset: `Mode A (720p→${targetHeight}p)`, fps: Math.round(fps * 10) / 10, avgMs: Math.round(avgMs * 100) / 100 }
+    device.destroy()
+  } catch (e) {
+    benchmarkError.value = String(e)
+  } finally {
+    benchmarking.value = false
+  }
 }
 
 async function fixMetadata(): Promise<void> {
@@ -323,6 +395,24 @@ onMounted(async () => {
 
   shikimoriUser.value = await window.api.shikimoriGetUser()
 
+  // Player settings
+  playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
+  anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
+
+  // Probe WebGPU
+  try {
+    if (navigator.gpu) {
+      const adapter = await navigator.gpu.requestAdapter()
+      if (adapter) {
+        const info = adapter.info
+        webgpuStatus.value = {
+          available: true,
+          gpuName: info.device || info.description || info.vendor || 'Unknown GPU'
+        }
+      }
+    }
+  } catch { /* WebGPU not available */ }
+
   loaded.value = true
 })
 
@@ -428,6 +518,8 @@ watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
+watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
+watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
 </script>
 
 <template>
@@ -440,6 +532,7 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
       <button class="tab" :class="{ active: activeTab === 'storage' }" @click="activeTab = 'storage'">Storage</button>
       <button class="tab" :class="{ active: activeTab === 'connectors' }" @click="activeTab = 'connectors'">Connectors</button>
       <button class="tab" :class="{ active: activeTab === 'merging' }" @click="activeTab = 'merging'">Merging</button>
+      <button class="tab" :class="{ active: activeTab === 'player' }" @click="activeTab = 'player'">Player</button>
       <button class="tab" :class="{ active: activeTab === 'shortcuts' }" @click="activeTab = 'shortcuts'">Shortcuts</button>
       <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount()">Debug</button>
     </div>
@@ -738,6 +831,49 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
         </div>
       </template>
 
+      <!-- Player tab -->
+      <template v-if="activeTab === 'player'">
+        <div class="setting-group">
+          <label class="setting-label">Default player</label>
+          <p class="setting-hint">Choose what happens when you click "Open" on a downloaded episode.</p>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" v-model="playerMode" value="system" />
+              System default player
+            </label>
+            <label class="radio-label">
+              <input type="radio" v-model="playerMode" value="builtin" />
+              Built-in player
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Anime4K upscaling preset</label>
+          <p class="setting-hint">Real-time anime upscaling via WebGPU shaders. Choose a preset based on your source video resolution.</p>
+          <select v-model="anime4kPreset" class="setting-input setting-select" :disabled="!webgpuStatus.available">
+            <option value="off">Off</option>
+            <option value="mode-a">Mode A (1080p source)</option>
+            <option value="mode-b">Mode B (720p source)</option>
+            <option value="mode-c">Mode C (480p source)</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">WebGPU status</label>
+          <div v-if="webgpuStatus.available" class="status-line ok">
+            Available — {{ webgpuStatus.gpuName }}
+          </div>
+          <div v-else class="status-line warn">
+            Not available — Anime4K shaders are disabled. Plain video playback still works.
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <p class="setting-hint">Note: MKV files will stream from server when using the built-in player (local MKV playback not yet supported). When player mode is "Built-in", a Play button appears on non-downloaded episodes for streaming.</p>
+        </div>
+      </template>
+
       <!-- Shortcuts tab -->
       <template v-if="activeTab === 'shortcuts'">
         <div class="setting-group">
@@ -837,6 +973,34 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
           <button class="merge-all-btn" style="background-color: #e94560;" @click="deleteFfmpeg" :disabled="!ffmpeg?.available">
             Delete ffmpeg + ffprobe
           </button>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Anime4K GPU Benchmark</label>
+          <p class="setting-hint">Test how fast your GPU can run Anime4K shaders (Mode A, 720p→screen resolution, 100 frames). Requires WebGPU.</p>
+          <button class="merge-all-btn" @click="runGpuBenchmark" :disabled="benchmarking">
+            {{ benchmarking ? 'Running benchmark...' : 'Run GPU benchmark' }}
+          </button>
+
+          <div v-if="benchmarkResult" class="scan-result">
+            <div class="scan-result-ok" :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }">
+              {{ benchmarkResult.preset }}: {{ benchmarkResult.fps }} fps ({{ benchmarkResult.avgMs }}ms/frame)
+            </div>
+            <div class="scan-error-item" :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }">
+              {{ benchmarkResult.fps >= 24 ? 'Your GPU can handle real-time Anime4K shaders' : 'Your GPU may struggle with real-time shaders — consider using "Off" preset' }}
+            </div>
+          </div>
+
+          <div v-if="benchmarkError" class="scan-result has-errors">
+            <div class="scan-result-errors">{{ benchmarkError }}</div>
+          </div>
+
+          <div v-if="webgpuStatus.available" class="status-line ok" style="margin-top: 8px;">
+            WebGPU: {{ webgpuStatus.gpuName }}
+          </div>
+          <div v-else class="status-line warn" style="margin-top: 8px;">
+            WebGPU not detected — benchmark will attempt to initialize it
+          </div>
         </div>
 
         <div class="setting-group">
@@ -1411,5 +1575,42 @@ watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 
 .shiki-show-url:hover {
   text-decoration: underline;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a0a0b8;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+  accent-color: #e94560;
+}
+
+.status-line {
+  font-size: 0.85rem;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+
+.status-line.ok {
+  color: #6ab04c;
+  background: rgba(106, 176, 76, 0.1);
+}
+
+.status-line.warn {
+  color: #f0932b;
+  background: rgba(240, 147, 43, 0.1);
 }
 </style>

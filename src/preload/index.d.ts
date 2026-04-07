@@ -67,6 +67,10 @@ interface Api {
 
   shellOpenExternal: (url: string) => Promise<boolean>
 
+  // Player
+  playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null } | null>
+  playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
+
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>
   shikimoriExchangeCode: (code: string) => Promise<ShikiUser>

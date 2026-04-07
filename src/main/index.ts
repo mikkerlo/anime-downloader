@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, Notification } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, Notification, protocol, net } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
@@ -13,6 +13,17 @@ import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
+import { pathToFileURL } from 'url'
+import { Readable } from 'stream'
+
+// Enable WebGPU support for Anime4K shaders in the renderer
+app.commandLine.appendSwitch('enable-unsafe-webgpu')
+app.commandLine.appendSwitch('enable-features', 'Vulkan')
+
+// Register anime-video:// protocol for serving local video files to <video> elements
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'anime-video', privileges: { stream: true, bypassCSP: true, supportFetchAPI: true } }
+])
 
 // Suppress EPIPE errors from broken stdout/stderr pipes (common on WSL2)
 process.stdout?.on('error', () => {})
@@ -88,7 +99,9 @@ const store = new Store({
     hotStorageDir: '' as string,
     coldStorageDir: '' as string,
     autoMoveToCold: false,
-    malIdMap: {} as Record<string, AnimeSearchResult>
+    malIdMap: {} as Record<string, AnimeSearchResult>,
+    playerMode: 'system' as 'system' | 'builtin',
+    anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c'
   }
 })
 
@@ -1108,6 +1121,89 @@ function registerIpcHandlers(): void {
       return false
     }
   })
+
+  function assToVtt(ass: string): string {
+    const lines = ass.split(/\r?\n/)
+    let vtt = 'WEBVTT\n\n'
+    let formatFields: string[] = []
+
+    for (const line of lines) {
+      if (line.startsWith('Format:') && line.toLowerCase().includes('text')) {
+        formatFields = line.substring(7).split(',').map(f => f.trim().toLowerCase())
+      } else if (line.startsWith('Dialogue:')) {
+        const values = line.substring(9).split(',')
+        const startIdx = formatFields.indexOf('start')
+        const endIdx = formatFields.indexOf('end')
+        const textIdx = formatFields.indexOf('text')
+        if (startIdx === -1 || endIdx === -1 || textIdx === -1) continue
+
+        const start = values[startIdx]?.trim()
+        const end = values[endIdx]?.trim()
+        // Text field is everything from textIdx onward (may contain commas)
+        const text = values.slice(textIdx).join(',').trim()
+          .replace(/\{[^}]*\}/g, '') // strip ASS style tags like {\b1}
+          .replace(/\\N/g, '\n')     // ASS newline
+          .replace(/\\n/g, '\n')
+
+        if (!start || !end || !text) continue
+
+        // Convert ASS time (H:MM:SS.CC) to VTT time (HH:MM:SS.MMM)
+        const toVttTime = (t: string): string => {
+          const m = t.match(/^(\d+):(\d{2}):(\d{2})\.(\d{2})$/)
+          if (!m) return t
+          return `${m[1].padStart(2, '0')}:${m[2]}:${m[3]}.${m[4]}0`
+        }
+
+        vtt += `${toVttTime(start)} --> ${toVttTime(end)} line:85%\n${text}\n\n`
+      }
+    }
+    return vtt
+  }
+
+  ipcMain.handle('player:get-stream-url', async (_event, translationId: number, maxHeight: number) => {
+    const token = store.get('token') as string
+    const url = `${API_BASE}/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
+    try {
+      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
+      if (!response.ok) return null
+      const json = await response.json() as { data: { stream: { height: number; urls: string[] }[]; subtitlesUrl: string | null } }
+      const streams = json.data?.stream || []
+      if (streams.length === 0) return null
+      const sorted = [...streams].sort((a, b) => b.height - a.height)
+      const best = sorted.find(s => s.height <= maxHeight) || sorted[0]
+      const streamUrl = best && best.urls.length > 0 ? best.urls[0] : null
+      if (!streamUrl) return null
+
+      // Fetch ASS subtitle content if available
+      let subtitleContent: string | null = null
+      if (json.data.subtitlesUrl) {
+        try {
+          const subUrl = `https://smotret-anime.ru/translations/ass/${translationId}?download=1`
+            + (token ? `&access_token=${token}` : '')
+          const subResp = await fetch(subUrl, { headers: { 'User-Agent': USER_AGENT } })
+          if (subResp.ok) {
+            const assContent = await subResp.text()
+            subtitleContent = assToVtt(assContent)
+          }
+        } catch { /* subtitle fetch failed, continue without subs */ }
+      }
+
+      return { streamUrl, subtitleContent }
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('player:get-local-subtitles', async (_event, filePath: string) => {
+    const assPath = filePath.replace(/\.(mp4|mkv)$/i, '.ass')
+    try {
+      if (fs.existsSync(assPath)) {
+        const assContent = fs.readFileSync(assPath, 'utf-8')
+        return assToVtt(assContent)
+      }
+    } catch { /* ignore */ }
+    return null
+  })
 }
 
 function createWindow(): void {
@@ -1142,6 +1238,58 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  // Handle anime-video:// protocol for local video playback with Range request support
+  protocol.handle('anime-video', async (request) => {
+    const filePath = decodeURIComponent(request.url.replace('anime-video://', ''))
+
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(filePath)
+    } catch {
+      return new Response('File not found', { status: 404 })
+    }
+
+    const fileSize = stat.size
+    const rangeHeader = request.headers.get('Range')
+
+    const ext = path.extname(filePath).toLowerCase()
+    const mimeType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : 'application/octet-stream'
+
+    if (rangeHeader) {
+      const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
+      if (match) {
+        const start = parseInt(match[1], 10)
+        const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
+        const chunkSize = end - start + 1
+
+        const nodeStream = fs.createReadStream(filePath, { start, end })
+        const webStream = Readable.toWeb(nodeStream) as ReadableStream
+
+        return new Response(webStream, {
+          status: 206,
+          headers: {
+            'Content-Type': mimeType,
+            'Content-Length': String(chunkSize),
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes'
+          }
+        })
+      }
+    }
+
+    const nodeStream = fs.createReadStream(filePath)
+    const webStream = Readable.toWeb(nodeStream) as ReadableStream
+
+    return new Response(webStream, {
+      status: 200,
+      headers: {
+        'Content-Type': mimeType,
+        'Content-Length': String(fileSize),
+        'Accept-Ranges': 'bytes'
+      }
+    })
+  })
+
   cleanupStaleCache()
   createWindow()
   const mainWin = BrowserWindow.getAllWindows()[0]

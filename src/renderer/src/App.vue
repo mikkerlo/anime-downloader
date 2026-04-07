@@ -7,6 +7,7 @@ import SettingsView from './components/SettingsView.vue'
 import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
 import ShikimoriView from './components/ShikimoriView.vue'
+import PlayerView from './components/PlayerView.vue'
 
 const currentView = ref('search')
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
@@ -18,6 +19,23 @@ const animeByView = ref<Record<string, number | null>>({
 })
 
 const shikimoriLoggedIn = ref(false)
+
+// Player overlay state
+const playerState = ref<{
+  filePath: string
+  streamUrl: string
+  subtitleContent: string
+  animeName: string
+  episodeLabel: string
+} | null>(null)
+
+function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string): void {
+  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel }
+}
+
+function closePlayer(): void {
+  playerState.value = null
+}
 
 // Persist translation type and author selections per anime across re-mounts
 const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({})
@@ -82,6 +100,9 @@ function executeAction(action: string): void {
 }
 
 function handleKeydown(e: KeyboardEvent): void {
+  // Don't intercept shortcuts when the player overlay is active
+  if (playerState.value) return
+
   const tag = (e.target as HTMLElement).tagName
   const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
@@ -127,12 +148,13 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <Sidebar :current-view="currentView" :shikimori-logged-in="shikimoriLoggedIn" @navigate="navigate" />
-    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" />
+    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" />
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
+    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" @close="closePlayer" />
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
       <div class="ffmpeg-modal">
         <div class="ffmpeg-spinner"></div>

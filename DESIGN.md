@@ -270,7 +270,7 @@ LibraryView shows both with indicators:
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
-| `player:get-stream-url` | invoke | Fetch CDN stream URL + subtitle content (ASS→VTT) for a translation |
+| `player:get-stream-url` | invoke | Fetch CDN stream URL + subtitle content (ASS→VTT) + all available stream qualities for a translation |
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, convert to VTT |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 

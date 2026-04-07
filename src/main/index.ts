@@ -1174,6 +1174,11 @@ function registerIpcHandlers(): void {
       const streamUrl = best && best.urls.length > 0 ? best.urls[0] : null
       if (!streamUrl) return null
 
+      // Build list of all available streams for quality selector
+      const availableStreams = sorted
+        .filter(s => s.urls.length > 0)
+        .map(s => ({ height: s.height, url: s.urls[0] }))
+
       // Fetch ASS subtitle content if available
       let subtitleContent: string | null = null
       if (json.data.subtitlesUrl) {
@@ -1188,7 +1193,7 @@ function registerIpcHandlers(): void {
         } catch { /* subtitle fetch failed, continue without subs */ }
       }
 
-      return { streamUrl, subtitleContent }
+      return { streamUrl, subtitleContent, availableStreams }
     } catch {
       return null
     }

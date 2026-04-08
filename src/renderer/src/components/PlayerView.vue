@@ -7,6 +7,8 @@ const props = defineProps<{
   subtitleContent: string
   animeName: string
   episodeLabel: string
+  availableStreams: { height: number; url: string }[]
+  translationId: number
 }>()
 
 const emit = defineEmits<{
@@ -37,8 +39,14 @@ const anime4kActive = computed(() => webgpuAvailable.value && anime4kPreset.valu
 // UI state
 const showControls = ref(true)
 const showPresetMenu = ref(false)
+const showQualityMenu = ref(false)
 const isStreaming = computed(() => !!props.streamUrl && !props.filePath)
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
+
+// Quality selector state
+const activeStreamUrl = ref(props.streamUrl)
+const selectedHeight = ref(0)
+const hasQualities = computed(() => props.availableStreams.length > 1)
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null
@@ -76,7 +84,7 @@ const videoSrc = computed(() => {
   if (props.filePath) {
     return 'anime-video://' + encodeURIComponent(props.filePath)
   }
-  return props.streamUrl
+  return activeStreamUrl.value
 })
 
 function formatTime(seconds: number): string {
@@ -149,6 +157,7 @@ function showControlsBriefly(): void {
     controlsTimer = setTimeout(() => {
       showControls.value = false
       showPresetMenu.value = false
+      showQualityMenu.value = false
     }, 3000)
   }
 }
@@ -444,6 +453,36 @@ const presetLabel = computed(() => {
   return labels[anime4kPreset.value] || 'A4K'
 })
 
+function qualityLabel(height: number): string {
+  return height + 'p'
+}
+
+const currentQualityLabel = computed(() => {
+  if (!selectedHeight.value) return ''
+  return qualityLabel(selectedHeight.value)
+})
+
+function selectQuality(stream: { height: number; url: string }): void {
+  if (stream.height === selectedHeight.value) {
+    showQualityMenu.value = false
+    return
+  }
+  const video = videoRef.value
+  const savedTime = video ? video.currentTime : 0
+  const wasPlaying = video ? !video.paused : false
+
+  activeStreamUrl.value = stream.url
+  selectedHeight.value = stream.height
+  showQualityMenu.value = false
+
+  nextTick(() => {
+    const v = videoRef.value
+    if (!v) return
+    v.currentTime = savedTime
+    if (wasPlaying) v.play()
+  })
+}
+
 function initSubtitles(video: HTMLVideoElement): void {
   const blob = new Blob([props.subtitleContent], { type: 'text/vtt' })
   subtitleTrackUrl.value = URL.createObjectURL(blob)
@@ -464,6 +503,12 @@ function destroySubtitles(): void {
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
+
+  // Initialize quality from available streams
+  if (props.streamUrl && props.availableStreams.length > 0) {
+    const current = props.availableStreams.find(s => s.url === props.streamUrl)
+    selectedHeight.value = current ? current.height : props.availableStreams[0].height
+  }
 
   // Load saved preset
   const savedPreset = await window.api.getSetting('anime4kPreset') as string
@@ -636,6 +681,28 @@ const bufferedProgress = computed(() => {
           </span>
 
           <div class="controls-spacer" />
+
+          <!-- Quality selector -->
+          <div class="preset-wrapper" v-if="hasQualities && isStreaming">
+            <button
+              class="ctrl-btn preset-btn"
+              @click="showQualityMenu = !showQualityMenu"
+              title="Video quality"
+            >
+              {{ currentQualityLabel }}
+            </button>
+            <div v-if="showQualityMenu" class="preset-menu">
+              <button
+                v-for="s in availableStreams"
+                :key="s.height"
+                class="preset-option"
+                :class="{ selected: selectedHeight === s.height }"
+                @click="selectQuality(s)"
+              >
+                {{ qualityLabel(s.height) }}
+              </button>
+            </div>
+          </div>
 
           <!-- Anime4K preset -->
           <div class="preset-wrapper" v-if="webgpuAvailable">

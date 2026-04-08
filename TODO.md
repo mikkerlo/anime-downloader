@@ -21,6 +21,7 @@
 - [x] Custom Dark Scrollbar Styling — thin scrollbars matching dark theme
 - [x] Shikimori Anime List — Browse & sync watchlist with status filters, MAL ID resolution, To Watch view
 - [x] Built-in Video Player with Anime4K Shaders — HTML5 player with WebGPU upscaling, CDN streaming, subtitles, GPU benchmark
+- [x] Quality Selector in Player — quality dropdown in built-in player controls for switching stream resolution
 
 ---
 
@@ -55,19 +56,19 @@ Allow switching between available translations without leaving the built-in play
 
 ---
 
-## 3. Quality Selector in Player
+## ~~3. Quality Selector in Player~~ ✅
 
-**Priority:** Medium | **Effort:** Small
+~~**Priority:** Medium | **Effort:** Small~~
 
-Add a quality selector dropdown in the built-in player controls. Currently the player always streams at the best available quality. Allow users to pick from available stream heights (e.g., 1080p, 720p, 480p).
+~~Add a quality selector dropdown in the built-in player controls. Currently the player always streams at the best available quality. Allow users to pick from available stream heights (e.g., 1080p, 720p, 480p).~~
 
-**Plan:**
-1. Extend `player:get-stream-url` to return all available stream heights (not just the best)
-2. Add new IPC or extend return type: `{ streams: { height: number; url: string }[]; subtitleContent: string | null }`
-3. Add quality dropdown in PlayerView controls bar showing available heights
-4. Default to best (highest) quality
-5. On quality switch: update `<video>` src to the selected stream URL, preserve playback position
-6. Files: `main/index.ts`, `preload/index.d.ts`, `PlayerView.vue`
+~~**Plan:**~~
+~~1. Extend `player:get-stream-url` to return all available stream heights (not just the best)~~
+~~2. Add new IPC or extend return type: `{ streams: { height: number; url: string }[]; subtitleContent: string | null }`~~
+~~3. Add quality dropdown in PlayerView controls bar showing available heights~~
+~~4. Default to best (highest) quality~~
+~~5. On quality switch: update `<video>` src to the selected stream URL, preserve playback position~~
+~~6. Files: `main/index.ts`, `preload/index.d.ts`, `PlayerView.vue`~~
 
 ---
 

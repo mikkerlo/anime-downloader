@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "scripts": {
@@ -12,7 +12,8 @@
     "pack:mac": "electron-vite build && electron-builder --mac --dir",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "screenshot": "node scripts/screenshot.js"
   },
   "build": {
     "appId": "com.anime-dl.app",
@@ -54,11 +55,13 @@
   },
   "license": "ISC",
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@vitejs/plugin-vue": "^6.0.5",
     "electron": "^41.1.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
+    "playwright": "^1.59.1",
     "typescript": "^6.0.2",
     "vite": "^7.3.1",
     "vue-tsc": "^3.2.6"

@@ -139,6 +139,8 @@ onMounted(async () => {
       ffmpegDownloading.value = false
     }
   })
+  // Expose test hook for Playwright screenshot script
+  ;(window as any).__openTestPlayer = openPlayer
 })
 
 onBeforeUnmount(() => {

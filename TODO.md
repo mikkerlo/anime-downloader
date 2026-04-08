@@ -22,6 +22,7 @@
 - [x] Shikimori Anime List — Browse & sync watchlist with status filters, MAL ID resolution, To Watch view
 - [x] Built-in Video Player with Anime4K Shaders — HTML5 player with WebGPU upscaling, CDN streaming, subtitles, GPU benchmark
 - [x] Quality Selector in Player — quality dropdown in built-in player controls for switching stream resolution
+- [x] Translation Selector in Player — translation dropdown in built-in player controls for switching between available translations
 
 ---
 
@@ -38,21 +39,21 @@ Add support for playing local .mkv files in the built-in player. Currently, .mkv
 
 ---
 
-## 2. Translation Selector in Player
+## ~~2. Translation Selector in Player~~ ✅
 
-**Priority:** Medium | **Effort:** Medium
+~~**Priority:** Medium | **Effort:** Medium~~
 
-Allow switching between available translations without leaving the built-in player. Currently the player receives a single stream URL — switching translation requires closing the player, changing the dropdown in AnimeDetailView, and reopening.
+~~Allow switching between available translations without leaving the built-in player. Currently the player receives a single stream URL — switching translation requires closing the player, changing the dropdown in AnimeDetailView, and reopening.~~
 
-**Plan:**
-1. Pass available translations list to PlayerView via props (from AnimeDetailView's `episodeRows` data)
-2. Add `translations` prop to PlayerView: `Array<{ id: number; label: string; type: string; height: number }>`
-3. Update emit chain: AnimeDetailView → App.vue (`openPlayer`) → PlayerView props
-4. Add translation dropdown button in PlayerView controls bar (next to Anime4K preset selector)
-5. On translation switch: call `window.api.playerGetStreamUrl(newTranslationId, height)` to get new stream URL + subtitles
-6. Update `<video>` src and subtitle track without remounting the component
-7. IPC: reuse existing `player:get-stream-url` handler — no new IPC needed
-8. Files: `AnimeDetailView.vue`, `App.vue`, `PlayerView.vue`, `preload/index.d.ts` (type update only)
+~~**Plan:**~~
+~~1. Pass available translations list to PlayerView via props (from AnimeDetailView's `episodeRows` data)~~
+~~2. Add `translations` prop to PlayerView: `Array<{ id: number; label: string; type: string; height: number }>`~~
+~~3. Update emit chain: AnimeDetailView → App.vue (`openPlayer`) → PlayerView props~~
+~~4. Add translation dropdown button in PlayerView controls bar (next to Anime4K preset selector)~~
+~~5. On translation switch: call `window.api.playerGetStreamUrl(newTranslationId, height)` to get new stream URL + subtitles~~
+~~6. Update `<video>` src and subtitle track without remounting the component~~
+~~7. IPC: reuse existing `player:get-stream-url` handler — no new IPC needed~~
+~~8. Files: `AnimeDetailView.vue`, `App.vue`, `PlayerView.vue`, `preload/index.d.ts` (type update only)~~
 
 ---
 

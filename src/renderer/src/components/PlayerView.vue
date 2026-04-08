@@ -46,7 +46,7 @@ let controlsTimer: ReturnType<typeof setTimeout> | null = null
 // Quality selector state
 const activeStreamUrl = ref(props.streamUrl)
 const selectedHeight = ref(0)
-const hasQualities = computed(() => props.availableStreams.length > 1)
+const hasQualities = computed(() => props.availableStreams.length > 0)
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null

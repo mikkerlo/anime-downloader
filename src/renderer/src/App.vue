@@ -139,14 +139,8 @@ onMounted(async () => {
       ffmpegDownloading.value = false
     }
   })
-  // Debug: auto-open player for testing quality selector
-  if ((window as any).__PLAYER_TEST__) {
-    openPlayer('', 'https://example.com/stream1080.mp4', '', 'Test Anime', '1', [
-      { height: 1080, url: 'https://example.com/stream1080.mp4' },
-      { height: 720, url: 'https://example.com/stream720.mp4' },
-      { height: 480, url: 'https://example.com/stream480.mp4' }
-    ], 123)
-  }
+  // Expose test hook for Playwright screenshot script
+  ;(window as any).__openTestPlayer = openPlayer
 })
 
 onBeforeUnmount(() => {

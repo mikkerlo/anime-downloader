@@ -546,8 +546,7 @@ async function openFile(episodeInt: string): Promise<void> {
     const name = anime.value ? getAnimeName() : ''
     if (info.type === 'mp4') {
       const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-      const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)
-      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, buildTranslationList(row))
+      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, [])
     } else {
       // MKV not supported in HTML5 — stream from CDN
       const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)

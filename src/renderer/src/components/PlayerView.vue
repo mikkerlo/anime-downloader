@@ -9,6 +9,7 @@ const props = defineProps<{
   episodeLabel: string
   availableStreams: { height: number; url: string }[]
   translationId: number
+  translations: { id: number; label: string; type: string; height: number }[]
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +48,13 @@ let controlsTimer: ReturnType<typeof setTimeout> | null = null
 const activeStreamUrl = ref(props.streamUrl)
 const selectedHeight = ref(0)
 const hasQualities = computed(() => props.availableStreams.length > 0)
+
+// Translation selector state
+const showTranslationMenu = ref(false)
+const activeTranslationId = ref(props.translationId)
+const activeSubtitleContent = ref(props.subtitleContent)
+const switchingTranslation = ref(false)
+const hasTranslations = computed(() => props.translations.length > 1 && isStreaming.value)
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null
@@ -158,6 +166,7 @@ function showControlsBriefly(): void {
       showControls.value = false
       showPresetMenu.value = false
       showQualityMenu.value = false
+      showTranslationMenu.value = false
     }, 3000)
   }
 }
@@ -483,8 +492,81 @@ function selectQuality(stream: { height: number; url: string }): void {
   })
 }
 
+// Translation selector
+const TRANSLATION_TYPE_LABELS: Record<string, string> = {
+  subRu: 'RU SUB',
+  subEn: 'EN SUB',
+  voiceRu: 'RU DUB',
+  voiceEn: 'EN DUB',
+  raw: 'RAW'
+}
+
+function translationTypeLabel(type: string): string {
+  return TRANSLATION_TYPE_LABELS[type] || type
+}
+
+const currentTranslation = computed(() =>
+  props.translations.find(t => t.id === activeTranslationId.value)
+)
+
+const currentTranslationLabel = computed(() => {
+  const tr = currentTranslation.value
+  if (!tr) return 'Translation'
+  return `${tr.label}`
+})
+
+async function selectTranslation(tr: { id: number; label: string; type: string; height: number }): Promise<void> {
+  if (tr.id === activeTranslationId.value) {
+    showTranslationMenu.value = false
+    return
+  }
+
+  const video = videoRef.value
+  const savedTime = video ? video.currentTime : 0
+  const wasPlaying = video ? !video.paused : false
+
+  switchingTranslation.value = true
+  showTranslationMenu.value = false
+
+  try {
+    const result = await window.api.playerGetStreamUrl(tr.id, tr.height)
+    if (!result) {
+      switchingTranslation.value = false
+      return
+    }
+
+    activeTranslationId.value = tr.id
+    activeStreamUrl.value = result.streamUrl
+    activeSubtitleContent.value = result.subtitleContent || ''
+
+    // Update available quality streams
+    if (result.availableStreams.length > 0) {
+      const current = result.availableStreams.find(s => s.url === result.streamUrl)
+      selectedHeight.value = current ? current.height : result.availableStreams[0].height
+    }
+
+    // Update subtitles
+    destroySubtitles()
+    if (result.subtitleContent && video) {
+      initSubtitles(video)
+    }
+
+    nextTick(() => {
+      const v = videoRef.value
+      if (!v) return
+      v.currentTime = savedTime
+      if (wasPlaying) v.play()
+      switchingTranslation.value = false
+    })
+  } catch {
+    switchingTranslation.value = false
+  }
+}
+
 function initSubtitles(video: HTMLVideoElement): void {
-  const blob = new Blob([props.subtitleContent], { type: 'text/vtt' })
+  const content = activeSubtitleContent.value
+  if (!content) return
+  const blob = new Blob([content], { type: 'text/vtt' })
   subtitleTrackUrl.value = URL.createObjectURL(blob)
   nextTick(() => {
     if (video.textTracks.length > 0) {
@@ -526,7 +608,7 @@ onMounted(async () => {
       if (anime4kPreset.value !== 'off' && webgpuAvailable.value) {
         await startAnime4KPipeline()
       }
-      if (props.subtitleContent) {
+      if (activeSubtitleContent.value) {
         initSubtitles(video)
       }
     }
@@ -681,6 +763,30 @@ const bufferedProgress = computed(() => {
           </span>
 
           <div class="controls-spacer" />
+
+          <!-- Translation selector -->
+          <div class="preset-wrapper" v-if="hasTranslations">
+            <button
+              class="ctrl-btn preset-btn translation-btn"
+              :class="{ loading: switchingTranslation }"
+              @click="showTranslationMenu = !showTranslationMenu"
+              title="Translation"
+            >
+              {{ switchingTranslation ? '...' : currentTranslationLabel }}
+            </button>
+            <div v-if="showTranslationMenu" class="preset-menu translation-menu">
+              <button
+                v-for="tr in translations"
+                :key="tr.id"
+                class="preset-option"
+                :class="{ selected: activeTranslationId === tr.id }"
+                @click="selectTranslation(tr)"
+              >
+                <span class="tr-label">{{ tr.label }}</span>
+                <span class="tr-meta">{{ translationTypeLabel(tr.type) }} · {{ qualityLabel(tr.height) }}</span>
+              </button>
+            </div>
+          </div>
 
           <!-- Quality selector -->
           <div class="preset-wrapper" v-if="hasQualities && isStreaming">
@@ -1017,6 +1123,50 @@ video::cue {
   color: #6a6a8a;
   font-size: 0.7rem;
   padding: 0 4px;
+}
+
+/* Translation selector */
+.translation-btn {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.translation-btn.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.translation-menu {
+  min-width: 260px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.translation-menu .preset-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tr-label {
+  font-size: 0.8rem;
+  color: #ddd;
+}
+
+.tr-meta {
+  font-size: 0.65rem;
+  color: #8a8aaa;
+}
+
+.preset-option.selected .tr-label {
+  color: #e94560;
+}
+
+.preset-option.selected .tr-meta {
+  color: #e94560;
+  opacity: 0.7;
 }
 
 /* Transitions */

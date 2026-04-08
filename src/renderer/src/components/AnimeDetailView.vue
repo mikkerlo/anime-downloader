@@ -10,7 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
-  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number]
+  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[]]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -528,6 +528,16 @@ async function checkFileStatus(): Promise<void> {
   episodeMeta.value = await window.api.downloadedEpisodesGet(props.animeId)
 }
 
+function buildTranslationList(row: EpisodeRow | undefined): { id: number; label: string; type: string; height: number }[] {
+  if (!row) return []
+  return row.allTranslations.map(tr => ({
+    id: tr.id,
+    label: tr.authorsSummary,
+    type: tr.type,
+    height: getRealHeight(tr)
+  }))
+}
+
 async function openFile(episodeInt: string): Promise<void> {
   const info = fileStatus.value[episodeInt]
   if (!info) return
@@ -536,14 +546,15 @@ async function openFile(episodeInt: string): Promise<void> {
     const name = anime.value ? getAnimeName() : ''
     if (info.type === 'mp4') {
       const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0)
+      const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)
+      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, buildTranslationList(row))
     } else {
       // MKV not supported in HTML5 — stream from CDN
       const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)
       if (row?.selectedTr) {
         const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
         if (result) {
-          emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, episodeInt, result.availableStreams, row.selectedTr.id)
+          emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row))
         } else {
           await window.api.fileOpen(info.filePath)
         }
@@ -561,7 +572,7 @@ async function playStream(row: EpisodeRow): Promise<void> {
   const name = anime.value ? getAnimeName() : ''
   const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
   if (result) {
-    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id)
+    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row))
   }
 }
 

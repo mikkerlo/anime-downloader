@@ -569,9 +569,13 @@ function toggleTranslationMenu(): void {
   showTranslationMenu.value = !showTranslationMenu.value
   if (showTranslationMenu.value) {
     const groups = translationTypeGroups.value
+    const current = currentTranslation.value
     if (groups.length === 1) {
       translationMenuLevel.value = 'items'
       selectedTypeGroup.value = groups[0].type
+    } else if (current && groups.some(g => g.type === current.type)) {
+      translationMenuLevel.value = 'items'
+      selectedTypeGroup.value = current.type
     } else {
       translationMenuLevel.value = 'types'
       selectedTypeGroup.value = ''

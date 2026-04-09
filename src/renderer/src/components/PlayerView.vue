@@ -31,6 +31,9 @@ const muted = ref(false)
 const isFullscreen = ref(false)
 const seeking = ref(false)
 const buffered = ref(0)
+const seekTooltipVisible = ref(false)
+const seekTooltipLeft = ref(0)
+const seekTooltipTime = ref('0:00')
 
 // Anime4K state
 const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
@@ -236,6 +239,22 @@ function onSeekInput(event: Event): void {
 
 function onSeekEnd(): void {
   seeking.value = false
+}
+
+function onSeekMouseMove(e: MouseEvent): void {
+  const container = (e.currentTarget as HTMLElement).parentElement
+  if (!container || duration.value <= 0) return
+  const rect = container.getBoundingClientRect()
+  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
+  const ratio = x / rect.width
+  const time = ratio * duration.value
+  seekTooltipTime.value = formatTime(time)
+  seekTooltipLeft.value = x
+  seekTooltipVisible.value = true
+}
+
+function onSeekMouseLeave(): void {
+  seekTooltipVisible.value = false
 }
 
 function onVolumeInput(event: Event): void {
@@ -836,7 +855,16 @@ const bufferedProgress = computed(() => {
             @mousedown="onSeekStart"
             @input="onSeekInput"
             @change="onSeekEnd"
+            @mousemove="onSeekMouseMove"
+            @mouseleave="onSeekMouseLeave"
           />
+          <div
+            v-show="seekTooltipVisible"
+            class="seek-tooltip"
+            :style="{ left: seekTooltipLeft + 'px' }"
+          >
+            {{ seekTooltipTime }}
+          </div>
         </div>
 
         <div class="controls-row">
@@ -1218,6 +1246,21 @@ const bufferedProgress = computed(() => {
 
 .seek-container:hover .seek-track {
   height: 6px;
+}
+
+.seek-tooltip {
+  position: absolute;
+  top: -28px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
 }
 
 /* Controls row */

@@ -51,16 +51,16 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 
 ---
 
-## 2. Seek Time Preview in Player
+## ~~2. Seek Time Preview in Player~~ ✅
 
-**Priority:** Low | **Effort:** Small
+~~**Priority:** Low | **Effort:** Small~~
 
-Show the target timestamp when hovering/dragging the seek bar. Currently seeking is blind — user can't see what time they're seeking to until they release.
+~~Show the target timestamp when hovering/dragging the seek bar. Currently seeking is blind — user can't see what time they're seeking to until they release.~~
 
-**Plan:**
-1. Add a time tooltip element positioned above the seek bar thumb
-2. Show on `mousemove` / `input` events on the seek input
-3. Calculate time from mouse position relative to seek bar width
-4. Format as `MM:SS` or `H:MM:SS` depending on duration
-5. Hide tooltip on `mouseleave`
-6. Files: `PlayerView.vue` only (pure UI change)
+~~**Plan:**~~
+~~1. Add a time tooltip element positioned above the seek bar thumb~~
+~~2. Show on `mousemove` / `input` events on the seek input~~
+~~3. Calculate time from mouse position relative to seek bar width~~
+~~4. Format as `MM:SS` or `H:MM:SS` depending on duration~~
+~~5. Hide tooltip on `mouseleave`~~
+~~6. Files: `PlayerView.vue` only (pure UI change)~~

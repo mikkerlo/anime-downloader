@@ -85,7 +85,50 @@ Replace the current ASS→WebVTT conversion with proper ASS rendering to preserv
 
 ---
 
-## 5. Seek Time Preview in Player
+## 5. Friends' Status on Anime Page
+
+**Priority:** Medium | **Effort:** Medium
+
+Show how your Shikimori friends relate to the anime you're viewing — their watch status, score, and progress. Displayed as a collapsible section on the anime detail page (e.g., "Friends: 3 watching, 2 completed").
+
+**Plan:**
+1. Add `getFriends(accessToken, userId)` to `shikimori.ts` — calls `GET /api/users/:id/friends` to fetch the friends list
+2. Add `getUserRatesForAnime(accessToken, userIds[], malId)` — for each friend, call `GET /api/v2/user_rates?user_id=:id&target_id=:malId&target_type=Anime` to get their rate (batch with concurrency limit to respect Shikimori rate limits)
+3. Define `ShikiFriendRate` interface: `{ nickname, avatar, status, score, episodes }` 
+4. Add IPC handler `shikimori:get-friends-rates` in `main/index.ts` — takes `malId`, returns `ShikiFriendRate[]`
+5. Expose in preload: `preload/index.ts` + `preload/index.d.ts`
+6. Add a "Friends" collapsible section in `AnimeDetailView.vue` below the existing Shikimori status area
+7. Show each friend as a compact row: avatar (small), nickname, status badge (watching/completed/dropped/etc.), score (if rated), episode progress
+8. Cache friends list in memory for the session (friends don't change often) to avoid re-fetching on every anime page
+9. Show a summary line at the top: "3 friends watching · 2 completed · 1 dropped"
+10. Handle edge cases: not logged in (hide section), no friends (hide section), no friends watching this anime (show "None of your friends have this anime")
+11. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `AnimeDetailView.vue`
+
+---
+
+## 6. Friends Activity Feed
+
+**Priority:** Medium | **Effort:** Medium
+
+Add a feed view showing recent anime activity from your Shikimori friends — what they've been watching, completing, rating, and adding to their lists. Gives a social overview similar to Shikimori's own activity page but integrated into the app.
+
+**Plan:**
+1. Add `getFriends(accessToken, userId)` to `shikimori.ts` if not already added (shared with task 5)
+2. Add `getFriendActivity(accessToken, userId)` — calls `GET /api/users/:id/history?limit=20&target_type=Anime` for each friend to get their recent anime history entries
+3. Define `ShikiFriendActivity` interface: `{ nickname, avatar, animeName, animeImage, action, episodeNumber, score, timestamp }`
+4. Add IPC handler `shikimori:get-friends-activity` in `main/index.ts` — fetches friends, then fetches recent history for each (with concurrency limit), merges and sorts by timestamp descending
+5. Expose in preload: `preload/index.ts` + `preload/index.d.ts`
+6. Create `FriendsActivityView.vue` — a new view accessible from the sidebar/nav alongside existing views (Library, Downloads, etc.)
+7. Render activity as a chronological feed: friend avatar + name, anime poster thumbnail, action text (e.g., "watched episode 5", "completed", "rated 8/10"), relative timestamp
+8. Clicking an anime in the feed navigates to its AnimeDetailView
+9. Add a refresh button and auto-refresh on view mount; cache results for 5 minutes to avoid excessive API calls
+10. Add pagination or "load more" if the feed grows long (initial load: 50 most recent entries across all friends)
+11. Handle edge cases: not logged in (prompt to connect Shikimori), no friends (show empty state with message), API rate limits (show cached data with "last updated" notice)
+12. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `FriendsActivityView.vue`, `App.vue` (add nav entry)
+
+---
+
+## 7. Seek Time Preview in Player
 
 **Priority:** Low | **Effort:** Small
 

@@ -86,3 +86,28 @@ Enable the translation type menu for downloaded episodes by allowing multiple lo
 7.  **Player Integration:** Update `openFile` in `AnimeDetailView` to pass the correct `translationId` and full `translations` list to `PlayerView`.
 8.  **Player Switching:** Modify `PlayerView.vue` to enable the translation menu even for local files, allowing seamless switching between multiple local files and streaming sources.
 9.  **Files:** `src/main/index.ts`, `src/main/download-manager.ts`, `src/renderer/src/components/AnimeDetailView.vue`, `src/renderer/src/components/PlayerView.vue`.
+
+---
+
+## 4. Refactor Smotret-Anime API into a Dedicated Class
+
+**Priority:** Medium | **Effort:** Small
+
+Consolidate all Smotret-Anime API interaction logic into a single, maintainable class to reduce duplication and improve code organization. Currently, API calls and URL constructions are scattered across `index.ts` and `download-manager.ts`.
+
+**Plan:**
+1.  Create `src/main/smotret-api.ts`.
+2.  Implement `SmotretApi` class with methods:
+    *   `constructor(getToken: () => string)`
+    *   `searchAnime(query: string)`
+    *   `getAnime(id: number)`
+    *   `getEpisode(id: number)`
+    *   `getEmbed(translationId: number)`
+    *   `getSubtitlesUrl(translationId: number)`
+    *   `getFallbackVideoUrl(translationId: number, height: number)`
+3.  Move shared interfaces/types related to the API (e.g., `AnimeDetail`, `Translation`, `EmbedData`) to `smotret-api.ts` or a shared types file.
+4.  Instantiate `SmotretApi` in `main/index.ts`.
+5.  Update IPC handlers in `index.ts` to use `smotretApi` instance.
+6.  Inject `smotretApi` into `DownloadManager` and update its methods (e.g., `fetchEmbed`, `enqueue`) to use the class.
+7.  Remove `apiRequest` and related constants (`API_BASE`, `USER_AGENT`) from `index.ts`.
+8.  Files: `src/main/smotret-api.ts`, `src/main/index.ts`, `src/main/download-manager.ts`.

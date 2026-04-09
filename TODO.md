@@ -50,3 +50,19 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 11. Handle edge cases: not logged in (prompt to connect Shikimori), no friends (show empty state with message), API rate limits (show cached data with "last updated" notice)
 12. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `FriendsActivityView.vue`, `App.vue` (add nav entry)
 
+---
+
+## 2. Start Translation Menu with Current Type
+
+**Priority:** Medium | **Effort:** Small
+
+Improve the player's translation menu by opening it directly within the current translation's category by default. This avoids an extra click for users who want to switch between translations of the same type (e.g., between different Russian subtitle authors).
+
+**Plan:**
+1.  Modify `toggleTranslationMenu()` in `src/renderer/src/components/PlayerView.vue`.
+2.  When opening the menu, find the current translation in `props.translations` based on `activeTranslationId.value`.
+3.  Set `selectedTypeGroup.value` to the current translation's `type`.
+4.  Set `translationMenuLevel.value = 'items'` directly.
+5.  Verify that the "back" button is still visible for users wanting to switch to other types (the template logic `v-if="translationTypeGroups.length > 1"` already handles this).
+6.  Files: `src/renderer/src/components/PlayerView.vue`
+

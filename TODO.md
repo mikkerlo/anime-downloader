@@ -75,7 +75,7 @@ Improve the player's translation menu by opening it directly within the current 
 Enable the translation type menu for downloaded episodes by allowing multiple local versions to coexist and marking them in selection menus with a Chrome-style download icon. Currently, an episode is locked to its single downloaded version, which disables the player's translation menu and prevents switching to other (streaming) translations.
 
 **Plan:**
-1.  **Update Filename Scheme:** Modify `DownloadManager.enqueue` to include the author's name in the filename: `Anime - 01 [Author].mp4`.
+1.  **Update Filename Scheme:** Modify `DownloadManager.enqueue` to include the author's name in the filename: `Anime - 01 [Author].mp4` and `Anime - 01 [Author].ass`. This ensures video and subtitle files remain matched when multiple versions exist.
 2.  **Metadata Persistence:** Change `downloadedEpisodes` store key from `animeId:episodeInt` to `animeId:episodeInt:translationId` to track multiple versions independently. Update `downloaded-episodes-get` IPC to return all versions for an anime.
 3.  **File Status Scan:** Update `file:check-episodes` IPC to return a map of all downloaded translation IDs for each episode, scanning both hot and cold storage for all variants. Ensure it still detects legacy filenames (without author tag).
 4.  **Unlock Selection:** In `AnimeDetailView.vue`, remove the `isLocked` logic for downloaded episodes. Only lock the row if a download for *any* version of that episode is currently active or queued.

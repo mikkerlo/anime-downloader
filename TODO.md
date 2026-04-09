@@ -28,51 +28,7 @@
 
 ---
 
-## ~~1. MKV Local Playback Support~~ ✅
-
-~~**Priority:** Medium | **Effort:** Medium~~
-
-~~Add support for playing local .mkv files in the built-in player. Currently, .mkv files fall back to CDN streaming because HTML5 `<video>` in Chromium doesn't support MKV containers. Options include on-the-fly remux via ffmpeg to a temporary .mp4 or using WebCodecs API with a JavaScript MKV demuxer.~~
-
-~~**Options:**~~
-~~1. On-the-fly remux via ffmpeg (`-c copy`) to a temp .mp4 before playback — fast but needs temp disk space~~
-~~2. WebCodecs API + JS MKV demuxer (e.g., `mkvdemux`) — no temp file, but complex and experimental~~
-~~3. Register a custom streaming protocol that remuxes on-the-fly as the player reads~~
-
----
-
-## ~~2. Translation Selector in Player~~ ✅
-
-~~**Priority:** Medium | **Effort:** Medium~~
-
-~~Allow switching between available translations without leaving the built-in player. Currently the player receives a single stream URL — switching translation requires closing the player, changing the dropdown in AnimeDetailView, and reopening.~~
-
-~~**Plan:**~~
-~~1. Pass available translations list to PlayerView via props (from AnimeDetailView's `episodeRows` data)~~
-~~2. Add `translations` prop to PlayerView: `Array<{ id: number; label: string; type: string; height: number }>`~~
-~~3. Update emit chain: AnimeDetailView → App.vue (`openPlayer`) → PlayerView props~~
-~~4. Add translation dropdown button in PlayerView controls bar (next to Anime4K preset selector)~~
-~~5. On translation switch: call `window.api.playerGetStreamUrl(newTranslationId, height)` to get new stream URL + subtitles~~
-~~6. Update `<video>` src and subtitle track without remounting the component~~
-~~7. IPC: reuse existing `player:get-stream-url` handler — no new IPC needed~~
-~~8. Files: `AnimeDetailView.vue`, `App.vue`, `PlayerView.vue`, `preload/index.d.ts` (type update only)~~
-
----
-
-## ~~3. ASS Subtitle Support in Player~~ ✅
-
-~~**Priority:** Medium | **Effort:** Medium~~
-
-~~Replace the current ASS→WebVTT conversion with proper ASS rendering to preserve styled subtitles (colors, positioning, effects). The current approach strips all ASS formatting tags during conversion to VTT.~~
-
-~~**Options:**~~
-~~1. `jassub` (libass WASM) — full ASS support, but has Vite worker bundling issues in Electron (needs investigation)~~
-~~2. `ass.js` / `assjs` — pure JS ASS renderer, simpler integration but less complete~~
-~~3. Custom ASS parser that preserves basic styling (colors, bold, italic, position) in VTT cues~~
-
----
-
-## 4. Friends' Status on Anime Page
+## 1. Friends' Status on Anime Page
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -93,7 +49,7 @@ Show how your Shikimori friends relate to the anime you're viewing — their wat
 
 ---
 
-## 5. Friends Activity Feed
+## 2. Friends Activity Feed
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -115,7 +71,7 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 
 ---
 
-## 6. Seek Time Preview in Player
+## 3. Seek Time Preview in Player
 
 **Priority:** Low | **Effort:** Small
 

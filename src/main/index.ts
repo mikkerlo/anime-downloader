@@ -1085,6 +1085,13 @@ function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle('shikimori:get-friends-rates', async (_event, malId: number) => {
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) throw new Error('Not logged in to Shikimori')
+    return shikimori.getFriendsRatesForAnime(accessToken, user.id, malId)
+  })
+
   ipcMain.handle('shikimori:get-anime-rates', async (_event, status?: string) => {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null

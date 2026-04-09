@@ -206,6 +206,78 @@ export async function updateUserRate(
   return response.json() as Promise<ShikiUserRate>
 }
 
+export interface ShikiFriend {
+  id: number
+  nickname: string
+  avatar: string
+}
+
+export interface ShikiFriendRate {
+  nickname: string
+  avatar: string
+  status: ShikiUserRateStatus
+  score: number
+  episodes: number
+}
+
+export async function getFriends(accessToken: string, userId: number): Promise<ShikiFriend[]> {
+  const response = await shikiFetch(`/api/users/${userId}/friends?limit=100`, {
+    headers: authHeaders(accessToken)
+  })
+  return response.json() as Promise<ShikiFriend[]>
+}
+
+async function getFriendRateForAnime(
+  accessToken: string,
+  friend: ShikiFriend,
+  malId: number
+): Promise<ShikiFriendRate | null> {
+  const params = new URLSearchParams({ limit: '5000', censored: 'true' })
+  const response = await shikiFetch(`/api/users/${friend.id}/anime_rates?${params}`, {
+    headers: authHeaders(accessToken)
+  })
+  const rates = (await response.json()) as ShikiAnimeRateEntry[]
+  const rate = rates.find((r) => r.anime.id === malId)
+  if (!rate) return null
+  return {
+    nickname: friend.nickname,
+    avatar: friend.avatar,
+    status: rate.status,
+    score: rate.score,
+    episodes: rate.episodes
+  }
+}
+
+export async function getFriendsRatesForAnime(
+  accessToken: string,
+  userId: number,
+  malId: number
+): Promise<ShikiFriendRate[]> {
+  const friends = await getFriends(accessToken, userId)
+  if (friends.length === 0) return []
+
+  const CONCURRENCY = 2
+  const results: ShikiFriendRate[] = []
+
+  for (let i = 0; i < friends.length; i += CONCURRENCY) {
+    const batch = friends.slice(i, i + CONCURRENCY)
+    const rates = await Promise.all(
+      batch.map(async (friend) => {
+        try {
+          return await getFriendRateForAnime(accessToken, friend, malId)
+        } catch {
+          return null
+        }
+      })
+    )
+    for (const r of rates) {
+      if (r) results.push(r)
+    }
+  }
+
+  return results
+}
+
 export async function getUserAnimeRates(
   accessToken: string,
   userId: number,

@@ -75,6 +75,7 @@ let pipelineActive = false
 
 // ASS subtitle state (JASSUB renderer)
 let jassubInstance: JASSUB | null = null
+let jassubWorkerBlobUrl: string | null = null
 
 // Fullscreen quad WGSL shaders for rendering pipeline output to canvas
 const FULLSCREEN_QUAD_VERT = `
@@ -635,12 +636,12 @@ async function initSubtitles(video: HTMLVideoElement): Promise<void> {
     let code = await resp.text()
     code = code.replaceAll('import.meta.url', JSON.stringify(jassubWorkerUrl))
     const blob = new Blob([code], { type: 'application/javascript' })
-    const blobUrl = URL.createObjectURL(blob)
+    jassubWorkerBlobUrl = URL.createObjectURL(blob)
 
     jassubInstance = new JASSUB({
       video,
       subContent: content,
-      workerUrl: blobUrl,
+      workerUrl: jassubWorkerBlobUrl,
       wasmUrl: jassubWasmUrl,
       modernWasmUrl: jassubModernWasmUrl,
       availableFonts: { 'default': jassubDefaultFontUrl },
@@ -658,6 +659,10 @@ function destroySubtitles(): void {
       jassubInstance.destroy()
     } catch { /* ignore cleanup errors */ }
     jassubInstance = null
+  }
+  if (jassubWorkerBlobUrl) {
+    URL.revokeObjectURL(jassubWorkerBlobUrl)
+    jassubWorkerBlobUrl = null
   }
 }
 

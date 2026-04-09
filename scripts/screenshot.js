@@ -7,12 +7,15 @@ const { execSync } = require('child_process');
 // Crops the bottom 15% of the image (above the 40px control bar) where subtitles render,
 // which dramatically improves OCR accuracy for white-on-dark subtitle text.
 function ocr(imagePath) {
+  const cropPath = imagePath.replace('.png', '-crop.png');
   try {
-    const cropPath = imagePath.replace('.png', '-crop.png');
     execSync(`convert "${imagePath}" -gravity South -crop 100%x15%+0+40 "${cropPath}"`, { stdio: 'pipe' });
-    return execSync(`tesseract "${cropPath}" stdout --psm 6 2>/dev/null`).toString().trim();
+    const text = execSync(`tesseract "${cropPath}" stdout --psm 6 2>/dev/null`).toString().trim();
+    return text;
   } catch {
     return '(OCR failed)';
+  } finally {
+    try { fs.unlinkSync(cropPath); } catch { /* ignore */ }
   }
 }
 

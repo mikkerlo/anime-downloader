@@ -23,19 +23,20 @@
 - [x] Built-in Video Player with Anime4K Shaders — HTML5 player with WebGPU upscaling, CDN streaming, subtitles, GPU benchmark
 - [x] Quality Selector in Player — quality dropdown in built-in player controls for switching stream resolution
 - [x] Translation Selector in Player — translation dropdown in built-in player controls for switching between available translations
+- [x] MKV Local Playback Support — on-the-fly remux via ffmpeg (`-c copy`) to temp MP4, auto-cleanup on player close
 
 ---
 
-## 1. MKV Local Playback Support
+## ~~1. MKV Local Playback Support~~ ✅
 
-**Priority:** Medium | **Effort:** Medium
+~~**Priority:** Medium | **Effort:** Medium~~
 
-Add support for playing local .mkv files in the built-in player. Currently, .mkv files fall back to CDN streaming because HTML5 `<video>` in Chromium doesn't support MKV containers. Options include on-the-fly remux via ffmpeg to a temporary .mp4 or using WebCodecs API with a JavaScript MKV demuxer.
+~~Add support for playing local .mkv files in the built-in player. Currently, .mkv files fall back to CDN streaming because HTML5 `<video>` in Chromium doesn't support MKV containers. Options include on-the-fly remux via ffmpeg to a temporary .mp4 or using WebCodecs API with a JavaScript MKV demuxer.~~
 
-**Options:**
-1. On-the-fly remux via ffmpeg (`-c copy`) to a temp .mp4 before playback — fast but needs temp disk space
-2. WebCodecs API + JS MKV demuxer (e.g., `mkvdemux`) — no temp file, but complex and experimental
-3. Register a custom streaming protocol that remuxes on-the-fly as the player reads
+~~**Options:**~~
+~~1. On-the-fly remux via ffmpeg (`-c copy`) to a temp .mp4 before playback — fast but needs temp disk space~~
+~~2. WebCodecs API + JS MKV demuxer (e.g., `mkvdemux`) — no temp file, but complex and experimental~~
+~~3. Register a custom streaming protocol that remuxes on-the-fly as the player reads~~
 
 ---
 

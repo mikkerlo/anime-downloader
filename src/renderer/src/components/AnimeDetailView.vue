@@ -577,18 +577,9 @@ async function openFile(episodeInt: string): Promise<void> {
       const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
       emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, [])
     } else {
-      // MKV not supported in HTML5 — stream from CDN
-      const row = episodeRows.value.find(r => r.episode.episodeInt === episodeInt)
-      if (row?.selectedTr) {
-        const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
-        if (result) {
-          emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row))
-        } else {
-          await window.api.fileOpen(info.filePath)
-        }
-      } else {
-        await window.api.fileOpen(info.filePath)
-      }
+      // MKV: pass filePath for remux-based local playback
+      const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
+      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, [])
     }
   } else {
     await window.api.fileOpen(info.filePath)

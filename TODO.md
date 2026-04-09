@@ -26,6 +26,7 @@
 - [x] MKV Local Playback Support — on-the-fly remux via ffmpeg (`-c copy`) to temp MP4, auto-cleanup on player close
 - [x] ASS Subtitle Support in Player — native ASS rendering via libass-wasm (SubtitlesOctopus), preserving styled subtitles (colors, positioning, effects). TODO: migrate to JASSUB for better rendering (WebGL, multithreading) once its ES module workers work on Windows Electron file:// protocol
 - [x] Friends' Status on Anime Page — Shikimori friends' watch status, score, and progress on anime detail page
+- [x] Seek Time Preview in Player — timestamp tooltip on seek bar hover/drag
 
 ---
 
@@ -49,18 +50,3 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 11. Handle edge cases: not logged in (prompt to connect Shikimori), no friends (show empty state with message), API rate limits (show cached data with "last updated" notice)
 12. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `FriendsActivityView.vue`, `App.vue` (add nav entry)
 
----
-
-## ~~2. Seek Time Preview in Player~~ ✅
-
-~~**Priority:** Low | **Effort:** Small~~
-
-~~Show the target timestamp when hovering/dragging the seek bar. Currently seeking is blind — user can't see what time they're seeking to until they release.~~
-
-~~**Plan:**~~
-~~1. Add a time tooltip element positioned above the seek bar thumb~~
-~~2. Show on `mousemove` / `input` events on the seek input~~
-~~3. Calculate time from mouse position relative to seek bar width~~
-~~4. Format as `MM:SS` or `H:MM:SS` depending on duration~~
-~~5. Hide tooltip on `mouseleave`~~
-~~6. Files: `PlayerView.vue` only (pure UI change)~~

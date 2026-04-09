@@ -627,30 +627,36 @@ async function initSubtitles(video: HTMLVideoElement): Promise<void> {
   if (!content) return
   destroySubtitles()
 
-  // Electron doesn't support module Workers with file:// protocol.
-  // Vite bundles the worker as ES module, so we fetch it, replace import.meta.url
-  // references with the actual file URL, and create a blob URL for a classic worker.
-  const resp = await fetch(jassubWorkerUrl)
-  let code = await resp.text()
-  code = code.replaceAll('import.meta.url', JSON.stringify(jassubWorkerUrl))
-  const blob = new Blob([code], { type: 'application/javascript' })
-  const blobUrl = URL.createObjectURL(blob)
+  try {
+    // Electron doesn't support module Workers with file:// protocol.
+    // Vite bundles the worker as ES module, so we fetch it, replace import.meta.url
+    // references with the actual file URL, and create a blob URL for a classic worker.
+    const resp = await fetch(jassubWorkerUrl)
+    let code = await resp.text()
+    code = code.replaceAll('import.meta.url', JSON.stringify(jassubWorkerUrl))
+    const blob = new Blob([code], { type: 'application/javascript' })
+    const blobUrl = URL.createObjectURL(blob)
 
-  jassubInstance = new JASSUB({
-    video,
-    subContent: content,
-    workerUrl: blobUrl,
-    wasmUrl: jassubWasmUrl,
-    modernWasmUrl: jassubModernWasmUrl,
-    availableFonts: { 'default': jassubDefaultFontUrl },
-    prescaleFactor: 0.8,
-    maxRenderHeight: 0
-  })
+    jassubInstance = new JASSUB({
+      video,
+      subContent: content,
+      workerUrl: blobUrl,
+      wasmUrl: jassubWasmUrl,
+      modernWasmUrl: jassubModernWasmUrl,
+      availableFonts: { 'default': jassubDefaultFontUrl },
+      prescaleFactor: 0.8,
+      maxRenderHeight: 0
+    })
+  } catch (e) {
+    console.error('Failed to initialize JASSUB subtitle renderer:', e)
+  }
 }
 
 function destroySubtitles(): void {
   if (jassubInstance) {
-    jassubInstance.destroy()
+    try {
+      jassubInstance.destroy()
+    } catch { /* ignore cleanup errors */ }
     jassubInstance = null
   }
 }

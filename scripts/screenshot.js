@@ -68,6 +68,7 @@ const fs = require('fs');
   await page.waitForTimeout(500);
 
   // Create a proper H.264 MKV test file (250s to cover gist subtitle timestamps up to 4:04)
+  // Duration must be >= 245s because the gist subtitles span 3:45–4:04
   const { execSync } = require('child_process');
   const mkvTestFile = '/tmp/test-h264.mkv';
   if (!fs.existsSync(mkvTestFile)) {

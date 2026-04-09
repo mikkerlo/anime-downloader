@@ -42,7 +42,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
-| `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, MKV remux, keyboard controls |
+| `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, JASSUB ASS subtitles, MKV remux, keyboard controls |
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
 ## Data Flow
@@ -270,8 +270,8 @@ LibraryView shows both with indicators:
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
-| `player:get-stream-url` | invoke | Fetch CDN stream URL + subtitle content (ASS→VTT) + all available stream qualities for a translation |
-| `player:get-local-subtitles` | invoke | Read local .ass file alongside video, convert to VTT |
+| `player:get-stream-url` | invoke | Fetch CDN stream URL + raw ASS subtitle content + all available stream qualities for a translation |
+| `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
 | `player:remux-mkv` | invoke | Remux MKV→MP4 via ffmpeg stream copy to temp dir for HTML5 playback |
 | `player:cleanup-remux` | invoke | Delete temp remuxed files when player closes |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
@@ -393,11 +393,13 @@ Preset modes: Mode A (1080p source), Mode B (720p source), Mode C (480p source).
 
 ### Subtitles
 
-ASS subtitles are converted to WebVTT in the main process and displayed via native HTML5 `<track>` element:
-- **Local files**: `player:get-local-subtitles` reads `.ass` file alongside the `.mp4`, converts to VTT
-- **Streaming**: `player:get-stream-url` fetches ASS from smotret-anime API, converts to VTT
-- Conversion strips ASS style tags (`{\b1}`, `{\an8}`, etc.), converts `\N` newlines, and maps ASS timestamps to VTT format
-- Subtitles positioned at `line:85%` to stay above player controls
+ASS subtitles are rendered natively using [JASSUB](https://github.com/ThaUnknown/jassub) (libass compiled to WASM), preserving full ASS styling — colors, positioning, fonts, effects, and sign translations. JASSUB renders subtitles onto a transparent canvas overlaid on the video element.
+
+- **Local files**: `player:get-local-subtitles` reads raw `.ass` file alongside the `.mp4`
+- **Streaming**: `player:get-stream-url` fetches raw ASS content from smotret-anime API
+- Raw ASS content is passed to the renderer and fed directly to JASSUB via `subContent` option
+- JASSUB worker and WASM assets are bundled via Vite `?url` imports; a custom Vite plugin (`jassub-worker-fix`) prevents Vite from attempting to bundle jassub's internal `Worker()` call
+- On subtitle update (e.g., translation switch), the previous JASSUB instance is destroyed and a new one created
 
 ### Quality Selector
 

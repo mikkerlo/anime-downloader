@@ -67,40 +67,58 @@ const fs = require('fs');
   });
   await page.waitForTimeout(500);
 
-  // Create a proper H.264 MKV test file for remux testing
+  // Create a proper H.264 MKV test file (250s to cover gist subtitle timestamps up to 4:04)
   const { execSync } = require('child_process');
   const mkvTestFile = '/tmp/test-h264.mkv';
   if (!fs.existsSync(mkvTestFile)) {
     try {
-      execSync('ffmpeg -f lavfi -i testsrc=duration=20:size=854x480:rate=24 -f lavfi -i sine=frequency=440:duration=20 -c:v libx264 -preset ultrafast -c:a aac /tmp/test-h264.mkv', { stdio: 'pipe' });
+      execSync('ffmpeg -f lavfi -i testsrc=duration=250:size=640x480:rate=24 -f lavfi -i sine=frequency=440:duration=250 -c:v libx264 -preset ultrafast -c:a aac /tmp/test-h264.mkv -y', { stdio: 'pipe' });
     } catch { /* may already exist */ }
   }
 
-  // Prepare ASS test subtitle file
+  // Prepare ASS subtitle file using the actual gist content (https://gist.github.com/Cellane/3836678)
+  // This contains real anime-style ASS subtitles with \move, \p1 drawing commands, sign translations, etc.
   const assTestFile = '/tmp/test-subs.ass';
   if (!fs.existsSync(assTestFile)) {
+    const gistDialogues = [
+      'Dialogue: 0,0:03:45.67,0:03:46.17,Default,Comment,0000,0000,0000,,Here.',
+      'Dialogue: 0,0:03:46.78,0:03:48.02,Default,Comment,0000,0000,0000,,Just get up and come.',
+      'Dialogue: 0,0:03:48.09,0:03:49.42,Default,Comment,0000,0000,0000,,H-Hey!',
+      'Dialogue: 1,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\move(355,420,355,35)\\p1\\an8\\1a&HFF&\\shad0\\bord2\\3c&H564765&}m 0 0 l 0 45 180 45 180 0{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\move(355,420,355,35)\\p1\\an8\\1a&HFF&\\shad0\\bord4.5\\3c&HA5A0BC&}m 0 0 l 0 45 180 45 180 0{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\move(355,420,355,35)\\p1\\an8\\c&HEBE9DC&\\shad0\\bord0\\3c&H595E70&}m 0 0 l 0 45 180 45 180 0{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(263,457,263,72)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(290,457,290,72)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(310,457,310,72)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(338,460,338,75)}m 0 0 b 0 0 24 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(358,460,358,75)}m 0 0 b 0 0 24 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(383,460,383,75)}m 0 0 b 0 0 24 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(383,457,383,72)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(410,457,410,72)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0020,,{\\an8\\p1\\shad0\\bord0\\3c&H595E70&\\c&HA0A87B&\\frz90\\move(435,457,435,72)\\clip(0,0,448,480)}m 0 0 b 0 0 30 30 0 30{\\p0}',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0000,,{\\fs16\\b0\\shad0\\bord0\\fnBankGothic Md BT\\move(325,438,325,53)\\c&H4C5CC7&}Health Center',
+      'Dialogue: 0,0:03:49.42,0:03:53.93,f.o.,Comment,0000,0000,0000,,{\\fscx112\\fs32\\b0\\shad0\\bord0\\c&H5A5548&\\fnColumbo\\move(355,470,355,85)}Yu Yu Land',
+      'Dialogue: 0,0:03:58.10,0:03:58.43,Default,Comment,0000,0000,0000,,See?',
+      'Dialogue: 0,0:03:58.89,0:04:02.10,Default,Comment,0000,0000,0000,,Nobody\'s around now, so we have the place all to ourselves!',
+      'Dialogue: 0,0:04:02.70,0:04:04.43,Default,Comment,0000,0000,0000,,This feels really good!',
+    ];
     fs.writeFileSync(assTestFile, [
       '[Script Info]',
-      'Title: Test ASS Subtitles',
+      'Title: Cellane Gist Test Subtitles',
       'ScriptType: v4.00+',
-      'PlayResX: 854',
+      'WrapStyle: 0',
+      'PlayResX: 640',
       'PlayResY: 480',
       'ScaledBorderAndShadow: yes',
       '',
       '[V4+ Styles]',
       'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-      'Style: Default,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1',
-      'Style: Top,Arial,28,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,8,20,20,20,1',
-      'Style: Styled,Arial,32,&H0000FF00,&H000000FF,&H00000000,&H80000000,0,-1,0,0,100,100,0,0,1,2,1,2,20,20,30,1',
+      'Style: Default,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1',
+      'Style: f.o.,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1',
       '',
       '[Events]',
       'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
-      'Dialogue: 0,0:00:00.50,0:00:04.00,Default,,0,0,0,,{\\b1}ASS Subtitle Rendering{\\b0} with full styling',
-      'Dialogue: 0,0:00:04.00,0:00:08.00,Top,,0,0,0,,Top-positioned subtitle with {\\c&H0000FF&}color{\\c}',
-      'Dialogue: 0,0:00:04.00,0:00:08.00,Default,,0,0,0,,Bottom subtitle {\\c&HFF0000&}simultaneously{\\c}',
-      'Dialogue: 0,0:00:08.00,0:00:12.00,Styled,,0,0,0,,{\\fad(500,500)}Italic green with fade effect',
-      'Dialogue: 0,0:00:12.00,0:00:16.00,Default,,0,0,0,,{\\i1}Italic{\\i0}, {\\b1}Bold{\\b0}, {\\c&H0000FF&}Blue{\\c}',
-      'Dialogue: 0,0:00:16.00,0:00:20.00,Default,,0,0,0,,{\\bord4\\3c&H0000FF&\\shad2}Custom border + shadow',
+      ...gistDialogues
     ].join('\n'));
   }
 
@@ -168,8 +186,8 @@ const fs = require('fs');
     });
     await page.waitForTimeout(1000);
 
-    // Test ASS subtitle rendering with JASSUB
-    console.log('Opening player with ASS subtitles...');
+    // Test ASS subtitle rendering with JASSUB using actual gist content
+    console.log('Opening player with gist ASS subtitles...');
     const assContent = fs.readFileSync(assTestFile, 'utf-8');
     await page.evaluate(({ mkvPath, subs }) => {
       if (window.__openTestPlayer) {
@@ -177,7 +195,7 @@ const fs = require('fs');
           mkvPath,
           '',
           subs,
-          'Styled Subtitles Test',
+          'Angel Beats',
           '1',
           [],
           0,
@@ -186,47 +204,69 @@ const fs = require('fs');
       }
     }, { mkvPath: mkvTestFile, subs: assContent });
 
-    // Wait for remux + JASSUB init + seek to subtitle
-    console.log('Waiting for remux + subtitle rendering...');
-    await page.waitForTimeout(10000);
-    // Seek to 1s to see the first subtitle
+    // Wait for remux + JASSUB init
+    console.log('Waiting for remux + subtitle init...');
+    await page.waitForTimeout(12000);
+
+    // Screenshot 1: "Just get up and come." (3:47)
+    console.log('Seeking to 3:47 — "Just get up and come."...');
     await page.evaluate(() => {
       const video = document.querySelector('video');
-      if (video) video.currentTime = 1.5;
+      if (video) video.currentTime = 227;  // 3:47
     });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
     await page.mouse.move(500, 400);
     await page.waitForTimeout(500);
+    await page.screenshot({ path: '/tmp/app-ass-dialogue.png' });
+    console.log('Dialogue screenshot saved to /tmp/app-ass-dialogue.png');
 
-    console.log('Taking ASS subtitle screenshot...');
-    await page.screenshot({ path: '/tmp/app-ass-subs.png' });
-    console.log('ASS subtitle screenshot saved to /tmp/app-ass-subs.png');
-
-    // Seek to 5s for dual subtitle test
+    // Screenshot 2: "H-Hey!" (3:48.5)
+    console.log('Seeking to 3:48 — "H-Hey!"...');
     await page.evaluate(() => {
       const video = document.querySelector('video');
-      if (video) video.currentTime = 5;
+      if (video) video.currentTime = 228.5;  // 3:48.5
     });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
     await page.mouse.move(500, 400);
     await page.waitForTimeout(500);
+    await page.screenshot({ path: '/tmp/app-ass-hhey.png' });
+    console.log('H-Hey screenshot saved to /tmp/app-ass-hhey.png');
 
-    console.log('Taking dual ASS subtitle screenshot...');
-    await page.screenshot({ path: '/tmp/app-ass-dual.png' });
-    console.log('Dual ASS subtitle screenshot saved to /tmp/app-ass-dual.png');
-
-    // Seek to 13s for styled text test
+    // Screenshot 3: Sign translations with \move + drawing commands (3:51 — mid-animation)
+    console.log('Seeking to 3:51 — sign translations (Health Center / Yu Yu Land)...');
     await page.evaluate(() => {
       const video = document.querySelector('video');
-      if (video) video.currentTime = 13;
+      if (video) video.currentTime = 231;  // 3:51
     });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
     await page.mouse.move(500, 400);
     await page.waitForTimeout(500);
+    await page.screenshot({ path: '/tmp/app-ass-signs.png' });
+    console.log('Signs screenshot saved to /tmp/app-ass-signs.png');
 
-    console.log('Taking styled ASS subtitle screenshot...');
-    await page.screenshot({ path: '/tmp/app-ass-styled.png' });
-    console.log('Styled ASS subtitle screenshot saved to /tmp/app-ass-styled.png');
+    // Screenshot 4: "Nobody's around now..." (3:59)
+    console.log('Seeking to 3:59 — "Nobody\'s around now..."...');
+    await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) video.currentTime = 239;  // 3:59
+    });
+    await page.waitForTimeout(3000);
+    await page.mouse.move(500, 400);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: '/tmp/app-ass-nobody.png' });
+    console.log('Nobody screenshot saved to /tmp/app-ass-nobody.png');
+
+    // Screenshot 5: "This feels really good!" (4:03)
+    console.log('Seeking to 4:03 — "This feels really good!"...');
+    await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) video.currentTime = 243;  // 4:03
+    });
+    await page.waitForTimeout(3000);
+    await page.mouse.move(500, 400);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: '/tmp/app-ass-good.png' });
+    console.log('Good screenshot saved to /tmp/app-ass-good.png');
   } else {
     console.log('Could not create MKV test file, skipping MKV and ASS screenshots');
   }

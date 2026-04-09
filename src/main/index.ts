@@ -1216,6 +1216,49 @@ function registerIpcHandlers(): void {
     } catch { /* ignore */ }
     return null
   })
+
+  // Remux MKV to MP4 (stream copy) for HTML5 playback
+  const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
+
+  ipcMain.handle('player:remux-mkv', async (_event, mkvPath: string): Promise<{ mp4Path: string } | { error: string }> => {
+    if (!ffmpegPath) return { error: 'ffmpeg not available' }
+    if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
+
+    // Create temp dir
+    fs.mkdirSync(remuxTmpDir, { recursive: true })
+
+    const baseName = path.basename(mkvPath, path.extname(mkvPath))
+    const mp4Path = path.join(remuxTmpDir, `${baseName}-${Date.now()}.mp4`)
+
+    Ffmpeg.setFfmpegPath(ffmpegPath)
+
+    return new Promise((resolve) => {
+      Ffmpeg(mkvPath)
+        .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
+        .output(mp4Path)
+        .on('error', (err) => {
+          console.error('[remux] FFmpeg error:', err.message)
+          resolve({ error: err.message })
+        })
+        .on('end', () => {
+          console.log('[remux] Completed:', mp4Path)
+          resolve({ mp4Path })
+        })
+        .run()
+    })
+  })
+
+  ipcMain.handle('player:cleanup-remux', async () => {
+    try {
+      if (fs.existsSync(remuxTmpDir)) {
+        const files = fs.readdirSync(remuxTmpDir)
+        for (const file of files) {
+          try { fs.unlinkSync(path.join(remuxTmpDir, file)) } catch { /* ignore */ }
+        }
+        try { fs.rmdirSync(remuxTmpDir) } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+  })
 }
 
 function createWindow(): void {

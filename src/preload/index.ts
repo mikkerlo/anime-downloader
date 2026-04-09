@@ -94,6 +94,10 @@ const api = {
     ipcRenderer.invoke('player:get-stream-url', translationId, maxHeight),
   playerGetLocalSubtitles: (filePath: string) =>
     ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
+  playerRemuxMkv: (mkvPath: string) =>
+    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string } | { error: string }>,
+  playerCleanupRemux: () =>
+    ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
 
   // Shikimori
   shikimoriGetAuthUrl: () => ipcRenderer.invoke('shikimori:get-auth-url') as Promise<string>,

@@ -44,6 +44,12 @@ const showQualityMenu = ref(false)
 const isStreaming = computed(() => !!props.streamUrl && !props.filePath)
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
+// MKV remux state
+const isMkv = computed(() => !!props.filePath && props.filePath.toLowerCase().endsWith('.mkv'))
+const remuxing = ref(false)
+const remuxError = ref('')
+const remuxedPath = ref('')
+
 // Quality selector state
 const activeStreamUrl = ref(props.streamUrl)
 const selectedHeight = ref(0)
@@ -92,6 +98,13 @@ fn main(@builtin(position) coord: vec4f) -> @location(0) vec4f {
 
 const videoSrc = computed(() => {
   if (props.filePath) {
+    // For MKV files, use the remuxed MP4 path
+    if (isMkv.value) {
+      if (remuxedPath.value) {
+        return 'anime-video://' + encodeURIComponent(remuxedPath.value)
+      }
+      return '' // Not ready yet — remuxing in progress
+    }
     return 'anime-video://' + encodeURIComponent(props.filePath)
   }
   return activeStreamUrl.value
@@ -627,6 +640,26 @@ onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
 
+  // Remux MKV to MP4 if needed
+  if (isMkv.value && props.filePath) {
+    remuxing.value = true
+    remuxError.value = ''
+    try {
+      const result = await window.api.playerRemuxMkv(props.filePath)
+      if ('error' in result) {
+        remuxError.value = result.error
+        remuxing.value = false
+        return
+      }
+      remuxedPath.value = result.mp4Path
+    } catch (e) {
+      remuxError.value = String(e)
+      remuxing.value = false
+      return
+    }
+    remuxing.value = false
+  }
+
   // Initialize quality from available streams
   if (props.streamUrl && props.availableStreams.length > 0) {
     const current = props.availableStreams.find(s => s.url === props.streamUrl)
@@ -680,6 +713,10 @@ onBeforeUnmount(() => {
     gpuDevice.destroy()
     gpuDevice = null
   }
+  // Clean up remuxed temp files
+  if (remuxedPath.value) {
+    window.api.playerCleanupRemux()
+  }
 })
 
 const seekProgress = computed(() => {
@@ -700,10 +737,28 @@ const bufferedProgress = computed(() => {
     @mousemove="onMouseMove"
     @click.self="togglePlay"
   >
+    <!-- Remuxing MKV overlay -->
+    <div v-if="remuxing" class="remux-overlay">
+      <div class="remux-modal">
+        <div class="remux-spinner"></div>
+        <p class="remux-title">Preparing MKV for playback...</p>
+        <p class="remux-hint">Remuxing to MP4 (stream copy, no re-encoding)</p>
+      </div>
+    </div>
+
+    <!-- Remux error overlay -->
+    <div v-if="remuxError" class="remux-overlay">
+      <div class="remux-modal">
+        <p class="remux-title remux-error-title">Failed to prepare MKV</p>
+        <p class="remux-hint">{{ remuxError }}</p>
+        <button class="remux-close-btn" @click="emit('close')">Close</button>
+      </div>
+    </div>
+
     <!-- Streaming warning banner -->
     <transition name="fade">
       <div v-if="isStreaming" class="streaming-banner">
-        Streaming from server — local MKV playback not yet supported
+        Streaming from server
       </div>
     </transition>
 
@@ -975,6 +1030,71 @@ video::cue {
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
+}
+
+/* Remux overlay */
+.remux-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.remux-modal {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 12px;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  min-width: 320px;
+}
+
+.remux-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #0f3460;
+  border-top-color: #e94560;
+  border-radius: 50%;
+  margin: 0 auto 1rem;
+  animation: remux-spin 0.8s linear infinite;
+}
+
+@keyframes remux-spin {
+  to { transform: rotate(360deg); }
+}
+
+.remux-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 0.5rem;
+}
+
+.remux-error-title {
+  color: #e94560;
+}
+
+.remux-hint {
+  font-size: 0.8rem;
+  color: #6a6a8a;
+}
+
+.remux-close-btn {
+  margin-top: 1rem;
+  background: #e94560;
+  border: none;
+  color: #fff;
+  padding: 8px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.remux-close-btn:hover {
+  background: #d63050;
 }
 
 /* Title bar */

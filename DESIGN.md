@@ -42,7 +42,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
-| `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, keyboard controls |
+| `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, MKV remux, keyboard controls |
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
 ## Data Flow
@@ -272,6 +272,8 @@ LibraryView shows both with indicators:
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
 | `player:get-stream-url` | invoke | Fetch CDN stream URL + subtitle content (ASS→VTT) + all available stream qualities for a translation |
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, convert to VTT |
+| `player:remux-mkv` | invoke | Remux MKV→MP4 via ffmpeg stream copy to temp dir for HTML5 playback |
+| `player:cleanup-remux` | invoke | Delete temp remuxed files when player closes |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 
 ## Key Types
@@ -376,7 +378,7 @@ In-app HTML5 video player with optional Anime4K WebGPU upscaling shaders. Uses `
 ### Video Playback
 
 - **Local .mp4**: Served via `anime-video://` protocol
-- **Local .mkv**: Not supported by HTML5 video — streams from CDN instead (shows warning banner)
+- **Local .mkv**: Remuxed to temp MP4 via ffmpeg stream copy (`-c copy -movflags +faststart`), then served via `anime-video://`. Shows "Preparing MKV for playback..." spinner during remux. Temp files cleaned up on player close via `player:cleanup-remux`. Temp dir: `os.tmpdir()/anime-dl-remux/`.
 - **Non-downloaded episodes**: Streams directly from smotret-anime CDN via `player:get-stream-url` IPC
 
 ### Anime4K WebGPU Pipeline

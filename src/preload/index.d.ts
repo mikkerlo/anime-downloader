@@ -70,6 +70,8 @@ interface Api {
   // Player
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
+  playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string } | { error: string }>
+  playerCleanupRemux: () => Promise<void>
 
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>

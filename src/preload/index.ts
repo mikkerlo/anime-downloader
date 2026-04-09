@@ -103,6 +103,8 @@ const api = {
   shikimoriGetRate: (malId: number) => ipcRenderer.invoke('shikimori:get-rate', malId),
   shikimoriUpdateRate: (malId: number, episodes: number, status: string, score: number) =>
     ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score),
+  shikimoriGetFriendsRates: (malId: number) =>
+    ipcRenderer.invoke('shikimori:get-friends-rates', malId) as Promise<ShikiFriendRate[]>,
   shikimoriGetAnimeRates: (status?: string) =>
     ipcRenderer.invoke('shikimori:get-anime-rates', status) as Promise<ShikiAnimeRateEntry[]>,
 

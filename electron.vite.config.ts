@@ -11,6 +11,11 @@ export default defineConfig({
   },
   renderer: {
     root: resolve('src/renderer'),
+    resolve: {
+      alias: {
+        'anime4k-webgpu': resolve('node_modules/anime4k-webgpu')
+      }
+    },
     build: {
       rollupOptions: {
         input: resolve('src/renderer/index.html')

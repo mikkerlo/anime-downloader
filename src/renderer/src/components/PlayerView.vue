@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import JASSUB from 'jassub'
-import jassubWorkerUrl from 'jassub/dist/wasm/jassub-worker.js?url'
+import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
+import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import jassubDefaultFontUrl from 'jassub/dist/default.woff2?url'
 
 const props = defineProps<{
@@ -621,16 +622,26 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
   }
 }
 
-function initSubtitles(video: HTMLVideoElement): void {
+async function initSubtitles(video: HTMLVideoElement): Promise<void> {
   const content = activeSubtitleContent.value
   if (!content) return
   destroySubtitles()
 
+  // Electron doesn't support module Workers with file:// protocol.
+  // Vite bundles the worker as ES module, so we fetch it, replace import.meta.url
+  // references with the actual file URL, and create a blob URL for a classic worker.
+  const resp = await fetch(jassubWorkerUrl)
+  let code = await resp.text()
+  code = code.replaceAll('import.meta.url', JSON.stringify(jassubWorkerUrl))
+  const blob = new Blob([code], { type: 'application/javascript' })
+  const blobUrl = URL.createObjectURL(blob)
+
   jassubInstance = new JASSUB({
     video,
     subContent: content,
-    workerUrl: jassubWorkerUrl,
+    workerUrl: blobUrl,
     wasmUrl: jassubWasmUrl,
+    modernWasmUrl: jassubModernWasmUrl,
     availableFonts: { 'default': jassubDefaultFontUrl },
     prescaleFactor: 0.8,
     maxRenderHeight: 0
@@ -770,23 +781,27 @@ const bufferedProgress = computed(() => {
       </div>
     </transition>
 
-    <!-- Video element -->
-    <video
-      ref="videoRef"
-      :src="videoSrc"
-      :class="{ hidden: anime4kActive }"
-      class="player-video"
-      crossorigin="anonymous"
-      @play="onPlay"
-      @pause="onPause"
-      @timeupdate="onTimeUpdate"
-      @durationchange="onDurationChange"
-      @progress="onProgress"
-      @click="togglePlay"
-      @dblclick="toggleFullscreen"
-      autoplay
-    >
-    </video>
+    <!-- Video wrapper: JASSUB inserts its canvas after the <video>, so this
+         positioned container ensures the subtitle overlay covers the video area -->
+    <div class="video-wrapper">
+      <video
+        ref="videoRef"
+        :src="videoSrc"
+        :class="{ hidden: anime4kActive }"
+        class="player-video"
+        crossorigin="anonymous"
+        @play="onPlay"
+        @pause="onPause"
+        @timeupdate="onTimeUpdate"
+        @durationchange="onDurationChange"
+        @progress="onProgress"
+        @click="togglePlay"
+        @dblclick="toggleFullscreen"
+        autoplay
+      >
+      </video>
+      <!-- JASSUB inserts its <div class="JASSUB"> here at runtime -->
+    </div>
 
     <!-- Canvas for Anime4K rendering -->
     <canvas
@@ -995,6 +1010,23 @@ const bufferedProgress = computed(() => {
 
 .player-overlay:hover {
   cursor: default;
+}
+
+.video-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* JASSUB injects <div class="JASSUB"> after the video at runtime;
+   position it as an overlay so it doesn't push flex layout */
+.video-wrapper :deep(.JASSUB) {
+  position: absolute !important;
+  inset: 0;
+  pointer-events: none;
 }
 
 .player-video {

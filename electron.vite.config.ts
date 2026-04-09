@@ -26,15 +26,21 @@ export default defineConfig({
     },
     plugins: [
       vue(),
-      // Prevent Vite from detecting and bundling jassub's internal Worker() call
+      // Fix jassub for Electron: strip type: "module" from Worker constructor
+      // since module workers don't work with file:// protocol
       {
-        name: 'jassub-worker-fix',
+        name: 'jassub-electron-fix',
         transform(code, id) {
           if (id.includes('jassub') && id.endsWith('.js') && code.includes('new Worker(new URL(')) {
-            return code.replace(
+            let patched = code.replace(
               /new Worker\(new URL\([^)]+\),\s*\{[^}]*\}\)/g,
-              'new Worker(opts.workerUrl, { name: "jassub-worker", type: "module" })'
+              'new Worker(opts.workerUrl, { name: "jassub-worker" })'
             )
+            patched = patched.replace(
+              /new Worker\(opts\.workerUrl,\s*\{\s*name:\s*["']jassub-worker["'],\s*type:\s*["']module["']\s*\}\)/g,
+              'new Worker(opts.workerUrl, { name: "jassub-worker" })'
+            )
+            return patched
           }
         }
       }

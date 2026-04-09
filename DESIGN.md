@@ -398,7 +398,7 @@ ASS subtitles are rendered natively using [JASSUB](https://github.com/ThaUnknown
 - **Local files**: `player:get-local-subtitles` reads raw `.ass` file alongside the `.mp4`
 - **Streaming**: `player:get-stream-url` fetches raw ASS content from smotret-anime API
 - Raw ASS content is passed to the renderer and fed directly to JASSUB via `subContent` option
-- JASSUB worker and WASM assets are bundled via Vite `?url` imports; a custom Vite plugin (`jassub-worker-fix`) prevents Vite from attempting to bundle jassub's internal `Worker()` call
+- JASSUB worker is bundled by Vite via `?worker&url` import; at runtime, the worker code is fetched, `import.meta.url` references are replaced with concrete URLs, and a blob URL is created for classic worker compatibility (Electron doesn't support module workers with `file://` protocol). A Vite plugin (`jassub-electron-fix`) strips `type: "module"` from JASSUB's Worker constructor.
 - On subtitle update (e.g., translation switch), the previous JASSUB instance is destroyed and a new one created
 
 ### Quality Selector

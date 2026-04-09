@@ -55,6 +55,8 @@ const activeTranslationId = ref(props.translationId)
 const activeSubtitleContent = ref(props.subtitleContent)
 const switchingTranslation = ref(false)
 const hasTranslations = computed(() => props.translations.length > 1 && isStreaming.value)
+const translationMenuLevel = ref<'types' | 'items'>('types')
+const selectedTypeGroup = ref('')
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null
@@ -515,6 +517,45 @@ const currentTranslationLabel = computed(() => {
   return `${tr.label}`
 })
 
+const translationTypeGroups = computed(() => {
+  const groups: Record<string, { id: number; label: string; type: string; height: number }[]> = {}
+  for (const tr of props.translations) {
+    const key = tr.type
+    if (!groups[key]) groups[key] = []
+    groups[key].push(tr)
+  }
+  return Object.entries(groups).map(([type, items]) => ({ type, label: translationTypeLabel(type), items }))
+})
+
+const selectedGroupItems = computed(() => {
+  const group = translationTypeGroups.value.find(g => g.type === selectedTypeGroup.value)
+  return group ? group.items : []
+})
+
+function toggleTranslationMenu(): void {
+  showTranslationMenu.value = !showTranslationMenu.value
+  if (showTranslationMenu.value) {
+    const groups = translationTypeGroups.value
+    if (groups.length === 1) {
+      translationMenuLevel.value = 'items'
+      selectedTypeGroup.value = groups[0].type
+    } else {
+      translationMenuLevel.value = 'types'
+      selectedTypeGroup.value = ''
+    }
+  }
+}
+
+function openTypeGroup(type: string): void {
+  selectedTypeGroup.value = type
+  translationMenuLevel.value = 'items'
+}
+
+function backToTypes(): void {
+  translationMenuLevel.value = 'types'
+  selectedTypeGroup.value = ''
+}
+
 async function selectTranslation(tr: { id: number; label: string; type: string; height: number }): Promise<void> {
   if (tr.id === activeTranslationId.value) {
     showTranslationMenu.value = false
@@ -769,22 +810,45 @@ const bufferedProgress = computed(() => {
             <button
               class="ctrl-btn preset-btn translation-btn"
               :class="{ loading: switchingTranslation }"
-              @click="showTranslationMenu = !showTranslationMenu"
+              @click="toggleTranslationMenu()"
               title="Translation"
             >
               {{ switchingTranslation ? '...' : currentTranslationLabel }}
             </button>
             <div v-if="showTranslationMenu" class="preset-menu translation-menu">
-              <button
-                v-for="tr in translations"
-                :key="tr.id"
-                class="preset-option"
-                :class="{ selected: activeTranslationId === tr.id }"
-                @click="selectTranslation(tr)"
-              >
-                <span class="tr-label">{{ tr.label }}</span>
-                <span class="tr-meta">{{ translationTypeLabel(tr.type) }} · {{ qualityLabel(tr.height) }}</span>
-              </button>
+              <!-- Level 1: type groups -->
+              <template v-if="translationMenuLevel === 'types'">
+                <button
+                  v-for="group in translationTypeGroups"
+                  :key="group.type"
+                  class="preset-option group-option"
+                  @click="openTypeGroup(group.type)"
+                >
+                  <span class="tr-label">{{ group.label }}</span>
+                  <span class="tr-arrow">›</span>
+                </button>
+              </template>
+              <!-- Level 2: translations in selected type -->
+              <template v-else>
+                <button
+                  v-if="translationTypeGroups.length > 1"
+                  class="preset-option back-option"
+                  @click="backToTypes()"
+                >
+                  <span class="tr-arrow back-arrow">‹</span>
+                  <span class="tr-label">{{ translationTypeLabel(selectedTypeGroup) }}</span>
+                </button>
+                <button
+                  v-for="tr in selectedGroupItems"
+                  :key="tr.id"
+                  class="preset-option"
+                  :class="{ selected: activeTranslationId === tr.id }"
+                  @click="selectTranslation(tr)"
+                >
+                  <span class="tr-label">{{ tr.label }}</span>
+                  <span class="tr-meta">{{ qualityLabel(tr.height) }}</span>
+                </button>
+              </template>
             </div>
           </div>
 
@@ -1139,15 +1203,41 @@ video::cue {
 }
 
 .translation-menu {
-  min-width: 260px;
+  min-width: 220px;
   max-height: 300px;
   overflow-y: auto;
 }
 
 .translation-menu .preset-option {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
+}
+
+.group-option {
+  justify-content: space-between;
+}
+
+.tr-arrow {
+  font-size: 1rem;
+  color: #8a8aaa;
+  flex-shrink: 0;
+}
+
+.back-option {
+  border-bottom: 1px solid #0f3460;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  gap: 6px;
+}
+
+.back-option .tr-label {
+  color: #8a8aaa;
+  font-size: 0.75rem;
+}
+
+.back-arrow {
+  font-size: 1.1rem;
 }
 
 .tr-label {
@@ -1158,6 +1248,7 @@ video::cue {
 .tr-meta {
   font-size: 0.65rem;
   color: #8a8aaa;
+  margin-left: auto;
 }
 
 .preset-option.selected .tr-label {

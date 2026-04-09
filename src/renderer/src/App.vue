@@ -7,6 +7,7 @@ import SettingsView from './components/SettingsView.vue'
 import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
 import ShikimoriView from './components/ShikimoriView.vue'
+import FriendsActivityView from './components/FriendsActivityView.vue'
 import PlayerView from './components/PlayerView.vue'
 
 const currentView = ref('search')
@@ -15,7 +16,8 @@ const shortcuts = ref<Record<string, string>>({})
 const animeByView = ref<Record<string, number | null>>({
   search: null,
   library: null,
-  shikimori: null
+  shikimori: null,
+  friends: null
 })
 
 const shikimoriLoggedIn = ref(false)
@@ -157,6 +159,7 @@ onBeforeUnmount(() => {
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
+    <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" @close="closePlayer" />

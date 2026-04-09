@@ -28,28 +28,7 @@
 - [x] Friends' Status on Anime Page — Shikimori friends' watch status, score, and progress on anime detail page
 - [x] Seek Time Preview in Player — timestamp tooltip on seek bar hover/drag
 - [x] Start Translation Menu with Current Type — translation menu opens directly to current translation’s category
-
----
-
-## 1. Friends Activity Feed
-
-**Priority:** Medium | **Effort:** Medium
-
-Add a feed view showing recent anime activity from your Shikimori friends — what they've been watching, completing, rating, and adding to their lists. Gives a social overview similar to Shikimori's own activity page but integrated into the app.
-
-**Plan:**
-1. Add `getFriends(accessToken, userId)` to `shikimori.ts` if not already added (shared with task 5)
-2. Add `getFriendActivity(accessToken, userId)` — calls `GET /api/users/:id/history?limit=20&target_type=Anime` for each friend to get their recent anime history entries
-3. Define `ShikiFriendActivity` interface: `{ nickname, avatar, animeName, animeImage, action, episodeNumber, score, timestamp }`
-4. Add IPC handler `shikimori:get-friends-activity` in `main/index.ts` — fetches friends, then fetches recent history for each (with concurrency limit), merges and sorts by timestamp descending
-5. Expose in preload: `preload/index.ts` + `preload/index.d.ts`
-6. Create `FriendsActivityView.vue` — a new view accessible from the sidebar/nav alongside existing views (Library, Downloads, etc.)
-7. Render activity as a chronological feed: friend avatar + name, anime poster thumbnail, action text (e.g., "watched episode 5", "completed", "rated 8/10"), relative timestamp
-8. Clicking an anime in the feed navigates to its AnimeDetailView
-9. Add a refresh button and auto-refresh on view mount; cache results for 5 minutes to avoid excessive API calls
-10. Add pagination or "load more" if the feed grows long (initial load: 50 most recent entries across all friends)
-11. Handle edge cases: not logged in (prompt to connect Shikimori), no friends (show empty state with message), API rate limits (show cached data with "last updated" notice)
-12. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `FriendsActivityView.vue`, `App.vue` (add nav entry)
+- [x] Friends Activity Feed — chronological feed of recent anime activity from Shikimori friends, globally sorted, top 50
 
 ---
 

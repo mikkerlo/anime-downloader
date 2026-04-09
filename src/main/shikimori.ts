@@ -278,6 +278,90 @@ export async function getFriendsRatesForAnime(
   return results
 }
 
+export interface ShikiHistoryEntry {
+  id: number
+  created_at: string
+  description: string
+  target?: {
+    id: number
+    name: string
+    russian: string
+    image: { original: string; preview: string; x96: string; x48: string }
+  } | null
+}
+
+export interface ShikiFriendActivity {
+  friendId: number
+  friendNickname: string
+  friendAvatar: string
+  malId: number
+  animeName: string
+  animeImage: string
+  description: string
+  createdAt: string
+}
+
+const FRIENDS_ACTIVITY_TOTAL_LIMIT = 50
+const FRIENDS_ACTIVITY_PER_FRIEND_FETCH = 100
+
+async function getFriendHistory(
+  accessToken: string,
+  friend: ShikiFriend
+): Promise<ShikiFriendActivity[]> {
+  const params = new URLSearchParams({
+    limit: String(FRIENDS_ACTIVITY_PER_FRIEND_FETCH),
+    target_type: 'Anime'
+  })
+  const response = await shikiFetch(`/api/users/${friend.id}/history?${params}`, {
+    headers: authHeaders(accessToken)
+  })
+  const entries = (await response.json()) as ShikiHistoryEntry[]
+  const activities: ShikiFriendActivity[] = []
+  for (const entry of entries) {
+    if (!entry.target) continue
+    const img = entry.target.image.preview || entry.target.image.x96 || entry.target.image.original
+    activities.push({
+      friendId: friend.id,
+      friendNickname: friend.nickname,
+      friendAvatar: friend.avatar,
+      malId: entry.target.id,
+      animeName: entry.target.russian || entry.target.name,
+      animeImage: img.startsWith('http') ? img : `${BASE_URL}${img}`,
+      description: entry.description,
+      createdAt: entry.created_at
+    })
+  }
+  return activities
+}
+
+export async function getFriendsActivity(
+  accessToken: string,
+  userId: number
+): Promise<ShikiFriendActivity[]> {
+  const friends = await getFriends(accessToken, userId)
+  if (friends.length === 0) return []
+
+  const CONCURRENCY = 2
+  const results: ShikiFriendActivity[] = []
+
+  for (let i = 0; i < friends.length; i += CONCURRENCY) {
+    const batch = friends.slice(i, i + CONCURRENCY)
+    const histories = await Promise.all(
+      batch.map(async (friend) => {
+        try {
+          return await getFriendHistory(accessToken, friend)
+        } catch {
+          return [] as ShikiFriendActivity[]
+        }
+      })
+    )
+    for (const h of histories) results.push(...h)
+  }
+
+  results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return results.slice(0, FRIENDS_ACTIVITY_TOTAL_LIMIT)
+}
+
 export async function getUserAnimeRates(
   accessToken: string,
   userId: number,

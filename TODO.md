@@ -56,23 +56,7 @@ Allow switching between available translations without leaving the built-in play
 
 ---
 
-## ~~3. Quality Selector in Player~~ ✅
-
-~~**Priority:** Medium | **Effort:** Small~~
-
-~~Add a quality selector dropdown in the built-in player controls. Currently the player always streams at the best available quality. Allow users to pick from available stream heights (e.g., 1080p, 720p, 480p).~~
-
-~~**Plan:**~~
-~~1. Extend `player:get-stream-url` to return all available stream heights (not just the best)~~
-~~2. Add new IPC or extend return type: `{ streams: { height: number; url: string }[]; subtitleContent: string | null }`~~
-~~3. Add quality dropdown in PlayerView controls bar showing available heights~~
-~~4. Default to best (highest) quality~~
-~~5. On quality switch: update `<video>` src to the selected stream URL, preserve playback position~~
-~~6. Files: `main/index.ts`, `preload/index.d.ts`, `PlayerView.vue`~~
-
----
-
-## 4. ASS Subtitle Support in Player
+## 3. ASS Subtitle Support in Player
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -85,7 +69,7 @@ Replace the current ASS→WebVTT conversion with proper ASS rendering to preserv
 
 ---
 
-## 5. Friends' Status on Anime Page
+## 4. Friends' Status on Anime Page
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -106,7 +90,7 @@ Show how your Shikimori friends relate to the anime you're viewing — their wat
 
 ---
 
-## 6. Friends Activity Feed
+## 5. Friends Activity Feed
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -128,7 +112,7 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 
 ---
 
-## 7. Seek Time Preview in Player
+## 6. Seek Time Preview in Player
 
 **Priority:** Low | **Effort:** Small
 

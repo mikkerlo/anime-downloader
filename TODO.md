@@ -25,31 +25,11 @@
 - [x] Translation Selector in Player — translation dropdown in built-in player controls for switching between available translations
 - [x] MKV Local Playback Support — on-the-fly remux via ffmpeg (`-c copy`) to temp MP4, auto-cleanup on player close
 - [x] ASS Subtitle Support in Player — native ASS rendering via libass-wasm (SubtitlesOctopus), preserving styled subtitles (colors, positioning, effects). TODO: migrate to JASSUB for better rendering (WebGL, multithreading) once its ES module workers work on Windows Electron file:// protocol
+- [x] Friends' Status on Anime Page — Shikimori friends' watch status, score, and progress on anime detail page
 
 ---
 
-## 1. Friends' Status on Anime Page
-
-**Priority:** Medium | **Effort:** Medium
-
-Show how your Shikimori friends relate to the anime you're viewing — their watch status, score, and progress. Displayed as a collapsible section on the anime detail page (e.g., "Friends: 3 watching, 2 completed").
-
-**Plan:**
-1. Add `getFriends(accessToken, userId)` to `shikimori.ts` — calls `GET /api/users/:id/friends` to fetch the friends list
-2. Add `getUserRatesForAnime(accessToken, userIds[], malId)` — for each friend, call `GET /api/v2/user_rates?user_id=:id&target_id=:malId&target_type=Anime` to get their rate (batch with concurrency limit to respect Shikimori rate limits)
-3. Define `ShikiFriendRate` interface: `{ nickname, avatar, status, score, episodes }` 
-4. Add IPC handler `shikimori:get-friends-rates` in `main/index.ts` — takes `malId`, returns `ShikiFriendRate[]`
-5. Expose in preload: `preload/index.ts` + `preload/index.d.ts`
-6. Add a "Friends" collapsible section in `AnimeDetailView.vue` below the existing Shikimori status area
-7. Show each friend as a compact row: avatar (small), nickname, status badge (watching/completed/dropped/etc.), score (if rated), episode progress
-8. Cache friends list in memory for the session (friends don't change often) to avoid re-fetching on every anime page
-9. Show a summary line at the top: "3 friends watching · 2 completed · 1 dropped"
-10. Handle edge cases: not logged in (hide section), no friends (hide section), no friends watching this anime (show "None of your friends have this anime")
-11. Files: `shikimori.ts`, `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, `AnimeDetailView.vue`
-
----
-
-## 2. Friends Activity Feed
+## 1. Friends Activity Feed
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -71,7 +51,7 @@ Add a feed view showing recent anime activity from your Shikimori friends — wh
 
 ---
 
-## 3. Seek Time Preview in Player
+## 2. Seek Time Preview in Player
 
 **Priority:** Low | **Effort:** Small
 

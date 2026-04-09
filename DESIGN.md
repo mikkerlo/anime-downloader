@@ -397,6 +397,14 @@ ASS subtitles are converted to WebVTT in the main process and displayed via nati
 - Conversion strips ASS style tags (`{\b1}`, `{\an8}`, etc.), converts `\N` newlines, and maps ASS timestamps to VTT format
 - Subtitles positioned at `line:85%` to stay above player controls
 
+### Quality Selector
+
+Dropdown in player controls showing all available stream heights (e.g., 1080p, 720p, 480p). Available streams are returned by `player:get-stream-url` IPC. On quality switch: updates `<video>` src, preserves playback position. Only visible when streaming (not for local files).
+
+### Translation Selector
+
+Dropdown in player controls showing all available translations for the current episode. Translations are passed from `AnimeDetailView.episodeRows` data through `App.vue` to `PlayerView` as `{ id, label, type, height }[]`. Each option shows the author name and a sub-label with type (RU SUB, EN DUB, etc.) and quality. On switch: calls `player:get-stream-url` with the new translation ID to get a fresh stream URL + subtitles, updates `<video>` src and subtitle track, preserves playback position. Only visible when streaming with more than one translation available.
+
 ### WebGPU Requirements
 
 - `enable-unsafe-webgpu` CLI flag set before app ready

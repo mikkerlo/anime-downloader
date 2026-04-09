@@ -39,7 +39,15 @@ const path = require('path');
           { height: 720, url: 'https://example.com/stream720.mp4' },
           { height: 480, url: 'https://example.com/stream480.mp4' }
         ],
-        123
+        123,
+        [
+          { id: 123, label: 'AniLibria', type: 'voiceRu', height: 1080 },
+          { id: 456, label: 'Studio Band', type: 'voiceRu', height: 720 },
+          { id: 457, label: 'AniDUB', type: 'voiceRu', height: 1080 },
+          { id: 789, label: 'HorribleSubs', type: 'subEn', height: 1080 },
+          { id: 790, label: 'Erai-raws', type: 'subEn', height: 720 },
+          { id: 101, label: 'Субтитры', type: 'subRu', height: 1080 }
+        ]
       );
     }
   });

@@ -45,7 +45,7 @@ const isStreaming = computed(() => !!props.streamUrl && !props.filePath)
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
 // MKV remux state
-const isMkv = computed(() => props.filePath.toLowerCase().endsWith('.mkv'))
+const isMkv = computed(() => !!props.filePath && props.filePath.toLowerCase().endsWith('.mkv'))
 const remuxing = ref(false)
 const remuxError = ref('')
 const remuxedPath = ref('')

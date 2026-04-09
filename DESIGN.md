@@ -27,7 +27,8 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 
 | File | Role |
 |------|------|
-| `src/main/index.ts` | App lifecycle, IPC handlers, API proxy, ffmpeg auto-download, settings |
+| `src/main/index.ts` | App lifecycle, IPC handlers, ffmpeg auto-download, settings |
+| `src/main/smotret-api.ts` | Smotret-Anime API client: search, anime/episode details, embed, subtitles, token validation |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |

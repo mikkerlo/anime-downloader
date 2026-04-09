@@ -89,9 +89,9 @@ Enable the translation type menu for downloaded episodes by allowing multiple lo
 
 ---
 
-## 4. Refactor Smotret-Anime API into a Dedicated Class
+## ~~4. Refactor Smotret-Anime API into a Dedicated Class~~
 
-**Priority:** Medium | **Effort:** Small
+~~**Priority:** Medium | **Effort:** Small~~
 
 Consolidate all Smotret-Anime API interaction logic into a single, maintainable class to reduce duplication and improve code organization. Currently, API calls and URL constructions are scattered across `index.ts` and `download-manager.ts`.
 

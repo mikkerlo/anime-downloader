@@ -24,6 +24,7 @@
 - [x] Quality Selector in Player — quality dropdown in built-in player controls for switching stream resolution
 - [x] Translation Selector in Player — translation dropdown in built-in player controls for switching between available translations
 - [x] MKV Local Playback Support — on-the-fly remux via ffmpeg (`-c copy`) to temp MP4, auto-cleanup on player close
+- [x] ASS Subtitle Support in Player — native ASS rendering via JASSUB (libass WASM), preserving styled subtitles (colors, positioning, effects)
 
 ---
 
@@ -58,16 +59,16 @@
 
 ---
 
-## 3. ASS Subtitle Support in Player
+## ~~3. ASS Subtitle Support in Player~~ ✅
 
-**Priority:** Medium | **Effort:** Medium
+~~**Priority:** Medium | **Effort:** Medium~~
 
-Replace the current ASS→WebVTT conversion with proper ASS rendering to preserve styled subtitles (colors, positioning, effects). The current approach strips all ASS formatting tags during conversion to VTT.
+~~Replace the current ASS→WebVTT conversion with proper ASS rendering to preserve styled subtitles (colors, positioning, effects). The current approach strips all ASS formatting tags during conversion to VTT.~~
 
-**Options:**
-1. `jassub` (libass WASM) — full ASS support, but has Vite worker bundling issues in Electron (needs investigation)
-2. `ass.js` / `assjs` — pure JS ASS renderer, simpler integration but less complete
-3. Custom ASS parser that preserves basic styling (colors, bold, italic, position) in VTT cues
+~~**Options:**~~
+~~1. `jassub` (libass WASM) — full ASS support, but has Vite worker bundling issues in Electron (needs investigation)~~
+~~2. `ass.js` / `assjs` — pure JS ASS renderer, simpler integration but less complete~~
+~~3. Custom ASS parser that preserves basic styling (colors, bold, italic, position) in VTT cues~~
 
 ---
 

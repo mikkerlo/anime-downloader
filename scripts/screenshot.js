@@ -240,8 +240,8 @@ function ocr(imagePath) {
         hasPlayer: !!document.querySelector('.player-overlay'),
         hasVideo: !!video,
         videoReady: video?.readyState || 0,
-        hasJassub: !!document.querySelector('.JASSUB'),
-        hasJassubCanvas: !!document.querySelector('.JASSUB canvas'),
+        hasSubCanvas: !!document.querySelector('.libassjs-canvas'),
+        hasSubParent: !!document.querySelector('.libassjs-canvas-parent'),
       };
     });
     console.log('Player ready state:', JSON.stringify(playerReady));

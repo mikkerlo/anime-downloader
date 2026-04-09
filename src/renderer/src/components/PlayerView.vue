@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import JASSUB from 'jassub'
-import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
-import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
-import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
-import jassubDefaultFontUrl from 'jassub/dist/default.woff2?url'
+import SubtitlesOctopus from 'libass-wasm/dist/js/subtitles-octopus.js'
 
 const props = defineProps<{
   filePath: string
@@ -73,9 +69,8 @@ const selectedTypeGroup = ref('')
 let gpuDevice: GPUDevice | null = null
 let pipelineActive = false
 
-// ASS subtitle state (JASSUB renderer)
-let jassubInstance: JASSUB | null = null
-let jassubWorkerBlobUrl: string | null = null
+// ASS subtitle state (SubtitlesOctopus renderer)
+let octopusInstance: InstanceType<typeof SubtitlesOctopus> | null = null
 
 // Fullscreen quad WGSL shaders for rendering pipeline output to canvas
 const FULLSCREEN_QUAD_VERT = `
@@ -623,46 +618,34 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
   }
 }
 
-async function initSubtitles(video: HTMLVideoElement): Promise<void> {
+function initSubtitles(video: HTMLVideoElement): void {
   const content = activeSubtitleContent.value
   if (!content) return
   destroySubtitles()
 
   try {
-    // Electron doesn't support module Workers with file:// protocol.
-    // Vite bundles the worker as ES module, so we fetch it, replace import.meta.url
-    // references with the actual file URL, and create a blob URL for a classic worker.
-    const resp = await fetch(jassubWorkerUrl)
-    let code = await resp.text()
-    code = code.replaceAll('import.meta.url', JSON.stringify(jassubWorkerUrl))
-    const blob = new Blob([code], { type: 'application/javascript' })
-    jassubWorkerBlobUrl = URL.createObjectURL(blob)
-
-    jassubInstance = new JASSUB({
+    const libassBase = new URL('./libass/', document.baseURI).href
+    octopusInstance = new SubtitlesOctopus({
       video,
       subContent: content,
-      workerUrl: jassubWorkerBlobUrl,
-      wasmUrl: jassubWasmUrl,
-      modernWasmUrl: jassubModernWasmUrl,
-      availableFonts: { 'default': jassubDefaultFontUrl },
+      workerUrl: libassBase + 'subtitles-octopus-worker.js',
+      legacyWorkerUrl: libassBase + 'subtitles-octopus-worker-legacy.js',
+      fallbackFont: libassBase + 'default.woff2',
+      lossyRender: true,
       prescaleFactor: 0.8,
       maxRenderHeight: 0
     })
   } catch (e) {
-    console.error('Failed to initialize JASSUB subtitle renderer:', e)
+    console.error('Failed to initialize subtitle renderer:', e)
   }
 }
 
 function destroySubtitles(): void {
-  if (jassubInstance) {
+  if (octopusInstance) {
     try {
-      jassubInstance.destroy()
+      octopusInstance.dispose()
     } catch { /* ignore cleanup errors */ }
-    jassubInstance = null
-  }
-  if (jassubWorkerBlobUrl) {
-    URL.revokeObjectURL(jassubWorkerBlobUrl)
-    jassubWorkerBlobUrl = null
+    octopusInstance = null
   }
 }
 
@@ -718,11 +701,11 @@ onMounted(async () => {
     }
 
     if (video.readyState >= 1) {
-      // Metadata already loaded
       onVideoReady()
     } else {
       video.addEventListener('loadedmetadata', onVideoReady, { once: true })
     }
+
   }
 })
 
@@ -792,7 +775,7 @@ const bufferedProgress = computed(() => {
       </div>
     </transition>
 
-    <!-- Video wrapper: JASSUB inserts its canvas after the <video>, so this
+    <!-- Video wrapper: SubtitlesOctopus inserts its canvas after the <video>, so this
          positioned container ensures the subtitle overlay covers the video area -->
     <div class="video-wrapper">
       <video
@@ -811,7 +794,6 @@ const bufferedProgress = computed(() => {
         autoplay
       >
       </video>
-      <!-- JASSUB inserts its <div class="JASSUB"> here at runtime -->
     </div>
 
     <!-- Canvas for Anime4K rendering -->
@@ -1032,11 +1014,16 @@ const bufferedProgress = computed(() => {
   justify-content: center;
 }
 
-/* JASSUB injects <div class="JASSUB"> after the video at runtime;
-   position it as an overlay so it doesn't push flex layout */
-.video-wrapper :deep(.JASSUB) {
+/* SubtitlesOctopus creates a .libassjs-canvas-parent wrapper after the <video>.
+   Override its positioning so it overlays the video instead of pushing layout. */
+.video-wrapper :deep(.libassjs-canvas-parent) {
   position: absolute !important;
   inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-wrapper :deep(.libassjs-canvas) {
   pointer-events: none;
 }
 

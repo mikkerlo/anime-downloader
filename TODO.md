@@ -24,7 +24,7 @@
 - [x] Quality Selector in Player — quality dropdown in built-in player controls for switching stream resolution
 - [x] Translation Selector in Player — translation dropdown in built-in player controls for switching between available translations
 - [x] MKV Local Playback Support — on-the-fly remux via ffmpeg (`-c copy`) to temp MP4, auto-cleanup on player close
-- [x] ASS Subtitle Support in Player — native ASS rendering via JASSUB (libass WASM), preserving styled subtitles (colors, positioning, effects)
+- [x] ASS Subtitle Support in Player — native ASS rendering via libass-wasm (SubtitlesOctopus), preserving styled subtitles (colors, positioning, effects). TODO: migrate to JASSUB for better rendering (WebGL, multithreading) once its ES module workers work on Windows Electron file:// protocol
 
 ---
 

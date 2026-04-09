@@ -5,3 +5,4 @@ dist/
 *.tar.gz
 *:Zone.Identifier
 tsconfig.web.tsbuildinfo
+scripts/browse.js

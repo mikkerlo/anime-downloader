@@ -66,3 +66,23 @@ Improve the player's translation menu by opening it directly within the current 
 5.  Verify that the "back" button is still visible for users wanting to switch to other types (the template logic `v-if="translationTypeGroups.length > 1"` already handles this).
 6.  Files: `src/renderer/src/components/PlayerView.vue`
 
+---
+
+## 3. Support Multiple Downloaded Translations and Mark in Menus
+
+**Priority:** High | **Effort:** Medium
+
+Enable the translation type menu for downloaded episodes by allowing multiple local versions to coexist and marking them in selection menus with a Chrome-style download icon. Currently, an episode is locked to its single downloaded version, which disables the player's translation menu and prevents switching to other (streaming) translations.
+
+**Plan:**
+1.  **Update Filename Scheme:** Modify `DownloadManager.enqueue` to include the author's name in the filename: `Anime - 01 [Author].mp4`.
+2.  **Metadata Persistence:** Change `downloadedEpisodes` store key from `animeId:episodeInt` to `animeId:episodeInt:translationId` to track multiple versions independently. Update `downloaded-episodes-get` IPC to return all versions for an anime.
+3.  **File Status Scan:** Update `file:check-episodes` IPC to return a map of all downloaded translation IDs for each episode, scanning both hot and cold storage for all variants. Ensure it still detects legacy filenames (without author tag).
+4.  **Unlock Selection:** In `AnimeDetailView.vue`, remove the `isLocked` logic for downloaded episodes. Only lock the row if a download for *any* version of that episode is currently active or queued.
+5.  **Mark Downloaded in Menus:**
+    *   In `AnimeDetailView` per-episode `<select>`, add a Chrome-like down arrow icon (📥) and a distinct color (e.g., green) for downloaded options. Use `optgroup` or custom labels to indicate status.
+    *   In `PlayerView.vue` translation menu, add the same icon/color indicator for downloaded versions.
+6.  **Dynamic Action Buttons:** Update `AnimeDetailView` episode row to show "Open" only when the *currently selected* translation is available on disk; otherwise show "Play" (streaming) and "Download".
+7.  **Player Integration:** Update `openFile` in `AnimeDetailView` to pass the correct `translationId` and full `translations` list to `PlayerView`.
+8.  **Player Switching:** Modify `PlayerView.vue` to enable the translation menu even for local files, allowing seamless switching between multiple local files and streaming sources.
+9.  **Files:** `src/main/index.ts`, `src/main/download-manager.ts`, `src/renderer/src/components/AnimeDetailView.vue`, `src/renderer/src/components/PlayerView.vue`.

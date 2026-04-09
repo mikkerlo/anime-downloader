@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import JASSUB from 'jassub'
+import jassubWorkerUrl from 'jassub/dist/wasm/jassub-worker.js?url'
+import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
+import jassubDefaultFontUrl from 'jassub/dist/default.woff2?url'
 
 const props = defineProps<{
   filePath: string
@@ -68,8 +72,8 @@ const selectedTypeGroup = ref('')
 let gpuDevice: GPUDevice | null = null
 let pipelineActive = false
 
-// Subtitle state
-const subtitleTrackUrl = ref('')
+// ASS subtitle state (JASSUB renderer)
+let jassubInstance: JASSUB | null = null
 
 // Fullscreen quad WGSL shaders for rendering pipeline output to canvas
 const FULLSCREEN_QUAD_VERT = `
@@ -620,19 +624,23 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
 function initSubtitles(video: HTMLVideoElement): void {
   const content = activeSubtitleContent.value
   if (!content) return
-  const blob = new Blob([content], { type: 'text/vtt' })
-  subtitleTrackUrl.value = URL.createObjectURL(blob)
-  nextTick(() => {
-    if (video.textTracks.length > 0) {
-      video.textTracks[0].mode = 'showing'
-    }
+  destroySubtitles()
+
+  jassubInstance = new JASSUB({
+    video,
+    subContent: content,
+    workerUrl: jassubWorkerUrl,
+    wasmUrl: jassubWasmUrl,
+    availableFonts: { 'default': jassubDefaultFontUrl },
+    prescaleFactor: 0.8,
+    maxRenderHeight: 0
   })
 }
 
 function destroySubtitles(): void {
-  if (subtitleTrackUrl.value) {
-    URL.revokeObjectURL(subtitleTrackUrl.value)
-    subtitleTrackUrl.value = ''
+  if (jassubInstance) {
+    jassubInstance.destroy()
+    jassubInstance = null
   }
 }
 
@@ -778,7 +786,6 @@ const bufferedProgress = computed(() => {
       @dblclick="toggleFullscreen"
       autoplay
     >
-      <track v-if="subtitleTrackUrl" :src="subtitleTrackUrl" kind="subtitles" label="Subtitles" default />
     </video>
 
     <!-- Canvas for Anime4K rendering -->
@@ -1008,14 +1015,6 @@ const bufferedProgress = computed(() => {
   height: 100%;
   object-fit: contain;
   pointer-events: auto;
-}
-
-/* Native video subtitle styling */
-video::cue {
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: 1.3em;
-  line-height: 1.4;
 }
 
 .streaming-banner {

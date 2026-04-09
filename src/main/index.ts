@@ -1129,44 +1129,6 @@ function registerIpcHandlers(): void {
     }
   })
 
-  function assToVtt(ass: string): string {
-    const lines = ass.split(/\r?\n/)
-    let vtt = 'WEBVTT\n\n'
-    let formatFields: string[] = []
-
-    for (const line of lines) {
-      if (line.startsWith('Format:') && line.toLowerCase().includes('text')) {
-        formatFields = line.substring(7).split(',').map(f => f.trim().toLowerCase())
-      } else if (line.startsWith('Dialogue:')) {
-        const values = line.substring(9).split(',')
-        const startIdx = formatFields.indexOf('start')
-        const endIdx = formatFields.indexOf('end')
-        const textIdx = formatFields.indexOf('text')
-        if (startIdx === -1 || endIdx === -1 || textIdx === -1) continue
-
-        const start = values[startIdx]?.trim()
-        const end = values[endIdx]?.trim()
-        // Text field is everything from textIdx onward (may contain commas)
-        const text = values.slice(textIdx).join(',').trim()
-          .replace(/\{[^}]*\}/g, '') // strip ASS style tags like {\b1}
-          .replace(/\\N/g, '\n')     // ASS newline
-          .replace(/\\n/g, '\n')
-
-        if (!start || !end || !text) continue
-
-        // Convert ASS time (H:MM:SS.CC) to VTT time (HH:MM:SS.MMM)
-        const toVttTime = (t: string): string => {
-          const m = t.match(/^(\d+):(\d{2}):(\d{2})\.(\d{2})$/)
-          if (!m) return t
-          return `${m[1].padStart(2, '0')}:${m[2]}:${m[3]}.${m[4]}0`
-        }
-
-        vtt += `${toVttTime(start)} --> ${toVttTime(end)} line:85%\n${text}\n\n`
-      }
-    }
-    return vtt
-  }
-
   ipcMain.handle('player:get-stream-url', async (_event, translationId: number, maxHeight: number) => {
     const token = store.get('token') as string
     const url = `${API_BASE}/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
@@ -1186,7 +1148,7 @@ function registerIpcHandlers(): void {
         .filter(s => s.urls.length > 0)
         .map(s => ({ height: s.height, url: s.urls[0] }))
 
-      // Fetch ASS subtitle content if available
+      // Fetch raw ASS subtitle content if available (rendered natively by JASSUB in the player)
       let subtitleContent: string | null = null
       if (json.data.subtitlesUrl) {
         try {
@@ -1194,8 +1156,7 @@ function registerIpcHandlers(): void {
             + (token ? `&access_token=${token}` : '')
           const subResp = await fetch(subUrl, { headers: { 'User-Agent': USER_AGENT } })
           if (subResp.ok) {
-            const assContent = await subResp.text()
-            subtitleContent = assToVtt(assContent)
+            subtitleContent = await subResp.text()
           }
         } catch { /* subtitle fetch failed, continue without subs */ }
       }
@@ -1210,8 +1171,7 @@ function registerIpcHandlers(): void {
     const assPath = filePath.replace(/\.(mp4|mkv)$/i, '.ass')
     try {
       if (fs.existsSync(assPath)) {
-        const assContent = fs.readFileSync(assPath, 'utf-8')
-        return assToVtt(assContent)
+        return fs.readFileSync(assPath, 'utf-8')
       }
     } catch { /* ignore */ }
     return null

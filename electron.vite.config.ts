@@ -21,6 +21,23 @@ export default defineConfig({
         input: resolve('src/renderer/index.html')
       }
     },
-    plugins: [vue()]
+    worker: {
+      format: 'es'
+    },
+    plugins: [
+      vue(),
+      // Prevent Vite from detecting and bundling jassub's internal Worker() call
+      {
+        name: 'jassub-worker-fix',
+        transform(code, id) {
+          if (id.includes('jassub') && id.endsWith('.js') && code.includes('new Worker(new URL(')) {
+            return code.replace(
+              /new Worker\(new URL\([^)]+\),\s*\{[^}]*\}\)/g,
+              'new Worker(opts.workerUrl, { name: "jassub-worker", type: "module" })'
+            )
+          }
+        }
+      }
+    ]
   }
 })

@@ -10,7 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
-  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[]]
+  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[]]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -605,7 +605,7 @@ async function openFile(row: EpisodeRow): Promise<void> {
   if (playerMode.value === 'builtin') {
     const name = anime.value ? getAnimeName() : ''
     const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row))
+    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds])
   } else {
     await window.api.fileOpen(info.filePath)
   }
@@ -616,7 +616,7 @@ async function playStream(row: EpisodeRow): Promise<void> {
   const name = anime.value ? getAnimeName() : ''
   const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
   if (result) {
-    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row))
+    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds])
   }
 }
 

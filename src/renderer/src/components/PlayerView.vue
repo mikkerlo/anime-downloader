@@ -11,6 +11,7 @@ const props = defineProps<{
   availableStreams: { height: number; url: string }[]
   translationId: number
   translations: { id: number; label: string; type: string; height: number }[]
+  downloadedTrIds: number[]
 }>()
 
 const emit = defineEmits<{
@@ -45,11 +46,12 @@ const anime4kActive = computed(() => webgpuAvailable.value && anime4kPreset.valu
 const showControls = ref(true)
 const showPresetMenu = ref(false)
 const showQualityMenu = ref(false)
-const isStreaming = computed(() => !!props.streamUrl && !props.filePath)
+const isStreaming = computed(() => !!activeStreamUrl.value && !activeFilePath.value)
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
 // MKV remux state
-const isMkv = computed(() => !!props.filePath && props.filePath.toLowerCase().endsWith('.mkv'))
+const activeFilePath = ref(props.filePath)
+const isMkv = computed(() => !!activeFilePath.value && activeFilePath.value.toLowerCase().endsWith('.mkv'))
 const remuxing = ref(false)
 const remuxError = ref('')
 const remuxedPath = ref('')
@@ -64,7 +66,7 @@ const showTranslationMenu = ref(false)
 const activeTranslationId = ref(props.translationId)
 const activeSubtitleContent = ref(props.subtitleContent)
 const switchingTranslation = ref(false)
-const hasTranslations = computed(() => props.translations.length > 1 && isStreaming.value)
+const hasTranslations = computed(() => props.translations.length > 1)
 const translationMenuLevel = ref<'types' | 'items'>('types')
 const selectedTypeGroup = ref('')
 
@@ -101,7 +103,7 @@ fn main(@builtin(position) coord: vec4f) -> @location(0) vec4f {
 `
 
 const videoSrc = computed(() => {
-  if (props.filePath) {
+  if (activeFilePath.value) {
     // For MKV files, use the remuxed MP4 path
     if (isMkv.value) {
       if (remuxedPath.value) {
@@ -109,7 +111,7 @@ const videoSrc = computed(() => {
       }
       return '' // Not ready yet — remuxing in progress
     }
-    return 'anime-video://' + encodeURIComponent(props.filePath)
+    return 'anime-video://' + encodeURIComponent(activeFilePath.value)
   }
   return activeStreamUrl.value
 })
@@ -607,6 +609,54 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
   showTranslationMenu.value = false
 
   try {
+    // Check if this translation has a local file
+    if (props.downloadedTrIds.includes(tr.id)) {
+      const localResult = await window.api.playerFindLocalFile(props.animeName, props.episodeLabel, tr.id)
+      if (localResult) {
+        activeTranslationId.value = tr.id
+
+        // Clean up previous remux if any
+        if (remuxedPath.value) {
+          await window.api.playerCleanupRemux()
+          remuxedPath.value = ''
+        }
+
+        // Switch to local file
+        activeFilePath.value = localResult.filePath
+        activeStreamUrl.value = ''
+        activeSubtitleContent.value = localResult.subtitleContent || ''
+
+        // Remux MKV if needed
+        if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
+          remuxing.value = true
+          const remuxResult = await window.api.playerRemuxMkv(localResult.filePath)
+          remuxing.value = false
+          if ('error' in remuxResult) {
+            remuxError.value = remuxResult.error
+            switchingTranslation.value = false
+            return
+          }
+          remuxedPath.value = remuxResult.mp4Path
+        }
+
+        // Update subtitles
+        destroySubtitles()
+        if (localResult.subtitleContent && video) {
+          initSubtitles(video)
+        }
+
+        nextTick(() => {
+          const v = videoRef.value
+          if (!v) return
+          v.currentTime = savedTime
+          if (wasPlaying) v.play()
+          switchingTranslation.value = false
+        })
+        return
+      }
+    }
+
+    // Fall back to streaming
     const result = await window.api.playerGetStreamUrl(tr.id, tr.height)
     if (!result) {
       switchingTranslation.value = false
@@ -614,6 +664,14 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
     }
 
     activeTranslationId.value = tr.id
+
+    // Clean up previous remux if switching from local to stream
+    if (remuxedPath.value) {
+      await window.api.playerCleanupRemux()
+      remuxedPath.value = ''
+    }
+
+    activeFilePath.value = ''
     activeStreamUrl.value = result.streamUrl
     activeSubtitleContent.value = result.subtitleContent || ''
 
@@ -944,9 +1002,10 @@ const bufferedProgress = computed(() => {
                   v-for="tr in selectedGroupItems"
                   :key="tr.id"
                   class="preset-option"
-                  :class="{ selected: activeTranslationId === tr.id }"
+                  :class="{ selected: activeTranslationId === tr.id, downloaded: downloadedTrIds.includes(tr.id) }"
                   @click="selectTranslation(tr)"
                 >
+                  <span v-if="downloadedTrIds.includes(tr.id)" class="tr-dl-icon">⬇</span>
                   <span class="tr-label">{{ tr.label }}</span>
                   <span class="tr-meta">{{ qualityLabel(tr.height) }}</span>
                 </button>
@@ -1454,6 +1513,16 @@ const bufferedProgress = computed(() => {
 .preset-option.selected .tr-meta {
   color: #e94560;
   opacity: 0.7;
+}
+
+.tr-dl-icon {
+  font-size: 0.7rem;
+  color: #6ab04c;
+  flex-shrink: 0;
+}
+
+.preset-option.downloaded .tr-label {
+  color: #6ab04c;
 }
 
 /* Transitions */

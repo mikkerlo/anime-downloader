@@ -30,10 +30,11 @@ const playerState = ref<{
   availableStreams: { height: number; url: string }[]
   translationId: number
   translations: { id: number; label: string; type: string; height: number }[]
+  downloadedTrIds: number[]
 } | null>(null)
 
-function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[] = []): void {
-  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel, availableStreams, translationId, translations }
+function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[] = [], downloadedTrIds: number[] = []): void {
+  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel, availableStreams, translationId, translations, downloadedTrIds }
 }
 
 function closePlayer(): void {
@@ -159,7 +160,7 @@ onBeforeUnmount(() => {
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
-    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" @close="closePlayer" />
+    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" @close="closePlayer" />
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
       <div class="ffmpeg-modal">
         <div class="ffmpeg-spinner"></div>

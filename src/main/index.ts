@@ -1180,6 +1180,62 @@ function registerIpcHandlers(): void {
     return null
   })
 
+  ipcMain.handle('player:find-local-file', async (_event, animeName: string, episodeInt: string, translationId: number) => {
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    // Find meta for this translation — try new key format, then scan for legacy
+    let meta: { author: string } | null = null
+    for (const [key, val] of Object.entries(episodes)) {
+      if (val.translationId === translationId) {
+        // Verify key belongs to right anime episode (starts with some animeId:episodeInt)
+        const parts = key.split(':')
+        if (parts.length >= 2 && parts[1] === episodeInt) {
+          meta = val
+          break
+        }
+      }
+    }
+    if (!meta) return null
+
+    const animeDirName = sanitizeFilename(animeName)
+    const padded = episodeInt.padStart(2, '0')
+    const base = sanitizeFilename(`${animeName} - ${padded}`)
+    const authorTag = sanitizeFilename(meta.author)
+    const taggedBase = `${base} [${authorTag}]`
+
+    const dirsToCheck = [getDownloadDir()]
+    if (isAdvancedStorage()) {
+      const coldDir = getColdStorageDir()
+      if (coldDir) dirsToCheck.push(coldDir)
+    }
+
+    for (const dir of dirsToCheck) {
+      const animeDir = path.join(dir, animeDirName)
+      // Try tagged filename first
+      for (const ext of ['.mkv', '.mp4']) {
+        const fp = path.join(animeDir, `${taggedBase}${ext}`)
+        if (fs.existsSync(fp)) {
+          const subtitleContent = await (async () => {
+            const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+            try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
+          })()
+          return { filePath: fp, subtitleContent }
+        }
+      }
+      // Try legacy filename
+      for (const ext of ['.mkv', '.mp4']) {
+        const fp = path.join(animeDir, `${base}${ext}`)
+        if (fs.existsSync(fp)) {
+          const subtitleContent = await (async () => {
+            const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+            try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
+          })()
+          return { filePath: fp, subtitleContent }
+        }
+      }
+    }
+    return null
+  })
+
   // Remux MKV to MP4 (stream copy) for HTML5 playback
   const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
 

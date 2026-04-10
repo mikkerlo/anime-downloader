@@ -45,8 +45,8 @@ const api = {
     ipcRenderer.invoke('file:check-episodes', animeName, episodeInts),
   fileOpen: (filePath: string) => ipcRenderer.invoke('file:open', filePath),
   fileShowInFolder: (filePath: string) => ipcRenderer.invoke('file:show-in-folder', filePath),
-  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number) =>
-    ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId),
+  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) =>
+    ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId, translationId),
 
   // Storage
   storagePickHotDir: () => ipcRenderer.invoke('storage:pick-hot-dir'),

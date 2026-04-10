@@ -34,7 +34,7 @@ interface Api {
   downloadCancel: (id: string) => Promise<void>
   downloadGetQueue: () => Promise<EpisodeGroup[]>
   downloadCancelByEpisode: (animeName: string, episodeLabel?: string) => Promise<void>
-  downloadedEpisodesGet: (animeId: number) => Promise<Record<string, EpisodeMeta>>
+  downloadedEpisodesGet: (animeId: number) => Promise<Record<string, EpisodeMeta[]>>
   downloadClearCompleted: () => Promise<void>
   downloadCancelMerge: () => Promise<void>
   downloadMerge: () => Promise<void>
@@ -53,10 +53,10 @@ interface Api {
   offStorageMoveToColdProgress: () => void
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
-    Promise<Record<string, { type: 'mkv' | 'mp4'; filePath: string }>>
+    Promise<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>
   fileOpen: (filePath: string) => Promise<string>
   fileShowInFolder: (filePath: string) => Promise<void>
-  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number) => Promise<void>
+  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) => Promise<void>
 
   onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => void
   offDownloadProgress: () => void

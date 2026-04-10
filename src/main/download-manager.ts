@@ -208,7 +208,8 @@ export class DownloadManager {
     for (const req of requests) {
       const padded = req.episodeInt.padStart(2, '0')
       const animeDirName = sanitizeFilename(req.animeName)
-      const baseFilename = sanitizeFilename(`${req.animeName} - ${padded}`)
+      const authorTag = sanitizeFilename(req.author)
+      const baseFilename = sanitizeFilename(`${req.animeName} - ${padded}`) + ` [${authorTag}]`
 
       const videoId = `video-${req.translationId}`
       const existing = this.queue.find(i => i.id === videoId)

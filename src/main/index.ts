@@ -15,6 +15,8 @@ import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
+import { SmotretApi } from './smotret-api'
+import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 
 // Enable WebGPU support for Anime4K shaders in the renderer
 app.commandLine.appendSwitch('enable-unsafe-webgpu')
@@ -35,42 +37,6 @@ interface AnimeCacheEntry {
   qualityProbes: Record<number, number>
   cachedAt: number
   posterCached: boolean
-}
-
-interface AnimeDetail extends AnimeSearchResult {
-  posterUrl: string
-  descriptions: { source: string; value: string }[]
-  episodes: EpisodeSummary[]
-  genres: { id: number; title: string }[]
-  myAnimeListId?: number
-}
-
-interface EpisodeSummary {
-  id: number
-  episodeFull: string
-  episodeInt: string
-  episodeType: string
-  isActive: number
-}
-
-interface EpisodeDetail {
-  id: number
-  episodeFull: string
-  episodeInt: string
-  episodeType: string
-  translations: Translation[]
-}
-
-interface Translation {
-  id: number
-  type: string
-  typeKind: string
-  typeLang: string
-  authorsSummary: string
-  isActive: number
-  width: number
-  height: number
-  duration: string
 }
 
 const store = new Store({
@@ -104,21 +70,6 @@ const store = new Store({
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c'
   }
 })
-
-interface AnimeSearchResult {
-  id: number
-  title: string
-  titles: { ru?: string; romaji?: string; ja?: string }
-  posterUrlSmall: string
-  numberOfEpisodes: number
-  type: string
-  typeTitle: string
-  year: number
-  season: string
-}
-
-const API_BASE = 'https://smotret-anime.ru/api'
-const USER_AGENT = 'smotret-anime-dl'
 
 // --- Anime cache helpers (for offline support of downloaded anime) ---
 
@@ -161,9 +112,8 @@ async function cachePosterImage(animeId: number, posterUrl: string): Promise<voi
   if (fs.existsSync(destPath)) return
   try {
     fs.mkdirSync(getPosterCacheDir(), { recursive: true })
-    const response = await fetch(posterUrl, { headers: { 'User-Agent': USER_AGENT } })
-    if (!response.ok || !response.body) return
-    const buffer = Buffer.from(await response.arrayBuffer())
+    const buffer = await smotretApi.fetchPoster(posterUrl)
+    if (!buffer) return
     fs.writeFileSync(destPath, buffer)
   } catch {
     // Non-critical, ignore
@@ -221,6 +171,7 @@ function cleanupStaleCache(): void {
   if (changed) store.set('animeCache', cache)
 }
 
+const smotretApi = new SmotretApi(() => store.get('token') as string)
 let downloadManager: DownloadManager
 let ffmpegPath = ''
 let ffprobePath = ''
@@ -426,21 +377,6 @@ async function moveAllFilesToColdStorage(
   return result
 }
 
-async function apiRequest(path: string): Promise<unknown> {
-  const token = store.get('token') as string
-  const url = token ? `${API_BASE}${path}${path.includes('?') ? '&' : '?'}access_token=${token}` : `${API_BASE}${path}`
-
-  const response = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT }
-  })
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`)
-  }
-
-  return response.json()
-}
-
 async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSearchResult>> {
   const cached = store.get('malIdMap') as Record<string, AnimeSearchResult>
   const result: Record<number, AnimeSearchResult> = {}
@@ -454,23 +390,14 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
     }
   }
 
-  const BATCH_SIZE = 50
-  for (let i = 0; i < uncachedIds.length; i += BATCH_SIZE) {
-    const batch = uncachedIds.slice(i, i + BATCH_SIZE)
-    const params = batch.map((id) => `myAnimeListId[]=${id}`).join('&')
-    const fields = 'id,title,titles,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,myAnimeListId'
-    const response = (await apiRequest(`/series/?${params}&fields=${fields}`)) as {
-      data: (AnimeSearchResult & { myAnimeListId?: number })[]
-    }
-    for (const anime of response.data) {
+  if (uncachedIds.length > 0) {
+    const fetched = await smotretApi.lookupByMalIds(uncachedIds)
+    for (const anime of fetched) {
       if (anime.myAnimeListId) {
         result[anime.myAnimeListId] = anime
         cached[String(anime.myAnimeListId)] = anime
       }
     }
-  }
-
-  if (uncachedIds.length > 0) {
     store.set('malIdMap', cached)
   }
   return result
@@ -517,28 +444,15 @@ function registerIpcHandlers(): void {
     autoUpdater.quitAndInstall()
   })
 
-  ipcMain.handle('validate-token', async () => {
-    const token = store.get('token') as string
-    if (!token) return { valid: false, error: 'No token configured' }
-    try {
-      const response = await fetch(`${API_BASE}/translations/embed/4336179?access_token=${token}`, {
-        headers: { 'User-Agent': USER_AGENT }
-      })
-      const json = await response.json() as { error?: { code: number; message: string }; data?: unknown }
-      if (json.error?.code === 403) return { valid: false, error: 'Invalid token' }
-      return { valid: true }
-    } catch (err) {
-      return { valid: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
+  ipcMain.handle('validate-token', () => smotretApi.validateToken())
 
   ipcMain.handle('search-anime', async (_event, query: string) => {
-    return apiRequest(`/series/?query=${encodeURIComponent(query)}&fields=id,title,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,titles`)
+    return smotretApi.searchAnime(query)
   })
 
   ipcMain.handle('get-anime', async (_event, id: number) => {
     try {
-      const result = await apiRequest(`/series/${id}`) as { data: AnimeDetail }
+      const result = await smotretApi.getAnime(id)
       updateAnimeDetailCache(id, result.data)
       return { ...result, source: 'api' }
     } catch (err) {
@@ -551,13 +465,9 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('probe-embed-quality', async (_event, translationId: number, animeId?: number) => {
-    const token = store.get('token') as string
-    const url = `https://smotret-anime.ru/api/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
     try {
-      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
-      if (!response.ok) return null
-      const json = await response.json() as { data: { stream: { height: number; urls: string[] }[] } }
-      const streams = json.data?.stream || []
+      const embed = await smotretApi.getEmbed(translationId)
+      const streams = embed.stream || []
       if (streams.length === 0) return null
       const best = streams.reduce((a, b) => a.height > b.height ? a : b)
       if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
@@ -592,7 +502,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('get-episode', async (_event, id: number, animeId?: number) => {
     try {
-      const result = await apiRequest(`/episodes/${id}`) as { data: EpisodeDetail }
+      const result = await smotretApi.getEpisode(id)
       if (animeId) updateEpisodeCache(animeId, id, result.data)
       return { ...result, source: 'api' }
     } catch (err) {
@@ -1130,13 +1040,9 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('player:get-stream-url', async (_event, translationId: number, maxHeight: number) => {
-    const token = store.get('token') as string
-    const url = `${API_BASE}/translations/embed/${translationId}${token ? `?access_token=${token}` : ''}`
     try {
-      const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
-      if (!response.ok) return null
-      const json = await response.json() as { data: { stream: { height: number; urls: string[] }[]; subtitlesUrl: string | null } }
-      const streams = json.data?.stream || []
+      const embed = await smotretApi.getEmbed(translationId)
+      const streams = embed.stream || []
       if (streams.length === 0) return null
       const sorted = [...streams].sort((a, b) => b.height - a.height)
       const best = sorted.find(s => s.height <= maxHeight) || sorted[0]
@@ -1150,15 +1056,8 @@ function registerIpcHandlers(): void {
 
       // Fetch raw ASS subtitle content if available (rendered natively by JASSUB in the player)
       let subtitleContent: string | null = null
-      if (json.data.subtitlesUrl) {
-        try {
-          const subUrl = `https://smotret-anime.ru/translations/ass/${translationId}?download=1`
-            + (token ? `&access_token=${token}` : '')
-          const subResp = await fetch(subUrl, { headers: { 'User-Agent': USER_AGENT } })
-          if (subResp.ok) {
-            subtitleContent = await subResp.text()
-          }
-        } catch { /* subtitle fetch failed, continue without subs */ }
+      if (embed.subtitlesUrl) {
+        subtitleContent = await smotretApi.fetchSubtitleContent(translationId)
       }
 
       return { streamUrl, subtitleContent, availableStreams }
@@ -1317,7 +1216,7 @@ app.whenReady().then(async () => {
   const ffmpegInfo = await checkFfmpeg()
   downloadManager = new DownloadManager(
     getDownloadDir(),
-    () => store.get('token') as string,
+    smotretApi,
     app.getPath('userData'),
     () => store.get('downloadSpeedLimit') as number || 0,
     () => store.get('concurrentDownloads') as number || 2

@@ -4,6 +4,7 @@ import * as path from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
+import type { SmotretApi } from './smotret-api'
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled'
 export type MergeStatus = 'pending' | 'merging' | 'completed' | 'failed'
@@ -51,12 +52,6 @@ export interface DownloadRequest {
   author: string
 }
 
-interface EmbedData {
-  download: { height: number; url: string }[]
-  stream: { height: number; urls: string[] }[]
-  subtitlesUrl: string | null
-}
-
 const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
@@ -78,7 +73,7 @@ export class DownloadManager {
   private abortControllers = new Map<string, AbortController>()
   private progressTimer: ReturnType<typeof setInterval> | null = null
   private downloadDir: string
-  private getToken: () => string
+  private api: SmotretApi
   private getSpeedLimit: () => number
   private getConcurrentLimit: () => number
   private episodeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
@@ -91,9 +86,9 @@ export class DownloadManager {
   private queueFilePath: string
   private persistScheduled = false
 
-  constructor(downloadDir: string, getToken: () => string, userDataPath: string, getSpeedLimit: () => number = () => 0, getConcurrentLimit: () => number = () => 2) {
+  constructor(downloadDir: string, api: SmotretApi, userDataPath: string, getSpeedLimit: () => number = () => 0, getConcurrentLimit: () => number = () => 2) {
     this.downloadDir = downloadDir
-    this.getToken = getToken
+    this.api = api
     this.getSpeedLimit = getSpeedLimit
     this.getConcurrentLimit = getConcurrentLimit
     this.queueFilePath = path.join(userDataPath, 'queue.json')
@@ -202,20 +197,11 @@ export class DownloadManager {
     return [...groups.values()]
   }
 
-  private async fetchEmbed(translationId: number): Promise<EmbedData> {
-    const token = this.getToken()
-    const url = `https://smotret-anime.ru/api/translations/embed/${translationId}?access_token=${token}`
-    console.log(`[download] Fetching embed: ${url.replace(token, 'TOKEN')}`)
-    const response = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT }
-    })
-    if (!response.ok) {
-      console.error(`[download] Embed API error: ${response.status} for translation ${translationId}`)
-      throw new Error(`Embed API error: ${response.status}`)
-    }
-    const json = await response.json() as { data: EmbedData }
-    console.log(`[download] Embed response for ${translationId}: ${json.data.stream?.length || 0} stream URLs, subtitles: ${!!json.data.subtitlesUrl}`)
-    return json.data
+  private async fetchEmbed(translationId: number) {
+    console.log(`[download] Fetching embed for translation ${translationId}`)
+    const data = await this.api.getEmbed(translationId)
+    console.log(`[download] Embed response for ${translationId}: ${data.stream?.length || 0} stream URLs, subtitles: ${!!data.subtitlesUrl}`)
+    return data
   }
 
   async enqueue(requests: DownloadRequest[]): Promise<void> {
@@ -265,14 +251,11 @@ export class DownloadManager {
         if (embed.subtitlesUrl) {
           const subId = `sub-${req.translationId}`
           if (!this.queue.find(i => i.id === subId)) {
-            const token = this.getToken()
-            const subUrl = `https://smotret-anime.ru/translations/ass/${req.translationId}?download=1`
-              + (token ? `&access_token=${token}` : '')
             this.queue.push({
               id: subId,
               translationId: req.translationId,
               kind: 'subtitle',
-              url: subUrl,
+              url: this.api.getSubtitlesUrl(req.translationId),
               filename: path.join(animeDirName, `${baseFilename}.ass`),
               animeName: req.animeName,
               episodeLabel: req.episodeLabel,
@@ -287,14 +270,11 @@ export class DownloadManager {
           }
         }
       } catch (err) {
-        const token = this.getToken()
-        const fallbackUrl = `https://smotret-anime.ru/translations/mp4/${req.translationId}?format=mp4&height=${req.height}`
-          + (token ? `&access_token=${token}` : '')
         this.queue.push({
           id: videoId,
           translationId: req.translationId,
           kind: 'video',
-          url: fallbackUrl,
+          url: this.api.getFallbackVideoUrl(req.translationId, req.height),
           filename: path.join(animeDirName, `${baseFilename}.mp4`),
           animeName: req.animeName,
           episodeLabel: req.episodeLabel,
@@ -379,9 +359,7 @@ export class DownloadManager {
           item.quality = best.height
         }
       } else if (item.kind === 'subtitle' && embed.subtitlesUrl) {
-        const token = this.getToken()
-        item.url = `https://smotret-anime.ru/translations/ass/${item.translationId}?download=1`
-          + (token ? `&access_token=${token}` : '')
+        item.url = this.api.getSubtitlesUrl(item.translationId)
       }
     } catch (err) {
       console.error(`[download] Restart: failed to re-fetch embed for ${item.translationId}`, err)

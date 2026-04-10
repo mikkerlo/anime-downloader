@@ -88,10 +88,15 @@ Only translations for the visible page are fetched (in batches of 5).
 Cached translations are reused when revisiting a page.
 
 Per-episode translation selector with priority chain:
-  1. Downloaded file on disk → locked to saved translation
-  2. In download queue → locked to queued translation
-  3. User per-episode override → user's manual pick
-  4. Global default → matching type + author from top dropdowns
+  1. In download queue → locked to queued translation
+  2. User per-episode override → user's manual pick
+  3. Global default → matching type + author from top dropdowns
+
+Multiple downloaded translations coexist per episode.
+Downloaded translations marked with ⬇ icon in select dropdown.
+Episode row shows Open/folder/delete when selected translation has a local file.
+Shows Play (stream) and Download buttons when selected translation has no local file.
+A small ⬇ badge indicates other translations are downloaded even if current isn't.
 
 Global dropdowns set defaults; each episode can override independently.
 Translation type dropdown shows episode counts: "Russian Subtitles (10/12)".
@@ -225,7 +230,7 @@ LibraryView shows both with indicators:
 | `library-get-status` | invoke | Batch check starred + downloaded status for multiple anime IDs |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
 | `downloaded-anime-delete` | invoke | Remove anime + delete folder |
-| `downloaded-episodes-get` | invoke | Get translation metadata per episode |
+| `downloaded-episodes-get` | invoke | Get translation metadata per episode (array of metas per episode, supports multiple translations) |
 | `get-setting` | invoke | Read setting value |
 | `set-setting` | invoke | Write setting value |
 | `download:enqueue` | invoke | Queue download requests + save episode metadata |
@@ -256,10 +261,10 @@ LibraryView shows both with indicators:
 | `update:install` | invoke | Quit and install downloaded update |
 | `update:status` | send | Update check/download progress and status |
 | `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
-| `file:check-episodes` | invoke | Check which episodes exist on disk |
+| `file:check-episodes` | invoke | Check which episodes exist on disk (returns array of files per episode with author tags) |
 | `file:open` | invoke | Open file with default app |
 | `file:show-in-folder` | invoke | Reveal file in explorer |
-| `file:delete-episode` | invoke | Delete episode files + clean metadata |
+| `file:delete-episode` | invoke | Delete episode files for specific translation or all versions |
 | `shikimori:get-auth-url` | invoke | Get Shikimori OAuth authorize URL |
 | `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user |
 | `shikimori:logout` | invoke | Clear Shikimori credentials and user |
@@ -273,6 +278,7 @@ LibraryView shows both with indicators:
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
 | `player:get-stream-url` | invoke | Fetch CDN stream URL + raw ASS subtitle content + all available stream qualities for a translation |
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
+| `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId |
 | `player:remux-mkv` | invoke | Remux MKV→MP4 via ffmpeg stream copy to temp dir for HTML5 playback |
 | `player:cleanup-remux` | invoke | Delete temp remuxed files when player closes |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
@@ -473,11 +479,16 @@ Merge progress is calculated from `timemark / probed_duration` (works for all co
 ```
 {downloadDir}/
   {sanitized anime name}/
-    {anime name} - 01.mp4        raw video
-    {anime name} - 01.ass        subtitles
-    {anime name} - 01.mkv        merged (video + subs)
-    {anime name} - 01.mp4.part   in-progress download
+    {anime name} - 01 [Author].mp4        raw video (author-tagged)
+    {anime name} - 01 [Author].ass        subtitles
+    {anime name} - 01 [Author].mkv        merged (video + subs)
+    {anime name} - 01 [Author].mp4.part   in-progress download
+    {anime name} - 01 [Author2].mkv       another translation
+    {anime name} - 01.mkv                 legacy (no author tag)
 ```
+
+Multiple translations per episode coexist via `[Author]` filename tags.
+Legacy filenames (without author tag) are still detected and supported.
 
 Filename sanitization: `[<>:"/\|?*]` replaced with `_`, whitespace normalized.
 

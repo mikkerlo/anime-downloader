@@ -859,7 +859,7 @@ function typeChip(type: string): { short: string; color: string } {
             <span v-if="row.selectedTr" class="type-chip" :style="{ backgroundColor: typeChip(row.selectedTr.type).color + '22', color: typeChip(row.selectedTr.type).color }">{{ typeChip(row.selectedTr.type).short }}</span>
             <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }">{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span>
             <template v-if="selectedTrHasFile(row)">
-              <span class="file-type-badge">{{ getFileForTranslation(row.episode.episodeInt, row.selectedTr?.id)!.type.toUpperCase() }}</span>
+              <span class="file-type-badge">{{ getFileForTranslation(row.episode.episodeInt, row.selectedTr?.id)?.type.toUpperCase() }}</span>
             </template>
             <template v-else-if="hasAnyFile(row.episode.episodeInt)">
               <span class="file-type-badge other-dl">⬇</span>

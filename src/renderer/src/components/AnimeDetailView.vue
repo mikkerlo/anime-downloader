@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName } from '../utils'
+import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, sanitizeFilename } from '../utils'
 
 const props = defineProps<{
   animeId: number
@@ -128,6 +128,7 @@ interface EpisodeRow {
   selectedTr: Translation | null
   isLocked: boolean
   lockSource: 'downloaded' | 'queued' | null
+  downloadedTrIds: Set<number>
 }
 
 // For each author+type combo, keep only the best quality translation
@@ -162,24 +163,21 @@ const episodeRows = computed((): EpisodeRow[] => {
       return typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type)
     })
 
-    const meta = episodeMeta.value[ep.episodeInt]
+    const metas = episodeMeta.value[ep.episodeInt] || []
     const group = downloadGroups.value.get(ep.episodeFull)
+
+    // Build set of downloaded translation IDs from metadata + files on disk
+    const downloadedTrIds = new Set<number>()
+    for (const m of metas) {
+      if (m.translationId) downloadedTrIds.add(m.translationId)
+    }
 
     let selectedTr: Translation | null = null
     let isLocked = false
     let lockSource: 'downloaded' | 'queued' | null = null
 
-    // Priority 1: Downloaded file on disk
-    if (fileStatus.value[ep.episodeInt] && meta) {
-      selectedTr = sorted.find(tr => tr.id === meta.translationId) || null
-      if (selectedTr) {
-        isLocked = true
-        lockSource = 'downloaded'
-      }
-    }
-
-    // Priority 2: In download queue (active)
-    if (!isLocked && group && group.video && !['completed', 'cancelled', 'failed'].includes(group.video.status)) {
+    // Priority 1: In download queue (active) — lock the row
+    if (group && group.video && !['completed', 'cancelled', 'failed'].includes(group.video.status)) {
       selectedTr = sorted.find(tr => tr.id === group.translationId) || null
       if (selectedTr) {
         isLocked = true
@@ -187,19 +185,19 @@ const episodeRows = computed((): EpisodeRow[] => {
       }
     }
 
-    // Priority 3: User per-episode override
+    // Priority 2: User per-episode override
     if (!isLocked && episodeOverrides.value.has(ep.id)) {
       selectedTr = sorted.find(tr => tr.id === episodeOverrides.value.get(ep.id)) || null
     }
 
-    // Priority 4: Global default (same type + author)
+    // Priority 3: Global default (same type + author)
     if (!isLocked && !selectedTr) {
       const typeFiltered = sorted.filter(tr => tr.type === translationType.value)
       selectedTr = typeFiltered.find(tr => tr.authorsSummary === selectedAuthor.value)
         || typeFiltered[0] || null
     }
 
-    return { episode: ep, allTranslations: sorted, selectedTr, isLocked, lockSource }
+    return { episode: ep, allTranslations: sorted, selectedTr, isLocked, lockSource, downloadedTrIds }
   })
 })
 
@@ -411,8 +409,8 @@ function qualityLabel(height: number): string {
   return `${height}p`
 }
 
-const fileStatus = ref<Record<string, { type: 'mkv' | 'mp4'; filePath: string }>>({})
-const episodeMeta = ref<Record<string, EpisodeMeta>>({})
+const fileStatus = ref<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>({})
+const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
 const errorMessage = ref('')
@@ -440,7 +438,7 @@ async function downloadAll(): Promise<void> {
   const requests: DownloadRequest[] = []
 
   for (const row of episodeRows.value) {
-    if (row.selectedTr && !row.isLocked) {
+    if (row.selectedTr && !row.isLocked && !selectedTrHasFile(row)) {
       requests.push({
         translationId: row.selectedTr.id,
         height: getRealHeight(row.selectedTr),
@@ -567,20 +565,47 @@ function buildTranslationList(row: EpisodeRow | undefined): { id: number; label:
   }))
 }
 
-async function openFile(episodeInt: string): Promise<void> {
-  const info = fileStatus.value[episodeInt]
+function getFileForTranslation(episodeInt: string, translationId: number | undefined): { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string } | null {
+  const files = fileStatus.value[episodeInt]
+  if (!files || files.length === 0) return null
+  // Find file matching the translation's author via metadata
+  if (translationId) {
+    const metas = episodeMeta.value[episodeInt] || []
+    const meta = metas.find(m => m.translationId === translationId)
+    if (meta) {
+      // Match by author tag
+      const authorTag = sanitizeFilename(meta.author)
+      const match = files.find(f => f.author === authorTag)
+      if (match) return match
+      // Legacy file (no author tag) — only match if it's the sole metadata entry
+      if (metas.length === 1 && files.length === 1 && !files[0].author) {
+        return files[0]
+      }
+    }
+  }
+  // No specific match found
+  return null
+}
+
+function hasAnyFile(episodeInt: string): boolean {
+  const files = fileStatus.value[episodeInt]
+  return !!files && files.length > 0
+}
+
+function selectedTrHasFile(row: EpisodeRow): boolean {
+  if (!row.selectedTr) return false
+  return !!getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
+}
+
+async function openFile(row: EpisodeRow): Promise<void> {
+  if (!row.selectedTr) return
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
   if (!info) return
 
   if (playerMode.value === 'builtin') {
     const name = anime.value ? getAnimeName() : ''
-    if (info.type === 'mp4') {
-      const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, [])
-    } else {
-      // MKV: pass filePath for remux-based local playback
-      const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-      emit('playFile', info.filePath, '', localSubs || '', name, episodeInt, [], 0, [])
-    }
+    const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
+    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row))
   } else {
     await window.api.fileOpen(info.filePath)
   }
@@ -595,22 +620,18 @@ async function playStream(row: EpisodeRow): Promise<void> {
   }
 }
 
-function showInFolder(episodeInt: string): void {
-  const info = fileStatus.value[episodeInt]
+function showInFolder(row: EpisodeRow): void {
+  if (!row.selectedTr) return
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
   if (!info) return
   window.api.fileShowInFolder(info.filePath)
 }
 
-async function deleteFile(episodeInt: string): Promise<void> {
-  const info = fileStatus.value[episodeInt]
+async function deleteFile(row: EpisodeRow): Promise<void> {
+  if (!row.selectedTr) return
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
   if (!info) return
-  // Clear override so it reverts to global default
-  const ep = filteredEpisodes.value.find(e => e.episodeInt === episodeInt)
-  if (ep) {
-    episodeOverrides.value.delete(ep.id)
-    episodeOverrides.value = new Map(episodeOverrides.value)
-  }
-  await window.api.fileDeleteEpisode(getAnimeName(), episodeInt, props.animeId)
+  await window.api.fileDeleteEpisode(getAnimeName(), row.episode.episodeInt, props.animeId, row.selectedTr.id)
   await checkFileStatus()
 }
 
@@ -789,7 +810,7 @@ function typeChip(type: string): { short: string; color: string } {
           <template v-if="row.isLocked">
             <span class="ep-author locked">
               {{ row.selectedTr?.authorsSummary || 'Unknown' }}
-              <span class="lock-label">{{ row.lockSource === 'downloaded' ? 'Downloaded' : 'Queued' }}</span>
+              <span class="lock-label">Queued</span>
             </span>
           </template>
           <template v-else-if="row.allTranslations.length > 0">
@@ -804,7 +825,7 @@ function typeChip(type: string): { short: string; color: string } {
                           :label="type.label">
                   <option v-for="tr in row.allTranslations.filter(t => t.type === type.value).sort((a, b) => getRealHeight(b) - getRealHeight(a))"
                           :key="tr.id" :value="tr.id">
-                    {{ tr.authorsSummary }} ({{ qualityLabel(getRealHeight(tr)) }})
+                    {{ row.downloadedTrIds.has(tr.id) ? '⬇ ' : '' }}{{ tr.authorsSummary }} ({{ qualityLabel(getRealHeight(tr)) }})
                   </option>
                 </optgroup>
               </template>
@@ -837,19 +858,22 @@ function typeChip(type: string): { short: string; color: string } {
           <div class="ep-right">
             <span v-if="row.selectedTr" class="type-chip" :style="{ backgroundColor: typeChip(row.selectedTr.type).color + '22', color: typeChip(row.selectedTr.type).color }">{{ typeChip(row.selectedTr.type).short }}</span>
             <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }">{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span>
-            <template v-if="fileStatus[row.episode.episodeInt]">
-              <span class="file-type-badge">{{ fileStatus[row.episode.episodeInt].type.toUpperCase() }}</span>
+            <template v-if="selectedTrHasFile(row)">
+              <span class="file-type-badge">{{ getFileForTranslation(row.episode.episodeInt, row.selectedTr?.id)!.type.toUpperCase() }}</span>
+            </template>
+            <template v-else-if="hasAnyFile(row.episode.episodeInt)">
+              <span class="file-type-badge other-dl">⬇</span>
             </template>
           </div>
           <div class="ep-links">
-            <template v-if="fileStatus[row.episode.episodeInt]">
-              <button class="link-btn open" @click="openFile(row.episode.episodeInt)" title="Open file">Open</button>
-              <button class="link-btn folder" @click="showInFolder(row.episode.episodeInt)" title="Show in folder">
+            <template v-if="selectedTrHasFile(row)">
+              <button class="link-btn open" @click="openFile(row)" title="Open file">Open</button>
+              <button class="link-btn folder" @click="showInFolder(row)" title="Show in folder">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M2 7.5V18a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-6.5l-2-2.5H4a2 2 0 00-2 2z"/>
                 </svg>
               </button>
-              <button class="link-btn delete" @click="deleteFile(row.episode.episodeInt)" title="Delete file">
+              <button class="link-btn delete" @click="deleteFile(row)" title="Delete file">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                 </svg>
@@ -860,12 +884,12 @@ function typeChip(type: string): { short: string; color: string } {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
               </svg>
             </button>
-            <button v-if="playerMode === 'builtin' && row.selectedTr && !fileStatus[row.episode.episodeInt]" class="link-btn play" @click="playStream(row)" title="Play (stream)">
+            <button v-if="playerMode === 'builtin' && row.selectedTr && !selectedTrHasFile(row)" class="link-btn play" @click="playStream(row)" title="Play (stream)">
               <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
                 <path d="M8 5v14l11-7z"/>
               </svg>
             </button>
-            <button v-if="row.selectedTr && !row.isLocked" class="link-btn dl" @click="downloadEpisode(row)" title="Download this episode">
+            <button v-if="row.selectedTr && !row.isLocked && !selectedTrHasFile(row)" class="link-btn dl" @click="downloadEpisode(row)" title="Download this episode">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M2 19.5h20M12 2v14m0 0l-4-4m4 4l4-4"/>
               </svg>
@@ -1332,6 +1356,12 @@ function typeChip(type: string): { short: string; color: string } {
 .file-type-badge {
   background-color: #1a4a2e;
   color: #6ab04c;
+}
+
+.file-type-badge.other-dl {
+  background-color: #0f3460;
+  color: #3498db;
+  font-size: 0.7rem;
 }
 
 .status-text {

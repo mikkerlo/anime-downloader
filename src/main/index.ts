@@ -1030,6 +1030,21 @@ function registerIpcHandlers(): void {
     }))
   })
 
+  ipcMain.handle('shikimori:get-friends-activity', async () => {
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) throw new Error('Not logged in to Shikimori')
+
+    const activities = await shikimori.getFriendsActivity(accessToken, user.id)
+    const malIds = Array.from(new Set(activities.map((a) => a.malId)))
+    const malMap = await lookupByMalIds(malIds)
+
+    return activities.map((a) => ({
+      ...a,
+      smotretAnime: malMap[a.malId] ?? null
+    }))
+  })
+
   ipcMain.handle('shell:open-external', async (_event, url: string) => {
     try {
       await shell.openExternal(url)

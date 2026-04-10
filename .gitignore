@@ -6,3 +6,4 @@ dist/
 *:Zone.Identifier
 tsconfig.web.tsbuildinfo
 scripts/browse.js
+package-lock.json

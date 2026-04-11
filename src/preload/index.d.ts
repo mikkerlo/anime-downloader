@@ -71,7 +71,7 @@ interface Api {
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
   playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) => Promise<{ filePath: string; subtitleContent: string | null } | null>
-  playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string } | { error: string }>
+  playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
   playerCleanupRemux: () => Promise<void>
 
   // Shikimori

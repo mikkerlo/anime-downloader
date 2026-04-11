@@ -637,11 +637,14 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
             return
           }
           remuxedPath.value = remuxResult.mp4Path
+          if (!activeSubtitleContent.value && remuxResult.subtitleContent) {
+            activeSubtitleContent.value = remuxResult.subtitleContent
+          }
         }
 
         // Update subtitles
         destroySubtitles()
-        if (localResult.subtitleContent && video) {
+        if (activeSubtitleContent.value && video) {
           initSubtitles(video)
         }
 
@@ -746,6 +749,9 @@ onMounted(async () => {
         return
       }
       remuxedPath.value = result.mp4Path
+      if (!activeSubtitleContent.value && result.subtitleContent) {
+        activeSubtitleContent.value = result.subtitleContent
+      }
     } catch (e) {
       remuxError.value = String(e)
       remuxing.value = false

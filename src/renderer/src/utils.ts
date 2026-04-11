@@ -21,3 +21,7 @@ export function formatEta(item: DownloadProgressItem): string {
 export function getAnimeName(anime: { title: string; titles?: { ru?: string; romaji?: string } }): string {
   return anime.titles?.romaji || anime.titles?.ru || anime.title
 }
+
+export function sanitizeFilename(name: string): string {
+  return name.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim()
+}

@@ -320,14 +320,18 @@ async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string)
   const padded = episodeLabel.padStart(2, '0')
   const base = sanitizeFilename(`${animeName} - ${padded}`)
 
-  for (const ext of ['.mkv', '.mp4', '.ass']) {
-    const src = path.join(hotAnimeDir, `${base}${ext}`)
-    // Never move .part files or files with in-progress downloads
-    if (ext === '.mp4' && fs.existsSync(src + '.part')) continue
-    if (fs.existsSync(src)) {
-      await moveFileToCold(src, path.join(coldAnimeDir, `${base}${ext}`))
+  // Move all files matching this episode base (including [Author] tagged variants)
+  try {
+    const files = fs.readdirSync(hotAnimeDir)
+    for (const file of files) {
+      if (!file.startsWith(base)) continue
+      if (!['.mkv', '.mp4', '.ass'].some(ext => file.endsWith(ext))) continue
+      // Never move .part files or files with in-progress downloads
+      if (file.endsWith('.mp4') && fs.existsSync(path.join(hotAnimeDir, file + '.part'))) continue
+      const src = path.join(hotAnimeDir, file)
+      await moveFileToCold(src, path.join(coldAnimeDir, file))
     }
-  }
+  } catch { /* dir listing failed */ }
 }
 
 async function moveAllFilesToColdStorage(
@@ -600,10 +604,12 @@ function registerIpcHandlers(): void {
   // Download handlers
   ipcMain.handle('download:enqueue', async (_event, requests: DownloadRequest[]) => {
     await downloadManager.enqueue(requests)
-    // Save episode metadata
+    // Save episode metadata (keyed by animeId:episodeInt:translationId for multi-translation support)
     const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
     for (const req of requests) {
-      episodes[`${req.animeId}:${req.episodeInt}`] = {
+      // Remove legacy key if present
+      delete episodes[`${req.animeId}:${req.episodeInt}`]
+      episodes[`${req.animeId}:${req.episodeInt}:${req.translationId}`] = {
         translationType: req.translationType,
         author: req.author,
         quality: req.height,
@@ -679,11 +685,17 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('downloaded-episodes-get', (_event, animeId: number) => {
     const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
-    const result: Record<string, { translationType: string; author: string; quality: number; translationId: number }> = {}
+    const result: Record<string, { translationType: string; author: string; quality: number; translationId: number }[]> = {}
     const prefix = `${animeId}:`
     for (const [key, val] of Object.entries(episodes)) {
       if (key.startsWith(prefix)) {
-        result[key.substring(prefix.length)] = val
+        const rest = key.substring(prefix.length)
+        // New format: episodeInt:translationId — extract episodeInt
+        // Legacy format: episodeInt (no colon) — also supported
+        const colonIdx = rest.indexOf(':')
+        const episodeInt = colonIdx >= 0 ? rest.substring(0, colonIdx) : rest
+        if (!result[episodeInt]) result[episodeInt] = []
+        result[episodeInt].push(val)
       }
     }
     return result
@@ -752,14 +764,23 @@ function registerIpcHandlers(): void {
     const metaByFile = new Map<string, { language: string; title: string }>()
 
     for (const [key, meta] of Object.entries(episodeMeta)) {
-      const [animeIdStr, epInt] = key.split(':')
+      const parts = key.split(':')
+      const animeIdStr = parts[0]
+      const epInt = parts[1]
+      if (!animeIdStr || !epInt) continue
       const animeEntry = downloadedAnime[animeIdStr]
       if (!animeEntry) continue
       const animeName = animeEntry.titles?.romaji || animeEntry.titles?.ru || animeEntry.title
       const padded = epInt.padStart(2, '0')
-      const base = sanitizeFilename(`${animeName} - ${padded}`)
       const dirName = sanitizeFilename(animeName)
-      const mkvPath = path.join(downloadDir, dirName, `${base}.mkv`)
+
+      // Try new tagged filename first, then legacy
+      const authorTag = sanitizeFilename(meta.author)
+      const taggedBase = sanitizeFilename(`${animeName} - ${padded}`) + ` [${authorTag}]`
+      const legacyBase = sanitizeFilename(`${animeName} - ${padded}`)
+      const taggedMkvPath = path.join(downloadDir, dirName, `${taggedBase}.mkv`)
+      const legacyMkvPath = path.join(downloadDir, dirName, `${legacyBase}.mkv`)
+      const mkvPath = fs.existsSync(taggedMkvPath) ? taggedMkvPath : legacyMkvPath
 
       const lang = meta.translationType.endsWith('Ru') || meta.translationType === 'subRu' || meta.translationType === 'voiceRu' ? 'rus'
         : meta.translationType.endsWith('En') || meta.translationType === 'subEn' || meta.translationType === 'voiceEn' ? 'eng'
@@ -845,22 +866,68 @@ function registerIpcHandlers(): void {
       if (coldDir) dirsToCheck.push(coldDir)
     }
 
-    const result: Record<string, { type: 'mkv' | 'mp4'; filePath: string }> = {}
-    // Check dirs in reverse so cold storage (last) takes priority
+    // Result: per-episode map of translationId -> file info, plus a legacy entry for old filenames
+    const result: Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]> = {}
+
+    // Build set of base names we're looking for
+    const baseMap = new Map<string, string>() // base -> episodeInt
+    for (const epInt of episodeInts) {
+      const padded = epInt.padStart(2, '0')
+      const base = sanitizeFilename(`${animeName} - ${padded}`)
+      baseMap.set(base, epInt)
+    }
+
     for (const dir of dirsToCheck) {
       const animeDir = path.join(dir, animeDirName)
       if (!fs.existsSync(animeDir)) continue
 
-      for (const epInt of episodeInts) {
-        const padded = epInt.padStart(2, '0')
-        const base = sanitizeFilename(`${animeName} - ${padded}`)
-        const mkvPath = path.join(animeDir, `${base}.mkv`)
-        const mp4Path = path.join(animeDir, `${base}.mp4`)
+      // First check for new [Author] tagged files by listing directory
+      let files: string[]
+      try { files = fs.readdirSync(animeDir) } catch { continue }
 
-        if (fs.existsSync(mkvPath)) {
-          result[epInt] = { type: 'mkv', filePath: mkvPath }
-        } else if (fs.existsSync(mp4Path)) {
-          result[epInt] = { type: 'mp4', filePath: mp4Path }
+      for (const file of files) {
+        // Match pattern: {base} [Author].{mkv|mp4}
+        const match = file.match(/^(.+?) \[(.+?)\]\.(mkv|mp4)$/)
+        if (match) {
+          const base = match[1]
+          const author = match[2]
+          const ext = match[3] as 'mkv' | 'mp4'
+          const epInt = baseMap.get(base)
+          if (epInt) {
+            if (!result[epInt]) result[epInt] = []
+            // Avoid duplicate entries (cold storage takes priority)
+            const existing = result[epInt].find(e => e.author === author)
+            if (existing) {
+              // Replace with cold storage version
+              existing.type = ext
+              existing.filePath = path.join(animeDir, file)
+            } else {
+              result[epInt].push({ type: ext, filePath: path.join(animeDir, file), author })
+            }
+          }
+          continue
+        }
+
+        // Legacy filenames (no author tag): {base}.{mkv|mp4}
+        const legacyMatch = file.match(/^(.+)\.(mkv|mp4)$/)
+        if (legacyMatch) {
+          const base = legacyMatch[1]
+          const ext = legacyMatch[2] as 'mkv' | 'mp4'
+          const epInt = baseMap.get(base)
+          if (epInt) {
+            if (!result[epInt]) result[epInt] = []
+            // Only add legacy if no author-tagged version exists with same base
+            const hasAuthorVersion = result[epInt].some(e => e.author)
+            if (!hasAuthorVersion || !result[epInt].some(e => !e.author)) {
+              const existing = result[epInt].find(e => !e.author)
+              if (existing) {
+                existing.type = ext
+                existing.filePath = path.join(animeDir, file)
+              } else {
+                result[epInt].push({ type: ext, filePath: path.join(animeDir, file) })
+              }
+            }
+          }
         }
       }
     }
@@ -875,7 +942,7 @@ function registerIpcHandlers(): void {
     shell.showItemInFolder(filePath)
   })
 
-  ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number) => {
+  ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
     const animeDirName = sanitizeFilename(animeName)
     const dirsToCheck = [getDownloadDir()]
     if (isAdvancedStorage()) {
@@ -886,19 +953,56 @@ function registerIpcHandlers(): void {
     const padded = episodeInt.padStart(2, '0')
     const base = sanitizeFilename(`${animeName} - ${padded}`)
 
-    for (const dir of dirsToCheck) {
-      const animeDir = path.join(dir, animeDirName)
-      for (const ext of ['.mkv', '.mp4', '.ass']) {
-        const fp = path.join(animeDir, `${base}${ext}`)
-        try { fs.unlinkSync(fp) } catch { /* ignore */ }
+    if (translationId && animeId) {
+      // Delete specific translation's files — find by author tag from metadata
+      const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+      const metaKey = `${animeId}:${episodeInt}:${translationId}`
+      const legacyKey = `${animeId}:${episodeInt}`
+      const meta = episodes[metaKey] || episodes[legacyKey]
+      if (meta) {
+        const authorTag = sanitizeFilename(meta.author)
+        const taggedBase = `${base} [${authorTag}]`
+        for (const dir of dirsToCheck) {
+          const animeDir = path.join(dir, animeDirName)
+          for (const ext of ['.mkv', '.mp4', '.ass']) {
+            // Try tagged filename first
+            const taggedPath = path.join(animeDir, `${taggedBase}${ext}`)
+            try { fs.unlinkSync(taggedPath) } catch { /* ignore */ }
+            // Also try legacy filename (for older downloads)
+            const legacyPath = path.join(animeDir, `${base}${ext}`)
+            try { fs.unlinkSync(legacyPath) } catch { /* ignore */ }
+          }
+        }
+        delete episodes[metaKey]
+        delete episodes[legacyKey]
+        store.set('downloadedEpisodes', episodes)
       }
-    }
+    } else {
+      // Delete all versions of this episode (legacy behavior)
+      for (const dir of dirsToCheck) {
+        const animeDir = path.join(dir, animeDirName)
+        // List directory and delete all matching files for this episode
+        try {
+          const files = fs.readdirSync(animeDir)
+          for (const file of files) {
+            if (file.startsWith(base) && (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))) {
+              try { fs.unlinkSync(path.join(animeDir, file)) } catch { /* ignore */ }
+            }
+          }
+        } catch { /* dir doesn't exist */ }
+      }
 
-    // Clean up episode metadata
-    if (animeId) {
-      const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
-      delete episodes[`${animeId}:${episodeInt}`]
-      store.set('downloadedEpisodes', episodes)
+      // Clean up all episode metadata for this episode
+      if (animeId) {
+        const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
+        const prefix = `${animeId}:${episodeInt}`
+        for (const key of Object.keys(episodes)) {
+          if (key === prefix || key.startsWith(prefix + ':')) {
+            delete episodes[key]
+          }
+        }
+        store.set('downloadedEpisodes', episodes)
+      }
     }
   })
 
@@ -1088,6 +1192,62 @@ function registerIpcHandlers(): void {
         return fs.readFileSync(assPath, 'utf-8')
       }
     } catch { /* ignore */ }
+    return null
+  })
+
+  ipcMain.handle('player:find-local-file', async (_event, animeName: string, episodeInt: string, translationId: number) => {
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    // Find meta for this translation — try new key format, then scan for legacy
+    let meta: { author: string } | null = null
+    for (const [key, val] of Object.entries(episodes)) {
+      if (val.translationId === translationId) {
+        // Verify key belongs to right anime episode (starts with some animeId:episodeInt)
+        const parts = key.split(':')
+        if (parts.length >= 2 && parts[1] === episodeInt) {
+          meta = val
+          break
+        }
+      }
+    }
+    if (!meta) return null
+
+    const animeDirName = sanitizeFilename(animeName)
+    const padded = episodeInt.padStart(2, '0')
+    const base = sanitizeFilename(`${animeName} - ${padded}`)
+    const authorTag = sanitizeFilename(meta.author)
+    const taggedBase = `${base} [${authorTag}]`
+
+    const dirsToCheck = [getDownloadDir()]
+    if (isAdvancedStorage()) {
+      const coldDir = getColdStorageDir()
+      if (coldDir) dirsToCheck.push(coldDir)
+    }
+
+    for (const dir of dirsToCheck) {
+      const animeDir = path.join(dir, animeDirName)
+      // Try tagged filename first
+      for (const ext of ['.mkv', '.mp4']) {
+        const fp = path.join(animeDir, `${taggedBase}${ext}`)
+        if (fs.existsSync(fp)) {
+          const subtitleContent = await (async () => {
+            const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+            try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
+          })()
+          return { filePath: fp, subtitleContent }
+        }
+      }
+      // Try legacy filename
+      for (const ext of ['.mkv', '.mp4']) {
+        const fp = path.join(animeDir, `${base}${ext}`)
+        if (fs.existsSync(fp)) {
+          const subtitleContent = await (async () => {
+            const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+            try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
+          })()
+          return { filePath: fp, subtitleContent }
+        }
+      }
+    }
     return null
   })
 

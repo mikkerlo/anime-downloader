@@ -97,7 +97,7 @@ const api = {
   playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) =>
     ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
   playerRemuxMkv: (mkvPath: string) =>
-    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string } | { error: string }>,
+    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
   playerCleanupRemux: () =>
     ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
 

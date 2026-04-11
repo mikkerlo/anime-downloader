@@ -1254,32 +1254,74 @@ function registerIpcHandlers(): void {
   // Remux MKV to MP4 (stream copy) for HTML5 playback
   const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
 
-  ipcMain.handle('player:remux-mkv', async (_event, mkvPath: string): Promise<{ mp4Path: string } | { error: string }> => {
+  ipcMain.handle('player:remux-mkv', async (_event, mkvPath: string): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
     if (!ffmpegPath) return { error: 'ffmpeg not available' }
     if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
     // Create temp dir
     fs.mkdirSync(remuxTmpDir, { recursive: true })
 
+    const stamp = Date.now()
     const baseName = path.basename(mkvPath, path.extname(mkvPath))
-    const mp4Path = path.join(remuxTmpDir, `${baseName}-${Date.now()}.mp4`)
+    const mp4Path = path.join(remuxTmpDir, `${baseName}-${stamp}.mp4`)
 
     Ffmpeg.setFfmpegPath(ffmpegPath)
 
-    return new Promise((resolve) => {
+    // Run remux and subtitle extraction in parallel
+    const remuxPromise = new Promise<void>((resolve, reject) => {
       Ffmpeg(mkvPath)
         .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
         .output(mp4Path)
         .on('error', (err) => {
           console.error('[remux] FFmpeg error:', err.message)
-          resolve({ error: err.message })
+          reject(err)
         })
         .on('end', () => {
           console.log('[remux] Completed:', mp4Path)
-          resolve({ mp4Path })
+          resolve()
         })
         .run()
     })
+
+    // Extract first subtitle stream (if any) to a temp .ass file
+    const subtitlePromise = (async (): Promise<string | undefined> => {
+      try {
+        if (!ffprobePath) return undefined
+        Ffmpeg.setFfprobePath(ffprobePath)
+        const hasSubStream = await new Promise<boolean>((res) => {
+          Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
+            res(err ? false : !!metadata.streams?.find(s => s.codec_type === 'subtitle'))
+          })
+        })
+        if (!hasSubStream) return undefined
+
+        const assPath = path.join(remuxTmpDir, `${baseName}-${stamp}.ass`)
+        await new Promise<void>((res, rej) => {
+          Ffmpeg(mkvPath)
+            .outputOptions(['-map', '0:s:0', '-c:s', 'ass'])
+            .output(assPath)
+            .on('error', (err) => {
+              console.error('[remux] Subtitle extraction error:', err.message)
+              rej(err)
+            })
+            .on('end', () => res())
+            .run()
+        })
+        const content = fs.readFileSync(assPath, 'utf-8')
+        console.log('[remux] Subtitle extracted:', assPath)
+        return content
+      } catch {
+        return undefined
+      }
+    })()
+
+    try {
+      const [, subtitleContent] = await Promise.all([remuxPromise, subtitlePromise])
+      return { mp4Path, ...(subtitleContent ? { subtitleContent } : {}) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { error: msg }
+    }
   })
 
   ipcMain.handle('player:cleanup-remux', async () => {

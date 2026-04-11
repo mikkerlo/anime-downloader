@@ -43,6 +43,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
+| `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
 | `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, JASSUB ASS subtitles, MKV remux, keyboard controls |
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
@@ -272,6 +273,7 @@ LibraryView shows both with indicators:
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score) |
 | `shikimori:get-anime-rates` | invoke | Fetch user's anime list from Shikimori, resolve MAL IDs to smotret-anime |
+| `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -449,6 +451,10 @@ Syncs anime watch status and episode progress with [Shikimori](https://shikimori
 ### Module: `src/main/shikimori.ts`
 
 Standalone API client with hardcoded client credentials. All methods throw `ShikiApiError` on failure. Rate limit handling: retries on 429 with `retry-after` header.
+
+### Friends Activity Feed
+
+`FriendsActivityView.vue` shows a chronological feed of recent anime activity from the user's Shikimori friends. The main process fetches `GET /api/users/:id/friends`, then for each friend calls `GET /api/users/:id/history?limit=100&target_type=Anime` (concurrency 2 to respect rate limits — same pattern as `getFriendsRatesForAnime`). Entries with a present `target` are mapped to `ShikiFriendActivity` records, merged into a single list, sorted globally by `created_at` desc, and trimmed to the top 50 most-recent events overall (not per-friend). The per-friend fetch uses Shikimori's max page size so a single very-active friend can fully populate the feed if their entries are all newer. MAL IDs are resolved via `lookupByMalIds` so feed rows can deep-link into `AnimeDetailView`. The renderer caches results in-memory for 5 minutes to avoid re-fetching on tab switches; the description HTML is stripped of tags before display. The sidebar entry only appears when logged in to Shikimori.
 
 ### AnimeDetailView Panel
 

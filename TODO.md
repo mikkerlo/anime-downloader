@@ -49,3 +49,22 @@ Additionally, `file:check-episodes` does a full `readdirSync` on every page load
 4. **Verify file on open:** In the `file:open` handler, check `fs.existsSync(filePath)` before calling `shell.openPath`. If the file is gone (e.g., user deleted externally), invalidate the cache for that anime and return an error so the renderer can refresh file status and show a message.
 5. **Background rescan:** After returning the cached result, optionally queue a background async rescan (using `fsPromises.readdir`) that updates the cache. If results differ from the cached version, send an IPC event to the renderer so it can refresh badges without a full page jump.
 6. **Files:** `src/main/index.ts` (file scan cache, IPC handlers), `src/renderer/src/components/AnimeDetailView.vue` (loading state, panel placeholders).
+
+---
+
+## 2. Stream MKV Playback Without Full Remux Wait
+
+**Priority:** Medium | **Effort:** Large
+
+Opening an MKV file in the built-in player currently remuxes the entire file to a temp MP4 via ffmpeg (`-c copy -movflags +faststart`) before playback can start. For a 1GB file this blocks for 10–20 seconds showing "Preparing MKV for playback...". Instead, pipe the ffmpeg remux output directly to the `anime-video://` protocol so playback starts within ~1 second while remux continues in the background.
+
+**Plan:**
+1. **Streaming remux process:** In `main/index.ts`, add a new IPC handler `player:remux-mkv-stream` that spawns ffmpeg with `-c copy -movflags +frag_keyframe+empty_moov -f mp4 pipe:1`, outputting a fragmented MP4 to stdout instead of a file. The `+frag_keyframe+empty_moov` movflags produce a streamable fragmented MP4 (moov atom at the start, no seek needed). Store the spawned child process and a reference to its stdout stream keyed by a session ID.
+2. **Subtitle extraction:** Extract subtitles from the MKV in parallel (same as current `player:remux-mkv` subtitle logic at line ~1305). Return the subtitle content along with the session ID in the IPC response so the renderer can set up JASSUB immediately.
+3. **Protocol handler update:** Modify the `anime-video://` protocol handler to detect a special URL scheme like `anime-video://stream/{sessionId}`. Instead of opening a file, pipe the buffered ffmpeg stdout data. Since fragmented MP4 doesn't require Range requests for initial playback, the handler can serve the stream as a 200 response with `Transfer-Encoding: chunked` or known content-length if available.
+4. **Buffering for seek:** Write the ffmpeg output to both the protocol response and a temp file simultaneously (tee). Once the remux completes, seeking works via the temp file through normal Range request handling. Track how many bytes have been written so far; if a Range request asks for data beyond what's been written, either wait or return a partial response.
+5. **PlayerView integration:** In `PlayerView.vue`, replace the `playerRemuxMkv` call in `onMounted` (line ~741) and translation switch (line ~630) with `playerRemuxMkvStream`. The video element gets the stream URL immediately, playback starts as data arrives. Show a subtle "Buffering..." indicator instead of the full remux overlay. Keep the existing `remuxing` overlay only as a fallback if the streaming approach fails.
+6. **Cleanup:** On player close or translation switch, kill the ffmpeg child process and delete the temp file. Update `player:cleanup-remux` to also terminate any active streaming remux sessions.
+7. **Seeking limitation:** While remux is in progress, seeking forward past the buffered position should either show a brief spinner or be disabled. Once remux finishes, full seeking works normally via the temp file.
+8. **IPC changes (4 files):** Add `player:remux-mkv-stream` handler in `src/main/index.ts`, bridge in `src/preload/index.ts`, type in `src/preload/index.d.ts`, consumer in `src/renderer/src/components/PlayerView.vue`.
+9. **Fallback:** If fragmented MP4 streaming fails (e.g., codec issues), fall back to the existing full-remux path so playback still works.

@@ -198,6 +198,16 @@ Actions per episode:
   Folder   --> shell.showItemInFolder(path)   cross-platform file explorer
   Delete   --> fs.unlink .mkv, .mp4, .ass     also cleans episode metadata
   Cancel   --> cancelByEpisode(animeName, episodeLabel)  cancel queued/active download
+
+File scan cache (session-level, in-memory):
+  fileCheckCache: Map<animeName, fullScanResult>
+  - First call per anime: full readdirSync, result cached
+  - Subsequent calls: return cached result, trigger async background rescan
+  - Background rescan uses fsPromises.readdir; if results differ, updates cache
+    and pushes file:episodes-changed IPC to renderer
+  - Cache invalidated on: file:delete-episode, onEpisodeComplete, onMergeComplete
+  - Cache cleared entirely on: storage:move-to-cold
+  - file:open verifies existence; if missing, invalidates cache + returns error
 ```
 
 ### Library
@@ -262,10 +272,11 @@ LibraryView shows both with indicators:
 | `update:install` | invoke | Quit and install downloaded update |
 | `update:status` | send | Update check/download progress and status |
 | `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
-| `file:check-episodes` | invoke | Check which episodes exist on disk (returns array of files per episode with author tags) |
-| `file:open` | invoke | Open file with default app |
+| `file:check-episodes` | invoke | Check which episodes exist on disk (session-cached, triggers background rescan on cache hit) |
+| `file:episodes-changed` | send | Background rescan detected file changes, pushes updated results to renderer |
+| `file:open` | invoke | Open file with default app (verifies existence, returns error + invalidates cache if missing) |
 | `file:show-in-folder` | invoke | Reveal file in explorer |
-| `file:delete-episode` | invoke | Delete episode files for specific translation or all versions |
+| `file:delete-episode` | invoke | Delete episode files for specific translation or all versions (invalidates file scan cache) |
 | `shikimori:get-auth-url` | invoke | Get Shikimori OAuth authorize URL |
 | `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user |
 | `shikimori:logout` | invoke | Clear Shikimori credentials and user |

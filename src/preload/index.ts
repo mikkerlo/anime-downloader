@@ -51,6 +51,12 @@ const api = {
   fileShowInFolder: (filePath: string) => ipcRenderer.invoke('file:show-in-folder', filePath),
   fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) =>
     ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId, translationId),
+  onFileEpisodesChanged: (callback: (animeName: string, data: Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>) => void) => {
+    ipcRenderer.on('file:episodes-changed', (_event, animeName, data) => callback(animeName, data))
+  },
+  offFileEpisodesChanged: () => {
+    ipcRenderer.removeAllListeners('file:episodes-changed')
+  },
 
   // Storage
   storagePickHotDir: () => ipcRenderer.invoke('storage:pick-hot-dir'),

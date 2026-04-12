@@ -68,3 +68,18 @@ Opening an MKV file in the built-in player currently remuxes the entire file to 
 7. **Seeking limitation:** While remux is in progress, seeking forward past the buffered position should either show a brief spinner or be disabled. Once remux finishes, full seeking works normally via the temp file.
 8. **IPC changes (4 files):** Add `player:remux-mkv-stream` handler in `src/main/index.ts`, bridge in `src/preload/index.ts`, type in `src/preload/index.d.ts`, consumer in `src/renderer/src/components/PlayerView.vue`.
 9. **Fallback:** If fragmented MP4 streaming fails (e.g., codec issues), fall back to the existing full-remux path so playback still works.
+
+---
+
+## 3. Configurable Anime4K Shader Shortcuts in Player
+
+**Priority:** Medium | **Effort:** Small
+
+Add keyboard shortcuts for switching Anime4K shader presets while watching: Ctrl+1 → Mode A, Ctrl+2 → Mode B, Ctrl+3 → Mode C, Ctrl+0 → Off. These should be configurable in Settings > Shortcuts alongside the existing global shortcuts.
+
+**Plan:**
+1. **Add default bindings:** In `SettingsView.vue`, extend `DEFAULT_SHORTCUTS` (line ~70) with four new entries: `shaderModeA: 'CmdOrCtrl+1'`, `shaderModeB: 'CmdOrCtrl+2'`, `shaderModeC: 'CmdOrCtrl+3'`, `shaderOff: 'CmdOrCtrl+0'`. Add matching entries in `SHORTCUT_LABELS` (line ~76) with descriptive labels like "Shader: Mode A" and hints like "Switch to Anime4K Mode A in player".
+2. **Update store defaults:** In `main/index.ts`, extend the `keyboardShortcuts` store default (line ~57) with the four new keys so they persist across updates.
+3. **Read shortcuts in PlayerView:** In `PlayerView.vue` `onMounted` (line ~736), load shortcuts from `window.api.getSetting('keyboardShortcuts')`. Store in a local ref.
+4. **Handle in `onKeyDown`:** In `PlayerView.vue` `onKeyDown` (line ~276), before the existing `switch`, build a key string from the event (matching the `CmdOrCtrl+Key` format from `captureKey` in SettingsView). Compare against the loaded shortcut bindings. If matched, call `selectPreset('mode-a')` / `selectPreset('mode-b')` / `selectPreset('mode-c')` / `selectPreset('off')` and `preventDefault()`. Only act if `webgpuAvailable` is true.
+5. **Files:** `src/renderer/src/components/SettingsView.vue` (defaults + labels), `src/renderer/src/components/PlayerView.vue` (shortcut handling), `src/main/index.ts` (store defaults).

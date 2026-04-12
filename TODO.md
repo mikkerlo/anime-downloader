@@ -116,3 +116,25 @@ Add prev/next episode navigation buttons to the built-in player controls for sea
 7. **Auto-advance on end (optional):** When the video fires the `ended` event and `canNext` is true, auto-navigate to the next episode after a brief delay (3s countdown with cancel).
 8. **IPC changes:** None — reuses existing `playerFindLocalFile`, `playerGetStreamUrl`, `playerRemuxMkv` handlers.
 9. **Files:** `src/renderer/src/components/AnimeDetailView.vue` (extend emit), `src/renderer/src/App.vue` (extend playerState + openPlayer + PlayerView props), `src/renderer/src/components/PlayerView.vue` (buttons, shortcuts, navigation logic), `src/renderer/src/components/SettingsView.vue` (shortcut defaults), `src/preload/index.d.ts` (update playFile emit type if needed).
+
+---
+
+## 6. Auto-Track Watch Progress and Resume Playback
+
+**Priority:** Medium | **Effort:** Medium
+
+Automatically track how many episodes the user has watched and where they stopped in each episode. Persist playback position locally for resume, and auto-update Shikimori episode count when an episode is considered "watched" (80%+ played AND at least 3 minutes of actual playback).
+
+**Plan:**
+1. **New store key `watchProgress`:** Add `watchProgress: {}` to electron-store defaults in `main/index.ts` (line ~42). Structure: `Record<string, { position: number; duration: number; updatedAt: number }>` keyed by `animeId:episodeInt`. Stores the last playback position in seconds, total duration, and timestamp.
+2. **IPC handlers for watch progress:** Add two handlers in `main/index.ts`:
+   - `watch-progress:save` — saves position/duration for a given animeId + episodeInt.
+   - `watch-progress:get` — returns saved position for a given animeId + episodeInt (or null).
+   Bridge in `preload/index.ts`, type in `preload/index.d.ts`.
+3. **Pass `animeId` and `malId` to player:** Extend the `playFile` emit in `AnimeDetailView.vue` to include `animeId` (from `props.animeId`) and `malId` (from `anime.value.myAnimeListId`). Update `playerState` in `App.vue` and `PlayerView` props accordingly.
+4. **Periodic position save in PlayerView:** In `PlayerView.vue`, add a `timeupdate` listener on the video element. Throttle to every 5 seconds. Call `window.api.watchProgressSave(animeId, episodeInt, currentTime, duration)`. Also save on `pause`, `beforeunmount`, and player close.
+5. **Resume on open:** In `PlayerView.vue` `onMounted`, after the video is ready (`loadedmetadata` event), call `window.api.watchProgressGet(animeId, episodeInt)`. If a saved position exists and is < 95% of duration, seek to it. Show a brief "Resuming from X:XX" toast.
+6. **Watched detection:** Track cumulative playback time in a local variable (increment on `timeupdate` only when video is playing, not paused/seeking). When `position / duration >= 0.8` AND `cumulativePlayTime >= 180` (3 minutes), mark the episode as "watched". Store a `watched: true` flag in `watchProgress` to avoid re-triggering.
+7. **Shikimori auto-update:** When an episode is marked watched and `malId` is available, call `window.api.shikimoriUpdateRate(malId, episodeNumber, 'watching', 0)` to increment the episode count. Only update if `episodeNumber > current shikiEpisodes`. Need a new IPC `shikimori:get-rate` call first to check current count, or pass the current Shikimori episode count from `AnimeDetailView` via props.
+8. **Visual indicator in AnimeDetailView:** Show a small progress bar or "watched" badge on episode rows using the stored `watchProgress` data. Load via `watch-progress:get-all` IPC (returns all entries for an animeId).
+9. **IPC changes (4 files):** Add `watch-progress:save`, `watch-progress:get`, `watch-progress:get-all` in `src/main/index.ts`, bridge in `src/preload/index.ts`, types in `src/preload/index.d.ts`, consumed in `src/renderer/src/components/PlayerView.vue` and `src/renderer/src/components/AnimeDetailView.vue`.

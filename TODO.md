@@ -95,3 +95,24 @@ When pressing Escape in the built-in player, the player closes (via `handleClose
 **Plan:**
 1. **Add `stopPropagation()`:** In `PlayerView.vue` `onKeyDown` (line ~276), call `event.stopPropagation()` at the top of the function (before the switch). This prevents the event from reaching `App.vue`'s `handleKeydown` listener entirely while the player is mounted. This is safe because the player already handles all relevant keys (Space, arrows, F, M, Escape) and should consume all keyboard input while active.
 2. **Files:** `src/renderer/src/components/PlayerView.vue`.
+
+---
+
+## 5. Previous / Next Episode Buttons in Player
+
+**Priority:** Medium | **Effort:** Medium
+
+Add prev/next episode navigation buttons to the built-in player controls for seamless binge-watching without returning to the anime detail view.
+
+**Translation resolution order for the target episode:** try downloaded file for same author → same translationId → best quality of current translation type → disable button if nothing available.
+
+**Plan:**
+1. **Pass episode list to player:** Extend the `playFile` emit in `AnimeDetailView.vue` (line ~673, ~684) to include the full `episodeRows` data: an ordered array of `{ episodeInt, episodeFull, translations, downloadedTrIds }` for all filtered episodes (not just the current page). Add a corresponding prop to `PlayerView.vue` and update `playerState` in `App.vue` `openPlayer` (line ~38).
+2. **Resolve target episode:** Add a helper function `resolveEpisodePlayback(targetEpisode, currentTranslationId, currentType)` in `PlayerView.vue` that implements the priority chain: (a) find a downloaded file matching the current author via `playerFindLocalFile`, (b) find the same `translationId`, (c) find the best quality translation of the current type, (d) return null (button disabled). This function returns `{ translationId, isLocal, filePath?, streamUrl?, subtitleContent? }` or null.
+3. **Computed prev/next availability:** Add computed properties `canPrev` / `canNext` that check whether the adjacent episode exists in the episode list and has a resolvable translation (call `resolveEpisodePlayback` reactively). Disable the buttons when null.
+4. **Navigation handler:** Add `goToEpisode(direction: 'prev' | 'next')` that calls `resolveEpisodePlayback`, then either loads the local file (via `playerFindLocalFile` + optional MKV remux) or fetches a stream URL (via `playerGetStreamUrl`). Update all reactive state: `activeFilePath`, `activeStreamUrl`, `activeSubtitleContent`, `activeTranslationId`, episode label in the title bar. Clean up previous remux if switching from MKV.
+5. **UI buttons:** Add prev/next buttons in the player controls bar (in the title bar area, next to the episode label). Use `‹` / `›` or skip-back/skip-forward SVG icons. Disable with reduced opacity when `!canPrev` / `!canNext`.
+6. **Keyboard shortcuts:** Add `Shift+ArrowLeft` for prev and `Shift+ArrowRight` for next in `onKeyDown` (line ~276). Make them configurable via `keyboardShortcuts` store (add `playerPrevEpisode: 'Shift+ArrowLeft'` and `playerNextEpisode: 'Shift+ArrowRight'` to `DEFAULT_SHORTCUTS` in `SettingsView.vue`).
+7. **Auto-advance on end (optional):** When the video fires the `ended` event and `canNext` is true, auto-navigate to the next episode after a brief delay (3s countdown with cancel).
+8. **IPC changes:** None — reuses existing `playerFindLocalFile`, `playerGetStreamUrl`, `playerRemuxMkv` handlers.
+9. **Files:** `src/renderer/src/components/AnimeDetailView.vue` (extend emit), `src/renderer/src/App.vue` (extend playerState + openPlayer + PlayerView props), `src/renderer/src/components/PlayerView.vue` (buttons, shortcuts, navigation logic), `src/renderer/src/components/SettingsView.vue` (shortcut defaults), `src/preload/index.d.ts` (update playFile emit type if needed).

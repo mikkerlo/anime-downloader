@@ -212,6 +212,34 @@ function onMouseBack(e: MouseEvent): void {
   }
 }
 
+async function loadShikimoriData(): Promise<void> {
+  shikiUser.value = await window.api.shikimoriGetUser()
+  if (!shikiUser.value || !anime.value?.myAnimeListId) return
+
+  shikiLoading.value = true
+  friendsLoading.value = true
+
+  // Load rate and friends in parallel, neither blocks the other
+  const ratePromise = window.api.shikimoriGetRate(anime.value.myAnimeListId)
+    .then(rate => {
+      shikiRate.value = rate
+      if (rate) {
+        shikiStatus.value = rate.status
+        shikiEpisodes.value = rate.episodes
+        shikiScore.value = rate.score
+      }
+    })
+    .catch(err => console.error('Failed to load Shikimori rate:', err))
+    .finally(() => { shikiLoading.value = false })
+
+  const friendsPromise = window.api.shikimoriGetFriendsRates(anime.value.myAnimeListId)
+    .then(rates => { friendsRates.value = rates })
+    .catch(err => console.error('Failed to load friends rates:', err))
+    .finally(() => { friendsLoading.value = false })
+
+  await Promise.all([ratePromise, friendsPromise])
+}
+
 onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack)
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
@@ -244,34 +272,8 @@ onMounted(async () => {
   updateDownloadGroups(queue)
   window.api.onDownloadProgress(updateDownloadGroups)
 
-  // Load Shikimori data
-  shikiUser.value = await window.api.shikimoriGetUser()
-  if (shikiUser.value && anime.value?.myAnimeListId) {
-    shikiLoading.value = true
-    try {
-      const rate = await window.api.shikimoriGetRate(anime.value.myAnimeListId)
-      shikiRate.value = rate
-      if (rate) {
-        shikiStatus.value = rate.status
-        shikiEpisodes.value = rate.episodes
-        shikiScore.value = rate.score
-      }
-    } catch (err) {
-      console.error('Failed to load Shikimori rate:', err)
-    } finally {
-      shikiLoading.value = false
-    }
-
-    // Load friends' rates
-    friendsLoading.value = true
-    try {
-      friendsRates.value = await window.api.shikimoriGetFriendsRates(anime.value.myAnimeListId)
-    } catch (err) {
-      console.error('Failed to load friends rates:', err)
-    } finally {
-      friendsLoading.value = false
-    }
-  }
+  // Load Shikimori data (non-blocking — don't hold up the episode list)
+  loadShikimoriData()
 })
 
 onUnmounted(() => {
@@ -356,8 +358,12 @@ async function goToPage(page: number): Promise<void> {
   await checkFileStatus()
 }
 
+let probeGeneration = 0
+
 async function probeSelectedQualities(): Promise<void> {
-  // Build a lookup of translation metadata for mismatch logging
+  const gen = ++probeGeneration
+
+  // Build translation metadata lookup
   const trMeta = new Map<number, Translation>()
   for (const row of episodeRows.value) {
     for (const tr of row.allTranslations) {
@@ -365,25 +371,64 @@ async function probeSelectedQualities(): Promise<void> {
     }
   }
 
-  // Collect unique translation IDs to probe
-  const toProbe = new Set<number>()
-  for (const id of trMeta.keys()) {
-    if (!realQuality.value.has(id)) {
-      toProbe.add(id)
+  // Phase 1: probe only currently selected translations
+  const selectedIds: number[] = []
+  for (const row of episodeRows.value) {
+    if (row.selectedTr && !realQuality.value.has(row.selectedTr.id)) {
+      selectedIds.push(row.selectedTr.id)
     }
   }
 
-  // Probe in batches of 5
-  const ids = [...toProbe]
-  for (let i = 0; i < ids.length; i += 5) {
-    const batch = ids.slice(i, i + 5)
+  if (selectedIds.length > 0) {
+    const updated = await probeIds(selectedIds, trMeta, gen)
+    if (updated) realQuality.value = updated
+  }
+
+  if (gen !== probeGeneration) return
+
+  // Phase 2: full scan only if enabled in settings and needed
+  const bgProbeEnabled = await window.api.getSetting('backgroundQualityProbe') as boolean
+  if (!bgProbeEnabled) return
+
+  const episodeCount = filteredEpisodes.value.length
+  const needsFullScan = await window.api.probeFullScanNeeded(props.animeId, episodeCount)
+  if (!needsFullScan || gen !== probeGeneration) return
+
+  const remainingIds: number[] = []
+  for (const id of trMeta.keys()) {
+    if (!realQuality.value.has(id)) {
+      remainingIds.push(id)
+    }
+  }
+
+  if (remainingIds.length > 0) {
+    const updated = await probeIds(remainingIds, trMeta, gen, true)
+    if (updated) realQuality.value = updated
+  }
+
+  if (gen === probeGeneration) {
+    window.api.probeFullScanDone(props.animeId, episodeCount)
+  }
+}
+
+async function probeIds(
+  ids: number[],
+  trMeta: Map<number, Translation>,
+  gen: number,
+  throttle = false
+): Promise<Map<number, number> | null> {
+  const batchSize = throttle ? 2 : 5
+  const collected = new Map<number, number>()
+  for (let i = 0; i < ids.length; i += batchSize) {
+    if (gen !== probeGeneration) return null
+    if (throttle) await new Promise(r => setTimeout(r, 100))
+    const batch = ids.slice(i, i + batchSize)
     const results = await Promise.all(
       batch.map(id => window.api.probeEmbedQuality(id, props.animeId).then(h => ({ id, height: h })))
     )
-    const updated = new Map(realQuality.value)
     for (const r of results) {
       if (r.height !== null) {
-        updated.set(r.id, r.height)
+        collected.set(r.id, r.height)
         const tr = trMeta.get(r.id)
         if (tr && tr.height !== r.height) {
           console.warn(`[quality-mismatch] Translation ${r.id} (${tr.authorsSummary}, ${tr.type}): reported=${tr.height}p, actual=${r.height}p`)
@@ -394,8 +439,13 @@ async function probeSelectedQualities(): Promise<void> {
         }
       }
     }
-    realQuality.value = updated
   }
+  if (gen !== probeGeneration) return null
+  const merged = new Map(realQuality.value)
+  for (const [id, h] of collected) {
+    merged.set(id, h)
+  }
+  return merged
 }
 
 function getRealHeight(tr: Translation): number {
@@ -479,14 +529,26 @@ async function downloadEpisode(row: EpisodeRow): Promise<void> {
   }])
 }
 
+function downloadGroupChanged(a: EpisodeGroup | undefined, b: EpisodeGroup | undefined): boolean {
+  if (!a && !b) return false
+  if (!a || !b) return true
+  if (a.mergeStatus !== b.mergeStatus || a.mergePercent !== b.mergePercent) return true
+  const av = a.video, bv = b.video
+  if (!av && !bv) return false
+  if (!av || !bv) return true
+  return av.status !== bv.status || av.bytesReceived !== bv.bytesReceived || av.totalBytes !== bv.totalBytes || av.speed !== bv.speed
+}
+
 function updateDownloadGroups(groups: EpisodeGroup[]): void {
   const prev = downloadGroups.value
   const map = new Map<string, EpisodeGroup>()
   let newlyCompleted = false
+  let changed = false
   for (const g of groups) {
     if (g.animeName === getAnimeName()) {
       map.set(g.episodeLabel, g)
       const old = prev.get(g.episodeLabel)
+      if (downloadGroupChanged(old, g)) changed = true
       if (g.mergeStatus === 'completed' && old?.mergeStatus !== 'completed') {
         newlyCompleted = true
       }
@@ -495,6 +557,9 @@ function updateDownloadGroups(groups: EpisodeGroup[]): void {
       }
     }
   }
+  // Also detect removals (prev had entries that new map doesn't)
+  if (prev.size !== map.size) changed = true
+  if (!changed) return
   downloadGroups.value = map
   if (newlyCompleted) {
     checkFileStatus()

@@ -10,6 +10,8 @@ interface Api {
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
   probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
   getCachedPoster: (animeId: number) => Promise<string | null>
+  probeFullScanNeeded: (animeId: number, episodeCount: number) => Promise<boolean>
+  probeFullScanDone: (animeId: number, episodeCount: number) => Promise<void>
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>

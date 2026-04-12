@@ -37,6 +37,8 @@ interface AnimeCacheEntry {
   qualityProbes: Record<number, number>
   cachedAt: number
   posterCached: boolean
+  fullProbeAt?: number
+  fullProbeEpisodeCount?: number
 }
 
 const store = new Store({
@@ -483,6 +485,22 @@ function registerIpcHandlers(): void {
       }
       return null
     }
+  })
+
+  ipcMain.handle('probe-full-scan-needed', (_event, animeId: number, episodeCount: number) => {
+    const entry = getCacheEntry(animeId)
+    if (!entry?.fullProbeAt) return true
+    if (entry.fullProbeEpisodeCount !== episodeCount) return true
+    const weekMs = 7 * 24 * 60 * 60 * 1000
+    return Date.now() - entry.fullProbeAt > weekMs
+  })
+
+  ipcMain.handle('probe-full-scan-done', (_event, animeId: number, episodeCount: number) => {
+    const entry = getCacheEntry(animeId)
+    if (!entry) return
+    entry.fullProbeAt = Date.now()
+    entry.fullProbeEpisodeCount = episodeCount
+    setCacheEntry(animeId, entry)
   })
 
   const qualityMismatches = new Map<number, { translationId: number; author: string; type: string; reported: number; actual: number }>()

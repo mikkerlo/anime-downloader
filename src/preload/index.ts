@@ -6,6 +6,10 @@ const api = {
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
   getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),
   probeEmbedQuality: (translationId: number, animeId?: number) => ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
+  probeFullScanNeeded: (animeId: number, episodeCount: number) =>
+    ipcRenderer.invoke('probe-full-scan-needed', animeId, episodeCount) as Promise<boolean>,
+  probeFullScanDone: (animeId: number, episodeCount: number) =>
+    ipcRenderer.invoke('probe-full-scan-done', animeId, episodeCount) as Promise<void>,
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) =>
     ipcRenderer.invoke('report-quality-mismatch', data),
   getQualityMismatchCount: () => ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,

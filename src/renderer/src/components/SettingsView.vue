@@ -32,6 +32,8 @@ const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
 
+const backgroundQualityProbe = ref(false)
+
 // Debug / scan-merge state
 const scanMerging = ref(false)
 const scanProgress = ref<{ current: number; total: number; file: string; percent: number } | null>(null)
@@ -382,6 +384,7 @@ onMounted(async () => {
     customSpeedLimit.value = Math.round(savedSpeedLimit / (1024 * 1024) * 10) / 10
   }
   autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
+  backgroundQualityProbe.value = (await window.api.getSetting('backgroundQualityProbe') as boolean) || false
   videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
   ffmpeg.value = await window.api.ffmpegCheck()
 
@@ -517,6 +520,7 @@ watch(customSpeedLimit, (val) => {
 watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
 watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
@@ -1001,6 +1005,15 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           <div v-else class="status-line warn" style="margin-top: 8px;">
             WebGPU not detected — benchmark will attempt to initialize it
           </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Background quality probe</label>
+          <p class="setting-hint">Probe actual stream quality for all translations when opening an anime page (not just the selected one). Detects quality mismatches but may cause lag on slower connections.</p>
+          <label class="toggle-row">
+            <input type="checkbox" v-model="backgroundQualityProbe" />
+            <span>Enable background quality probe</span>
+          </label>
         </div>
 
         <div class="setting-group">

@@ -86,15 +86,15 @@ Add keyboard shortcuts for switching Anime4K shader presets while watching: Ctrl
 
 ---
 
-## 4. Disable "Go Back" Global Shortcut While Player Is Open
+## ~~4. Disable "Go Back" Global Shortcut While Player Is Open~~
 
-**Priority:** Medium | **Effort:** Small
+~~**Priority:** Medium | **Effort:** Small~~
 
-When pressing Escape in the built-in player, the player closes (via `handleClose()` in `PlayerView.vue` line ~267 → `emit('close')` → `closePlayer()` in `App.vue` sets `playerState = null`). But in the same keydown event, `App.vue`'s `handleKeydown` (line ~108) fires next — and since `playerState` is now null (just cleared synchronously by `closePlayer`), the `if (playerState.value) return` guard on line ~110 no longer blocks, so the "back" action also executes, closing the anime detail view. The user ends up back at the search/library grid instead of the anime page.
+~~When pressing Escape in the built-in player, the player closes (via `handleClose()` in `PlayerView.vue` line ~267 → `emit('close')` → `closePlayer()` in `App.vue` sets `playerState = null`). But in the same keydown event, `App.vue`'s `handleKeydown` (line ~108) fires next — and since `playerState` is now null (just cleared synchronously by `closePlayer`), the `if (playerState.value) return` guard on line ~110 no longer blocks, so the "back" action also executes, closing the anime detail view. The user ends up back at the search/library grid instead of the anime page.~~
 
-**Plan:**
-1. **Add `stopPropagation()`:** In `PlayerView.vue` `onKeyDown` (line ~276), call `event.stopPropagation()` at the top of the function (before the switch). This prevents the event from reaching `App.vue`'s `handleKeydown` listener entirely while the player is mounted. This is safe because the player already handles all relevant keys (Space, arrows, F, M, Escape) and should consume all keyboard input while active.
-2. **Files:** `src/renderer/src/components/PlayerView.vue`.
+~~**Plan:**~~
+~~1. **Add `stopPropagation()`:** In `PlayerView.vue` `onKeyDown` (line ~276), call `event.stopPropagation()` at the top of the function (before the switch). This prevents the event from reaching `App.vue`'s `handleKeydown` listener entirely while the player is mounted. This is safe because the player already handles all relevant keys (Space, arrows, F, M, Escape) and should consume all keyboard input while active.~~
+~~2. **Files:** `src/renderer/src/components/PlayerView.vue`.~~
 
 ---
 

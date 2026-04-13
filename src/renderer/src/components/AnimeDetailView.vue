@@ -40,6 +40,7 @@ const shikiError = ref('')
 const friendsRates = ref<ShikiFriendRate[]>([])
 const friendsLoading = ref(false)
 const friendsCollapsed = ref(false)
+const shikiUserChecked = ref(false)
 
 const friendsSummary = computed(() => {
   const counts = new Map<string, number>()
@@ -213,7 +214,13 @@ function onMouseBack(e: MouseEvent): void {
 }
 
 async function loadShikimoriData(): Promise<void> {
-  shikiUser.value = await window.api.shikimoriGetUser()
+  try {
+    shikiUser.value = await window.api.shikimoriGetUser()
+  } catch (err) {
+    console.error('Failed to load Shikimori user:', err)
+  } finally {
+    shikiUserChecked.value = true
+  }
   if (!shikiUser.value || !anime.value?.myAnimeListId) return
 
   shikiLoading.value = true
@@ -253,14 +260,13 @@ onMounted(async () => {
     const res = await window.api.getAnime(props.animeId)
     anime.value = res.data
     dataSource.value = res.source
+    await loadPageEpisodes()
+    await checkFileStatus()
   } catch (err) {
-    console.error('Failed to load anime:', err)
+    console.error('Failed to load anime detail view:', err)
   } finally {
     loading.value = false
   }
-
-  await loadPageEpisodes()
-  await checkFileStatus()
 
   // If served from cache, try a background refresh
   if (dataSource.value === 'cache') {
@@ -272,6 +278,25 @@ onMounted(async () => {
   updateDownloadGroups(queue)
   window.api.onDownloadProgress(updateDownloadGroups)
 
+  // Subscribe to background file rescan updates
+  window.api.onFileEpisodesChanged((animeName, data) => {
+    if (anime.value && animeName === getAnimeName()) {
+      const episodeInts = filteredEpisodes.value.map(ep => ep.episodeInt)
+      const baseMap = new Map<string, string>()
+      for (const epInt of episodeInts) {
+        const padded = epInt.padStart(2, '0')
+        const base = sanitizeFilename(`${animeName} - ${padded}`)
+        baseMap.set(base, epInt)
+      }
+      const filtered: typeof fileStatus.value = {}
+      for (const [base, files] of Object.entries(data)) {
+        const epInt = baseMap.get(base)
+        if (epInt) filtered[epInt] = files
+      }
+      fileStatus.value = filtered
+    }
+  })
+
   // Load Shikimori data (non-blocking — don't hold up the episode list)
   loadShikimoriData()
 })
@@ -279,6 +304,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('mouseup', onMouseBack)
   window.api.offDownloadProgress()
+  window.api.offFileEpisodesChanged()
 })
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
@@ -672,7 +698,11 @@ async function openFile(row: EpisodeRow): Promise<void> {
     const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
     emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds])
   } else {
-    await window.api.fileOpen(info.filePath)
+    const result = await window.api.fileOpen(info.filePath)
+    if (result) {
+      errorMessage.value = result
+      await checkFileStatus()
+    }
   }
 }
 
@@ -754,44 +784,47 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
       </div>
 
-      <div v-if="shikiUser && anime.myAnimeListId" class="shiki-panel">
-        <div class="shiki-header">
-          <span class="shiki-label">Shikimori</span>
-          <a :href="`https://shikimori.one/animes/${anime.myAnimeListId}`" target="_blank" class="shiki-link">
-            Open on Shikimori
-          </a>
-        </div>
-        <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
-        <div v-else class="shiki-controls">
-          <select v-model="shikiStatus" class="select shiki-select">
-            <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">{{ s.label }}</option>
-          </select>
-          <div class="shiki-episodes">
-            <span>Episodes:</span>
-            <input
-              v-model.number="shikiEpisodes"
-              type="number"
-              min="0"
-              :max="anime.numberOfEpisodes || undefined"
-              class="shiki-ep-input"
-            />
-            <span v-if="anime.numberOfEpisodes" class="shiki-ep-total">/ {{ anime.numberOfEpisodes }}</span>
+      <div v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)" class="shiki-panel">
+        <template v-if="shikiUser">
+          <div class="shiki-header">
+            <span class="shiki-label">Shikimori</span>
+            <a :href="`https://shikimori.one/animes/${anime.myAnimeListId}`" target="_blank" class="shiki-link">
+              Open on Shikimori
+            </a>
           </div>
-          <div class="shiki-episodes">
-            <span>Score:</span>
-            <select v-model.number="shikiScore" class="select shiki-score-select">
-              <option :value="0">—</option>
-              <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
+          <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
+          <div v-else class="shiki-controls">
+            <select v-model="shikiStatus" class="select shiki-select">
+              <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">{{ s.label }}</option>
             </select>
+            <div class="shiki-episodes">
+              <span>Episodes:</span>
+              <input
+                v-model.number="shikiEpisodes"
+                type="number"
+                min="0"
+                :max="anime.numberOfEpisodes || undefined"
+                class="shiki-ep-input"
+              />
+              <span v-if="anime.numberOfEpisodes" class="shiki-ep-total">/ {{ anime.numberOfEpisodes }}</span>
+            </div>
+            <div class="shiki-episodes">
+              <span>Score:</span>
+              <select v-model.number="shikiScore" class="select shiki-score-select">
+                <option :value="0">—</option>
+                <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
+              {{ shikiSaving ? 'Saving...' : 'Save' }}
+            </button>
           </div>
-          <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
-            {{ shikiSaving ? 'Saving...' : 'Save' }}
-          </button>
-        </div>
-        <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
+          <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
+        </template>
+        <div v-else class="shiki-loading">Loading...</div>
       </div>
 
-      <div v-if="shikiUser && anime.myAnimeListId" class="friends-panel">
+      <div v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)" class="friends-panel">
         <div class="friends-header" @click="friendsCollapsed = !friendsCollapsed">
           <div class="friends-header-left">
             <svg

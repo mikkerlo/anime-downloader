@@ -59,6 +59,8 @@ interface Api {
   fileOpen: (filePath: string) => Promise<string>
   fileShowInFolder: (filePath: string) => Promise<void>
   fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) => Promise<void>
+  onFileEpisodesChanged: (callback: (animeName: string, data: Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>) => void) => void
+  offFileEpisodesChanged: () => void
 
   onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => void
   offDownloadProgress: () => void

@@ -31,28 +31,12 @@
 - [x] Friends Activity Feed — chronological feed of recent anime activity from Shikimori friends, globally sorted, top 50
 - [x] Support Multiple Downloaded Translations — multiple local versions per episode with author-tagged filenames, marked in menus
 - [x] Refactor Smotret-Anime API into a Dedicated Class — consolidated API logic into `SmotretApi` class in `smotret-api.ts`
+- [x] Stabilize Anime Detail View Layout During Loading — unified loading state and session-level file scan cache
+- [x] Disable "Go Back" Global Shortcut While Player Is Open — player key events no longer propagate to App.vue
 
 ---
 
-## ~~1. Stabilize Anime Detail View Layout During Loading~~
-
-~~**Priority:** Medium | **Effort:** Medium~~
-
-~~The anime detail page "jumps" as different sections load asynchronously — episodes appear, then file status shifts badges, then Shikimori/Friends panels pop in and push everything down. The page should show an overall spinner until the episode list + file status are ready, then show compact spinner rows for Shikimori/Friends that haven't resolved yet.~~
-
-~~Additionally, `file:check-episodes` does a full `readdirSync` on every page load even though we already know what files were downloaded. We should cache file scan results in the main process for the session and only do a background rescan, verifying files exist on open rather than on every mount.~~
-
-~~**Plan:**~~
-~~1. **Overall loading state:** In `AnimeDetailView.vue`, keep the existing `loading` spinner visible until both `loadPageEpisodes()` and `checkFileStatus()` complete. Currently `loading` is set to `false` after `getAnime()` returns (line ~259), before episodes or files are loaded — move it after `checkFileStatus()` so the episode list, controls, pagination, and file badges all appear together instead of popping in one by one.~~
-~~2. **Compact spinner rows for Shikimori/Friends:** The Shikimori panel (`shiki-panel`) and Friends panel (`friends-panel`) load async via `loadShikimoriData()`. They already show "Loading..." text, but the panels themselves (`v-if="shikiUser && anime.myAnimeListId"`) only appear after `shikiUser` resolves. Reserve the panels immediately (show them with a spinner row as soon as `anime.myAnimeListId` exists) rather than waiting for `shikiUser`. After `loadShikimoriData` resolves, replace spinner with controls or hide the panel if not logged in.~~
-~~3. **Session-level file scan cache in main process:** Add an in-memory `Map<string, ...>` in `main/index.ts` (keyed by `animeName`) that caches the result of `file:check-episodes`. On first call per anime per session, do the full directory scan and cache. On subsequent calls, return the cached result immediately. Invalidate the cache entry when files change: after `file:delete-episode`, after download completion (in `downloadedEpisodesSet`), and after `storage:move-to-cold`.~~
-~~4. **Verify file on open:** In the `file:open` handler, check `fs.existsSync(filePath)` before calling `shell.openPath`. If the file is gone (e.g., user deleted externally), invalidate the cache for that anime and return an error so the renderer can refresh file status and show a message.~~
-~~5. **Background rescan:** After returning the cached result, optionally queue a background async rescan (using `fsPromises.readdir`) that updates the cache. If results differ from the cached version, send an IPC event to the renderer so it can refresh badges without a full page jump.~~
-~~6. **Files:** `src/main/index.ts` (file scan cache, IPC handlers), `src/renderer/src/components/AnimeDetailView.vue` (loading state, panel placeholders).~~
-
----
-
-## 2. Stream MKV Playback Without Full Remux Wait
+## 1. Stream MKV Playback Without Full Remux Wait
 
 **Priority:** Medium | **Effort:** Large
 
@@ -71,7 +55,7 @@ Opening an MKV file in the built-in player currently remuxes the entire file to 
 
 ---
 
-## 3. Configurable Anime4K Shader Shortcuts in Player
+## 2. Configurable Anime4K Shader Shortcuts in Player
 
 **Priority:** Medium | **Effort:** Small
 
@@ -86,19 +70,7 @@ Add keyboard shortcuts for switching Anime4K shader presets while watching: Ctrl
 
 ---
 
-## ~~4. Disable "Go Back" Global Shortcut While Player Is Open~~
-
-~~**Priority:** Medium | **Effort:** Small~~
-
-~~When pressing Escape in the built-in player, the player closes (via `handleClose()` in `PlayerView.vue` line ~267 → `emit('close')` → `closePlayer()` in `App.vue` sets `playerState = null`). But in the same keydown event, `App.vue`'s `handleKeydown` (line ~108) fires next — and since `playerState` is now null (just cleared synchronously by `closePlayer`), the `if (playerState.value) return` guard on line ~110 no longer blocks, so the "back" action also executes, closing the anime detail view. The user ends up back at the search/library grid instead of the anime page.~~
-
-~~**Plan:**~~
-~~1. **Add `stopPropagation()`:** In `PlayerView.vue` `onKeyDown` (line ~276), call `event.stopPropagation()` at the top of the function (before the switch). This prevents the event from reaching `App.vue`'s `handleKeydown` listener entirely while the player is mounted. This is safe because the player already handles all relevant keys (Space, arrows, F, M, Escape) and should consume all keyboard input while active.~~
-~~2. **Files:** `src/renderer/src/components/PlayerView.vue`.~~
-
----
-
-## 5. Previous / Next Episode Buttons in Player
+## 3. Previous / Next Episode Buttons in Player
 
 **Priority:** Medium | **Effort:** Medium
 
@@ -119,7 +91,7 @@ Add prev/next episode navigation buttons to the built-in player controls for sea
 
 ---
 
-## 6. Auto-Track Watch Progress and Resume Playback
+## 4. Auto-Track Watch Progress and Resume Playback
 
 **Priority:** Medium | **Effort:** Medium
 

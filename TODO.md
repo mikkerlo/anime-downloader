@@ -71,7 +71,7 @@ Add keyboard shortcuts for switching Anime4K shader presets while watching: Ctrl
 
 ---
 
-## 3. Auto-Track Watch Progress and Resume Playback
+## ~~3. Auto-Track Watch Progress and Resume Playback~~
 
 **Priority:** Medium | **Effort:** Medium
 

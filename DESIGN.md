@@ -244,6 +244,9 @@ LibraryView shows both with indicators:
 | `downloaded-episodes-get` | invoke | Get translation metadata per episode (array of metas per episode, supports multiple translations) |
 | `get-setting` | invoke | Read setting value |
 | `set-setting` | invoke | Write setting value |
+| `watch-progress:save` | invoke | Save playback position + optional watched flag for an episode |
+| `watch-progress:get` | invoke | Fetch saved progress for a single episode |
+| `watch-progress:get-all` | invoke | Fetch all saved progress entries for an anime (keyed by episodeInt) |
 | `download:enqueue` | invoke | Queue download requests + save episode metadata |
 | `download:pause` | invoke | Pause a download |
 | `download:resume` | invoke | Resume paused/failed download |
@@ -364,6 +367,17 @@ interface EpisodeMeta {
 | `malIdMap` | object | `{}` | Persistent cache of MAL ID → smotret-anime entry for Shikimori list resolution |
 | `playerMode` | string | `'system'` | Default player: `system` (OS default) or `builtin` (in-app HTML5 player) |
 | `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |
+| `watchProgress` | object | `{}` | Per-episode playback position + watched flag (key: `animeId:episodeInt`) |
+
+## Watch Progress & Resume
+
+The built-in player auto-saves playback position to `watchProgress` (electron-store, keyed by `animeId:episodeInt`). The save hook runs on `timeupdate` throttled to 5s, and on `pause`/unmount (forced). On player open, after `loadedmetadata`, the saved position is restored if `position > 5s` and `position / duration < 0.95`, and a brief toast is shown.
+
+"Watched" detection counts real playback time via `timeupdate` deltas (clamped `< 2s` to ignore seek jumps). An episode is marked `watched: true` when `position / duration >= 0.8` AND cumulative playback `>= 180s`. The flag is set once per episode per session.
+
+When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and, if `epNum > rate.episodes`, calls `shikimoriUpdateRate` with `'watching'` (or `'rewatching'` if current status was `'completed'`).
+
+`AnimeDetailView` loads all watch-progress entries for the anime on mount via `watchProgressGetAll` and renders a small ✓ badge (watched) or mini progress bar (partial) on each episode row. The view listens on a `watch-progress-updated` window event — dispatched by `PlayerView` after each save — to refresh indicators live.
 
 ## Hot/Cold Storage
 

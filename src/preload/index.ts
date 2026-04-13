@@ -25,6 +25,14 @@ const api = {
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
 
+  // Watch progress
+  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) =>
+    ipcRenderer.invoke('watch-progress:save', animeId, episodeInt, position, duration, watched),
+  watchProgressGet: (animeId: number, episodeInt: string) =>
+    ipcRenderer.invoke('watch-progress:get', animeId, episodeInt) as Promise<{ position: number; duration: number; updatedAt: number; watched?: boolean } | null>,
+  watchProgressGetAll: (animeId: number) =>
+    ipcRenderer.invoke('watch-progress:get-all', animeId) as Promise<Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>>,
+
   // Downloads
   downloadEnqueue: (requests: unknown[]) => ipcRenderer.invoke('download:enqueue', requests),
   downloadPause: (id: string) => ipcRenderer.invoke('download:pause', id),

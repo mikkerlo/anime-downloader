@@ -34,6 +34,11 @@ interface Api {
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
 
+  // Watch progress
+  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => Promise<void>
+  watchProgressGet: (animeId: number, episodeInt: string) => Promise<WatchProgressEntry | null>
+  watchProgressGetAll: (animeId: number) => Promise<Record<string, WatchProgressEntry>>
+
   // Downloads
   downloadEnqueue: (requests: DownloadRequest[]) => Promise<void>
   downloadPause: (id: string) => Promise<void>
@@ -153,6 +158,13 @@ interface Translation {
   width: number
   height: number
   duration: string
+}
+
+interface WatchProgressEntry {
+  position: number
+  duration: number
+  updatedAt: number
+  watched?: boolean
 }
 
 interface EpisodeMeta {

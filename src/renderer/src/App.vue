@@ -35,10 +35,12 @@ const playerState = ref<{
   downloadedTrIds: number[]
   allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[]
   episodeIndex: number
+  animeId: number
+  malId: number
 } | null>(null)
 
-function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[] = [], downloadedTrIds: number[] = [], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[] = [], episodeIndex: number = 0): void {
-  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel, availableStreams, translationId, translations, downloadedTrIds, allEpisodes, episodeIndex }
+function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[] = [], downloadedTrIds: number[] = [], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[] = [], episodeIndex: number = 0, animeId = 0, malId = 0): void {
+  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel, availableStreams, translationId, translations, downloadedTrIds, allEpisodes, episodeIndex, animeId, malId }
 }
 
 function closePlayer(): void {
@@ -165,7 +167,7 @@ onBeforeUnmount(() => {
     <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
-    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" @close="closePlayer" />
+    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" :anime-id="playerState.animeId" :mal-id="playerState.malId" @close="closePlayer" />
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
       <div class="ffmpeg-modal">
         <div class="ffmpeg-spinner"></div>

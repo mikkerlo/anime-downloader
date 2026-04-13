@@ -71,7 +71,8 @@ const store = new Store({
     autoMoveToCold: false,
     malIdMap: {} as Record<string, AnimeSearchResult>,
     playerMode: 'system' as 'system' | 'builtin',
-    anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c'
+    anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
+    watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
   }
 })
 
@@ -764,6 +765,37 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('set-setting', (_event, key: string, value: unknown) => {
     store.set(key, value)
+  })
+
+  // Watch progress tracking
+  ipcMain.handle('watch-progress:save', (_event, animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => {
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    const key = `${animeId}:${episodeInt}`
+    const prev = all[key]
+    all[key] = {
+      position,
+      duration,
+      updatedAt: Date.now(),
+      watched: watched || prev?.watched || false
+    }
+    store.set('watchProgress', all)
+  })
+
+  ipcMain.handle('watch-progress:get', (_event, animeId: number, episodeInt: string) => {
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    return all[`${animeId}:${episodeInt}`] || null
+  })
+
+  ipcMain.handle('watch-progress:get-all', (_event, animeId: number) => {
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    const prefix = `${animeId}:`
+    const out: Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }> = {}
+    for (const [key, val] of Object.entries(all)) {
+      if (key.startsWith(prefix)) {
+        out[key.slice(prefix.length)] = val
+      }
+    }
+    return out
   })
 
   // Download handlers

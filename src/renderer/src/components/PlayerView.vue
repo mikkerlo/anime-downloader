@@ -14,6 +14,8 @@ const props = defineProps<{
   downloadedTrIds: number[]
   allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[]
   episodeIndex: number
+  animeId: number
+  malId: number
 }>()
 
 const emit = defineEmits<{
@@ -83,6 +85,140 @@ const canNext = computed(() => activeEpisodeIndex.value < props.allEpisodes.leng
 const autoAdvanceCountdown = ref(0)
 let autoAdvanceTimer: ReturnType<typeof setInterval> | null = null
 const playerShortcuts = ref<Record<string, string>>({})
+
+// Watch progress tracking
+const currentEpisodeInt = computed(() => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || '')
+let cumulativePlayTime = 0
+let lastTimeUpdateAt = 0
+let lastSaveAt = 0
+let watchedReported = false
+let episodeOpenedAt = Date.now()
+let pendingPrevEpisodeInt = ''
+const resumeToast = ref('')
+let resumeToastTimer: ReturnType<typeof setTimeout> | null = null
+
+const WATCH_THRESHOLD_RATIO = 0.8
+const WATCH_THRESHOLD_SECONDS = 180
+const SAVE_INTERVAL_MS = 5000
+const NEXT_MARK_PREV_WATCHED_MS = 60_000
+
+function trackProgressDelta(now: number): void {
+  if (lastTimeUpdateAt > 0 && playing.value && !seeking.value) {
+    const delta = (now - lastTimeUpdateAt) / 1000
+    if (delta > 0 && delta < 2) cumulativePlayTime += delta
+  }
+  lastTimeUpdateAt = now
+}
+
+async function saveProgress(force = false): Promise<void> {
+  const epInt = currentEpisodeInt.value
+  if (!props.animeId || !epInt) return
+  const video = videoRef.value
+  if (!video || !duration.value) return
+  // Don't persist trivial progress — avoids 0% ghost entries from brief opens
+  if (!watchedReported && video.currentTime < 15) return
+  const now = Date.now()
+  if (!force && now - lastSaveAt < SAVE_INTERVAL_MS) return
+  lastSaveAt = now
+  // When watched, clear the position so we don't try to resume near the end later
+  const positionToSave = watchedReported ? 0 : video.currentTime
+  try {
+    await window.api.watchProgressSave(props.animeId, epInt, positionToSave, duration.value, watchedReported)
+    window.dispatchEvent(new CustomEvent('watch-progress-updated'))
+  } catch (err) {
+    console.warn('[player] failed to save watch progress:', err)
+  }
+}
+
+async function markEpisodeWatched(episodeInt: string): Promise<void> {
+  if (!props.animeId || !episodeInt) return
+  try {
+    await window.api.watchProgressSave(props.animeId, episodeInt, 0, 0, true)
+    window.dispatchEvent(new CustomEvent('watch-progress-updated'))
+  } catch (err) {
+    console.warn('[player] failed to mark episode watched:', err)
+  }
+
+  if (!props.malId) return
+  const epNum = parseInt(episodeInt, 10)
+  if (!Number.isFinite(epNum) || epNum <= 0) return
+  try {
+    const rate = await window.api.shikimoriGetRate(props.malId)
+    const currentEps = rate?.episodes ?? 0
+    if (epNum > currentEps) {
+      const nextStatus = rate?.status === 'completed' ? 'rewatching' : 'watching'
+      await window.api.shikimoriUpdateRate(props.malId, epNum, nextStatus, rate?.score ?? 0)
+    }
+  } catch (err) {
+    console.warn('[player] failed to update Shikimori episode count:', err)
+  }
+}
+
+async function maybeMarkWatched(): Promise<void> {
+  if (watchedReported) return
+  const video = videoRef.value
+  if (!video || !duration.value) return
+  const ratio = video.currentTime / duration.value
+  if (ratio < WATCH_THRESHOLD_RATIO) return
+  if (cumulativePlayTime < WATCH_THRESHOLD_SECONDS) return
+
+  watchedReported = true
+  await saveProgress(true)
+
+  if (!props.malId) return
+  const epNum = parseInt(currentEpisodeInt.value, 10)
+  if (!Number.isFinite(epNum) || epNum <= 0) return
+  try {
+    const rate = await window.api.shikimoriGetRate(props.malId)
+    const currentEps = rate?.episodes ?? 0
+    if (epNum > currentEps) {
+      const nextStatus = rate?.status === 'completed' ? 'rewatching' : 'watching'
+      await window.api.shikimoriUpdateRate(props.malId, epNum, nextStatus, rate?.score ?? 0)
+    }
+  } catch (err) {
+    console.warn('[player] failed to update Shikimori episode count:', err)
+  }
+}
+
+function resetEpisodeTracking(): void {
+  cumulativePlayTime = 0
+  lastTimeUpdateAt = 0
+  lastSaveAt = 0
+  watchedReported = false
+  episodeOpenedAt = Date.now()
+}
+
+async function resumeFromSavedPosition(): Promise<void> {
+  const video = videoRef.value
+  if (!video) return
+  const epInt = currentEpisodeInt.value
+  if (!props.animeId || !epInt) return
+  try {
+    const saved = await window.api.watchProgressGet(props.animeId, epInt)
+    if (!saved) return
+    watchedReported = !!saved.watched
+    if (saved.watched) return
+    const d = video.duration || saved.duration
+    if (!d) return
+    if (saved.position > 5 && saved.position / d < 0.95) {
+      video.currentTime = saved.position
+      currentTime.value = saved.position
+      resumeToast.value = `Resumed at ${formatTime(saved.position)}`
+      if (resumeToastTimer) clearTimeout(resumeToastTimer)
+      resumeToastTimer = setTimeout(() => { resumeToast.value = '' }, 3000)
+    }
+  } catch (err) {
+    console.warn('[player] failed to load watch progress:', err)
+  }
+}
+
+function maybeMarkPendingPrevWatched(): void {
+  if (!pendingPrevEpisodeInt) return
+  if (Date.now() - episodeOpenedAt < NEXT_MARK_PREV_WATCHED_MS) return
+  const prev = pendingPrevEpisodeInt
+  pendingPrevEpisodeInt = ''
+  markEpisodeWatched(prev)
+}
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null
@@ -215,18 +351,25 @@ function onMouseMove(): void {
 function onPlay(): void {
   playing.value = true
   showControlsBriefly()
+  lastTimeUpdateAt = Date.now()
 }
 
 function onPause(): void {
   playing.value = false
   showControls.value = true
   if (controlsTimer) clearTimeout(controlsTimer)
+  lastTimeUpdateAt = 0
+  saveProgress(true)
 }
 
 function onTimeUpdate(): void {
   if (!seeking.value && videoRef.value) {
     currentTime.value = videoRef.value.currentTime
   }
+  trackProgressDelta(Date.now())
+  saveProgress()
+  maybeMarkWatched()
+  maybeMarkPendingPrevWatched()
 }
 
 function onDurationChange(): void {
@@ -764,6 +907,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
   if (targetIndex < 0 || targetIndex >= props.allEpisodes.length) return
   if (navigating.value) return
 
+  // Persist current episode progress before leaving
+  await saveProgress(true)
+  const prevEpisodeInt = currentEpisodeInt.value
+
   cancelAutoAdvance()
   navigating.value = true
   const video = videoRef.value
@@ -830,6 +977,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     activeTranslations.value = targetEp.translations
     activeDownloadedTrIds.value = targetEp.downloadedTrIds
     activeTranslationId.value = resolvedTr.id
+    resetEpisodeTracking()
+    pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : ''
 
     // Try local file first if downloaded (forceLocal means we specifically chose a downloaded translation)
     if (forceLocal || targetEp.downloadedTrIds.includes(resolvedTr.id)) {
@@ -859,7 +1008,11 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
         nextTick(() => {
           const v = videoRef.value
-          if (v) { v.currentTime = 0; v.play() }
+          if (v) {
+            v.currentTime = 0
+            v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true })
+            v.play()
+          }
           navigating.value = false
         })
         return
@@ -884,7 +1037,11 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
     nextTick(() => {
       const v = videoRef.value
-      if (v) { v.currentTime = 0; v.play() }
+      if (v) {
+        v.currentTime = 0
+        v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true })
+        v.play()
+      }
       navigating.value = false
     })
   } catch {
@@ -1006,10 +1163,18 @@ onMounted(async () => {
       video.addEventListener('loadedmetadata', onVideoReady, { once: true })
     }
 
+    // Resume from saved position
+    if (video.readyState >= 1) {
+      resumeFromSavedPosition()
+    } else {
+      video.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true })
+    }
   }
 })
 
 onBeforeUnmount(() => {
+  saveProgress(true)
+  if (resumeToastTimer) clearTimeout(resumeToastTimer)
   document.removeEventListener('keydown', onKeyDown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('mouseup', onMouseBack, true)
@@ -1083,6 +1248,11 @@ const bufferedProgress = computed(() => {
       <div v-if="isStreaming" class="streaming-banner">
         Streaming from server
       </div>
+    </transition>
+
+    <!-- Resume toast -->
+    <transition name="fade">
+      <div v-if="resumeToast" class="resume-toast">{{ resumeToast }}</div>
     </transition>
 
     <!-- Video wrapper: SubtitlesOctopus inserts its canvas after the <video>, so this
@@ -1385,6 +1555,20 @@ const bufferedProgress = computed(() => {
   transform: translateX(-50%);
   background: rgba(233, 69, 96, 0.85);
   color: #fff;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.resume-toast {
+  position: absolute;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 52, 96, 0.9);
+  color: #e0e0e0;
   padding: 6px 16px;
   border-radius: 6px;
   font-size: 0.8rem;

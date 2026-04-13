@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, sanitizeFilename } from '../utils'
 
 const props = defineProps<{
@@ -10,7 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
-  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[], episodeIndex: number]
+  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[], episodeIndex: number, animeId: number, malId: number]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -299,10 +299,15 @@ onMounted(async () => {
 
   // Load Shikimori data (non-blocking — don't hold up the episode list)
   loadShikimoriData()
+
+  // Load watch progress for episode indicators
+  loadWatchProgress()
+  window.addEventListener('watch-progress-updated', loadWatchProgress)
 })
 
 onUnmounted(() => {
   window.removeEventListener('mouseup', onMouseBack)
+  window.removeEventListener('watch-progress-updated', loadWatchProgress)
   window.api.offDownloadProgress()
   window.api.offFileEpisodesChanged()
 })
@@ -486,6 +491,103 @@ function qualityLabel(height: number): string {
 }
 
 const fileStatus = ref<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>({})
+const watchProgress = ref<Record<string, WatchProgressEntry>>({})
+
+async function loadWatchProgress(): Promise<void> {
+  try {
+    watchProgress.value = await window.api.watchProgressGetAll(props.animeId)
+  } catch (err) {
+    console.error('Failed to load watch progress:', err)
+  }
+}
+
+function episodeProgressPercent(episodeInt: string): number {
+  const entry = watchProgress.value[episodeInt]
+  if (!entry || !entry.duration) return 0
+  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100))
+  return pct < 2 ? 0 : pct
+}
+
+function isEpisodeWatched(episodeInt: string): boolean {
+  return !!watchProgress.value[episodeInt]?.watched
+}
+
+const continueTarget = computed((): EpisodeSummary | null => {
+  const eps = filteredEpisodes.value
+  if (eps.length === 0) return null
+
+  // 1) If Shikimori reports N completed episodes, jump to episode N+1.
+  // Shikimori is authoritative — ignore local saved positions for earlier episodes.
+  if (shikiUser.value && shikiEpisodes.value > 0 && shikiEpisodes.value < eps.length) {
+    return eps[shikiEpisodes.value]
+  }
+
+  // 2) Prefer an episode with an unfinished saved position (most recent).
+  let bestResume: EpisodeSummary | null = null
+  let bestUpdatedAt = 0
+  for (const ep of eps) {
+    const entry = watchProgress.value[ep.episodeInt]
+    if (!entry || entry.watched) continue
+    if (!entry.position || !entry.duration) continue
+    if (entry.updatedAt > bestUpdatedAt) {
+      bestUpdatedAt = entry.updatedAt
+      bestResume = ep
+    }
+  }
+  if (bestResume) return bestResume
+
+  // 3) First episode after the last locally-watched one.
+  let lastWatchedIdx = -1
+  for (let i = 0; i < eps.length; i++) {
+    if (isEpisodeWatched(eps[i].episodeInt)) lastWatchedIdx = i
+  }
+  const nextIdx = lastWatchedIdx + 1
+  if (nextIdx < eps.length) return eps[nextIdx]
+
+  // 4) Everything watched — fall back to the last episode.
+  return eps[eps.length - 1]
+})
+
+const continueReady = computed((): boolean => {
+  if (!anime.value || filteredEpisodes.value.length === 0) return false
+  if (loadingEpisodes.value) return false
+  if (anime.value.myAnimeListId && !shikiUserChecked.value) return false
+  if (shikiUser.value && shikiLoading.value) return false
+  return continueTarget.value !== null
+})
+
+const continueLabel = computed((): string => {
+  const target = continueTarget.value
+  if (!target) return 'Continue'
+  const entry = watchProgress.value[target.episodeInt]
+  const verb = entry && entry.position > 0 && !entry.watched ? 'Resume' : 'Continue'
+  return `${verb} · Ep ${target.episodeInt}`
+})
+
+async function continueWatching(): Promise<void> {
+  const target = continueTarget.value
+  if (!target) return
+
+  const eps = filteredEpisodes.value
+  const targetIdx = eps.findIndex(e => e.episodeInt === target.episodeInt)
+  if (targetIdx < 0) return
+
+  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0
+  if (targetPage !== currentPage.value) {
+    await goToPage(targetPage)
+  }
+  await nextTick()
+
+  const row = episodeRows.value.find(r => r.episode.episodeInt === target.episodeInt)
+  if (!row || !row.selectedTr) return
+
+  if (selectedTrHasFile(row)) {
+    await openFile(row)
+  } else {
+    await playStream(row)
+  }
+}
+
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
@@ -710,7 +812,7 @@ async function openFile(row: EpisodeRow): Promise<void> {
     const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
     const allEps = buildAllEpisodes()
     const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
-    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx)
+    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx, props.animeId, anime.value?.myAnimeListId ?? 0)
   } else {
     const result = await window.api.fileOpen(info.filePath)
     if (result) {
@@ -727,7 +829,7 @@ async function playStream(row: EpisodeRow): Promise<void> {
   if (result) {
     const allEps = buildAllEpisodes()
     const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
-    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx)
+    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx, props.animeId, anime.value?.myAnimeListId ?? 0)
   }
 }
 
@@ -782,7 +884,20 @@ function typeChip(type: string): { short: string; color: string } {
 
     <div v-else-if="anime" class="body">
       <div class="anime-header">
-        <img :src="posterSrc" :alt="anime.title" class="detail-poster" @error="onPosterError" />
+        <div class="poster-col">
+          <img :src="posterSrc" :alt="anime.title" class="detail-poster" @error="onPosterError" />
+          <button
+            class="continue-btn"
+            :disabled="!continueReady"
+            :title="continueReady ? 'Continue watching' : 'Loading...'"
+            @click="continueWatching"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {{ continueLabel }}
+          </button>
+        </div>
         <div class="anime-info">
           <h2 class="anime-title">
             {{ getAnimeName() }}
@@ -970,6 +1085,14 @@ function typeChip(type: string): { short: string; color: string } {
             Failed
           </div>
           <div class="ep-right">
+            <span v-if="isEpisodeWatched(row.episode.episodeInt)" class="watched-badge" title="Watched">✓</span>
+            <span
+              v-else-if="episodeProgressPercent(row.episode.episodeInt) > 0"
+              class="watch-progress-badge"
+              :title="`Watched ${episodeProgressPercent(row.episode.episodeInt)}%`"
+            >
+              {{ episodeProgressPercent(row.episode.episodeInt) }}%
+            </span>
             <span v-if="row.selectedTr" class="type-chip" :style="{ backgroundColor: typeChip(row.selectedTr.type).color + '22', color: typeChip(row.selectedTr.type).color }">{{ typeChip(row.selectedTr.type).short }}</span>
             <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }">{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span>
             <template v-if="selectedTrHasFile(row)">
@@ -1056,11 +1179,45 @@ function typeChip(type: string): { short: string; color: string } {
   margin-bottom: 24px;
 }
 
+.poster-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .detail-poster {
   width: 200px;
   border-radius: 10px;
   object-fit: cover;
   flex-shrink: 0;
+}
+
+.continue-btn {
+  width: 200px;
+  padding: 10px 14px;
+  background: #e94560;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.continue-btn:hover:not(:disabled) {
+  background: #d63651;
+}
+
+.continue-btn:disabled {
+  background: #2a2a4a;
+  color: #6a6a8a;
+  cursor: not-allowed;
 }
 
 .anime-info {
@@ -1335,6 +1492,34 @@ function typeChip(type: string): { short: string; color: string } {
 
 .type-chip {
   letter-spacing: 0.3px;
+}
+
+.watched-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background-color: rgba(106, 176, 76, 0.2);
+  color: #6ab04c;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.watch-progress-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background-color: rgba(233, 69, 96, 0.15);
+  color: #e94560;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 .quality-badge {

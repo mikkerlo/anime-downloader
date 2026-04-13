@@ -30,6 +30,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Workaround for anthropics/claude-code-action#<fork-pr-bug>:
+      # the action does `git fetch origin <headRefName>` which fails for fork
+      # PRs because the branch name only exists on the fork, not on origin.
+      # Point origin at the PR's head repo so the fetch resolves.
+      - name: Redirect origin to PR head repo for fork PRs
+        if: github.event.issue.pull_request != null || github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
+          HEAD_FULL=$(echo "$PR_JSON" | jq -r .head.repo.full_name)
+          BASE_FULL=$(echo "$PR_JSON" | jq -r .base.repo.full_name)
+          if [ "$HEAD_FULL" != "$BASE_FULL" ]; then
+            HEAD_URL=$(echo "$PR_JSON" | jq -r .head.repo.clone_url)
+            echo "Fork PR detected — setting origin to $HEAD_FULL"
+            git remote set-url origin "$HEAD_URL"
+          else
+            echo "Same-repo PR — leaving origin unchanged"
+          fi
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1

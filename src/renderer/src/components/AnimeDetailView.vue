@@ -10,7 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
-  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[]]
+  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[], episodeIndex: number]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -656,6 +656,18 @@ function buildTranslationList(row: EpisodeRow | undefined): { id: number; label:
   }))
 }
 
+function buildAllEpisodes(): { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[] {
+  return filteredEpisodes.value.map(ep => {
+    const detail = episodes.value.get(ep.id)
+    const translations = detail
+      ? detail.translations.filter(t => t.isActive === 1).map(t => ({ id: t.id, label: t.authorsSummary, type: t.type, height: getRealHeight(t) }))
+      : []
+    const metas = episodeMeta.value[ep.episodeInt] || []
+    const downloadedTrIds = metas.map(m => m.translationId)
+    return { episodeInt: ep.episodeInt, episodeFull: ep.episodeFull, translations, downloadedTrIds }
+  })
+}
+
 function getFileForTranslation(episodeInt: string, translationId: number | undefined): { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string } | null {
   const files = fileStatus.value[episodeInt]
   if (!files || files.length === 0) return null
@@ -696,7 +708,9 @@ async function openFile(row: EpisodeRow): Promise<void> {
   if (playerMode.value === 'builtin') {
     const name = anime.value ? getAnimeName() : ''
     const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds])
+    const allEps = buildAllEpisodes()
+    const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
+    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx)
   } else {
     const result = await window.api.fileOpen(info.filePath)
     if (result) {
@@ -711,7 +725,9 @@ async function playStream(row: EpisodeRow): Promise<void> {
   const name = anime.value ? getAnimeName() : ''
   const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
   if (result) {
-    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds])
+    const allEps = buildAllEpisodes()
+    const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
+    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx)
   }
 }
 

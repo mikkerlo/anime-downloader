@@ -354,7 +354,7 @@ interface EpisodeMeta {
 | `notificationMode` | string | `'off'` | Desktop notification mode: `off`, `each` (per episode), `queue` (when queue empties) |
 | `downloadSpeedLimit` | number | `0` | Download speed limit in bytes/sec (0 = unlimited), shared across active downloads |
 | `concurrentDownloads` | number | `2` | Max simultaneous downloads (1–3) |
-| `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D'}` | Configurable keyboard shortcut bindings |
+| `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D', playerPrevEpisode:'Shift+ArrowLeft', playerNextEpisode:'Shift+ArrowRight'}` | Configurable keyboard shortcut bindings |
 | `shikimoriCredentials` | object\|null | `null` | Shikimori OAuth tokens (access_token, refresh_token, created_at, expires_in) |
 | `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
 | `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |
@@ -428,6 +428,16 @@ Dropdown in player controls showing all available stream heights (e.g., 1080p, 7
 ### Translation Selector
 
 Dropdown in player controls showing all available translations for the current episode. Translations are passed from `AnimeDetailView.episodeRows` data through `App.vue` to `PlayerView` as `{ id, label, type, height }[]`. Each option shows the author name and a sub-label with type (RU SUB, EN DUB, etc.) and quality. On switch: calls `player:get-stream-url` with the new translation ID to get a fresh stream URL + subtitles, updates `<video>` src and subtitle track, preserves playback position. Only visible when streaming with more than one translation available.
+
+### Episode Navigation
+
+Prev/next episode buttons in the title bar for seamless binge-watching. `AnimeDetailView` passes the full `filteredEpisodes` list (all episodes, not just the current page) as `allEpisodes` prop through `App.vue` to `PlayerView`. Each entry contains `{ episodeInt, episodeFull, translations, downloadedTrIds }`.
+
+Translation resolution for the target episode: same translationId → best quality of same type → first available. Tries local file first (via `playerFindLocalFile`), falls back to streaming (via `playerGetStreamUrl`). Cleans up previous MKV remux when switching.
+
+Auto-advance: when video ends and next episode is available, shows a 5-second countdown overlay. User can cancel or let it auto-navigate to the next episode.
+
+Configurable keyboard shortcuts: `playerPrevEpisode` (default Shift+ArrowLeft) and `playerNextEpisode` (default Shift+ArrowRight) in Settings > Shortcuts.
 
 ### WebGPU Requirements
 

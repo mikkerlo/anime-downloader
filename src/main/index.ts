@@ -59,7 +59,9 @@ const store = new Store({
     keyboardShortcuts: {
       back: 'Escape',
       focusSearch: 'CmdOrCtrl+F',
-      goDownloads: 'CmdOrCtrl+D'
+      goDownloads: 'CmdOrCtrl+D',
+      playerPrevEpisode: 'Shift+ArrowLeft',
+      playerNextEpisode: 'Shift+ArrowRight'
     } as Record<string, string>,
     shikimoriCredentials: null as shikimori.ShikiCredentials | null,
     shikimoriUser: null as shikimori.ShikiUser | null,

@@ -70,13 +70,17 @@ const benchmarkError = ref('')
 const DEFAULT_SHORTCUTS: Record<string, string> = {
   back: 'Escape',
   focusSearch: 'CmdOrCtrl+F',
-  goDownloads: 'CmdOrCtrl+D'
+  goDownloads: 'CmdOrCtrl+D',
+  playerPrevEpisode: 'Shift+ArrowLeft',
+  playerNextEpisode: 'Shift+ArrowRight'
 }
 
 const SHORTCUT_LABELS: Record<string, { label: string; hint: string }> = {
   back: { label: 'Go back', hint: 'Navigate back from anime detail view' },
   focusSearch: { label: 'Focus search', hint: 'Switch to Search tab and focus the input' },
-  goDownloads: { label: 'Go to downloads', hint: 'Switch to Downloads tab' }
+  goDownloads: { label: 'Go to downloads', hint: 'Switch to Downloads tab' },
+  playerPrevEpisode: { label: 'Previous episode', hint: 'Go to previous episode in the built-in player' },
+  playerNextEpisode: { label: 'Next episode', hint: 'Go to next episode in the built-in player' }
 }
 
 const shortcutBindings = ref<Record<string, string>>({})

@@ -12,6 +12,8 @@ const props = defineProps<{
   translationId: number
   translations: { id: number; label: string; type: string; height: number }[]
   downloadedTrIds: number[]
+  allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[]
+  episodeIndex: number
 }>()
 
 const emit = defineEmits<{
@@ -66,9 +68,21 @@ const showTranslationMenu = ref(false)
 const activeTranslationId = ref(props.translationId)
 const activeSubtitleContent = ref(props.subtitleContent)
 const switchingTranslation = ref(false)
-const hasTranslations = computed(() => props.translations.length > 1)
+const hasTranslations = computed(() => activeTranslations.value.length > 1)
 const translationMenuLevel = ref<'types' | 'items'>('types')
 const selectedTypeGroup = ref('')
+
+// Episode navigation state
+const activeEpisodeIndex = ref(props.episodeIndex)
+const activeEpisodeLabel = ref(props.episodeLabel)
+const activeTranslations = ref(props.translations)
+const activeDownloadedTrIds = ref(props.downloadedTrIds)
+const navigating = ref(false)
+const canPrev = computed(() => activeEpisodeIndex.value > 0)
+const canNext = computed(() => activeEpisodeIndex.value < props.allEpisodes.length - 1)
+const autoAdvanceCountdown = ref(0)
+let autoAdvanceTimer: ReturnType<typeof setInterval> | null = null
+const playerShortcuts = ref<Record<string, string>>({})
 
 // WebGPU pipeline state
 let gpuDevice: GPUDevice | null = null
@@ -127,6 +141,7 @@ function formatTime(seconds: number): string {
 
 // Playback controls
 function togglePlay(): void {
+  cancelAutoAdvance()
   const video = videoRef.value
   if (!video) return
   if (video.paused) {
@@ -281,10 +296,43 @@ function onMouseBack(e: MouseEvent): void {
 }
 
 // Keyboard shortcuts
+const isMac = navigator.platform.toUpperCase().includes('MAC')
+
+function matchesBinding(e: KeyboardEvent, binding: string): boolean {
+  const parts = binding.split('+')
+  const key = parts[parts.length - 1]
+  const mods = parts.slice(0, -1).map((m) => m.toLowerCase())
+  const needCtrl = mods.includes('ctrl')
+  const needMeta = mods.includes('meta')
+  const needCmdOrCtrl = mods.includes('cmdorctrl')
+  const needShift = mods.includes('shift')
+  const needAlt = mods.includes('alt')
+  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac)
+  const wantMeta = needMeta || (needCmdOrCtrl && isMac)
+  if (e.ctrlKey !== wantCtrl) return false
+  if (e.metaKey !== wantMeta) return false
+  if (e.shiftKey !== needShift) return false
+  if (e.altKey !== needAlt) return false
+  return e.key.toLowerCase() === key.toLowerCase()
+}
+
 function onKeyDown(event: KeyboardEvent): void {
   event.stopPropagation()
   // Don't handle if a preset menu input is focused
   if ((event.target as HTMLElement)?.tagName === 'SELECT') return
+
+  const prevBinding = playerShortcuts.value.playerPrevEpisode || 'Shift+ArrowLeft'
+  const nextBinding = playerShortcuts.value.playerNextEpisode || 'Shift+ArrowRight'
+  if (matchesBinding(event, prevBinding)) {
+    event.preventDefault()
+    if (canPrev.value) goToEpisode('prev')
+    return
+  }
+  if (matchesBinding(event, nextBinding)) {
+    event.preventDefault()
+    if (canNext.value) goToEpisode('next')
+    return
+  }
 
   switch (event.key) {
     case ' ':
@@ -552,7 +600,7 @@ function translationTypeLabel(type: string): string {
 }
 
 const currentTranslation = computed(() =>
-  props.translations.find(t => t.id === activeTranslationId.value)
+  activeTranslations.value.find(t => t.id === activeTranslationId.value)
 )
 
 const currentTranslationLabel = computed(() => {
@@ -563,7 +611,7 @@ const currentTranslationLabel = computed(() => {
 
 const translationTypeGroups = computed(() => {
   const groups: Record<string, { id: number; label: string; type: string; height: number }[]> = {}
-  for (const tr of props.translations) {
+  for (const tr of activeTranslations.value) {
     const key = tr.type
     if (!groups[key]) groups[key] = []
     groups[key].push(tr)
@@ -619,8 +667,8 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
 
   try {
     // Check if this translation has a local file
-    if (props.downloadedTrIds.includes(tr.id)) {
-      const localResult = await window.api.playerFindLocalFile(props.animeName, props.episodeLabel, tr.id)
+    if (activeDownloadedTrIds.value.includes(tr.id)) {
+      const localResult = await window.api.playerFindLocalFile(props.animeName, activeEpisodeLabel.value, tr.id)
       if (localResult) {
         activeTranslationId.value = tr.id
 
@@ -711,6 +759,139 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
   }
 }
 
+async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
+  const targetIndex = direction === 'prev' ? activeEpisodeIndex.value - 1 : activeEpisodeIndex.value + 1
+  if (targetIndex < 0 || targetIndex >= props.allEpisodes.length) return
+  if (navigating.value) return
+
+  cancelAutoAdvance()
+  navigating.value = true
+  const video = videoRef.value
+  const targetEp = props.allEpisodes[targetIndex]
+
+  // Find the current translation type for resolution
+  const currentTr = activeTranslations.value.find(t => t.id === activeTranslationId.value)
+  const currentType = currentTr?.type || ''
+
+  // Resolution priority chain
+  let resolvedTr: { id: number; label: string; type: string; height: number } | null = null
+
+  // (a) Same translationId if available in target episode
+  resolvedTr = targetEp.translations.find(t => t.id === activeTranslationId.value) || null
+
+  // (b) Best quality of same type
+  if (!resolvedTr) {
+    const sameType = targetEp.translations
+      .filter(t => t.type === currentType)
+      .sort((a, b) => b.height - a.height)
+    resolvedTr = sameType[0] || null
+  }
+
+  // (c) First available translation
+  if (!resolvedTr) {
+    resolvedTr = targetEp.translations[0] || null
+  }
+
+  if (!resolvedTr) {
+    navigating.value = false
+    return
+  }
+
+  try {
+    // Clean up previous remux
+    if (remuxedPath.value) {
+      await window.api.playerCleanupRemux()
+      remuxedPath.value = ''
+    }
+
+    // Update episode state
+    activeEpisodeIndex.value = targetIndex
+    activeEpisodeLabel.value = targetEp.episodeInt
+    activeTranslations.value = targetEp.translations
+    activeDownloadedTrIds.value = targetEp.downloadedTrIds
+    activeTranslationId.value = resolvedTr.id
+
+    // Try local file first if downloaded
+    if (targetEp.downloadedTrIds.includes(resolvedTr.id)) {
+      const localResult = await window.api.playerFindLocalFile(props.animeName, targetEp.episodeInt, resolvedTr.id)
+      if (localResult) {
+        activeFilePath.value = localResult.filePath
+        activeStreamUrl.value = ''
+        activeSubtitleContent.value = localResult.subtitleContent || ''
+
+        if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
+          remuxing.value = true
+          const remuxResult = await window.api.playerRemuxMkv(localResult.filePath)
+          remuxing.value = false
+          if ('error' in remuxResult) {
+            remuxError.value = remuxResult.error
+            navigating.value = false
+            return
+          }
+          remuxedPath.value = remuxResult.mp4Path
+          if (!activeSubtitleContent.value && remuxResult.subtitleContent) {
+            activeSubtitleContent.value = remuxResult.subtitleContent
+          }
+        }
+
+        destroySubtitles()
+        if (activeSubtitleContent.value && video) initSubtitles(video)
+
+        nextTick(() => {
+          const v = videoRef.value
+          if (v) { v.currentTime = 0; v.play() }
+          navigating.value = false
+        })
+        return
+      }
+    }
+
+    // Fall back to streaming
+    const result = await window.api.playerGetStreamUrl(resolvedTr.id, resolvedTr.height)
+    if (!result) { navigating.value = false; return }
+
+    activeFilePath.value = ''
+    activeStreamUrl.value = result.streamUrl
+    activeSubtitleContent.value = result.subtitleContent || ''
+
+    if (result.availableStreams.length > 0) {
+      const current = result.availableStreams.find(s => s.url === result.streamUrl)
+      selectedHeight.value = current ? current.height : result.availableStreams[0].height
+    }
+
+    destroySubtitles()
+    if (result.subtitleContent && video) initSubtitles(video)
+
+    nextTick(() => {
+      const v = videoRef.value
+      if (v) { v.currentTime = 0; v.play() }
+      navigating.value = false
+    })
+  } catch {
+    navigating.value = false
+  }
+}
+
+function cancelAutoAdvance(): void {
+  if (autoAdvanceTimer) {
+    clearInterval(autoAdvanceTimer)
+    autoAdvanceTimer = null
+  }
+  autoAdvanceCountdown.value = 0
+}
+
+function onVideoEnded(): void {
+  if (!canNext.value) return
+  autoAdvanceCountdown.value = 5
+  autoAdvanceTimer = setInterval(() => {
+    autoAdvanceCountdown.value--
+    if (autoAdvanceCountdown.value <= 0) {
+      cancelAutoAdvance()
+      goToEpisode('next')
+    }
+  }, 1000)
+}
+
 function initSubtitles(video: HTMLVideoElement): void {
   const content = activeSubtitleContent.value
   if (!content) return
@@ -746,6 +927,8 @@ onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('mouseup', onMouseBack, true)
+  const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
+  if (savedShortcuts) playerShortcuts.value = savedShortcuts
 
   // Remux MKV to MP4 if needed
   if (isMkv.value && props.filePath) {
@@ -811,6 +994,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('mouseup', onMouseBack, true)
   if (controlsTimer) clearTimeout(controlsTimer)
+  cancelAutoAdvance()
   stopAnime4KPipeline()
   destroySubtitles()
   // Pause and release video
@@ -866,6 +1050,14 @@ const bufferedProgress = computed(() => {
       </div>
     </div>
 
+    <!-- Auto-advance countdown -->
+    <div v-if="autoAdvanceCountdown > 0" class="auto-advance-overlay">
+      <div class="auto-advance-modal">
+        <p class="auto-advance-text">Next episode in {{ autoAdvanceCountdown }}...</p>
+        <button class="auto-advance-cancel" @click="cancelAutoAdvance">Cancel</button>
+      </div>
+    </div>
+
     <!-- Streaming warning banner -->
     <transition name="fade">
       <div v-if="isStreaming" class="streaming-banner">
@@ -887,6 +1079,7 @@ const bufferedProgress = computed(() => {
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"
+        @ended="onVideoEnded"
         @click="togglePlay"
         @dblclick="toggleFullscreen"
         autoplay
@@ -911,7 +1104,17 @@ const bufferedProgress = computed(() => {
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
         </button>
-        <span class="title-text">{{ animeName }} — {{ episodeLabel }}</span>
+        <button v-if="props.allEpisodes.length > 1" class="ep-nav-btn" :disabled="!canPrev || navigating" @click="goToEpisode('prev')" title="Previous episode (Shift+←)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <span class="title-text">{{ animeName }} — {{ activeEpisodeLabel }}</span>
+        <button v-if="props.allEpisodes.length > 1" class="ep-nav-btn" :disabled="!canNext || navigating" @click="goToEpisode('next')" title="Next episode (Shift+→)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
       </div>
     </transition>
 
@@ -1019,10 +1222,10 @@ const bufferedProgress = computed(() => {
                   v-for="tr in selectedGroupItems"
                   :key="tr.id"
                   class="preset-option"
-                  :class="{ selected: activeTranslationId === tr.id, downloaded: downloadedTrIds.includes(tr.id) }"
+                  :class="{ selected: activeTranslationId === tr.id, downloaded: activeDownloadedTrIds.includes(tr.id) }"
                   @click="selectTranslation(tr)"
                 >
-                  <span v-if="downloadedTrIds.includes(tr.id)" class="tr-dl-icon">⬇</span>
+                  <span v-if="activeDownloadedTrIds.includes(tr.id)" class="tr-dl-icon">⬇</span>
                   <span class="tr-label">{{ tr.label }}</span>
                   <span class="tr-meta">{{ qualityLabel(tr.height) }}</span>
                 </button>
@@ -1268,6 +1471,66 @@ const bufferedProgress = computed(() => {
   font-size: 0.9rem;
   font-weight: 500;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.ep-nav-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  opacity: 0.8;
+}
+
+.ep-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  opacity: 1;
+}
+
+.ep-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.auto-advance-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.auto-advance-modal {
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.auto-advance-text {
+  color: #fff;
+  font-size: 1.1rem;
+  margin: 0 0 0.8rem 0;
+}
+
+.auto-advance-cancel {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  padding: 6px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.auto-advance-cancel:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* Controls bar */

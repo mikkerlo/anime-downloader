@@ -1,3 +1,12 @@
+declare module 'libass-wasm/dist/js/subtitles-octopus.js' {
+  export default class SubtitlesOctopus {
+    constructor(options: Record<string, unknown>)
+    dispose(): void
+    setTrack(content: string): void
+    freeTrack(): void
+  }
+}
+
 interface ApiResponse<T> {
   data: T
   source: 'api' | 'cache'
@@ -268,8 +277,6 @@ interface ShikiFriendActivityEntry {
   smotretAnime: AnimeSearchResult | null
 }
 
-declare global {
-  interface Window {
-    api: Api
-  }
+interface Window {
+  api: Api
 }

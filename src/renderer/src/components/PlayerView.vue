@@ -439,7 +439,7 @@ async function startAnime4KPipeline(): Promise<void> {
       try {
         // Copy current video frame to input texture
         device.queue.copyExternalImageToTexture(
-          { source: video },
+          { source: video! },
           { texture: videoFrameTexture },
           [WIDTH, HEIGHT]
         )
@@ -470,7 +470,7 @@ async function startAnime4KPipeline(): Promise<void> {
         return
       }
 
-      video.requestVideoFrameCallback(frame)
+      video!.requestVideoFrameCallback(frame)
     }
 
     video.requestVideoFrameCallback(frame)

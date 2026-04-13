@@ -22,7 +22,7 @@ const tokenError = ref('')
 
 // Update state
 const appVersion = ref('')
-const updateStatus = ref<{ status: string; version?: string; percent?: number; error?: string }>({ status: 'idle' })
+const updateStatus = ref<{ status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'; version?: string; percent?: number; error?: string }>({ status: 'idle' })
 
 const notificationMode = ref('off')
 const speedLimitPreset = ref('0')
@@ -433,7 +433,7 @@ function showSaved(): void {
   savedTimeout = setTimeout(() => { savedVisible.value = false }, 1500)
 }
 
-function autoSave(key: string, value: string | boolean): void {
+function autoSave(key: string, value: string | boolean | number): void {
   window.api.setSetting(key, value)
   showSaved()
 }
@@ -600,7 +600,6 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           <button
             v-if="updateStatus.status === 'idle' || updateStatus.status === 'up-to-date' || updateStatus.status === 'error'"
             class="test-token-btn"
-            :disabled="updateStatus.status === 'checking'"
             @click="checkForUpdates"
           >
             Check for updates

@@ -84,7 +84,15 @@ const canPrev = computed(() => activeEpisodeIndex.value > 0)
 const canNext = computed(() => activeEpisodeIndex.value < props.allEpisodes.length - 1)
 const autoAdvanceCountdown = ref(0)
 let autoAdvanceTimer: ReturnType<typeof setInterval> | null = null
-const playerShortcuts = ref<Record<string, string>>({})
+const DEFAULT_PLAYER_SHORTCUTS: Record<string, string> = {
+  playerPrevEpisode: 'Shift+ArrowLeft',
+  playerNextEpisode: 'Shift+ArrowRight',
+  shaderModeA: 'CmdOrCtrl+1',
+  shaderModeB: 'CmdOrCtrl+2',
+  shaderModeC: 'CmdOrCtrl+3',
+  shaderOff: 'CmdOrCtrl+Backquote'
+}
+const playerShortcuts = ref<Record<string, string>>({ ...DEFAULT_PLAYER_SHORTCUTS })
 
 // Watch progress tracking
 const currentEpisodeInt = computed(() => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || '')
@@ -475,6 +483,23 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault()
     if (canNext.value) goToEpisode('next')
     return
+  }
+
+  if (webgpuAvailable.value) {
+    const shaderBindings: [string, 'mode-a' | 'mode-b' | 'mode-c' | 'off'][] = [
+      [playerShortcuts.value.shaderModeA || 'CmdOrCtrl+1', 'mode-a'],
+      [playerShortcuts.value.shaderModeB || 'CmdOrCtrl+2', 'mode-b'],
+      [playerShortcuts.value.shaderModeC || 'CmdOrCtrl+3', 'mode-c'],
+      [playerShortcuts.value.shaderOff || 'CmdOrCtrl+Backquote', 'off']
+    ]
+    for (const [binding, preset] of shaderBindings) {
+      if (matchesBinding(event, binding)) {
+        event.preventDefault()
+        selectPreset(preset)
+        showControlsBriefly()
+        return
+      }
+    }
   }
 
   switch (event.key) {
@@ -1105,7 +1130,7 @@ onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('mouseup', onMouseBack, true)
   const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
-  if (savedShortcuts) playerShortcuts.value = savedShortcuts
+  playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) }
 
   // Remux MKV to MP4 if needed
   if (isMkv.value && props.filePath) {

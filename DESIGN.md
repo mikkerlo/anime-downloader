@@ -357,7 +357,7 @@ interface EpisodeMeta {
 | `notificationMode` | string | `'off'` | Desktop notification mode: `off`, `each` (per episode), `queue` (when queue empties) |
 | `downloadSpeedLimit` | number | `0` | Download speed limit in bytes/sec (0 = unlimited), shared across active downloads |
 | `concurrentDownloads` | number | `2` | Max simultaneous downloads (1–3) |
-| `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D', playerPrevEpisode:'Shift+ArrowLeft', playerNextEpisode:'Shift+ArrowRight'}` | Configurable keyboard shortcut bindings |
+| `keyboardShortcuts` | object | `{back:'Escape', focusSearch:'CmdOrCtrl+F', goDownloads:'CmdOrCtrl+D', playerPrevEpisode:'Shift+ArrowLeft', playerNextEpisode:'Shift+ArrowRight', shaderModeA:'CmdOrCtrl+1', shaderModeB:'CmdOrCtrl+2', shaderModeC:'CmdOrCtrl+3', shaderOff:'CmdOrCtrl+0'}` | Configurable keyboard shortcut bindings |
 | `shikimoriCredentials` | object\|null | `null` | Shikimori OAuth tokens (access_token, refresh_token, created_at, expires_in) |
 | `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
 | `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |

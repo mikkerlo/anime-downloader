@@ -775,11 +775,31 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
   // Resolution priority chain
   let resolvedTr: { id: number; label: string; type: string; height: number } | null = null
+  let forceLocal = false
 
-  // (a) Same translationId if available in target episode
-  resolvedTr = targetEp.translations.find(t => t.id === activeTranslationId.value) || null
+  // (a) Prefer any downloaded translation on the target episode
+  if (targetEp.downloadedTrIds.length > 0) {
+    // Prefer same translationId if it's downloaded
+    const sameIdDownloaded = targetEp.translations.find(
+      t => t.id === activeTranslationId.value && targetEp.downloadedTrIds.includes(t.id)
+    )
+    if (sameIdDownloaded) {
+      resolvedTr = sameIdDownloaded
+    } else {
+      // Pick the best quality downloaded translation of the same type, or any downloaded
+      const downloadedTrs = targetEp.translations.filter(t => targetEp.downloadedTrIds.includes(t.id))
+      const sameTypeDownloaded = downloadedTrs.filter(t => t.type === currentType).sort((a, b) => b.height - a.height)
+      resolvedTr = sameTypeDownloaded[0] || downloadedTrs[0] || null
+    }
+    if (resolvedTr) forceLocal = true
+  }
 
-  // (b) Best quality of same type
+  // (b) Same translationId if available in target episode (stream)
+  if (!resolvedTr) {
+    resolvedTr = targetEp.translations.find(t => t.id === activeTranslationId.value) || null
+  }
+
+  // (c) Best quality of same type (stream)
   if (!resolvedTr) {
     const sameType = targetEp.translations
       .filter(t => t.type === currentType)
@@ -787,7 +807,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     resolvedTr = sameType[0] || null
   }
 
-  // (c) First available translation
+  // (d) First available translation (stream)
   if (!resolvedTr) {
     resolvedTr = targetEp.translations[0] || null
   }
@@ -811,8 +831,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     activeDownloadedTrIds.value = targetEp.downloadedTrIds
     activeTranslationId.value = resolvedTr.id
 
-    // Try local file first if downloaded
-    if (targetEp.downloadedTrIds.includes(resolvedTr.id)) {
+    // Try local file first if downloaded (forceLocal means we specifically chose a downloaded translation)
+    if (forceLocal || targetEp.downloadedTrIds.includes(resolvedTr.id)) {
       const localResult = await window.api.playerFindLocalFile(props.animeName, targetEp.episodeInt, resolvedTr.id)
       if (localResult) {
         activeFilePath.value = localResult.filePath

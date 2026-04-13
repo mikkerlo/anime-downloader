@@ -433,7 +433,7 @@ Dropdown in player controls showing all available translations for the current e
 
 Prev/next episode buttons in the title bar for seamless binge-watching. `AnimeDetailView` passes the full `filteredEpisodes` list (all episodes, not just the current page) as `allEpisodes` prop through `App.vue` to `PlayerView`. Each entry contains `{ episodeInt, episodeFull, translations, downloadedTrIds }`.
 
-Translation resolution for the target episode: same translationId → best quality of same type → first available. Tries local file first (via `playerFindLocalFile`), falls back to streaming (via `playerGetStreamUrl`). Cleans up previous MKV remux when switching.
+Translation resolution for the target episode: (1) prefer any downloaded translation (downloaded wins over streaming — same ID first, then same type, then any downloaded), (2) same translationId via streaming, (3) best quality of same type via streaming, (4) first available. Cleans up previous MKV remux when switching.
 
 Auto-advance: when video ends and next episode is available, shows a 5-second countdown overlay. User can cancel or let it auto-navigate to the next episode.
 

@@ -15,7 +15,7 @@ Electron + Vue 3 + TypeScript desktop app for downloading anime. See `DESIGN.md`
 ```bash
 npm run dev          # Run app with hot reload
 npm run build        # Compile to out/
-npm run typecheck    # Type check (tsconfig deprecation warnings are pre-existing, ignore them)
+npm run typecheck    # Type check
 ```
 
 ## Version control
@@ -45,6 +45,6 @@ CI auto-creates a GitHub release when `package.json` version changes on main.
 
 - All Vue components use `<script setup lang="ts">` with Composition API
 - IPC pattern: `ipcMain.handle` in main → `contextBridge` in preload → `window.api.*` in renderer
-- New IPC channels need updates in 4 files: `main/index.ts`, `preload/index.ts`, `preload/index.d.ts`, and the consuming component
+- New IPC channels need updates in 4 files: `main/index.ts`, `preload/index.ts`, `preload/types.d.ts`, and the consuming component
 - Keep `DESIGN.md` up to date when adding IPC handlers, settings, or changing architecture
 - Don't add unnecessary comments, docstrings, or type annotations to unchanged code

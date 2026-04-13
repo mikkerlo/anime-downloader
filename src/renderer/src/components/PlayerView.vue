@@ -265,15 +265,24 @@ function onVolumeInput(event: Event): void {
 }
 
 function handleClose(): void {
-  if (isFullscreen.value) {
+  if (document.fullscreenElement) {
     document.exitFullscreen()
   } else {
     emit('close')
   }
 }
 
+function onMouseBack(e: MouseEvent): void {
+  if (e.button === 3) {
+    e.stopImmediatePropagation()
+    e.preventDefault()
+    handleClose()
+  }
+}
+
 // Keyboard shortcuts
 function onKeyDown(event: KeyboardEvent): void {
+  event.stopPropagation()
   // Don't handle if a preset menu input is focused
   if ((event.target as HTMLElement)?.tagName === 'SELECT') return
 
@@ -736,6 +745,7 @@ function destroySubtitles(): void {
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  window.addEventListener('mouseup', onMouseBack, true)
 
   // Remux MKV to MP4 if needed
   if (isMkv.value && props.filePath) {
@@ -799,6 +809,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeyDown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  window.removeEventListener('mouseup', onMouseBack, true)
   if (controlsTimer) clearTimeout(controlsTimer)
   stopAnime4KPipeline()
   destroySubtitles()

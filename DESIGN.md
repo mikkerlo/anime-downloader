@@ -295,8 +295,14 @@ LibraryView shows both with indicators:
 | `player:get-stream-url` | invoke | Fetch CDN stream URL + raw ASS subtitle content + all available stream qualities for a translation |
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
 | `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId |
-| `player:remux-mkv` | invoke | Remux MKV→MP4 via ffmpeg stream copy to temp dir for HTML5 playback |
-| `player:cleanup-remux` | invoke | Delete temp remuxed files when player closes |
+| `player:remux-mkv` | invoke | Legacy: remux MKV→MP4 via ffmpeg stream copy, await completion before returning (used as fallback when codecs aren't MSE-compatible) |
+| `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending }` for MSE consumption |
+| `player:stream-chunk` | event (main→renderer) | Fragmented-MP4 bytes from an active session, appended into the renderer's `SourceBuffer` |
+| `player:stream-end` | event (main→renderer) | ffmpeg finished writing; renderer calls `mediaSource.endOfStream()` after draining its queue |
+| `player:stream-error` | event (main→renderer) | ffmpeg exited non-zero or spawn failed; renderer falls back to legacy remux |
+| `player:stream-ack` | invoke | Renderer reports bytes it has consumed from the session; main resumes ffmpeg stdout once pending bytes drop below the low watermark |
+| `player:stream-subtitles` | event (main→renderer) | Subtitle `.ass` content extracted from an MKV stream session, pushed when extraction finishes |
+| `player:cleanup-remux` | invoke | Kill any active stream sessions and delete all temp remuxed files |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 
 ## Key Types
@@ -407,12 +413,12 @@ In-app HTML5 video player with optional Anime4K WebGPU upscaling shaders. Uses `
 
 ### Custom Protocol
 
-`anime-video://` protocol registered via `protocol.handle` serves local video files to the `<video>` element. The `stream: true` privilege enables HTTP range requests for seeking. The handler manually parses `Range` headers and returns 206 Partial Content responses using `fs.createReadStream({ start, end })` for proper seeking support. Files are encoded as `anime-video://{encodeURIComponent(filePath)}`.
+`anime-video://` protocol registered via `protocol.handle` serves local video files to the `<video>` element. The `stream: true` privilege enables HTTP range requests for seeking. The handler manually parses `Range` headers and returns 206 Partial Content responses using `fs.createReadStream({ start, end })` for proper seeking support. URL shape: `anime-video://{encodeURIComponent(filePath)}`. (MKV streaming does not use this protocol — it flows through MSE over IPC; see below.)
 
 ### Video Playback
 
 - **Local .mp4**: Served via `anime-video://` protocol
-- **Local .mkv**: Remuxed to temp MP4 via ffmpeg stream copy (`-c copy -movflags +faststart`), then served via `anime-video://`. Shows "Preparing MKV for playback..." spinner during remux. Temp files cleaned up on player close via `player:cleanup-remux`. Temp dir: `os.tmpdir()/anime-dl-remux/`.
+- **Local .mkv**: Progressive playback via **MSE (MediaSource Extensions)**. The main process ffprobes the MKV for duration and H.264 / AAC codec parameters, then spawns ffmpeg with `-c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1` and streams its stdout to the renderer via `player:stream-chunk` events. `player:remux-mkv-stream` returns `{ sessionId, duration, mimeType, hasSubtitlesPending }` immediately. The renderer creates a `MediaSource`, sets `duration` upfront, calls `addSourceBuffer(mimeType)`, appends each incoming chunk, and binds `<video>` to the `URL.createObjectURL(mediaSource)`. Backpressure: main tracks pending-bytes per session and pauses `ffmpeg.stdout` above 32 MB; renderer acks via `player:stream-ack` each 1 MB appended. Subtitle extraction runs in parallel and is pushed via `player:stream-subtitles` when ready. Fallback: if ffprobe reports an unsupported codec combo (anything non-H.264/AAC, e.g. HEVC, Opus, FLAC) or ffmpeg errors, renderer falls back to legacy `player:remux-mkv` (full remux with `+faststart`, blocking "Preparing MKV…" overlay). SourceBuffer quota is managed by evicting buffered data >60 s behind the playhead on every `updateend`, with a `QuotaExceededError` retry path. `player:cleanup-remux` SIGKILLs active ffmpeg processes and sweeps the temp dir (`os.tmpdir()/anime-dl-remux/`, used only for extracted `.ass` files).
 - **Non-downloaded episodes**: Streams directly from smotret-anime CDN via `player:get-stream-url` IPC
 
 ### Anime4K WebGPU Pipeline

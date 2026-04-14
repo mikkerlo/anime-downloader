@@ -116,8 +116,43 @@ const api = {
     ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
+  playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>
+    ipcRenderer.invoke('player:remux-mkv-stream', mkvPath, initialSeek) as Promise<
+      | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+      | { error: string }
+    >,
+  playerStreamStart: (sessionId: string) =>
+    ipcRenderer.invoke('player:stream-start', sessionId) as Promise<void>,
+  playerStreamAck: (sessionId: string, bytes: number) =>
+    ipcRenderer.invoke('player:stream-ack', sessionId, bytes) as Promise<void>,
+  playerStreamSeek: (sessionId: string, seekSeconds: number) =>
+    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number } | { error: string }>,
   playerCleanupRemux: () =>
     ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
+  onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => {
+    ipcRenderer.on('player:stream-subtitles', (_event, data) => callback(data))
+  },
+  offPlayerStreamSubtitles: () => {
+    ipcRenderer.removeAllListeners('player:stream-subtitles')
+  },
+  onPlayerStreamChunk: (callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void) => {
+    ipcRenderer.on('player:stream-chunk', (_event, data) => callback(data))
+  },
+  offPlayerStreamChunk: () => {
+    ipcRenderer.removeAllListeners('player:stream-chunk')
+  },
+  onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => {
+    ipcRenderer.on('player:stream-end', (_event, data) => callback(data))
+  },
+  offPlayerStreamEnd: () => {
+    ipcRenderer.removeAllListeners('player:stream-end')
+  },
+  onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => {
+    ipcRenderer.on('player:stream-error', (_event, data) => callback(data))
+  },
+  offPlayerStreamError: () => {
+    ipcRenderer.removeAllListeners('player:stream-error')
+  },
 
   // Shikimori
   shikimoriGetAuthUrl: () => ipcRenderer.invoke('shikimori:get-auth-url') as Promise<string>,

@@ -34,6 +34,7 @@
 - [x] Stabilize Anime Detail View Layout During Loading — unified loading state and session-level file scan cache
 - [x] Disable "Go Back" Global Shortcut While Player Is Open — player key events no longer propagate to App.vue
 - [x] Previous / Next Episode Buttons in Player — prev/next navigation, auto-advance, configurable shortcuts
+- [x] Auto-Track Watch Progress and Resume Playback — track watched progress, persist position, and update Shikimori
 
 ---
 
@@ -68,25 +69,3 @@ Add keyboard shortcuts for switching Anime4K shader presets while watching: Ctrl
 3. **Read shortcuts in PlayerView:** In `PlayerView.vue` `onMounted` (line ~736), load shortcuts from `window.api.getSetting('keyboardShortcuts')`. Store in a local ref.
 4. **Handle in `onKeyDown`:** In `PlayerView.vue` `onKeyDown` (line ~276), before the existing `switch`, build a key string from the event (matching the `CmdOrCtrl+Key` format from `captureKey` in SettingsView). Compare against the loaded shortcut bindings. If matched, call `selectPreset('mode-a')` / `selectPreset('mode-b')` / `selectPreset('mode-c')` / `selectPreset('off')` and `preventDefault()`. Only act if `webgpuAvailable` is true.
 5. **Files:** `src/renderer/src/components/SettingsView.vue` (defaults + labels), `src/renderer/src/components/PlayerView.vue` (shortcut handling), `src/main/index.ts` (store defaults).
-
----
-
-## ~~3. Auto-Track Watch Progress and Resume Playback~~
-
-**Priority:** Medium | **Effort:** Medium
-
-Automatically track how many episodes the user has watched and where they stopped in each episode. Persist playback position locally for resume, and auto-update Shikimori episode count when an episode is considered "watched" (80%+ played AND at least 3 minutes of actual playback).
-
-**Plan:**
-1. **New store key `watchProgress`:** Add `watchProgress: {}` to electron-store defaults in `main/index.ts` (line ~42). Structure: `Record<string, { position: number; duration: number; updatedAt: number }>` keyed by `animeId:episodeInt`. Stores the last playback position in seconds, total duration, and timestamp.
-2. **IPC handlers for watch progress:** Add two handlers in `main/index.ts`:
-   - `watch-progress:save` — saves position/duration for a given animeId + episodeInt.
-   - `watch-progress:get` — returns saved position for a given animeId + episodeInt (or null).
-   Bridge in `preload/index.ts`, type in `preload/index.d.ts`.
-3. **Pass `animeId` and `malId` to player:** Extend the `playFile` emit in `AnimeDetailView.vue` to include `animeId` (from `props.animeId`) and `malId` (from `anime.value.myAnimeListId`). Update `playerState` in `App.vue` and `PlayerView` props accordingly.
-4. **Periodic position save in PlayerView:** In `PlayerView.vue`, add a `timeupdate` listener on the video element. Throttle to every 5 seconds. Call `window.api.watchProgressSave(animeId, episodeInt, currentTime, duration)`. Also save on `pause`, `beforeunmount`, and player close.
-5. **Resume on open:** In `PlayerView.vue` `onMounted`, after the video is ready (`loadedmetadata` event), call `window.api.watchProgressGet(animeId, episodeInt)`. If a saved position exists and is < 95% of duration, seek to it. Show a brief "Resuming from X:XX" toast.
-6. **Watched detection:** Track cumulative playback time in a local variable (increment on `timeupdate` only when video is playing, not paused/seeking). When `position / duration >= 0.8` AND `cumulativePlayTime >= 180` (3 minutes), mark the episode as "watched". Store a `watched: true` flag in `watchProgress` to avoid re-triggering.
-7. **Shikimori auto-update:** When an episode is marked watched and `malId` is available, call `window.api.shikimoriUpdateRate(malId, episodeNumber, 'watching', 0)` to increment the episode count. Only update if `episodeNumber > current shikiEpisodes`. Need a new IPC `shikimori:get-rate` call first to check current count, or pass the current Shikimori episode count from `AnimeDetailView` via props.
-8. **Visual indicator in AnimeDetailView:** Show a small progress bar or "watched" badge on episode rows using the stored `watchProgress` data. Load via `watch-progress:get-all` IPC (returns all entries for an animeId).
-9. **IPC changes (4 files):** Add `watch-progress:save`, `watch-progress:get`, `watch-progress:get-all` in `src/main/index.ts`, bridge in `src/preload/index.ts`, types in `src/preload/index.d.ts`, consumed in `src/renderer/src/components/PlayerView.vue` and `src/renderer/src/components/AnimeDetailView.vue`.

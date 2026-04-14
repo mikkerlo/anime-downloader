@@ -50,7 +50,10 @@ jobs:
 
       - run: npx electron-vite build
 
-      - run: npx electron-builder ${{ matrix.args }} -c.publish=null
+      # IMPORTANT: do NOT change to `-c.publish=null`. electron-builder parses
+      # that as the literal publisher name "null" and fails with
+      # "Cannot find module for publisher 'null'". Always use `--publish never`.
+      - run: npx electron-builder ${{ matrix.args }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

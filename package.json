@@ -23,14 +23,16 @@
     "win": {
       "target": [
         "portable",
-        "nsis"
+        "nsis",
+        "zip"
       ],
       "icon": "resources/icon.ico"
     },
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "deb",
+        "zip"
       ]
     },
     "mac": {

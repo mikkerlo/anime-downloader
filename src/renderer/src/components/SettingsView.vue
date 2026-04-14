@@ -602,12 +602,16 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           <p class="setting-hint">Version {{ appVersion }}</p>
 
           <button
-            v-if="updateStatus.status === 'idle' || updateStatus.status === 'up-to-date' || updateStatus.status === 'error'"
+            v-if="(updateStatus.status === 'idle' || updateStatus.status === 'up-to-date' || updateStatus.status === 'error') && !appVersion.includes('-nightly')"
             class="test-token-btn"
             @click="checkForUpdates"
           >
             Check for updates
           </button>
+
+          <span v-else-if="appVersion.includes('-nightly')" class="setting-hint" style="color: var(--color-text-dim)">
+            Update check disabled for nightly builds
+          </span>
 
           <span v-else-if="updateStatus.status === 'checking'" class="setting-hint" style="margin-bottom: 0">Checking...</span>
 

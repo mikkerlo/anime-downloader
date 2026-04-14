@@ -1,0 +1,57 @@
+name: Nightly Build
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            args: --linux zip
+          - os: windows-latest
+            platform: win
+            args: --win zip
+          - os: macos-latest
+            platform: mac
+            args: --mac zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Set nightly version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          NIGHTLY_VERSION="${VERSION}-nightly-$(date +%Y%m%d%H%M%S)"
+          npm version $NIGHTLY_VERSION --no-git-tag-version
+
+      - run: npx electron-vite build
+
+      - run: npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-build-${{ matrix.platform }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.zip
+            dist/*.dmg
+          if-no-files-found: ignore
+          retention-days: 7

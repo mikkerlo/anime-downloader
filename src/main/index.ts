@@ -573,6 +573,16 @@ function registerIpcHandlers(): void {
   ipcMain.handle('app:version', () => app.getVersion())
 
   ipcMain.handle('update:check', async () => {
+    if (app.getVersion().includes('-nightly')) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('update:status', {
+          status: 'error',
+          error: 'Update check disabled for nightly builds.'
+        })
+      }
+      return
+    }
+
     try {
       const result = await autoUpdater.checkForUpdates()
       if (!result) {
@@ -1784,6 +1794,7 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
 
   // Auto-updater setup
+  const isNightly = app.getVersion().includes('-nightly')
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 
@@ -1814,10 +1825,14 @@ app.whenReady().then(async () => {
     broadcastUpdateStatus({ status: 'error', error: err.message })
   })
 
-  // Auto-check on launch if last check was >24h ago
-  const lastCheck = store.get('lastUpdateCheck') as number
-  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
-    autoUpdater.checkForUpdates().catch(() => {})
+  if (!isNightly) {
+    // Auto-check on launch if last check was >24h ago
+    const lastCheck = store.get('lastUpdateCheck') as number
+    if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }
+  } else {
+    console.log('Nightly build detected, auto-updates disabled.')
   }
 
   app.on('activate', () => {

@@ -17,13 +17,13 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
-            args: --linux
+            args: --linux zip
           - os: windows-latest
             platform: win
-            args: --win
+            args: --win zip
           - os: macos-latest
             platform: mac
-            args: --mac
+            args: --mac zip
 
     runs-on: ${{ matrix.os }}
     permissions:
@@ -45,6 +45,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Set nightly version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          NIGHTLY_VERSION="${VERSION}-nightly-${{ github.event.pull_request.number || github.run_id }}.${{ github.run_attempt }}"
+          npm version $NIGHTLY_VERSION --no-git-tag-version
 
       - run: npm run typecheck
 

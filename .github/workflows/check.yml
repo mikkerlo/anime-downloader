@@ -4,9 +4,14 @@ on:
   pull_request:
     branches:
       - main
+  issue_comment:
+    types: [created]
 
 jobs:
   build:
+    if: >
+      github.event_name == 'pull_request' || 
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/build'))
     strategy:
       matrix:
         include:
@@ -25,7 +30,14 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Get PR branch
+        if: github.event_name == 'issue_comment'
+        id: get-pr
+        run: echo "ref=refs/pull/${{ github.event.issue.number }}/head" >> $GITHUB_OUTPUT
+
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.get-pr.outputs.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -57,13 +69,16 @@ jobs:
   comment-artifacts:
     needs: build
     runs-on: ubuntu-latest
-    # Only run for non-draft PRs originating from within the same repository (not forks)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    # Run for non-draft PRs or when triggered by a /build comment
+    if: >
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/build'))
     permissions:
       pull-requests: write
     steps:
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
+          number: ${{ github.event.issue.number || github.event.pull_request.number }}
           header: pr-artifacts
           recreate: true
           message: |

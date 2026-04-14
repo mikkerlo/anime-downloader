@@ -61,7 +61,11 @@ const store = new Store({
       focusSearch: 'CmdOrCtrl+F',
       goDownloads: 'CmdOrCtrl+D',
       playerPrevEpisode: 'Shift+ArrowLeft',
-      playerNextEpisode: 'Shift+ArrowRight'
+      playerNextEpisode: 'Shift+ArrowRight',
+      shaderModeA: 'CmdOrCtrl+1',
+      shaderModeB: 'CmdOrCtrl+2',
+      shaderModeC: 'CmdOrCtrl+3',
+      shaderOff: 'CmdOrCtrl+Backquote'
     } as Record<string, string>,
     shikimoriCredentials: null as shikimori.ShikiCredentials | null,
     shikimoriUser: null as shikimori.ShikiUser | null,

@@ -72,7 +72,11 @@ const DEFAULT_SHORTCUTS: Record<string, string> = {
   focusSearch: 'CmdOrCtrl+F',
   goDownloads: 'CmdOrCtrl+D',
   playerPrevEpisode: 'Shift+ArrowLeft',
-  playerNextEpisode: 'Shift+ArrowRight'
+  playerNextEpisode: 'Shift+ArrowRight',
+  shaderModeA: 'CmdOrCtrl+1',
+  shaderModeB: 'CmdOrCtrl+2',
+  shaderModeC: 'CmdOrCtrl+3',
+  shaderOff: 'CmdOrCtrl+Backquote'
 }
 
 const SHORTCUT_LABELS: Record<string, { label: string; hint: string }> = {
@@ -80,7 +84,11 @@ const SHORTCUT_LABELS: Record<string, { label: string; hint: string }> = {
   focusSearch: { label: 'Focus search', hint: 'Switch to Search tab and focus the input' },
   goDownloads: { label: 'Go to downloads', hint: 'Switch to Downloads tab' },
   playerPrevEpisode: { label: 'Previous episode', hint: 'Go to previous episode in the built-in player' },
-  playerNextEpisode: { label: 'Next episode', hint: 'Go to next episode in the built-in player' }
+  playerNextEpisode: { label: 'Next episode', hint: 'Go to next episode in the built-in player' },
+  shaderModeA: { label: 'Shader: Mode A', hint: 'Switch to Anime4K Mode A in player' },
+  shaderModeB: { label: 'Shader: Mode B', hint: 'Switch to Anime4K Mode B in player' },
+  shaderModeC: { label: 'Shader: Mode C', hint: 'Switch to Anime4K Mode C in player' },
+  shaderOff: { label: 'Shader: Off', hint: 'Disable Anime4K shaders in player' }
 }
 
 const shortcutBindings = ref<Record<string, string>>({})
@@ -888,7 +896,12 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           <p class="setting-hint">Click "Record" to set a new key, press Escape to cancel recording. Click "Clear" to disable a shortcut.</p>
         </div>
 
-        <div v-for="(meta, action) in SHORTCUT_LABELS" :key="action" class="shortcut-row">
+        <div
+          v-for="(meta, action) in SHORTCUT_LABELS"
+          :key="action"
+          v-show="!String(action).startsWith('shader') || webgpuStatus.available"
+          class="shortcut-row"
+        >
           <div class="shortcut-info">
             <span class="shortcut-action">{{ meta.label }}</span>
             <span class="shortcut-hint">{{ meta.hint }}</span>

@@ -7,7 +7,20 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            args: --linux
+          - os: windows-latest
+            platform: win
+            args: --win
+          - os: macos-latest
+            platform: mac
+            args: --mac
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
 
@@ -21,3 +34,37 @@ jobs:
       - run: npm run typecheck
 
       - run: npx electron-vite build
+
+      - run: npx electron-builder ${{ matrix.args }} -c.publish=null
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-build-${{ matrix.platform }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.zip
+            dist/*.dmg
+          if-no-files-found: ignore
+
+  comment-artifacts:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only run for PRs originating from within the same repository (not forks)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-artifacts
+          message: |
+            ### 📦 PR Build Artifacts are ready!
+            Test this pull request by downloading the artifacts below:
+
+            * 🍎 [macOS Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-mac.zip)
+            * 🪟 [Windows Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-win.zip)
+            * 🐧 [Linux Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-linux.zip)

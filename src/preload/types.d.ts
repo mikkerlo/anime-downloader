@@ -89,9 +89,23 @@ interface Api {
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
   playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) => Promise<{ filePath: string; subtitleContent: string | null } | null>
-  playerRemuxMkvStream: (mkvPath: string) => Promise<{ sessionId: string } | { error: string }>
-  playerGetRemuxSubtitles: (sessionId: string) => Promise<string | null>
+  playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
+  playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) => Promise<
+    | { sessionId: string; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+    | { error: string }
+  >
+  playerStreamStart: (sessionId: string) => Promise<void>
+  playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
+  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true } | { error: string }>
   playerCleanupRemux: () => Promise<void>
+  onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => void
+  offPlayerStreamSubtitles: () => void
+  onPlayerStreamChunk: (callback: (data: { sessionId: string; data: Uint8Array }) => void) => void
+  offPlayerStreamChunk: () => void
+  onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => void
+  offPlayerStreamEnd: () => void
+  onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => void
+  offPlayerStreamError: () => void
 
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>

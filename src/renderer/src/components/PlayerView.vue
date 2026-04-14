@@ -58,7 +58,19 @@ const activeFilePath = ref(props.filePath)
 const isMkv = computed(() => !!activeFilePath.value && activeFilePath.value.toLowerCase().endsWith('.mkv'))
 const remuxing = ref(false)
 const remuxError = ref('')
-const remuxStreamId = ref('')
+const remuxedPath = ref('')           // used by legacy full-remux fallback
+const streamSessionId = ref('')       // active MSE session id
+const mseSrcUrl = ref('')             // URL.createObjectURL(MediaSource)
+const mkvBuffering = ref(false)       // shows "Buffering…" toast while MSE waits for data
+
+// MSE internals (not reactive)
+let mediaSource: MediaSource | null = null
+let sourceBuffer: SourceBuffer | null = null
+let streamEnded = false
+const appendQueue: Uint8Array[] = []
+let pendingAckBytes = 0
+let mseInitialSeek = 0
+const STREAM_ACK_THRESHOLD = 1 * 1024 * 1024
 
 // Quality selector state
 const activeStreamUrl = ref(props.streamUrl)
@@ -200,6 +212,18 @@ async function resumeFromSavedPosition(): Promise<void> {
     if (saved.watched) return
     const d = video.duration || saved.duration
     if (!d) return
+    // For MSE MKV streams the ffmpeg run was already started at the saved
+    // position; skip the native seek to avoid a spurious unbuffered-seek flow.
+    if (streamSessionId.value && mseInitialSeek > 0) {
+      if (video.currentTime < mseInitialSeek) {
+        try { video.currentTime = mseInitialSeek } catch { /* ignore */ }
+      }
+      currentTime.value = mseInitialSeek
+      resumeToast.value = `Resumed at ${formatTime(saved.position)}`
+      if (resumeToastTimer) clearTimeout(resumeToastTimer)
+      resumeToastTimer = setTimeout(() => { resumeToast.value = '' }, 3000)
+      return
+    }
     if (saved.position > 5 && saved.position / d < 0.95) {
       video.currentTime = saved.position
       currentTime.value = saved.position
@@ -254,17 +278,297 @@ fn main(@builtin(position) coord: vec4f) -> @location(0) vec4f {
 
 const videoSrc = computed(() => {
   if (activeFilePath.value) {
-    // For MKV files, use the remuxed MP4 stream
+    // For MKV files, prefer the MSE stream URL; fall back to legacy full remux.
     if (isMkv.value) {
-      if (remuxStreamId.value) {
-        return 'anime-video://stream/?id=' + encodeURIComponent(remuxStreamId.value)
-      }
-      return '' // Not ready yet — remuxing in progress
+      if (mseSrcUrl.value) return mseSrcUrl.value
+      if (remuxedPath.value) return 'anime-video://' + encodeURIComponent(remuxedPath.value)
+      return ''
     }
     return 'anime-video://' + encodeURIComponent(activeFilePath.value)
   }
   return activeStreamUrl.value
 })
+
+async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  resetMseState()
+  streamSessionId.value = ''
+  remuxedPath.value = ''
+  remuxError.value = ''
+
+  // Resolve saved position up front so ffmpeg's first spawn already starts
+  // near the resume point. Avoids the "append-during-parse" race that fires
+  // if we set timestampOffset after the first chunks are already parsing.
+  let initialSeek = 0
+  try {
+    const epInt = currentEpisodeInt.value
+    if (props.animeId && epInt) {
+      const saved = await window.api.watchProgressGet(props.animeId, epInt)
+      if (saved && !saved.watched && saved.position > 5 && saved.duration > 0 && saved.position / saved.duration < 0.95) {
+        initialSeek = Math.max(0, saved.position - 1)
+      }
+    }
+  } catch { /* ignore */ }
+
+  const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek)
+  if (!('error' in streamResult)) {
+    if (typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType)) {
+      startMseSession(streamResult.sessionId, streamResult.duration, streamResult.mimeType, streamResult.initialSeek)
+      mkvBuffering.value = true
+      return { ok: true }
+    }
+    console.warn('[player] MSE does not support codecs:', streamResult.mimeType, '— falling back to legacy remux')
+    await window.api.playerCleanupRemux()
+  } else {
+    console.warn('[player] MSE stream open failed, falling back to legacy remux:', streamResult.error)
+  }
+
+  remuxing.value = true
+  try {
+    const legacy = await window.api.playerRemuxMkv(filePath)
+    if ('error' in legacy) return { ok: false, error: legacy.error }
+    remuxedPath.value = legacy.mp4Path
+    if (!activeSubtitleContent.value && legacy.subtitleContent) {
+      activeSubtitleContent.value = legacy.subtitleContent
+    }
+    return { ok: true }
+  } finally {
+    remuxing.value = false
+  }
+}
+
+function startMseSession(sessionId: string, duration: number, mimeType: string, initialSeek: number): void {
+  streamSessionId.value = sessionId
+  mseInitialSeek = initialSeek
+  const ms = new MediaSource()
+  mediaSource = ms
+  mseSrcUrl.value = URL.createObjectURL(ms)
+  ms.addEventListener('sourceopen', () => {
+    try {
+      console.log('[player] sourceopen, adding SourceBuffer:', mimeType, 'initialSeek=', initialSeek)
+      const sb = ms.addSourceBuffer(mimeType)
+      sourceBuffer = sb
+      try { ms.duration = duration } catch (e) { console.warn('[player] set duration failed:', e) }
+      if (initialSeek > 0) {
+        try { sb.timestampOffset = initialSeek } catch (e) { console.warn('[player] initial timestampOffset failed:', e) }
+      }
+      sb.addEventListener('updateend', onSourceBufferUpdateEnd)
+      sb.addEventListener('error', (e) => console.error('[player] SourceBuffer error event:', e))
+      sb.addEventListener('abort', () => console.warn('[player] SourceBuffer abort'))
+      window.api.playerStreamStart(sessionId)
+      pumpAppendQueue()
+    } catch (e) {
+      console.error('[player] addSourceBuffer failed:', e)
+    }
+  }, { once: true })
+}
+
+let appendCount = 0
+function onSourceBufferUpdateEnd(): void {
+  const sb = sourceBuffer
+  if (sb && sb.buffered.length > 0) {
+    appendCount++
+    if (appendCount <= 5 || appendCount % 50 === 0) {
+      const ranges: string[] = []
+      for (let i = 0; i < sb.buffered.length; i++) {
+        ranges.push(`[${sb.buffered.start(i).toFixed(2)}-${sb.buffered.end(i).toFixed(2)}]`)
+      }
+      console.log(`[player] append #${appendCount} buffered=${ranges.join(',')} t=${(videoRef.value?.currentTime ?? 0).toFixed(2)}`)
+    }
+    const bufStart = sb.buffered.start(0)
+    const t = videoRef.value?.currentTime ?? 0
+    if (bufStart < t - 60 && !sb.updating) {
+      try { sb.remove(bufStart, Math.max(bufStart + 1, t - 30)) } catch { /* ignore */ }
+    }
+  }
+  pumpAppendQueue()
+}
+
+const MAX_BUFFER_AHEAD = 30
+function pumpAppendQueue(): void {
+  const sb = sourceBuffer
+  const ms = mediaSource
+  if (!sb || sb.updating || !ms) return
+  if (unbufferedSeekInFlight) return
+
+  if (appendQueue.length === 0) {
+    if (streamEnded && ms.readyState === 'open') {
+      try { ms.endOfStream() } catch { /* ignore */ }
+    }
+    return
+  }
+
+  // Throttle: stop pumping once we have enough lead ahead of the playhead.
+  // Without this, SourceBuffer fills to the Chromium quota and eviction would
+  // remove the [0, 1] keyframe the playhead is still stuck on, leaving a gap.
+  if (sb.buffered.length > 0) {
+    const t = videoRef.value?.currentTime ?? 0
+    const lead = sb.buffered.end(sb.buffered.length - 1) - t
+    if (lead > MAX_BUFFER_AHEAD) return
+  }
+
+  const v = videoRef.value
+  if (v && v.error) return
+  const chunk = appendQueue.shift()!
+  try {
+    sb.appendBuffer(chunk as unknown as BufferSource)
+    pendingAckBytes += chunk.byteLength
+    if (pendingAckBytes >= STREAM_ACK_THRESHOLD && streamSessionId.value) {
+      const bytes = pendingAckBytes
+      pendingAckBytes = 0
+      window.api.playerStreamAck(streamSessionId.value, bytes)
+    }
+  } catch (e) {
+    const err = e as DOMException
+    if (err.name === 'QuotaExceededError') {
+      appendQueue.unshift(chunk)
+      // Only evict data strictly behind the playhead. Never drop the range
+      // the video element is currently sitting inside, or playback stalls.
+      const t = videoRef.value?.currentTime ?? 0
+      if (sb.buffered.length > 0 && !sb.updating) {
+        const bufStart = sb.buffered.start(0)
+        const removeUntil = t - 5
+        if (removeUntil > bufStart + 1) {
+          try { sb.remove(bufStart, removeUntil) } catch { /* ignore */ }
+        }
+      }
+    } else {
+      console.error('[player] appendBuffer failed:', err)
+    }
+  }
+}
+
+let unbufferedSeekInFlight = false
+let respawnDebounceTimer: ReturnType<typeof setTimeout> | null = null
+const RESPAWN_DEBOUNCE_MS = 250
+
+function maybeRespawnForUnbufferedPosition(): void {
+  const v = videoRef.value
+  const sb = sourceBuffer
+  if (!v || !sb || !streamSessionId.value) return
+  // Debounce. Check `currentTime` vs buffered ranges only when the timer fires,
+  // so a burst of rapid seeks coalesces into one respawn at the final target.
+  if (respawnDebounceTimer) clearTimeout(respawnDebounceTimer)
+  respawnDebounceTimer = setTimeout(() => {
+    respawnDebounceTimer = null
+    if (unbufferedSeekInFlight) return
+    const cur = videoRef.value
+    const curSb = sourceBuffer
+    if (!cur || !curSb) return
+    const t = cur.currentTime
+    for (let i = 0; i < curSb.buffered.length; i++) {
+      if (t >= curSb.buffered.start(i) - 0.25 && t <= curSb.buffered.end(i) + 0.25) return
+    }
+    // Nothing buffered yet (fresh respawn) — wait for data.
+    if (curSb.buffered.length === 0) return
+    handleUnbufferedSeek()
+  }, RESPAWN_DEBOUNCE_MS)
+}
+
+async function handleUnbufferedSeek(): Promise<void> {
+  const v = videoRef.value
+  const sb = sourceBuffer
+  if (!v || !sb || !streamSessionId.value) return
+  const target = v.currentTime
+  // If the target falls inside any existing buffered range, the video element
+  // handles the seek natively — nothing to do.
+  for (let i = 0; i < sb.buffered.length; i++) {
+    if (target >= sb.buffered.start(i) - 0.25 && target <= sb.buffered.end(i) + 0.25) {
+      return
+    }
+  }
+  if (unbufferedSeekInFlight) return
+  unbufferedSeekInFlight = true
+  const seekAt = Math.max(0, target - 1)
+  console.log(`[player] unbuffered seek → respawn ffmpeg at ${seekAt.toFixed(2)} (target ${target.toFixed(2)})`)
+  try {
+    // Drop any queued chunks from the old ffmpeg — main will stop sending new
+    // ones as soon as the seek IPC below bumps the session generation.
+    appendQueue.length = 0
+    pendingAckBytes = 0
+    const result = await window.api.playerStreamSeek(streamSessionId.value, seekAt)
+    if ('error' in result) {
+      console.error('[player] stream-seek failed:', result.error)
+      return
+    }
+    // Reset the SourceBuffer segment parser. Without this, an interrupted
+    // append leaves the parser in PARSING_MEDIA_SEGMENT and any subsequent
+    // timestampOffset change or appendBuffer throws. abort() also cancels
+    // any in-flight update, so no updateend wait is needed.
+    try { sb.abort() } catch (e) { console.warn('[player] sb.abort failed:', e) }
+    // Drop old buffered data so the previous audio ahead of us doesn't keep
+    // playing while the new fragments arrive and decode.
+    try {
+      if (sb.buffered.length > 0) {
+        sb.remove(sb.buffered.start(0), sb.buffered.end(sb.buffered.length - 1))
+        await new Promise<void>((res) => sb.addEventListener('updateend', () => res(), { once: true }))
+      }
+    } catch (e) {
+      console.warn('[player] buffer clear failed:', e)
+    }
+    if (v.error) {
+      console.error('[player] video element errored during seek:', v.error.code, v.error.message)
+      return
+    }
+    try {
+      sb.timestampOffset = seekAt
+    } catch (e) {
+      console.warn('[player] timestampOffset set failed:', e)
+    }
+    // Release main's buffered prelude for the new ffmpeg run.
+    window.api.playerStreamStart(streamSessionId.value)
+  } finally {
+    unbufferedSeekInFlight = false
+    // If the user kept seeking while the respawn was in flight, the playhead
+    // may now be outside the fresh buffered range too — re-check.
+    maybeRespawnForUnbufferedPosition()
+  }
+}
+
+let chunkRecvCount = 0
+let chunkRecvBytes = 0
+function handleStreamChunk(sessionId: string, data: Uint8Array): void {
+  if (sessionId !== streamSessionId.value) return
+  const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+  chunkRecvCount++
+  chunkRecvBytes += u8.byteLength
+  if (chunkRecvCount === 1 || chunkRecvCount % 200 === 0) {
+    console.log(`[player] recv chunk #${chunkRecvCount} total=${(chunkRecvBytes / 1024 / 1024).toFixed(1)}MB queue=${appendQueue.length}`)
+  }
+  appendQueue.push(u8)
+  pumpAppendQueue()
+}
+
+function handleStreamEnd(sessionId: string): void {
+  if (sessionId !== streamSessionId.value) return
+  streamEnded = true
+  pumpAppendQueue()
+}
+
+function handleStreamError(sessionId: string, error: string): void {
+  if (sessionId !== streamSessionId.value) return
+  console.error('[player] stream error:', error)
+  remuxError.value = error
+  resetMseState()
+}
+
+function resetMseState(): void {
+  streamEnded = false
+  pendingAckBytes = 0
+  appendQueue.length = 0
+  mseInitialSeek = 0
+  if (sourceBuffer) {
+    try { sourceBuffer.removeEventListener('updateend', onSourceBufferUpdateEnd) } catch { /* ignore */ }
+    sourceBuffer = null
+  }
+  if (mediaSource && mediaSource.readyState === 'open') {
+    try { mediaSource.endOfStream() } catch { /* ignore */ }
+  }
+  mediaSource = null
+  if (mseSrcUrl.value) {
+    try { URL.revokeObjectURL(mseSrcUrl.value) } catch { /* ignore */ }
+    mseSrcUrl.value = ''
+  }
+}
 
 function formatTime(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '0:00'
@@ -382,6 +686,10 @@ function onProgress(): void {
   const video = videoRef.value
   if (!video || video.buffered.length === 0) return
   buffered.value = video.buffered.end(video.buffered.length - 1)
+}
+
+function onCanPlay(): void {
+  if (mkvBuffering.value) mkvBuffering.value = false
 }
 
 function onSeekStart(): void {
@@ -815,10 +1123,12 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
       if (localResult) {
         activeTranslationId.value = tr.id
 
-        // Clean up previous remux if any
-        if (remuxStreamId.value) {
+        // Clean up previous remux / stream session if any
+        if (remuxedPath.value || streamSessionId.value) {
           await window.api.playerCleanupRemux()
-          remuxStreamId.value = ''
+          remuxedPath.value = ''
+          streamSessionId.value = ''
+          resetMseState()
         }
 
         // Switch to local file
@@ -826,24 +1136,13 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
         activeStreamUrl.value = ''
         activeSubtitleContent.value = localResult.subtitleContent || ''
 
-        // Remux MKV if needed
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
-          remuxing.value = true
-          const remuxResult = await window.api.playerRemuxMkvStream(localResult.filePath)
-          if ('error' in remuxResult) {
-            remuxError.value = remuxResult.error
-            remuxing.value = false
+          const prep = await prepareMkvForPlayback(localResult.filePath)
+          if (!prep.ok) {
+            remuxError.value = prep.error
             switchingTranslation.value = false
             return
           }
-          remuxStreamId.value = remuxResult.sessionId
-          if (videoRef.value) videoRef.value.pause() // Prevent autoplay while fetching subs
-          
-          const subContent = await window.api.playerGetRemuxSubtitles(remuxResult.sessionId)
-          if (subContent && !activeSubtitleContent.value) {
-            activeSubtitleContent.value = subContent
-          }
-          remuxing.value = false
         }
 
         // Update subtitles
@@ -872,10 +1171,12 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
 
     activeTranslationId.value = tr.id
 
-    // Clean up previous remux if switching from local to stream
-    if (remuxStreamId.value) {
+    // Clean up previous remux / MSE stream if switching from local to stream
+    if (remuxedPath.value || streamSessionId.value) {
       await window.api.playerCleanupRemux()
-      remuxStreamId.value = ''
+      remuxedPath.value = ''
+      streamSessionId.value = ''
+      resetMseState()
     }
 
     activeFilePath.value = ''
@@ -969,10 +1270,12 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
   }
 
   try {
-    // Clean up previous remux
-    if (remuxStreamId.value) {
+    // Clean up previous remux / MSE stream
+    if (remuxedPath.value || streamSessionId.value) {
       await window.api.playerCleanupRemux()
-      remuxStreamId.value = ''
+      remuxedPath.value = ''
+      streamSessionId.value = ''
+      resetMseState()
     }
 
     // Update episode state
@@ -993,22 +1296,18 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         activeSubtitleContent.value = localResult.subtitleContent || ''
 
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
-          remuxing.value = true
-          const remuxResult = await window.api.playerRemuxMkvStream(localResult.filePath)
-          if ('error' in remuxResult) {
-            remuxError.value = remuxResult.error
-            remuxing.value = false
+          if (remuxedPath.value || streamSessionId.value) {
+            await window.api.playerCleanupRemux()
+            remuxedPath.value = ''
+            streamSessionId.value = ''
+            resetMseState()
+          }
+          const prep = await prepareMkvForPlayback(localResult.filePath)
+          if (!prep.ok) {
+            remuxError.value = prep.error
             navigating.value = false
             return
           }
-          remuxStreamId.value = remuxResult.sessionId
-          if (videoRef.value) videoRef.value.pause()
-          
-          const subContent = await window.api.playerGetRemuxSubtitles(remuxResult.sessionId)
-          if (subContent && !activeSubtitleContent.value) {
-            activeSubtitleContent.value = subContent
-          }
-          remuxing.value = false
         }
 
         destroySubtitles()
@@ -1115,31 +1414,51 @@ onMounted(async () => {
   const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
   if (savedShortcuts) playerShortcuts.value = savedShortcuts
 
-  // Remux MKV to MP4 if needed
+  // Subtitles extracted from MKV streams arrive asynchronously via IPC.
+  window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
+    if (sessionId !== streamSessionId.value) return
+    if (activeSubtitleContent.value) return
+    activeSubtitleContent.value = content
+    const v = videoRef.value
+    if (v) {
+      destroySubtitles()
+      initSubtitles(v)
+    }
+  })
+
+  // MSE fragmented MP4 chunks / end / error events.
+  window.api.onPlayerStreamChunk(({ sessionId, data }) => handleStreamChunk(sessionId, data))
+  window.api.onPlayerStreamEnd(({ sessionId }) => handleStreamEnd(sessionId))
+  window.api.onPlayerStreamError(({ sessionId, error }) => handleStreamError(sessionId, error))
+
+  // Diagnostic listeners on the video element to see why MSE playback stalls.
+  watch(videoRef, (v) => {
+    if (!v) return
+    v.addEventListener('waiting', () => console.warn(`[player] video 'waiting' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`))
+    v.addEventListener('stalled', () => console.warn(`[player] video 'stalled' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`))
+    v.addEventListener('error', () => {
+      const e = v.error
+      console.error(`[player] video element error: code=${e?.code} message=${e?.message} networkState=${v.networkState} readyState=${v.readyState}`)
+    })
+    v.addEventListener('timeupdate', () => pumpAppendQueue())
+    // Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
+    // so a burst collapses into one respawn at the final target — native seeks
+    // inside the buffered range are filtered out in the debounced callback.
+    v.addEventListener('seeking', () => maybeRespawnForUnbufferedPosition())
+  }, { immediate: true })
+
+  // Start MKV remux stream (or fall back to legacy full remux)
   if (isMkv.value && props.filePath) {
-    remuxing.value = true
-    remuxError.value = ''
     try {
-      const result = await window.api.playerRemuxMkvStream(props.filePath)
-      if ('error' in result) {
-        remuxError.value = result.error
-        remuxing.value = false
+      const prep = await prepareMkvForPlayback(props.filePath)
+      if (!prep.ok) {
+        remuxError.value = prep.error
         return
-      }
-      remuxStreamId.value = result.sessionId
-      if (videoRef.value) videoRef.value.pause()
-      
-      const subContent = await window.api.playerGetRemuxSubtitles(result.sessionId)
-      if (subContent && !activeSubtitleContent.value) {
-        activeSubtitleContent.value = subContent
       }
     } catch (e) {
       remuxError.value = String(e)
-      remuxing.value = false
       return
     }
-    remuxing.value = false
-    if (videoRef.value) videoRef.value.play() // Resume playback if it was ready
   }
 
   // Initialize quality from available streams
@@ -1205,8 +1524,14 @@ onBeforeUnmount(() => {
     gpuDevice.destroy()
     gpuDevice = null
   }
-  // Clean up remuxed temp files
-  if (remuxStreamId.value) {
+  // Stop listening for stream events
+  window.api.offPlayerStreamSubtitles()
+  window.api.offPlayerStreamChunk()
+  window.api.offPlayerStreamEnd()
+  window.api.offPlayerStreamError()
+  resetMseState()
+  // Clean up remuxed temp files / active stream sessions
+  if (remuxedPath.value || streamSessionId.value) {
     window.api.playerCleanupRemux()
   }
 })
@@ -1229,7 +1554,7 @@ const bufferedProgress = computed(() => {
     @mousemove="onMouseMove"
     @click.self="togglePlay"
   >
-    <!-- Remuxing MKV overlay -->
+    <!-- Remuxing MKV overlay (legacy full-remux fallback only) -->
     <div v-if="remuxing" class="remux-overlay">
       <div class="remux-modal">
         <div class="remux-spinner"></div>
@@ -1237,6 +1562,13 @@ const bufferedProgress = computed(() => {
         <p class="remux-hint">Remuxing to MP4 (stream copy, no re-encoding)</p>
       </div>
     </div>
+
+    <!-- Streaming MKV: subtle toast while the first seconds buffer -->
+    <transition name="fade">
+      <div v-if="mkvBuffering" class="mkv-buffering-toast">
+        Buffering MKV…
+      </div>
+    </transition>
 
     <!-- Remux error overlay -->
     <div v-if="remuxError" class="remux-overlay">
@@ -1272,7 +1604,7 @@ const bufferedProgress = computed(() => {
     <div class="video-wrapper">
       <video
         ref="videoRef"
-        :src="videoSrc"
+        :src="videoSrc || undefined"
         :class="{ hidden: anime4kActive }"
         class="player-video"
         crossorigin="anonymous"
@@ -1281,6 +1613,7 @@ const bufferedProgress = computed(() => {
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"
+        @canplay="onCanPlay"
         @ended="onVideoEnded"
         @click="togglePlay"
         @dblclick="toggleFullscreen"
@@ -1582,6 +1915,19 @@ const bufferedProgress = computed(() => {
   background: rgba(15, 52, 96, 0.9);
   color: #e0e0e0;
   padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.mkv-buffering-toast {
+  position: absolute;
+  top: 100px;
+  right: 24px;
+  background: rgba(15, 52, 96, 0.85);
+  color: #e0e0e0;
+  padding: 6px 14px;
   border-radius: 6px;
   font-size: 0.8rem;
   z-index: 10;

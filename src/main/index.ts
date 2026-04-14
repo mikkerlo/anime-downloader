@@ -8,27 +8,16 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
-import { execFile } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
-import { Readable, PassThrough } from 'stream'
-import * as crypto from 'crypto'
+import { Readable } from 'stream'
+import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
-
-interface RemuxSession {
-  process: Ffmpeg.FfmpegCommand
-  tempPath: string
-  stream: PassThrough
-  passThrough: PassThrough
-  subtitlePromise?: Promise<string | undefined>
-  completed: boolean
-  streamConsumed: boolean
-}
-const remuxSessions = new Map<string, RemuxSession>()
 
 // Enable WebGPU support for Anime4K shaders in the renderer
 app.commandLine.appendSwitch('enable-unsafe-webgpu')
@@ -573,16 +562,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle('app:version', () => app.getVersion())
 
   ipcMain.handle('update:check', async () => {
-    if (app.getVersion().includes('-nightly')) {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('update:status', {
-          status: 'error',
-          error: 'Update check disabled for nightly builds.'
-        })
-      }
-      return
-    }
-
     try {
       const result = await autoUpdater.checkForUpdates()
       if (!result) {
@@ -1418,118 +1397,170 @@ function registerIpcHandlers(): void {
     return null
   })
 
-  // Remux MKV to MP4 (stream copy) for HTML5 playback
-  const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
-
-  ipcMain.handle('player:get-remux-subtitles', async (_event, sessionId: string): Promise<string | null> => {
-    const session = remuxSessions.get(sessionId)
-    if (!session || !session.subtitlePromise) return null
-    try {
-      const content = await session.subtitlePromise
-      return content || null
-    } catch {
-      return null
-    }
-  })
-
-  ipcMain.handle('player:remux-mkv-stream', async (_event, mkvPath: string): Promise<{ sessionId: string } | { error: string }> => {
+  // Remux MKV to fragmented MP4 (stream copy) for progressive HTML5 playback.
+  // See protocol.handle('anime-video', …) below for the streaming reader.
+  ipcMain.handle('player:remux-mkv', async (_event, mkvPath: string): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
     if (!ffmpegPath) return { error: 'ffmpeg not available' }
     if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
     fs.mkdirSync(remuxTmpDir, { recursive: true })
 
-    const sessionId = crypto.randomUUID()
+    const stamp = Date.now()
     const baseName = path.basename(mkvPath, path.extname(mkvPath))
-    const mp4Path = path.join(remuxTmpDir, `${baseName}-${sessionId}.mp4`)
+    const mp4Path = path.join(remuxTmpDir, `${baseName}-${stamp}.mp4`)
 
     Ffmpeg.setFfmpegPath(ffmpegPath)
 
-    const passThrough = new PassThrough()
-    const streamForResponse = new PassThrough()
-    const streamForFile = fs.createWriteStream(mp4Path)
+    const remuxPromise = new Promise<void>((resolve, reject) => {
+      Ffmpeg(mkvPath)
+        .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
+        .output(mp4Path)
+        .on('error', (err) => {
+          console.error('[remux] FFmpeg error:', err.message)
+          reject(err)
+        })
+        .on('end', () => {
+          console.log('[remux] Completed:', mp4Path)
+          resolve()
+        })
+        .run()
+    })
 
-    passThrough.pipe(streamForFile)
-    passThrough.pipe(streamForResponse) // Use pipe to handle backpressure properly
+    const subtitlePromise = extractFirstSubtitle(mkvPath, path.join(remuxTmpDir, `${baseName}-${stamp}.ass`))
 
-    const remuxProcess = Ffmpeg(mkvPath)
-      .outputOptions([
-        '-c', 'copy',
-        '-movflags', '+frag_keyframe+empty_moov',
-        '-f', 'mp4'
-      ])
-      .on('error', (err) => {
-        console.error('[remux-stream] FFmpeg error:', err.message)
-        const session = remuxSessions.get(sessionId)
-        if (session) {
-          session.completed = true
-          session.stream.destroy()
-        }
-        passThrough.destroy()
-        remuxSessions.delete(sessionId)
-      })
-      .on('end', () => {
-        console.log('[remux-stream] Completed:', mp4Path)
-        const session = remuxSessions.get(sessionId)
-        if (session) session.completed = true
-      })
+    try {
+      const [, subtitleContent] = await Promise.all([remuxPromise, subtitlePromise])
+      return { mp4Path, ...(subtitleContent ? { subtitleContent } : {}) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { error: msg }
+    }
+  })
 
-    remuxProcess.pipe(passThrough)
+  // Start an MSE-friendly fragmented MP4 pipe. Returns duration + codecs MIME so the
+  // renderer can set MediaSource.duration and addSourceBuffer(mimeType) upfront.
+  // Video bytes are pushed to the renderer via 'player:stream-chunk' events.
+  ipcMain.handle('player:remux-mkv-stream', async (event, mkvPath: string, initialSeek?: number): Promise<MseOpenResult | { error: string }> => {
+    if (!ffmpegPath) return { error: 'ffmpeg not available' }
+    if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
-    // Extract subtitles in parallel
-    const subtitlePromise = (async (): Promise<string | undefined> => {
-      try {
-        if (!ffprobePath) return undefined
+    const probe = await probeMkvForMse(mkvPath)
+    if (!probe) return { error: 'Codecs not supported for MSE' }
+
+    fs.mkdirSync(remuxTmpDir, { recursive: true })
+
+    const sessionId = randomUUID()
+    const baseName = path.basename(mkvPath, path.extname(mkvPath))
+
+    const session: MseSession = {
+      proc: null as unknown as ChildProcess,
+      pendingBytes: 0,
+      stderrTail: [],
+      done: false,
+      error: null,
+      senderId: event.sender.id,
+      ready: false,
+      prelude: [],
+      mkvPath,
+      generation: 0
+    }
+    mseSessions.set(sessionId, session)
+    const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+    session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
+
+    // Kick off subtitle extraction in parallel; push to renderer when ready.
+    const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
+    let hasSubtitlesPending = false
+    try {
+      if (ffprobePath) {
         Ffmpeg.setFfprobePath(ffprobePath)
-        const hasSubStream = await new Promise<boolean>((res) => {
+        hasSubtitlesPending = await new Promise<boolean>((res) => {
           Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
-            res(err ? false : !!metadata.streams?.find(s => s.codec_type === 'subtitle'))
+            res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
           })
         })
-        if (!hasSubStream) return undefined
-
-        const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
-        await new Promise<void>((res, rej) => {
-          Ffmpeg(mkvPath)
-            .outputOptions(['-map', '0:s:0', '-c:s', 'ass'])
-            .output(assPath)
-            .on('error', (err) => {
-              console.error('[remux-stream] Subtitle extraction error:', err.message)
-              rej(err)
-            })
-            .on('end', () => res())
-            .run()
-        })
-        const content = fs.readFileSync(assPath, 'utf-8')
-        console.log('[remux-stream] Subtitle extracted:', assPath)
-        return content
-      } catch (err) {
-        console.warn('[remux-stream] Subtitle extraction failed:', err)
-        return undefined
       }
-    })()
+    } catch { /* ignore probe failures */ }
 
-    const session: RemuxSession = {
-      process: remuxProcess,
-      tempPath: mp4Path,
-      stream: streamForResponse,
-      passThrough: passThrough,
-      subtitlePromise: subtitlePromise,
-      completed: false,
-      streamConsumed: false
+    if (hasSubtitlesPending) {
+      extractFirstSubtitle(mkvPath, assPath).then((content) => {
+        if (!content) return
+        const sender = event.sender
+        if (sender && !sender.isDestroyed()) {
+          sender.send('player:stream-subtitles', { sessionId, content })
+        }
+      }).catch(() => { /* already logged */ })
     }
-    remuxSessions.set(sessionId, session)
 
-    // Return immediately to not block video playback
-    return { sessionId }
+    return {
+      sessionId,
+      duration: probe.duration,
+      mimeType: probe.mimeType,
+      hasSubtitlesPending,
+      initialSeek: startSeek
+    }
+  })
+
+  // Forward seek past the buffered region: respawn ffmpeg with `-ss` so output
+  // starts at (or just before) the requested timestamp. The renderer will have
+  // already set sourceBuffer.timestampOffset to place fragments on the correct
+  // MSE timeline position. Stale chunks from the old proc are filtered out by
+  // the generation counter captured in spawnFfmpegForSession.
+  ipcMain.handle('player:stream-seek', (event, sessionId: string, seekSeconds: number) => {
+    const session = mseSessions.get(sessionId)
+    if (!session) return { error: 'session not found' }
+    session.generation++
+    try { session.proc.kill('SIGKILL') } catch { /* ignore */ }
+    session.pendingBytes = 0
+    session.prelude = []
+    session.done = false
+    session.error = null
+    // Hold new chunks in the prelude until the renderer has set its
+    // SourceBuffer.timestampOffset and called player:stream-start again.
+    // Otherwise first frames of the new run race ahead of the offset change
+    // and get placed on the wrong MSE timeline.
+    session.ready = false
+    if (session.proc.stdout && session.proc.stdout.isPaused()) {
+      try { session.proc.stdout.resume() } catch { /* ignore */ }
+    }
+    session.proc = spawnFfmpegForSession(session, event, sessionId, Math.max(0, seekSeconds))
+    return { ok: true }
+  })
+
+  // Handshake: renderer's MediaSource + SourceBuffer are ready to receive chunks.
+  // Flush any buffered prelude (the MP4 moov header lives in here) and switch to
+  // forwarding subsequent chunks directly.
+  ipcMain.handle('player:stream-start', (event, sessionId: string) => {
+    const session = mseSessions.get(sessionId)
+    if (!session) return
+    if (session.ready) return
+    session.ready = true
+    const sender = event.sender
+    if (sender && !sender.isDestroyed()) {
+      for (const chunk of session.prelude) {
+        sender.send('player:stream-chunk', { sessionId, data: chunk })
+      }
+    }
+    session.prelude = []
+  })
+
+  // Backpressure ack: renderer reports bytes it has appended into its SourceBuffer.
+  // When enough data has been consumed we resume the ffmpeg stdout pipe.
+  ipcMain.handle('player:stream-ack', (_event, sessionId: string, bytesConsumed: number) => {
+    const session = mseSessions.get(sessionId)
+    if (!session) return
+    session.pendingBytes = Math.max(0, session.pendingBytes - bytesConsumed)
+    if (
+      session.pendingBytes < STREAM_BACKPRESSURE_LOW_WATERMARK &&
+      session.proc.stdout?.isPaused()
+    ) {
+      session.proc.stdout.resume()
+    }
   })
 
   ipcMain.handle('player:cleanup-remux', async () => {
-    for (const [id, session] of remuxSessions.entries()) {
-      try { session.process.kill('SIGKILL') } catch { /* ignore */ }
-      try { session.stream.destroy() } catch { /* ignore */ }
-      try { session.passThrough.destroy() } catch { /* ignore */ }
-      try { if (fs.existsSync(session.tempPath)) fs.unlinkSync(session.tempPath) } catch { /* ignore */ }
-      remuxSessions.delete(id)
+    for (const sessionId of Array.from(mseSessions.keys())) {
+      cleanupMseSession(sessionId)
     }
     try {
       if (fs.existsSync(remuxTmpDir)) {
@@ -1541,6 +1572,212 @@ function registerIpcHandlers(): void {
       }
     } catch { /* ignore */ }
   })
+}
+
+interface MseOpenResult {
+  sessionId: string
+  duration: number
+  mimeType: string
+  hasSubtitlesPending: boolean
+  initialSeek: number
+}
+
+interface MseSession {
+  proc: ChildProcess
+  pendingBytes: number
+  stderrTail: string[]
+  done: boolean
+  error: string | null
+  senderId: number
+  ready: boolean
+  prelude: Buffer[]
+  mkvPath: string
+  generation: number
+}
+
+function spawnFfmpegForSession(
+  session: MseSession,
+  event: Electron.IpcMainInvokeEvent,
+  sessionId: string,
+  seekSeconds: number
+): ChildProcess {
+  const args: string[] = ['-fflags', '+genpts']
+  if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
+  args.push(
+    '-i', session.mkvPath,
+    '-map', '0:v:0',
+    '-map', '0:a:0?',
+    '-c', 'copy',
+    '-avoid_negative_ts', 'make_zero',
+    '-muxpreload', '0',
+    '-muxdelay', '0',
+    '-movflags', '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
+    '-frag_duration', '1000000',
+    '-f', 'mp4',
+    'pipe:1'
+  )
+  const proc = spawn(ffmpegPath!, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  const procGen = session.generation
+  console.log(`[remux-stream] spawned ffmpeg session ${sessionId.slice(0, 8)} gen=${procGen} seek=${seekSeconds}`)
+
+  proc.stderr?.on('data', (data: Buffer) => {
+    if (procGen !== session.generation) return
+    const line = data.toString()
+    session.stderrTail.push(line)
+    if (session.stderrTail.length > 40) session.stderrTail.shift()
+  })
+
+  let totalBytes = 0
+  let chunkCount = 0
+  proc.stdout?.on('data', (chunk: Buffer) => {
+    if (procGen !== session.generation) return
+    session.pendingBytes += chunk.length
+    totalBytes += chunk.length
+    chunkCount++
+    if (chunkCount === 1 || chunkCount % 400 === 0) {
+      console.log(`[remux-stream] ${sessionId.slice(0, 8)} gen=${procGen} chunk ${chunkCount} total=${(totalBytes / 1024 / 1024).toFixed(1)}MB pending=${(session.pendingBytes / 1024 / 1024).toFixed(1)}MB ready=${session.ready}`)
+    }
+    if (session.ready) {
+      const sender = event.sender
+      if (sender && !sender.isDestroyed()) {
+        sender.send('player:stream-chunk', { sessionId, data: chunk })
+      }
+    } else {
+      session.prelude.push(chunk)
+    }
+    if (session.pendingBytes > STREAM_BACKPRESSURE_HIGH_WATERMARK) {
+      proc.stdout?.pause()
+    }
+  })
+
+  proc.stdout?.on('end', () => {
+    if (procGen !== session.generation) return
+    if (session.done) return
+    session.done = true
+    const sender = event.sender
+    if (sender && !sender.isDestroyed()) {
+      sender.send('player:stream-end', { sessionId })
+    }
+  })
+
+  proc.on('error', (err) => {
+    if (procGen !== session.generation) return
+    if (session.done) return
+    session.done = true
+    session.error = err.message
+    console.error('[remux-stream] spawn error:', err.message)
+    const sender = event.sender
+    if (sender && !sender.isDestroyed()) {
+      sender.send('player:stream-error', { sessionId, error: err.message })
+    }
+  })
+
+  proc.on('exit', (code, signal) => {
+    if (procGen !== session.generation) return
+    if (signal === 'SIGKILL') return
+    if (code !== 0 && !session.done) {
+      const msg = `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
+      session.error = msg
+      session.done = true
+      console.error('[remux-stream]', msg)
+      const sender = event.sender
+      if (sender && !sender.isDestroyed()) {
+        sender.send('player:stream-error', { sessionId, error: msg })
+      }
+    }
+  })
+
+  return proc
+}
+
+const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
+const mseSessions = new Map<string, MseSession>()
+const STREAM_BACKPRESSURE_HIGH_WATERMARK = 32 * 1024 * 1024
+const STREAM_BACKPRESSURE_LOW_WATERMARK = 8 * 1024 * 1024
+
+function cleanupMseSession(sessionId: string): void {
+  const session = mseSessions.get(sessionId)
+  if (!session) return
+  session.done = true
+  try { session.proc.kill('SIGKILL') } catch { /* ignore */ }
+  mseSessions.delete(sessionId)
+}
+
+async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mimeType: string } | null> {
+  if (!ffprobePath) return null
+  try {
+    Ffmpeg.setFfprobePath(ffprobePath)
+    const metadata = await new Promise<Ffmpeg.FfprobeData>((res, rej) => {
+      Ffmpeg.ffprobe(mkvPath, (err, m) => (err ? rej(err) : res(m)))
+    })
+    const durationStr = metadata.format?.duration
+    const duration = typeof durationStr === 'number' ? durationStr : parseFloat(String(durationStr))
+    if (!isFinite(duration) || duration <= 0) return null
+    const video = metadata.streams?.find((s) => s.codec_type === 'video')
+    const audio = metadata.streams?.find((s) => s.codec_type === 'audio')
+    if (!video || !audio) return null
+    const vStr = avcCodecString(video)
+    const aStr = aacCodecString(audio)
+    if (!vStr || !aStr) return null
+    return { duration, mimeType: `video/mp4; codecs="${vStr}, ${aStr}"` }
+  } catch {
+    return null
+  }
+}
+
+function avcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
+  if (stream.codec_name !== 'h264') return null
+  const profile = (stream.profile || '').toString().toLowerCase()
+  let pp: string, cc: string
+  if (profile.includes('constrained baseline')) { pp = '42'; cc = 'E0' }
+  else if (profile.includes('baseline')) { pp = '42'; cc = '00' }
+  else if (profile.includes('main')) { pp = '4D'; cc = '40' }
+  else if (profile.includes('high 10')) { pp = '6E'; cc = '00' }
+  else if (profile.includes('high 4:2:2')) { pp = '7A'; cc = '00' }
+  else if (profile.includes('high 4:4:4')) { pp = 'F4'; cc = '00' }
+  else if (profile.includes('high')) { pp = '64'; cc = '00' }
+  else return null
+  const level = typeof stream.level === 'number' ? stream.level : 0
+  if (level <= 0) return null
+  const ll = level.toString(16).padStart(2, '0').toUpperCase()
+  return `avc1.${pp}${cc}${ll}`
+}
+
+function aacCodecString(stream: Ffmpeg.FfprobeStream): string | null {
+  if (stream.codec_name !== 'aac') return null
+  const profile = (stream.profile || '').toString().toUpperCase()
+  if (profile === 'HE-AAC') return 'mp4a.40.5'
+  if (profile === 'HE-AACV2' || profile === 'HE-AAC V2') return 'mp4a.40.29'
+  return 'mp4a.40.2'
+}
+
+async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {
+  try {
+    if (!ffprobePath) return undefined
+    Ffmpeg.setFfprobePath(ffprobePath)
+    const hasSubStream = await new Promise<boolean>((res) => {
+      Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
+        res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
+      })
+    })
+    if (!hasSubStream) return undefined
+    await new Promise<void>((res, rej) => {
+      Ffmpeg(mkvPath)
+        .outputOptions(['-map', '0:s:0', '-c:s', 'ass'])
+        .output(assPath)
+        .on('error', (err) => {
+          console.error('[remux] Subtitle extraction error:', err.message)
+          rej(err)
+        })
+        .on('end', () => res())
+        .run()
+    })
+    const content = fs.readFileSync(assPath, 'utf-8')
+    console.log('[remux] Subtitle extracted:', assPath)
+    return content
+  } catch {
+    return undefined
+  }
 }
 
 function createWindow(): void {
@@ -1575,113 +1812,11 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  // Handle anime-video:// protocol for local video playback with Range request support
+  // Handle anime-video:// protocol for local video playback with Range request support.
+  // Only one URL shape: anime-video://{absolute-path}. MKV streaming now uses MSE via IPC.
   protocol.handle('anime-video', async (request) => {
-    let urlObj: URL
-    try {
-      urlObj = new URL(request.url)
-    } catch {
-      return new Response('Invalid URL', { status: 400 })
-    }
-
-    if (urlObj.hostname === 'stream') {
-      const sessionId = urlObj.searchParams.get('id')
-      if (!sessionId) return new Response('Missing stream id', { status: 400 })
-      const session = remuxSessions.get(sessionId)
-      if (!session) return new Response('Session not found', { status: 404 })
-
-      const mimeType = 'video/mp4'
-      const rangeHeader = request.headers.get('Range')
-
-      if (rangeHeader) {
-        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
-        if (match) {
-          const start = parseInt(match[1], 10)
-          
-          if (start === 0 && !session.streamConsumed) {
-            session.streamConsumed = true
-            // Unknown-length live stream - return 200 without Content-Range per review feedback
-            return new Response(Readable.toWeb(session.stream) as ReadableStream, {
-              status: 200,
-              headers: {
-                'Content-Type': mimeType,
-                'Accept-Ranges': 'bytes'
-              }
-            })
-          }
-
-          let stat: fs.Stats
-          try { stat = fs.statSync(session.tempPath) } catch { return new Response('File not found', { status: 404 }) }
-          
-          let currentSize = stat.size
-          let end = match[2] ? parseInt(match[2], 10) : currentSize - 1
-          
-          if (start >= currentSize && !session.completed) {
-            await new Promise<void>((resolve, reject) => {
-              let elapsed = 0;
-              const check = () => {
-                if (!remuxSessions.has(sessionId)) {
-                  resolve() // Session deleted, stop polling
-                  return
-                }
-                if (session.completed || fs.statSync(session.tempPath).size > start) resolve()
-                else if (elapsed > 10000) resolve() // Timeout after 10s
-                else {
-                  elapsed += 100
-                  setTimeout(check, 100)
-                }
-              }
-              check()
-            })
-            try {
-              stat = fs.statSync(session.tempPath)
-              currentSize = stat.size
-              if (end >= currentSize) end = currentSize - 1
-            } catch {
-              return new Response('File not found', { status: 404 })
-            }
-          }
-
-          if (start > end && session.completed) return new Response('', { status: 416 })
-
-          const chunkSize = end - start + 1
-          const nodeStream = fs.createReadStream(session.tempPath, { start, end })
-          const webStream = Readable.toWeb(nodeStream) as ReadableStream
-
-          return new Response(webStream, {
-            status: 206,
-            headers: {
-              'Content-Type': mimeType,
-              'Content-Length': String(chunkSize),
-              'Content-Range': `bytes ${start}-${end}/${session.completed ? currentSize : '*'}`,
-              'Accept-Ranges': 'bytes'
-            }
-          })
-        }
-      }
-
-      if (!session.streamConsumed) {
-        // Fallback for non-range requests or direct access
-        session.streamConsumed = true
-        return new Response(Readable.toWeb(session.stream) as ReadableStream, {
-          status: 200,
-          headers: { 'Content-Type': mimeType }
-        })
-      } else {
-        const nodeStream = fs.createReadStream(session.tempPath)
-        return new Response(Readable.toWeb(nodeStream) as ReadableStream, {
-          status: 200,
-          headers: { 'Content-Type': mimeType }
-        })
-      }
-    }
-
-    // Decode traditional file paths from anime-video:// scheme
-    let filePath = decodeURIComponent(request.url.replace('anime-video://', ''))
-    if (filePath.startsWith('/')) {
-        // preserve absolute path semantics after protocol stripping if necessary
-        // actually anime-video:///path translates to decodeURIComponent('/path')
-    }
+    const raw = request.url.replace('anime-video://', '')
+    const filePath = decodeURIComponent(raw)
 
     let stat: fs.Stats
     try {
@@ -1794,7 +1929,6 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
 
   // Auto-updater setup
-  const isNightly = app.getVersion().includes('-nightly')
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 
@@ -1825,14 +1959,10 @@ app.whenReady().then(async () => {
     broadcastUpdateStatus({ status: 'error', error: err.message })
   })
 
-  if (!isNightly) {
-    // Auto-check on launch if last check was >24h ago
-    const lastCheck = store.get('lastUpdateCheck') as number
-    if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
-      autoUpdater.checkForUpdates().catch(() => {})
-    }
-  } else {
-    console.log('Nightly build detected, auto-updates disabled.')
+  // Auto-check on launch if last check was >24h ago
+  const lastCheck = store.get('lastUpdateCheck') as number
+  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
+    autoUpdater.checkForUpdates().catch(() => {})
   }
 
   app.on('activate', () => {

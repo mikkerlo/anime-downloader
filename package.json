@@ -23,16 +23,14 @@
     "win": {
       "target": [
         "portable",
-        "nsis",
-        "zip"
+        "nsis"
       ],
       "icon": "resources/icon.ico"
     },
     "linux": {
       "target": [
         "AppImage",
-        "deb",
-        "zip"
+        "deb"
       ]
     },
     "mac": {
@@ -40,6 +38,11 @@
         "zip",
         "dmg"
       ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "mikkerlo",
+      "repo": "anime-downloader"
     },
     "files": [
       "out/**/*"
@@ -74,9 +77,5 @@
     "jassub": "^2.4.2",
     "libass-wasm": "^4.1.0",
     "vue": "^3.5.31"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mikkerlo/anime-downloader.git"
   }
 }

@@ -114,8 +114,10 @@ const api = {
     ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
   playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) =>
     ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
-  playerRemuxMkv: (mkvPath: string) =>
-    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
+  playerRemuxMkvStream: (mkvPath: string) =>
+    ipcRenderer.invoke('player:remux-mkv-stream', mkvPath) as Promise<{ sessionId: string } | { error: string }>,
+  playerGetRemuxSubtitles: (sessionId: string) =>
+    ipcRenderer.invoke('player:get-remux-subtitles', sessionId) as Promise<string | null>,
   playerCleanupRemux: () =>
     ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
 

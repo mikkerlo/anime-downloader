@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "scripts": {
@@ -39,11 +39,6 @@
         "dmg"
       ]
     },
-    "publish": {
-      "provider": "github",
-      "owner": "mikkerlo",
-      "repo": "anime-downloader"
-    },
     "files": [
       "out/**/*"
     ]
@@ -77,5 +72,9 @@
     "jassub": "^2.4.2",
     "libass-wasm": "^4.1.0",
     "vue": "^3.5.31"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikkerlo/anime-downloader.git"
   }
 }

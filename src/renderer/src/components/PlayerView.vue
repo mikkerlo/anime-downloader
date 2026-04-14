@@ -58,7 +58,7 @@ const activeFilePath = ref(props.filePath)
 const isMkv = computed(() => !!activeFilePath.value && activeFilePath.value.toLowerCase().endsWith('.mkv'))
 const remuxing = ref(false)
 const remuxError = ref('')
-const remuxedPath = ref('')
+const remuxStreamId = ref('')
 
 // Quality selector state
 const activeStreamUrl = ref(props.streamUrl)
@@ -254,10 +254,10 @@ fn main(@builtin(position) coord: vec4f) -> @location(0) vec4f {
 
 const videoSrc = computed(() => {
   if (activeFilePath.value) {
-    // For MKV files, use the remuxed MP4 path
+    // For MKV files, use the remuxed MP4 stream
     if (isMkv.value) {
-      if (remuxedPath.value) {
-        return 'anime-video://' + encodeURIComponent(remuxedPath.value)
+      if (remuxStreamId.value) {
+        return 'anime-video://stream/?id=' + encodeURIComponent(remuxStreamId.value)
       }
       return '' // Not ready yet — remuxing in progress
     }
@@ -816,9 +816,9 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
         activeTranslationId.value = tr.id
 
         // Clean up previous remux if any
-        if (remuxedPath.value) {
+        if (remuxStreamId.value) {
           await window.api.playerCleanupRemux()
-          remuxedPath.value = ''
+          remuxStreamId.value = ''
         }
 
         // Switch to local file
@@ -829,17 +829,21 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
         // Remux MKV if needed
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           remuxing.value = true
-          const remuxResult = await window.api.playerRemuxMkv(localResult.filePath)
-          remuxing.value = false
+          const remuxResult = await window.api.playerRemuxMkvStream(localResult.filePath)
           if ('error' in remuxResult) {
             remuxError.value = remuxResult.error
+            remuxing.value = false
             switchingTranslation.value = false
             return
           }
-          remuxedPath.value = remuxResult.mp4Path
-          if (!activeSubtitleContent.value && remuxResult.subtitleContent) {
-            activeSubtitleContent.value = remuxResult.subtitleContent
+          remuxStreamId.value = remuxResult.sessionId
+          if (videoRef.value) videoRef.value.pause() // Prevent autoplay while fetching subs
+          
+          const subContent = await window.api.playerGetRemuxSubtitles(remuxResult.sessionId)
+          if (subContent && !activeSubtitleContent.value) {
+            activeSubtitleContent.value = subContent
           }
+          remuxing.value = false
         }
 
         // Update subtitles
@@ -869,9 +873,9 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
     activeTranslationId.value = tr.id
 
     // Clean up previous remux if switching from local to stream
-    if (remuxedPath.value) {
+    if (remuxStreamId.value) {
       await window.api.playerCleanupRemux()
-      remuxedPath.value = ''
+      remuxStreamId.value = ''
     }
 
     activeFilePath.value = ''
@@ -966,9 +970,9 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
   try {
     // Clean up previous remux
-    if (remuxedPath.value) {
+    if (remuxStreamId.value) {
       await window.api.playerCleanupRemux()
-      remuxedPath.value = ''
+      remuxStreamId.value = ''
     }
 
     // Update episode state
@@ -990,17 +994,21 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           remuxing.value = true
-          const remuxResult = await window.api.playerRemuxMkv(localResult.filePath)
-          remuxing.value = false
+          const remuxResult = await window.api.playerRemuxMkvStream(localResult.filePath)
           if ('error' in remuxResult) {
             remuxError.value = remuxResult.error
+            remuxing.value = false
             navigating.value = false
             return
           }
-          remuxedPath.value = remuxResult.mp4Path
-          if (!activeSubtitleContent.value && remuxResult.subtitleContent) {
-            activeSubtitleContent.value = remuxResult.subtitleContent
+          remuxStreamId.value = remuxResult.sessionId
+          if (videoRef.value) videoRef.value.pause()
+          
+          const subContent = await window.api.playerGetRemuxSubtitles(remuxResult.sessionId)
+          if (subContent && !activeSubtitleContent.value) {
+            activeSubtitleContent.value = subContent
           }
+          remuxing.value = false
         }
 
         destroySubtitles()
@@ -1112,15 +1120,18 @@ onMounted(async () => {
     remuxing.value = true
     remuxError.value = ''
     try {
-      const result = await window.api.playerRemuxMkv(props.filePath)
+      const result = await window.api.playerRemuxMkvStream(props.filePath)
       if ('error' in result) {
         remuxError.value = result.error
         remuxing.value = false
         return
       }
-      remuxedPath.value = result.mp4Path
-      if (!activeSubtitleContent.value && result.subtitleContent) {
-        activeSubtitleContent.value = result.subtitleContent
+      remuxStreamId.value = result.sessionId
+      if (videoRef.value) videoRef.value.pause()
+      
+      const subContent = await window.api.playerGetRemuxSubtitles(result.sessionId)
+      if (subContent && !activeSubtitleContent.value) {
+        activeSubtitleContent.value = subContent
       }
     } catch (e) {
       remuxError.value = String(e)
@@ -1128,6 +1139,7 @@ onMounted(async () => {
       return
     }
     remuxing.value = false
+    if (videoRef.value) videoRef.value.play() // Resume playback if it was ready
   }
 
   // Initialize quality from available streams
@@ -1194,7 +1206,7 @@ onBeforeUnmount(() => {
     gpuDevice = null
   }
   // Clean up remuxed temp files
-  if (remuxedPath.value) {
+  if (remuxStreamId.value) {
     window.api.playerCleanupRemux()
   }
 })

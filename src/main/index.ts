@@ -14,9 +14,21 @@ import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
-import { Readable } from 'stream'
+import { Readable, PassThrough } from 'stream'
+import * as crypto from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
+
+interface RemuxSession {
+  process: Ffmpeg.FfmpegCommand
+  tempPath: string
+  stream: PassThrough
+  passThrough: PassThrough
+  subtitlePromise?: Promise<string | undefined>
+  completed: boolean
+  streamConsumed: boolean
+}
+const remuxSessions = new Map<string, RemuxSession>()
 
 // Enable WebGPU support for Anime4K shaders in the renderer
 app.commandLine.appendSwitch('enable-unsafe-webgpu')
@@ -1399,36 +1411,61 @@ function registerIpcHandlers(): void {
   // Remux MKV to MP4 (stream copy) for HTML5 playback
   const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
 
-  ipcMain.handle('player:remux-mkv', async (_event, mkvPath: string): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
+  ipcMain.handle('player:get-remux-subtitles', async (_event, sessionId: string): Promise<string | null> => {
+    const session = remuxSessions.get(sessionId)
+    if (!session || !session.subtitlePromise) return null
+    try {
+      const content = await session.subtitlePromise
+      return content || null
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('player:remux-mkv-stream', async (_event, mkvPath: string): Promise<{ sessionId: string } | { error: string }> => {
     if (!ffmpegPath) return { error: 'ffmpeg not available' }
     if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
-    // Create temp dir
     fs.mkdirSync(remuxTmpDir, { recursive: true })
 
-    const stamp = Date.now()
+    const sessionId = crypto.randomUUID()
     const baseName = path.basename(mkvPath, path.extname(mkvPath))
-    const mp4Path = path.join(remuxTmpDir, `${baseName}-${stamp}.mp4`)
+    const mp4Path = path.join(remuxTmpDir, `${baseName}-${sessionId}.mp4`)
 
     Ffmpeg.setFfmpegPath(ffmpegPath)
 
-    // Run remux and subtitle extraction in parallel
-    const remuxPromise = new Promise<void>((resolve, reject) => {
-      Ffmpeg(mkvPath)
-        .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
-        .output(mp4Path)
-        .on('error', (err) => {
-          console.error('[remux] FFmpeg error:', err.message)
-          reject(err)
-        })
-        .on('end', () => {
-          console.log('[remux] Completed:', mp4Path)
-          resolve()
-        })
-        .run()
-    })
+    const passThrough = new PassThrough()
+    const streamForResponse = new PassThrough()
+    const streamForFile = fs.createWriteStream(mp4Path)
 
-    // Extract first subtitle stream (if any) to a temp .ass file
+    passThrough.pipe(streamForFile)
+    passThrough.pipe(streamForResponse) // Use pipe to handle backpressure properly
+
+    const remuxProcess = Ffmpeg(mkvPath)
+      .outputOptions([
+        '-c', 'copy',
+        '-movflags', '+frag_keyframe+empty_moov',
+        '-f', 'mp4'
+      ])
+      .on('error', (err) => {
+        console.error('[remux-stream] FFmpeg error:', err.message)
+        const session = remuxSessions.get(sessionId)
+        if (session) {
+          session.completed = true
+          session.stream.destroy()
+        }
+        passThrough.destroy()
+        remuxSessions.delete(sessionId)
+      })
+      .on('end', () => {
+        console.log('[remux-stream] Completed:', mp4Path)
+        const session = remuxSessions.get(sessionId)
+        if (session) session.completed = true
+      })
+
+    remuxProcess.pipe(passThrough)
+
+    // Extract subtitles in parallel
     const subtitlePromise = (async (): Promise<string | undefined> => {
       try {
         if (!ffprobePath) return undefined
@@ -1440,36 +1477,50 @@ function registerIpcHandlers(): void {
         })
         if (!hasSubStream) return undefined
 
-        const assPath = path.join(remuxTmpDir, `${baseName}-${stamp}.ass`)
+        const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
         await new Promise<void>((res, rej) => {
           Ffmpeg(mkvPath)
             .outputOptions(['-map', '0:s:0', '-c:s', 'ass'])
             .output(assPath)
             .on('error', (err) => {
-              console.error('[remux] Subtitle extraction error:', err.message)
+              console.error('[remux-stream] Subtitle extraction error:', err.message)
               rej(err)
             })
             .on('end', () => res())
             .run()
         })
         const content = fs.readFileSync(assPath, 'utf-8')
-        console.log('[remux] Subtitle extracted:', assPath)
+        console.log('[remux-stream] Subtitle extracted:', assPath)
         return content
-      } catch {
+      } catch (err) {
+        console.warn('[remux-stream] Subtitle extraction failed:', err)
         return undefined
       }
     })()
 
-    try {
-      const [, subtitleContent] = await Promise.all([remuxPromise, subtitlePromise])
-      return { mp4Path, ...(subtitleContent ? { subtitleContent } : {}) }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return { error: msg }
+    const session: RemuxSession = {
+      process: remuxProcess,
+      tempPath: mp4Path,
+      stream: streamForResponse,
+      passThrough: passThrough,
+      subtitlePromise: subtitlePromise,
+      completed: false,
+      streamConsumed: false
     }
+    remuxSessions.set(sessionId, session)
+
+    // Return immediately to not block video playback
+    return { sessionId }
   })
 
   ipcMain.handle('player:cleanup-remux', async () => {
+    for (const [id, session] of remuxSessions.entries()) {
+      try { session.process.kill('SIGKILL') } catch { /* ignore */ }
+      try { session.stream.destroy() } catch { /* ignore */ }
+      try { session.passThrough.destroy() } catch { /* ignore */ }
+      try { if (fs.existsSync(session.tempPath)) fs.unlinkSync(session.tempPath) } catch { /* ignore */ }
+      remuxSessions.delete(id)
+    }
     try {
       if (fs.existsSync(remuxTmpDir)) {
         const files = fs.readdirSync(remuxTmpDir)
@@ -1516,7 +1567,111 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   // Handle anime-video:// protocol for local video playback with Range request support
   protocol.handle('anime-video', async (request) => {
-    const filePath = decodeURIComponent(request.url.replace('anime-video://', ''))
+    let urlObj: URL
+    try {
+      urlObj = new URL(request.url)
+    } catch {
+      return new Response('Invalid URL', { status: 400 })
+    }
+
+    if (urlObj.hostname === 'stream') {
+      const sessionId = urlObj.searchParams.get('id')
+      if (!sessionId) return new Response('Missing stream id', { status: 400 })
+      const session = remuxSessions.get(sessionId)
+      if (!session) return new Response('Session not found', { status: 404 })
+
+      const mimeType = 'video/mp4'
+      const rangeHeader = request.headers.get('Range')
+
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
+        if (match) {
+          const start = parseInt(match[1], 10)
+          
+          if (start === 0 && !session.streamConsumed) {
+            session.streamConsumed = true
+            // Unknown-length live stream - return 200 without Content-Range per review feedback
+            return new Response(Readable.toWeb(session.stream) as ReadableStream, {
+              status: 200,
+              headers: {
+                'Content-Type': mimeType,
+                'Accept-Ranges': 'bytes'
+              }
+            })
+          }
+
+          let stat: fs.Stats
+          try { stat = fs.statSync(session.tempPath) } catch { return new Response('File not found', { status: 404 }) }
+          
+          let currentSize = stat.size
+          let end = match[2] ? parseInt(match[2], 10) : currentSize - 1
+          
+          if (start >= currentSize && !session.completed) {
+            await new Promise<void>((resolve, reject) => {
+              let elapsed = 0;
+              const check = () => {
+                if (!remuxSessions.has(sessionId)) {
+                  resolve() // Session deleted, stop polling
+                  return
+                }
+                if (session.completed || fs.statSync(session.tempPath).size > start) resolve()
+                else if (elapsed > 10000) resolve() // Timeout after 10s
+                else {
+                  elapsed += 100
+                  setTimeout(check, 100)
+                }
+              }
+              check()
+            })
+            try {
+              stat = fs.statSync(session.tempPath)
+              currentSize = stat.size
+              if (end >= currentSize) end = currentSize - 1
+            } catch {
+              return new Response('File not found', { status: 404 })
+            }
+          }
+
+          if (start > end && session.completed) return new Response('', { status: 416 })
+
+          const chunkSize = end - start + 1
+          const nodeStream = fs.createReadStream(session.tempPath, { start, end })
+          const webStream = Readable.toWeb(nodeStream) as ReadableStream
+
+          return new Response(webStream, {
+            status: 206,
+            headers: {
+              'Content-Type': mimeType,
+              'Content-Length': String(chunkSize),
+              'Content-Range': `bytes ${start}-${end}/${session.completed ? currentSize : '*'}`,
+              'Accept-Ranges': 'bytes'
+            }
+          })
+        }
+      }
+
+      if (!session.streamConsumed) {
+        // Fallback for non-range requests or direct access
+        session.streamConsumed = true
+        return new Response(Readable.toWeb(session.stream) as ReadableStream, {
+          status: 200,
+          headers: { 'Content-Type': mimeType }
+        })
+      } else {
+        const nodeStream = fs.createReadStream(session.tempPath)
+        return new Response(Readable.toWeb(nodeStream) as ReadableStream, {
+          status: 200,
+          headers: { 'Content-Type': mimeType }
+        })
+      }
+    }
+
+    // Decode traditional file paths from anime-video:// scheme
+    let filePath = decodeURIComponent(request.url.replace('anime-video://', ''))
+    if (filePath.startsWith('/')) {
+        // preserve absolute path semantics after protocol stripping if necessary
+        // actually anime-video:///path translates to decodeURIComponent('/path')
+    }
 
     let stat: fs.Stats
     try {

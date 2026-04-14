@@ -21,6 +21,9 @@ jobs:
             args: --mac
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
 

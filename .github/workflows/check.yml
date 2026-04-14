@@ -17,13 +17,13 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
-            args: --linux
+            args: --linux zip
           - os: windows-latest
             platform: win
-            args: --win
+            args: --win zip
           - os: macos-latest
             platform: mac
-            args: --mac
+            args: --mac zip
 
     runs-on: ${{ matrix.os }}
     permissions:
@@ -33,7 +33,8 @@ jobs:
       - name: Get PR branch
         if: github.event_name == 'issue_comment'
         id: get-pr
-        run: echo "ref=refs/pull/${{ github.event.issue.number }}/head" >> $GITHUB_OUTPUT
+        shell: bash
+        run: echo "ref=refs/pull/${{ github.event.issue.number }}/head" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
         with:
@@ -48,11 +49,19 @@ jobs:
 
       - run: npm run typecheck
 
+      - name: Set PR build version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+          PR_VERSION="${VERSION}-pr${PR_NUMBER}-$(date +%Y%m%d%H%M%S)"
+          npm version "$PR_VERSION" --no-git-tag-version --allow-same-version
+
       - run: npx electron-vite build
 
-      # IMPORTANT: do NOT change to `-c.publish=null`. electron-builder parses
-      # that as the literal publisher name "null" and fails with
-      # "Cannot find module for publisher 'null'". Always use `--publish never`.
+      # Build as zip so artifacts have no bundled auto-updater / installer,
+      # mirroring nightly builds. `--publish never` avoids electron-builder
+      # resolving a null publisher.
       - run: npx electron-builder ${{ matrix.args }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -61,11 +70,7 @@ jobs:
         with:
           name: pr-build-${{ matrix.platform }}
           path: |
-            dist/*.exe
-            dist/*.AppImage
-            dist/*.deb
             dist/*.zip
-            dist/*.dmg
           if-no-files-found: ignore
           retention-days: 3
 
@@ -86,7 +91,7 @@ jobs:
           recreate: true
           message: |
             ### 📦 PR Build Artifacts are ready!
-            Test this pull request by downloading the artifacts below:
+            Portable zip builds (no installer, auto-updater disabled) — unzip and run.
 
             * 🍎 [macOS Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-mac.zip)
             * 🪟 [Windows Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-win.zip)

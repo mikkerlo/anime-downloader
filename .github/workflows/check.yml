@@ -52,18 +52,20 @@ jobs:
             dist/*.zip
             dist/*.dmg
           if-no-files-found: ignore
+          retention-days: 3
 
   comment-artifacts:
     needs: build
     runs-on: ubuntu-latest
-    # Only run for PRs originating from within the same repository (not forks)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # Only run for non-draft PRs originating from within the same repository (not forks)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
     permissions:
       pull-requests: write
     steps:
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: pr-artifacts
+          recreate: true
           message: |
             ### 📦 PR Build Artifacts are ready!
             Test this pull request by downloading the artifacts below:

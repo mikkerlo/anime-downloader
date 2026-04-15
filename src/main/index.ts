@@ -19,9 +19,12 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 
-// Enable WebGPU support for Anime4K shaders in the renderer
+// Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
+// PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
+// without it, MediaSource.isTypeSupported('…hvc1…') returns false even on
+// systems that have a hardware decoder available.
 app.commandLine.appendSwitch('enable-unsafe-webgpu')
-app.commandLine.appendSwitch('enable-features', 'Vulkan')
+app.commandLine.appendSwitch('enable-features', 'Vulkan,PlatformHEVCDecoderSupport')
 
 // Register anime-video:// protocol for serving local video files to <video> elements
 protocol.registerSchemesAsPrivileged([
@@ -1466,10 +1469,12 @@ function registerIpcHandlers(): void {
       ready: false,
       prelude: [],
       mkvPath,
-      generation: 0
+      generation: 0,
+      videoCodec: probe.videoCodec
     }
     mseSessions.set(sessionId, session)
     const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+    console.log(`[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${probe.mimeType}"`)
     session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
 
     // Kick off subtitle extraction in parallel; push to renderer when ready.
@@ -1600,6 +1605,7 @@ interface MseSession {
   prelude: Buffer[]
   mkvPath: string
   generation: number
+  videoCodec: 'h264' | 'hevc'
 }
 
 function spawnFfmpegForSession(
@@ -1617,7 +1623,13 @@ function spawnFfmpegForSession(
     '-c', 'copy',
     '-avoid_negative_ts', 'make_zero',
     '-muxpreload', '0',
-    '-muxdelay', '0',
+    '-muxdelay', '0'
+  )
+  // HEVC tracks in fMP4 must be tagged `hvc1` (parameter sets in sample entry)
+  // so Chromium's MSE decoder accepts them. ffmpeg defaults to `hev1`
+  // (parameter sets in-band), which many browsers reject for MSE.
+  if (session.videoCodec === 'hevc') args.push('-tag:v', 'hvc1')
+  args.push(
     '-movflags', '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
     '-frag_duration', '1000000',
     '-f', 'mp4',
@@ -1710,7 +1722,7 @@ function cleanupMseSession(sessionId: string): void {
   mseSessions.delete(sessionId)
 }
 
-async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mimeType: string } | null> {
+async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mimeType: string; videoCodec: 'h264' | 'hevc' } | null> {
   if (!ffprobePath) return null
   try {
     Ffmpeg.setFfprobePath(ffprobePath)
@@ -1723,10 +1735,13 @@ async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mime
     const video = metadata.streams?.find((s) => s.codec_type === 'video')
     const audio = metadata.streams?.find((s) => s.codec_type === 'audio')
     if (!video || !audio) return null
-    const vStr = avcCodecString(video)
     const aStr = aacCodecString(audio)
-    if (!vStr || !aStr) return null
-    return { duration, mimeType: `video/mp4; codecs="${vStr}, ${aStr}"` }
+    if (!aStr) return null
+    const avc = avcCodecString(video)
+    if (avc) return { duration, mimeType: `video/mp4; codecs="${avc}, ${aStr}"`, videoCodec: 'h264' }
+    const hevc = hevcCodecString(video)
+    if (hevc) return { duration, mimeType: `video/mp4; codecs="${hevc}, ${aStr}"`, videoCodec: 'hevc' }
+    return null
   } catch {
     return null
   }
@@ -1750,6 +1765,60 @@ function avcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
   return `avc1.${pp}${cc}${ll}`
 }
 
+function hevcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
+  if (stream.codec_name !== 'hevc') return null
+  // Format: hvc1.<profile_space><profile_idc>.<compat_flags_hex_reversed>.<tier><level_idc>.<constraint_bytes>
+  // Reference: ISO/IEC 14496-15 Annex E, Chromium spec at
+  // https://source.chromium.org/chromium/chromium/src/+/main:media/base/video_codecs.cc
+  const profile = (stream.profile || '').toString().toLowerCase()
+  let profileIdc: number
+  let compatFlags: number
+  // `compatFlags` holds the raw general_profile_compatibility_flag bitfield
+  // exactly as laid out in ISO/IEC 14496-15 §E.3 (MSB = flag[0] = Main profile,
+  // next bit = Main 10, next = Main Still Picture, …). The codec string wants
+  // the bit-reversed (LSB-first) hex form, which `reverseBits32` below produces:
+  //   Main           → raw 0x60000000 → codec hex "6"  → hvc1.1.6.Lxx.B0
+  //   Main 10        → raw 0x20000000 → codec hex "4"  → hvc1.2.4.Lxx.B0
+  //   Main Still Pic → raw 0x40000000 → codec hex "2"  → hvc1.3.2.Lxx.B0
+  if (profile.includes('main 10')) {
+    profileIdc = 2
+    compatFlags = 0x20000000
+  } else if (profile.includes('main still')) {
+    profileIdc = 3
+    compatFlags = 0x40000000
+  } else if (profile.includes('main')) {
+    // Main-profile bitstreams are also decodable by Main 10 decoders, hence two bits set.
+    profileIdc = 1
+    compatFlags = 0x60000000
+  } else {
+    return null
+  }
+  // For HEVC, ffprobe's `level` is the raw HEVC level_idc value (for example
+  // 120 → level 4.0, 150 → 5.0, 153 → 5.1, 156 → 5.2 in human-readable form).
+  // The codec string uses that raw value directly, so we emit `L<level_idc>`
+  // (for example `L120`, `L150`) rather than converting it to a decimal level.
+  const levelIdc = typeof stream.level === 'number' ? stream.level : 0
+  if (levelIdc <= 0) return null
+  // Reverse 32-bit compatibility flags and emit as hex without leading zeros.
+  const reversed = reverseBits32(compatFlags)
+  const compatHex = reversed.toString(16).toUpperCase()
+  // Tier: assume Main tier (L) — High tier (H) is rare outside 8K broadcast content.
+  const tierAndLevel = `L${levelIdc}`
+  // Constraint indicator flags: 6 bytes, typically all zero; Chromium accepts a
+  // trailing `.B0` (or even truncation). Use `.B0` as a compact default.
+  return `hvc1.${profileIdc}.${compatHex}.${tierAndLevel}.B0`
+}
+
+function reverseBits32(value: number): number {
+  let v = value >>> 0
+  let result = 0
+  for (let i = 0; i < 32; i++) {
+    result = (result << 1) | (v & 1)
+    v >>>= 1
+  }
+  return result >>> 0
+}
+
 function aacCodecString(stream: Ffmpeg.FfprobeStream): string | null {
   if (stream.codec_name !== 'aac') return null
   const profile = (stream.profile || '').toString().toUpperCase()
@@ -1760,7 +1829,11 @@ function aacCodecString(stream: Ffmpeg.FfprobeStream): string | null {
 
 async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {
   try {
-    if (!ffprobePath) return undefined
+    if (!ffmpegPath || !ffprobePath) return undefined
+    // fluent-ffmpeg resolves the ffmpeg binary from PATH unless setFfmpegPath
+    // was called. On Windows the ffbinaries-downloaded ffmpeg is not on PATH,
+    // so this must be set explicitly here even if setFfprobePath was called.
+    Ffmpeg.setFfmpegPath(ffmpegPath)
     Ffmpeg.setFfprobePath(ffprobePath)
     const hasSubStream = await new Promise<boolean>((res) => {
       Ffmpeg.ffprobe(mkvPath, (err, metadata) => {

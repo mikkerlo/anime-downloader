@@ -37,39 +37,47 @@
 - [x] Auto-Track Watch Progress and Resume Playback — track watched progress, persist position, and update Shikimori
 - [x] Configurable Anime4K Shader Shortcuts in Player — Ctrl+1/2/3 for Mode A/B/C and Ctrl+` for Off, rebindable in Settings
 - [x] Stream MKV Playback Without Full Remux Wait — fragmented MP4 piped to MSE SourceBuffer with on-the-fly ffmpeg respawn on unbuffered seek; legacy full-remux kept as fallback
+- [x] HEVC (H.265) Support in MSE Streaming Path — `hevcCodecString` produces `hvc1.…` for Main / Main 10 / Main Still Picture; ffmpeg spawn emits `-tag:v hvc1` so Chromium MSE accepts the track; legacy full-remux fallback still fires when the platform has no HEVC decoder
 
 ---
 
-## 1. HEVC (H.265) Support in MSE Streaming Path
+## Planned
 
-**Priority:** Medium | **Effort:** Medium
+## 1. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 
-The MSE streaming path added in v3.6.0 only accepts H.264 + AAC. `avcCodecString` in `src/main/index.ts:1735` hard-rejects anything where `codec_name !== 'h264'`, so HEVC MKVs cause `probeMkvForMse` to return `null`, `player:remux-mkv-stream` returns `{ error: 'Codecs not supported for MSE' }`, and the renderer falls back to the legacy full-remux path. That fallback is slow (10–20s blocking for a 1 GB file) and also only plays HEVC when Chromium has a platform decoder available — on Linux Electron builds without the HEVC feature flag, playback fails entirely. Many anime releases (especially 1080p+ encodes) are HEVC, so this is a meaningful gap.
+**Priority:** Medium | **Effort:** Large
 
-**Problem details:**
-- `probeMkvForMse` needs to produce a correct `hvc1.…` (or `hev1.…`) codec string. Unlike AVC, this requires: general_profile_space, tier_flag, profile_idc, profile_compatibility_flags, constraint_indicator_flags, and level_idc — fields ffprobe exposes only partially via `codec_tag_string`, `profile`, `level`. We may need to parse the `hvcC` box out of the bitstream, or use a heuristic based on common profile/level combinations.
-- `MediaSource.isTypeSupported('video/mp4; codecs="hvc1.…")` is the gate — Chromium returns `false` when HEVC is disabled at build time or no platform decoder is present. The renderer already falls back when `isTypeSupported` is false, so a correct codec string is enough; no separate platform probe needed.
-- ffmpeg's fMP4 muxer tags HEVC tracks as `hev1` by default. Chromium MSE generally prefers `hvc1` (in-band parameter sets stored in the sample description box rather than in-stream). Add `-tag:v hvc1` to the ffmpeg args so the MP4 track is tagged correctly and parameter sets are inlined.
-- Stream-copy still works (`-c copy` already handles HEVC bitstreams), so no re-encoding is required — good, since HEVC encoding on the fly would be prohibitively slow.
+**Problem:** On Linux, Chromium in Electron ships no software HEVC decoder. `MediaSource.isTypeSupported('video/mp4; codecs="hvc1.…"')` returns `false` even with `PlatformHEVCDecoderSupport` enabled (the flag only unlocks *platform* decoders — VA-API on some Intel/AMD Linux systems; it doesn't add a software decoder). As a result the current legacy full-remux fallback in `player:remux-mkv` does `ffmpeg -c copy` and produces an MP4 that `<video>` still cannot decode — user sees a black screen with audio. The current PR just warns the user; this item replaces the warning with an actual working path.
+
+**Linux-specific notes (read first):**
+- Do **not** rely on the legacy `player:remux-mkv` to fix this. Its `-c copy` branch produces an unplayable MP4 on Linux for the same reason MSE rejected it — the codec didn't change.
+- `PlatformHEVCDecoderSupport` only helps when the *system* has a VA-API/V4L2 HEVC decoder. On WSL2, containerized Linux, or machines without compatible GPU/drivers, the flag is a no-op. Treat `MediaSource.isTypeSupported('…hvc1…')` as the single source of truth.
+- Feature-detect ffmpeg hardware encoders at startup (`ffmpeg -encoders | grep h264`) and cache results. `h264_vaapi` needs an init device (`-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -vf format=nv12,hwupload`) and fails silently if `/dev/dri/renderD128` isn't accessible — don't assume presence of the encoder name means it'll work; probe with a 1-frame encode of `testsrc`.
+- `libx264 -preset ultrafast -tune zerolatency` is the portable default. On a mid-range CPU it sustains ~80–120 fps at 1080p, which keeps up with real-time playback but leaves little headroom — keep the backpressure high-watermark tighter (~16 MB) during transcode so we don't starve the encoder if the CPU is contended.
 
 **Plan:**
-1. **Add `hevcCodecString` helper** in `src/main/index.ts` (next to `avcCodecString` at line 1735). Accept an `Ffmpeg.FfprobeStream`, return a string like `hvc1.1.6.L93.B0` or `null` if the stream isn't HEVC or required fields are missing. Mapping:
-   - profile_space: derive from `profile` (usually `""` → `0`); prefix letter (A/B/C) if non-zero.
-   - profile_idc: `"Main"` → `1`, `"Main 10"` → `2`, `"Main Still Picture"` → `3`, `"Rext"` → `4`. Start with Main/Main 10 (covers ~99% of anime); reject others for now.
-   - compatibility_flags: derive from profile (Main → `0x60000000` reversed-bit = `6`; Main 10 → `0x40000000` → `4`). These need to be encoded as a reversed 32-bit hex.
-   - tier + level: from `level` (ffprobe gives an integer like `120` meaning 4.0, `150` meaning 5.0). Tier defaults to 0 (L); high tier (H) is rare for consumer content.
-   - constraint flags: 6 bytes, usually all zero for typical profiles → `B0` (or `00` for legacy). Use `B0` as a safe default; Chromium is lenient here.
-2. **Extend `probeMkvForMse`** (line 1719) to try `avcCodecString` first, then `hevcCodecString`. Combine with the existing `aacCodecString` into the `mimeType`. If both fail, return `null` (renderer falls back).
-3. **Update ffmpeg spawn args** in `spawnFfmpegForSession` (line 1598). Detect video codec from a cached ffprobe (pass codec name into the function or re-probe cheaply) and, when HEVC, insert `-tag:v hvc1` before `-f mp4`. For H.264 keep the current args unchanged.
-4. **Renderer change: none.** The existing `MediaSource.isTypeSupported(streamResult.mimeType)` check in `PlayerView.vue:startMseSession` already gates on platform support and falls back to legacy remux when unsupported. Add a console log noting "HEVC detected, MSE support=…" for diagnosis.
-5. **Test matrix:**
-   - H.264 MKV on Windows/Linux — must continue to work via the MSE path (regression check).
-   - HEVC Main 10 MKV on Windows (with HW decoder) — expect MSE playback.
-   - HEVC MKV on Linux Electron (typically no HEVC) — expect graceful fallback to full remux, and note that the full remux will also likely fail to play (document that Linux users may need to re-encode or use system mpv).
-   - Unusual HEVC profiles (Rext, Main Still Picture) — expect `hevcCodecString` to return `null` and fallback to legacy remux.
-6. **Follow-up (out of scope for this ticket):** ffprobe's profile/level fields aren't always enough to produce an accurate codec string for edge cases. If Chromium rejects a `hvc1.…` string for a file that should play, add a second attempt using `hev1.…` (tags can differ) before giving up. Longer term, parse the `hvcC` box directly from the first fMP4 fragment.
+1. **Gate at negotiation.** In `prepareMkvForPlayback` (`src/renderer/src/components/PlayerView.vue`), when the MSE `isTypeSupported` check fails AND the mime contains `hvc1`/`hev1`, branch to a new `prepareHevcTranscode()` path instead of calling `playerRemuxMkv` (legacy).
+2. **New IPC channel** `player:remux-mkv-stream-transcode` (4-file pattern):
+   - `src/main/index.ts` — new `ipcMain.handle`; reuses `MseSession` struct but spawns ffmpeg with `-c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -profile:v high -level 4.0 -c:a <copy-if-aac-else-aac-192k>` into the same fMP4 pipe. Reports back mime `video/mp4; codecs="avc1.640028, <audio>"`.
+   - `src/preload/index.ts` — expose `playerRemuxMkvStreamTranscode(path, seek)`.
+   - `src/preload/types.d.ts` — add the signature.
+   - `PlayerView.vue` — call it from the new branch.
+3. **Reuse existing plumbing.** Keep `spawnFfmpegForSession`, `player:stream-seek`, the generation-counter filter, `player:stream-chunk` / `-start` / `-ack` / `-end` / `-error`, and the subtitle extraction path unchanged — they're codec-agnostic. Only the argv differs.
+4. **Audio strategy.** Extend `probeMkvForMse` (`src/main/index.ts`) to also return an `audioStrategy: 'copy' | 'transcode'` field based on `stream.codec_name`. AAC → copy; AC-3/E-AC-3/DTS/FLAC/TrueHD → `-c:a aac -b:a 192k`. The transcode handler uses this to compose its audio args.
+5. **Encoder pick (new helper).** `pickH264Encoder()` in `src/main/index.ts`: on startup probe once, in priority order — `h264_vaapi` (Linux Intel/AMD, verify device), `h264_nvenc` (NVIDIA), `h264_qsv` (Intel QSV on Windows), `libx264` (universal fallback). Cache result. Must do a 1-frame dry-run encode, not just parse `-encoders` output.
+6. **Consent UX.** New setting `hevcTranscodeOnPlay: 'ask' | 'always' | 'never'` (default `'ask'`) in `src/main/index.ts` defaults and `SettingsView.vue` → Player tab dropdown. When `'ask'` and MSE rejects HEVC, show a modal in `PlayerView.vue`: "Transcode this file", "Always transcode HEVC", "Open in external player". Persist the second choice to the setting.
+7. **External-player escape hatch.** Add IPC `shell:open-external-file` (`shell.openPath`) exposed via preload; bind to the third modal button. Also the correct behavior when ffmpeg isn't bundled.
+8. **Progress UX.** Replace the generic "Buffering…" toast with "Transcoding HEVC → H.264…" while the first MSE fragment for a transcode session is pending (track via a new reactive flag in `PlayerView.vue`). Include a cancel button that kills the session and closes the player.
+9. **Settings surface.** In `SettingsView.vue` → Player tab, show current-platform decoder status ("HEVC decoder: available" / "not available") next to the new dropdown, computed from the same `hevcPlaybackSupported` check that gates the codec-change confirmation. Grey out the dropdown on platforms where HEVC already plays natively.
+10. **DESIGN.md update.** Extend the "Local .mkv" section to describe the transcode branch, list the argv, and state that the legacy `player:remux-mkv` is now only used for non-HEVC fallback.
+11. **Testing matrix.**
+    - HEVC Main, Main 10, Main Still Picture on Linux → transcode path fires, video plays within ~3 s.
+    - HEVC on Windows/macOS → native MSE path, unchanged.
+    - H.264 MKV → unchanged (MSE stream-copy).
+    - Seek during transcode → ffmpeg respawn at new timestamp, generation counter filters stale chunks correctly.
+    - No hardware encoders available → falls back to `libx264`, still works (slower).
+    - AC-3 / FLAC audio + HEVC → audio transcoded to AAC, plays back.
+    - ffmpeg missing → modal defaults to "Open in external player".
 
-**Files:**
-- `src/main/index.ts` — add `hevcCodecString`, extend `probeMkvForMse`, thread codec info into `spawnFfmpegForSession` for the `-tag:v hvc1` flag.
-- `src/renderer/src/components/PlayerView.vue` — add diagnostic log only.
+**Why this replaces a simple warning:** mikkerlo's review on PR #27 accepted the warning-only solution on the assumption the legacy remux path would still make HEVC playable on Linux. It doesn't — Chromium has no decoder regardless of container. So the fix has to actually change the codec, not the container.
 

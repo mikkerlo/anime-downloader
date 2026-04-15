@@ -1825,7 +1825,11 @@ function aacCodecString(stream: Ffmpeg.FfprobeStream): string | null {
 
 async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {
   try {
-    if (!ffprobePath) return undefined
+    if (!ffmpegPath || !ffprobePath) return undefined
+    // fluent-ffmpeg resolves the ffmpeg binary from PATH unless setFfmpegPath
+    // was called. On Windows the ffbinaries-downloaded ffmpeg is not on PATH,
+    // so this must be set explicitly here even if setFfprobePath was called.
+    Ffmpeg.setFfmpegPath(ffmpegPath)
     Ffmpeg.setFfprobePath(ffprobePath)
     const hasSubStream = await new Promise<boolean>((res) => {
       Ffmpeg.ffprobe(mkvPath, (err, metadata) => {

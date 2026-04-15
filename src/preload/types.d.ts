@@ -84,6 +84,7 @@ interface Api {
   offFfmpegDownloadProgress: () => void
 
   shellOpenExternal: (url: string) => Promise<boolean>
+  shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
   // Player
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
@@ -91,6 +92,10 @@ interface Api {
   playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) => Promise<{ filePath: string; subtitleContent: string | null } | null>
   playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) => Promise<
+    | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+    | { error: string }
+  >
+  playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) => Promise<
     | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
     | { error: string }
   >

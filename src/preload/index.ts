@@ -121,6 +121,13 @@ const api = {
       | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
       | { error: string }
     >,
+  playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) =>
+    ipcRenderer.invoke('player:remux-mkv-stream-transcode', mkvPath, initialSeek) as Promise<
+      | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+      | { error: string }
+    >,
+  shellOpenExternalFile: (filePath: string) =>
+    ipcRenderer.invoke('shell:open-external-file', filePath) as Promise<{ ok: boolean; error?: string }>,
   playerStreamStart: (sessionId: string) =>
     ipcRenderer.invoke('player:stream-start', sessionId) as Promise<void>,
   playerStreamAck: (sessionId: string, bytes: number) =>

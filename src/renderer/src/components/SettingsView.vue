@@ -80,6 +80,7 @@ const shikimoriShowUrl = ref(false)
 // Player settings
 const playerMode = ref<'system' | 'builtin'>('system')
 const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
+const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask')
 const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
 
 // GPU benchmark state
@@ -433,6 +434,7 @@ onMounted(async () => {
   // Player settings
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
+  hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
 
   // Probe WebGPU
   try {
@@ -584,6 +586,7 @@ watch(videoCodec, (val, oldVal) => {
 })
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
+watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
 </script>
 
 <template>
@@ -935,6 +938,24 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           </div>
           <div v-else class="status-line warn">
             Not available — Anime4K shaders are disabled. Plain video playback still works.
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">HEVC transcoding on play</label>
+          <p class="setting-hint">
+            When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen.
+          </p>
+          <select v-model="hevcTranscodeOnPlay" class="setting-input setting-select" :disabled="hevcPlaybackSupported">
+            <option value="ask">Ask each time</option>
+            <option value="always">Always transcode</option>
+            <option value="never">Never — open in external player</option>
+          </select>
+          <div v-if="hevcPlaybackSupported" class="status-line ok" style="margin-top: 0.4rem">
+            HEVC decoder: available — transcoding not needed on this platform.
+          </div>
+          <div v-else class="status-line warn" style="margin-top: 0.4rem">
+            HEVC decoder: not available — this setting controls the fallback behavior.
           </div>
         </div>
 

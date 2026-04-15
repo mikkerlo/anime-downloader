@@ -38,11 +38,14 @@
 - [x] Configurable Anime4K Shader Shortcuts in Player — Ctrl+1/2/3 for Mode A/B/C and Ctrl+` for Off, rebindable in Settings
 - [x] Stream MKV Playback Without Full Remux Wait — fragmented MP4 piped to MSE SourceBuffer with on-the-fly ffmpeg respawn on unbuffered seek; legacy full-remux kept as fallback
 - [x] HEVC (H.265) Support in MSE Streaming Path — `hevcCodecString` produces `hvc1.…` for Main / Main 10 / Main Still Picture; ffmpeg spawn emits `-tag:v hvc1` so Chromium MSE accepts the track; legacy full-remux fallback still fires when the platform has no HEVC decoder
+- [x] HEVC → H.264 transcode fallback for platforms without an HEVC decoder — new `player:remux-mkv-stream-transcode` IPC re-encodes HEVC to H.264 through the existing MSE pipe; `pickH264Encoder` dry-runs `h264_vaapi` / `h264_nvenc` / `h264_qsv` / `libx264` at startup; `hevcTranscodeOnPlay` setting (ask / always / never) with consent modal and `shell:open-external-file` escape hatch
 
 ---
 
 ## Planned
 
+<<<<<<< conflict 1 of 1
++++++++ wntxnunq 6f055eac "Add TODO: Update pre-fetching to only target Shikimori API" (rebase destination)
 ## 1. Centralized Shikimori Cache & Surgical UI Updates
 
 **Priority:** High | **Effort:** Medium
@@ -107,7 +110,7 @@
 - **Shikimori Rate Limits:** Must strictly adhere to Shikimori's "5 requests per second" limit; the loop should be conservative (1-2 per second) to account for concurrent user actions.
 - **Cache Size:** Fetching full details for very large lists (2000+ entries) can grow the `electron-store` file significantly; may need to limit pre-fetching to "Watching" and "Planned" statuses only.
 
-## 5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
+## ~~5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder~~ (done)
 
 **Priority:** Medium | **Effort:** Large
 

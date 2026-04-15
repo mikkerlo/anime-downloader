@@ -82,6 +82,7 @@ const store = new Store({
     playerVolume: 1 as number,
     playerMuted: false,
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
+    hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
   }
 })
@@ -1313,6 +1314,15 @@ function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('shell:open-external-file', async (_event, filePath: string) => {
+    try {
+      const err = await shell.openPath(filePath)
+      return { ok: err === '', error: err || undefined }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
   ipcMain.handle('player:get-stream-url', async (_event, translationId: number, maxHeight: number) => {
     try {
       const embed = await smotretApi.getEmbed(translationId)
@@ -1454,7 +1464,8 @@ function registerIpcHandlers(): void {
     if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
     const probe = await probeMkvForMse(mkvPath)
-    if (!probe) return { error: 'Codecs not supported for MSE' }
+    if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
+    const streamCopyMime = probe.streamCopyMimeType
 
     fs.mkdirSync(remuxTmpDir, { recursive: true })
 
@@ -1472,11 +1483,14 @@ function registerIpcHandlers(): void {
       prelude: [],
       mkvPath,
       generation: 0,
-      videoCodec: probe.videoCodec
+      videoCodec: probe.videoCodec,
+      transcode: false,
+      audioStrategy: 'copy',
+      h264Encoder: null
     }
     mseSessions.set(sessionId, session)
     const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
-    console.log(`[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${probe.mimeType}"`)
+    console.log(`[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}"`)
     session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
 
     // Kick off subtitle extraction in parallel; push to renderer when ready.
@@ -1507,7 +1521,80 @@ function registerIpcHandlers(): void {
       sessionId,
       generation: session.generation,
       duration: probe.duration,
-      mimeType: probe.mimeType,
+      mimeType: streamCopyMime,
+      hasSubtitlesPending,
+      initialSeek: startSeek
+    }
+  })
+
+  // Same as `player:remux-mkv-stream` but re-encodes video to H.264 on the fly.
+  // Used when the platform has no decoder for the source codec (typically HEVC
+  // on Linux without VA-API). Audio is copied when AAC, otherwise transcoded
+  // to AAC so MSE can play it.
+  ipcMain.handle('player:remux-mkv-stream-transcode', async (event, mkvPath: string, initialSeek?: number): Promise<MseOpenResult | { error: string }> => {
+    if (!ffmpegPath) return { error: 'ffmpeg not available' }
+    if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
+
+    const probe = await probeMkvForMse(mkvPath)
+    if (!probe) return { error: 'Probe failed' }
+
+    fs.mkdirSync(remuxTmpDir, { recursive: true })
+
+    const encoder = await pickH264Encoder()
+    const mimeType = `video/mp4; codecs="avc1.640028, mp4a.40.2"`
+
+    const sessionId = randomUUID()
+    const baseName = path.basename(mkvPath, path.extname(mkvPath))
+
+    const session: MseSession = {
+      proc: null as unknown as ChildProcess,
+      pendingBytes: 0,
+      stderrTail: [],
+      done: false,
+      error: null,
+      senderId: event.sender.id,
+      ready: false,
+      prelude: [],
+      mkvPath,
+      generation: 0,
+      videoCodec: probe.videoCodec,
+      transcode: true,
+      audioStrategy: probe.audioStrategy,
+      h264Encoder: encoder.name
+    }
+    mseSessions.set(sessionId, session)
+    const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+    console.log(`[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}"`)
+    session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
+
+    const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
+    let hasSubtitlesPending = false
+    try {
+      if (ffprobePath) {
+        Ffmpeg.setFfprobePath(ffprobePath)
+        hasSubtitlesPending = await new Promise<boolean>((res) => {
+          Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
+            res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
+          })
+        })
+      }
+    } catch { /* ignore */ }
+
+    if (hasSubtitlesPending) {
+      extractFirstSubtitle(mkvPath, assPath).then((content) => {
+        if (!content) return
+        const sender = event.sender
+        if (sender && !sender.isDestroyed()) {
+          sender.send('player:stream-subtitles', { sessionId, content })
+        }
+      }).catch(() => { /* already logged */ })
+    }
+
+    return {
+      sessionId,
+      generation: session.generation,
+      duration: probe.duration,
+      mimeType,
       hasSubtitlesPending,
       initialSeek: startSeek
     }
@@ -1608,6 +1695,9 @@ interface MseSession {
   mkvPath: string
   generation: number
   videoCodec: 'h264' | 'hevc'
+  transcode: boolean
+  audioStrategy: 'copy' | 'transcode'
+  h264Encoder: string | null
 }
 
 function spawnFfmpegForSession(
@@ -1617,20 +1707,31 @@ function spawnFfmpegForSession(
   seekSeconds: number
 ): ChildProcess {
   const args: string[] = ['-fflags', '+genpts']
-  if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
-  args.push(
-    '-i', session.mkvPath,
-    '-map', '0:v:0',
-    '-map', '0:a:0?',
-    '-c', 'copy',
-    '-avoid_negative_ts', 'make_zero',
-    '-muxpreload', '0',
-    '-muxdelay', '0'
-  )
-  // HEVC tracks in fMP4 must be tagged `hvc1` (parameter sets in sample entry)
-  // so Chromium's MSE decoder accepts them. ffmpeg defaults to `hev1`
-  // (parameter sets in-band), which many browsers reject for MSE.
-  if (session.videoCodec === 'hevc') args.push('-tag:v', 'hvc1')
+  if (session.transcode) {
+    const choice = h264EncoderCandidates().find((c) => c.name === session.h264Encoder) || h264EncoderCandidates().slice(-1)[0]
+    if (choice.extraInputArgs) args.push(...choice.extraInputArgs)
+    if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
+    args.push('-i', session.mkvPath, '-map', '0:v:0', '-map', '0:a:0?')
+    args.push(...choice.videoArgs)
+    if (session.audioStrategy === 'copy') args.push('-c:a', 'copy')
+    else args.push('-c:a', 'aac', '-b:a', '192k')
+    args.push('-avoid_negative_ts', 'make_zero', '-muxpreload', '0', '-muxdelay', '0')
+  } else {
+    if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
+    args.push(
+      '-i', session.mkvPath,
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      '-c', 'copy',
+      '-avoid_negative_ts', 'make_zero',
+      '-muxpreload', '0',
+      '-muxdelay', '0'
+    )
+    // HEVC tracks in fMP4 must be tagged `hvc1` (parameter sets in sample entry)
+    // so Chromium's MSE decoder accepts them. ffmpeg defaults to `hev1`
+    // (parameter sets in-band), which many browsers reject for MSE.
+    if (session.videoCodec === 'hevc') args.push('-tag:v', 'hvc1')
+  }
   args.push(
     '-movflags', '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
     '-frag_duration', '1000000',
@@ -1639,7 +1740,6 @@ function spawnFfmpegForSession(
   )
   const proc = spawn(ffmpegPath!, args, { stdio: ['ignore', 'pipe', 'pipe'] })
   const procGen = session.generation
-  console.log(`[remux-stream] spawned ffmpeg session ${sessionId.slice(0, 8)} gen=${procGen} seek=${seekSeconds}`)
 
   proc.stderr?.on('data', (data: Buffer) => {
     if (procGen !== session.generation) return
@@ -1648,32 +1748,44 @@ function spawnFfmpegForSession(
     if (session.stderrTail.length > 40) session.stderrTail.shift()
   })
 
-  let totalBytes = 0
-  let chunkCount = 0
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    if (procGen !== session.generation) return
-    session.pendingBytes += chunk.length
-    totalBytes += chunk.length
-    chunkCount++
-    if (chunkCount === 1 || chunkCount % 400 === 0) {
-      console.log(`[remux-stream] ${sessionId.slice(0, 8)} gen=${procGen} chunk ${chunkCount} total=${(totalBytes / 1024 / 1024).toFixed(1)}MB pending=${(session.pendingBytes / 1024 / 1024).toFixed(1)}MB ready=${session.ready}`)
-    }
+  // Coalesce small ffmpeg stdout chunks into ~256 KB IPC messages. ffmpeg
+  // emits 50–60 KB writes; at transcode speed that floods the renderer main
+  // thread with hundreds of IPC events per second and starves the video
+  // compositor, showing up as playback stutter.
+  const BATCH_FLUSH_BYTES = 256 * 1024
+  let batchBuf: Buffer[] = []
+  let batchLen = 0
+  const flushBatch = (): void => {
+    if (batchLen === 0) return
+    const out = batchBuf.length === 1 ? batchBuf[0] : Buffer.concat(batchBuf, batchLen)
+    batchBuf = []
+    batchLen = 0
     if (session.ready) {
       const sender = event.sender
       if (sender && !sender.isDestroyed()) {
-        sender.send('player:stream-chunk', { sessionId, gen: procGen, data: chunk })
+        sender.send('player:stream-chunk', { sessionId, gen: procGen, data: out })
       }
     } else {
-      session.prelude.push(chunk)
+      session.prelude.push(out)
     }
+  }
+  proc.stdout?.on('data', (chunk: Buffer) => {
+    if (procGen !== session.generation) return
+    session.pendingBytes += chunk.length
+    batchBuf.push(chunk)
+    batchLen += chunk.length
+    if (batchLen >= BATCH_FLUSH_BYTES) flushBatch()
     if (session.pendingBytes > STREAM_BACKPRESSURE_HIGH_WATERMARK) {
       proc.stdout?.pause()
     }
   })
 
+  proc.stdout?.on('pause', flushBatch)
+
   proc.stdout?.on('end', () => {
     if (procGen !== session.generation) return
     if (session.done) return
+    flushBatch()
     session.done = true
     const sender = event.sender
     if (sender && !sender.isDestroyed()) {
@@ -1713,8 +1825,8 @@ function spawnFfmpegForSession(
 
 const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
 const mseSessions = new Map<string, MseSession>()
-const STREAM_BACKPRESSURE_HIGH_WATERMARK = 32 * 1024 * 1024
-const STREAM_BACKPRESSURE_LOW_WATERMARK = 8 * 1024 * 1024
+const STREAM_BACKPRESSURE_HIGH_WATERMARK = 64 * 1024 * 1024
+const STREAM_BACKPRESSURE_LOW_WATERMARK = 16 * 1024 * 1024
 
 function cleanupMseSession(sessionId: string): void {
   const session = mseSessions.get(sessionId)
@@ -1724,7 +1836,15 @@ function cleanupMseSession(sessionId: string): void {
   mseSessions.delete(sessionId)
 }
 
-async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mimeType: string; videoCodec: 'h264' | 'hevc' } | null> {
+interface MkvProbeResult {
+  duration: number
+  videoCodec: 'h264' | 'hevc'
+  audioCodecName: string
+  audioStrategy: 'copy' | 'transcode'
+  streamCopyMimeType: string | null
+}
+
+async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
   if (!ffprobePath) return null
   try {
     Ffmpeg.setFfprobePath(ffprobePath)
@@ -1737,13 +1857,20 @@ async function probeMkvForMse(mkvPath: string): Promise<{ duration: number; mime
     const video = metadata.streams?.find((s) => s.codec_type === 'video')
     const audio = metadata.streams?.find((s) => s.codec_type === 'audio')
     if (!video || !audio) return null
-    const aStr = aacCodecString(audio)
-    if (!aStr) return null
+    let videoCodec: 'h264' | 'hevc'
+    let videoCodecStr: string | null = null
     const avc = avcCodecString(video)
-    if (avc) return { duration, mimeType: `video/mp4; codecs="${avc}, ${aStr}"`, videoCodec: 'h264' }
-    const hevc = hevcCodecString(video)
-    if (hevc) return { duration, mimeType: `video/mp4; codecs="${hevc}, ${aStr}"`, videoCodec: 'hevc' }
-    return null
+    if (avc) { videoCodec = 'h264'; videoCodecStr = avc }
+    else {
+      const hevc = hevcCodecString(video)
+      if (hevc) { videoCodec = 'hevc'; videoCodecStr = hevc }
+      else return null
+    }
+    const audioCodecName = (audio.codec_name || '').toString()
+    const aStr = aacCodecString(audio)
+    const audioStrategy: 'copy' | 'transcode' = aStr ? 'copy' : 'transcode'
+    const streamCopyMimeType = aStr && videoCodecStr ? `video/mp4; codecs="${videoCodecStr}, ${aStr}"` : null
+    return { duration, videoCodec, audioCodecName, audioStrategy, streamCopyMimeType }
   } catch {
     return null
   }
@@ -1809,6 +1936,82 @@ function hevcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
   // Constraint indicator flags: 6 bytes, typically all zero; Chromium accepts a
   // trailing `.B0` (or even truncation). Use `.B0` as a compact default.
   return `hvc1.${profileIdc}.${compatHex}.${tierAndLevel}.B0`
+}
+
+let cachedH264Encoder: string | null | undefined = undefined
+
+interface H264EncoderChoice {
+  name: string
+  videoArgs: string[]
+  extraInputArgs?: string[]
+}
+
+function h264EncoderCandidates(): H264EncoderChoice[] {
+  // Force a keyframe every second via a time-based expression so fragments
+  // emitted with `+frag_keyframe` land every ~1 s instead of waiting for the
+  // encoder's default ~10 s GOP. Without this, the first post-seek fragment
+  // takes many seconds to appear and the MSE buffer stays empty.
+  const keyframeEverySecond = ['-force_key_frames', 'expr:gte(t,n_forced*1)']
+  const candidates: H264EncoderChoice[] = []
+  if (process.platform === 'linux') {
+    candidates.push({
+      name: 'h264_vaapi',
+      extraInputArgs: ['-init_hw_device', 'vaapi=va:/dev/dri/renderD128', '-filter_hw_device', 'va'],
+      videoArgs: ['-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi', '-profile:v', 'high', '-level', '40', ...keyframeEverySecond]
+    })
+  }
+  candidates.push({
+    name: 'h264_nvenc',
+    videoArgs: ['-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'll', '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.0', ...keyframeEverySecond]
+  })
+  if (process.platform === 'win32' || process.platform === 'linux') {
+    candidates.push({
+      name: 'h264_qsv',
+      videoArgs: ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-pix_fmt', 'nv12', '-profile:v', 'high', '-level', '4.0', ...keyframeEverySecond]
+    })
+  }
+  candidates.push({
+    // No `-tune zerolatency`: it forces slice-threads only and disables frame-threading,
+    // which roughly halves libx264's throughput. `-threads 0` lets x264 auto-pick.
+    name: 'libx264',
+    videoArgs: ['-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '0', '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.0', ...keyframeEverySecond]
+  })
+  return candidates
+}
+
+function dryRunEncoder(choice: H264EncoderChoice): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (!ffmpegPath) return resolve(false)
+    const args: string[] = []
+    if (choice.extraInputArgs) args.push(...choice.extraInputArgs)
+    args.push('-f', 'lavfi', '-i', 'testsrc=duration=0.1:size=320x240:rate=30', '-frames:v', '1')
+    args.push(...choice.videoArgs)
+    args.push('-an', '-f', 'null', '-')
+    try {
+      execFile(ffmpegPath, args, { timeout: 5000 }, (err) => resolve(!err))
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
+async function pickH264Encoder(): Promise<H264EncoderChoice> {
+  const candidates = h264EncoderCandidates()
+  if (cachedH264Encoder !== undefined) {
+    const hit = candidates.find((c) => c.name === cachedH264Encoder)
+    if (hit) return hit
+  }
+  for (const c of candidates) {
+    const ok = await dryRunEncoder(c)
+    if (ok) {
+      cachedH264Encoder = c.name
+      console.log(`[remux-stream] picked H.264 encoder: ${c.name}`)
+      return c
+    }
+  }
+  // libx264 should always work but if even that fails, still return it so the spawn surfaces a real error later.
+  cachedH264Encoder = 'libx264'
+  return candidates[candidates.length - 1]
 }
 
 function reverseBits32(value: number): number {

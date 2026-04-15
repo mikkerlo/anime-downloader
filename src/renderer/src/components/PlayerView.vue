@@ -61,7 +61,10 @@ const remuxedPath = ref('')           // used by legacy full-remux fallback
 const streamSessionId = ref('')       // active MSE session id
 const mseSrcUrl = ref('')             // URL.createObjectURL(MediaSource)
 const mkvBuffering = ref(false)       // shows "Buffering…" toast while MSE waits for data
-const hevcFallbackWarning = ref(false) // true when HEVC MSE negotiate failed and we're on the legacy remux path
+const transcodingHevc = ref(false)    // true when the current MSE session is real-time HEVC→H.264 transcode
+const hevcPromptOpen = ref(false)     // consent modal when MSE rejects HEVC and setting is 'ask'
+type HevcPromptChoice = 'transcode' | 'always-transcode' | 'external' | 'cancel'
+let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null
 
 // MSE internals (not reactive)
 let mediaSource: MediaSource | null = null
@@ -327,11 +330,8 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
   streamSessionId.value = ''
   remuxedPath.value = ''
   remuxError.value = ''
-  hevcFallbackWarning.value = false
+  transcodingHevc.value = false
 
-  // Resolve saved position up front so ffmpeg's first spawn already starts
-  // near the resume point. Avoids the "append-during-parse" race that fires
-  // if we set timestampOffset after the first chunks are already parsing.
   let initialSeek = 0
   try {
     const epInt = currentEpisodeInt.value
@@ -352,12 +352,29 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
       mkvBuffering.value = true
       return { ok: true }
     }
-    console.warn('[player] MSE does not support codecs:', streamResult.mimeType, '— falling back to legacy remux')
-    // HEVC without a platform decoder: the legacy remux will succeed (stream copy)
-    // but the resulting MP4 will also be unplayable because <video> itself cannot
-    // decode it. Warn the user so they don't wait silently for a black screen.
-    if (/hvc1|hev1/i.test(streamResult.mimeType)) hevcFallbackWarning.value = true
+    console.warn('[player] MSE does not support codecs:', streamResult.mimeType)
     await window.api.playerCleanupRemux()
+
+    if (/hvc1|hev1/i.test(streamResult.mimeType)) {
+      const pref = ((await window.api.getSetting('hevcTranscodeOnPlay')) as 'ask' | 'always' | 'never' | undefined) ?? 'ask'
+      let choice: HevcPromptChoice
+      if (pref === 'always') choice = 'transcode'
+      else if (pref === 'never') choice = 'external'
+      else choice = await askHevcChoice()
+      if (choice === 'external') {
+        const res = await window.api.shellOpenExternalFile(filePath)
+        emit('close')
+        return res.ok ? { ok: true } : { ok: false, error: res.error || 'Failed to open externally' }
+      }
+      if (choice === 'cancel') {
+        emit('close')
+        return { ok: true }
+      }
+      if (choice === 'always-transcode') {
+        try { await window.api.setSetting('hevcTranscodeOnPlay', 'always') } catch { /* ignore */ }
+      }
+      return await prepareHevcTranscode(filePath, initialSeek)
+    }
   } else {
     console.warn('[player] MSE stream open failed, falling back to legacy remux:', streamResult.error)
   }
@@ -374,6 +391,44 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
   } finally {
     remuxing.value = false
   }
+}
+
+function askHevcChoice(): Promise<HevcPromptChoice> {
+  return new Promise((resolve) => {
+    hevcPromptResolver = resolve
+    hevcPromptOpen.value = true
+  })
+}
+
+function resolveHevcPrompt(choice: HevcPromptChoice): void {
+  hevcPromptOpen.value = false
+  const fn = hevcPromptResolver
+  hevcPromptResolver = null
+  if (fn) fn(choice)
+}
+
+async function prepareHevcTranscode(filePath: string, initialSeek: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  transcodingHevc.value = true
+  const r = await window.api.playerRemuxMkvStreamTranscode(filePath, initialSeek)
+  if ('error' in r) {
+    transcodingHevc.value = false
+    return { ok: false, error: r.error }
+  }
+  const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(r.mimeType)
+  if (!mseOk) {
+    transcodingHevc.value = false
+    await window.api.playerCleanupRemux()
+    return { ok: false, error: `Browser rejected transcoded mime: ${r.mimeType}` }
+  }
+  startMseSession(r.sessionId, r.generation, r.duration, r.mimeType, r.initialSeek)
+  mkvBuffering.value = true
+  return { ok: true }
+}
+
+async function cancelHevcTranscode(): Promise<void> {
+  try { await window.api.playerCleanupRemux() } catch { /* ignore */ }
+  transcodingHevc.value = false
+  emit('close')
 }
 
 function startMseSession(sessionId: string, generation: number, duration: number, mimeType: string, initialSeek: number): void {
@@ -424,7 +479,7 @@ function onSourceBufferUpdateEnd(): void {
   pumpAppendQueue()
 }
 
-const MAX_BUFFER_AHEAD = 30
+const MAX_BUFFER_AHEAD = 60
 function pumpAppendQueue(): void {
   const sb = sourceBuffer
   const ms = mediaSource
@@ -505,6 +560,23 @@ function maybeRespawnForUnbufferedPosition(): void {
   }, RESPAWN_DEBOUNCE_MS)
 }
 
+async function waitForBufferAhead(v: HTMLVideoElement, sb: SourceBuffer, seconds: number, timeoutMs: number): Promise<void> {
+  const wasPaused = v.paused
+  try { v.pause() } catch { /* ignore */ }
+  const deadline = performance.now() + timeoutMs
+  while (performance.now() < deadline) {
+    const t = v.currentTime
+    for (let i = 0; i < sb.buffered.length; i++) {
+      if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
+        if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
+        return
+      }
+    }
+    await new Promise<void>((res) => setTimeout(res, 200))
+  }
+  if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
+}
+
 async function handleUnbufferedSeek(): Promise<void> {
   const v = videoRef.value
   const sb = sourceBuffer
@@ -564,6 +636,23 @@ async function handleUnbufferedSeek(): Promise<void> {
     }
     // Release main's buffered prelude for the new ffmpeg run.
     window.api.playerStreamStart(streamSessionId.value)
+    // Clear the in-flight flag *before* awaiting the buffer-ahead gate below,
+    // otherwise `pumpAppendQueue` refuses to drain incoming chunks (it bails
+    // early while the flag is set), the buffer never fills, and the wait
+    // times out — manifesting as a ~15s post-seek freeze on transcode.
+    unbufferedSeekInFlight = false
+    pumpAppendQueue()
+
+    // On the transcode path ffmpeg runs at ~real-time with almost no headroom,
+    // so the fresh buffer stays razor-thin and any encoder hiccup stalls the
+    // video. Pause playback until we have a few seconds buffered ahead, then
+    // let the element resume. Stream-copy doesn't need this — muxing is much
+    // faster than real-time and the buffer fills instantly.
+    if (transcodingHevc.value) {
+      mkvBuffering.value = true
+      await waitForBufferAhead(v, sb, 3.0, 15000)
+      mkvBuffering.value = false
+    }
   } finally {
     unbufferedSeekInFlight = false
     // If the user kept seeking while the respawn was in flight, the playhead
@@ -610,6 +699,7 @@ function resetMseState(): void {
   appendQueue.length = 0
   mseInitialSeek = 0
   currentStreamGen = 0
+  transcodingHevc.value = false
   if (sourceBuffer) {
     try { sourceBuffer.removeEventListener('updateend', onSourceBufferUpdateEnd) } catch { /* ignore */ }
     sourceBuffer = null
@@ -1665,16 +1755,31 @@ const bufferedProgress = computed(() => {
         <div class="remux-spinner"></div>
         <p class="remux-title">Preparing MKV for playback...</p>
         <p class="remux-hint">Remuxing to MP4 (stream copy, no re-encoding)</p>
-        <p v-if="hevcFallbackWarning" class="remux-hint remux-hint-warn">
-          HEVC (H.265) is not natively supported on this platform — the remuxed file may fail to play.
+      </div>
+    </div>
+
+    <!-- HEVC consent modal when MSE rejects the track -->
+    <div v-if="hevcPromptOpen" class="remux-overlay">
+      <div class="remux-modal">
+        <p class="remux-title">HEVC not supported by the built-in player</p>
+        <p class="remux-hint">
+          This file uses HEVC (H.265) and your platform has no decoder Chromium can use.
+          Transcoding to H.264 on the fly lets the built-in player play it, at the cost of extra CPU/GPU.
         </p>
+        <div class="hevc-prompt-buttons">
+          <button class="remux-close-btn" @click="resolveHevcPrompt('transcode')">Transcode this file</button>
+          <button class="remux-close-btn" @click="resolveHevcPrompt('always-transcode')">Always transcode HEVC</button>
+          <button class="remux-close-btn" @click="resolveHevcPrompt('external')">Open in external player</button>
+          <button class="remux-close-btn" @click="resolveHevcPrompt('cancel')">Cancel</button>
+        </div>
       </div>
     </div>
 
     <!-- Streaming MKV: subtle toast while the first seconds buffer -->
     <transition name="fade">
       <div v-if="mkvBuffering" class="mkv-buffering-toast">
-        Buffering MKV…
+        {{ transcodingHevc ? 'Transcoding HEVC → H.264…' : 'Buffering MKV…' }}
+        <button v-if="transcodingHevc" class="mkv-cancel-btn" @click="cancelHevcTranscode">Cancel</button>
       </div>
     </transition>
 
@@ -2092,9 +2197,22 @@ const bufferedProgress = computed(() => {
   color: #6a6a8a;
 }
 
-.remux-hint-warn {
-  margin-top: 0.5rem;
-  color: #e0b36a;
+.hevc-prompt-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.mkv-cancel-btn {
+  margin-left: 0.75rem;
+  background: transparent;
+  border: 1px solid #e94560;
+  color: #e94560;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 0.75rem;
 }
 
 .remux-close-btn {

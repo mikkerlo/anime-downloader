@@ -1791,8 +1791,10 @@ function hevcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
   } else {
     return null
   }
-  // ffprobe's `level` for HEVC is level_idc * 3 (e.g. 120 → level 4.0, 150 → 5.0, 153 → 5.1, 156 → 5.2)
-  // For the codec string we want the raw level_idc (120, 150, …), not the decimal level.
+  // For HEVC, ffprobe's `level` is the raw HEVC level_idc value (for example
+  // 120 → level 4.0, 150 → 5.0, 153 → 5.1, 156 → 5.2 in human-readable form).
+  // The codec string uses that raw value directly, so we emit `L<level_idc>`
+  // (for example `L120`, `L150`) rather than converting it to a decimal level.
   const levelIdc = typeof stream.level === 'number' ? stream.level : 0
   if (levelIdc <= 0) return null
   // Reverse 32-bit compatibility flags and emit as hex without leading zeros.

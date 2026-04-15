@@ -62,6 +62,7 @@ const remuxedPath = ref('')           // used by legacy full-remux fallback
 const streamSessionId = ref('')       // active MSE session id
 const mseSrcUrl = ref('')             // URL.createObjectURL(MediaSource)
 const mkvBuffering = ref(false)       // shows "Buffering…" toast while MSE waits for data
+const hevcFallbackWarning = ref(false) // true when HEVC MSE negotiate failed and we're on the legacy remux path
 
 // MSE internals (not reactive)
 let mediaSource: MediaSource | null = null
@@ -308,6 +309,7 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
   streamSessionId.value = ''
   remuxedPath.value = ''
   remuxError.value = ''
+  hevcFallbackWarning.value = false
 
   // Resolve saved position up front so ffmpeg's first spawn already starts
   // near the resume point. Avoids the "append-during-parse" race that fires
@@ -333,6 +335,10 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
       return { ok: true }
     }
     console.warn('[player] MSE does not support codecs:', streamResult.mimeType, '— falling back to legacy remux')
+    // HEVC without a platform decoder: the legacy remux will succeed (stream copy)
+    // but the resulting MP4 will also be unplayable because <video> itself cannot
+    // decode it. Warn the user so they don't wait silently for a black screen.
+    if (/hvc1|hev1/i.test(streamResult.mimeType)) hevcFallbackWarning.value = true
     await window.api.playerCleanupRemux()
   } else {
     console.warn('[player] MSE stream open failed, falling back to legacy remux:', streamResult.error)
@@ -1607,6 +1613,9 @@ const bufferedProgress = computed(() => {
         <div class="remux-spinner"></div>
         <p class="remux-title">Preparing MKV for playback...</p>
         <p class="remux-hint">Remuxing to MP4 (stream copy, no re-encoding)</p>
+        <p v-if="hevcFallbackWarning" class="remux-hint remux-hint-warn">
+          HEVC (H.265) is not natively supported on this platform — the remuxed file may fail to play.
+        </p>
       </div>
     </div>
 
@@ -2029,6 +2038,11 @@ const bufferedProgress = computed(() => {
 .remux-hint {
   font-size: 0.8rem;
   color: #6a6a8a;
+}
+
+.remux-hint-warn {
+  margin-top: 0.5rem;
+  color: #e0b36a;
 }
 
 .remux-close-btn {

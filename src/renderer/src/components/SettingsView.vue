@@ -32,6 +32,15 @@ const autoMerge = ref(false)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
 
+// HEVC playback decoder availability. On Linux stock Chromium builds ship no HEVC
+// decoder, so merging to H.265 produces files the built-in player can't play.
+// Windows (Media Foundation) and macOS (VideoToolbox) generally work.
+const hevcPlaybackSupported = typeof MediaSource !== 'undefined'
+  && (
+    MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.B0, mp4a.40.2"')
+    || MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L120.B0, mp4a.40.2"')
+  )
+
 const backgroundQualityProbe = ref(false)
 
 // Debug / scan-merge state
@@ -533,7 +542,27 @@ watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
-watch(videoCodec, (val) => { if (loaded.value) autoSave('videoCodec', val) })
+watch(videoCodec, (val, oldVal) => {
+  if (!loaded.value) return
+  const isHevc = val.startsWith('libx265') || val.startsWith('hevc_')
+  const wasHevc = oldVal.startsWith('libx265') || oldVal.startsWith('hevc_')
+  // Only ask for confirmation on platforms without a working HEVC decoder —
+  // on Windows/macOS the merged file plays back fine and the prompt is noise.
+  if (isHevc && !wasHevc && !hevcPlaybackSupported) {
+    const confirmed = window.confirm(
+      'This platform has no HEVC (H.265) decoder available for playback.\n\n' +
+        'Files merged with H.265 will save disk space, but the built-in player will not be able to ' +
+        'decode them — you\'ll get audio with a black video, and will need an external player (VLC/mpv) ' +
+        'to watch them.\n\n' +
+        'Continue with H.265?'
+    )
+    if (!confirmed) {
+      videoCodec.value = oldVal
+      return
+    }
+  }
+  autoSave('videoCodec', val)
+})
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
 </script>
@@ -843,6 +872,12 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
           <select v-model="videoCodec" class="setting-input setting-select" :disabled="!ffmpeg?.available">
             <option v-for="c in availableCodecs" :key="c.value" :value="c.value">{{ c.label }}</option>
           </select>
+          <p
+            v-if="(videoCodec.startsWith('libx265') || videoCodec.startsWith('hevc_')) && !hevcPlaybackSupported"
+            class="setting-hint setting-hint-warn"
+          >
+            H.265 merges save disk space, but this platform has no HEVC decoder — the built-in player will not play these files.
+          </p>
         </div>
       </template>
 
@@ -1126,6 +1161,11 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
   font-size: 0.8rem;
   color: #6a6a8a;
   margin-bottom: 10px;
+}
+
+.setting-hint-warn {
+  color: #e0b36a;
+  margin-top: 6px;
 }
 
 .setting-input {

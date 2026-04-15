@@ -262,6 +262,35 @@ onMounted(async () => {
     dataSource.value = res.source
     await loadPageEpisodes()
     await checkFileStatus()
+    // If the user hasn't explicitly picked a translation type on this anime
+    // before, and something is already downloaded, prefer the (type, author)
+    // of the downloaded file(s) over the global settings default.
+    if (!props.initialPrefs?.translationType) {
+      const counts = new Map<string, number>()
+      for (const metaArr of Object.values(episodeMeta.value)) {
+        for (const m of metaArr) {
+          const key = `${m.translationType}\u0000${m.author}`
+          counts.set(key, (counts.get(key) || 0) + 1)
+        }
+      }
+      if (counts.size > 0) {
+        let bestKey = ''
+        let bestCount = 0
+        for (const [key, count] of counts) {
+          if (count > bestCount) { bestKey = key; bestCount = count }
+        }
+        if (bestKey) {
+          const [bestType, bestAuthor] = bestKey.split('\u0000')
+          translationType.value = bestType
+          // Only override selectedAuthor if the downloaded author is still
+          // offered for this type — the translation may have been deactivated
+          // or removed upstream, which would leave the <select> blank.
+          if (bestAuthor && availableAuthors.value.some(([a]) => a === bestAuthor)) {
+            selectedAuthor.value = bestAuthor
+          }
+        }
+      }
+    }
   } catch (err) {
     console.error('Failed to load anime detail view:', err)
   } finally {

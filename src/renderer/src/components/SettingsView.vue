@@ -553,8 +553,15 @@ watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
 watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
+let suppressVideoCodecSave = false
 watch(videoCodec, (val, oldVal) => {
   if (!loaded.value) return
+  // Re-entrant call from reverting the value below — skip both the confirm
+  // and the autoSave so we don't flash a "Saved" toast for a no-op change.
+  if (suppressVideoCodecSave) {
+    suppressVideoCodecSave = false
+    return
+  }
   const isHevc = val.startsWith('libx265') || val.startsWith('hevc_')
   const wasHevc = oldVal.startsWith('libx265') || oldVal.startsWith('hevc_')
   // Only ask for confirmation on platforms without a working HEVC decoder —
@@ -568,6 +575,7 @@ watch(videoCodec, (val, oldVal) => {
         'Continue with H.265?'
     )
     if (!confirmed) {
+      suppressVideoCodecSave = true
       videoCodec.value = oldVal
       return
     }

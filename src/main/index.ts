@@ -1773,21 +1773,23 @@ function hevcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
   const profile = (stream.profile || '').toString().toLowerCase()
   let profileIdc: number
   let compatFlags: number
-  // Compatibility flags are a 32-bit field whose hex representation is reversed
-  // per ISO/IEC 14496-15. These constants are pre-reversed values matching the
-  // strings browsers accept (see dashif.org/codecs, Chromium video_codecs.cc):
-  //   Main           → "6"  (hvc1.1.6.Lxx.B0)
-  //   Main 10        → "4"  (hvc1.2.4.Lxx.B0)
-  //   Main Still Pic → "2"  (hvc1.3.2.Lxx.B0)
+  // `compatFlags` holds the raw general_profile_compatibility_flag bitfield
+  // exactly as laid out in ISO/IEC 14496-15 §E.3 (MSB = flag[0] = Main profile,
+  // next bit = Main 10, next = Main Still Picture, …). The codec string wants
+  // the bit-reversed (LSB-first) hex form, which `reverseBits32` below produces:
+  //   Main           → raw 0x60000000 → codec hex "6"  → hvc1.1.6.Lxx.B0
+  //   Main 10        → raw 0x20000000 → codec hex "4"  → hvc1.2.4.Lxx.B0
+  //   Main Still Pic → raw 0x40000000 → codec hex "2"  → hvc1.3.2.Lxx.B0
   if (profile.includes('main 10')) {
     profileIdc = 2
-    compatFlags = 0x20000000 // reversed → 4
+    compatFlags = 0x20000000
   } else if (profile.includes('main still')) {
     profileIdc = 3
-    compatFlags = 0x40000000 // reversed → 2
+    compatFlags = 0x40000000
   } else if (profile.includes('main')) {
+    // Main-profile bitstreams are also decodable by Main 10 decoders, hence two bits set.
     profileIdc = 1
-    compatFlags = 0x60000000 // reversed → 6; Main-profile bitstreams are also decodable by Main 10 decoders
+    compatFlags = 0x60000000
   } else {
     return null
   }

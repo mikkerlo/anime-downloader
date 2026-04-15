@@ -325,7 +325,9 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
 
   const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek)
   if (!('error' in streamResult)) {
-    if (typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType)) {
+    const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType)
+    console.log(`[player] MSE negotiate mime="${streamResult.mimeType}" supported=${mseOk}`)
+    if (mseOk) {
       startMseSession(streamResult.sessionId, streamResult.generation, streamResult.duration, streamResult.mimeType, streamResult.initialSeek)
       mkvBuffering.value = true
       return { ok: true }

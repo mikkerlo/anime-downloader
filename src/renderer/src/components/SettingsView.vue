@@ -35,11 +35,22 @@ const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders
 // HEVC playback decoder availability. On Linux stock Chromium builds ship no HEVC
 // decoder, so merging to H.265 produces files the built-in player can't play.
 // Windows (Media Foundation) and macOS (VideoToolbox) generally work.
-const hevcPlaybackSupported = typeof MediaSource !== 'undefined'
-  && (
-    MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.B0, mp4a.40.2"')
-    || MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L120.B0, mp4a.40.2"')
-  )
+//
+// Probe via HTMLVideoElement.canPlayType rather than MediaSource.isTypeSupported:
+// merged H.265 MP4s play through a plain <video src="…"> element, not MSE, and
+// the two support surfaces can diverge. Using canPlayType matches what the
+// built-in player will actually attempt when opening a merged file.
+const hevcPlaybackSupported = (() => {
+  if (typeof document === 'undefined') return false
+  const v = document.createElement('video')
+  const probes = [
+    'video/mp4; codecs="hvc1.1.6.L120.B0"',
+    'video/mp4; codecs="hvc1.2.4.L120.B0"',
+    'video/mp4; codecs="hev1.1.6.L120.B0"',
+    'video/mp4; codecs="hev1.2.4.L120.B0"'
+  ]
+  return probes.some((p) => v.canPlayType(p) !== '')
+})()
 
 const backgroundQualityProbe = ref(false)
 

@@ -43,25 +43,40 @@
 
 ## Planned
 
-## 1. Centralized Shikimori Cache & Surgical Updates
+## 1. Robust Shikimori Sync: Offline Queuing, Centralized Cache & Background Pre-fetching
 
-**Priority:** Medium | **Effort:** Medium
+**Priority:** High | **Effort:** Large
 
-**Motivation:** Currently, the Shikimori tab only loads data once on mount and doesn't reflect changes made in the Anime Detail view (like updating watched episodes or status). This leads to stale data and requires manual refreshes. A persistent cache will improve startup time and offline support, while a broadcast mechanism will keep all views in sync.
+**Motivation:** Users should be able to update their watch status even without an active internet connection. Changes should be queued and automatically synced when back online, with careful conflict resolution to avoid overwriting manual changes made directly on Shikimori. A centralized persistent cache and background pre-fetching will make the Shikimori tab feel instant and reliable.
 
-**Plan:**
-1. **Persistent Storage:** Add `shikimoriUserRates` to `electron-store` defaults in `src/main/index.ts`.
-2. **Main Process Cache Logic:**
-   - Update `shikimori:get-anime-rates` to return cached data from the store if available.
-   - Add `forceRefresh?: boolean` parameter to `shikimori:get-anime-rates` to allow manual re-fetch.
-   - When fetching from API, update the store and resolve MAL IDs via `lookupByMalIds`.
-3. **IPC Broadcasting:**
-   - Create a new IPC channel `shikimori:rate-updated` (4-file pattern).
-   - In `shikimori:update-rate` handler: after a successful update, update the corresponding entry in the store's `shikimoriUserRates` and broadcast the full `ShikiAnimeRateEntry` to all renderer windows.
-4. **Renderer Integration:**
-   - `src/preload/index.ts` & `src/preload/types.d.ts`: Expose `onShikimoriRateUpdated` listener.
-   - `src/renderer/src/components/ShikimoriView.vue`: Subscribe to `shikimori:rate-updated`. On update, surgically replace the entry in the local `entries` ref.
-   - `src/renderer/src/components/AnimeDetailView.vue`: (Optional) Use the cache for initial Shikimori data if it's already available in the main process to reduce API calls on mount.
+### Tasks:
+
+1. **Persistent Cache & Offline Queue Store**
+   - Add `shikimoriUserRates` (cache of the full list) and `shikimoriUpdateQueue` (array of pending changes) to `electron-store` defaults in `src/main/index.ts`.
+   - Update `shikimori:get-anime-rates` to serve from cache immediately, then optionally refresh in background.
+
+2. **Offline Mode Detection & Interception**
+   - Implement `online-status-changed` IPC to track connectivity in the main process (via renderer events).
+   - Update `shikimori:update-rate` handler:
+     - If offline: Record `before` state (from cache), `after` state (new values), and `malId` into `shikimoriUpdateQueue`.
+     - Return the `after` state to the renderer immediately to reflect the change in UI.
+   - Broadcast `shikimori:status-changed` (online/offline) to renderer.
+
+3. **Conflict-Aware Automatic Sync**
+   - On `online` event: Process `shikimoriUpdateQueue` sequentially.
+   - For each item:
+     - Fetch current state from Shikimori API.
+     - Compare `current` with `before`. If they match, apply `after`.
+     - If they differ (manual change on Shikimori), only apply `after` if it's an advancement (e.g., higher episode count or 'completed' status) and doesn't "revert" a more recent manual change.
+     - Emit `shikimori:rate-updated` for each successful sync to update views.
+
+4. **Surgical UI Updates & Offline Indicators**
+   - `src/renderer/src/components/ShikimoriView.vue`: Listen for `shikimori:rate-updated` and surgically update the local list without a full re-fetch.
+   - `src/renderer/src/components/AnimeDetailView.vue`: Display a "Working Offline - changes will sync later" indicator near the Shikimori status block when disconnected.
+
+5. **Gradual Background Data Pre-fetching**
+   - In `shikimori:get-anime-rates`: After returning the list, initiate a background task to fetch and cache full details (`AnimeDetail`) for each anime in the list.
+   - Use a throttled loop (e.g., 1 anime every 2–3 seconds) to stay under Smotret-Anime API rate limits and avoid blocking the main thread.
 
 ## 2. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 

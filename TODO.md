@@ -55,6 +55,10 @@
 - Implement `shikimori:rate-updated` IPC channel to broadcast changes to all renderer windows.
 - Update `ShikimoriView.vue` to listen for broadcasts and surgically update its local list.
 
+**Blockers & Risks:**
+- **Schema Design:** Must define a robust schema for `shikimoriUserRates` that includes `updatedAt` to avoid stale cache issues.
+- **IPC Overhead:** Broadcasting full rate objects for large lists (1000+ entries) may cause renderer lag; needs optimized payload or filtered broadcasts.
+
 ## 2. Offline Shikimori Support: Queuing & Status Indicators
 
 **Priority:** High | **Effort:** Medium
@@ -66,6 +70,10 @@
 - Create `shikimoriUpdateQueue` in `electron-store` to persist pending changes.
 - Update `shikimori:update-rate` to intercept changes while offline: save the `before` (cached) and `after` (requested) states and return success to the UI.
 - Add a "Working Offline" indicator near the Shikimori status block in `AnimeDetailView.vue`.
+
+**Blockers & Risks:**
+- **Dependency:** Hard-blocked by **Item #1** (requires the centralized cache to record the `before` state).
+- **False Positives:** `navigator.onLine` is notoriously unreliable; implementation must handle "lie-fi" (connected to Wi-Fi but no internet) to avoid lost requests.
 
 ## 3. Conflict-Aware Automatic Sync for Offline Changes
 
@@ -79,6 +87,11 @@
 - **Conflict Resolution:** If the current state matches `before`, apply the `after` change. If they differ (manual change on Shikimori web), only apply the update if it represents progress (e.g., higher episode count) to avoid regressions.
 - Clear successfully synced items from the queue.
 
+**Blockers & Risks:**
+- **Dependency:** Hard-blocked by **Item #2**.
+- **Data Integrity:** Complex conflict resolution logic; incorrectly resolving a "watched 5" vs "watched 10" conflict could permanently corrupt user watch history on Shikimori.
+- **Rate Limiting:** Sequential syncing after a long offline period might trigger Shikimori's 429 rate limits.
+
 ## 4. Gradual Background Pre-fetching of Shikimori List Details
 
 **Priority:** Medium | **Effort:** Small
@@ -89,6 +102,10 @@
 - Implement a throttled background loop in `shikimori:get-anime-rates` that triggers after the initial list load.
 - Gradually fetch `AnimeDetail` for each item in the list (e.g., one every 3 seconds) to stay within Smotret-Anime API rate limits.
 - Cache the results using the existing `updateAnimeDetailCache` mechanism.
+
+**Blockers & Risks:**
+- **Ban Risk:** Aggressive pre-fetching will lead to IP bans from Smotret-Anime; the throttle *must* be strictly enforced and potentially randomized.
+- **Resource Usage:** Background fetching can increase CPU/Bandwidth; should be paused while the user is actively downloading or watching a high-bitrate stream.
 
 ## 5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 

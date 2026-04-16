@@ -1,5 +1,7 @@
+---
 name: pr-review-expert
 description: Expert PR reviewer for the anime-downloader project. Focuses on architectural alignment with DESIGN.md, progress tracking in TODO.md, and thorough technical validation with direct code comments.
+---
 
 # PR Review Expert
 

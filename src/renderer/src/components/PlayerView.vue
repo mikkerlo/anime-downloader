@@ -50,7 +50,6 @@ const anime4kActive = computed(() => webgpuAvailable.value && anime4kPreset.valu
 const showControls = ref(true)
 const showPresetMenu = ref(false)
 const showQualityMenu = ref(false)
-const isStreaming = computed(() => !!activeStreamUrl.value && !activeFilePath.value)
 let controlsTimer: ReturnType<typeof setTimeout> | null = null
 
 // MKV remux state
@@ -83,6 +82,25 @@ const STREAM_ACK_THRESHOLD = 1 * 1024 * 1024
 const activeStreamUrl = ref(props.streamUrl)
 const selectedHeight = ref(0)
 const hasQualities = computed(() => props.availableStreams.length > 0)
+
+const isStreaming = computed(() => !!activeStreamUrl.value && !activeFilePath.value)
+const streamingBannerVisible = ref(false)
+let streamingBannerTimer: ReturnType<typeof setTimeout> | null = null
+watch(isStreaming, (streaming) => {
+  if (streamingBannerTimer) {
+    clearTimeout(streamingBannerTimer)
+    streamingBannerTimer = null
+  }
+  if (streaming) {
+    streamingBannerVisible.value = true
+    streamingBannerTimer = setTimeout(() => {
+      streamingBannerTimer = null
+      streamingBannerVisible.value = false
+    }, 3500)
+  } else {
+    streamingBannerVisible.value = false
+  }
+}, { immediate: true })
 
 // Translation selector state
 const showTranslationMenu = ref(false)
@@ -656,6 +674,18 @@ function toggleMute(): void {
   muted.value = !muted.value
   video.muted = muted.value
 }
+
+let persistVolumeTimer: ReturnType<typeof setTimeout> | null = null
+let suppressVolumePersist = true  // don't write the restored values back on mount
+watch([volume, muted], ([v, m]) => {
+  if (suppressVolumePersist) return
+  if (persistVolumeTimer) clearTimeout(persistVolumeTimer)
+  persistVolumeTimer = setTimeout(() => {
+    persistVolumeTimer = null
+    window.api.setSetting('playerVolume', v)
+    window.api.setSetting('playerMuted', m)
+  }, 400)
+})
 
 function toggleFullscreen(): void {
   if (!document.fullscreenElement) {
@@ -1526,12 +1556,26 @@ onMounted(async () => {
     anime4kPreset.value = savedPreset as typeof anime4kPreset.value
   }
 
+  // Restore saved volume + mute
+  const savedVolume = await window.api.getSetting('playerVolume') as number | null
+  if (typeof savedVolume === 'number' && savedVolume >= 0 && savedVolume <= 1) {
+    volume.value = savedVolume
+  }
+  const savedMuted = await window.api.getSetting('playerMuted') as boolean | null
+  if (typeof savedMuted === 'boolean') {
+    muted.value = savedMuted
+  }
+  await nextTick()
+  suppressVolumePersist = false
+
   await initWebGPU()
 
   // Wait for video to be ready, then start pipeline if needed
   await nextTick()
   const video = videoRef.value
   if (video) {
+    video.volume = volume.value
+    video.muted = muted.value
     const onVideoReady = async (): Promise<void> => {
       if (anime4kPreset.value !== 'off' && webgpuAvailable.value) {
         await startAnime4KPipeline()
@@ -1563,6 +1607,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('mouseup', onMouseBack, true)
   if (controlsTimer) clearTimeout(controlsTimer)
+  if (streamingBannerTimer) {
+    clearTimeout(streamingBannerTimer)
+    streamingBannerTimer = null
+  }
+  if (persistVolumeTimer) {
+    clearTimeout(persistVolumeTimer)
+    persistVolumeTimer = null
+  }
   cancelAutoAdvance()
   stopAnime4KPipeline()
   destroySubtitles()
@@ -1645,7 +1697,7 @@ const bufferedProgress = computed(() => {
 
     <!-- Streaming warning banner -->
     <transition name="fade">
-      <div v-if="isStreaming" class="streaming-banner">
+      <div v-if="streamingBannerVisible" class="streaming-banner">
         Streaming from server
       </div>
     </transition>

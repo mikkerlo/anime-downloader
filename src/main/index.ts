@@ -79,6 +79,8 @@ const store = new Store({
     autoMoveToCold: false,
     malIdMap: {} as Record<string, AnimeSearchResult>,
     playerMode: 'system' as 'system' | 'builtin',
+    playerVolume: 1 as number,
+    playerMuted: false,
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
   }

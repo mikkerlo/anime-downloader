@@ -92,20 +92,20 @@
 - **Data Integrity:** Complex conflict resolution logic; incorrectly resolving a "watched 5" vs "watched 10" conflict could permanently corrupt user watch history on Shikimori.
 - **Rate Limiting:** Sequential syncing after a long offline period might trigger Shikimori's 429 rate limits.
 
-## 4. Gradual Background Pre-fetching of Shikimori List Details
+## 4. Gradual Background Pre-fetching of Shikimori Detailed Info
 
 **Priority:** Medium | **Effort:** Small
 
-**Motivation:** Ensure all anime in the Shikimori watchlist have their full details (descriptions, genres, etc.) cached for a seamless offline experience.
+**Motivation:** Ensure all anime in the Shikimori watchlist have their full Shikimori-side details (detailed descriptions, genres, and metadata) cached for a seamless offline experience without risking Smotret-Anime IP bans.
 
 **Tasks:**
 - Implement a throttled background loop in `shikimori:get-anime-rates` that triggers after the initial list load.
-- Gradually fetch `AnimeDetail` for each item in the list (e.g., one every 3 seconds) to stay within Smotret-Anime API rate limits.
-- Cache the results using the existing `updateAnimeDetailCache` mechanism.
+- Gradually fetch detailed anime info from Shikimori API (e.g., one every 2 seconds) for each item in the list.
+- Store these details in the persistent cache to allow the Shikimori tab and Anime Detail view to show full information even when offline.
 
 **Blockers & Risks:**
-- **Ban Risk:** Aggressive pre-fetching will lead to IP bans from Smotret-Anime; the throttle *must* be strictly enforced and potentially randomized.
-- **Resource Usage:** Background fetching can increase CPU/Bandwidth; should be paused while the user is actively downloading or watching a high-bitrate stream.
+- **Shikimori Rate Limits:** Must strictly adhere to Shikimori's "5 requests per second" limit; the loop should be conservative (1-2 per second) to account for concurrent user actions.
+- **Cache Size:** Fetching full details for very large lists (2000+ entries) can grow the `electron-store` file significantly; may need to limit pre-fetching to "Watching" and "Planned" statuses only.
 
 ## 5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 

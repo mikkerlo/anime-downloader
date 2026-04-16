@@ -52,6 +52,22 @@ const hevcPlaybackSupported = (() => {
   return probes.some((p) => v.canPlayType(p) !== '')
 })()
 
+// `hevcTranscodeOnPlay` gates the MKV-via-MSE path, which negotiates codecs
+// through `MediaSource.isTypeSupported`. That surface can reject HEVC even when
+// `canPlayType` above accepts it (Chromium's platform HEVC path is reachable
+// through <video src> but not always through MSE). Probe MSE separately so we
+// only disable the dropdown when the fallback truly can't fire.
+const hevcMseSupported = (() => {
+  if (typeof window === 'undefined' || typeof MediaSource === 'undefined') return false
+  const probes = [
+    'video/mp4; codecs="hvc1.1.6.L120.B0"',
+    'video/mp4; codecs="hvc1.2.4.L120.B0"',
+    'video/mp4; codecs="hev1.1.6.L120.B0"',
+    'video/mp4; codecs="hev1.2.4.L120.B0"'
+  ]
+  return probes.some((p) => MediaSource.isTypeSupported(p))
+})()
+
 const backgroundQualityProbe = ref(false)
 
 // Debug / scan-merge state
@@ -946,21 +962,21 @@ watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeO
           <p class="setting-hint">
             When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen.
           </p>
-          <select v-model="hevcTranscodeOnPlay" class="setting-input setting-select" :disabled="hevcPlaybackSupported">
+          <select v-model="hevcTranscodeOnPlay" class="setting-input setting-select" :disabled="hevcMseSupported">
             <option value="ask">Ask each time</option>
             <option value="always">Always transcode</option>
             <option value="never">Never — open in external player</option>
           </select>
-          <div v-if="hevcPlaybackSupported" class="status-line ok" style="margin-top: 0.4rem">
-            HEVC decoder: available — transcoding not needed on this platform.
+          <div v-if="hevcMseSupported" class="status-line ok" style="margin-top: 0.4rem">
+            HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't fire.
           </div>
           <div v-else class="status-line warn" style="margin-top: 0.4rem">
-            HEVC decoder: not available — this setting controls the fallback behavior.
+            HEVC MSE decoder: not available — this setting controls the fallback for local MKV playback.
           </div>
         </div>
 
         <div class="setting-group">
-          <p class="setting-hint">Note: MKV files will stream from server when using the built-in player (local MKV playback not yet supported). When player mode is "Built-in", a Play button appears on non-downloaded episodes for streaming.</p>
+          <p class="setting-hint">Note: the built-in player supports local MKV playback via the MSE remux pipeline. For non-downloaded episodes, MKV files are streamed from the server — a Play button will appear on those rows when player mode is "Built-in". If a local HEVC MKV can't be decoded by your platform, the fallback above decides what happens.</p>
         </div>
       </template>
 

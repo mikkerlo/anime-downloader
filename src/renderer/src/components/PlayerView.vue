@@ -363,8 +363,12 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
       else choice = await askHevcChoice()
       if (choice === 'external') {
         const res = await window.api.shellOpenExternalFile(filePath)
-        emit('close')
-        return res.ok ? { ok: true } : { ok: false, error: res.error || 'Failed to open externally' }
+        if (res.ok) {
+          emit('close')
+          return { ok: true }
+        }
+        // Keep the player open so the error can surface in remuxError UI.
+        return { ok: false, error: res.error || 'Failed to open externally' }
       }
       if (choice === 'cancel') {
         emit('close')
@@ -395,6 +399,9 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
 
 function askHevcChoice(): Promise<HevcPromptChoice> {
   return new Promise((resolve) => {
+    // If a previous resolver is somehow still pending, settle it as cancel so
+    // the old caller can unwind and doesn't deadlock.
+    if (hevcPromptResolver) hevcPromptResolver('cancel')
     hevcPromptResolver = resolve
     hevcPromptOpen.value = true
   })
@@ -1704,6 +1711,13 @@ onBeforeUnmount(() => {
   if (persistVolumeTimer) {
     clearTimeout(persistVolumeTimer)
     persistVolumeTimer = null
+  }
+  // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
+  if (hevcPromptResolver) {
+    const fn = hevcPromptResolver
+    hevcPromptResolver = null
+    hevcPromptOpen.value = false
+    fn('cancel')
   }
   cancelAutoAdvance()
   stopAnime4KPipeline()

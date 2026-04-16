@@ -1541,7 +1541,14 @@ function registerIpcHandlers(): void {
     fs.mkdirSync(remuxTmpDir, { recursive: true })
 
     const encoder = await pickH264Encoder()
-    const mimeType = `video/mp4; codecs="avc1.640028, mp4a.40.2"`
+    // When the audio is being stream-copied, reflect its actual AAC object type
+    // (mp4a.40.2 / .5 / .29) in the mime — otherwise MediaSource.isTypeSupported
+    // will reject a perfectly valid HE-AAC stream. When we transcode audio we
+    // force LC AAC, so mp4a.40.2 is always correct on that branch.
+    const audioCodecForMime = probe.audioStrategy === 'copy' && probe.audioCodecString
+      ? probe.audioCodecString
+      : 'mp4a.40.2'
+    const mimeType = `video/mp4; codecs="avc1.640028, ${audioCodecForMime}"`
 
     const sessionId = randomUUID()
     const baseName = path.basename(mkvPath, path.extname(mkvPath))
@@ -1842,6 +1849,9 @@ interface MkvProbeResult {
   audioCodecName: string
   audioStrategy: 'copy' | 'transcode'
   streamCopyMimeType: string | null
+  // Set when the source audio is AAC — carries the precise AAC object-type
+  // codec string (e.g. mp4a.40.2, mp4a.40.5) for HE-AAC/HE-AACv2 variants.
+  audioCodecString: string | null
 }
 
 async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
@@ -1870,7 +1880,7 @@ async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
     const aStr = aacCodecString(audio)
     const audioStrategy: 'copy' | 'transcode' = aStr ? 'copy' : 'transcode'
     const streamCopyMimeType = aStr && videoCodecStr ? `video/mp4; codecs="${videoCodecStr}, ${aStr}"` : null
-    return { duration, videoCodec, audioCodecName, audioStrategy, streamCopyMimeType }
+    return { duration, videoCodec, audioCodecName, audioStrategy, streamCopyMimeType, audioCodecString: aStr }
   } catch {
     return null
   }

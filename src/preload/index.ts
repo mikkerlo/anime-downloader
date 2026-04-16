@@ -160,6 +160,12 @@ const api = {
   offPlayerStreamError: () => {
     ipcRenderer.removeAllListeners('player:stream-error')
   },
+  onPlayerStreamProgress: (callback: (data: { sessionId: string; gen: number; speed: number | null; time: number | null }) => void) => {
+    ipcRenderer.on('player:stream-progress', (_event, data) => callback(data))
+  },
+  offPlayerStreamProgress: () => {
+    ipcRenderer.removeAllListeners('player:stream-progress')
+  },
 
   // Shikimori
   shikimoriGetAuthUrl: () => ipcRenderer.invoke('shikimori:get-auth-url') as Promise<string>,

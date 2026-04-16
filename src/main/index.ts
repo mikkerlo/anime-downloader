@@ -1748,11 +1748,30 @@ function spawnFfmpegForSession(
   const proc = spawn(ffmpegPath!, args, { stdio: ['ignore', 'pipe', 'pipe'] })
   const procGen = session.generation
 
+  // Throttle transcode progress IPC: ffmpeg emits progress lines ~4x/sec which
+  // is too noisy for a UI label, so we coalesce to at most one send per 500 ms.
+  let lastProgressSentAt = 0
   proc.stderr?.on('data', (data: Buffer) => {
     if (procGen !== session.generation) return
     const line = data.toString()
     session.stderrTail.push(line)
     if (session.stderrTail.length > 40) session.stderrTail.shift()
+    if (!session.transcode) return
+    // Lines look like:
+    //   frame= 1234 fps= 60 q=-1.0 size=... time=00:01:23.45 bitrate=... speed=2.5x
+    const speedMatch = /speed=\s*([\d.]+)x/.exec(line)
+    const timeMatch = /time=\s*(\d+):(\d+):([\d.]+)/.exec(line)
+    if (!speedMatch && !timeMatch) return
+    const now = Date.now()
+    if (now - lastProgressSentAt < 500) return
+    lastProgressSentAt = now
+    const sender = event.sender
+    if (!sender || sender.isDestroyed()) return
+    const speed = speedMatch ? parseFloat(speedMatch[1]) : null
+    const time = timeMatch
+      ? parseInt(timeMatch[1], 10) * 3600 + parseInt(timeMatch[2], 10) * 60 + parseFloat(timeMatch[3])
+      : null
+    sender.send('player:stream-progress', { sessionId, gen: procGen, speed, time })
   })
 
   // Coalesce small ffmpeg stdout chunks into ~256 KB IPC messages. ffmpeg
@@ -1956,6 +1975,22 @@ interface H264EncoderChoice {
   extraInputArgs?: string[]
 }
 
+function listVaapiRenderNodes(): string[] {
+  // Common default is /dev/dri/renderD128, but multi-GPU systems expose
+  // renderD129, renderD130, ... The right one for hardware H.264 encode isn't
+  // knowable without probing, so enumerate all of them and let pickH264Encoder
+  // dry-run each in order.
+  try {
+    const entries = fs.readdirSync('/dev/dri')
+    return entries
+      .filter((n) => /^renderD\d+$/.test(n))
+      .sort()
+      .map((n) => `/dev/dri/${n}`)
+  } catch {
+    return []
+  }
+}
+
 function h264EncoderCandidates(): H264EncoderChoice[] {
   // Force a keyframe every second via a time-based expression so fragments
   // emitted with `+frag_keyframe` land every ~1 s instead of waiting for the
@@ -1964,11 +1999,13 @@ function h264EncoderCandidates(): H264EncoderChoice[] {
   const keyframeEverySecond = ['-force_key_frames', 'expr:gte(t,n_forced*1)']
   const candidates: H264EncoderChoice[] = []
   if (process.platform === 'linux') {
-    candidates.push({
-      name: 'h264_vaapi',
-      extraInputArgs: ['-init_hw_device', 'vaapi=va:/dev/dri/renderD128', '-filter_hw_device', 'va'],
-      videoArgs: ['-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi', '-profile:v', 'high', '-level', '40', ...keyframeEverySecond]
-    })
+    for (const node of listVaapiRenderNodes()) {
+      candidates.push({
+        name: `h264_vaapi(${node})`,
+        extraInputArgs: ['-init_hw_device', `vaapi=va:${node}`, '-filter_hw_device', 'va'],
+        videoArgs: ['-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi', '-profile:v', 'high', '-level', '40', ...keyframeEverySecond]
+      })
+    }
   }
   candidates.push({
     name: 'h264_nvenc',

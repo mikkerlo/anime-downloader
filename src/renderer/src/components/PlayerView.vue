@@ -62,6 +62,11 @@ const streamSessionId = ref('')       // active MSE session id
 const mseSrcUrl = ref('')             // URL.createObjectURL(MediaSource)
 const mkvBuffering = ref(false)       // shows "Buffering…" toast while MSE waits for data
 const transcodingHevc = ref(false)    // true when the current MSE session is real-time HEVC→H.264 transcode
+const transcodeSpeed = ref<number | null>(null)  // ffmpeg reported encode speed (e.g. 2.5 for 2.5x realtime)
+const transcodeLabel = computed(() => {
+  if (transcodeSpeed.value == null) return 'Transcoding HEVC → H.264…'
+  return `Transcoding HEVC → H.264 @ ${transcodeSpeed.value.toFixed(1)}×`
+})
 const hevcPromptOpen = ref(false)     // consent modal when MSE rejects HEVC and setting is 'ask'
 type HevcPromptChoice = 'transcode' | 'always-transcode' | 'external' | 'cancel'
 let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null
@@ -331,6 +336,7 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
   remuxedPath.value = ''
   remuxError.value = ''
   transcodingHevc.value = false
+  transcodeSpeed.value = null
 
   let initialSeek = 0
   try {
@@ -419,11 +425,13 @@ async function prepareHevcTranscode(filePath: string, initialSeek: number): Prom
   const r = await window.api.playerRemuxMkvStreamTranscode(filePath, initialSeek)
   if ('error' in r) {
     transcodingHevc.value = false
+    transcodeSpeed.value = null
     return { ok: false, error: r.error }
   }
   const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(r.mimeType)
   if (!mseOk) {
     transcodingHevc.value = false
+    transcodeSpeed.value = null
     await window.api.playerCleanupRemux()
     return { ok: false, error: `Browser rejected transcoded mime: ${r.mimeType}` }
   }
@@ -435,6 +443,7 @@ async function prepareHevcTranscode(filePath: string, initialSeek: number): Prom
 async function cancelHevcTranscode(): Promise<void> {
   try { await window.api.playerCleanupRemux() } catch { /* ignore */ }
   transcodingHevc.value = false
+  transcodeSpeed.value = null
   emit('close')
 }
 
@@ -707,6 +716,7 @@ function resetMseState(): void {
   mseInitialSeek = 0
   currentStreamGen = 0
   transcodingHevc.value = false
+  transcodeSpeed.value = null
   if (sourceBuffer) {
     try { sourceBuffer.removeEventListener('updateend', onSourceBufferUpdateEnd) } catch { /* ignore */ }
     sourceBuffer = null
@@ -1610,6 +1620,11 @@ onMounted(async () => {
   window.api.onPlayerStreamChunk(({ sessionId, gen, data }) => handleStreamChunk(sessionId, gen, data))
   window.api.onPlayerStreamEnd(({ sessionId }) => handleStreamEnd(sessionId))
   window.api.onPlayerStreamError(({ sessionId, error }) => handleStreamError(sessionId, error))
+  window.api.onPlayerStreamProgress(({ sessionId, gen, speed }) => {
+    if (sessionId !== streamSessionId.value) return
+    if (gen !== currentStreamGen) return
+    if (typeof speed === 'number' && isFinite(speed)) transcodeSpeed.value = speed
+  })
 
   // Diagnostic listeners on the video element to see why MSE playback stalls.
   watch(videoRef, (v) => {
@@ -1738,6 +1753,7 @@ onBeforeUnmount(() => {
   window.api.offPlayerStreamChunk()
   window.api.offPlayerStreamEnd()
   window.api.offPlayerStreamError()
+  window.api.offPlayerStreamProgress()
   resetMseState()
   // Clean up remuxed temp files / active stream sessions
   if (remuxedPath.value || streamSessionId.value) {
@@ -1792,7 +1808,7 @@ const bufferedProgress = computed(() => {
     <!-- Streaming MKV: subtle toast while the first seconds buffer -->
     <transition name="fade">
       <div v-if="mkvBuffering" class="mkv-buffering-toast">
-        {{ transcodingHevc ? 'Transcoding HEVC → H.264…' : 'Buffering MKV…' }}
+        {{ transcodingHevc ? transcodeLabel : 'Buffering MKV…' }}
         <button v-if="transcodingHevc" class="mkv-cancel-btn" @click="cancelHevcTranscode">Cancel</button>
       </div>
     </transition>

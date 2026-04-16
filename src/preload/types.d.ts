@@ -111,6 +111,8 @@ interface Api {
   offPlayerStreamEnd: () => void
   onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => void
   offPlayerStreamError: () => void
+  onPlayerStreamProgress: (callback: (data: { sessionId: string; gen: number; speed: number | null; time: number | null }) => void) => void
+  offPlayerStreamProgress: () => void
 
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>

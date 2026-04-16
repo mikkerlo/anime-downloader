@@ -43,42 +43,54 @@
 
 ## Planned
 
-## 1. Robust Shikimori Sync: Offline Queuing, Centralized Cache & Background Pre-fetching
+## 1. Centralized Shikimori Cache & Surgical UI Updates
 
-**Priority:** High | **Effort:** Large
+**Priority:** High | **Effort:** Medium
 
-**Motivation:** Users should be able to update their watch status even without an active internet connection. Changes should be queued and automatically synced when back online, with careful conflict resolution to avoid overwriting manual changes made directly on Shikimori. A centralized persistent cache and background pre-fetching will make the Shikimori tab feel instant and reliable.
+**Motivation:** Move Shikimori data management to the main process to enable persistence and keep multiple views (Shikimori tab and Anime Detail) in sync without full refreshes.
 
-### Tasks:
+**Tasks:**
+- Add `shikimoriUserRates` to `electron-store` defaults.
+- Update `shikimori:get-anime-rates` to serve from store immediately and refresh from API in the background.
+- Implement `shikimori:rate-updated` IPC channel to broadcast changes to all renderer windows.
+- Update `ShikimoriView.vue` to listen for broadcasts and surgically update its local list.
 
-1. **Persistent Cache & Offline Queue Store**
-   - Add `shikimoriUserRates` (cache of the full list) and `shikimoriUpdateQueue` (array of pending changes) to `electron-store` defaults in `src/main/index.ts`.
-   - Update `shikimori:get-anime-rates` to serve from cache immediately, then optionally refresh in background.
+## 2. Offline Shikimori Support: Queuing & Status Indicators
 
-2. **Offline Mode Detection & Interception**
-   - Implement `online-status-changed` IPC to track connectivity in the main process (via renderer events).
-   - Update `shikimori:update-rate` handler:
-     - If offline: Record `before` state (from cache), `after` state (new values), and `malId` into `shikimoriUpdateQueue`.
-     - Return the `after` state to the renderer immediately to reflect the change in UI.
-   - Broadcast `shikimori:status-changed` (online/offline) to renderer.
+**Priority:** High | **Effort:** Medium
 
-3. **Conflict-Aware Automatic Sync**
-   - On `online` event: Process `shikimoriUpdateQueue` sequentially.
-   - For each item:
-     - Fetch current state from Shikimori API.
-     - Compare `current` with `before`. If they match, apply `after`.
-     - If they differ (manual change on Shikimori), only apply `after` if it's an advancement (e.g., higher episode count or 'completed' status) and doesn't "revert" a more recent manual change.
-     - Emit `shikimori:rate-updated` for each successful sync to update views.
+**Motivation:** Allow users to update their watch progress while disconnected.
 
-4. **Surgical UI Updates & Offline Indicators**
-   - `src/renderer/src/components/ShikimoriView.vue`: Listen for `shikimori:rate-updated` and surgically update the local list without a full re-fetch.
-   - `src/renderer/src/components/AnimeDetailView.vue`: Display a "Working Offline - changes will sync later" indicator near the Shikimori status block when disconnected.
+**Tasks:**
+- Implement connectivity tracking in the main process via renderer `online`/`offline` events.
+- Create `shikimoriUpdateQueue` in `electron-store` to persist pending changes.
+- Update `shikimori:update-rate` to intercept changes while offline: save the `before` (cached) and `after` (requested) states and return success to the UI.
+- Add a "Working Offline" indicator near the Shikimori status block in `AnimeDetailView.vue`.
 
-5. **Gradual Background Data Pre-fetching**
-   - In `shikimori:get-anime-rates`: After returning the list, initiate a background task to fetch and cache full details (`AnimeDetail`) for each anime in the list.
-   - Use a throttled loop (e.g., 1 anime every 2–3 seconds) to stay under Smotret-Anime API rate limits and avoid blocking the main thread.
+## 3. Conflict-Aware Automatic Sync for Offline Changes
 
-## 2. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
+**Priority:** High | **Effort:** Medium
+
+**Motivation:** Automatically and safely apply queued changes when the internet connection is restored.
+
+**Tasks:**
+- Implement a background sync worker that triggers on the `online` event.
+- For each queued change, fetch the current state from Shikimori and compare it with the `before` state recorded during the offline change.
+- **Conflict Resolution:** If the current state matches `before`, apply the `after` change. If they differ (manual change on Shikimori web), only apply the update if it represents progress (e.g., higher episode count) to avoid regressions.
+- Clear successfully synced items from the queue.
+
+## 4. Gradual Background Pre-fetching of Shikimori List Details
+
+**Priority:** Medium | **Effort:** Small
+
+**Motivation:** Ensure all anime in the Shikimori watchlist have their full details (descriptions, genres, etc.) cached for a seamless offline experience.
+
+**Tasks:**
+- Implement a throttled background loop in `shikimori:get-anime-rates` that triggers after the initial list load.
+- Gradually fetch `AnimeDetail` for each item in the list (e.g., one every 3 seconds) to stay within Smotret-Anime API rate limits.
+- Cache the results using the existing `updateAnimeDetailCache` mechanism.
+
+## 5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 
 **Priority:** Medium | **Effort:** Large
 

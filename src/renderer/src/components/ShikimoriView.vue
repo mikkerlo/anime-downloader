@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AnimeCard from './AnimeCard.vue'
 
 const emit = defineEmits<{
@@ -11,6 +11,7 @@ const loading = ref(false)
 const error = ref('')
 const statusFilter = ref<string>('to_watch')
 const starredIds = ref(new Set<number>())
+const refreshing = ref(false)
 
 const filteredEntries = computed(() => {
   let list = entries.value
@@ -62,6 +63,7 @@ async function loadRates(): Promise<void> {
       }
       starredIds.value = starred
     }
+    if (entries.value.length > 0) refreshing.value = true
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load anime list'
   } finally {
@@ -98,7 +100,36 @@ function shikiTitle(entry: ShikiAnimeRateEntry): string {
   return entry.shikiAnime.russian || entry.shikiAnime.name
 }
 
-onMounted(loadRates)
+onMounted(() => {
+  loadRates()
+
+  window.api.onShikimoriRateUpdated((entry) => {
+    const idx = entries.value.findIndex((e) => e.rate.target_id === entry.rate.target_id)
+    if (idx !== -1) {
+      entries.value[idx] = entry
+      entries.value = [...entries.value]
+    }
+  })
+
+  window.api.onShikimoriRatesRefreshed(async (newEntries) => {
+    entries.value = newEntries
+    refreshing.value = false
+    const ids = newEntries.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id)
+    if (ids.length > 0) {
+      const statuses = await window.api.libraryGetStatus(ids)
+      const starred = new Set<number>()
+      for (const [id, s] of Object.entries(statuses)) {
+        if (s.starred) starred.add(Number(id))
+      }
+      starredIds.value = starred
+    }
+  })
+})
+
+onUnmounted(() => {
+  window.api.offShikimoriRateUpdated()
+  window.api.offShikimoriRatesRefreshed()
+})
 </script>
 
 <template>
@@ -112,7 +143,7 @@ onMounted(loadRates)
           </option>
         </select>
         <button class="refresh-btn" :disabled="loading" @click="loadRates" title="Refresh list">
-          <svg :class="{ spinning: loading }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
+          <svg :class="{ spinning: loading || refreshing }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
             <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.015 4.356v4.992" />
           </svg>
         </button>

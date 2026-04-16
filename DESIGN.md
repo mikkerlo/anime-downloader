@@ -285,8 +285,10 @@ LibraryView shows both with indicators:
 | `shikimori:logout` | invoke | Clear Shikimori credentials and user |
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
-| `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score) |
-| `shikimori:get-anime-rates` | invoke | Fetch user's anime list from Shikimori, resolve MAL IDs to smotret-anime |
+| `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score); updates cached rates and broadcasts change |
+| `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |
+| `shikimori:rate-updated` | send | Single rate entry changed (after update-rate); renderer views surgically update their local state |
+| `shikimori:rates-refreshed` | send | Full rate list refreshed from API in background; renderer views replace their entries |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
@@ -377,6 +379,7 @@ interface EpisodeMeta {
 | `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |
 | `hevcTranscodeOnPlay` | string | `'ask'` | HEVC fallback when the built-in player has no decoder: `ask` (show modal), `always` (transcode to H.264), `never` (open in external player) |
 | `watchProgress` | object | `{}` | Per-episode playback position + watched flag (key: `animeId:episodeInt`) |
+| `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
 
 ## Watch Progress & Resume
 
@@ -497,6 +500,10 @@ Syncs anime watch status and episode progress with [Shikimori](https://shikimori
 ### Module: `src/main/shikimori.ts`
 
 Standalone API client with hardcoded client credentials. All methods throw `ShikiApiError` on failure. Rate limit handling: retries on 429 with `retry-after` header.
+
+### Centralized Rate Cache
+
+Anime rates are persisted in `shikimoriUserRates` (electron-store). `shikimori:get-anime-rates` returns cached data instantly when available and triggers a background API refresh; the refresh result is broadcast via `shikimori:rates-refreshed` so open views update without a manual reload. `shikimori:update-rate` patches the cached entry in-place and broadcasts `shikimori:rate-updated` for surgical single-entry updates. ShikimoriView and AnimeDetailView both listen for these broadcasts. Cache is cleared on logout.
 
 ### Friends Activity Feed
 

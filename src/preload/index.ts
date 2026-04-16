@@ -181,6 +181,18 @@ const api = {
     ipcRenderer.invoke('shikimori:get-anime-rates', status) as Promise<ShikiAnimeRateEntry[]>,
   shikimoriGetFriendsActivity: () =>
     ipcRenderer.invoke('shikimori:get-friends-activity') as Promise<ShikiFriendActivityEntry[]>,
+  onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => {
+    ipcRenderer.on('shikimori:rate-updated', (_event, entry) => callback(entry))
+  },
+  offShikimoriRateUpdated: () => {
+    ipcRenderer.removeAllListeners('shikimori:rate-updated')
+  },
+  onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => {
+    ipcRenderer.on('shikimori:rates-refreshed', (_event, entries) => callback(entries))
+  },
+  offShikimoriRatesRefreshed: () => {
+    ipcRenderer.removeAllListeners('shikimori:rates-refreshed')
+  },
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

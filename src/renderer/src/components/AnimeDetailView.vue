@@ -332,6 +332,40 @@ onMounted(async () => {
   // Load watch progress for episode indicators
   loadWatchProgress()
   window.addEventListener('watch-progress-updated', loadWatchProgress)
+
+  window.api.onShikimoriRateUpdated((entry) => {
+    if (anime.value?.myAnimeListId && entry.rate.target_id === anime.value.myAnimeListId) {
+      shikiRate.value = {
+        id: entry.rate.id,
+        score: entry.rate.score,
+        status: entry.rate.status,
+        episodes: entry.rate.episodes,
+        target_id: entry.rate.target_id,
+        target_type: 'Anime'
+      }
+      shikiStatus.value = entry.rate.status
+      shikiEpisodes.value = entry.rate.episodes
+      shikiScore.value = entry.rate.score
+    }
+  })
+
+  window.api.onShikimoriRatesRefreshed((entries) => {
+    if (!anime.value?.myAnimeListId) return
+    const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId)
+    if (match) {
+      shikiRate.value = {
+        id: match.rate.id,
+        score: match.rate.score,
+        status: match.rate.status,
+        episodes: match.rate.episodes,
+        target_id: match.rate.target_id,
+        target_type: 'Anime'
+      }
+      shikiStatus.value = match.rate.status
+      shikiEpisodes.value = match.rate.episodes
+      shikiScore.value = match.rate.score
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -339,6 +373,8 @@ onUnmounted(() => {
   window.removeEventListener('watch-progress-updated', loadWatchProgress)
   window.api.offDownloadProgress()
   window.api.offFileEpisodesChanged()
+  window.api.offShikimoriRateUpdated()
+  window.api.offShikimoriRatesRefreshed()
 })
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [

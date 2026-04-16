@@ -43,7 +43,27 @@
 
 ## Planned
 
-## 1. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
+## 1. Centralized Shikimori Cache & Surgical Updates
+
+**Priority:** Medium | **Effort:** Medium
+
+**Motivation:** Currently, the Shikimori tab only loads data once on mount and doesn't reflect changes made in the Anime Detail view (like updating watched episodes or status). This leads to stale data and requires manual refreshes. A persistent cache will improve startup time and offline support, while a broadcast mechanism will keep all views in sync.
+
+**Plan:**
+1. **Persistent Storage:** Add `shikimoriUserRates` to `electron-store` defaults in `src/main/index.ts`.
+2. **Main Process Cache Logic:**
+   - Update `shikimori:get-anime-rates` to return cached data from the store if available.
+   - Add `forceRefresh?: boolean` parameter to `shikimori:get-anime-rates` to allow manual re-fetch.
+   - When fetching from API, update the store and resolve MAL IDs via `lookupByMalIds`.
+3. **IPC Broadcasting:**
+   - Create a new IPC channel `shikimori:rate-updated` (4-file pattern).
+   - In `shikimori:update-rate` handler: after a successful update, update the corresponding entry in the store's `shikimoriUserRates` and broadcast the full `ShikiAnimeRateEntry` to all renderer windows.
+4. **Renderer Integration:**
+   - `src/preload/index.ts` & `src/preload/types.d.ts`: Expose `onShikimoriRateUpdated` listener.
+   - `src/renderer/src/components/ShikimoriView.vue`: Subscribe to `shikimori:rate-updated`. On update, surgically replace the entry in the local `entries` ref.
+   - `src/renderer/src/components/AnimeDetailView.vue`: (Optional) Use the cache for initial Shikimori data if it's already available in the main process to reduce API calls on mount.
+
+## 2. HEVC → H.264 transcode fallback for platforms without an HEVC decoder
 
 **Priority:** Medium | **Effort:** Large
 

@@ -52,6 +52,22 @@ const hevcPlaybackSupported = (() => {
   return probes.some((p) => v.canPlayType(p) !== '')
 })()
 
+// `hevcTranscodeOnPlay` gates the MKV-via-MSE path, which negotiates codecs
+// through `MediaSource.isTypeSupported`. That surface can reject HEVC even when
+// `canPlayType` above accepts it (Chromium's platform HEVC path is reachable
+// through <video src> but not always through MSE). Probe MSE separately so we
+// only disable the dropdown when the fallback truly can't fire.
+const hevcMseSupported = (() => {
+  if (typeof window === 'undefined' || typeof MediaSource === 'undefined') return false
+  const probes = [
+    'video/mp4; codecs="hvc1.1.6.L120.B0"',
+    'video/mp4; codecs="hvc1.2.4.L120.B0"',
+    'video/mp4; codecs="hev1.1.6.L120.B0"',
+    'video/mp4; codecs="hev1.2.4.L120.B0"'
+  ]
+  return probes.some((p) => MediaSource.isTypeSupported(p))
+})()
+
 const backgroundQualityProbe = ref(false)
 
 // Debug / scan-merge state
@@ -80,6 +96,7 @@ const shikimoriShowUrl = ref(false)
 // Player settings
 const playerMode = ref<'system' | 'builtin'>('system')
 const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
+const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask')
 const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
 
 // GPU benchmark state
@@ -433,6 +450,7 @@ onMounted(async () => {
   // Player settings
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
+  hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
 
   // Probe WebGPU
   try {
@@ -584,6 +602,7 @@ watch(videoCodec, (val, oldVal) => {
 })
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
+watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
 </script>
 
 <template>
@@ -939,7 +958,25 @@ watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val)
         </div>
 
         <div class="setting-group">
-          <p class="setting-hint">Note: MKV files will stream from server when using the built-in player (local MKV playback not yet supported). When player mode is "Built-in", a Play button appears on non-downloaded episodes for streaming.</p>
+          <label class="setting-label">HEVC transcoding on play</label>
+          <p class="setting-hint">
+            When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen.
+          </p>
+          <select v-model="hevcTranscodeOnPlay" class="setting-input setting-select" :disabled="hevcMseSupported">
+            <option value="ask">Ask each time</option>
+            <option value="always">Always transcode</option>
+            <option value="never">Never — open in external player</option>
+          </select>
+          <div v-if="hevcMseSupported" class="status-line ok" style="margin-top: 0.4rem">
+            HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't fire.
+          </div>
+          <div v-else class="status-line warn" style="margin-top: 0.4rem">
+            HEVC MSE decoder: not available — this setting controls the fallback for local MKV playback.
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <p class="setting-hint">Note: the built-in player supports local MKV playback via the MSE remux pipeline. For non-downloaded episodes, MKV files are streamed from the server — a Play button will appear on those rows when player mode is "Built-in". If a local HEVC MKV can't be decoded by your platform, the fallback above decides what happens.</p>
         </div>
       </template>
 

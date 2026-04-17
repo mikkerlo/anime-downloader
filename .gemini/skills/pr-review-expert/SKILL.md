@@ -13,7 +13,7 @@ Follow this workflow to perform high-quality code reviews for this project.
 2.  **Track Progress**: Check `TODO.md` to see if the PR completes existing tasks or adds new ones. Ensure task status updates are included in the PR.
 3.  **Comprehensive Feedback**: Provide a mix of general praise, specific implementation observations, and actionable suggestions.
 4.  **Direct Action**: Prefer line-level code comments and suggestions over just general comments.
-5.  **Verified Approval**: Use explicit approval phrases like "LGTM after testing on Windows" or "LGTM after manual testing" to indicate thorough verification.
+5.  **Verified Approval**: Use explicit approval phrases like "LGTM after testing on Windows" or "LGTM after manual testing" to indicate thorough verification. ONLY use these phrases when you are ready to formally approve the PR.
 
 ## Workflow
 
@@ -39,4 +39,4 @@ Follow this workflow to perform high-quality code reviews for this project.
 
 ### 4. Approval
 - If everything looks good (or only minor non-blocking fixes are needed), approve the PR.
-- **Mandatory Suffix**: Append "LGTM after [manual/platform] testing" to the final review message.
+- **Mandatory Suffix for Approval**: ONLY if you are submitting a formal approval, append "LGTM after [manual/platform] testing" to the final review message. DO NOT use this suffix for standard comments or if blocking issues (like conflict markers) remain.

@@ -124,6 +124,10 @@ interface Api {
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
+  onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => void
+  offShikimoriRateUpdated: () => void
+  onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => void
+  offShikimoriRatesRefreshed: () => void
 
   // Updates
   appVersion: () => Promise<string>

@@ -40,6 +40,7 @@
 - [x] HEVC (H.265) Support in MSE Streaming Path — `hevcCodecString` produces `hvc1.…` for Main / Main 10 / Main Still Picture; ffmpeg spawn emits `-tag:v hvc1` so Chromium MSE accepts the track; legacy full-remux fallback still fires when the platform has no HEVC decoder
 - [x] HEVC → H.264 transcode fallback for platforms without an HEVC decoder — new `player:remux-mkv-stream-transcode` IPC re-encodes HEVC to H.264 through the existing MSE pipe; `pickH264Encoder` dry-runs `h264_vaapi` / `h264_nvenc` / `h264_qsv` / `libx264` at startup; `hevcTranscodeOnPlay` setting (ask / always / never) with consent modal and `shell:open-external-file` escape hatch
 - [x] Centralized Shikimori Cache & Surgical UI Updates — persist `shikimoriUserRates` in electron-store, cache-first `get-anime-rates`, background API refresh with `shikimori:rates-refreshed` broadcast, surgical `shikimori:rate-updated` on rate changes
+- [x] Offline Shikimori Support: Queuing & Status Indicators — intercept transport-level failures in `shikimori:update-rate`, persist `{before, after}` deltas to `shikimoriUpdateQueue`, optimistically update cache, broadcast `shikimori:offline-queue-changed`, show "Working offline" chip in AnimeDetailView
 
 ---
 
@@ -61,7 +62,7 @@
 - **Schema Design:** Must define a robust schema for `shikimoriUserRates` that includes `updatedAt` to avoid stale cache issues.
 - **IPC Overhead:** Broadcasting full rate objects for large lists (1000+ entries) may cause renderer lag; needs optimized payload or filtered broadcasts.
 
-## 2. Offline Shikimori Support: Queuing & Status Indicators
+## ~~2. Offline Shikimori Support: Queuing & Status Indicators~~ (done)
 
 **Priority:** High | **Effort:** Medium
 

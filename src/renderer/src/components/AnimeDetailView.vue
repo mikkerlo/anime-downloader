@@ -35,6 +35,7 @@ const shikiScore = ref(0)
 const shikiLoading = ref(false)
 const shikiSaving = ref(false)
 const shikiError = ref('')
+const offlineQueueLength = ref(0)
 
 // Friends state
 const friendsRates = ref<ShikiFriendRate[]>([])
@@ -366,6 +367,13 @@ onMounted(async () => {
       shikiScore.value = match.rate.score
     }
   })
+
+  window.api.shikimoriGetOfflineQueueLength().then((n) => {
+    offlineQueueLength.value = n
+  })
+  window.api.onShikimoriOfflineQueueChanged((data) => {
+    offlineQueueLength.value = data.length
+  })
 })
 
 onUnmounted(() => {
@@ -375,6 +383,7 @@ onUnmounted(() => {
   window.api.offFileEpisodesChanged()
   window.api.offShikimoriRateUpdated()
   window.api.offShikimoriRatesRefreshed()
+  window.api.offShikimoriOfflineQueueChanged()
 })
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
@@ -1016,6 +1025,12 @@ function typeChip(type: string): { short: string; color: string } {
             </button>
           </div>
           <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
+          <div v-if="offlineQueueLength > 0" class="shiki-offline">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M12 5a7 7 0 016.95 6.155A4 4 0 0118 19H9m-3-2a4 4 0 01-1.9-7.516" />
+            </svg>
+            Working offline — {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} queued
+          </div>
         </template>
         <div v-else class="shiki-loading">Loading...</div>
       </div>
@@ -1838,6 +1853,19 @@ function typeChip(type: string): { short: string; color: string } {
   margin-top: 8px;
   font-size: 0.8rem;
   color: #e94560;
+}
+
+.shiki-offline {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  color: #f0a75f;
+  background: rgba(240, 167, 95, 0.12);
+  border: 1px solid rgba(240, 167, 95, 0.3);
+  border-radius: 4px;
 }
 
 .friends-panel {

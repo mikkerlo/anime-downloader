@@ -84,7 +84,8 @@ const store = new Store({
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
     hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>,
-    shikimoriUserRates: [] as unknown[]
+    shikimoriUserRates: [] as unknown[],
+    shikimoriUpdateQueue: [] as unknown[]
   }
 })
 
@@ -92,6 +93,46 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, ...args)
   }
+}
+
+const NETWORK_ERROR_CODES = new Set([
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'EPIPE',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT'
+])
+
+function errorCode(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'code' in err && typeof (err as { code: unknown }).code === 'string') {
+    return (err as { code: string }).code
+  }
+  if (err && typeof err === 'object' && 'cause' in err) {
+    return errorCode((err as { cause: unknown }).cause)
+  }
+  return undefined
+}
+
+function isNetworkError(err: unknown): boolean {
+  if (err instanceof shikimori.ShikiApiError) return false
+  if (err instanceof TypeError) return true
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) return true
+  const code = errorCode(err)
+  if (code && NETWORK_ERROR_CODES.has(code)) return true
+  return false
+}
+
+interface QueuedShikimoriUpdate {
+  malId: number
+  rateId: number | null
+  before: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
+  after: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
+  queuedAt: number
 }
 
 // --- Anime cache helpers (for offline support of downloaded anime) ---
@@ -1236,6 +1277,8 @@ function registerIpcHandlers(): void {
     store.set('shikimoriCredentials', null)
     store.set('shikimoriUser', null)
     store.set('shikimoriUserRates', [])
+    store.set('shikimoriUpdateQueue', [])
+    broadcastToAll('shikimori:offline-queue-changed', { length: 0 })
   })
 
   ipcMain.handle('shikimori:get-user', () => {
@@ -1252,35 +1295,77 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     'shikimori:update-rate',
     async (_event, malId: number, episodes: number, status: shikimori.ShikiUserRateStatus, score: number) => {
-      const accessToken = await shikimori.ensureFreshToken(store)
       const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
       if (!user) throw new Error('Not logged in to Shikimori')
-      const existing = await shikimori.getUserRate(accessToken, user.id, malId)
-      const updatedRate = existing
-        ? await shikimori.updateUserRate(accessToken, existing.id, episodes, status, score)
-        : await shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score)
 
-      const cached = store.get('shikimoriUserRates') as { rate: Record<string, unknown> & { target_id: number }; shikiAnime: unknown; smotretAnime: unknown }[]
+      const cached = store.get('shikimoriUserRates') as { rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number }; shikiAnime: unknown; smotretAnime: unknown }[]
       const idx = cached.findIndex((e) => e.rate.target_id === malId)
-      if (idx !== -1) {
+
+      try {
+        const accessToken = await shikimori.ensureFreshToken(store)
+        const existing = await shikimori.getUserRate(accessToken, user.id, malId)
+        const updatedRate = existing
+          ? await shikimori.updateUserRate(accessToken, existing.id, episodes, status, score)
+          : await shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score)
+
+        if (idx !== -1) {
+          cached[idx] = {
+            ...cached[idx],
+            rate: {
+              id: updatedRate.id,
+              score: updatedRate.score,
+              status: updatedRate.status,
+              episodes: updatedRate.episodes,
+              updated_at: new Date().toISOString(),
+              target_id: updatedRate.target_id
+            }
+          }
+          store.set('shikimoriUserRates', cached)
+          broadcastToAll('shikimori:rate-updated', cached[idx])
+        } else {
+          refreshShikimoriRatesInBackground()
+        }
+
+        return updatedRate
+      } catch (err) {
+        if (!isNetworkError(err) || idx === -1) throw err
+
+        const cachedEntry = cached[idx]
+        const rateId = typeof cachedEntry.rate.id === 'number' ? cachedEntry.rate.id : null
+        const before = {
+          episodes: cachedEntry.rate.episodes,
+          status: cachedEntry.rate.status,
+          score: cachedEntry.rate.score
+        }
+        const after = { episodes, status, score }
+
+        const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+        queue.push({ malId, rateId, before, after, queuedAt: Date.now() })
+        store.set('shikimoriUpdateQueue', queue)
+
         cached[idx] = {
-          ...cached[idx],
+          ...cachedEntry,
           rate: {
-            id: updatedRate.id,
-            score: updatedRate.score,
-            status: updatedRate.status,
-            episodes: updatedRate.episodes,
-            updated_at: new Date().toISOString(),
-            target_id: updatedRate.target_id
+            ...cachedEntry.rate,
+            episodes,
+            status,
+            score,
+            updated_at: new Date().toISOString()
           }
         }
         store.set('shikimoriUserRates', cached)
         broadcastToAll('shikimori:rate-updated', cached[idx])
-      } else {
-        refreshShikimoriRatesInBackground()
-      }
+        broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
 
-      return updatedRate
+        return {
+          id: rateId ?? -1,
+          score,
+          status,
+          episodes,
+          target_id: malId,
+          target_type: 'Anime'
+        } satisfies shikimori.ShikiUserRate
+      }
     }
   )
 
@@ -1335,6 +1420,10 @@ function registerIpcHandlers(): void {
       }
     }
     return fetchAndCacheShikimoriRates(status)
+  })
+
+  ipcMain.handle('shikimori:get-offline-queue-length', () => {
+    return (store.get('shikimoriUpdateQueue') as unknown[]).length
   })
 
   ipcMain.handle('shikimori:get-friends-activity', async () => {

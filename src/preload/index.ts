@@ -193,6 +193,14 @@ const api = {
   offShikimoriRatesRefreshed: () => {
     ipcRenderer.removeAllListeners('shikimori:rates-refreshed')
   },
+  shikimoriGetOfflineQueueLength: () =>
+    ipcRenderer.invoke('shikimori:get-offline-queue-length') as Promise<number>,
+  onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => {
+    ipcRenderer.on('shikimori:offline-queue-changed', (_event, data) => callback(data))
+  },
+  offShikimoriOfflineQueueChanged: () => {
+    ipcRenderer.removeAllListeners('shikimori:offline-queue-changed')
+  },
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

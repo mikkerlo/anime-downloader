@@ -17,23 +17,43 @@ Argument passed: $ARGUMENTS
 
 Make sure the PR's branch is checked out locally (the working copy should be on it). If `jj log -r 'main..@'` doesn't include commits matching the PR's commits, ask the user to switch first — do not attempt to fetch/checkout for them.
 
-## Step 1: Fetch comments
+## Step 1: Fetch comments and thread IDs
 
-Run both in parallel:
+Run all three in parallel:
 
 ```bash
 gh pr view <N> --json number,title,state,reviews,comments
 gh api repos/<owner>/<repo>/pulls/<N>/comments --jq '.[] | {id, path, line, body, user: .user.login, created_at}'
+gh api graphql -f query='
+  query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            path
+            line
+            comments(first: 10) {
+              nodes { databaseId body author { login } }
+            }
+          }
+        }
+      }
+    }
+  }' -F owner=<owner> -F repo=<repo> -F pr=<N>
 ```
 
-The first surfaces top-level review summaries (state, body); the second is the line-anchored inline comments — those are the ones you need to triage.
+The first surfaces top-level review summaries (state, body); the second is the line-anchored inline comments — those are the ones you need to triage; the third gives you thread IDs (`PRRT_…`) needed in Step 6 to mark threads resolved after you fix them.
 
 Filter out:
-- Comments authored by the current user (`viewerDidAuthor: true`) — those are your own past replies, not new feedback.
-- Bot comments (e.g. `github-actions`, `dependabot`) unless they flag a real issue.
-- Already-resolved threads (check `isMinimized` on review comments where exposed).
+- Comments authored by the current user (`viewerDidAuthor: true`, or `author.login` matches `gh api user --jq .login`) — those are your own past replies, not new feedback.
+- Already-resolved threads: drop any `reviewThreads` node where `isResolved: true`.
+- Pure bot noise (e.g. `dependabot` version bumps). **Do not** skip `github-advanced-security` / CodeQL — those are real findings and must be triaged like human comments.
 
 If the PR has multiple review rounds, focus on the **most recent** round's comments. Earlier rounds were already addressed in prior commits.
+
+Keep a mapping of `(path, line, comment-body-excerpt) → thread-id` from the GraphQL response — you'll need it in Step 6.
 
 ## Step 2: Triage each comment
 
@@ -46,22 +66,27 @@ Group your verdicts and present them to the user via AskUserQuestion (one questi
 
 When in doubt, lean toward fixing. Reviewers prefer a small accommodation over a long defense.
 
-## Step 3: Implement the fixes
+## Step 3: Create the fix commit, then implement
 
-For each "fix it" verdict:
-- Edit the relevant file(s).
+**Order matters.** jj snapshots the working copy into whichever commit is `@` at the moment you run the next jj command. If you edit files first and run `jj new` afterwards, the edits land in the parent commit (the original PR commit) — which is exactly the squash we want to avoid. So:
+
+```bash
+jj new -m "WIP: PR #<N> review fixes"
+```
+
+**Then** edit the relevant file(s):
 - Follow project conventions from CLAUDE.md (Vue Composition API, 4-file IPC pattern, no needless comments, etc.).
 - Re-run `npm run typecheck` after the batch of edits.
 
 If a fix requires schema or architecture changes, update DESIGN.md alongside.
 
-## Step 4: Commit the fixes
+If you realize you already edited before running `jj new`, recover with `jj op log` → `jj op restore <op_id>` back to the clean state, then redo in the correct order.
+
+## Step 4: Describe and push
 
 Per the project's PR-review-fix convention (see user memory): **add a NEW commit on top of the existing commits — never squash into the original feature commit.** This keeps the review history legible and makes it obvious to the reviewer what changed in response to their feedback.
 
 ```bash
-jj new -m "WIP: PR #<N> review fixes"
-# (edits already applied)
 jj describe -m "fix: address PR #<N> review — <short list of what changed>"
 jj bookmark set <branch-name> -r @
 jj git push --bookmark <branch-name>
@@ -75,6 +100,21 @@ Post a single consolidated comment on the PR summarizing what you did, using `gh
 
 - For fixes: one or two sentences describing the change and the rationale.
 - For "reply explaining" verdicts: explain the reasoning concretely — reference exact file paths, line numbers, type definitions, or upstream API shapes that justify the current design. Don't be defensive; assume the reviewer is acting in good faith and just lacked a piece of context.
+
+## Step 6: Resolve the fixed threads
+
+Using the `(path, line, body) → thread-id` mapping captured in Step 1, mark every thread you actually fixed (not the "Replied explaining" ones — leave those for the reviewer to resolve or push back on) as resolved via the GraphQL mutation:
+
+```bash
+gh api graphql -f query='
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: {threadId: $threadId}) {
+      thread { id isResolved }
+    }
+  }' -F threadId=<PRRT_…>
+```
+
+Run one call per thread. If the mapping is ambiguous (multiple threads on the same path+line), match by a distinctive substring of the comment body instead.
 
 End-of-turn report to the user: a one-line summary per comment (Fixed: ... / Replied: ...) plus the PR URL. Nothing else.
 

@@ -47,7 +47,34 @@
 
 ## Planned
 
-## ~~1. Centralized Shikimori Cache & Surgical UI Updates~~ (done)
+## 1. Shikimori Series Chronology in Anime Detail View
+
+**Priority:** Medium | **Effort:** Medium
+
+**Motivation:** Users often watch anime series with multiple seasons, OVAs, or movies. Providing a "Chronology" section directly on the anime page makes it easy to see the watch order, track progress across the entire franchise, and quickly navigate between entries.
+
+**Tasks:**
+- **Main Process (`src/main/shikimori.ts`)**:
+  - Add `ShikiRelated` interface and `getRelatedAnime(shikiId: number)` function using the `/api/animes/:id/related` endpoint.
+  - Ensure it filters for `anime` targets and handles Shikimori's rate limits.
+- **Main Process (`src/main/index.ts`)**:
+  - Implement `shikimori:get-related` IPC handler.
+  - Use `lookupByMalIds` (our internal Shikimori ID resolver) to resolve the related anime to Smotret-Anime search results for deep linking.
+- **Preload (`src/preload/index.ts` & `src/preload/types.d.ts`)**:
+  - Expose `shikimoriGetRelated` to the renderer.
+- **Renderer (`src/renderer/src/components/AnimeDetailView.vue`)**:
+  - Fetch related anime on mount after the main anime data is loaded.
+  - Cross-reference with `shikimoriUserRates` cache to determine watched/unwatched status for each related entry.
+  - Add a "Chronology" section after the anime description.
+  - Display entries with title, kind (TV/Movie/OVA), and a status badge (e.g., "Watched", "Watching", "Planned").
+  - Make entries clickable to navigate to the corresponding `AnimeDetailView`.
+  - Show a "Not available" badge for entries that don't have a Smotret-Anime match.
+
+**Blockers & Risks:**
+- **API Latency:** Fetching related items adds another round-trip on mount; should be non-blocking and show a subtle loading state.
+- **Resolution Accuracy:** `lookupByMalIds` might not find a match if the anime is missing from Smotret-Anime or if the Shikimori mapping is incorrect.
+
+## ~~2. Centralized Shikimori Cache & Surgical UI Updates~~ (done)
 
 **Priority:** High | **Effort:** Medium
 
@@ -63,7 +90,7 @@
 - **Schema Design:** Must define a robust schema for `shikimoriUserRates` that includes `updatedAt` to avoid stale cache issues.
 - **IPC Overhead:** Broadcasting full rate objects for large lists (1000+ entries) may cause renderer lag; needs optimized payload or filtered broadcasts.
 
-## ~~2. Offline Shikimori Support: Queuing & Status Indicators~~ (done)
+## ~~3. Offline Shikimori Support: Queuing & Status Indicators~~ (done)
 
 **Priority:** High | **Effort:** Medium
 
@@ -79,7 +106,7 @@
 - **Dependency:** Hard-blocked by **Item #1** (requires the centralized cache to record the `before` state).
 - **False Positives:** `navigator.onLine` is notoriously unreliable; implementation must handle "lie-fi" (connected to Wi-Fi but no internet) to avoid lost requests.
 
-## ~~3. Conflict-Aware Automatic Sync for Offline Changes~~ (done)
+## ~~4. Conflict-Aware Automatic Sync for Offline Changes~~ (done)
 
 **Priority:** High | **Effort:** Medium
 
@@ -96,7 +123,7 @@
 - **Data Integrity:** Complex conflict resolution logic; incorrectly resolving a "watched 5" vs "watched 10" conflict could permanently corrupt user watch history on Shikimori.
 - **Rate Limiting:** Sequential syncing after a long offline period might trigger Shikimori's 429 rate limits.
 
-## 4. Gradual Background Pre-fetching of Shikimori Detailed Info
+## 5. Gradual Background Pre-fetching of Shikimori Detailed Info
 
 **Priority:** Medium | **Effort:** Small
 
@@ -111,7 +138,7 @@
 - **Shikimori Rate Limits:** Must strictly adhere to Shikimori's "5 requests per second" limit; the loop should be conservative (1-2 per second) to account for concurrent user actions.
 - **Cache Size:** Fetching full details for very large lists (2000+ entries) can grow the `electron-store` file significantly; may need to limit pre-fetching to "Watching" and "Planned" statuses only.
 
-## ~~5. HEVC → H.264 transcode fallback for platforms without an HEVC decoder~~ (done)
+## ~~6. HEVC → H.264 transcode fallback for platforms without an HEVC decoder~~ (done)
 
 **Priority:** Medium | **Effort:** Large
 
@@ -148,4 +175,3 @@
     - ffmpeg missing → modal defaults to "Open in external player".
 
 **Why this replaces a simple warning:** mikkerlo's review on PR #27 accepted the warning-only solution on the assumption the legacy remux path would still make HEVC playable on Linux. It doesn't — Chromium has no decoder regardless of container. So the fix has to actually change the codec, not the container.
-

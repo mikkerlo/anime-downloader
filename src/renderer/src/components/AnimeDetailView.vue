@@ -60,9 +60,17 @@ const shikiDetailsDescription = computed<string>(() => {
   }
   const html = shikiDetails.value.description_html
   if (!html) return ''
-  const tmp = document.createElement('div')
-  tmp.innerHTML = html
-  return (tmp.textContent || '').replace(/\s+/g, ' ').trim()
+  return html
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
 })
 
 const friendsSummary = computed(() => {
@@ -387,6 +395,12 @@ onMounted(async () => {
     }
   })
 
+  window.api.onShikimoriAnimeDetailsUpdated(({ malId, details }) => {
+    if (anime.value?.myAnimeListId === malId) {
+      shikiDetails.value = details
+    }
+  })
+
   window.api.onShikimoriRatesRefreshed((entries) => {
     if (!anime.value?.myAnimeListId) return
     const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId)
@@ -430,6 +444,7 @@ onUnmounted(() => {
   window.api.offFileEpisodesChanged()
   window.api.offShikimoriRateUpdated()
   window.api.offShikimoriRatesRefreshed()
+  window.api.offShikimoriAnimeDetailsUpdated()
   window.api.offShikimoriOfflineQueueChanged()
   window.api.offShikimoriSyncStatus()
 })

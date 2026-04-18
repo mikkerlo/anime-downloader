@@ -429,6 +429,7 @@ async function prefetchShikimoriDetails(): Promise<void> {
         >
         cache[String(malId)] = { details, fetchedAt: Date.now() }
         store.set('shikimoriAnimeDetails', cache)
+        broadcastToAll('shikimori:anime-details-updated', { malId, details })
       } catch (err) {
         if (isNetworkError(err)) {
           console.warn('[shikimori prefetch] network error, aborting loop:', err)

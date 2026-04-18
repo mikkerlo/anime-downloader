@@ -149,6 +149,10 @@ interface Api {
   offShikimoriSyncStatus: () => void
   shikimoriGetAnimeDetails: (malId: number) => Promise<ShikiAnimeDetails | null>
   shikimoriTriggerDetailPrefetch: () => Promise<void>
+  onShikimoriAnimeDetailsUpdated: (
+    callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
+  ) => void
+  offShikimoriAnimeDetailsUpdated: () => void
 
   // Updates
   appVersion: () => Promise<string>

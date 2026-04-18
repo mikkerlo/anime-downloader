@@ -227,6 +227,14 @@ const api = {
     ipcRenderer.invoke('shikimori:get-anime-details', malId) as Promise<ShikiAnimeDetails | null>,
   shikimoriTriggerDetailPrefetch: () =>
     ipcRenderer.invoke('shikimori:trigger-detail-prefetch') as Promise<void>,
+  onShikimoriAnimeDetailsUpdated: (
+    callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
+  ) => {
+    ipcRenderer.on('shikimori:anime-details-updated', (_event, data) => callback(data))
+  },
+  offShikimoriAnimeDetailsUpdated: () => {
+    ipcRenderer.removeAllListeners('shikimori:anime-details-updated')
+  },
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

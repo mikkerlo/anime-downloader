@@ -195,18 +195,33 @@ function adjustSyncTimer(): void {
   else stopSyncTimer()
 }
 
-function consolidateQueue(queue: QueuedShikimoriUpdate[]): QueuedShikimoriUpdate[] {
-  const map = new Map<number, QueuedShikimoriUpdate>()
+interface ConsolidatedWorkItem extends QueuedShikimoriUpdate {
+  consumedQueuedAts: number[]
+}
+
+function consolidateQueue(queue: QueuedShikimoriUpdate[]): ConsolidatedWorkItem[] {
+  const map = new Map<number, ConsolidatedWorkItem>()
   for (const entry of queue) {
     const existing = map.get(entry.malId)
     if (existing) {
       existing.after = entry.after
       existing.rateId = entry.rateId ?? existing.rateId
+      existing.consumedQueuedAts.push(entry.queuedAt)
     } else {
-      map.set(entry.malId, { ...entry })
+      map.set(entry.malId, { ...entry, consumedQueuedAts: [entry.queuedAt] })
     }
   }
   return Array.from(map.values())
+}
+
+function dropConsumedEntries(malId: number, consumedQueuedAts: number[]): number {
+  const consumed = new Set(consumedQueuedAts)
+  const queue = (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).filter(
+    (q) => !(q.malId === malId && consumed.has(q.queuedAt))
+  )
+  store.set('shikimoriUpdateQueue', queue)
+  broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
+  return queue.length
 }
 
 function sleep(ms: number): Promise<void> {
@@ -241,13 +256,18 @@ function shouldApplyOnDrift(
   after: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
 ): boolean {
   if (after.episodes <= current.episodes) return false
-  if (STATUS_ORDER[current.status] > STATUS_ORDER[after.status]) return false
+  const currentRank = STATUS_ORDER[current.status]
+  const afterRank = STATUS_ORDER[after.status]
+  if (currentRank > afterRank) return false
+  // Same rank but different value (watching ↔ rewatching) is a user-meaningful side-grade,
+  // not pure episode progress — treat as drift and let the server value win
+  if (currentRank === afterRank && current.status !== after.status) return false
   return true
 }
 
 async function syncShikimoriQueue(): Promise<void> {
   if (syncInProgress) return
-  let queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+  const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
   if (queue.length === 0) {
     stopSyncTimer()
     return
@@ -318,11 +338,7 @@ async function syncShikimoriQueue(): Promise<void> {
         }
       }
 
-      queue = (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).filter(
-        (q) => q.malId !== item.malId
-      )
-      store.set('shikimoriUpdateQueue', queue)
-      broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
+      dropConsumedEntries(item.malId, item.consumedQueuedAts)
     } catch (err) {
       if (isNetworkError(err)) {
         aborted = true
@@ -335,11 +351,7 @@ async function syncShikimoriQueue(): Promise<void> {
         break
       }
       console.warn('[shikimori sync] dropping item', item.malId, err)
-      queue = (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).filter(
-        (q) => q.malId !== item.malId
-      )
-      store.set('shikimoriUpdateQueue', queue)
-      broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
+      dropConsumedEntries(item.malId, item.consumedQueuedAts)
     }
 
     if (work.indexOf(item) < work.length - 1) await sleep(SYNC_ITEM_DELAY_MS)

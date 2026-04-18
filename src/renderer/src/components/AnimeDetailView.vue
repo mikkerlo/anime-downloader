@@ -195,13 +195,14 @@ const episodeRows = computed((): EpisodeRow[] => {
     }
 
     // Priority 3: Prefer any downloaded translation on this episode — avoids silent fallback to
-    // streaming when the global default (type+author) doesn't match what's on disk
+    // streaming when the global default (type+author) doesn't match what's on disk.
+    // Within same-type downloads, honor the user's author preference before picking highest quality.
     if (!isLocked && !selectedTr && downloadedTrIds.size > 0) {
       const downloaded = sorted.filter(tr => downloadedTrIds.has(tr.id))
-      const sameType = downloaded
-        .filter(tr => tr.type === translationType.value)
-        .sort((a, b) => getRealHeight(b) - getRealHeight(a))
-      selectedTr = sameType[0] || downloaded[0] || null
+      const sameType = downloaded.filter(tr => tr.type === translationType.value)
+      const sameAuthor = sameType.find(tr => tr.authorsSummary === selectedAuthor.value)
+      const bestSameType = [...sameType].sort((a, b) => getRealHeight(b) - getRealHeight(a))[0]
+      selectedTr = sameAuthor || bestSameType || downloaded[0] || null
     }
 
     // Priority 4: Global default (same type + author)

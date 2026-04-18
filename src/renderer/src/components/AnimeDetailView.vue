@@ -60,15 +60,22 @@ const shikiDetailsDescription = computed<string>(() => {
   }
   const html = shikiDetails.value.description_html
   if (!html) return ''
-  return html
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
+  let stripped = html.replace(/<br\s*\/?>/gi, ' ')
+  let prev: string
+  do {
+    prev = stripped
+    stripped = stripped.replace(/<[^>]*>/g, '')
+  } while (stripped !== prev)
+  const entities: Record<string, string> = {
+    '&amp;': '&',
+    '&nbsp;': ' ',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'"
+  }
+  return stripped
+    .replace(/&(?:amp|nbsp|lt|gt|quot|#39);/gi, (m) => entities[m.toLowerCase()] ?? m)
     .replace(/\s+/g, ' ')
     .trim()
 })

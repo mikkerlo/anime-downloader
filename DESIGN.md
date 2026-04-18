@@ -291,6 +291,9 @@ LibraryView shows both with indicators:
 | `shikimori:rates-refreshed` | send | Full rate list refreshed from API in background; renderer views replace their entries |
 | `shikimori:get-offline-queue-length` | invoke | Returns the number of rate updates currently queued for later sync (for initial UI hydration) |
 | `shikimori:offline-queue-changed` | send | Queue length changed; renderers update the "Working offline" indicator |
+| `shikimori:get-sync-status` | invoke | Returns `{ state, queueLength, lastSyncAt, lastSyncError }` for initial UI hydration of the sync indicator |
+| `shikimori:trigger-sync` | invoke | Manually kicks off a drain attempt (fire-and-forget); powers the "Retry now" button |
+| `shikimori:sync-status` | send | Sync worker state changed (idle ↔ syncing) or a drain just finished; renderers swap offline/syncing chip variants |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
@@ -510,7 +513,19 @@ Anime rates are persisted in `shikimoriUserRates` (electron-store). `shikimori:g
 
 ### Offline Update Queue
 
-`shikimori:update-rate` distinguishes transport-level failures (fetch threw `TypeError` / `AbortError`) from HTTP errors (wrapped as `ShikiApiError`). HTTP errors propagate to the renderer as before. Transport failures are intercepted: the previous cached state is recorded as `before`, the requested change as `after`, and a `QueuedShikimoriUpdate` (`{ malId, rateId, before, after, queuedAt }`) is appended to `shikimoriUpdateQueue` in electron-store. The cached rate entry is then updated in place with the requested values so the UI reflects the change, and `shikimori:rate-updated` + `shikimori:offline-queue-changed` are broadcast. The handler returns a synthetic `ShikiUserRate` so callers (including `PlayerView`'s auto-tracker) don't need an offline branch. `AnimeDetailView` shows a "Working offline — N changes queued" chip while the queue is non-empty; the chip hydrates from `shikimori:get-offline-queue-length` on mount. Queue is cleared on logout. Actual sync-back to Shikimori when connectivity returns is handled by the next follow-up (Conflict-Aware Automatic Sync).
+`shikimori:update-rate` distinguishes transport-level failures (fetch threw `TypeError` / `AbortError`) from HTTP errors (wrapped as `ShikiApiError`). HTTP errors propagate to the renderer as before. Transport failures are intercepted: the previous cached state is recorded as `before`, the requested change as `after`, and a `QueuedShikimoriUpdate` (`{ malId, rateId, before, after, queuedAt }`) is appended to `shikimoriUpdateQueue` in electron-store. The cached rate entry is then updated in place with the requested values so the UI reflects the change, and `shikimori:rate-updated` + `shikimori:offline-queue-changed` are broadcast. The handler returns a synthetic `ShikiUserRate` so callers (including `PlayerView`'s auto-tracker) don't need an offline branch. `AnimeDetailView` shows a "Working offline — N changes queued" chip while the queue is non-empty; it flips to a blue "Syncing…" variant with a spinner while the sync worker drains. The chip hydrates from `shikimori:get-offline-queue-length` + `shikimori:get-sync-status` on mount. Queue and timer are cleared on logout.
+
+#### Sync worker
+
+When the queue is non-empty, a background worker (`syncShikimoriQueue`, module-level in `src/main/index.ts`) drains it back to Shikimori. Trigger cadence is outcome-based — same philosophy as the offline intercept classifier: rather than trusting `navigator.onLine` / `net.isOnline()`, we try the drain and let the fetch result tell us whether we're really online. The worker fires on a 60s timer (started only while the queue is non-empty), on boot if the queue is non-empty, after any successful online `shikimori:update-rate` or `fetchAndCacheShikimoriRates`, and on demand via `shikimori:trigger-sync` ("Retry now" button).
+
+Before hitting the API, queued entries are consolidated per `malId` (first `before` + last `after`), so repeated offline bumps on the same anime produce a single PATCH. For each consolidated item the worker calls `getUserRate` to read current server state, then:
+
+- **Server state matches `before`** — no drift; apply `after` via `updateUserRate`.
+- **Server state drifted** — apply progress rule: only override if `after.episodes > current.episodes` AND the current status is not more advanced than `after.status` (ordering: `planned < watching/rewatching < on_hold/dropped < completed`). Otherwise reconcile local cache to the server's value and drop the queue item — the user's offline intent has been superseded by a more recent server-side decision.
+- **Server returned no rate (deleted)** — recreate with `after` via `createUserRate`.
+
+An in-memory mutex (`syncInProgress`) prevents overlapping drains. Items are processed sequentially with a 250 ms delay to stay under Shikimori's 5 req/s cap (the `shikiFetch` wrapper also handles 429 with `retry-after`). Network errors during drain abort the run and leave the queue intact for the next timer tick; 401/403 also abort without dropping items (user needs to re-auth); other HTTP errors drop the offending item and continue. `shikimori:rate-updated` is broadcast on both "applied" and "reconciled to server" paths so the UI stays consistent regardless of which branch fired.
 
 ### Friends Activity Feed
 

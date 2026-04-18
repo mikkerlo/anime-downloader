@@ -131,6 +131,22 @@ interface Api {
   shikimoriGetOfflineQueueLength: () => Promise<number>
   onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => void
   offShikimoriOfflineQueueChanged: () => void
+  shikimoriGetSyncStatus: () => Promise<{
+    state: 'idle' | 'syncing'
+    queueLength: number
+    lastSyncAt: number
+    lastSyncError: string | null
+  }>
+  shikimoriTriggerSync: () => Promise<void>
+  onShikimoriSyncStatus: (
+    callback: (data: {
+      state: 'idle' | 'syncing'
+      queueLength: number
+      lastSyncAt: number
+      lastSyncError: string | null
+    }) => void
+  ) => void
+  offShikimoriSyncStatus: () => void
 
   // Updates
   appVersion: () => Promise<string>

@@ -201,6 +201,28 @@ const api = {
   offShikimoriOfflineQueueChanged: () => {
     ipcRenderer.removeAllListeners('shikimori:offline-queue-changed')
   },
+  shikimoriGetSyncStatus: () =>
+    ipcRenderer.invoke('shikimori:get-sync-status') as Promise<{
+      state: 'idle' | 'syncing'
+      queueLength: number
+      lastSyncAt: number
+      lastSyncError: string | null
+    }>,
+  shikimoriTriggerSync: () =>
+    ipcRenderer.invoke('shikimori:trigger-sync') as Promise<void>,
+  onShikimoriSyncStatus: (
+    callback: (data: {
+      state: 'idle' | 'syncing'
+      queueLength: number
+      lastSyncAt: number
+      lastSyncError: string | null
+    }) => void
+  ) => {
+    ipcRenderer.on('shikimori:sync-status', (_event, data) => callback(data))
+  },
+  offShikimoriSyncStatus: () => {
+    ipcRenderer.removeAllListeners('shikimori:sync-status')
+  },
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

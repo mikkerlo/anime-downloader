@@ -42,6 +42,7 @@
 - [x] Centralized Shikimori Cache & Surgical UI Updates — persist `shikimoriUserRates` in electron-store, cache-first `get-anime-rates`, background API refresh with `shikimori:rates-refreshed` broadcast, surgical `shikimori:rate-updated` on rate changes
 - [x] Offline Shikimori Support: Queuing & Status Indicators — intercept transport-level failures in `shikimori:update-rate`, persist `{before, after}` deltas to `shikimoriUpdateQueue`, optimistically update cache, broadcast `shikimori:offline-queue-changed`, show "Working offline" chip in AnimeDetailView
 - [x] Conflict-Aware Automatic Sync for Offline Changes — background sync worker drains `shikimoriUpdateQueue` on 60s timer + post-success hooks + boot, consolidates per malId, progress-only override on server drift, recreate on server deletion, `shikimori:sync-status` broadcast + "Retry now" button in AnimeDetailView
+- [x] Gradual Background Pre-fetching of Shikimori Detailed Info — throttled (2s) worker drains missing/stale `shikimoriAnimeDetails` for Watching+Planned entries, triggered post-rate-refresh and lazily on `shikimori:get-anime-details`; AnimeDetailView Shikimori panel surfaces genres + collapsible description when cached
 
 ---
 
@@ -123,7 +124,7 @@
 - **Data Integrity:** Complex conflict resolution logic; incorrectly resolving a "watched 5" vs "watched 10" conflict could permanently corrupt user watch history on Shikimori.
 - **Rate Limiting:** Sequential syncing after a long offline period might trigger Shikimori's 429 rate limits.
 
-## 5. Gradual Background Pre-fetching of Shikimori Detailed Info
+## ~~5. Gradual Background Pre-fetching of Shikimori Detailed Info~~ (done)
 
 **Priority:** Medium | **Effort:** Small
 

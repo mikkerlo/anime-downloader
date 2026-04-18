@@ -294,6 +294,8 @@ LibraryView shows both with indicators:
 | `shikimori:get-sync-status` | invoke | Returns `{ state, queueLength, lastSyncAt, lastSyncError }` for initial UI hydration of the sync indicator |
 | `shikimori:trigger-sync` | invoke | Manually kicks off a drain attempt (fire-and-forget); powers the "Retry now" button |
 | `shikimori:sync-status` | send | Sync worker state changed (idle ↔ syncing) or a drain just finished; renderers swap offline/syncing chip variants |
+| `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
+| `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
@@ -386,6 +388,7 @@ interface EpisodeMeta {
 | `watchProgress` | object | `{}` | Per-episode playback position + watched flag (key: `animeId:episodeInt`) |
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
 | `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
+| `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
 
 ## Watch Progress & Resume
 
@@ -510,6 +513,10 @@ Standalone API client with hardcoded client credentials. All methods throw `Shik
 ### Centralized Rate Cache
 
 Anime rates are persisted in `shikimoriUserRates` (electron-store). `shikimori:get-anime-rates` returns cached data instantly when available and triggers a background API refresh; the refresh result is broadcast via `shikimori:rates-refreshed` so open views update without a manual reload. `shikimori:update-rate` patches the cached entry in-place and broadcasts `shikimori:rate-updated` for surgical single-entry updates. ShikimoriView and AnimeDetailView both listen for these broadcasts. Cache is cleared on logout.
+
+#### Detail prefetch worker
+
+`shikimoriAnimeDetails` holds the rich `GET /api/animes/:id` payload (description, genres, studios) keyed by MAL ID. A background worker (`prefetchShikimoriDetails`) drains the missing-or-stale set, throttled to one request every 2 s to stay well under Shikimori's 5 req/s cap. Worklist filters to **Watching + Planned** statuses only — keeps the cache bounded for users with very large lists. Entries older than **30 days** are refreshed on the next pass. Triggers: post-`fetchAndCacheShikimoriRates` write, post-`shikimori:rates-refreshed` broadcast, and lazy on the `shikimori:get-anime-details` IPC when called for an uncached MAL ID. The worker is fire-and-forget — no progress UI; the visible signal is descriptions/genres appearing in the AnimeDetailView Shikimori panel over time. An in-memory `prefetchInProgress` mutex prevents overlapping runs; a `prefetchAbort` flag is flipped on logout so an in-flight loop bails on the next iteration without waiting on the 2 s timer. Network errors and 401/403 abort the loop (retried on next trigger); 404 logs and skips that MAL ID. The cache is cleared on logout.
 
 ### Offline Update Queue
 

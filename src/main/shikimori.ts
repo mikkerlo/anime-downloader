@@ -374,3 +374,46 @@ export async function getUserAnimeRates(
   })
   return response.json() as Promise<ShikiAnimeRateEntry[]>
 }
+
+export interface ShikiAnimeGenre {
+  id: number
+  name: string
+  russian: string
+  kind: string
+}
+
+export interface ShikiAnimeStudio {
+  id: number
+  name: string
+  filtered_name: string
+  real: boolean
+  image: string | null
+}
+
+export interface ShikiAnimeDetails {
+  id: number
+  name: string
+  russian: string
+  description: string | null
+  description_html: string | null
+  rating: string
+  duration: number
+  aired_on: string | null
+  released_on: string | null
+  genres: ShikiAnimeGenre[]
+  studios: ShikiAnimeStudio[]
+  score: string
+  status: string
+  episodes: number
+  episodes_aired: number
+}
+
+export async function getAnimeDetails(
+  accessToken: string,
+  malId: number
+): Promise<ShikiAnimeDetails> {
+  const response = await shikiFetch(`/api/animes/${malId}`, {
+    headers: authHeaders(accessToken)
+  })
+  return response.json() as Promise<ShikiAnimeDetails>
+}

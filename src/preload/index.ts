@@ -223,6 +223,10 @@ const api = {
   offShikimoriSyncStatus: () => {
     ipcRenderer.removeAllListeners('shikimori:sync-status')
   },
+  shikimoriGetAnimeDetails: (malId: number) =>
+    ipcRenderer.invoke('shikimori:get-anime-details', malId) as Promise<ShikiAnimeDetails | null>,
+  shikimoriTriggerDetailPrefetch: () =>
+    ipcRenderer.invoke('shikimori:trigger-detail-prefetch') as Promise<void>,
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

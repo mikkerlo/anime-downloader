@@ -45,6 +45,26 @@ const friendsLoading = ref(false)
 const friendsCollapsed = ref(false)
 const shikiUserChecked = ref(false)
 
+// Shikimori detailed info (description / genres) — cached in main process
+const shikiDetails = ref<ShikiAnimeDetails | null>(null)
+const descExpanded = ref(false)
+
+const shikiDetailsDescription = computed<string>(() => {
+  if (!shikiDetails.value) return ''
+  const src = shikiDetails.value.description
+  if (src) {
+    return src
+      .replace(/\[\/?[a-zA-Z][^\]]*\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+  const html = shikiDetails.value.description_html
+  if (!html) return ''
+  const tmp = document.createElement('div')
+  tmp.innerHTML = html
+  return (tmp.textContent || '').replace(/\s+/g, ' ').trim()
+})
+
 const friendsSummary = computed(() => {
   const counts = new Map<string, number>()
   for (const r of friendsRates.value) {
@@ -258,7 +278,11 @@ async function loadShikimoriData(): Promise<void> {
     .catch(err => console.error('Failed to load friends rates:', err))
     .finally(() => { friendsLoading.value = false })
 
-  await Promise.all([ratePromise, friendsPromise])
+  const detailsPromise = window.api.shikimoriGetAnimeDetails(anime.value.myAnimeListId)
+    .then(details => { shikiDetails.value = details })
+    .catch(err => console.error('Failed to load Shikimori details:', err))
+
+  await Promise.all([ratePromise, friendsPromise, detailsPromise])
 }
 
 onMounted(async () => {
@@ -1095,6 +1119,28 @@ function typeChip(type: string): { short: string; color: string } {
               @click="triggerSyncNow"
             >
               Retry now
+            </button>
+          </div>
+          <div v-if="shikiDetails" class="shiki-details">
+            <div v-if="shikiDetails.genres?.length" class="shiki-genres">
+              <span v-for="g in shikiDetails.genres" :key="g.id" class="shiki-genre-tag">
+                {{ g.russian || g.name }}
+              </span>
+            </div>
+            <p
+              v-if="shikiDetailsDescription"
+              class="shiki-description"
+              :class="{ collapsed: !descExpanded }"
+            >
+              {{ shikiDetailsDescription }}
+            </p>
+            <button
+              v-if="shikiDetailsDescription && shikiDetailsDescription.length > 320"
+              type="button"
+              class="shiki-desc-toggle"
+              @click="descExpanded = !descExpanded"
+            >
+              {{ descExpanded ? 'Show less' : 'Show more' }}
             </button>
           </div>
         </template>
@@ -1963,6 +2009,59 @@ function typeChip(type: string): { short: string; color: string } {
 
 .shiki-offline-retry:hover {
   background: rgba(240, 167, 95, 0.15);
+}
+
+.shiki-details {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 52, 96, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shiki-genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.shiki-genre-tag {
+  font-size: 0.72rem;
+  color: #cdd6e4;
+  background: rgba(15, 52, 96, 0.5);
+  border: 1px solid rgba(94, 156, 216, 0.25);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.shiki-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #b8c2d4;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.shiki-description.collapsed {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.shiki-desc-toggle {
+  align-self: flex-start;
+  font-size: 0.75rem;
+  color: #5e9cd8;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.shiki-desc-toggle:hover {
+  text-decoration: underline;
 }
 
 .friends-panel {

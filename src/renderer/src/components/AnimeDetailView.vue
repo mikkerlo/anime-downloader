@@ -36,6 +36,8 @@ const shikiLoading = ref(false)
 const shikiSaving = ref(false)
 const shikiError = ref('')
 const offlineQueueLength = ref(0)
+const syncState = ref<'idle' | 'syncing'>('idle')
+const lastSyncError = ref<string | null>(null)
 
 // Friends state
 const friendsRates = ref<ShikiFriendRate[]>([])
@@ -374,6 +376,16 @@ onMounted(async () => {
   window.api.onShikimoriOfflineQueueChanged((data) => {
     offlineQueueLength.value = data.length
   })
+  window.api.shikimoriGetSyncStatus().then((s) => {
+    syncState.value = s.state
+    offlineQueueLength.value = s.queueLength
+    lastSyncError.value = s.lastSyncError
+  })
+  window.api.onShikimoriSyncStatus((data) => {
+    syncState.value = data.state
+    offlineQueueLength.value = data.queueLength
+    lastSyncError.value = data.lastSyncError
+  })
 })
 
 onUnmounted(() => {
@@ -384,7 +396,12 @@ onUnmounted(() => {
   window.api.offShikimoriRateUpdated()
   window.api.offShikimoriRatesRefreshed()
   window.api.offShikimoriOfflineQueueChanged()
+  window.api.offShikimoriSyncStatus()
 })
+
+async function triggerSyncNow(): Promise<void> {
+  await window.api.shikimoriTriggerSync()
+}
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   { value: 'planned', label: 'Planned' },
@@ -1025,11 +1042,49 @@ function typeChip(type: string): { short: string; color: string } {
             </button>
           </div>
           <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
-          <div v-if="offlineQueueLength > 0" class="shiki-offline">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <div
+            v-if="offlineQueueLength > 0"
+            class="shiki-offline"
+            :class="{ 'shiki-syncing': syncState === 'syncing' }"
+            :title="lastSyncError || ''"
+          >
+            <svg
+              v-if="syncState === 'syncing'"
+              class="shiki-offline-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-6.219-8.56" />
+            </svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
+            >
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M12 5a7 7 0 016.95 6.155A4 4 0 0118 19H9m-3-2a4 4 0 01-1.9-7.516" />
             </svg>
-            Working offline — {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} queued
+            <span v-if="syncState === 'syncing'">
+              Syncing {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }}…
+            </span>
+            <span v-else>
+              Working offline — {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} queued
+            </span>
+            <button
+              v-if="syncState === 'idle'"
+              type="button"
+              class="shiki-offline-retry"
+              @click="triggerSyncNow"
+            >
+              Retry now
+            </button>
           </div>
         </template>
         <div v-else class="shiki-loading">Loading...</div>
@@ -1866,6 +1921,37 @@ function typeChip(type: string): { short: string; color: string } {
   background: rgba(240, 167, 95, 0.12);
   border: 1px solid rgba(240, 167, 95, 0.3);
   border-radius: 4px;
+}
+
+.shiki-offline.shiki-syncing {
+  color: #5e9cd8;
+  background: rgba(94, 156, 216, 0.12);
+  border-color: rgba(94, 156, 216, 0.3);
+}
+
+.shiki-offline-spin {
+  animation: shiki-offline-rotate 0.9s linear infinite;
+}
+
+@keyframes shiki-offline-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.shiki-offline-retry {
+  margin-left: 4px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  color: #f0a75f;
+  background: transparent;
+  border: 1px solid rgba(240, 167, 95, 0.5);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.shiki-offline-retry:hover {
+  background: rgba(240, 167, 95, 0.15);
 }
 
 .friends-panel {

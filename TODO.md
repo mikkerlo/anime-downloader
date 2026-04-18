@@ -41,6 +41,7 @@
 - [x] HEVC → H.264 transcode fallback for platforms without an HEVC decoder — new `player:remux-mkv-stream-transcode` IPC re-encodes HEVC to H.264 through the existing MSE pipe; `pickH264Encoder` dry-runs `h264_vaapi` / `h264_nvenc` / `h264_qsv` / `libx264` at startup; `hevcTranscodeOnPlay` setting (ask / always / never) with consent modal and `shell:open-external-file` escape hatch
 - [x] Centralized Shikimori Cache & Surgical UI Updates — persist `shikimoriUserRates` in electron-store, cache-first `get-anime-rates`, background API refresh with `shikimori:rates-refreshed` broadcast, surgical `shikimori:rate-updated` on rate changes
 - [x] Offline Shikimori Support: Queuing & Status Indicators — intercept transport-level failures in `shikimori:update-rate`, persist `{before, after}` deltas to `shikimoriUpdateQueue`, optimistically update cache, broadcast `shikimori:offline-queue-changed`, show "Working offline" chip in AnimeDetailView
+- [x] Conflict-Aware Automatic Sync for Offline Changes — background sync worker drains `shikimoriUpdateQueue` on 60s timer + post-success hooks + boot, consolidates per malId, progress-only override on server drift, recreate on server deletion, `shikimori:sync-status` broadcast + "Retry now" button in AnimeDetailView
 
 ---
 
@@ -78,7 +79,7 @@
 - **Dependency:** Hard-blocked by **Item #1** (requires the centralized cache to record the `before` state).
 - **False Positives:** `navigator.onLine` is notoriously unreliable; implementation must handle "lie-fi" (connected to Wi-Fi but no internet) to avoid lost requests.
 
-## 3. Conflict-Aware Automatic Sync for Offline Changes
+## ~~3. Conflict-Aware Automatic Sync for Offline Changes~~ (done)
 
 **Priority:** High | **Effort:** Medium
 

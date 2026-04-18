@@ -194,7 +194,17 @@ const episodeRows = computed((): EpisodeRow[] => {
       selectedTr = sorted.find(tr => tr.id === episodeOverrides.value.get(ep.id)) || null
     }
 
-    // Priority 3: Global default (same type + author)
+    // Priority 3: Prefer any downloaded translation on this episode — avoids silent fallback to
+    // streaming when the global default (type+author) doesn't match what's on disk
+    if (!isLocked && !selectedTr && downloadedTrIds.size > 0) {
+      const downloaded = sorted.filter(tr => downloadedTrIds.has(tr.id))
+      const sameType = downloaded
+        .filter(tr => tr.type === translationType.value)
+        .sort((a, b) => getRealHeight(b) - getRealHeight(a))
+      selectedTr = sameType[0] || downloaded[0] || null
+    }
+
+    // Priority 4: Global default (same type + author)
     if (!isLocked && !selectedTr) {
       const typeFiltered = sorted.filter(tr => tr.type === translationType.value)
       selectedTr = typeFiltered.find(tr => tr.authorsSummary === selectedAuthor.value)

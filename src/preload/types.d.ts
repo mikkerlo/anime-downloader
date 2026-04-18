@@ -128,6 +128,9 @@ interface Api {
   offShikimoriRateUpdated: () => void
   onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => void
   offShikimoriRatesRefreshed: () => void
+  shikimoriGetOfflineQueueLength: () => Promise<number>
+  onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => void
+  offShikimoriOfflineQueueChanged: () => void
 
   // Updates
   appVersion: () => Promise<string>

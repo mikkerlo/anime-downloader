@@ -289,6 +289,8 @@ LibraryView shows both with indicators:
 | `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |
 | `shikimori:rate-updated` | send | Single rate entry changed (after update-rate); renderer views surgically update their local state |
 | `shikimori:rates-refreshed` | send | Full rate list refreshed from API in background; renderer views replace their entries |
+| `shikimori:get-offline-queue-length` | invoke | Returns the number of rate updates currently queued for later sync (for initial UI hydration) |
+| `shikimori:offline-queue-changed` | send | Queue length changed; renderers update the "Working offline" indicator |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
@@ -380,6 +382,7 @@ interface EpisodeMeta {
 | `hevcTranscodeOnPlay` | string | `'ask'` | HEVC fallback when the built-in player has no decoder: `ask` (show modal), `always` (transcode to H.264), `never` (open in external player) |
 | `watchProgress` | object | `{}` | Per-episode playback position + watched flag (key: `animeId:episodeInt`) |
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
+| `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
 
 ## Watch Progress & Resume
 
@@ -504,6 +507,10 @@ Standalone API client with hardcoded client credentials. All methods throw `Shik
 ### Centralized Rate Cache
 
 Anime rates are persisted in `shikimoriUserRates` (electron-store). `shikimori:get-anime-rates` returns cached data instantly when available and triggers a background API refresh; the refresh result is broadcast via `shikimori:rates-refreshed` so open views update without a manual reload. `shikimori:update-rate` patches the cached entry in-place and broadcasts `shikimori:rate-updated` for surgical single-entry updates. ShikimoriView and AnimeDetailView both listen for these broadcasts. Cache is cleared on logout.
+
+### Offline Update Queue
+
+`shikimori:update-rate` distinguishes transport-level failures (fetch threw `TypeError` / `AbortError`) from HTTP errors (wrapped as `ShikiApiError`). HTTP errors propagate to the renderer as before. Transport failures are intercepted: the previous cached state is recorded as `before`, the requested change as `after`, and a `QueuedShikimoriUpdate` (`{ malId, rateId, before, after, queuedAt }`) is appended to `shikimoriUpdateQueue` in electron-store. The cached rate entry is then updated in place with the requested values so the UI reflects the change, and `shikimori:rate-updated` + `shikimori:offline-queue-changed` are broadcast. The handler returns a synthetic `ShikiUserRate` so callers (including `PlayerView`'s auto-tracker) don't need an offline branch. `AnimeDetailView` shows a "Working offline — N changes queued" chip while the queue is non-empty; the chip hydrates from `shikimori:get-offline-queue-length` on mount. Queue is cleared on logout. Actual sync-back to Shikimori when connectivity returns is handled by the next follow-up (Conflict-Aware Automatic Sync).
 
 ### Friends Activity Feed
 

@@ -17,6 +17,8 @@ export interface DownloadItem {
   filename: string
   animeName: string
   episodeLabel: string
+  animeId: number
+  episodeInt: string
   quality: number
   translationType: string
   author: string
@@ -52,6 +54,17 @@ export interface DownloadRequest {
   author: string
 }
 
+export interface EpisodeCompleteInfo {
+  animeName: string
+  episodeLabel: string
+  animeId: number
+  episodeInt: string
+  translationId: number
+  translationType: string
+  author: string
+  quality: number
+}
+
 const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
@@ -76,7 +89,7 @@ export class DownloadManager {
   private api: SmotretApi
   private getSpeedLimit: () => number
   private getConcurrentLimit: () => number
-  private episodeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
+  private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void) | null = null
   private mergeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
   private queueCompleteCallback: (() => void) | null = null
   private merging = false
@@ -131,6 +144,9 @@ export class DownloadManager {
             item.status = 'paused'
             item.speed = 0
           }
+          // Defensive: older queue.json predates animeId/episodeInt on items
+          if (typeof item.animeId !== 'number') item.animeId = 0
+          if (typeof item.episodeInt !== 'string') item.episodeInt = ''
           this.queue.push(item)
         }
       }
@@ -152,7 +168,7 @@ export class DownloadManager {
     }
   }
 
-  onEpisodeComplete(callback: (animeName: string, episodeLabel: string) => void): void {
+  onEpisodeComplete(callback: (info: EpisodeCompleteInfo) => void): void {
     this.episodeCompleteCallback = callback
   }
 
@@ -166,6 +182,19 @@ export class DownloadManager {
 
   setDownloadDir(dir: string): void {
     this.downloadDir = dir
+  }
+
+  getItem(id: string): DownloadItem | null {
+    return this.queue.find(i => i.id === id) || null
+  }
+
+  findCancellableItems(animeName: string, episodeLabel?: string): DownloadItem[] {
+    return this.queue.filter(i =>
+      i.animeName === animeName &&
+      (!episodeLabel || i.episodeLabel === episodeLabel) &&
+      i.status !== 'completed' &&
+      i.status !== 'cancelled'
+    )
   }
 
   getEpisodeGroups(): EpisodeGroup[] {
@@ -239,6 +268,8 @@ export class DownloadManager {
             filename: path.join(animeDirName, `${baseFilename}.mp4`),
             animeName: req.animeName,
             episodeLabel: req.episodeLabel,
+            animeId: req.animeId,
+            episodeInt: req.episodeInt,
             quality: best.height,
             translationType: req.translationType,
             author: req.author,
@@ -260,6 +291,8 @@ export class DownloadManager {
               filename: path.join(animeDirName, `${baseFilename}.ass`),
               animeName: req.animeName,
               episodeLabel: req.episodeLabel,
+              animeId: req.animeId,
+              episodeInt: req.episodeInt,
               quality: best?.height || req.height,
               translationType: req.translationType,
               author: req.author,
@@ -279,6 +312,8 @@ export class DownloadManager {
           filename: path.join(animeDirName, `${baseFilename}.mp4`),
           animeName: req.animeName,
           episodeLabel: req.episodeLabel,
+          animeId: req.animeId,
+          episodeInt: req.episodeInt,
           quality: req.height,
           translationType: req.translationType,
           author: req.author,
@@ -842,9 +877,17 @@ export class DownloadManager {
     if (allDone) {
       const first = items[0]
       if (this.episodeCompleteCallback) {
-        const animeName = first.animeName
-        const episodeLabel = first.episodeLabel
-        setTimeout(() => this.episodeCompleteCallback?.(animeName, episodeLabel), 100)
+        const info: EpisodeCompleteInfo = {
+          animeName: first.animeName,
+          episodeLabel: first.episodeLabel,
+          animeId: first.animeId,
+          episodeInt: first.episodeInt,
+          translationId: first.translationId,
+          translationType: first.translationType,
+          author: first.author,
+          quality: first.quality
+        }
+        setTimeout(() => this.episodeCompleteCallback?.(info), 100)
       }
       this.checkQueueComplete()
     }

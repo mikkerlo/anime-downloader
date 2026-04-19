@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "3.10.0",
+  "version": "3.11.0",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "scripts": {

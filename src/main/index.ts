@@ -825,6 +825,52 @@ function isAdvancedStorage(): boolean {
   return (store.get('storageMode') as string) === 'advanced'
 }
 
+function storageDirsForScan(): string[] {
+  const dirs = [getDownloadDir()]
+  if (isAdvancedStorage()) {
+    const cold = getColdStorageDir()
+    if (cold) dirs.push(cold)
+  }
+  return dirs
+}
+
+// Drops `downloadedEpisodes[animeId:episodeInt:translationId]` (and the legacy
+// `animeId:episodeInt` key if it points at the same translation) when no file
+// for that translation exists on disk. Called after cancel / cancel-by-episode.
+function pruneDownloadedEpisode(animeId: number, episodeInt: string, translationId: number, animeName: string, author: string): void {
+  if (episodeFileExists(animeName, episodeInt, author)) return
+  const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+  const key = `${animeId}:${episodeInt}:${translationId}`
+  const legacyKey = `${animeId}:${episodeInt}`
+  let changed = false
+  if (key in episodes) {
+    delete episodes[key]
+    changed = true
+  }
+  if (episodes[legacyKey]?.translationId === translationId) {
+    delete episodes[legacyKey]
+    changed = true
+  }
+  if (changed) store.set('downloadedEpisodes', episodes)
+}
+
+// Returns true iff a .mkv or .mp4 for (animeName, episodeInt, author) exists in any storage dir.
+// Used to validate `downloadedEpisodes` metadata against the filesystem.
+function episodeFileExists(animeName: string, episodeInt: string, author: string): boolean {
+  const animeDirName = sanitizeFilename(animeName)
+  const padded = episodeInt.padStart(2, '0')
+  const base = sanitizeFilename(`${animeName} - ${padded}`)
+  const authorTag = sanitizeFilename(author || '')
+  const taggedBase = authorTag ? `${base} [${authorTag}]` : base
+  for (const dir of storageDirsForScan()) {
+    const animeDir = path.join(dir, animeDirName)
+    for (const candidate of [`${taggedBase}.mkv`, `${taggedBase}.mp4`, `${base}.mkv`, `${base}.mp4`]) {
+      if (fs.existsSync(path.join(animeDir, candidate))) return true
+    }
+  }
+  return false
+}
+
 async function moveFileToCold(src: string, dest: string): Promise<void> {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   try {
@@ -1182,19 +1228,9 @@ function registerIpcHandlers(): void {
   // Download handlers
   ipcMain.handle('download:enqueue', async (_event, requests: DownloadRequest[]) => {
     await downloadManager.enqueue(requests)
-    // Save episode metadata (keyed by animeId:episodeInt:translationId for multi-translation support)
-    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
-    for (const req of requests) {
-      // Remove legacy key if present
-      delete episodes[`${req.animeId}:${req.episodeInt}`]
-      episodes[`${req.animeId}:${req.episodeInt}:${req.translationId}`] = {
-        translationType: req.translationType,
-        author: req.author,
-        quality: req.height,
-        translationId: req.translationId
-      }
-    }
-    store.set('downloadedEpisodes', episodes)
+    // Metadata in `downloadedEpisodes` is written by the onEpisodeComplete callback
+    // once the video is actually on disk — premature writes here caused stale ⬇ icons
+    // to survive cancelled or never-finished downloads.
   })
 
   ipcMain.handle('download:pause', (_event, id: string) => {
@@ -1222,7 +1258,11 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('download:cancel', (_event, id: string) => {
+    const item = downloadManager.getItem(id)
     downloadManager.cancel(id)
+    if (item && item.animeId > 0 && item.episodeInt) {
+      pruneDownloadedEpisode(item.animeId, item.episodeInt, item.translationId, item.animeName, item.author)
+    }
   })
 
   ipcMain.handle('download:get-queue', () => {
@@ -1230,7 +1270,17 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('download:cancel-by-episode', (_event, animeName: string, episodeLabel?: string) => {
+    // Snapshot items before cancellation so we can prune metadata for any translation
+    // whose file never landed on disk.
+    const toPrune = downloadManager.findCancellableItems(animeName, episodeLabel)
+      .filter(i => i.kind === 'video' && i.animeId > 0 && i.episodeInt)
+      .map(i => ({ animeId: i.animeId, episodeInt: i.episodeInt, translationId: i.translationId, animeName: i.animeName, author: i.author }))
+
     downloadManager.cancelByEpisode(animeName, episodeLabel)
+
+    for (const p of toPrune) {
+      pruneDownloadedEpisode(p.animeId, p.episodeInt, p.translationId, p.animeName, p.author)
+    }
 
     // If no active downloads remain for this anime and no files on disk, remove from downloaded list
     const groups = downloadManager.getEpisodeGroups()
@@ -1265,17 +1315,39 @@ function registerIpcHandlers(): void {
     const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
     const result: Record<string, { translationType: string; author: string; quality: number; translationId: number }[]> = {}
     const prefix = `${animeId}:`
+
+    // Resolve anime name so we can validate each entry against the filesystem.
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const animeRec = downloaded[String(animeId)]
+    const animeName = animeRec ? (animeRec.titles?.romaji || animeRec.titles?.ru || animeRec.title) : ''
+
+    // Active downloads (kept even without a file yet so the UI lock / in-progress indicators work).
+    const activeTrIds = new Set(
+      downloadManager.getEpisodeGroups()
+        .filter(g => g.animeName === animeName)
+        .map(g => g.translationId)
+    )
+
+    let mutated = false
     for (const [key, val] of Object.entries(episodes)) {
-      if (key.startsWith(prefix)) {
-        const rest = key.substring(prefix.length)
-        // New format: episodeInt:translationId — extract episodeInt
-        // Legacy format: episodeInt (no colon) — also supported
-        const colonIdx = rest.indexOf(':')
-        const episodeInt = colonIdx >= 0 ? rest.substring(0, colonIdx) : rest
-        if (!result[episodeInt]) result[episodeInt] = []
-        result[episodeInt].push(val)
+      if (!key.startsWith(prefix)) continue
+      const rest = key.substring(prefix.length)
+      const colonIdx = rest.indexOf(':')
+      const episodeInt = colonIdx >= 0 ? rest.substring(0, colonIdx) : rest
+
+      // GC stale metadata whose file is not on disk and which isn't an active download.
+      if (animeName && !activeTrIds.has(val.translationId)
+          && !episodeFileExists(animeName, episodeInt, val.author)) {
+        delete episodes[key]
+        mutated = true
+        continue
       }
+
+      if (!result[episodeInt]) result[episodeInt] = []
+      result[episodeInt].push(val)
     }
+
+    if (mutated) store.set('downloadedEpisodes', episodes)
     return result
   })
 
@@ -2715,8 +2787,24 @@ app.whenReady().then(async () => {
     new Notification({ title, body }).show()
   }
 
-  downloadManager.onEpisodeComplete(async (animeName, episodeLabel) => {
+  downloadManager.onEpisodeComplete(async (info) => {
+    const { animeName, episodeLabel, animeId, episodeInt, translationId, translationType, author, quality } = info
     fileCheckCache.delete(animeName)
+
+    // Persist episode metadata now that the video is on disk. Writing this at enqueue
+    // time caused stale ⬇ icons to survive cancelled / failed downloads.
+    if (animeId > 0 && episodeInt) {
+      const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+      delete episodes[`${animeId}:${episodeInt}`]
+      episodes[`${animeId}:${episodeInt}:${translationId}`] = {
+        translationType,
+        author,
+        quality,
+        translationId
+      }
+      store.set('downloadedEpisodes', episodes)
+    }
+
     const autoMerge = store.get('autoMerge') as boolean
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {
       const codec = store.get('videoCodec') as string || 'copy'

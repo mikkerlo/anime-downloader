@@ -130,8 +130,11 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    b. Select best quality stream URL <= requested height
    c. Create DownloadItem for video (stream URL) + subtitle (ass URL)
    d. Add to queue
-4. Episode metadata saved to electron-store (translationType, author, quality)
-5. Anime added to downloadedAnime store (appears in library)
+4. Anime added to downloadedAnime store (appears in library)
+5. Episode metadata (`downloadedEpisodes[animeId:episodeInt:translationId]`) is
+   written by the `onEpisodeComplete` callback once the video is on disk — NOT
+   at enqueue time. This prevents cancelled or never-finished downloads from
+   leaving a stale ⬇ icon in the UI.
 6. processQueue(): run up to 2 concurrent downloads
 7. startDownload():
    a. HTTP fetch with Range header (resume support)
@@ -197,7 +200,16 @@ Actions per episode:
   Open     --> shell.openPath(filePath)       cross-platform default player
   Folder   --> shell.showItemInFolder(path)   cross-platform file explorer
   Delete   --> fs.unlink .mkv, .mp4, .ass     also cleans episode metadata
-  Cancel   --> cancelByEpisode(animeName, episodeLabel)  cancel queued/active download
+  Cancel   --> cancelByEpisode(animeName, episodeLabel)  cancel queued/active download;
+               snapshots cancelled translations and drops their
+               `downloadedEpisodes` entries when no file landed on disk
+
+Metadata invariants:
+  `downloaded-episodes-get` cross-checks each `downloadedEpisodes` entry against
+  disk (tagged `[Author]` .mkv/.mp4, plus legacy untagged, in hot + cold dirs).
+  Entries with no matching file and no active download are filtered out and
+  garbage-collected from the store. Combined with the late-write at completion,
+  this makes the ⬇ icon a reliable signal that the file is actually present.
 
 File scan cache (session-level, in-memory):
   fileCheckCache: Map<animeName, fullScanResult>

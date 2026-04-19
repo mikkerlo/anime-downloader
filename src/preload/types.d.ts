@@ -147,6 +147,12 @@ interface Api {
     }) => void
   ) => void
   offShikimoriSyncStatus: () => void
+  shikimoriGetAnimeDetails: (malId: number) => Promise<ShikiAnimeDetails | null>
+  shikimoriTriggerDetailPrefetch: () => Promise<void>
+  onShikimoriAnimeDetailsUpdated: (
+    callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
+  ) => void
+  offShikimoriAnimeDetailsUpdated: () => void
 
   // Updates
   appVersion: () => Promise<string>
@@ -312,6 +318,39 @@ interface ShikiAnimeRateEntry {
   }
   shikiAnime: ShikiAnimeInfo
   smotretAnime: AnimeSearchResult | null
+}
+
+interface ShikiAnimeGenre {
+  id: number
+  name: string
+  russian: string
+  kind: string
+}
+
+interface ShikiAnimeStudio {
+  id: number
+  name: string
+  filtered_name: string
+  real: boolean
+  image: string | null
+}
+
+interface ShikiAnimeDetails {
+  id: number
+  name: string
+  russian: string
+  description: string | null
+  description_html: string | null
+  rating: string
+  duration: number
+  aired_on: string | null
+  released_on: string | null
+  genres: ShikiAnimeGenre[]
+  studios: ShikiAnimeStudio[]
+  score: string
+  status: string
+  episodes: number
+  episodes_aired: number
 }
 
 interface ShikiFriendRate {

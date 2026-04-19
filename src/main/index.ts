@@ -85,7 +85,8 @@ const store = new Store({
     hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>,
     shikimoriUserRates: [] as unknown[],
-    shikimoriUpdateQueue: [] as unknown[]
+    shikimoriUpdateQueue: [] as unknown[],
+    shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>
   }
 })
 
@@ -159,6 +160,13 @@ let syncInProgress = false
 let syncTimer: NodeJS.Timeout | null = null
 let lastSyncAt = 0
 let lastSyncError: string | null = null
+
+const PREFETCH_INTER_REQUEST_MS = 2000
+const PREFETCH_STALENESS_MS = 30 * 24 * 60 * 60 * 1000
+const PREFETCH_STATUSES = new Set<shikimori.ShikiUserRateStatus>(['watching', 'planned'])
+
+let prefetchInProgress = false
+let prefetchAbort = false
 
 function getQueueLength(): number {
   return (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).length
@@ -364,6 +372,89 @@ async function syncShikimoriQueue(): Promise<void> {
   }
   adjustSyncTimer()
   broadcastSyncStatus()
+}
+
+function getStaleOrMissingMalIds(): number[] {
+  const rates = store.get('shikimoriUserRates') as {
+    rate: { target_id: number; status: shikimori.ShikiUserRateStatus }
+  }[]
+  const cache = store.get('shikimoriAnimeDetails') as Record<
+    string,
+    { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+  >
+  const now = Date.now()
+  const result: number[] = []
+  for (const entry of rates) {
+    if (!PREFETCH_STATUSES.has(entry.rate.status)) continue
+    const malId = entry.rate.target_id
+    const cached = cache[String(malId)]
+    if (!cached || now - cached.fetchedAt > PREFETCH_STALENESS_MS) {
+      result.push(malId)
+    }
+  }
+  return result
+}
+
+async function prefetchShikimoriDetails(): Promise<void> {
+  if (prefetchInProgress) return
+  const creds = store.get('shikimoriCredentials') as shikimori.ShikiCredentials | null
+  const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+  if (!creds || !user) return
+
+  const work = getStaleOrMissingMalIds()
+  if (work.length === 0) return
+
+  prefetchInProgress = true
+  prefetchAbort = false
+
+  try {
+    let accessToken: string
+    try {
+      accessToken = await shikimori.ensureFreshToken(store)
+    } catch (err) {
+      if (!isNetworkError(err)) {
+        console.warn('[shikimori prefetch] auth refresh failed:', err)
+      }
+      return
+    }
+
+    for (let i = 0; i < work.length; i++) {
+      if (prefetchAbort) break
+      const malId = work[i]
+      try {
+        const details = await shikimori.getAnimeDetails(accessToken, malId)
+        const cache = store.get('shikimoriAnimeDetails') as Record<
+          string,
+          { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+        >
+        cache[String(malId)] = { details, fetchedAt: Date.now() }
+        store.set('shikimoriAnimeDetails', cache)
+        broadcastToAll('shikimori:anime-details-updated', { malId, details })
+      } catch (err) {
+        if (isNetworkError(err)) {
+          console.warn('[shikimori prefetch] network error, aborting loop:', err)
+          break
+        }
+        if (
+          err instanceof shikimori.ShikiApiError &&
+          (err.status === 401 || err.status === 403)
+        ) {
+          console.warn('[shikimori prefetch] auth error, aborting loop:', err)
+          break
+        }
+        if (err instanceof shikimori.ShikiApiError && err.status === 404) {
+          console.warn('[shikimori prefetch] anime', malId, 'not found, skipping')
+        } else {
+          console.warn('[shikimori prefetch] error fetching', malId, err)
+        }
+      }
+      if (i < work.length - 1) {
+        await sleep(PREFETCH_INTER_REQUEST_MS)
+      }
+    }
+  } finally {
+    prefetchInProgress = false
+  }
 }
 
 // --- Anime cache helpers (for offline support of downloaded anime) ---
@@ -1509,6 +1600,8 @@ function registerIpcHandlers(): void {
     store.set('shikimoriUser', null)
     store.set('shikimoriUserRates', [])
     store.set('shikimoriUpdateQueue', [])
+    store.set('shikimoriAnimeDetails', {})
+    prefetchAbort = true
     stopSyncTimer()
     broadcastToAll('shikimori:offline-queue-changed', { length: 0 })
     broadcastSyncStatus()
@@ -1645,6 +1738,7 @@ function registerIpcHandlers(): void {
       .then((entries) => {
         broadcastToAll('shikimori:rates-refreshed', entries)
         void syncShikimoriQueue()
+        void prefetchShikimoriDetails()
       })
       .catch((err) => console.warn('[shikimori] background refresh failed:', err))
   }
@@ -1657,7 +1751,27 @@ function registerIpcHandlers(): void {
         return cached
       }
     }
-    return fetchAndCacheShikimoriRates(status)
+    const entries = await fetchAndCacheShikimoriRates(status)
+    if (!status) void prefetchShikimoriDetails()
+    return entries
+  })
+
+  ipcMain.handle('shikimori:get-anime-details', (_event, malId: number) => {
+    const cache = store.get('shikimoriAnimeDetails') as Record<
+      string,
+      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+    >
+    const entry = cache[String(malId)]
+    if (!entry) {
+      const creds = store.get('shikimoriCredentials') as shikimori.ShikiCredentials | null
+      if (creds) void prefetchShikimoriDetails()
+      return null
+    }
+    return entry.details
+  })
+
+  ipcMain.handle('shikimori:trigger-detail-prefetch', () => {
+    void prefetchShikimoriDetails()
   })
 
   ipcMain.handle('shikimori:get-offline-queue-length', () => {

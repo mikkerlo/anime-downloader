@@ -4,6 +4,7 @@ declare module 'libass-wasm/dist/js/subtitles-octopus.js' {
     dispose(): void
     setTrack(content: string): void
     freeTrack(): void
+    resize(width?: number, height?: number, top?: number, left?: number): void
   }
 }
 

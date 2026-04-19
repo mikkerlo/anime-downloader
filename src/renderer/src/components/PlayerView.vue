@@ -804,6 +804,13 @@ function toggleFullscreen(): void {
 
 function onFullscreenChange(): void {
   isFullscreen.value = !!document.fullscreenElement
+  // SubtitlesOctopus caches the last rendered frame at the old canvas size; after a
+  // fullscreen transition the video element resizes but libass does not re-render
+  // until the next subtitle event, leaving a gap. Force it to resample at the new
+  // dimensions once layout has settled.
+  requestAnimationFrame(() => {
+    try { octopusInstance?.resize() } catch { /* ignore */ }
+  })
 }
 
 // Controls visibility

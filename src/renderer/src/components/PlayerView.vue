@@ -804,16 +804,6 @@ function toggleFullscreen(): void {
 
 function onFullscreenChange(): void {
   isFullscreen.value = !!document.fullscreenElement
-  // SubtitlesOctopus registers its own fullscreenchange handler that resizes its
-  // canvas (which clears the bitmap) but does not re-render the current frame —
-  // so whatever subtitle was on screen disappears until the next dialog event.
-  // Force a re-render once its internal delayed resize (100ms) has settled.
-  setTimeout(() => {
-    const v = videoRef.value
-    if (octopusInstance && v) {
-      try { octopusInstance.setCurrentTime(v.currentTime) } catch { /* ignore */ }
-    }
-  }, 150)
 }
 
 // Controls visibility

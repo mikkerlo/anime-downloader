@@ -804,6 +804,16 @@ function toggleFullscreen(): void {
 
 function onFullscreenChange(): void {
   isFullscreen.value = !!document.fullscreenElement
+  // libass's internal fullscreenchange listener resizes the canvas but does
+  // not force a redraw, so a paused frame loses its subtitles. setTrack makes
+  // the worker rebuild the track and emit a fresh bitmap at the new canvas
+  // size. Delay past the library's own 100ms resize so we hit final geometry.
+  setTimeout(() => {
+    const content = activeSubtitleContent.value
+    if (octopusInstance && content) {
+      try { octopusInstance.setTrack(content) } catch { /* ignore */ }
+    }
+  }, 200)
 }
 
 // Controls visibility

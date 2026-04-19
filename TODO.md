@@ -48,7 +48,7 @@
 
 ## Planned
 
-## 1. Shikimori Series Chronology in Anime Detail View
+## ~~1. Shikimori Series Chronology in Anime Detail View~~ (done)
 
 **Priority:** Medium | **Effort:** Medium
 

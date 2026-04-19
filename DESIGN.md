@@ -310,6 +310,7 @@ LibraryView shows both with indicators:
 | `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
 | `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
+| `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/related`, resolve each related MAL ID to a smotret-anime entry |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -560,6 +561,10 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 - Save button to push changes
 - Link to anime on Shikimori
 - Auto-status: episodes > 0 → watching (from planned) / rewatching (from completed); episodes = max → completed
+
+### Series Chronology
+
+Below the Shikimori panel, `AnimeDetailView` renders a Chronology list of the entire franchise sourced from `GET /api/animes/:id/franchise`. The main-process handler `shikimori:get-related` fetches the franchise graph (`{ nodes, links, current_id }`), sorts nodes chronologically by release `date`, then calls `lookupByMalIds` to resolve each node's MAL ID to its smotret-anime entry (reusing the persistent `malIdMap` cache). For each node it also walks the `links` array to find any direct edge to or from `current_id` — that edge's `relation` (sequel/prequel/side story/…) is attached when present; nodes more than one hop away from the current anime simply omit the relation label. Each row shows title, kind badge (TV/movie/OVA/…), release year, relation label (when available), and — cross-referenced against `shikimoriUserRates` — a watch-status badge when the current user tracks that entry. The current anime's node is highlighted with a "Current" badge and is non-clickable. Rows where `lookupByMalIds` returned no smotret-anime match display a "Not available" badge and are non-clickable. Clickable rows emit `open-anime` up through `App.vue` into the current view slot, re-mounting `AnimeDetailView` via the `:key="activeAnimeId"` binding so navigation between franchise entries works in-place without a history stack. Lists with more than eight entries collapse by default behind a "Show more" toggle to keep the panel compact for long franchises.
 
 ## FFmpeg
 

@@ -394,6 +394,7 @@ export interface ShikiAnimeDetails {
   id: number
   name: string
   russian: string
+  kind: string
   description: string | null
   description_html: string | null
   rating: string
@@ -416,4 +417,36 @@ export async function getAnimeDetails(
     headers: authHeaders(accessToken)
   })
   return response.json() as Promise<ShikiAnimeDetails>
+}
+
+export interface ShikiFranchiseNode {
+  id: number
+  date: number | null
+  name: string
+  image_url: string
+  url: string
+  year: number | null
+  kind: string | null
+  weight: number
+}
+
+export interface ShikiFranchiseLink {
+  id: number
+  source_id: number
+  target_id: number
+  source: number
+  target: number
+  weight: number
+  relation: string
+}
+
+export interface ShikiFranchise {
+  links: ShikiFranchiseLink[]
+  nodes: ShikiFranchiseNode[]
+  current_id: number
+}
+
+export async function getFranchise(malId: number): Promise<ShikiFranchise> {
+  const response = await shikiFetch(`/api/animes/${malId}/franchise`)
+  return response.json() as Promise<ShikiFranchise>
 }

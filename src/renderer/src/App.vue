@@ -19,6 +19,12 @@ const animeByView = ref<Record<string, number | null>>({
   shikimori: null,
   friends: null
 })
+const animeHistoryByView = ref<Record<string, number[]>>({
+  search: [],
+  library: [],
+  shikimori: [],
+  friends: []
+})
 
 const shikimoriLoggedIn = ref(false)
 
@@ -53,11 +59,18 @@ const animePrefs = ref<Record<number, { translationType?: string; author?: strin
 const activeAnimeId = computed(() => animeByView.value[currentView.value] ?? null)
 
 function openAnime(id: number): void {
-  animeByView.value[currentView.value] = id
+  const view = currentView.value
+  const current = animeByView.value[view]
+  if (current != null && current !== id) {
+    animeHistoryByView.value[view].push(current)
+  }
+  animeByView.value[view] = id
 }
 
 function closeAnime(): void {
-  animeByView.value[currentView.value] = null
+  const view = currentView.value
+  const stack = animeHistoryByView.value[view]
+  animeByView.value[view] = stack.length > 0 ? stack.pop()! : null
 }
 
 function saveAnimePrefs(animeId: number, translationType: string, author: string): void {
@@ -160,7 +173,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <Sidebar :current-view="currentView" :shikimori-logged-in="shikimoriLoggedIn" @navigate="navigate" />
-    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" />
+    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" @open-anime="openAnime" />
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />

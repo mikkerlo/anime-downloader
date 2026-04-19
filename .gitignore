@@ -6,3 +6,5 @@ dist/
 *:Zone.Identifier
 tsconfig.web.tsbuildinfo
 scripts/browse.js
+.claude/scheduled_tasks.lock
+.claude/settings.local.json

@@ -911,12 +911,21 @@ function handleClose(): void {
   }
 }
 
-function onMouseBack(e: MouseEvent): void {
+function onAuxMouseUp(e: MouseEvent): void {
   if (e.button === 3) {
     e.stopImmediatePropagation()
     e.preventDefault()
     handleClose()
+  } else if (e.button === 1) {
+    e.stopImmediatePropagation()
+    e.preventDefault()
+    togglePlay()
   }
+}
+
+// Suppress middle-click autoscroll cursor; the actual toggle happens on mouseup.
+function onAuxMouseDown(e: MouseEvent): void {
+  if (e.button === 1) e.preventDefault()
 }
 
 // Keyboard shortcuts
@@ -1600,7 +1609,8 @@ function destroySubtitles(): void {
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
-  window.addEventListener('mouseup', onMouseBack, true)
+  window.addEventListener('mouseup', onAuxMouseUp, true)
+  window.addEventListener('mousedown', onAuxMouseDown, true)
   const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
   playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) }
 
@@ -1717,7 +1727,8 @@ onBeforeUnmount(() => {
   if (resumeToastTimer) clearTimeout(resumeToastTimer)
   document.removeEventListener('keydown', onKeyDown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
-  window.removeEventListener('mouseup', onMouseBack, true)
+  window.removeEventListener('mouseup', onAuxMouseUp, true)
+  window.removeEventListener('mousedown', onAuxMouseDown, true)
   if (controlsTimer) clearTimeout(controlsTimer)
   if (streamingBannerTimer) {
     clearTimeout(streamingBannerTimer)

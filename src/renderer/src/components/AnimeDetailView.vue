@@ -53,7 +53,7 @@ const descExpanded = ref(false)
 // Shikimori chronology (related anime in the franchise)
 const shikiRelated = ref<ShikiRelatedEntry[]>([])
 const relatedLoading = ref(false)
-const relatedCollapsed = ref(false)
+const relatedCollapsed = ref(true)
 
 const KIND_LABELS: Record<string, string> = {
   tv: 'TV',
@@ -306,7 +306,6 @@ async function loadShikimoriData(): Promise<void> {
   const relatedPromise = window.api.shikimoriGetRelated(anime.value.myAnimeListId)
     .then((related) => {
       shikiRelated.value = related
-      relatedCollapsed.value = related.length > 8
     })
     .catch(err => console.error('Failed to load Shikimori related:', err))
     .finally(() => { relatedLoading.value = false })

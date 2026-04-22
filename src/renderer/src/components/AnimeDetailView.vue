@@ -300,7 +300,21 @@ async function loadShikimoriData(): Promise<void> {
   } finally {
     shikiUserChecked.value = true
   }
-  if (!shikiUser.value || !anime.value?.myAnimeListId) return
+  if (!anime.value?.myAnimeListId) return
+
+  relatedLoading.value = true
+  const relatedPromise = window.api.shikimoriGetRelated(anime.value.myAnimeListId)
+    .then((related) => {
+      shikiRelated.value = related
+      relatedCollapsed.value = related.length > 8
+    })
+    .catch(err => console.error('Failed to load Shikimori related:', err))
+    .finally(() => { relatedLoading.value = false })
+
+  if (!shikiUser.value) {
+    await relatedPromise
+    return
+  }
 
   shikiLoading.value = true
   friendsLoading.value = true
@@ -326,15 +340,6 @@ async function loadShikimoriData(): Promise<void> {
   const detailsPromise = window.api.shikimoriGetAnimeDetails(anime.value.myAnimeListId)
     .then(details => { shikiDetails.value = details })
     .catch(err => console.error('Failed to load Shikimori details:', err))
-
-  relatedLoading.value = true
-  const relatedPromise = window.api.shikimoriGetRelated(anime.value.myAnimeListId)
-    .then((related) => {
-      shikiRelated.value = related
-      relatedCollapsed.value = related.length > 8
-    })
-    .catch(err => console.error('Failed to load Shikimori related:', err))
-    .finally(() => { relatedLoading.value = false })
 
   await Promise.all([ratePromise, friendsPromise, detailsPromise, relatedPromise])
 }
@@ -1209,7 +1214,7 @@ function typeChip(type: string): { short: string; color: string } {
       </div>
 
       <div
-        v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked) && (relatedLoading || shikiRelated.length > 0)"
+        v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
         class="related-panel"
       >
         <div class="related-header" @click="relatedCollapsed = !relatedCollapsed">
@@ -1234,10 +1239,15 @@ function typeChip(type: string): { short: string; color: string } {
               :key="entry.shikiAnime.id"
               class="related-row"
               :class="{ clickable: entry.smotretAnime && !entry.isCurrent, unavailable: !entry.smotretAnime, current: entry.isCurrent }"
+              :role="entry.smotretAnime && !entry.isCurrent ? 'button' : undefined"
+              :tabindex="entry.smotretAnime && !entry.isCurrent ? 0 : undefined"
               @click="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
+              @keydown.enter.prevent="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
+              @keydown.space.prevent="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
             >
               <img
                 :src="entry.shikiAnime.image_url || ''"
+                :alt="entry.shikiAnime.name"
                 class="related-thumb"
                 loading="lazy"
               />
@@ -2250,8 +2260,10 @@ function typeChip(type: string): { short: string; color: string } {
   cursor: pointer;
 }
 
-.related-row.clickable:hover {
+.related-row.clickable:hover,
+.related-row.clickable:focus-visible {
   background-color: #1a2a4d;
+  outline: none;
 }
 
 .related-row.unavailable {

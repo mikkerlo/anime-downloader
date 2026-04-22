@@ -1899,8 +1899,8 @@ function registerIpcHandlers(): void {
 
     const reachable = new Set<number>([franchise.current_id])
     const queue = [franchise.current_id]
-    while (queue.length > 0) {
-      const cur = queue.shift()!
+    for (let i = 0; i < queue.length; i++) {
+      const cur = queue[i]
       for (const { nodeId } of adjacency.get(cur) || []) {
         if (reachable.has(nodeId)) continue
         reachable.add(nodeId)
@@ -1916,8 +1916,6 @@ function registerIpcHandlers(): void {
     for (const link of franchise.links) {
       if (link.source_id === franchise.current_id) {
         relationByNodeId.set(link.target_id, link.relation)
-      } else if (link.target_id === franchise.current_id) {
-        relationByNodeId.set(link.source_id, link.relation)
       }
     }
 

@@ -124,6 +124,7 @@ interface Api {
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
+  shikimoriGetRelated: (malId: number) => Promise<ShikiRelatedEntry[]>
   onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => void
   offShikimoriRateUpdated: () => void
   onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => void
@@ -339,6 +340,7 @@ interface ShikiAnimeDetails {
   id: number
   name: string
   russian: string
+  kind: string
   description: string | null
   description_html: string | null
   rating: string
@@ -371,6 +373,24 @@ interface ShikiFriendActivityEntry {
   description: string
   createdAt: string
   smotretAnime: AnimeSearchResult | null
+}
+
+interface ShikiRelatedAnimeInfo {
+  id: number
+  name: string
+  image_url: string
+  url: string
+  year: number | null
+  kind: string | null
+  date: number | null
+}
+
+interface ShikiRelatedEntry {
+  relation: string | null
+  shikiAnime: ShikiRelatedAnimeInfo
+  smotretAnime: AnimeSearchResult | null
+  isCurrent: boolean
+  watchStatus: ShikiUserRateStatus | null
 }
 
 interface Window {

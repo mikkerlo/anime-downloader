@@ -310,6 +310,7 @@ LibraryView shows both with indicators:
 | `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
 | `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
+| `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -560,6 +561,10 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 - Save button to push changes
 - Link to anime on Shikimori
 - Auto-status: episodes > 0 → watching (from planned) / rewatching (from completed); episodes = max → completed
+
+### Series Chronology
+
+Below the Shikimori panel, `AnimeDetailView` renders a Chronology list of the entire franchise sourced from `GET /api/animes/:id/franchise` (a public, unauthenticated endpoint, so the panel renders for logged-out users too). The main-process handler `shikimori:get-related` fetches the franchise graph (`{ nodes, links, current_id }`), then does a BFS from `current_id` through a whitelist of canonical relation edges (sequel/prequel/side_story/parent_story/alternative_version/summary/full_story/spin_off/alternative_setting) to drop unrelated bridges — e.g. the Isekai-Quartet `"other"` edges that otherwise pull Overlord/Konosuba/Re:Zero into a Youjo Senki franchise query. Reachable nodes are sorted chronologically by release `date`, then `lookupByMalIds` resolves each node's MAL ID to its smotret-anime entry (reusing the persistent `malIdMap` cache). Direct edges from `current_id` are walked to attach a `relation` label (source-side only, since Shikimori emits all current-node links as `source_id`); nodes more than one hop away simply omit the label. Each row shows title, kind badge (TV/movie/OVA/…), release year, relation label (when available), and — cross-referenced against `shikimoriUserRates` — a watch-status badge when the current user tracks that entry. Promos/CMs/music videos are filtered out. The current anime's node is highlighted with a "Current" badge and is non-clickable. Rows where `lookupByMalIds` returned no smotret-anime match display a "Not available" badge and are non-clickable. Clickable rows emit `open-anime` up through `App.vue`, which maintains a per-view navigation stack (`animeHistoryByView`) so Back returns to the previously-opened anime in the same tab rather than the list view. The panel is collapsed by default on every mount (header chevron toggles the body) so the page opens compact; users expand it on demand.
 
 ## FFmpeg
 

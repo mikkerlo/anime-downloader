@@ -74,7 +74,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pr-build-${{ matrix.platform }}
+          name: pr-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.run_number }}-build-${{ matrix.platform }}
           path: dist/extracted/
           if-no-files-found: ignore
           retention-days: 3
@@ -98,6 +98,6 @@ jobs:
             ### 📦 PR Build Artifacts are ready!
             Portable zip builds (no installer, auto-updater disabled) — unzip and run.
 
-            * 🍎 [macOS Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-mac.zip)
-            * 🪟 [Windows Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-win.zip)
-            * 🐧 [Linux Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-build-linux.zip)
+            * 🍎 [macOS Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-mac.zip)
+            * 🪟 [Windows Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-win.zip)
+            * 🐧 [Linux Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-linux.zip)

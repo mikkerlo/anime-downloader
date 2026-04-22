@@ -110,3 +110,26 @@
 - **Position divergence on transcode.** The HEVC→H.264 transcode path introduces variable encode latency. Position reported by `<video>.currentTime` is presentation time, not source time, so this is actually fine — but verify that two transcoding clients don't drift.
 - **TLS optional.** Public Syncplay servers support opportunistic TLS; we must handle both plaintext and upgraded connections in the same state machine without duplicating code.
 - **Clock skew.** The `clientLatencyCalculation` timestamp is in "seconds since epoch" as a float; rely on `Date.now()/1000` consistently on both machines — do not use `performance.now()` for this field.
+
+---
+
+## 3. Add to Library from Anime Page
+
+**Priority:** Medium | **Effort:** Small
+
+**Motivation:** Users should be able to add anime to their library directly from the detail view, rather than having to go back to search results.
+
+**Plan:**
+1.  **Renderer: `AnimeDetailView.vue` state.**
+    *   Add `isStarred` ref.
+    *   In `onMounted`, initialize `isStarred` by calling `window.api.libraryHas(props.animeId)`.
+2.  **Renderer: `AnimeDetailView.vue` logic.**
+    *   Add `toggleStar()` function.
+    *   It should call `window.api.libraryToggle(anime)`. To keep the store lean, strip the `AnimeDetail` object down to `AnimeSearchResult` fields (id, titles, posterUrlSmall, etc.) before passing it.
+    *   Update `isStarred` based on the return value.
+3.  **Renderer: `AnimeDetailView.vue` template.**
+    *   Add the button in `.poster-col`, below the `.continue-btn`.
+    *   Use the star icon from `AnimeCard.vue`.
+    *   Show "Add to Library" when not starred, and "In Library" (with a filled star) when starred.
+4.  **Renderer: `AnimeDetailView.vue` styling.**
+    *   Add `.library-btn` styles. Use a style similar to `.continue-btn` but with a secondary color (e.g., `#0f3460` background, or transparent with border) to distinguish it from the primary action.

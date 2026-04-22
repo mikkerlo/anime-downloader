@@ -251,6 +251,196 @@ let pendingPrevEpisodeInt = ''
 const resumeToast = ref('')
 let resumeToastTimer: ReturnType<typeof setTimeout> | null = null
 
+// Syncplay (Watch Together) state
+const syncplayStatus = ref<SyncplayStatus>({ state: 'idle' })
+const syncplayRoomUsers = ref<SyncplayRoomUser[]>([])
+const syncplayRoomInput = ref('')
+const syncplayMenuOpen = ref(false)
+const syncplayToast = ref('')
+let syncplayToastTimer: ReturnType<typeof setTimeout> | null = null
+let syncplaySnapshotTimer: ReturnType<typeof setInterval> | null = null
+let suppressNextLocalEventUntil = 0
+let syncplayLocalReady = true
+let syncplayLastRemotePlaying = false
+let syncplayLastAppliedPaused: boolean | null = null
+let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null
+const WAITING_DEBOUNCE_MS = 600
+const syncplayPausedBy = ref<string | null>(null)
+
+// Listener functions captured at register-time so onBeforeUnmount can call
+// the matching off* with the same reference — avoids removeAllListeners
+// ripping out listeners installed by other views (e.g. SettingsView's
+// "Test connection" handler).
+let syncplayConnectionStatusHandler: ((status: SyncplayStatus) => void) | null = null
+let syncplayRemoteStateHandler: ((state: SyncplayRemoteState) => void) | null = null
+let syncplayRoomUsersHandler: ((users: SyncplayRoomUser[]) => void) | null = null
+let syncplayRoomEventHandler: ((ev: SyncplayRoomEvent) => void) | null = null
+let syncplayTraceHandler: ((entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) | null = null
+let syncplayRemoteEpisodeChangeHandler: ((ep: SyncplayRemoteEpisode) => void) | null = null
+
+function showSyncplayToast(text: string, ms = 3500): void {
+  syncplayToast.value = text
+  if (syncplayToastTimer) clearTimeout(syncplayToastTimer)
+  syncplayToastTimer = setTimeout(() => { syncplayToast.value = '' }, ms)
+}
+
+function buildCanonicalName(): string {
+  const ep = currentEpisodeInt.value || activeEpisodeLabel.value || ''
+  return ep ? `${props.animeName} - ${ep}` : props.animeName
+}
+
+function pushSyncplayFile(): void {
+  if (syncplayStatus.value.state !== 'ready') return
+  const dur = videoRef.value?.duration || duration.value || 0
+  window.api.syncplaySetFile({
+    animeId: props.animeId,
+    malId: props.malId || null,
+    episodeInt: currentEpisodeInt.value || activeEpisodeLabel.value || '',
+    translationId: activeTranslationId.value ?? null,
+    canonicalName: buildCanonicalName(),
+    duration: dur
+  })
+}
+
+function sendSyncplayLocalState(cause: 'play' | 'pause' | 'seek'): void {
+  if (syncplayStatus.value.state !== 'ready') return
+  if (Date.now() < suppressNextLocalEventUntil) return
+  const v = videoRef.value
+  if (!v) return
+  window.api.syncplaySendLocalState({
+    paused: v.paused,
+    position: v.currentTime,
+    cause
+  })
+}
+
+function onVideoSeeked(): void {
+  sendSyncplayLocalState('seek')
+}
+
+function syncplayAllUsersReady(): boolean {
+  if (!syncplayLocalReady) return false
+  for (const u of syncplayRoomUsers.value) {
+    if (u.isReady === false) return false
+  }
+  return true
+}
+
+function setSyncplayLocalReady(ready: boolean): void {
+  if (syncplayLocalReady === ready) return
+  syncplayLocalReady = ready
+  if (syncplayStatus.value.state === 'ready') {
+    window.api.syncplaySetReady(ready).catch(() => {})
+  }
+  applySyncplayReadyGate()
+}
+
+function applySyncplayReadyGate(): void {
+  if (syncplayStatus.value.state !== 'ready') return
+  const v = videoRef.value
+  if (!v) return
+  const shouldPlay = syncplayLastRemotePlaying && syncplayAllUsersReady()
+  if (!shouldPlay && !v.paused) {
+    suppressNextLocalEventUntil = Date.now() + 1500
+    v.pause()
+  } else if (shouldPlay && v.paused) {
+    suppressNextLocalEventUntil = Date.now() + 1500
+    v.play().catch(() => {})
+  }
+}
+
+function onVideoWaiting(): void {
+  if (syncplayWaitingTimer) clearTimeout(syncplayWaitingTimer)
+  syncplayWaitingTimer = setTimeout(() => {
+    syncplayWaitingTimer = null
+    setSyncplayLocalReady(false)
+  }, WAITING_DEBOUNCE_MS)
+}
+
+function applyRemoteState(state: SyncplayRemoteState): void {
+  const v = videoRef.value
+  if (!v) return
+  syncplayLastRemotePlaying = !state.paused
+  const pausedChanged = syncplayLastAppliedPaused !== state.paused
+  syncplayLastAppliedPaused = state.paused
+  if (pausedChanged) {
+    if (state.paused && state.setBy) syncplayPausedBy.value = state.setBy
+    else if (!state.paused) syncplayPausedBy.value = null
+  }
+  const diff = Math.abs(v.currentTime - state.position)
+  const needsSeek = state.doSeek || diff > 3.0
+  const effectivePaused = state.paused || !syncplayAllUsersReady()
+  const needsPlayPause = effectivePaused !== v.paused
+
+  if (!needsSeek && !needsPlayPause) return
+  suppressNextLocalEventUntil = Date.now() + 1500
+
+  if (needsSeek) {
+    v.currentTime = Math.max(0, state.position)
+  }
+  if (needsPlayPause) {
+    if (effectivePaused) v.pause()
+    else v.play().catch(() => {})
+  }
+  if (state.setBy && needsSeek) {
+    showSyncplayToast(`${state.setBy} seeked to ${formatTime(state.position)}`)
+  }
+}
+
+// Episode/translation switch: re-announce the file to peers but DO NOT reset
+// syncplayLastRemotePlaying. If a peer is currently playing, applySyncplayReadyGate
+// will start the new episode as soon as buffer fills — by design, so a remote
+// "next episode" or local prev/next auto-resumes the binge instead of pausing.
+watch([activeEpisodeIndex, activeTranslationId], () => {
+  pushSyncplayFile()
+})
+
+async function toggleSyncplayConnection(): Promise<void> {
+  const isActive = syncplayStatus.value.state === 'ready'
+    || syncplayStatus.value.state === 'connecting'
+    || syncplayStatus.value.state === 'tls-probing'
+    || syncplayStatus.value.state === 'tls-handshake'
+    || syncplayStatus.value.state === 'hello-sent'
+    || syncplayStatus.value.state === 'reconnecting'
+  if (isActive) {
+    await window.api.syncplayDisconnect()
+    return
+  }
+  const cfg = await window.api.getSetting('syncplay') as {
+    lastHost?: string
+    lastPort?: number
+    lastRoom?: string
+    username?: string
+    autoReconnect?: boolean
+  } | null
+  const host = cfg?.lastHost || 'syncplay.pl'
+  const port = cfg?.lastPort || 8999
+  const room = syncplayRoomInput.value.trim() || cfg?.lastRoom || ''
+  let username = cfg?.username?.trim() || ''
+  if (!username) {
+    const shiki = await window.api.shikimoriGetUser()
+    if (shiki?.nickname) {
+      username = shiki.nickname
+      await window.api.setSetting('syncplay', { ...(cfg || {}), username })
+    }
+  }
+  if (!room) {
+    showSyncplayToast('Enter a room name first')
+    return
+  }
+  if (!username) {
+    showSyncplayToast('Set a username in Settings → Watch Together')
+    return
+  }
+  await window.api.syncplayConnect({
+    host,
+    port,
+    room,
+    username,
+    autoReconnect: cfg?.autoReconnect ?? true
+  })
+}
+
 const WATCH_THRESHOLD_RATIO = 0.8
 const WATCH_THRESHOLD_SECONDS = 180
 const SAVE_INTERVAL_MS = 5000
@@ -679,19 +869,24 @@ function maybeRespawnForUnbufferedPosition(): void {
 
 async function waitForBufferAhead(v: HTMLVideoElement, sb: SourceBuffer, seconds: number, timeoutMs: number): Promise<void> {
   const wasPaused = v.paused
+  setSyncplayLocalReady(false)
   try { v.pause() } catch { /* ignore */ }
   const deadline = performance.now() + timeoutMs
-  while (performance.now() < deadline) {
-    const t = v.currentTime
-    for (let i = 0; i < sb.buffered.length; i++) {
-      if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
-        if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
-        return
+  try {
+    while (performance.now() < deadline) {
+      const t = v.currentTime
+      for (let i = 0; i < sb.buffered.length; i++) {
+        if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
+          if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
+          return
+        }
       }
+      await new Promise<void>((res) => setTimeout(res, 200))
     }
-    await new Promise<void>((res) => setTimeout(res, 200))
+    if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
+  } finally {
+    setSyncplayLocalReady(true)
   }
-  if (!wasPaused) { try { await v.play() } catch { /* ignore */ } }
 }
 
 async function handleUnbufferedSeek(): Promise<void> {
@@ -940,6 +1135,13 @@ function onPlay(): void {
   playing.value = true
   showControlsBriefly()
   lastTimeUpdateAt = Date.now()
+  if (Date.now() >= suppressNextLocalEventUntil) {
+    syncplayLastRemotePlaying = true
+    syncplayLastAppliedPaused = false
+    syncplayPausedBy.value = null
+  }
+  sendSyncplayLocalState('play')
+  applySyncplayReadyGate()
 }
 
 function onPause(): void {
@@ -948,6 +1150,14 @@ function onPause(): void {
   if (controlsTimer) clearTimeout(controlsTimer)
   lastTimeUpdateAt = 0
   saveProgress(true)
+  if (Date.now() >= suppressNextLocalEventUntil) {
+    syncplayLastRemotePlaying = false
+    syncplayLastAppliedPaused = true
+    if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
+      syncplayPausedBy.value = syncplayStatus.value.username
+    }
+  }
+  sendSyncplayLocalState('pause')
 }
 
 function onTimeUpdate(): void {
@@ -964,6 +1174,7 @@ function onDurationChange(): void {
   if (videoRef.value) {
     duration.value = videoRef.value.duration
   }
+  pushSyncplayFile()
 }
 
 function onProgress(): void {
@@ -974,6 +1185,11 @@ function onProgress(): void {
 
 function onCanPlay(): void {
   if (mkvBuffering.value) mkvBuffering.value = false
+  if (syncplayWaitingTimer) {
+    clearTimeout(syncplayWaitingTimer)
+    syncplayWaitingTimer = null
+  }
+  setSyncplayLocalReady(true)
 }
 
 function onSeekStart(): void {
@@ -1073,8 +1289,9 @@ function matchesBinding(e: KeyboardEvent, binding: string): boolean {
 
 function onKeyDown(event: KeyboardEvent): void {
   event.stopPropagation()
-  // Don't handle if a preset menu input is focused
-  if ((event.target as HTMLElement)?.tagName === 'SELECT') return
+  const target = event.target as HTMLElement | null
+  const tag = target?.tagName
+  if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
 
   const prevBinding = playerShortcuts.value.playerPrevEpisode || 'Shift+ArrowLeft'
   const nextBinding = playerShortcuts.value.playerNextEpisode || 'Shift+ArrowRight'
@@ -1765,6 +1982,102 @@ onMounted(async () => {
     if (typeof speed === 'number' && isFinite(speed)) transcodeSpeed.value = speed
   })
 
+  // Syncplay listeners
+  try {
+    syncplayStatus.value = await window.api.syncplayGetStatus()
+  } catch { /* ignore */ }
+  const cfg = await window.api.getSetting('syncplay') as { lastRoom?: string } | null
+  if (cfg?.lastRoom) syncplayRoomInput.value = cfg.lastRoom
+
+  syncplayConnectionStatusHandler = (status): void => {
+    const wasReady = syncplayStatus.value.state === 'ready'
+    console.log('[syncplay] status:', status.state, status.error ? `error=${status.error}` : '')
+    syncplayStatus.value = status
+    if (status.state === 'ready' && !wasReady) {
+      pushSyncplayFile()
+    }
+    if (status.state === 'idle' || status.state === 'disconnected') {
+      syncplayLocalReady = true
+      syncplayLastRemotePlaying = false
+      syncplayLastAppliedPaused = null
+      syncplayPausedBy.value = null
+      if (syncplayWaitingTimer) {
+        clearTimeout(syncplayWaitingTimer)
+        syncplayWaitingTimer = null
+      }
+    }
+    if (status.state === 'reconnecting') {
+      showSyncplayToast('Reconnecting to Syncplay server…', 8000)
+    } else if (status.state === 'disconnected') {
+      showSyncplayToast(status.error ? `Disconnected: ${status.error}` : 'Disconnected from Syncplay', 8000)
+    }
+  }
+  syncplayRemoteStateHandler = (state): void => {
+    applyRemoteState(state)
+  }
+  syncplayRoomUsersHandler = (users): void => {
+    syncplayRoomUsers.value = users
+    applySyncplayReadyGate()
+  }
+  syncplayRoomEventHandler = (ev): void => {
+    if (ev.level === 'warn' || ev.level === 'error') {
+      console.warn('[syncplay]', ev.text)
+    } else {
+      console.log('[syncplay]', ev.text)
+    }
+    const ms = ev.level === 'warn' || ev.level === 'error' ? 8000 : 3500
+    showSyncplayToast(ev.text, ms)
+  }
+  syncplayTraceHandler = (entry): void => {
+    const arrow = entry.dir === 'in' ? '<<' : '>>'
+    let flat: string
+    try {
+      flat = JSON.stringify(entry.msg)
+    } catch {
+      flat = String(entry.msg)
+    }
+    console.log(`[syncplay] ${arrow} ${entry.keys} ${flat}`)
+  }
+  syncplayRemoteEpisodeChangeHandler = (ep): void => {
+    if (ep.animeId !== props.animeId) {
+      showSyncplayToast(`${ep.fromUser} switched to a different anime — not loaded here`)
+      return
+    }
+    const idx = props.allEpisodes.findIndex((e) => e.episodeInt === ep.episodeInt)
+    if (idx < 0) {
+      showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt} (not available)`)
+      return
+    }
+    if (idx === activeEpisodeIndex.value) return
+    showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt}`)
+    const dir = idx > activeEpisodeIndex.value ? 'next' : 'prev'
+    // goToEpisode moves one step; step toward target in a loop.
+    const stepTowards = async (): Promise<void> => {
+      while (activeEpisodeIndex.value !== idx && !navigating.value) {
+        await goToEpisode(dir)
+      }
+    }
+    stepTowards()
+  }
+
+  window.api.onSyncplayConnectionStatus(syncplayConnectionStatusHandler)
+  window.api.onSyncplayRemoteState(syncplayRemoteStateHandler)
+  window.api.onSyncplayRoomUsers(syncplayRoomUsersHandler)
+  window.api.onSyncplayRoomEvent(syncplayRoomEventHandler)
+  window.api.onSyncplayTrace(syncplayTraceHandler)
+  window.api.onSyncplayRemoteEpisodeChange(syncplayRemoteEpisodeChangeHandler)
+
+  // 1-second snapshot push so main's heartbeat has fresh position.
+  syncplaySnapshotTimer = setInterval(() => {
+    if (syncplayStatus.value.state !== 'ready') return
+    const v = videoRef.value
+    if (!v) return
+    window.api.syncplaySendLocalSnapshot({
+      position: v.currentTime,
+      paused: v.paused
+    })
+  }, 1000)
+
   // Diagnostic listeners on the video element to see why MSE playback stalls.
   watch(videoRef, (v) => {
     if (!v) return
@@ -1899,6 +2212,42 @@ onBeforeUnmount(() => {
   window.api.offPlayerStreamEnd()
   window.api.offPlayerStreamError()
   window.api.offPlayerStreamProgress()
+  if (syncplayConnectionStatusHandler) {
+    window.api.offSyncplayConnectionStatus(syncplayConnectionStatusHandler)
+    syncplayConnectionStatusHandler = null
+  }
+  if (syncplayRemoteStateHandler) {
+    window.api.offSyncplayRemoteState(syncplayRemoteStateHandler)
+    syncplayRemoteStateHandler = null
+  }
+  if (syncplayRoomUsersHandler) {
+    window.api.offSyncplayRoomUsers(syncplayRoomUsersHandler)
+    syncplayRoomUsersHandler = null
+  }
+  if (syncplayRoomEventHandler) {
+    window.api.offSyncplayRoomEvent(syncplayRoomEventHandler)
+    syncplayRoomEventHandler = null
+  }
+  if (syncplayRemoteEpisodeChangeHandler) {
+    window.api.offSyncplayRemoteEpisodeChange(syncplayRemoteEpisodeChangeHandler)
+    syncplayRemoteEpisodeChangeHandler = null
+  }
+  if (syncplayTraceHandler) {
+    window.api.offSyncplayTrace(syncplayTraceHandler)
+    syncplayTraceHandler = null
+  }
+  if (syncplaySnapshotTimer) {
+    clearInterval(syncplaySnapshotTimer)
+    syncplaySnapshotTimer = null
+  }
+  if (syncplayToastTimer) {
+    clearTimeout(syncplayToastTimer)
+    syncplayToastTimer = null
+  }
+  if (syncplayWaitingTimer) {
+    clearTimeout(syncplayWaitingTimer)
+    syncplayWaitingTimer = null
+  }
   resetMseState()
   // Clean up remuxed temp files / active stream sessions
   if (remuxedPath.value || streamSessionId.value) {
@@ -1987,6 +2336,20 @@ const bufferedProgress = computed(() => {
       <div v-if="resumeToast" class="resume-toast">{{ resumeToast }}</div>
     </transition>
 
+    <!-- Syncplay toast -->
+    <transition name="fade">
+      <div v-if="syncplayToast" class="syncplay-toast">{{ syncplayToast }}</div>
+    </transition>
+
+    <!-- Syncplay: persistent "paused by X" badge while paused -->
+    <div
+      v-if="!playing && syncplayPausedBy && syncplayStatus.state === 'ready'"
+      class="syncplay-paused-by"
+    >
+      <span class="syncplay-paused-icon">⏸</span>
+      Paused by {{ syncplayPausedBy === syncplayStatus.username ? 'you' : syncplayPausedBy }}
+    </div>
+
     <!-- Video wrapper: SubtitlesOctopus inserts its canvas after the <video>, so this
          positioned container ensures the subtitle overlay covers the video area -->
     <div class="video-wrapper">
@@ -1998,10 +2361,12 @@ const bufferedProgress = computed(() => {
         crossorigin="anonymous"
         @play="onPlay"
         @pause="onPause"
+        @seeked="onVideoSeeked"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"
         @canplay="onCanPlay"
+        @waiting="onVideoWaiting"
         @ended="onVideoEnded"
         @click="togglePlay"
         @dblclick="toggleFullscreen"
@@ -2242,6 +2607,50 @@ const bufferedProgress = computed(() => {
             No GPU
           </div>
 
+          <!-- Watch Together (Syncplay) -->
+          <div class="preset-wrapper">
+            <button
+              class="ctrl-btn preset-btn syncplay-btn"
+              :class="{ active: syncplayStatus.state === 'ready' }"
+              @click="syncplayMenuOpen = !syncplayMenuOpen"
+              title="Watch Together"
+            >
+              <span class="sp-dot" :class="'sp-' + syncplayStatus.state"></span>
+              <span class="sp-label">Sync</span>
+            </button>
+            <div v-if="syncplayMenuOpen" class="preset-menu syncplay-menu" @click.stop>
+              <div class="sp-status-line">
+                Status: <strong>{{ syncplayStatus.state }}</strong>
+                <span v-if="syncplayStatus.tls" class="sp-tls-badge">TLS</span>
+              </div>
+              <div v-if="syncplayStatus.error" class="sp-error-line">{{ syncplayStatus.error }}</div>
+              <label class="sp-label-row" for="sp-room-input">Room</label>
+              <input
+                id="sp-room-input"
+                v-model="syncplayRoomInput"
+                type="text"
+                class="sp-input"
+                placeholder="room name"
+                :disabled="syncplayStatus.state !== 'idle' && syncplayStatus.state !== 'disconnected'"
+              />
+              <button class="sp-action-btn" @click="toggleSyncplayConnection()">
+                {{ syncplayStatus.state === 'idle' || syncplayStatus.state === 'disconnected' ? 'Connect' : 'Disconnect' }}
+              </button>
+              <div v-if="syncplayRoomUsers.length > 0" class="sp-users-list">
+                <div class="sp-users-title">In room</div>
+                <div v-for="u in syncplayRoomUsers" :key="u.username" class="sp-user-row">
+                  <span
+                    class="sp-user-dot"
+                    :class="u.isReady === false ? 'sp-user-dot-buffering' : 'sp-user-dot-ready'"
+                    :title="u.isReady === false ? 'Buffering' : 'Ready'"
+                  ></span>
+                  <span class="sp-user-name">{{ u.username }}</span>
+                  <span v-if="u.file" class="sp-user-file" :title="u.file.name">{{ u.file.name }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Fullscreen -->
           <button class="ctrl-btn" @click="toggleFullscreen" :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -2352,6 +2761,187 @@ const bufferedProgress = computed(() => {
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
+}
+
+.syncplay-toast {
+  position: absolute;
+  top: 140px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 52, 96, 0.9);
+  color: #e0e0e0;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+  max-width: 60vw;
+  text-align: center;
+}
+
+.syncplay-paused-by {
+  position: absolute;
+  top: 72px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 52, 96, 0.85);
+  color: #e0e0e0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+  border: 1px solid rgba(96, 150, 255, 0.4);
+}
+
+.syncplay-paused-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.syncplay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6a6a8a;
+}
+
+.sp-dot.sp-idle,
+.sp-dot.sp-disconnected {
+  background: #6a6a8a;
+}
+
+.sp-dot.sp-connecting,
+.sp-dot.sp-tls-probing,
+.sp-dot.sp-tls-handshake,
+.sp-dot.sp-hello-sent,
+.sp-dot.sp-reconnecting {
+  background: #f0932b;
+}
+
+.sp-dot.sp-ready {
+  background: #6ab04c;
+}
+
+.sp-label {
+  font-size: 0.8rem;
+}
+
+.syncplay-menu {
+  min-width: 240px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sp-status-line {
+  font-size: 0.8rem;
+  color: #a0a0b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sp-tls-badge {
+  font-size: 0.65rem;
+  background: #0f3460;
+  color: #e0e0e0;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.sp-error-line {
+  color: #e94560;
+  font-size: 0.75rem;
+}
+
+.sp-label-row {
+  font-size: 0.75rem;
+  color: #a0a0b8;
+  margin-top: 4px;
+}
+
+.sp-input {
+  width: 100%;
+  padding: 6px 8px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+}
+
+.sp-input:disabled {
+  opacity: 0.55;
+}
+
+.sp-action-btn {
+  padding: 6px 12px;
+  background: #e94560;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sp-action-btn:hover {
+  background: #d13b53;
+}
+
+.sp-users-list {
+  border-top: 1px solid #0f3460;
+  padding-top: 6px;
+  margin-top: 4px;
+}
+
+.sp-users-title {
+  font-size: 0.75rem;
+  color: #a0a0b8;
+  margin-bottom: 4px;
+}
+
+.sp-user-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 6px;
+  font-size: 0.8rem;
+  padding: 2px 0;
+  align-items: center;
+}
+
+.sp-user-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  grid-row: 1 / span 2;
+}
+
+.sp-user-dot-ready {
+  background: #4ade80;
+}
+
+.sp-user-dot-buffering {
+  background: #f59e0b;
+}
+
+.sp-user-file {
+  grid-column: 2;
+  font-size: 0.7rem;
+  color: #6a6a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Remux overlay */

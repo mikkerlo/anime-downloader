@@ -31,6 +31,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/smotret-api.ts` | Smotret-Anime API client: search, anime/episode details, embed, subtitles, token validation |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
+| `src/main/syncplay.ts` | Syncplay (Watch Together) TCP/TLS client: handshake, STARTTLS upgrade, `ignoringOnTheFly` bookkeeping, 1 s heartbeat, RTT compensation, auto-reconnect |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
 | `src/main/fpcalc-binaries.ts` | Auto-download Chromaprint `fpcalc` binary on first launch |
 | `src/main/fingerprint.ts` | Spawns fpcalc on a media file; parses raw 32-bit fingerprint hash array |
@@ -360,6 +361,18 @@ LibraryView shows both with indicators:
 | `player:cleanup-remux` | invoke | Kill any active stream sessions and delete all temp remuxed files |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 | `shell:open-external-file` | invoke | Open a local file with the OS default app via `shell.openPath` (returns `{ ok, error? }`) |
+| `syncplay:connect` | invoke | Open a TLS-only Syncplay connection with supplied `{host, port, room, username, password?, autoReconnect}` (TCP → STARTTLS probe → TLS handshake → `Hello`; aborts if the server refuses TLS or fails cert validation) and persist the session intent |
+| `syncplay:disconnect` | invoke | Close the active Syncplay connection (cancels any pending auto-reconnect) |
+| `syncplay:set-file` | invoke | Announce the currently-playing file to the room as `{canonicalName, duration, features.animeDlAppMeta:{animeId, malId, episodeInt, translationId}}` |
+| `syncplay:local-state` | invoke | Emit a `State` message on a discrete local event (`play` / `pause` / `seek`); increments the client-side `ignoringOnTheFly` counter |
+| `syncplay:local-snapshot` | invoke | Renderer pushes `{position, paused}` every ~1 s so main's heartbeat carries fresh position without wiring `timeupdate` across IPC |
+| `syncplay:set-ready` | invoke | Send `Set: {ready: {isReady, manuallyInitiated:false}}` — flips buffering state so peers pause until everyone's ready |
+| `syncplay:get-status` | invoke | Return the current `{state, host, port, room, username, tls, error?}` for initial hydration |
+| `syncplay:connection-status` | send | State machine transitions (`idle` → `connecting` → `hello-sent` → `ready` → `reconnecting`/`disconnected`) |
+| `syncplay:remote-state` | send | Remote `play`/`pause`/`seek` resolved to `{paused, position, setBy, doSeek}` with RTT-compensated position, after the `ignoringOnTheFly` counter round-trips |
+| `syncplay:room-users` | send | Current room member list with each member's advertised file info and `animeDlAppMeta` (if available) |
+| `syncplay:room-event` | send | Info/warn/error/chat messages rendered as a toast in the player (join/leave/chat/disconnect) |
+| `syncplay:remote-episode-change` | send | Another room member (same anime) switched to a different episode; PlayerView auto-navigates via `goToEpisode` |
 
 ## Key Types
 
@@ -438,6 +451,7 @@ interface EpisodeMeta {
 | `skipFingerprintCache` | object | `{}` | Per-file Chromaprint fingerprint cache, keyed by `animeId:episodeInt:fileSize:mtime` |
 | `enableLocalSkipDetection` | boolean | `true` | Run Chromaprint OP/ED detection in the background after each download/merge completes; turn off to disable background CPU usage |
 | `calendarView` | string | `'week'` | Default time range for the Airing Calendar tab: `week` (1×7 grid) or `month` (4×7 grid). Toggle in Settings > General |
+| `syncplay` | object | `{ lastHost:'syncplay.pl', lastPort:8999, lastRoom:'', username:'', autoReconnect:true }` | Watch Together session intent (host/port/room/username + auto-reconnect toggle; TLS is always on). The connection itself is NOT persisted — users must rejoin after restart |
 
 ## Watch Progress & Resume
 
@@ -612,6 +626,56 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 ### Series Chronology
 
 Below the Shikimori panel, `AnimeDetailView` renders a Chronology list of the entire franchise sourced from `GET /api/animes/:id/franchise` (a public, unauthenticated endpoint, so the panel renders for logged-out users too). The main-process handler `shikimori:get-related` fetches the franchise graph (`{ nodes, links, current_id }`), then does a BFS from `current_id` through a whitelist of canonical relation edges (sequel/prequel/side_story/parent_story/alternative_version/summary/full_story/spin_off/alternative_setting) to drop unrelated bridges — e.g. the Isekai-Quartet `"other"` edges that otherwise pull Overlord/Konosuba/Re:Zero into a Youjo Senki franchise query. Reachable nodes are sorted chronologically by release `date`, then `lookupByMalIds` resolves each node's MAL ID to its smotret-anime entry (reusing the persistent `malIdMap` cache). Direct edges from `current_id` are walked to attach a `relation` label (source-side only, since Shikimori emits all current-node links as `source_id`); nodes more than one hop away simply omit the label. Each row shows title, kind badge (TV/movie/OVA/…), release year, relation label (when available), and — cross-referenced against `shikimoriUserRates` — a watch-status badge when the current user tracks that entry. Promos/CMs/music videos are filtered out. The current anime's node is highlighted with a "Current" badge and is non-clickable. Rows where `lookupByMalIds` returned no smotret-anime match display a "Not available" badge and are non-clickable. Clickable rows emit `open-anime` up through `App.vue`, which maintains a per-view navigation stack (`animeHistoryByView`) so Back returns to the previously-opened anime in the same tab rather than the list view. The panel is collapsed by default on every mount (header chevron toggles the body) so the page opens compact; users expand it on demand.
+
+## Watch Together (Syncplay)
+
+Two (or more) users watching the same anime together over the Internet, staying in lockstep on playback position. Compatible with the [Syncplay](https://syncplay.pl) protocol — connects to community servers (`syncplay.pl:8999` default) and interoperates with the reference `syncplay.pl` desktop client (mpv/VLC), so a friend can watch along from any player Syncplay supports.
+
+### Module: `src/main/syncplay.ts`
+
+Standalone TCP/TLS client. **TLS-only:** `net.Socket` opens the TCP connection, the very first message we send is the Syncplay TLS probe `{TLS:{option:'send'}}`, and only after the server replies `{TLS:{startTLS:'true'}}` and `tls.connect({ socket })` finishes its handshake (with `rejectUnauthorized` left at its default `true`) do we send the `Hello` message containing username/password. Servers that do not support STARTTLS — or whose certificate fails verification against `host` — drop the connection with a clear error. Line-delimited JSON (each message is one JSON object followed by `\r\n`). All protocol-level concerns live here — the renderer only emits high-level playback events.
+
+State machine: `idle → connecting → tls-probing → tls-handshake → hello-sent → ready → (reconnecting) → disconnected`. On transport error: exponential backoff reconnect, max 5 attempts. On protocol error (wrong password, bad handshake, server refused TLS): abort without retry.
+
+### File Identity
+
+Syncplay clients identify "are we watching the same thing?" by file name + duration. We canonicalize our label to `"{animeName} - {episodeInt}"` so mpv/VLC users see a human-readable name, and duration is the HTML5 `<video>` `duration` rounded to the nearest second. For app-to-app sync (two instances of this app), we additionally stamp `features.animeDlAppMeta = { animeId, malId, episodeInt, translationId }` on outbound `Set.file` messages — the remote side uses this to auto-navigate when the other user advances to the next episode. Users on mpv/VLC don't emit this field, so auto-nav is a best-effort upgrade and the app falls back to identity-by-name for them.
+
+### `ignoringOnTheFly` Bookkeeping
+
+The protocol's anti-echo counter. Two independent counters (client-side and server-side) ride along on `State` messages. Local play/pause/seek increments `clientIgnoreCounter` and sends it on the next `State`; the server reflects the counter back. Until `pendingClientAck` drops to zero, inbound `State` messages that would override our local intent are dropped. This is the authoritative echo-suppression mechanism.
+
+Belt-and-suspenders: the renderer also sets `suppressNextLocalEventUntil = Date.now() + 250` after applying a remote state, so any `play`/`pause`/`seeked` events fired synchronously by the HTMLMediaElement during the apply don't bounce back to the server in the brief window before the counter round-trip completes.
+
+### Heartbeat + RTT Compensation
+
+A 1 s heartbeat (`setInterval` in main) sends the current `{paused, position}` regardless of local user input — this is how a stable idle state propagates and stays calibrated. Position source is a renderer-pushed snapshot via unthrottled `syncplay:local-snapshot` IPC on 1 s cadence, so main never pokes into renderer video state.
+
+Each outbound `State` stamps `clientLatencyCalculation = now / 1000`. The server echoes it back in its next `State`; `serverRtt = now − lastClientLatencyCalculation`. Inbound remote positions are shifted by `+ serverRtt / 2` before applying, to account for wire delay.
+
+### Apply Rule
+
+On inbound `State`, the renderer compares remote vs. local:
+- `paused` differs → call `play()` / `pause()`.
+- `state.doSeek === true` **or** `|remote.position − local.currentTime| > 3.0` → set `currentTime = remote.position`. The 3 s tolerance prevents drift jitter from causing constant micro-seeks.
+
+### Readiness Gate (Buffer Sync)
+
+When either user runs out of MSE buffer (HTML5 `waiting` event, or the MSE respawn path's `waitForBufferAhead`), the renderer calls `syncplay:set-ready(false)` which emits `Set: {ready: {isReady:false, manuallyInitiated:false}}`. Main tracks readiness per user from `Set: {user:{X:{isReady:{…}}}}` broadcasts and from `List` messages. A user dot turns amber in the popover's member list.
+
+Renderer gates playback locally: if any room member (including self) is `isReady: false`, `applySyncplayReadyGate()` calls `v.pause()` even when the last remote `State` said `paused: false`. The last remote play intent is remembered in `syncplayLastRemotePlaying`; when the last not-ready user flips back to ready, the gate calls `v.play()` automatically. This keeps two app instances locked together when one falls behind on download/decode, rather than ping-ponging pause/play broadcasts.
+
+### Remote Episode Auto-Nav
+
+When the remote user advances to a new episode (detected by `features.animeDlAppMeta.episodeInt` change on inbound `Set.file`), main broadcasts `syncplay:remote-episode-change` with `{ animeId, episodeInt, translationId }`. PlayerView checks `animeId` against its current anime:
+- **Match** — walks `goToEpisode('next'|'prev')` in a loop until `activeEpisodeIndex` reaches the target. Reuses the normal episode-switch path (including translation resolution).
+- **Mismatch or episode not in list** — toast only. The app can't navigate to an anime that isn't loaded in the current view.
+
+### IPC Surface
+
+Main-side handlers (see IPC Handlers table): `connect`, `disconnect`, `set-file`, `local-state`, `local-snapshot`, `get-status`. Broadcasts: `connection-status`, `remote-state`, `room-users`, `room-event`, `remote-episode-change`. Settings tab "Watch Together" in `SettingsView.vue` persists host/port/room/username/autoReconnect under the `syncplay` electron-store key — session state (currently-connected room, password) is **not** persisted across restarts.
+
+Debug tracing gated by `SYNCPLAY_DEBUG=1` env var — dumps every inbound/outbound JSON message and state transition to the main process log.
 
 ## FFmpeg
 

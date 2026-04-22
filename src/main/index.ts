@@ -21,6 +21,16 @@ import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Tra
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import { analyzeShow } from './skip-detector'
 import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress } from './skip-detector'
+import { syncplay } from './syncplay'
+import type {
+  SyncplayConfig,
+  SyncplayFileInfo,
+  SyncplayRemoteState,
+  SyncplayRoomUser,
+  SyncplayRoomEvent,
+  SyncplayRemoteEpisode,
+  SyncplayStatus
+} from './syncplay'
 
 // Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
 // PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
@@ -99,7 +109,20 @@ const store = new Store({
     skipDetections: {} as Record<string, ShowSkipDetections>,
     skipFingerprintCache: {} as Record<string, CachedFingerprint>,
     enableLocalSkipDetection: true,
-    calendarView: 'week' as 'week' | 'month'
+    calendarView: 'week' as 'week' | 'month',
+    syncplay: {
+      lastHost: 'syncplay.pl',
+      lastPort: 8999,
+      lastRoom: '',
+      username: '',
+      autoReconnect: true
+    } as {
+      lastHost: string
+      lastPort: number
+      lastRoom: string
+      username: string
+      autoReconnect: boolean
+    }
   }
 })
 
@@ -3474,6 +3497,44 @@ function registerIpcHandlers(): void {
       }
     } catch { /* ignore */ }
   })
+
+  ipcMain.handle('syncplay:connect', (_event, cfg: SyncplayConfig) => {
+    const persisted = store.get('syncplay')
+    store.set('syncplay', {
+      ...persisted,
+      lastHost: cfg.host,
+      lastPort: cfg.port,
+      lastRoom: cfg.room,
+      username: cfg.username,
+      autoReconnect: Boolean(cfg.autoReconnect)
+    })
+    syncplay.connect(cfg)
+  })
+
+  ipcMain.handle('syncplay:disconnect', () => {
+    syncplay.disconnect()
+  })
+
+  ipcMain.handle('syncplay:set-file', (_event, file: SyncplayFileInfo) => {
+    syncplay.setFile(file)
+  })
+
+  ipcMain.handle(
+    'syncplay:local-state',
+    (_event, payload: { paused: boolean; position: number; cause: 'play' | 'pause' | 'seek' }) => {
+      syncplay.sendLocalState(payload)
+    }
+  )
+
+  ipcMain.handle('syncplay:local-snapshot', (_event, snap: { position: number; paused: boolean }) => {
+    syncplay.updateSnapshot(snap)
+  })
+
+  ipcMain.handle('syncplay:set-ready', (_event, isReady: boolean) => {
+    syncplay.setReady(isReady)
+  })
+
+  ipcMain.handle('syncplay:get-status', () => syncplay.getStatus())
 }
 
 interface MseOpenResult {
@@ -4102,6 +4163,26 @@ app.whenReady().then(async () => {
     }
   }, 30_000)
 
+  syncplay.on('connection-status', (status: SyncplayStatus) => {
+    broadcastToAll('syncplay:connection-status', status)
+  })
+  syncplay.on('remote-state', (state: SyncplayRemoteState) => {
+    broadcastToAll('syncplay:remote-state', state)
+  })
+  syncplay.on('room-users', (users: SyncplayRoomUser[]) => {
+    broadcastToAll('syncplay:room-users', users)
+  })
+  syncplay.on('room-event', (ev: SyncplayRoomEvent) => {
+    broadcastToAll('syncplay:room-event', ev)
+  })
+  syncplay.on('remote-episode-change', (ep: SyncplayRemoteEpisode) => {
+    broadcastToAll('syncplay:remote-episode-change', ep)
+  })
+  syncplay.on('trace', (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => {
+    broadcastToAll('syncplay:trace', entry)
+  })
+
+
   if (getQueueLength() > 0) {
     startSyncTimer()
     void syncShikimoriQueue()
@@ -4157,4 +4238,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   downloadManager?.destroy()
+  syncplay.disconnect()
 })

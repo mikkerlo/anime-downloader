@@ -176,3 +176,32 @@
     - ffmpeg missing → modal defaults to "Open in external player".
 
 **Why this replaces a simple warning:** mikkerlo's review on PR #27 accepted the warning-only solution on the assumption the legacy remux path would still make HEVC playable on Linux. It doesn't — Chromium has no decoder regardless of container. So the fix has to actually change the codec, not the container.
+
+---
+
+## 7. Watch Together (Syncplay)
+
+**Priority:** High | **Effort:** Large
+
+**Motivation:** Allow users to watch anime synchronously with friends over the Internet. Users can watch different translations/qualities of the same episode while keeping playback time synchronized.
+
+**Tasks:**
+- **Main Process (`src/main/syncplay.ts`)**:
+  - Implement a Syncplay TCP client (JSON-over-TCP) adhering to the Syncplay protocol (`Hello`, `State`, `Set`).
+  - Support configuration for custom host, port, and default room, with a fallback to a known public server (e.g., `syncplay.pl:8999`).
+  - Auto-resolve username: use Shikimori username if available in `shikimoriUserRates` cache or token, otherwise a manual setting/random name.
+  - Implement heartbeat (`ping` every 4s) and latency compensation (RTT).
+  - Handle room joining, user status updates, and playstate (position/paused) synchronization.
+- **Main Process (`src/main/index.ts`)**:
+  - Add IPC handlers: `syncplay:connect`, `syncplay:disconnect`, `syncplay:send-state`, `syncplay:update-room`.
+  - Add IPC events to renderer: `syncplay:state-changed`, `syncplay:room-updated`.
+- **Preload (`src/preload/index.ts` & `src/preload/types.d.ts`)**:
+  - Expose Syncplay IPC methods and events on `window.api`.
+- **Renderer (`src/renderer/src/components/SettingsView.vue`)**:
+  - Add a new "Watch Together" settings tab for Syncplay host, port, default room, and manual username.
+- **Renderer (`src/renderer/src/components/PlayerView.vue`)**:
+  - Add a "Syncplay" button to the player controls to connect/disconnect and set the current room.
+  - Display a small overlay or toast notifications for Syncplay events (e.g., "Bob joined the room", "Alice paused").
+  - Wire up the HTML video element's `play`, `pause`, `seeked`, and `timeupdate` events to `syncplay:send-state`.
+  - React to `syncplay:state-changed` events from the server to pause/play/seek the local video.
+  - Ensure time synchronization works regardless of the selected translation (streaming or local MKV), focusing purely on the `position` in seconds.

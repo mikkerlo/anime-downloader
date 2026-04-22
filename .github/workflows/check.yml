@@ -66,11 +66,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract zip for single-layer artifact
+        shell: bash
+        run: |
+          mkdir -p dist/extracted
+          for f in dist/*.zip; do unzip -q "$f" -d dist/extracted/; done
+
       - uses: actions/upload-artifact@v4
         with:
           name: pr-build-${{ matrix.platform }}
-          path: |
-            dist/*.zip
+          path: dist/extracted/
           if-no-files-found: ignore
           retention-days: 3
 

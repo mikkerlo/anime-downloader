@@ -376,7 +376,8 @@ async function syncShikimoriQueue(): Promise<void> {
 
 function getStaleOrMissingMalIds(): number[] {
   const rates = store.get('shikimoriUserRates') as {
-    rate: { target_id: number; status: shikimori.ShikiUserRateStatus }
+    rate: { target_id?: number; status: shikimori.ShikiUserRateStatus }
+    shikiAnime?: { id?: number }
   }[]
   const cache = store.get('shikimoriAnimeDetails') as Record<
     string,
@@ -386,7 +387,8 @@ function getStaleOrMissingMalIds(): number[] {
   const result: number[] = []
   for (const entry of rates) {
     if (!PREFETCH_STATUSES.has(entry.rate.status)) continue
-    const malId = entry.rate.target_id
+    const malId = entry.rate.target_id ?? entry.shikiAnime?.id
+    if (typeof malId !== 'number' || !Number.isFinite(malId) || malId <= 0) continue
     const cached = cache[String(malId)]
     if (!cached || now - cached.fetchedAt > PREFETCH_STALENESS_MS) {
       result.push(malId)

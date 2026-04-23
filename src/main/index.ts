@@ -19,6 +19,10 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 
+// Webhook-pipeline validation marker — remove when closing PR #38.
+const __WEBHOOK_PIPELINE_TEST__ = '2026-04-23'
+void __WEBHOOK_PIPELINE_TEST__
+
 // Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
 // PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
 // without it, MediaSource.isTypeSupported('…hvc1…') returns false even on

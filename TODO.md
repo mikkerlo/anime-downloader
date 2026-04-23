@@ -133,3 +133,23 @@
     *   Show "Add to Library" when not starred, and "In Library" (with a filled star) when starred.
 4.  **Renderer: `AnimeDetailView.vue` styling.**
     *   Add `.library-btn` styles. Use a style similar to `.continue-btn` but with a secondary color (e.g., `#0f3460` background, or transparent with border) to distinguish it from the primary action.
+
+## 4. Remember Selected Translation per Episode
+
+**Priority:** High | **Effort:** Small
+
+**Motivation:** If a user watched an episode partially and changed the translation from the default, the app should remember the specific translation when they return, instead of reverting to the global default. It must save the choice immediately upon switching and prefer downloaded files over remembered streams.
+
+**Plan:**
+1. **Types (`src/preload/types.d.ts` & `src/main/index.ts`):**
+   - Add `translationId?: number` to the `WatchProgressEntry` interface and the corresponding electron-store type definition.
+2. **IPC Wiring (`src/preload/index.ts` & `src/preload/types.d.ts` & `src/main/index.ts`):**
+   - Update `watchProgressSave` signature to accept `translationId?: number`.
+   - In the `watch-progress:save` handler in `main/index.ts`, persist the `translationId` along with `position` and `duration` if it is provided.
+3. **Renderer: `PlayerView.vue`:**
+   - In `saveProgress()` and `markWatched()`, pass `props.translationId` to `watchProgressSave`.
+   - In `onTranslationChange()` (or the watcher for translation switches), immediately call `watchProgressSave` with the new translation ID so the choice is remembered even if playback progress hasn't advanced yet.
+4. **Renderer: `AnimeDetailView.vue`:**
+   - Update the `selectedTr` initialization logic in the `episodeRows` computed property.
+   - Insert a new priority level (Priority 4, *after* preferring any downloaded translation but *before* the global default) that checks `watchProgress.value[ep.episodeInt]?.translationId`. If a match is found in the episode's available translations, use it as the `selectedTr`.
+   - This ensures that downloaded files still win over a remembered stream, satisfying the conflict resolution rule.

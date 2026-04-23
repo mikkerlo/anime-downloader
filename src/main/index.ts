@@ -19,6 +19,10 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 
+// Local Bot API artifact-attach validation marker — remove when closing test PR.
+const __ARTIFACT_ATTACH_TEST__ = '2026-04-23'
+void __ARTIFACT_ATTACH_TEST__
+
 // Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
 // PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
 // without it, MediaSource.isTypeSupported('…hvc1…') returns false even on

@@ -1575,6 +1575,7 @@ function cancelAutoAdvance(): void {
 
 function onVideoEnded(): void {
   if (!canNext.value) return
+  if (autoAdvanceTimer) return
   autoAdvanceCountdown.value = 5
   autoAdvanceTimer = setInterval(() => {
     autoAdvanceCountdown.value--

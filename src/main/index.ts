@@ -86,7 +86,8 @@ const store = new Store({
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>,
     shikimoriUserRates: [] as unknown[],
     shikimoriUpdateQueue: [] as unknown[],
-    shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>
+    shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
+    recentAnimeMeta: {} as Record<string, AnimeSearchResult>
   }
 })
 
@@ -960,14 +961,96 @@ async function moveAllFilesToColdStorage(
   return result
 }
 
+function rememberAnimeMeta(detail: AnimeDetail): void {
+  if (!detail || !detail.id) return
+  const meta = store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>
+  meta[String(detail.id)] = {
+    id: detail.id,
+    title: detail.title,
+    titles: detail.titles,
+    // Some smotret entries return only the full-size `posterUrl`; fall back
+    // to it so HomeView never has an empty thumbnail when one is available.
+    posterUrlSmall: detail.posterUrlSmall || detail.posterUrl,
+    numberOfEpisodes: detail.numberOfEpisodes,
+    type: detail.type,
+    typeTitle: detail.typeTitle,
+    year: detail.year,
+    season: detail.season
+  }
+  store.set('recentAnimeMeta', meta)
+}
+
+// Smotret's bulk `series/?myAnimeListId[]=…` endpoint occasionally returns
+// entries with an empty `posterUrlSmall`. The single-anime detail endpoint
+// (`/series/:id`) usually has one. Enrich any poster-less entries by hitting
+// the detail endpoint, with a small concurrency limit and a per-call timeout.
+// Caches the resolved poster in `recentAnimeMeta` so future lookups skip the
+// fetch entirely.
+async function enrichMissingPosters(
+  entries: AnimeSearchResult[],
+  recent: Record<string, AnimeSearchResult>
+): Promise<void> {
+  const idsToFetch: number[] = []
+  for (const e of entries) {
+    if (e.posterUrlSmall || !e.id) continue
+    const cachedRecent = recent[String(e.id)]
+    if (cachedRecent?.posterUrlSmall) {
+      e.posterUrlSmall = cachedRecent.posterUrlSmall
+      continue
+    }
+    idsToFetch.push(e.id)
+  }
+  if (idsToFetch.length === 0) return
+
+  // Cap to avoid runaway fan-out on first sync of a large list. Anything past
+  // the cap will be enriched lazily on next interaction.
+  const MAX_ENRICH = 20
+  const ids = idsToFetch.slice(0, MAX_ENRICH)
+  const concurrency = 4
+  let cursor = 0
+  async function worker(): Promise<void> {
+    while (cursor < ids.length) {
+      const id = ids[cursor++]
+      try {
+        const result = await Promise.race([
+          smotretApi.getAnime(id),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 5000)
+          )
+        ])
+        const detail = (result as { data: AnimeDetail }).data
+        if (!detail) continue
+        rememberAnimeMeta(detail)
+        const poster = detail.posterUrlSmall || detail.posterUrl || ''
+        if (!poster) continue
+        for (const e of entries) {
+          if (e.id === id && !e.posterUrlSmall) e.posterUrlSmall = poster
+        }
+      } catch {
+        // best-effort; leave empty so renderer fallback can decide
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, () => worker()))
+}
+
 async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSearchResult>> {
   const cached = store.get('malIdMap') as Record<string, AnimeSearchResult>
+  const recent = store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>
   const result: Record<number, AnimeSearchResult> = {}
   const uncachedIds: number[] = []
 
   for (const id of malIds) {
     if (cached[String(id)]) {
-      result[id] = cached[String(id)]
+      let entry = cached[String(id)]
+      // If the cached MAL→smotret entry has no poster, try the freshest
+      // smotret meta we have (populated on every get-anime call). This
+      // heals stale entries that were cached before we enriched.
+      if (!entry.posterUrlSmall && recent[String(entry.id)]?.posterUrlSmall) {
+        entry = { ...entry, posterUrlSmall: recent[String(entry.id)].posterUrlSmall }
+        cached[String(id)] = entry
+      }
+      result[id] = entry
     } else {
       uncachedIds.push(id)
     }
@@ -975,14 +1058,15 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
 
   if (uncachedIds.length > 0) {
     const fetched = await smotretApi.lookupByMalIds(uncachedIds)
+    await enrichMissingPosters(fetched, recent)
     for (const anime of fetched) {
       if (anime.myAnimeListId) {
         result[anime.myAnimeListId] = anime
         cached[String(anime.myAnimeListId)] = anime
       }
     }
-    store.set('malIdMap', cached)
   }
+  store.set('malIdMap', cached)
   return result
 }
 
@@ -1037,6 +1121,7 @@ function registerIpcHandlers(): void {
     try {
       const result = await smotretApi.getAnime(id)
       updateAnimeDetailCache(id, result.data)
+      rememberAnimeMeta(result.data)
       return { ...result, source: 'api' }
     } catch (err) {
       const cached = getCacheEntry(id)
@@ -1159,6 +1244,243 @@ function registerIpcHandlers(): void {
       result[id] = { starred: !!lib[key], downloaded: !!downloaded[key] }
     }
     return result
+  })
+
+  ipcMain.handle('home:get-continue-watching', async () => {
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const malMap = store.get('malIdMap') as Record<string, AnimeSearchResult>
+    const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+    const recent = store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>
+
+    function localResolve(animeId: number, malId?: number): AnimeSearchResult | null {
+      const idKey = String(animeId)
+      return lib[idKey] || downloaded[idKey] || recent[idKey] || (malId ? malMap[String(malId)] : null) || null
+    }
+
+    function entryToNamePoster(entry: AnimeSearchResult | null, fallbackName?: string): { name: string; poster: string } {
+      if (!entry) return { name: fallbackName || '', poster: '' }
+      return { name: entry.titles?.ru || entry.titles?.romaji || entry.title || '', poster: entry.posterUrlSmall || '' }
+    }
+
+    // smotret-anime episodes for some shows lead with a `preview`/trailer entry
+    // that shares `episodeInt` with the real episode (see e.g. Guimi Zhi Zhu:
+    // Xiaochou Pian, smotret id 34496). AnimeDetailView already filters these
+    // out with `episodeType !== 'preview'`; mirror that here so HomeView labels
+    // don't say "Трейлер" instead of "Episode 1".
+    function isContentEpisode(ep: EpisodeSummary): boolean {
+      return ep.episodeType !== 'preview'
+    }
+
+    function episodeLabelFor(animeId: number, episodeInt: string): string {
+      const entry = cache[String(animeId)]
+      const ep = entry?.animeDetail?.episodes?.find(
+        (e) => e.episodeInt === episodeInt && isContentEpisode(e)
+      )
+      return ep?.episodeFull || `Episode ${episodeInt}`
+    }
+
+    type Entry = {
+      kind: 'resume' | 'next'
+      animeId: number
+      animeName: string
+      posterUrl: string
+      episodeInt: string
+      episodeLabel: string
+      position?: number
+      duration?: number
+      updatedAt: number
+      malId?: number
+    }
+
+    type Raw = Entry & {
+      shikiPosterFallback?: string
+      shikiNameFallback?: string
+    }
+
+    const resumeKeys = new Set<string>()
+    const raw: Raw[] = []
+
+    // Collapse to the most-recently-updated unfinished episode per anime.
+    const bestByAnime = new Map<number, { episodeInt: string; position: number; duration: number; updatedAt: number }>()
+    const progress = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    for (const [key, val] of Object.entries(progress)) {
+      if (val.watched) continue
+      if (!val.duration || val.duration <= 0) continue
+      if (!val.position || val.position <= 5) continue
+      if (val.position / val.duration >= 0.95) continue
+      const sep = key.indexOf(':')
+      if (sep < 0) continue
+      const animeId = Number(key.slice(0, sep))
+      const episodeInt = key.slice(sep + 1)
+      if (!animeId || !episodeInt) continue
+      const prev = bestByAnime.get(animeId)
+      if (!prev || val.updatedAt > prev.updatedAt) {
+        bestByAnime.set(animeId, {
+          episodeInt,
+          position: val.position,
+          duration: val.duration,
+          updatedAt: val.updatedAt
+        })
+      }
+    }
+
+    for (const [animeId, val] of bestByAnime) {
+      const { name, poster } = entryToNamePoster(localResolve(animeId))
+      resumeKeys.add(`${animeId}`)
+      raw.push({
+        kind: 'resume',
+        animeId,
+        animeName: name,
+        posterUrl: poster,
+        episodeInt: val.episodeInt,
+        episodeLabel: episodeLabelFor(animeId, val.episodeInt),
+        position: val.position,
+        duration: val.duration,
+        updatedAt: val.updatedAt
+      })
+    }
+
+    type CachedRate = {
+      rate: { target_id: number; episodes: number; status: string; updated_at?: string }
+      shikiAnime?: { id: number; name?: string; russian?: string; image?: { preview?: string; x96?: string; original?: string }; episodes_aired?: number }
+      smotretAnime?: AnimeSearchResult | null
+    }
+    const rates = store.get('shikimoriUserRates') as CachedRate[]
+    const SHIKI_BASE = 'https://shikimori.one'
+
+    // Map smotret-anime id -> Shikimori rate.updated_at (ms). Used to override
+    // Resume rows' sort key with the Shikimori clock so the Home view orders
+    // entries the same way as the Shikimori "To Watch" tab.
+    const rateUpdatedByAnimeId = new Map<number, number>()
+    for (const r of rates) {
+      const animeId = r.smotretAnime?.id ?? (r.rate.target_id ? malMap[String(r.rate.target_id)]?.id : undefined)
+      if (!animeId || !r.rate.updated_at) continue
+      const ms = Date.parse(r.rate.updated_at)
+      if (Number.isFinite(ms)) rateUpdatedByAnimeId.set(animeId, ms)
+    }
+    for (const r of raw) {
+      if (r.kind !== 'resume') continue
+      const ms = rateUpdatedByAnimeId.get(r.animeId)
+      if (ms) r.updatedAt = ms
+    }
+
+    for (const entry of rates) {
+      const status = entry.rate.status
+      if (status !== 'watching' && status !== 'rewatching') continue
+      const malId = entry.rate.target_id
+      const watched = entry.rate.episodes
+      const aired = entry.shikiAnime?.episodes_aired ?? 0
+      const next = watched + 1
+      if (aired > 0 && next > aired) continue
+      const smotret = entry.smotretAnime || (malId ? malMap[String(malId)] : null)
+      const animeId = smotret?.id ?? 0
+      if (animeId && resumeKeys.has(String(animeId))) continue
+      const fallbackName = entry.shikiAnime?.russian || entry.shikiAnime?.name || ''
+      const resolved = entryToNamePoster(animeId ? localResolve(animeId, malId) : null, fallbackName)
+      let poster = resolved.poster
+      if (!poster && entry.shikiAnime?.image) {
+        const img = entry.shikiAnime.image.preview || entry.shikiAnime.image.x96 || entry.shikiAnime.image.original || ''
+        poster = img && (img.startsWith('http') ? img : `${SHIKI_BASE}${img}`)
+      }
+      const updatedAt = entry.rate.updated_at ? Date.parse(entry.rate.updated_at) || Date.now() : Date.now()
+      raw.push({
+        kind: 'next',
+        animeId,
+        animeName: resolved.name,
+        posterUrl: poster,
+        episodeInt: String(next),
+        episodeLabel: animeId ? episodeLabelFor(animeId, String(next)) : `Episode ${next}`,
+        updatedAt,
+        malId,
+        shikiPosterFallback: poster,
+        shikiNameFallback: fallbackName
+      })
+    }
+
+    // Lazy resolve any rows where we still don't have a name + poster locally.
+    // Typical case: anime the user only streamed (no library/downloadedAnime/animeCache entry).
+    const unresolvedIds = Array.from(
+      new Set(
+        raw
+          .filter((r) => {
+            if (!r.animeId) return false
+            // recentAnimeMeta is the freshest source (set on every get-anime
+            // call). If we already have it, skip the fetch.
+            if (recent[String(r.animeId)]) return false
+            // No name → must fetch.
+            if (!r.animeName) return true
+            // Empty poster → must fetch.
+            if (!r.posterUrl) return true
+            // Poster is only the Shikimori fallback (which can be a 'missing'
+            // placeholder URL when smotret-anime's bulk lookup didn't return a
+            // poster). The detail endpoint usually does — so try.
+            if (r.shikiPosterFallback && r.posterUrl === r.shikiPosterFallback) return true
+            return false
+          })
+          .map((r) => r.animeId)
+      )
+    )
+
+    if (unresolvedIds.length > 0) {
+      const fetched: Record<number, AnimeDetail | null> = {}
+      const concurrency = 4
+      let cursor = 0
+      async function worker(): Promise<void> {
+        while (cursor < unresolvedIds.length) {
+          const id = unresolvedIds[cursor++]
+          try {
+            const result = await Promise.race([
+              smotretApi.getAnime(id),
+              new Promise<{ data: null }>((_, reject) =>
+                setTimeout(() => reject(new Error('timeout')), 5000)
+              )
+            ])
+            const detail = (result as { data: AnimeDetail | null }).data
+            if (detail) {
+              fetched[id] = detail
+              rememberAnimeMeta(detail)
+            }
+          } catch {
+            fetched[id] = null
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(concurrency, unresolvedIds.length) }, () => worker()))
+
+      for (const r of raw) {
+        if (!r.animeId) continue
+        const meta = fetched[r.animeId]
+        if (!meta) continue
+        if (!r.animeName) {
+          r.animeName = meta.titles?.ru || meta.titles?.romaji || meta.title || r.shikiNameFallback || ''
+        }
+        // Always prefer a smotret-anime poster when we have one — it overrides
+        // the (potentially broken) Shikimori fallback.
+        const fetchedPoster = meta.posterUrlSmall || meta.posterUrl
+        if (fetchedPoster) {
+          r.posterUrl = fetchedPoster
+        } else if (!r.posterUrl) {
+          r.posterUrl = r.shikiPosterFallback || ''
+        }
+        if (r.episodeLabel.startsWith('Episode ')) {
+          const ep = meta.episodes?.find(
+            (e) => e.episodeInt === r.episodeInt && isContentEpisode(e)
+          )
+          if (ep?.episodeFull) r.episodeLabel = ep.episodeFull
+        }
+      }
+    }
+
+    const out: Entry[] = raw
+      .map(({ shikiPosterFallback: _p, shikiNameFallback: _n, ...rest }) => rest)
+      .filter((r) => r.animeId && r.animeName)
+
+    // Sort by Shikimori rate.updated_at descending — same rule as the
+    // ShikimoriView "To Watch" tab. Resume rows whose anime isn't tracked on
+    // Shikimori fall back to local watchProgress.updatedAt.
+    out.sort((a, b) => b.updatedAt - a.updatedAt)
+    return out.slice(0, 24)
   })
 
   ipcMain.handle('downloaded-anime-add', (_event, anime: AnimeSearchResult) => {

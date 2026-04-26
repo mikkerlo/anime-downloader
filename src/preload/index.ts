@@ -25,6 +25,9 @@ const api = {
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
 
+  homeGetContinueWatching: () =>
+    ipcRenderer.invoke('home:get-continue-watching') as Promise<ContinueWatchingEntry[]>,
+
   // Watch progress
   watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) =>
     ipcRenderer.invoke('watch-progress:save', animeId, episodeInt, position, duration, watched),

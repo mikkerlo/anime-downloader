@@ -156,7 +156,7 @@
 
 ---
 
-## 5. Continue Watching Home View
+## ~~5. Continue Watching Home View~~
 
 **Priority:** High | **Effort:** Medium
 

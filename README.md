@@ -1,5 +1,7 @@
 # Anime DL
 
+[![Ready for Implementation](https://img.shields.io/badge/Issues-Ready%20for%20Implementation-2cbe4e?style=flat-square&logo=github)](https://github.com/mikkerlo/anime-downloader/issues?q=is%3Aopen+is%3Aissue+label%3A%22Ready+for+implementation%22)
+
 Desktop app for downloading anime episodes from [smotret-anime.ru](https://smotret-anime.ru) (anime365).
 
 Built with Electron, Vue 3, and TypeScript.

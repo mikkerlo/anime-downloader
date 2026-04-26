@@ -62,6 +62,13 @@ function handleClick(entry: ShikiFriendActivityEntry): void {
   if (entry.smotretAnime) emit('openAnime', entry.smotretAnime.id)
 }
 
+function posterUrl(entry: ShikiFriendActivityEntry): string {
+  // Prefer smotret-anime's poster — Shikimori's image URL can be a 'missing'
+  // placeholder for newly-listed anime. The main process already enriches
+  // smotret entries via `enrichMissingPosters`, so this is normally non-empty.
+  return entry.smotretAnime?.posterUrlSmall || entry.animeImage
+}
+
 onMounted(() => load())
 </script>
 
@@ -101,7 +108,7 @@ onMounted(() => load())
             <div class="line-2">{{ stripHtml(entry.description) }}</div>
             <div class="line-3" :title="entry.animeName">{{ entry.animeName }}</div>
           </div>
-          <img :src="entry.animeImage" :alt="entry.animeName" class="poster" loading="lazy" />
+          <img :src="posterUrl(entry)" :alt="entry.animeName" class="poster" loading="lazy" />
         </li>
       </ul>
     </div>

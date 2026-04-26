@@ -92,6 +92,10 @@ function hasUnwatched(entry: ShikiAnimeRateEntry): boolean {
 }
 
 function shikiPosterUrl(entry: ShikiAnimeRateEntry): string {
+  // Prefer smotret-anime's poster — Shikimori's image URL can be a 'missing'
+  // placeholder for newly-listed anime. The main process already enriches
+  // smotret entries via `enrichMissingPosters`, so this is normally non-empty.
+  if (entry.smotretAnime?.posterUrlSmall) return entry.smotretAnime.posterUrlSmall
   const img = entry.shikiAnime.image.original
   return img.startsWith('http') ? img : `https://shikimori.one${img}`
 }

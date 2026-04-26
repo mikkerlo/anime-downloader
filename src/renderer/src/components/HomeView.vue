@@ -24,6 +24,17 @@ function onPosterError(e: ContinueWatchingEntry): void {
   failedPosters.value = new Set(failedPosters.value).add(entryKey(e))
 }
 
+function onPosterLoad(e: ContinueWatchingEntry, evt: Event): void {
+  // smotret-anime.ru sometimes serves a 200-OK response with content-length: 0
+  // for missing posters. The browser fires `load` (not `error`) and renders an
+  // empty <img>, leaving the dark container visible forever. Detect via the
+  // decoded dimensions and treat as failed.
+  const img = evt.target as HTMLImageElement
+  if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+    failedPosters.value = new Set(failedPosters.value).add(entryKey(e))
+  }
+}
+
 async function refresh(): Promise<void> {
   try {
     entries.value = await window.api.homeGetContinueWatching()
@@ -109,7 +120,7 @@ onUnmounted(() => {
           @click="onClick(e)"
         >
           <div class="poster">
-            <img v-if="showPoster(e)" :src="e.posterUrl" :alt="e.animeName" @error="onPosterError(e)" />
+            <img v-if="showPoster(e)" :src="e.posterUrl" :alt="e.animeName" @error="onPosterError(e)" @load="onPosterLoad(e, $event)" />
             <div v-else class="poster-fallback"></div>
           </div>
           <div class="info">

@@ -1281,7 +1281,7 @@ function typeChip(type: string): { short: string; color: string } {
               @keydown.space.prevent="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
             >
               <img
-                :src="entry.shikiAnime.image_url || ''"
+                :src="entry.smotretAnime?.posterUrlSmall || entry.shikiAnime.image_url || ''"
                 :alt="entry.shikiAnime.name"
                 class="related-thumb"
                 loading="lazy"

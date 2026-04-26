@@ -270,13 +270,19 @@
    - Settings type addition: `autoSkipIntro: boolean`, `autoSkipOutro: boolean` in the store schema (`src/main/index.ts`).
 6. **Renderer: cache settings in PlayerView.**
    - `playerSettings` ref includes the two new toggles, refreshed on player mount via `getSetting`. The `currentTime` watcher consults the cached values.
-7. **DESIGN.md update.** New "Aniskip Skip-Intro / Skip-Outro" subsection under Built-in Video Player. Document: the API, the cache (30-day TTL, key shape), button-overlay default, and auto-skip toggle. Add `aniskip:get-skip-times` to the IPC table and `aniskipCache` / `autoSkipIntro` / `autoSkipOutro` to the Settings table.
+7. **Pre-fetch on library add and on episode download.** The silent-`[]` fallback handles transient outages, but for offline playback (e.g. travelling with downloaded episodes) we want the skip overlays to keep working. New main-side worker `prefetchAniskipForAnime(malId, episodeRange)`:
+   - Triggered on `library:add` for the freshly-added anime (`episodeRange = 1..details.episodes_aired`, capped to e.g. 100 to avoid runaway calls on long-running shows). Triggered on download completion for the specific episode (`episodeRange = [episodeInt]`).
+   - Throttled to ~1 req/s with `setTimeout` between calls so we don't hammer aniskip.com when adding a long-running show.
+   - Re-uses the existing `aniskip:get-skip-times` cache path; pre-fetch is just "warm the cache". A subsequent player open finds it ready.
+   - Skips silently when `malId <= 0`, when the cache entry is fresh (<30 days), or when the network call fails (logged once per anime).
+8. **DESIGN.md update.** New "Aniskip Skip-Intro / Skip-Outro" subsection under Built-in Video Player. Document: the API, the cache (30-day TTL, key shape), button-overlay default, auto-skip toggle, and the library/download pre-fetch worker. Add `aniskip:get-skip-times` to the IPC table and `aniskipCache` / `autoSkipIntro` / `autoSkipOutro` to the Settings table.
 
 **Blockers & Risks:**
+- **Database coverage.** Aniskip's GitHub repo star count understates adoption — the API is the upstream that drives skip plugins for mpv, Jellyfin, and Plex, so coverage is strong on popular shows and thin/absent on niche/older ones. A missing entry naturally degrades to "no button shown" thanks to the silent-`[]` fallback, so coverage gaps are not a blocker, just an honest limit.
 - **Bad timestamps.** Aniskip is crowdsourced — occasional bad submissions skip into spoilers. That's exactly why v1 default is button-only, not auto-skip; users opt in once they trust the database for a given show. Worth mentioning in the Settings tooltip ("Community-contributed timestamps; occasionally inaccurate").
 - **Episode number parsing.** `episodeLabel` in the player is the smotret-anime label (often "Episode 5" or "5"). `episodeInt` is already passed through as a string; parse it via `parseInt(episodeInt, 10)`. Fractional `.5` recap episodes won't have aniskip data — return early.
 - **`malId === 0`.** Many smotret-anime entries lack a MAL link (e.g. niche or older shows). Skip the API call entirely when `malId <= 0`.
-- **Network loss.** Already covered by the silent-`[]` fallback in main; the player just won't show a skip button.
+- **Network loss.** Mitigated for downloaded/library anime by the pre-fetch worker (step 7) — skip data is warmed into the cache when the user adds the anime or finishes a download, so offline playback still gets overlays. For everything else, the silent-`[]` fallback in main keeps the player usable; it just won't show a skip button.
 - **Privacy.** Each play sends `malId + episode + duration` to aniskip.com. Document this in the Settings tooltip; the cache means a given episode is only sent once per 30 days. No PII.
 - **Outro near end-credits cliffhanger.** Some shows put plot in the post-credits stinger. Auto-skip past the outro would skip the stinger. Mitigation: aniskip's `ed` interval typically ends *before* the stinger — verify this when QA-ing; if intervals are too aggressive, treat outro skip as button-only even when auto-skip is on (i.e. `autoSkipOutro` ignored, only `autoSkipIntro` honored). Decision pending QA.
 

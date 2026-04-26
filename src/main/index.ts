@@ -1263,9 +1263,20 @@ function registerIpcHandlers(): void {
       return { name: entry.titles?.ru || entry.titles?.romaji || entry.title || '', poster: entry.posterUrlSmall || '' }
     }
 
+    // smotret-anime episodes for some shows lead with a `preview`/trailer entry
+    // that shares `episodeInt` with the real episode (see e.g. Guimi Zhi Zhu:
+    // Xiaochou Pian, smotret id 34496). AnimeDetailView already filters these
+    // out with `episodeType !== 'preview'`; mirror that here so HomeView labels
+    // don't say "Трейлер" instead of "Episode 1".
+    function isContentEpisode(ep: EpisodeSummary): boolean {
+      return ep.episodeType !== 'preview'
+    }
+
     function episodeLabelFor(animeId: number, episodeInt: string): string {
       const entry = cache[String(animeId)]
-      const ep = entry?.animeDetail?.episodes?.find((e) => e.episodeInt === episodeInt)
+      const ep = entry?.animeDetail?.episodes?.find(
+        (e) => e.episodeInt === episodeInt && isContentEpisode(e)
+      )
       return ep?.episodeFull || `Episode ${episodeInt}`
     }
 
@@ -1453,7 +1464,9 @@ function registerIpcHandlers(): void {
           r.posterUrl = r.shikiPosterFallback || ''
         }
         if (r.episodeLabel.startsWith('Episode ')) {
-          const ep = meta.episodes?.find((e) => e.episodeInt === r.episodeInt)
+          const ep = meta.episodes?.find(
+            (e) => e.episodeInt === r.episodeInt && isContentEpisode(e)
+          )
           if (ep?.episodeFull) r.episodeLabel = ep.episodeFull
         }
       }

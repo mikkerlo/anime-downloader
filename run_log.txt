@@ -1,0 +1,1159 @@
+changes	UNKNOWN STEP	﻿2026-04-26T03:22:54.6394988Z Current runner version: '2.333.1'
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6421608Z ##[group]Runner Image Provisioner
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6422462Z Hosted Compute Agent
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6422991Z Version: 20260213.493
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6423628Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6424304Z Build Date: 2026-02-13T00:28:41Z
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6424948Z Worker ID: {387cafce-1c3a-4c7e-8a3e-2593e615513f}
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6425593Z Azure Region: westus3
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6426301Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6428312Z ##[group]Operating System
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6428897Z Ubuntu
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6429434Z 24.04.4
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6429887Z LTS
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6430291Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6430854Z ##[group]Runner Image
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6431396Z Image: ubuntu-24.04
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6431866Z Version: 20260413.86.1
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6433084Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260413.86/images/ubuntu/Ubuntu2404-Readme.md
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6434436Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260413.86
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6435400Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6436368Z ##[group]GITHUB_TOKEN Permissions
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6438830Z Contents: read
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6439383Z Metadata: read
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6439830Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6442190Z Secret source: Actions
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6442893Z Prepare workflow directory
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6849164Z Prepare all required actions
+changes	UNKNOWN STEP	2026-04-26T03:22:54.6890439Z Getting action download info
+changes	UNKNOWN STEP	2026-04-26T03:22:55.1262368Z Download action repository 'actions/checkout@v5' (SHA:93cb6efe18208431cddfb8368fd83d5badbf9bfd)
+changes	UNKNOWN STEP	2026-04-26T03:22:55.2940851Z Download action repository 'dorny/paths-filter@v3' (SHA:d1c1ffe0248fe513906c8e24db8ea791d46f8590)
+changes	UNKNOWN STEP	2026-04-26T03:22:56.2231494Z Complete job name: changes
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3098731Z ##[group]Run actions/checkout@v5
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3100129Z with:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3100958Z   repository: mikkerlo/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3102434Z   token: ***
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3103205Z   ssh-strict: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3104016Z   ssh-user: git
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3104849Z   persist-credentials: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3105789Z   clean: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3106608Z   sparse-checkout-cone-mode: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3108202Z   fetch-depth: 1
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3109034Z   fetch-tags: false
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3109867Z   show-progress: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3110721Z   lfs: false
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3111471Z   submodules: false
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3112299Z   set-safe-directory: true
+changes	UNKNOWN STEP	2026-04-26T03:22:56.3113523Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4129372Z Syncing repository: mikkerlo/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4132361Z ##[group]Getting Git version info
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4134242Z Working directory is '/home/runner/work/anime-downloader/anime-downloader'
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4137874Z [command]/usr/bin/git version
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4142279Z git version 2.53.0
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4166354Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4183444Z Temporarily overriding HOME='/home/runner/work/_temp/3181d3ea-a698-4a94-b71d-4b9fc0bf76c1' before making global git config changes
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4186601Z Adding repository directory to the temporary git global config as a safe directory
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4191105Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/anime-downloader/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4229001Z Deleting the contents of '/home/runner/work/anime-downloader/anime-downloader'
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4232400Z ##[group]Initializing the repository
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4238051Z [command]/usr/bin/git init /home/runner/work/anime-downloader/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4319416Z hint: Using 'master' as the name for the initial branch. This default branch name
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4322563Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4324533Z hint: to use in all of your new repositories, which will suppress this warning,
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4327566Z hint: call:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4328754Z hint:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4330313Z hint: 	git config --global init.defaultBranch <name>
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4332253Z hint:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4334044Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4336108Z hint: 'development'. The just-created branch can be renamed via this command:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4338143Z hint:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4338916Z hint: 	git branch -m <name>
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4339796Z hint:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4341141Z hint: Disable this message with "git config set advice.defaultBranchName false"
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4343380Z Initialized empty Git repository in /home/runner/work/anime-downloader/anime-downloader/.git/
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4347019Z [command]/usr/bin/git remote add origin https://github.com/mikkerlo/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4368467Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4370453Z ##[group]Disabling automatic garbage collection
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4372689Z [command]/usr/bin/git config --local gc.auto 0
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4404745Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4406507Z ##[group]Setting up auth
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4410873Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4444569Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4788720Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+changes	UNKNOWN STEP	2026-04-26T03:22:56.4823173Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5051680Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5087580Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5316421Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5355221Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5357978Z ##[group]Fetching the repository
+changes	UNKNOWN STEP	2026-04-26T03:22:56.5368115Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +02d43897e169c35969419e5667a69db38c61e2e8:refs/remotes/pull/44/merge
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7666544Z From https://github.com/mikkerlo/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7669174Z  * [new ref]         02d43897e169c35969419e5667a69db38c61e2e8 -> pull/44/merge
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7694825Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7695279Z ##[group]Determining the checkout info
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7697845Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7702947Z [command]/usr/bin/git sparse-checkout disable
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7743739Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7772193Z ##[group]Checking out the ref
+changes	UNKNOWN STEP	2026-04-26T03:22:57.7776676Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/44/merge
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8240493Z Note: switching to 'refs/remotes/pull/44/merge'.
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8241086Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8241554Z You are in 'detached HEAD' state. You can look around, make experimental
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8242419Z changes and commit them, and you can discard any commits you make in this
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8242953Z state without impacting any branches by switching back to a branch.
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8243333Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8243590Z If you want to create a new branch to retain commits you create, you may
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8244072Z do so (now or later) by using -c with the switch command. Example:
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8244335Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8244526Z   git switch -c <new-branch-name>
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8244717Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8244838Z Or undo this operation with:
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8245406Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8245509Z   git switch -
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8245667Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8245900Z Turn off this advice by setting config variable advice.detachedHead to false
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8246484Z 
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8247097Z HEAD is now at 02d4389 Merge 9a7bf1ff2b738d800fae6432302636055b370f37 into 6f790509035cdb81be5d2038a3b68132f581c095
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8248796Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8287438Z [command]/usr/bin/git log -1 --format=%H
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8312002Z 02d43897e169c35969419e5667a69db38c61e2e8
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8574051Z ##[group]Run dorny/paths-filter@v3
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8574437Z with:
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8574854Z   filters: code:
+changes	UNKNOWN STEP	  - '**'
+changes	UNKNOWN STEP	  - '!**/*.md'
+changes	UNKNOWN STEP	  - '!*.md'
+changes	UNKNOWN STEP	  - '!LICENSE'
+changes	UNKNOWN STEP	  - '!.gitignore'
+changes	UNKNOWN STEP	  - '!.gitattributes'
+changes	UNKNOWN STEP	
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8575495Z   token: ***
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8575724Z   list-files: none
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8575972Z   initial-fetch-depth: 100
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8576279Z   predicate-quantifier: some
+changes	UNKNOWN STEP	2026-04-26T03:22:57.8576575Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:57.9515100Z ##[group]Fetching list of changed files for PR#44 from Github API
+changes	UNKNOWN STEP	2026-04-26T03:22:57.9524776Z Invoking listFiles(pull_number: 44, per_page: 100)
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3503603Z Received 1 items
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3504686Z [modified] .github/workflows/check.yml
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3506605Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3507968Z Detected 1 changed files
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3508820Z Results:
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3509906Z ##[group]Filter code = true
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3510653Z Matching files:
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3511818Z .github/workflows/check.yml [modified]
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3520842Z ##[endgroup]
+changes	UNKNOWN STEP	2026-04-26T03:22:58.3521673Z Changes output set to ["code"]
+changes	UNKNOWN STEP	2026-04-26T03:22:58.4336597Z Post job cleanup.
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5242533Z [command]/usr/bin/git version
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5244348Z git version 2.53.0
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5251045Z Temporarily overriding HOME='/home/runner/work/_temp/e59f512e-36be-485d-936c-cc12d830a413' before making global git config changes
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5252878Z Adding repository directory to the temporary git global config as a safe directory
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5254591Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/anime-downloader/anime-downloader
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5295112Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5332029Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5563457Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5590000Z http.https://github.com/.extraheader
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5602150Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5637936Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5868701Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+changes	UNKNOWN STEP	2026-04-26T03:22:58.5903256Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+changes	UNKNOWN STEP	2026-04-26T03:22:58.6258114Z Evaluate and set job outputs
+changes	UNKNOWN STEP	2026-04-26T03:22:58.6265309Z Set output 'code'
+changes	UNKNOWN STEP	2026-04-26T03:22:58.6267728Z Cleaning up orphan processes
+changes	UNKNOWN STEP	2026-04-26T03:22:58.6571241Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: dorny/paths-filter@v3. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	﻿2026-04-26T03:23:04.2509293Z Current runner version: '2.333.1'
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2534099Z ##[group]Runner Image Provisioner
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2534832Z Hosted Compute Agent
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2535495Z Version: 20260213.493
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2536110Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2536828Z Build Date: 2026-02-13T00:28:41Z
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2537610Z Worker ID: {6b11c973-c213-4e43-8d1c-a5bd920dfba0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2538266Z Azure Region: eastus
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2538815Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2540118Z ##[group]Operating System
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2540898Z Ubuntu
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2541379Z 24.04.4
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2541930Z LTS
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2542409Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2542876Z ##[group]Runner Image
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2543475Z Image: ubuntu-24.04
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2543990Z Version: 20260413.86.1
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2545264Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260413.86/images/ubuntu/Ubuntu2404-Readme.md
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2546682Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260413.86
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2547546Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2548664Z ##[group]GITHUB_TOKEN Permissions
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2551169Z Actions: read
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2551815Z Contents: read
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2552315Z Metadata: read
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2552828Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2554825Z Secret source: Actions
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2555878Z Prepare workflow directory
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2878109Z Prepare all required actions
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.2915734Z Getting action download info
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.6020146Z Download action repository 'actions/checkout@v5' (SHA:93cb6efe18208431cddfb8368fd83d5badbf9bfd)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.6897551Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:04.7783356Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0004799Z Complete job name: build (ubuntu-latest, linux, --linux zip)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0666063Z ##[group]Run actions/checkout@v5
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0666843Z with:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0667244Z   repository: mikkerlo/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0667929Z   token: ***
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0668304Z   ssh-strict: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0668686Z   ssh-user: git
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0669069Z   persist-credentials: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0669506Z   clean: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0669897Z   sparse-checkout-cone-mode: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0670370Z   fetch-depth: 1
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0670925Z   fetch-tags: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0671320Z   show-progress: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0671712Z   lfs: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0672060Z   submodules: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0672448Z   set-safe-directory: true
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.0673060Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1600107Z Syncing repository: mikkerlo/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1602249Z ##[group]Getting Git version info
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1603145Z Working directory is '/home/runner/work/anime-downloader/anime-downloader'
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1604270Z [command]/usr/bin/git version
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1625156Z git version 2.53.0
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1676760Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1691029Z Temporarily overriding HOME='/home/runner/work/_temp/31722aae-349a-41ee-8f1c-bd5b1b1e60b0' before making global git config changes
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1693048Z Adding repository directory to the temporary git global config as a safe directory
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1696071Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/anime-downloader/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1730141Z Deleting the contents of '/home/runner/work/anime-downloader/anime-downloader'
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1734104Z ##[group]Initializing the repository
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1738713Z [command]/usr/bin/git init /home/runner/work/anime-downloader/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1806658Z hint: Using 'master' as the name for the initial branch. This default branch name
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1808407Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1809657Z hint: to use in all of your new repositories, which will suppress this warning,
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1810425Z hint: call:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1811136Z hint:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1811604Z hint: 	git config --global init.defaultBranch <name>
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1812268Z hint:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1813044Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1813911Z hint: 'development'. The just-created branch can be renamed via this command:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1814821Z hint:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1815211Z hint: 	git branch -m <name>
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1815630Z hint:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1816195Z hint: Disable this message with "git config set advice.defaultBranchName false"
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1817329Z Initialized empty Git repository in /home/runner/work/anime-downloader/anime-downloader/.git/
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1819213Z [command]/usr/bin/git remote add origin https://github.com/mikkerlo/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1850492Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1851896Z ##[group]Disabling automatic garbage collection
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1854909Z [command]/usr/bin/git config --local gc.auto 0
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1884959Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1886057Z ##[group]Setting up auth
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1891922Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.1923815Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2216537Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2255553Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2498159Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2532056Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2788645Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2829944Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2831382Z ##[group]Fetching the repository
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.2840981Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +02d43897e169c35969419e5667a69db38c61e2e8:refs/remotes/pull/44/merge
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7503894Z From https://github.com/mikkerlo/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7505517Z  * [new ref]         02d43897e169c35969419e5667a69db38c61e2e8 -> pull/44/merge
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7533818Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7534834Z ##[group]Determining the checkout info
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7536600Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7542899Z [command]/usr/bin/git sparse-checkout disable
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7584537Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7614482Z ##[group]Checking out the ref
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.7618865Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/44/merge
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8132203Z Note: switching to 'refs/remotes/pull/44/merge'.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8133028Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8133546Z You are in 'detached HEAD' state. You can look around, make experimental
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8134678Z changes and commit them, and you can discard any commits you make in this
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8135799Z state without impacting any branches by switching back to a branch.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8136470Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8137205Z If you want to create a new branch to retain commits you create, you may
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8138423Z do so (now or later) by using -c with the switch command. Example:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8139402Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8139753Z   git switch -c <new-branch-name>
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8140268Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8140804Z Or undo this operation with:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8141302Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8141569Z   git switch -
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8141943Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8142604Z Turn off this advice by setting config variable advice.detachedHead to false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8143645Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8144642Z HEAD is now at 02d4389 Merge 9a7bf1ff2b738d800fae6432302636055b370f37 into 6f790509035cdb81be5d2038a3b68132f581c095
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8147781Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8178409Z [command]/usr/bin/git log -1 --format=%H
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8203240Z 02d43897e169c35969419e5667a69db38c61e2e8
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8515389Z ##[group]Run actions/setup-node@v4
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8516492Z with:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8517284Z   node-version: 20
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8518123Z   cache: npm
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8518923Z   always-auth: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8519851Z   check-latest: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8521261Z   token: ***
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:05.8591865Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.0392275Z Found in cache @ /opt/hostedtoolcache/node/20.20.2/x64
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.0399709Z ##[group]Environment details
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.3373873Z node: v20.20.2
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.3374354Z npm: 10.8.2
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.3374689Z yarn: 1.22.22
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.3376042Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.3395049Z [command]/opt/hostedtoolcache/node/20.20.2/x64/bin/npm config get cache
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.4482224Z /home/runner/.npm
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:06.5432120Z Cache hit for: node-cache-Linux-x64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.1642162Z Received 130613878 of 130613878 (100.0%), 212.9 MBs/sec
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.1642902Z Cache Size: ~125 MB (130613878 B)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.1671723Z [command]/usr/bin/tar -xf /home/runner/work/_temp/114611af-cff2-4817-bf12-3dfba72b54ee/cache.tzst -P -C /home/runner/work/anime-downloader/anime-downloader --use-compress-program unzstd
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4363339Z Cache restored successfully
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4427440Z Cache restored from key: node-cache-Linux-x64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4625185Z ##[group]Run npm ci
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4625487Z [36;1mnpm ci[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4658709Z shell: /usr/bin/bash -e {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:07.4659004Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0711128Z npm warn EBADENGINE Unsupported engine {
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0711772Z npm warn EBADENGINE   package: '@electron/rebuild@4.0.3',
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0712231Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0712710Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0713073Z npm warn EBADENGINE }
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0731547Z npm warn EBADENGINE Unsupported engine {
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0732263Z npm warn EBADENGINE   package: 'node-abi@4.28.0',
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0732960Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0733753Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:08.0734335Z npm warn EBADENGINE }
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:10.6639413Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:10.7345068Z npm warn deprecated rimraf@2.6.3: Rimraf versions prior to v4 are no longer supported
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:10.7655301Z npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:10.7675689Z npm warn deprecated har-validator@5.1.5: this library is no longer supported
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:10.8598586Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:11.0392913Z npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:11.0434698Z npm warn deprecated uuid@3.4.0: Please upgrade  to version 7 or higher.  Older versions may use Math.random() in certain circumstances, which is known to be problematic.  See https://v8.dev/blog/math-random for details.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:11.1521003Z npm warn deprecated request@2.88.2: request has been deprecated, see https://github.com/request/request/issues/3142
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:11.4963790Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:12.1664027Z npm warn deprecated fluent-ffmpeg@2.1.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1585311Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1586119Z added 540 packages, and audited 541 packages in 9s
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1586532Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1586814Z 81 packages are looking for funding
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1587242Z   run `npm fund` for details
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1678897Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1683140Z 8 vulnerabilities (5 moderate, 1 high, 2 critical)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1683669Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1684185Z To address issues that do not require attention, run:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1684712Z   npm audit fix
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1684906Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1685240Z Some issues need review, and may require choosing
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1685852Z a different dependency.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1686150Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.1686404Z Run `npm audit` for details.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.2223403Z ##[group]Run npm run typecheck
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.2223697Z [36;1mnpm run typecheck[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.2248205Z shell: /usr/bin/bash -e {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.2248461Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.3374164Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.3374514Z > anime-dl-app@3.12.0 typecheck
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.3375112Z > npm run typecheck:node && npm run typecheck:web
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.3375350Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.4488777Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.4489433Z > anime-dl-app@3.12.0 typecheck:node
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.4490194Z > tsc --noEmit -p tsconfig.node.json --composite false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:16.4490852Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:18.8368022Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:18.8368712Z > anime-dl-app@3.12.0 typecheck:web
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:18.8369449Z > vue-tsc --noEmit -p tsconfig.web.json --composite false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:18.8369840Z 
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2459139Z ##[group]Run VERSION=$(node -p "require('./package.json').version")
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2459641Z [36;1mVERSION=$(node -p "require('./package.json').version")[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2459998Z [36;1mPR_NUMBER="44"[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2460308Z [36;1mPR_VERSION="${VERSION}-pr${PR_NUMBER}-$(date +%Y%m%d%H%M%S)"[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2461116Z [36;1mnpm version "$PR_VERSION" --no-git-tag-version --allow-same-version[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2485850Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.2486200Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.4491294Z v3.12.0-pr44-20260426032322
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.4576535Z ##[group]Run npx electron-vite build
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.4576843Z [36;1mnpx electron-vite build[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.4599484Z shell: /usr/bin/bash -e {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:22.4599727Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:23.1806903Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:23.2496717Z transforming...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.6234293Z [32m✓[39m 373 modules transformed.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8278791Z rendering chunks...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8339132Z [2mout/main/[22m[36mindex.js  [39m[1m[33m721.45 kB[39m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8340188Z [32m✓ built in 1.63s[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8380991Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8441294Z transforming...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8501126Z [32m✓[39m 1 modules transformed.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8541904Z rendering chunks...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8550072Z [2mout/preload/[22m[36mindex.js  [39m[1m[2m12.19 kB[22m[1m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8550997Z [32m✓ built in 16ms[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.8582388Z [36mvite v7.3.2 [32mbuilding client environment for production...[36m[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:24.9171308Z transforming...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:26.8279999Z [32m✓[39m 50 modules transformed.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:26.9955825Z rendering chunks...
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1094445Z [2m../../out/renderer/[22m[32mindex.html                   [39m[1m[2m    0.47 kB[22m[1m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1095856Z [2m../../out/renderer/[22m[2massets/[22m[32mfavicon-CSnylL_T.png  [39m[1m[2m   11.37 kB[22m[1m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1097210Z [2m../../out/renderer/[22m[2massets/[22m[35mindex-CIVFRQb3.css    [39m[1m[2m   58.65 kB[22m[1m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1098463Z [2m../../out/renderer/[22m[2massets/[22m[36mindex-BhDZM5R6.js     [39m[1m[33m  535.37 kB[39m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1099653Z [2m../../out/renderer/[22m[2massets/[22m[36mindex-D-tWLyH1.js     [39m[1m[33m3,518.17 kB[39m[22m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1100436Z [32m✓ built in 2.25s[39m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1606816Z ##[group]Run npx electron-builder --linux zip --publish never
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1607252Z [36;1mnpx electron-builder --linux zip --publish never[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1629938Z shell: /usr/bin/bash -e {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1630189Z env:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1630843Z   GH_TOKEN: ***
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.1631049Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.9341200Z   • electron-builder  version=26.8.1 os=6.17.0-1010-azure
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:27.9398627Z   • loaded configuration  file=package.json ("build" field)
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:28.2037068Z   • executing @electron/rebuild  electronVersion=41.2.0 arch=x64 buildFromSource=false workspaceRoot=/home/runner/work/anime-downloader/anime-downloader projectDir=./ appDir=./
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:28.2039860Z   • installing native dependencies  arch=x64
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:28.4260241Z   • completed installing native dependencies
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:28.4330206Z   • packaging       platform=linux arch=x64 electron=41.2.0 appOutDir=dist/linux-unpacked
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:28.4832715Z   • downloading     url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-linux-x64.zip size=117 MB parts=8
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:29.3091911Z   • downloaded      url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-linux-x64.zip duration=870ms
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:31.1118969Z   • searching for node modules  pm=npm searchDir=/home/runner/work/anime-downloader/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:31.5834679Z   • duplicate dependency references  dependencies=["debug@4.4.3","fs-extra@8.1.0","@types/node@25.6.0","@types/node@25.6.0","@types/responselike@1.0.3","@types/node@25.6.0","get-stream@5.2.0","responselike@2.0.1","debug@4.4.3","debug@4.4.3","once@1.4.0","yauzl@2.10.0","electron@41.2.0","combined-stream@1.0.8","mime-types@2.1.35","@babel/parser@7.29.2","@vue/compiler-core@3.5.32","@vue/compiler-dom@3.5.32","@vue/compiler-dom@3.5.32","@vue/reactivity@3.5.32","@vue/compiler-ssr@3.5.32","vue@3.5.32"]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:23:35.2863841Z   • building        target=zip arch=x64 file=dist/Anime-DL-3.12.0-pr44-20260426032322-x64.zip
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:34.7743956Z ##[group]Run mkdir -p dist/extracted
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:34.7744281Z [36;1mmkdir -p dist/extracted[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:34.7744627Z [36;1mfor f in dist/*.zip; do unzip -q "$f" -d dist/extracted/; done[0m
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:34.7768422Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:34.7768737Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6503928Z ##[group]Run actions/upload-artifact@v4
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6504206Z with:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6504397Z   name: pr-44-111-build-linux
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6504635Z   path: dist/extracted/
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6505027Z   if-no-files-found: ignore
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6505242Z   retention-days: 3
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6506275Z   compression-level: 6
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6506487Z   overwrite: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6506684Z   include-hidden-files: false
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.6506908Z ##[endgroup]
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.8791833Z With the provided path, there will be 74 files uploaded
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.8808933Z Artifact name is valid!
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.8809357Z Root directory input is valid!
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:37.9923018Z Beginning upload of artifact content to blob storage
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:39.0263546Z Uploaded bytes 8388608
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:39.5934121Z Uploaded bytes 16777216
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:40.2148338Z Uploaded bytes 25165824
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:40.8762816Z Uploaded bytes 33554432
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:41.5649524Z Uploaded bytes 41943040
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:42.1496668Z Uploaded bytes 50331648
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:42.7596937Z Uploaded bytes 58720256
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:43.4033836Z Uploaded bytes 67108864
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:44.0776918Z Uploaded bytes 75497472
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:44.7316811Z Uploaded bytes 83886080
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:45.6451831Z Uploaded bytes 92274688
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:46.4140031Z Uploaded bytes 100663296
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:47.4402232Z Uploaded bytes 109051904
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:48.4799252Z Uploaded bytes 117440512
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.4523959Z Uploaded bytes 125829120
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.8015403Z Uploaded bytes 134217728
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.8243491Z Uploaded bytes 135162291
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.8383347Z Finished uploading artifact content to blob storage!
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.8386146Z SHA256 digest of uploaded artifact zip is c0c6be5312c46c1f6d3541fadb165ccda1f5f4c1cb9b92554d4c36e309ae2aab
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.8387885Z Finalizing artifact upload
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.9728022Z Artifact pr-44-111-build-linux.zip successfully finalized. Artifact ID 6644526306
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.9729107Z Artifact pr-44-111-build-linux has been successfully uploaded! Final size is 135162291 bytes. Artifact ID is 6644526306
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.9735231Z Artifact download URL: https://github.com/mikkerlo/anime-downloader/actions/runs/24947183210/artifacts/6644526306
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:49.9902383Z Post job cleanup.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.1453760Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea, not saving cache.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.1570409Z Post job cleanup.
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2393311Z [command]/usr/bin/git version
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2431355Z git version 2.53.0
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2468244Z Temporarily overriding HOME='/home/runner/work/_temp/65b7e80a-760c-483d-8b7e-1909ea1639ce' before making global git config changes
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2469106Z Adding repository directory to the temporary git global config as a safe directory
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2474530Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/anime-downloader/anime-downloader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2511897Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2545326Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2779037Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2803558Z http.https://github.com/.extraheader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2815745Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.2849541Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.3109539Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.3143443Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.3565938Z Cleaning up orphan processes
+build (ubuntu-latest, linux, --linux zip)	UNKNOWN STEP	2026-04-26T03:24:50.3843145Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/setup-node@v4, actions/upload-artifact@v4. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	﻿2026-04-26T03:23:03.6489470Z Current runner version: '2.333.1'
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6505170Z ##[group]Runner Image Provisioner
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6505640Z Hosted Compute Agent
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6505970Z Version: 20260415.520
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6506360Z Commit: af089020f5f67b61ccc91db6c07980876c02bf7b
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6506830Z Build Date: 2026-04-15T18:07:08Z
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6507270Z Worker ID: {f02ffab4-b131-40bc-858c-6e51523a69f2}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6507690Z Azure Region: westus
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6508020Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6508880Z ##[group]Operating System
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6509230Z macOS
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6509520Z 15.7.4
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6509820Z 24G517
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6510090Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6510390Z ##[group]Runner Image
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6510710Z Image: macos-15-arm64
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6511020Z Version: 20260421.0007.1
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6511790Z Included Software: https://github.com/actions/runner-images/blob/macos-15-arm64/20260421.0007/images/macos/macos-15-arm64-Readme.md
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6512780Z Image Release: https://github.com/actions/runner-images/releases/tag/macos-15-arm64%2F20260421.0007
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6513380Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6514060Z ##[group]GITHUB_TOKEN Permissions
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6515100Z Actions: read
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6515440Z Contents: read
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6515770Z Metadata: read
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6516110Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6517670Z Secret source: Actions
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6518100Z Prepare workflow directory
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6746740Z Prepare all required actions
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.6777860Z Getting action download info
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:03.8551070Z Download action repository 'actions/checkout@v5' (SHA:93cb6efe18208431cddfb8368fd83d5badbf9bfd)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.0620360Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.2150940Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.3856340Z Complete job name: build (macos-latest, mac, --mac zip)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4192150Z ##[group]Run actions/checkout@v5
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4192650Z with:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4192930Z   repository: mikkerlo/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4193360Z   token: ***
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4193610Z   ssh-strict: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4206130Z   ssh-user: git
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4206410Z   persist-credentials: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4206710Z   clean: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4206980Z   sparse-checkout-cone-mode: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4207280Z   fetch-depth: 1
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4207530Z   fetch-tags: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4207800Z   show-progress: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4208120Z   lfs: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4208370Z   submodules: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4208640Z   set-safe-directory: true
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.4209060Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.7251750Z Syncing repository: mikkerlo/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.7253080Z ##[group]Getting Git version info
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.7253940Z Working directory is '/Users/runner/work/anime-downloader/anime-downloader'
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.7254980Z [command]/opt/homebrew/bin/git version
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8179860Z git version 2.54.0
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8182900Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8189210Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/91cc1f50-9218-410c-93c2-ae838c6a97a0/.gitconfig'
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8191250Z Temporarily overriding HOME='/Users/runner/work/_temp/91cc1f50-9218-410c-93c2-ae838c6a97a0' before making global git config changes
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8192650Z Adding repository directory to the temporary git global config as a safe directory
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8193750Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/anime-downloader/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8195940Z Deleting the contents of '/Users/runner/work/anime-downloader/anime-downloader'
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8197130Z ##[group]Initializing the repository
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8198480Z [command]/opt/homebrew/bin/git init /Users/runner/work/anime-downloader/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8288760Z hint: Using 'master' as the name for the initial branch. This default branch name
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8292870Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8294470Z hint: to use in all of your new repositories, which will suppress this warning,
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8295190Z hint: call:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8295610Z hint:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8296060Z hint: 	git config --global init.defaultBranch <name>
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8296730Z hint:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8297260Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8298070Z hint: 'development'. The just-created branch can be renamed via this command:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8298710Z hint:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8299060Z hint: 	git branch -m <name>
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8299490Z hint:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8300050Z hint: Disable this message with "git config set advice.defaultBranchName false"
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8300990Z Initialized empty Git repository in /Users/runner/work/anime-downloader/anime-downloader/.git/
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8302560Z [command]/opt/homebrew/bin/git remote add origin https://github.com/mikkerlo/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8357340Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8357990Z ##[group]Disabling automatic garbage collection
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8359510Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8410990Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8411530Z ##[group]Setting up auth
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8413610Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.8468020Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.9243670Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.9308830Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:04.9961990Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:05.0111000Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:05.1283410Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:05.1285300Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:05.1285960Z ##[group]Fetching the repository
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:05.1287060Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +02d43897e169c35969419e5667a69db38c61e2e8:refs/remotes/pull/44/merge
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3723730Z From https://github.com/mikkerlo/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3728180Z  * [new ref]         02d43897e169c35969419e5667a69db38c61e2e8 -> pull/44/merge
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3799530Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3800300Z ##[group]Determining the checkout info
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3800960Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3801610Z [command]/opt/homebrew/bin/git sparse-checkout disable
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3864210Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3915280Z ##[group]Checking out the ref
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.3917510Z [command]/opt/homebrew/bin/git checkout --progress --force refs/remotes/pull/44/merge
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4300780Z HEAD is now at 02d4389 Merge 9a7bf1ff2b738d800fae6432302636055b370f37 into 6f790509035cdb81be5d2038a3b68132f581c095
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4415580Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4419600Z [command]/opt/homebrew/bin/git log -1 --format=%H
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4446040Z 02d43897e169c35969419e5667a69db38c61e2e8
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4650320Z ##[group]Run actions/setup-node@v4
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4650830Z with:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4651140Z   node-version: 20
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4651460Z   cache: npm
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4651770Z   always-auth: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4652130Z   check-latest: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4652650Z   token: ***
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.4652950Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.7329660Z Found in cache @ /Users/runner/hostedtoolcache/node/20.20.2/arm64
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:06.7337300Z ##[group]Environment details
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.2438170Z node: v20.20.2
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.2539300Z npm: 10.8.2
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.2540180Z yarn: 1.22.22
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.2541090Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.2541440Z [command]/Users/runner/hostedtoolcache/node/20.20.2/arm64/bin/npm config get cache
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.3631700Z /Users/runner/.npm
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:07.4586730Z Cache hit for: node-cache-macOS-arm64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.4594590Z Received 130146083 of 130146083 (100.0%), 131.1 MBs/sec
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.4598410Z Cache Size: ~124 MB (130146083 B)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.4680700Z [command]/opt/homebrew/bin/gtar -xf /Users/runner/work/_temp/7dccddcc-57ae-4356-8823-14db27c2708b/cache.tzst -P -C /Users/runner/work/anime-downloader/anime-downloader --delay-directory-restore --use-compress-program unzstd
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9058170Z Cache restored successfully
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9105220Z Cache restored from key: node-cache-macOS-arm64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9296690Z ##[group]Run npm ci
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9297020Z [36;1mnpm ci[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9344680Z shell: /bin/bash -e {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:08.9344950Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3485420Z npm warn EBADENGINE Unsupported engine {
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3487480Z npm warn EBADENGINE   package: '@electron/rebuild@4.0.3',
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3488110Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3488680Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3489090Z npm warn EBADENGINE }
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3495520Z npm warn EBADENGINE Unsupported engine {
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3496230Z npm warn EBADENGINE   package: 'node-abi@4.28.0',
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3496980Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3497500Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:09.3497920Z npm warn EBADENGINE }
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.1163560Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.1403370Z npm warn deprecated rimraf@2.6.3: Rimraf versions prior to v4 are no longer supported
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.1516160Z npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.1639440Z npm warn deprecated har-validator@5.1.5: this library is no longer supported
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.2103370Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.3654320Z npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.3779840Z npm warn deprecated uuid@3.4.0: Please upgrade  to version 7 or higher.  Older versions may use Math.random() in certain circumstances, which is known to be problematic.  See https://v8.dev/blog/math-random for details.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.4542110Z npm warn deprecated request@2.88.2: request has been deprecated, see https://github.com/request/request/issues/3142
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:11.9446520Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:12.5973090Z npm warn deprecated fluent-ffmpeg@2.1.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1259440Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1260330Z added 552 packages, and audited 553 packages in 7s
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1345160Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1361720Z 82 packages are looking for funding
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1365190Z   run `npm fund` for details
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1365500Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1368320Z 8 vulnerabilities (5 moderate, 1 high, 2 critical)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1368720Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1369050Z To address issues that do not require attention, run:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1369520Z   npm audit fix
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1372700Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1373090Z Some issues need review, and may require choosing
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1373550Z a different dependency.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1391400Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1391670Z Run `npm audit` for details.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1547350Z ##[group]Run npm run typecheck
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1547730Z [36;1mnpm run typecheck[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1633970Z shell: /bin/bash -e {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.1634210Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.3461130Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.3461640Z > anime-dl-app@3.12.0 typecheck
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.3462120Z > npm run typecheck:node && npm run typecheck:web
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.3462480Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.4632260Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.4729220Z > anime-dl-app@3.12.0 typecheck:node
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.4747540Z > tsc --noEmit -p tsconfig.node.json --composite false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:16.4755150Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:18.0486820Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:18.0587780Z > anime-dl-app@3.12.0 typecheck:web
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:18.0667350Z > vue-tsc --noEmit -p tsconfig.web.json --composite false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:18.0667730Z 
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0424890Z ##[group]Run VERSION=$(node -p "require('./package.json').version")
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0425320Z [36;1mVERSION=$(node -p "require('./package.json').version")[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0427060Z [36;1mPR_NUMBER="44"[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0427370Z [36;1mPR_VERSION="${VERSION}-pr${PR_NUMBER}-$(date +%Y%m%d%H%M%S)"[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0427760Z [36;1mnpm version "$PR_VERSION" --no-git-tag-version --allow-same-version[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0463420Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.0463700Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.2205720Z v3.12.0-pr44-20260426032320
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.2258630Z ##[group]Run npx electron-vite build
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.2258890Z [36;1mnpx electron-vite build[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.2289100Z shell: /bin/bash -e {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.2289260Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.8074420Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:20.8583520Z transforming...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.5995110Z [32m✓[39m 373 modules transformed.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7198030Z rendering chunks...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7299740Z [2mout/main/[22m[36mindex.js  [39m[1m[33m721.45 kB[39m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7399930Z [32m✓ built in 899ms[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7501620Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7566850Z transforming...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7603310Z [32m✓[39m 1 modules transformed.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7607780Z rendering chunks...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7608510Z [2mout/preload/[22m[36mindex.js  [39m[1m[2m12.19 kB[22m[1m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7609030Z [32m✓ built in 11ms[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7609550Z [36mvite v7.3.2 [32mbuilding client environment for production...[36m[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:21.7769880Z transforming...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:22.8773010Z [32m✓[39m 50 modules transformed.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:22.9842910Z rendering chunks...
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0570200Z [2m../../out/renderer/[22m[32mindex.html                   [39m[1m[2m    0.47 kB[22m[1m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0577870Z [2m../../out/renderer/[22m[2massets/[22m[32mfavicon-CSnylL_T.png  [39m[1m[2m   11.37 kB[22m[1m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0578600Z [2m../../out/renderer/[22m[2massets/[22m[35mindex-CIVFRQb3.css    [39m[1m[2m   58.65 kB[22m[1m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0579370Z [2m../../out/renderer/[22m[2massets/[22m[36mindex-BhDZM5R6.js     [39m[1m[33m  535.37 kB[39m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0580080Z [2m../../out/renderer/[22m[2massets/[22m[36mindex-D-tWLyH1.js     [39m[1m[33m3,518.17 kB[39m[22m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0580530Z [32m✓ built in 1.32s[39m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0751020Z ##[group]Run npx electron-builder --mac zip --publish never
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0751330Z [36;1mnpx electron-builder --mac zip --publish never[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0779730Z shell: /bin/bash -e {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0779890Z env:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0780240Z   GH_TOKEN: ***
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.0780380Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.7414380Z   • electron-builder  version=26.8.1 os=24.6.0
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.7442310Z   • loaded configuration  file=package.json ("build" field)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.9304980Z   • executing @electron/rebuild  electronVersion=41.2.0 arch=arm64 buildFromSource=false workspaceRoot=/Users/runner/work/anime-downloader/anime-downloader projectDir=./ appDir=./
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:23.9398720Z   • installing native dependencies  arch=arm64
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:24.1218410Z   • completed installing native dependencies
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:24.1269800Z   • packaging       platform=darwin arch=arm64 electron=41.2.0 appOutDir=dist/mac-arm64
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:24.4563120Z   • downloading     url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-darwin-arm64.zip size=116 MB parts=6
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:24.9269750Z   • downloaded      url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-darwin-arm64.zip duration=742ms
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:26.2365540Z   • searching for node modules  pm=npm searchDir=/Users/runner/work/anime-downloader/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:26.5914590Z   • duplicate dependency references  dependencies=["debug@4.4.3","fs-extra@8.1.0","@types/node@25.6.0","@types/node@25.6.0","@types/responselike@1.0.3","@types/node@25.6.0","get-stream@5.2.0","responselike@2.0.1","debug@4.4.3","debug@4.4.3","once@1.4.0","yauzl@2.10.0","electron@41.2.0","combined-stream@1.0.8","mime-types@2.1.35","@babel/parser@7.29.2","@vue/compiler-core@3.5.32","@vue/compiler-dom@3.5.32","@vue/compiler-dom@3.5.32","@vue/reactivity@3.5.32","@vue/compiler-ssr@3.5.32","vue@3.5.32"]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:28.8528250Z   • Current build is a part of pull request, code signing will be skipped.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:28.8545990Z Set env CSC_FOR_PULL_REQUEST to true to force code signing.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:28.8549370Z There are serious security concerns with CSC_FOR_PULL_REQUEST=true (see the  CircleCI documentation (https://circleci.com/docs/1.0/fork-pr-builds/) for details)
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:28.8551260Z If you have SSH keys, sensitive env vars or AWS credentials stored in your project settings and untrusted forks can make pull requests against your repo, then this option isn't for you.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:23:28.8557410Z   • building        target=macOS zip arch=arm64 file=dist/Anime-DL-3.12.0-pr44-20260426032320-arm64.zip
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.0670200Z   • building block map  blockMapFile=dist/Anime-DL-3.12.0-pr44-20260426032320-arm64.zip.blockmap
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.8839290Z ##[group]Run mkdir -p dist/extracted
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.8839680Z [36;1mmkdir -p dist/extracted[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.8840030Z [36;1mfor f in dist/*.zip; do unzip -q "$f" -d dist/extracted/; done[0m
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.9055630Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:06.9056180Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5462230Z ##[group]Run actions/upload-artifact@v4
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5462690Z with:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5462900Z   name: pr-44-111-build-mac
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5463120Z   path: dist/extracted/
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5467730Z   if-no-files-found: ignore
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5468030Z   retention-days: 3
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5468250Z   compression-level: 6
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5468430Z   overwrite: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5468580Z   include-hidden-files: false
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:09.5468910Z ##[endgroup]
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:10.3462310Z With the provided path, there will be 741 files uploaded
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:10.3462720Z Artifact name is valid!
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:10.3462930Z Root directory input is valid!
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:10.3465990Z Beginning upload of artifact content to blob storage
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:10.7398770Z Uploaded bytes 8388608
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:11.1682470Z Uploaded bytes 16777216
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:11.5547450Z Uploaded bytes 25165824
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:11.9831440Z Uploaded bytes 33554432
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:12.3935120Z Uploaded bytes 41943040
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:12.8251350Z Uploaded bytes 50331648
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:13.2153080Z Uploaded bytes 58720256
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:13.6574000Z Uploaded bytes 67108864
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:14.1769230Z Uploaded bytes 75497472
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:14.7522640Z Uploaded bytes 83886080
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:15.1866370Z Uploaded bytes 92274688
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:15.7468370Z Uploaded bytes 100663296
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:16.2296520Z Uploaded bytes 109051904
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:16.7647780Z Uploaded bytes 117440512
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:17.1566810Z Uploaded bytes 125829120
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:17.5429810Z Uploaded bytes 134217728
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:18.0068900Z Uploaded bytes 142606336
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:18.4124690Z Uploaded bytes 150994944
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:18.8221450Z Uploaded bytes 159383552
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:19.2784540Z Uploaded bytes 167772160
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:19.7073120Z Uploaded bytes 176160768
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:20.1456800Z Uploaded bytes 184549376
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:20.6409430Z Uploaded bytes 192937984
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:21.1204370Z Uploaded bytes 201326592
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:21.6390900Z Uploaded bytes 209715200
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:22.2481540Z Uploaded bytes 218103808
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:22.6611850Z Uploaded bytes 226492416
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:23.1858610Z Uploaded bytes 234881024
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:23.5891760Z Uploaded bytes 243269632
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:23.9233330Z Uploaded bytes 251658240
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:24.3216290Z Uploaded bytes 260046848
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:24.7212740Z Uploaded bytes 268435456
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:25.1492810Z Uploaded bytes 276824064
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:25.6238090Z Uploaded bytes 285212672
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:26.0516500Z Uploaded bytes 293601280
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:26.4889180Z Uploaded bytes 301989888
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:27.0537220Z Uploaded bytes 310378496
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:27.5231290Z Uploaded bytes 318767104
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:28.0687420Z Uploaded bytes 327155712
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:28.6567050Z Uploaded bytes 335544320
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:29.1026240Z Uploaded bytes 343932928
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:29.7957640Z Uploaded bytes 352321536
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:30.5163230Z Uploaded bytes 360710144
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:30.9870080Z Uploaded bytes 367137839
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:30.9970410Z Finished uploading artifact content to blob storage!
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.0072060Z SHA256 digest of uploaded artifact zip is 412d3a58b642a0439e86c526a0f6d110a1fd922a4d5bf8dc6633fafae93260e4
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.0172240Z Finalizing artifact upload
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.1255260Z Artifact pr-44-111-build-mac.zip successfully finalized. Artifact ID 6644524767
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.1256220Z Artifact pr-44-111-build-mac has been successfully uploaded! Final size is 367137839 bytes. Artifact ID is 6644524767
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.1263490Z Artifact download URL: https://github.com/mikkerlo/anime-downloader/actions/runs/24947183210/artifacts/6644524767
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.1406180Z Post job cleanup.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.2905040Z Cache hit occurred on the primary key node-cache-macOS-arm64-npm-ffcad9be585020c8d61d3cde6556100025ca48f1737dc04408c99388739b1dea, not saving cache.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.2997870Z Post job cleanup.
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5677430Z [command]/opt/homebrew/bin/git version
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5885060Z git version 2.54.0
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5940730Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/689c5c51-17f0-4029-b5ab-df6acea22efc/.gitconfig'
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5945880Z Temporarily overriding HOME='/Users/runner/work/_temp/689c5c51-17f0-4029-b5ab-df6acea22efc' before making global git config changes
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5946690Z Adding repository directory to the temporary git global config as a safe directory
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.5947490Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/anime-downloader/anime-downloader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6016710Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6100010Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6816110Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6859390Z http.https://github.com/.extraheader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6864720Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.6920900Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.7530450Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.7574780Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:31.8452360Z Cleaning up orphan processes
+build (macos-latest, mac, --mac zip)	UNKNOWN STEP	2026-04-26T03:24:32.6759610Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/setup-node@v4, actions/upload-artifact@v4. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+build (windows-latest, win, --win zip)	UNKNOWN STEP	﻿2026-04-26T03:23:04.2548113Z Current runner version: '2.333.1'
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2583163Z ##[group]Runner Image Provisioner
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2584361Z Hosted Compute Agent
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2585198Z Version: 20260213.493
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2586186Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2587277Z Build Date: 2026-02-13T00:28:41Z
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2588317Z Worker ID: {ace1ca64-484a-4afb-857f-6a4e4b2e6a0c}
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2589379Z Azure Region: eastus
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2590637Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2592884Z ##[group]Operating System
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2593818Z Microsoft Windows Server 2025
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2594808Z 10.0.26100
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2595490Z Datacenter
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2596334Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2597083Z ##[group]Runner Image
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2597912Z Image: windows-2025
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2598714Z Version: 20260413.84.1
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2601069Z Included Software: https://github.com/actions/runner-images/blob/win25/20260413.84/images/windows/Windows2025-Readme.md
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2603682Z Image Release: https://github.com/actions/runner-images/releases/tag/win25%2F20260413.84
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2605232Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2607084Z ##[group]GITHUB_TOKEN Permissions
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2609599Z Actions: read
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2610818Z Contents: read
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2611609Z Metadata: read
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2612378Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2615157Z Secret source: Actions
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.2616137Z Prepare workflow directory
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.3075962Z Prepare all required actions
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.3114256Z Getting action download info
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.5643489Z Download action repository 'actions/checkout@v5' (SHA:93cb6efe18208431cddfb8368fd83d5badbf9bfd)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.6936366Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:04.8535108Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.2306907Z Complete job name: build (windows-latest, win, --win zip)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4527549Z ##[group]Run actions/checkout@v5
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4528499Z with:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4528881Z   repository: mikkerlo/anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4529552Z   token: ***
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4529899Z   ssh-strict: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4530254Z   ssh-user: git
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4530610Z   persist-credentials: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4531012Z   clean: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4531374Z   sparse-checkout-cone-mode: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4531811Z   fetch-depth: 1
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4532151Z   fetch-tags: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4532510Z   show-progress: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4532882Z   lfs: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4533219Z   submodules: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4533590Z   set-safe-directory: true
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.4534188Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.6046322Z Syncing repository: mikkerlo/anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.6048618Z ##[group]Getting Git version info
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.6049374Z Working directory is 'D:\a\anime-downloader\anime-downloader'
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:05.6839893Z [command]"C:\Program Files\Git\bin\git.exe" version
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.3687931Z git version 2.53.0.windows.2
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.3740390Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.3760574Z Temporarily overriding HOME='D:\a\_temp\7d51e433-15e4-4750-8a25-825e5607f59a' before making global git config changes
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.3762939Z Adding repository directory to the temporary git global config as a safe directory
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.3771369Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\anime-downloader\anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.4812457Z Deleting the contents of 'D:\a\anime-downloader\anime-downloader'
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.4819474Z ##[group]Initializing the repository
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.4828972Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\anime-downloader\anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.6554238Z Initialized empty Git repository in D:/a/anime-downloader/anime-downloader/.git/
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.6600367Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/mikkerlo/anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7563918Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7564964Z ##[group]Disabling automatic garbage collection
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7572679Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7873650Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7875379Z ##[group]Setting up auth
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.7885430Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:06.8173122Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:09.1593305Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:09.1905003Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:09.7334935Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:09.7628332Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:10.2686272Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:10.3015559Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:10.3016409Z ##[group]Fetching the repository
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:10.3032432Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +02d43897e169c35969419e5667a69db38c61e2e8:refs/remotes/pull/44/merge
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4377597Z From https://github.com/mikkerlo/anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4378544Z  * [new ref]         02d43897e169c35969419e5667a69db38c61e2e8 -> pull/44/merge
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4639531Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4640152Z ##[group]Determining the checkout info
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4643331Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4655434Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.4983088Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.5284219Z ##[group]Checking out the ref
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.5297875Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/44/merge
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6416916Z Note: switching to 'refs/remotes/pull/44/merge'.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6417622Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6418075Z You are in 'detached HEAD' state. You can look around, make experimental
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6418837Z changes and commit them, and you can discard any commits you make in this
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6419619Z state without impacting any branches by switching back to a branch.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6420082Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6420367Z If you want to create a new branch to retain commits you create, you may
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6421102Z do so (now or later) by using -c with the switch command. Example:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6421550Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6421727Z   git switch -c <new-branch-name>
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6422012Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6422143Z Or undo this operation with:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6422394Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6422501Z   git switch -
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6422685Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6423019Z Turn off this advice by setting config variable advice.detachedHead to false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6423558Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6424292Z HEAD is now at 02d4389 Merge 9a7bf1ff2b738d800fae6432302636055b370f37 into 6f790509035cdb81be5d2038a3b68132f581c095
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6482913Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.6809499Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7066310Z 02d43897e169c35969419e5667a69db38c61e2e8
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7476690Z ##[group]Run actions/setup-node@v4
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7476985Z with:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7477146Z   node-version: 20
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7477319Z   cache: npm
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7477474Z   always-auth: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7477681Z   check-latest: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7478058Z   token: ***
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:11.7538046Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:12.0028799Z Found in cache @ C:\hostedtoolcache\windows\node\20.20.2\x64
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:12.0039953Z ##[group]Environment details
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:19.7699508Z node: v20.20.2
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:19.7699855Z npm: 10.8.2
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:19.7700103Z yarn: 1.22.22
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:19.7701521Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:19.8680159Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\20.20.2\x64\npm.cmd config get cache"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:21.0430612Z C:\npm\cache
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:21.5356426Z Cache hit for: node-cache-Windows-x64-npm-d6cb696252a52cdff4a414c11ab93c91db8462871b4412e42ca49bf2d294e86f
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:22.5188024Z Received 131776444 of 131776444 (100.0%), 136.5 MBs/sec
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:22.5192943Z Cache Size: ~126 MB (131776444 B)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:22.5280231Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/36131a47-1991-4d8f-9357-15d0be7b6b7a/cache.tzst -P -C D:/a/anime-downloader/anime-downloader --force-local --use-compress-program "zstd -d"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.5292300Z Cache restored successfully
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.5386837Z Cache restored from key: node-cache-Windows-x64-npm-d6cb696252a52cdff4a414c11ab93c91db8462871b4412e42ca49bf2d294e86f
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.5675675Z ##[group]Run npm ci
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.5675967Z [36;1mnpm ci[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.7858185Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:25.7858577Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7570962Z npm warn EBADENGINE Unsupported engine {
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7571790Z npm warn EBADENGINE   package: '@electron/rebuild@4.0.3',
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7572536Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7573324Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7573935Z npm warn EBADENGINE }
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7598044Z npm warn EBADENGINE Unsupported engine {
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7598701Z npm warn EBADENGINE   package: 'node-abi@4.28.0',
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7599386Z npm warn EBADENGINE   required: { node: '>=22.12.0' },
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7600174Z npm warn EBADENGINE   current: { node: 'v20.20.2', npm: '10.8.2' }
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:38.7600786Z npm warn EBADENGINE }
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:42.5499266Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:42.6552125Z npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:42.7104224Z npm warn deprecated rimraf@2.6.3: Rimraf versions prior to v4 are no longer supported
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:42.8206773Z npm warn deprecated har-validator@5.1.5: this library is no longer supported
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:42.8595275Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:43.5582584Z npm warn deprecated boolean@3.2.0: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:43.5885641Z npm warn deprecated uuid@3.4.0: Please upgrade  to version 7 or higher.  Older versions may use Math.random() in certain circumstances, which is known to be problematic.  See https://v8.dev/blog/math-random for details.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:43.6183447Z npm warn deprecated request@2.88.2: request has been deprecated, see https://github.com/request/request/issues/3142
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:44.7280733Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:45.7391248Z npm warn deprecated fluent-ffmpeg@2.1.3: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6620057Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6620806Z added 541 packages, and audited 542 packages in 19s
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6621266Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6621490Z 81 packages are looking for funding
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6621918Z   run `npm fund` for details
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6736566Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6737398Z 8 vulnerabilities (5 moderate, 1 high, 2 critical)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6737998Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6742327Z To address issues that do not require attention, run:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6743069Z   npm audit fix
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6743251Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6743578Z Some issues need review, and may require choosing
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6744117Z a different dependency.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6744356Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:53.6744543Z Run `npm audit` for details.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:54.9851955Z ##[group]Run npm run typecheck
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:54.9852281Z [36;1mnpm run typecheck[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:54.9919939Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:54.9920278Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:55.6590530Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:55.6591271Z > anime-dl-app@3.12.0 typecheck
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:55.6591710Z > npm run typecheck:node && npm run typecheck:web
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:55.6591949Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:56.0863306Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:56.0863946Z > anime-dl-app@3.12.0 typecheck:node
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:56.0864621Z > tsc --noEmit -p tsconfig.node.json --composite false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:56.0865028Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:59.6130231Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:59.6131099Z > anime-dl-app@3.12.0 typecheck:web
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:59.6131799Z > vue-tsc --noEmit -p tsconfig.web.json --composite false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:23:59.6132210Z 
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5393060Z ##[group]Run VERSION=$(node -p "require('./package.json').version")
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5393871Z [36;1mVERSION=$(node -p "require('./package.json').version")[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5394408Z [36;1mPR_NUMBER="44"[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5394876Z [36;1mPR_VERSION="${VERSION}-pr${PR_NUMBER}-$(date +%Y%m%d%H%M%S)"[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5395625Z [36;1mnpm version "$PR_VERSION" --no-git-tag-version --allow-same-version[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5410803Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:04.5411208Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:05.5143926Z v3.12.0-pr44-20260426032404
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:05.5472406Z ##[group]Run npx electron-vite build
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:05.5472774Z [36;1mnpx electron-vite build[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:05.5537811Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:05.5538451Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:08.8484910Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:08.9824764Z transforming...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.2365515Z [32m✓[39m 373 modules transformed.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.4971643Z rendering chunks...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5548391Z [2mout/main/[22m[36mindex.js  [39m[1m[33m721.45 kB[39m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5551421Z [32m✓ built in 2.67s[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5609898Z [36mvite v7.3.2 [32mbuilding ssr environment for production...[36m[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5695523Z transforming...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5802155Z [32m✓[39m 1 modules transformed.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5870543Z rendering chunks...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5885102Z [2mout/preload/[22m[36mindex.js  [39m[1m[2m12.19 kB[22m[1m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5887015Z [32m✓ built in 28ms[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.5946243Z [36mvite v7.3.2 [32mbuilding client environment for production...[36m[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:11.6784961Z transforming...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:13.9982976Z [32m✓[39m 50 modules transformed.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.2006744Z rendering chunks...
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3277668Z [2m../../out/renderer/[22m[32mindex.html                   [39m[1m[2m    0.49 kB[22m[1m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3279226Z [2m../../out/renderer/[22m[32massets/favicon-CSnylL_T.png  [39m[1m[2m   11.37 kB[22m[1m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3280564Z [2m../../out/renderer/[22m[35massets/index-C46FWVaN.css    [39m[1m[2m   60.44 kB[22m[1m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3281866Z [2m../../out/renderer/[22m[36massets/index-BSQpKtWI.js     [39m[1m[33m  535.37 kB[39m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3283375Z [2m../../out/renderer/[22m[36massets/index-COKfBzyA.js     [39m[1m[33m3,518.17 kB[39m[22m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.3284607Z [32m✓ built in 2.73s[39m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5049886Z ##[group]Run npx electron-builder --win zip --publish never
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5050349Z [36;1mnpx electron-builder --win zip --publish never[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5113602Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5113939Z env:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5114313Z   GH_TOKEN: ***
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:14.5114476Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:16.5132952Z   • electron-builder  version=26.8.1 os=10.0.26100
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:16.5227093Z   • loaded configuration  file=package.json ("build" field)
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:17.1028053Z   • executing @electron/rebuild  electronVersion=41.2.0 arch=x64 buildFromSource=false workspaceRoot=D:\a\anime-downloader\anime-downloader projectDir=./ appDir=./
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:17.1030100Z   • installing native dependencies  arch=x64
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:17.6386512Z   • completed installing native dependencies
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:17.6490644Z   • packaging       platform=win32 arch=x64 electron=41.2.0 appOutDir=dist\win-unpacked
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:17.7703374Z   • downloading     url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-win32-x64.zip size=142 MB parts=8
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:18.0264526Z   • downloaded      url=https://github.com/electron/electron/releases/download/v41.2.0/electron-v41.2.0-win32-x64.zip duration=352ms
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:20.1395022Z   • searching for node modules  pm=npm searchDir=D:\a\anime-downloader\anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:21.2638236Z   • duplicate dependency references  dependencies=["debug@4.4.3","fs-extra@8.1.0","@types/node@25.6.0","@types/node@25.6.0","@types/responselike@1.0.3","@types/node@25.6.0","get-stream@5.2.0","responselike@2.0.1","debug@4.4.3","debug@4.4.3","once@1.4.0","yauzl@2.10.0","electron@41.2.0","combined-stream@1.0.8","mime-types@2.1.35","@babel/parser@7.29.2","@vue/compiler-core@3.5.32","@vue/compiler-dom@3.5.32","@vue/compiler-dom@3.5.32","@vue/reactivity@3.5.32","@vue/compiler-ssr@3.5.32","vue@3.5.32"]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:30.1167424Z   • updating asar integrity executable resource  executablePath=dist\win-unpacked\Anime DL.exe
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:30.3300564Z   • downloading     url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z size=5.6 MB parts=1
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:30.3765498Z   • downloaded      url=https://github.com/electron-userland/electron-builder-binaries/releases/download/winCodeSign-2.6.0/winCodeSign-2.6.0.7z duration=209ms
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:31.2437971Z   • signing with signtool.exe  path=dist\win-unpacked\Anime DL.exe
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:24:31.2486911Z   • building        target=zip arch=x64 file=dist\Anime-DL-3.12.0-pr44-20260426032404-x64.zip
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:33.5632414Z ##[group]Run mkdir -p dist/extracted
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:33.5632799Z [36;1mmkdir -p dist/extracted[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:33.5633131Z [36;1mfor f in dist/*.zip; do unzip -q "$f" -d dist/extracted/; done[0m
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:33.5647401Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:33.5647790Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2647001Z ##[group]Run actions/upload-artifact@v4
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2647308Z with:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2647483Z   name: pr-44-111-build-win
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2647696Z   path: dist/extracted/
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2647886Z   if-no-files-found: ignore
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2648087Z   retention-days: 3
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2648272Z   compression-level: 6
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2648444Z   overwrite: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2648624Z   include-hidden-files: false
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.2648832Z ##[endgroup]
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.6525281Z With the provided path, there will be 74 files uploaded
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.6531697Z Artifact name is valid!
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.6534846Z Root directory input is valid!
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:37.8051308Z Beginning upload of artifact content to blob storage
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:38.8223746Z Uploaded bytes 8388608
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:39.5835404Z Uploaded bytes 16777216
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:40.3030972Z Uploaded bytes 25165824
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:41.0165378Z Uploaded bytes 33554432
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:41.7204253Z Uploaded bytes 41943040
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:42.5470724Z Uploaded bytes 50331648
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:43.3796460Z Uploaded bytes 58720256
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:44.1804632Z Uploaded bytes 67108864
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:44.9280267Z Uploaded bytes 75497472
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:45.7890515Z Uploaded bytes 83886080
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:46.4780038Z Uploaded bytes 92274688
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:47.1522942Z Uploaded bytes 100663296
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:47.8395038Z Uploaded bytes 109051904
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:48.5533766Z Uploaded bytes 117440512
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:49.5055135Z Uploaded bytes 125829120
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:50.4972810Z Uploaded bytes 134217728
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:51.5873759Z Uploaded bytes 142606336
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:52.5522804Z Uploaded bytes 150994944
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:52.9308228Z Uploaded bytes 159383552
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.1336644Z Uploaded bytes 161937710
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.1499434Z Finished uploading artifact content to blob storage!
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.1503679Z SHA256 digest of uploaded artifact zip is 093b525190a34e061e8b07f9a85ee4e8186bd405267f0a481854a74f13033cdb
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.1506450Z Finalizing artifact upload
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.2789334Z Artifact pr-44-111-build-win.zip successfully finalized. Artifact ID 6644531724
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.2790453Z Artifact pr-44-111-build-win has been successfully uploaded! Final size is 161937710 bytes. Artifact ID is 6644531724
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.2803739Z Artifact download URL: https://github.com/mikkerlo/anime-downloader/actions/runs/24947183210/artifacts/6644531724
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.3109180Z Post job cleanup.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.5338413Z Cache hit occurred on the primary key node-cache-Windows-x64-npm-d6cb696252a52cdff4a414c11ab93c91db8462871b4412e42ca49bf2d294e86f, not saving cache.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.5595930Z Post job cleanup.
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.7461679Z [command]"C:\Program Files\Git\bin\git.exe" version
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.7810866Z git version 2.53.0.windows.2
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.7895195Z Temporarily overriding HOME='D:\a\_temp\47dd6234-8a74-432a-9940-d9662a984530' before making global git config changes
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.7896648Z Adding repository directory to the temporary git global config as a safe directory
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.7907485Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\anime-downloader\anime-downloader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.8306157Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:53.8614523Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:54.8215325Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:54.8468674Z http.https://github.com/.extraheader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:54.8509571Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:54.8805099Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:55.6772576Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:55.7059623Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:56.2551407Z Cleaning up orphan processes
+build (windows-latest, win, --win zip)	UNKNOWN STEP	2026-04-26T03:25:56.3161418Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/setup-node@v4, actions/upload-artifact@v4. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+comment-artifacts	UNKNOWN STEP	﻿2026-04-26T03:26:01.0661565Z Current runner version: '2.333.1'
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0697217Z ##[group]Runner Image Provisioner
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0698103Z Hosted Compute Agent
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0698618Z Version: 20260213.493
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0699372Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0700080Z Build Date: 2026-02-13T00:28:41Z
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0700745Z Worker ID: {2bbb609a-1133-49f7-8b3d-e2c3d35edeb2}
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0701381Z Azure Region: northcentralus
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0702469Z ##[endgroup]
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0704010Z ##[group]Operating System
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0704576Z Ubuntu
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0705145Z 24.04.4
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0705576Z LTS
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0706023Z ##[endgroup]
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0706548Z ##[group]Runner Image
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0707128Z Image: ubuntu-24.04
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0707602Z Version: 20260413.86.1
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0708903Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260413.86/images/ubuntu/Ubuntu2404-Readme.md
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0710323Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260413.86
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0711314Z ##[endgroup]
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0712738Z ##[group]GITHUB_TOKEN Permissions
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0715676Z Metadata: read
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0716280Z PullRequests: write
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0716824Z ##[endgroup]
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0719369Z Secret source: Actions
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.0720485Z Prepare workflow directory
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.1182519Z Prepare all required actions
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.1242259Z Getting action download info
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:01.4306240Z Download action repository 'marocchino/sticky-pull-request-comment@v2' (SHA:773744901bac0e8cbb5a0dc842800d45e9b2b405)
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.0355414Z Complete job name: comment-artifacts
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1161412Z ##[group]Run marocchino/sticky-pull-request-comment@v2
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1162655Z with:
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1163042Z   number: 44
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1163420Z   header: pr-artifacts
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1163913Z   recreate: true
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1166736Z   message: ### 📦 PR Build Artifacts are ready!
+comment-artifacts	UNKNOWN STEP	Portable zip builds (no installer, auto-updater disabled) — unzip and run.
+comment-artifacts	UNKNOWN STEP	
+comment-artifacts	UNKNOWN STEP	* 🍎 [macOS Build](https://nightly.link/mikkerlo/anime-downloader/actions/runs/24947183210/pr-44-111-build-mac.zip)
+comment-artifacts	UNKNOWN STEP	* 🪟 [Windows Build](https://nightly.link/mikkerlo/anime-downloader/actions/runs/24947183210/pr-44-111-build-win.zip)
+comment-artifacts	UNKNOWN STEP	* 🐧 [Linux Build](https://nightly.link/mikkerlo/anime-downloader/actions/runs/24947183210/pr-44-111-build-linux.zip)
+comment-artifacts	UNKNOWN STEP	
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1169607Z   append: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1169997Z   delete: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1170625Z   only_create: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1171113Z   only_update: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1171519Z   hide_details: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1172121Z   hide: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1172503Z   hide_and_recreate: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1172943Z   hide_classify: OUTDATED
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1173366Z   ignore_empty: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1173773Z   skip_unchanged: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1174207Z   follow_symbolic_links: false
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1174952Z   GITHUB_TOKEN: ***
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:02.1176027Z ##[endgroup]
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:03.7553236Z Cleaning up orphan processes
+comment-artifacts	UNKNOWN STEP	2026-04-26T03:26:03.7886027Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: marocchino/sticky-pull-request-comment@v2. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

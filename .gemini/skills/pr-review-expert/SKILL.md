@@ -11,9 +11,9 @@ Follow this workflow to perform high-quality code reviews for this project.
 
 1.  **Architecture First**: Always read `DESIGN.md` before starting a review. Ensure the PR doesn't break established patterns (e.g., IPC handlers, Vue 3 Composition API, storage modes).
 2.  **Track Progress**: Check `TODO.md` to see if the PR completes existing tasks or adds new ones. Ensure task status updates are included in the PR.
-3.  **Comprehensive Feedback**: Provide a mix of general praise, specific implementation observations, and actionable suggestions.
-4.  **Direct Action**: Prefer line-level code comments and suggestions over just general comments.
-5.  **Verified Approval**: Use explicit approval phrases like "LGTM after testing on Windows" or "LGTM after manual testing" to indicate thorough verification. ONLY use these phrases when you are ready to formally approve the PR.
+3.  **Comprehensive Feedback**: Provide specific implementation observations and actionable suggestions. Keep the feedback concise and reduce the amount of praise.
+4.  **Direct Action**: Prefer line-level code comments and suggestions over just general comments. Prefix minor issues or suggestions with "nit:".
+5.  **Verified Approval**: Use explicit approval phrases like "LGTM after testing on Windows" or "LGTM after manual testing" to indicate thorough verification ONLY if code changes that require testing were made. ONLY use these phrases when you are ready to formally approve the PR.
 
 ## Workflow
 
@@ -32,11 +32,11 @@ Follow this workflow to perform high-quality code reviews for this project.
 ### 3. Review Submission
 - Start with a summary of the PR's value.
 - Group observations into:
-    - **General Feedback**: Praise for the implementation and high-level wins.
-    - **Specific Observations**: Detailed breakdown of what works well.
-    - **Suggestions for Improvement**: Actionable fixes or future-proofing advice.
+    - **General Feedback**: High-level observations of the implementation. Avoid excessive praise.
+    - **Specific Observations**: Detailed breakdown of the changes.
+    - **Suggestions for Improvement**: Actionable fixes or future-proofing advice. Use "nit:" for minor issues.
 - Use `gh api` or `gh pr review` to post line-level comments.
 
 ### 4. Approval
 - If everything looks good (or only minor non-blocking fixes are needed), approve the PR.
-- **Mandatory Suffix for Approval**: ONLY if you are submitting a formal approval, append "LGTM after [manual/platform] testing" to the final review message. DO NOT use this suffix for standard comments or if blocking issues (like conflict markers) remain.
+- **Mandatory Suffix for Approval**: ONLY if you are submitting a formal approval for code changes that require testing, append "LGTM after [manual/platform] testing" to the final review message. If the changes do not require testing (e.g., docs), use a standard "LGTM". DO NOT use this suffix for standard comments or if blocking issues (like conflict markers) remain.

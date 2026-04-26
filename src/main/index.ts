@@ -968,7 +968,9 @@ function rememberAnimeMeta(detail: AnimeDetail): void {
     id: detail.id,
     title: detail.title,
     titles: detail.titles,
-    posterUrlSmall: detail.posterUrlSmall,
+    // Some smotret entries return only the full-size `posterUrl`; fall back
+    // to it so HomeView never has an empty thumbnail when one is available.
+    posterUrlSmall: detail.posterUrlSmall || detail.posterUrl,
     numberOfEpisodes: detail.numberOfEpisodes,
     type: detail.type,
     typeTitle: detail.typeTitle,
@@ -1326,7 +1328,21 @@ function registerIpcHandlers(): void {
     const unresolvedIds = Array.from(
       new Set(
         raw
-          .filter((r) => r.animeId && (!r.animeName || !r.posterUrl) && !localResolve(r.animeId))
+          .filter((r) => {
+            if (!r.animeId) return false
+            // recentAnimeMeta is the freshest source (set on every get-anime
+            // call). If we already have it, skip the fetch.
+            if (recent[String(r.animeId)]) return false
+            // No name → must fetch.
+            if (!r.animeName) return true
+            // Empty poster → must fetch.
+            if (!r.posterUrl) return true
+            // Poster is only the Shikimori fallback (which can be a 'missing'
+            // placeholder URL when smotret-anime's bulk lookup didn't return a
+            // poster). The detail endpoint usually does — so try.
+            if (r.shikiPosterFallback && r.posterUrl === r.shikiPosterFallback) return true
+            return false
+          })
           .map((r) => r.animeId)
       )
     )
@@ -1364,8 +1380,13 @@ function registerIpcHandlers(): void {
         if (!r.animeName) {
           r.animeName = meta.titles?.ru || meta.titles?.romaji || meta.title || r.shikiNameFallback || ''
         }
-        if (!r.posterUrl) {
-          r.posterUrl = meta.posterUrlSmall || meta.posterUrl || r.shikiPosterFallback || ''
+        // Always prefer a smotret-anime poster when we have one — it overrides
+        // the (potentially broken) Shikimori fallback.
+        const fetchedPoster = meta.posterUrlSmall || meta.posterUrl
+        if (fetchedPoster) {
+          r.posterUrl = fetchedPoster
+        } else if (!r.posterUrl) {
+          r.posterUrl = r.shikiPosterFallback || ''
         }
         if (r.episodeLabel.startsWith('Episode ')) {
           const ep = meta.episodes?.find((e) => e.episodeInt === r.episodeInt)

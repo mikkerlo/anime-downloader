@@ -8,18 +8,46 @@ const emit = defineEmits<{
 
 const entries = ref<ContinueWatchingEntry[]>([])
 const loading = ref(true)
+const failedPosters = ref(new Set<string>())
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function entryKey(e: ContinueWatchingEntry): string {
+  return `${e.kind}:${e.animeId}:${e.episodeInt}`
+}
+
+function showPoster(e: ContinueWatchingEntry): boolean {
+  return !!e.posterUrl && !failedPosters.value.has(entryKey(e))
+}
+
+function onPosterError(e: ContinueWatchingEntry): void {
+  failedPosters.value = new Set(failedPosters.value).add(entryKey(e))
+}
 
 async function refresh(): Promise<void> {
   try {
     entries.value = await window.api.homeGetContinueWatching()
+    failedPosters.value = new Set()
   } catch (err) {
     console.error('Failed to load continue-watching list:', err)
     entries.value = []
   } finally {
     loading.value = false
   }
+}
+
+async function manualRefresh(): Promise<void> {
+  loading.value = true
+  // Kick a Shikimori rates refresh — returns cached instantly and triggers a
+  // background fetch. When the fetch completes the `rates-refreshed` broadcast
+  // re-fires `refresh()` via our existing listener, picking up anything newly
+  // added on Shikimori.
+  try {
+    void window.api.shikimoriGetAnimeRates()
+  } catch (err) {
+    console.error('Failed to trigger Shikimori refresh:', err)
+  }
+  await refresh()
 }
 
 function debouncedRefresh(): void {
@@ -63,7 +91,7 @@ onUnmounted(() => {
   <main class="home-view">
     <header class="topbar">
       <h2>Continue Watching</h2>
-      <button class="refresh-btn" @click="refresh" :disabled="loading">Refresh</button>
+      <button class="refresh-btn" @click="manualRefresh" :disabled="loading">Refresh</button>
     </header>
     <div class="body">
       <div v-if="loading && entries.length === 0" class="status-text">Loading...</div>
@@ -81,7 +109,7 @@ onUnmounted(() => {
           @click="onClick(e)"
         >
           <div class="poster">
-            <img v-if="e.posterUrl" :src="e.posterUrl" :alt="e.animeName" />
+            <img v-if="showPoster(e)" :src="e.posterUrl" :alt="e.animeName" @error="onPosterError(e)" />
             <div v-else class="poster-fallback"></div>
           </div>
           <div class="info">

@@ -8,9 +8,35 @@ on:
     types: [created]
 
 jobs:
-  build:
+  changes:
+    # Detect whether a PR touches anything other than docs. Output is consumed by
+    # the build job to skip the artifact build (and the artifacts comment) when
+    # only documentation changed. /build comments bypass this check entirely.
     if: >
-      github.event_name == 'pull_request' || 
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/build'))
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!*.md'
+              - '!LICENSE'
+              - '!.gitignore'
+              - '!.gitattributes'
+
+  build:
+    needs: changes
+    if: >
+      (github.event_name == 'pull_request' && needs.changes.outputs.code == 'true') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/build'))
     strategy:
       matrix:

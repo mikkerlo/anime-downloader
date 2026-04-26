@@ -29,14 +29,18 @@ jobs:
         id: filter
         if: github.event_name == 'pull_request'
         with:
+          # Allowlist: build only when files that actually feed into the
+          # electron-vite + electron-builder output change. Anything outside
+          # this list (docs, .github/, LICENSE, scripts unrelated to the bundle)
+          # is treated as a no-op and skips the artifact build.
           filters: |
             code:
-              - '**'
-              - '!**/*.md'
-              - '!*.md'
-              - '!LICENSE'
-              - '!.gitignore'
-              - '!.gitattributes'
+              - 'src/**'
+              - 'resources/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'electron.vite.config.*'
+              - 'tsconfig*.json'
 
   build:
     needs: changes

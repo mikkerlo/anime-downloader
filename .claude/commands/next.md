@@ -1,12 +1,12 @@
 ---
-allowed-tools: Read, Edit, Write, Bash(npm:*), Bash(jj:*), Bash(ls:*), Glob, Grep, Agent, TaskCreate, TaskUpdate, EnterPlanMode, ExitPlanMode, AskUserQuestion
-description: Pick the next TODO item (or a specific one), plan it, implement it, test it, bump version, and push a CL
-argument-hint: [todo-number]
+allowed-tools: Read, Edit, Write, Bash(npm:*), Bash(jj:*), Bash(ls:*), Bash(gh:*), Glob, Grep, Agent, TaskCreate, TaskUpdate, EnterPlanMode, ExitPlanMode, AskUserQuestion
+description: Pick the next TODO item (or a specific issue/PR/TODO), plan it, implement it, test it, bump version, and push a CL
+argument-hint: [todo-number | issue-number | pr-number]
 ---
 
-# Implement Next TODO Item
+# Implement Next TODO Item, Issue, or PR
 
-You are going to implement a TODO item from this project end-to-end.
+You are going to implement a TODO item, issue, or PR from this project end-to-end.
 
 ## Step 0: Read context
 
@@ -16,19 +16,22 @@ Read ALL markdown files in the project root to understand the project:
 - @TODO.md
 - @README.md (if it exists)
 
-## Step 1: Pick the TODO item
+## Step 1: Pick the item
 
 Argument passed: $ARGUMENTS
 
-- If an argument (todo number) was provided, find that specific numbered item in TODO.md.
+- If an argument was provided:
+  - It might be a TODO number, an issue number (e.g. `123` or `#123`), or a PR number.
+  - If it corresponds to a GitHub issue or PR, fetch its details using `gh issue view <number>` or `gh pr view <number>` to understand the requirements. If the issue or PR does not have the "Ready for implementation" label, you MUST warn the user and ask for explicit confirmation before proceeding.
+  - If it corresponds to a numbered item in `TODO.md`, find that specific item.
 - If no argument was provided, find the **first non-completed** item in TODO.md. Completed items are struck through (~~strikethrough~~) or marked done.
-- Show the user which item you picked and confirm before proceeding.
+- Show the user which item you picked (and its details) and confirm before proceeding.
 
-Ask if you shoud proceed via AskUserQuestion.
+Ask if you should proceed via AskUserQuestion.
 
 ## Step 2: Plan
 
-Enter plan mode. Create a detailed implementation plan for the chosen TODO item:
+Enter plan mode. Create a detailed implementation plan for the chosen item:
 - Which files need to change
 - What new files (if any) are needed
 - IPC changes (remember the 4-file pattern from CLAUDE.md)
@@ -66,16 +69,17 @@ Ask the user how to bump the version in package.json:
 3. **Major** (first number, e.g. 1.1.2 → 2.0.0) — for breaking changes
 4. **No bump** — skip version change
 
-Apply the chosen bump to package.json if applicable. Show the correct option in the option varians by your understanding.
+Apply the chosen bump to package.json if applicable. Show the correct option in the option variants by your understanding.
 
 ## Step 6: Finalize and push
 
-1. Strike through the completed item in TODO.md (wrap it with `~~`)
+1. If working on a TODO item, strike through the completed item in TODO.md (wrap it with `~~`).
 2. Update DESIGN.md if any architectural changes were made
 3. Create a CL and push using jj (NEVER use git directly):
 
 ```bash
 jj describe -m "Commit message describing the change"
+# If working on an issue, append "Fixes #<number>" to the commit message
 jj bookmark set main -r @
 jj git push
 ```

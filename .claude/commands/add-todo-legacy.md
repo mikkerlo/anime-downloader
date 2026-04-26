@@ -1,12 +1,12 @@
 ---
-allowed-tools: Read, Edit, Write, Glob, Grep, Agent, AskUserQuestion, EnterPlanMode, ExitPlanMode, Bash(gh:*)
-description: Research a feature idea and create a detailed GitHub issue with the todo tag
+allowed-tools: Read, Edit, Write, Glob, Grep, Agent, AskUserQuestion, EnterPlanMode, ExitPlanMode
+description: Research a feature idea and add a detailed TODO entry
 argument-hint: <feature description>
 ---
 
-# Add TODO Issue
+# Add TODO Item
 
-You are going to research a feature idea and create a well-structured GitHub issue with a `todo` tag.
+You are going to research a feature idea and add a well-structured entry to TODO.md.
 
 Feature description: $ARGUMENTS
 
@@ -17,7 +17,7 @@ Read ALL markdown files in the project root:
 - @DESIGN.md
 - @TODO.md
 
-Understand the project architecture, existing features, and IPC patterns.
+Understand the project architecture, existing features, IPC patterns, and the TODO format.
 
 ## Step 2: Understand the feature
 
@@ -39,11 +39,13 @@ Ask the user clarifying questions to nail down the scope and design. Use AskUser
 
 Ask only the questions that matter — skip anything that's obvious from the description or code. Batch related questions into a single AskUserQuestion call when possible.
 
-## Step 4: Create the GitHub Issue
+## Step 4: Write the TODO entry
 
-After getting answers, write a detailed issue body following the format we commit to TODO.md:
+After getting answers, write a detailed TODO entry following the existing format in TODO.md:
 
 ```markdown
+## N. Feature title
+
 **Priority:** High/Medium/Low | **Effort:** Small/Medium/Large
 
 Brief description of the problem or motivation.
@@ -55,8 +57,13 @@ Brief description of the problem or motivation.
 4. Note edge cases or gotchas discovered during research
 ```
 
-Create the issue using the GitHub CLI:
+Requirements for the plan:
+- Reference actual file paths and function names from the code you read
+- If IPC changes are needed, list all 4 files
+- Each step should be concrete and actionable
+- Number the new entry sequentially after the last existing entry in TODO.md
 
-```bash
-gh issue create --title "<Feature title>" --body "<body>" --label "todo"
-```
+Append the new entry at the end of TODO.md (before any trailing whitespace), separated by `---`.
+
+After that make a CL and push it using jj.
+

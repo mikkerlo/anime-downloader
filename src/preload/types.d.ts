@@ -34,6 +34,8 @@ interface Api {
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
 
+  homeGetContinueWatching: () => Promise<ContinueWatchingEntry[]>
+
   // Watch progress
   watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => Promise<void>
   watchProgressGet: (animeId: number, episodeInt: string) => Promise<WatchProgressEntry | null>
@@ -217,6 +219,19 @@ interface WatchProgressEntry {
   duration: number
   updatedAt: number
   watched?: boolean
+}
+
+interface ContinueWatchingEntry {
+  kind: 'resume' | 'next'
+  animeId: number
+  animeName: string
+  posterUrl: string
+  episodeInt: string
+  episodeLabel: string
+  position?: number
+  duration?: number
+  updatedAt: number
+  malId?: number
 }
 
 interface EpisodeMeta {

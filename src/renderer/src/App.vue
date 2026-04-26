@@ -8,23 +8,27 @@ import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
 import ShikimoriView from './components/ShikimoriView.vue'
 import FriendsActivityView from './components/FriendsActivityView.vue'
+import HomeView from './components/HomeView.vue'
 import PlayerView from './components/PlayerView.vue'
 
-const currentView = ref('search')
+const currentView = ref('home')
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
 const shortcuts = ref<Record<string, string>>({})
 const animeByView = ref<Record<string, number | null>>({
+  home: null,
   search: null,
   library: null,
   shikimori: null,
   friends: null
 })
 const animeHistoryByView = ref<Record<string, number[]>>({
+  home: [],
   search: [],
   library: [],
   shikimori: [],
   friends: []
 })
+const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
 
 const shikimoriLoggedIn = ref(false)
 
@@ -58,13 +62,22 @@ const animePrefs = ref<Record<number, { translationType?: string; author?: strin
 
 const activeAnimeId = computed(() => animeByView.value[currentView.value] ?? null)
 
-function openAnime(id: number): void {
+function openAnime(id: number, focusEpisodeInt?: string): void {
   const view = currentView.value
   const current = animeByView.value[view]
   if (current != null && current !== id) {
     animeHistoryByView.value[view].push(current)
   }
+  if (focusEpisodeInt) {
+    focusEpisodeIntForAnime.value[id] = focusEpisodeInt
+  }
   animeByView.value[view] = id
+}
+
+function clearFocusEpisode(id: number): void {
+  if (focusEpisodeIntForAnime.value[id] !== undefined) {
+    delete focusEpisodeIntForAnime.value[id]
+  }
 }
 
 function closeAnime(): void {
@@ -173,7 +186,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <Sidebar :current-view="currentView" :shikimori-logged-in="shikimoriLoggedIn" @navigate="navigate" />
-    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" @open-anime="openAnime" />
+    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" :focus-episode-int="focusEpisodeIntForAnime[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" @open-anime="openAnime" @focus-applied="clearFocusEpisode" />
+    <HomeView v-show="currentView === 'home' && !activeAnimeId" @open-anime="openAnime" @navigate="navigate" />
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />

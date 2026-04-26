@@ -35,8 +35,9 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |
-| `src/renderer/src/App.vue` | Root component, per-view navigation state, anime prefs persistence |
+| `src/renderer/src/App.vue` | Root component, per-view navigation state, anime prefs persistence (default view: `home`) |
 | `src/renderer/src/components/Sidebar.vue` | Navigation menu |
+| `src/renderer/src/components/HomeView.vue` | Continue Watching landing view: Resume + Next-up entries |
 | `src/renderer/src/components/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
 | `src/renderer/src/components/AnimeCard.vue` | Reusable anime poster card |
 | `src/renderer/src/components/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
@@ -48,6 +49,21 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
 ## Data Flow
+
+### Home / Continue Watching
+
+`HomeView` is the default landing view. It calls `home:get-continue-watching`, which merges two local sources (no network) into a single, time-sorted list capped at 24 entries:
+
+- **Resume rows** — entries in `watchProgress` where `watched !== true`, `position > 5`, `duration > 0`, and `position / duration < 0.95`. Collapsed to a single entry per anime: the most-recently-updated unfinished episode wins.
+- **Next-up rows** — entries in `shikimoriUserRates` with `status ∈ {watching, rewatching}` and `episodes_aired === 0 || rate.episodes + 1 <= episodes_aired`.
+
+Dedup rule: if a `(animeId, _)` resume row exists, no Next-up row is emitted for that anime — Resume already represents the user's most recent intent on the show.
+
+Sort order: descending Shikimori `rate.updated_at` — same rule as the ShikimoriView "To Watch" tab. Resume rows look up their Shikimori rate by `animeId` (via `smotretAnime.id` on cached rates) and inherit its `updated_at`; if the anime isn't tracked on Shikimori, the row falls back to its local `watchProgress.updatedAt`. Resume and Next-up rows are mixed in this single ordering.
+
+Poster + name resolution priority for each row: `library` → `downloadedAnime` → `malIdMap` → for Next rows only, the cached `shikiAnime.image.preview/x96/original` (prefixed with the Shikimori host when relative). Episode label prefers `animeCache[animeId].animeDetail.episodes[*].episodeFull`, else `Episode N`.
+
+`HomeView` re-fetches on mount, on a 1-second-debounced `watch-progress-updated` window event (dispatched by `PlayerView`), and on `shikimori:rates-refreshed` / `shikimori:rate-updated` IPC broadcasts. Click → emits `open-anime` with `{ animeId, focusEpisodeInt }`. `App.vue` keeps a `focusEpisodeIntForAnime` map so the value flows into `AnimeDetailView` as a prop. `AnimeDetailView` watches `focusEpisodeInt` + `filteredEpisodes`; once ready it switches `currentPage` (via existing `goToPage`) and calls `scrollIntoView` on the matching `.episode-row[data-ep-int]`. The view emits `focus-applied` once per `animeId` so re-renders don't re-scroll.
 
 ### Anime Search & Browse
 
@@ -246,6 +262,7 @@ LibraryView shows both with indicators:
 | `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |
 | `get-quality-mismatch-count` | invoke | Get number of collected mismatches |
 | `dump-quality-mismatches` | invoke | Write mismatches to JSON file in download dir |
+| `home:get-continue-watching` | invoke | Build merged Resume + Next-up list (capped at 24) for the Home view from local stores; no network |
 | `library-get` | invoke | List all starred + downloaded anime (merged) |
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |

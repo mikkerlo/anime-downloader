@@ -5,13 +5,15 @@ import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, san
 const props = defineProps<{
   animeId: number
   initialPrefs?: { translationType?: string; author?: string }
+  focusEpisodeInt?: string
 }>()
 
 const emit = defineEmits<{
   back: []
   prefsChanged: [animeId: number, translationType: string, author: string]
   playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[], episodeIndex: number, animeId: number, malId: number]
-  openAnime: [animeId: number]
+  openAnime: [animeId: number, focusEpisodeInt?: string]
+  focusApplied: [animeId: number]
 }>()
 
 const anime = ref<AnimeDetail | null>(null)
@@ -784,6 +786,40 @@ const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
 const errorMessage = ref('')
 
+const focusApplied = ref(false)
+async function applyFocusEpisode(target: string): Promise<void> {
+  if (focusApplied.value) return
+  const eps = filteredEpisodes.value
+  if (eps.length === 0) return
+  const targetIdx = eps.findIndex((e) => e.episodeInt === target)
+  if (targetIdx < 0) {
+    focusApplied.value = true
+    emit('focusApplied', props.animeId)
+    return
+  }
+  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0
+  if (targetPage !== currentPage.value) {
+    await goToPage(targetPage)
+  }
+  await nextTick()
+  const el = document.querySelector(`.episode-row[data-ep-int="${CSS.escape(target)}"]`) as HTMLElement | null
+  if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  focusApplied.value = true
+  emit('focusApplied', props.animeId)
+}
+
+watch(
+  [() => props.focusEpisodeInt, filteredEpisodes, loadingEpisodes],
+  async () => {
+    const target = props.focusEpisodeInt
+    if (!target || focusApplied.value) return
+    if (loadingEpisodes.value) return
+    if (filteredEpisodes.value.length === 0) return
+    await applyFocusEpisode(target)
+  },
+  { immediate: true }
+)
+
 function getAnimeName(): string {
   if (!anime.value) return ''
   return _getAnimeName(anime.value)
@@ -1351,7 +1387,7 @@ function typeChip(type: string): { short: string; color: string } {
       </div>
 
       <div class="episode-list">
-        <div v-for="row in episodeRows" :key="row.episode.id" class="episode-row">
+        <div v-for="row in episodeRows" :key="row.episode.id" :data-ep-int="row.episode.episodeInt" class="episode-row">
           <span class="ep-name">{{ row.episode.episodeFull }}</span>
           <template v-if="row.isLocked">
             <span class="ep-author locked">

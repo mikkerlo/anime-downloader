@@ -7,6 +7,9 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     # Detect whether a PR touches anything other than docs. Output is consumed by

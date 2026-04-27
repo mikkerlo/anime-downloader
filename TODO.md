@@ -51,3 +51,4 @@
 - [x] Conflict-Aware Automatic Sync for Offline Changes
 - [x] Gradual Background Pre-fetching of Shikimori Detailed Info
 - [x] HEVC → H.264 transcode fallback for platforms without an HEVC decoder
+- [x] Auto-Skip Intro / Outro (Aniskip) — manual button overlay with opt-in auto-skip toggles, 30-day cache, library/download pre-fetch worker, encapsulated behind `src/main/aniskip.ts` for easy provider swap (#53)

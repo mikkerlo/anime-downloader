@@ -155,6 +155,46 @@ const WATCH_THRESHOLD_SECONDS = 180
 const SAVE_INTERVAL_MS = 5000
 const NEXT_MARK_PREV_WATCHED_MS = 60_000
 
+// Aniskip skip-intro / skip-outro state
+const skipTimes = ref<SkipTime[]>([])
+const lastAutoSkippedId = ref<string | null>(null)
+const autoSkipIntro = ref(false)
+const autoSkipOutro = ref(false)
+let pendingAutoSkipId: string | null = null
+let autoSkipTimer: ReturnType<typeof setTimeout> | null = null
+const AUTO_SKIP_GRACE_MS = 250
+const SKIP_OVERLAY_TAIL_S = 1
+
+const activeSkip = computed<SkipTime | null>(() => {
+  const t = currentTime.value
+  for (const s of skipTimes.value) {
+    if (t >= s.interval.startTime && t < s.interval.endTime - SKIP_OVERLAY_TAIL_S) {
+      return s
+    }
+  }
+  return null
+})
+
+function activeSkipLabel(skip: SkipTime): string {
+  return skip.skipType === 'op' ? 'Skip Intro' : 'Skip Outro'
+}
+
+function clearAutoSkipPending(): void {
+  if (autoSkipTimer) {
+    clearTimeout(autoSkipTimer)
+    autoSkipTimer = null
+  }
+  pendingAutoSkipId = null
+}
+
+function onSkipClick(): void {
+  const skip = activeSkip.value
+  if (!skip) return
+  clearAutoSkipPending()
+  lastAutoSkippedId.value = skip.skipId
+  seek(skip.interval.endTime)
+}
+
 function trackProgressDelta(now: number): void {
   if (lastTimeUpdateAt > 0 && playing.value && !seeking.value) {
     const delta = (now - lastTimeUpdateAt) / 1000
@@ -239,7 +279,50 @@ function resetEpisodeTracking(): void {
   lastSaveAt = 0
   watchedReported = false
   episodeOpenedAt = Date.now()
+  skipTimes.value = []
+  lastAutoSkippedId.value = null
+  clearAutoSkipPending()
 }
+
+watch([currentEpisodeInt, duration], async ([epStr, dur]) => {
+  skipTimes.value = []
+  lastAutoSkippedId.value = null
+  clearAutoSkipPending()
+  if (!props.malId || props.malId <= 0) return
+  if (!epStr || !dur || dur <= 0) return
+  const epNum = parseInt(epStr, 10)
+  if (!Number.isFinite(epNum) || epNum <= 0) return
+  if (String(epNum) !== epStr) return // fractional (.5) recap episodes — no aniskip data
+  try {
+    skipTimes.value = await window.api.aniskipGetSkipTimes(props.malId, epNum, Math.round(dur))
+  } catch (err) {
+    console.warn('[player] aniskip lookup failed:', err)
+    skipTimes.value = []
+  }
+})
+
+watch(activeSkip, (skip) => {
+  if (!skip) {
+    clearAutoSkipPending()
+    return
+  }
+  if (lastAutoSkippedId.value === skip.skipId) return
+  if (pendingAutoSkipId === skip.skipId) return
+  const wantSkip =
+    (skip.skipType === 'op' && autoSkipIntro.value) ||
+    (skip.skipType === 'ed' && autoSkipOutro.value)
+  if (!wantSkip) return
+  if (autoSkipTimer) clearTimeout(autoSkipTimer)
+  pendingAutoSkipId = skip.skipId
+  autoSkipTimer = setTimeout(() => {
+    autoSkipTimer = null
+    pendingAutoSkipId = null
+    const current = activeSkip.value
+    if (!current || current.skipId !== skip.skipId) return
+    lastAutoSkippedId.value = current.skipId
+    seek(current.interval.endTime)
+  }, AUTO_SKIP_GRACE_MS)
+})
 
 async function resumeFromSavedPosition(): Promise<void> {
   const video = videoRef.value
@@ -1698,6 +1781,12 @@ onMounted(async () => {
   if (typeof savedMuted === 'boolean') {
     muted.value = savedMuted
   }
+
+  // Aniskip auto-skip toggles (button overlay still shows regardless)
+  const savedAutoSkipIntro = await window.api.getSetting('autoSkipIntro') as boolean | null
+  if (typeof savedAutoSkipIntro === 'boolean') autoSkipIntro.value = savedAutoSkipIntro
+  const savedAutoSkipOutro = await window.api.getSetting('autoSkipOutro') as boolean | null
+  if (typeof savedAutoSkipOutro === 'boolean') autoSkipOutro.value = savedAutoSkipOutro
   await nextTick()
   suppressVolumePersist = false
 
@@ -1757,6 +1846,7 @@ onBeforeUnmount(() => {
     fn('cancel')
   }
   cancelAutoAdvance()
+  clearAutoSkipPending()
   stopAnime4KPipeline()
   destroySubtitles()
   // Pause and release video
@@ -1886,6 +1976,13 @@ const bufferedProgress = computed(() => {
       >
       </video>
     </div>
+
+    <!-- Aniskip skip-intro / skip-outro overlay -->
+    <transition name="fade">
+      <button v-if="activeSkip" class="skip-overlay" @click="onSkipClick">
+        {{ activeSkipLabel(activeSkip) }}
+      </button>
+    </transition>
 
     <!-- Canvas for Anime4K rendering -->
     <canvas
@@ -2197,6 +2294,30 @@ const bufferedProgress = computed(() => {
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
+}
+
+.skip-overlay {
+  position: absolute;
+  bottom: 88px;
+  right: 24px;
+  background: rgba(15, 52, 96, 0.92);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  z-index: 12;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.skip-overlay:hover {
+  background: rgba(233, 69, 96, 0.92);
+}
+
+.skip-overlay:active {
+  transform: translateY(1px);
 }
 
 /* Remux overlay */

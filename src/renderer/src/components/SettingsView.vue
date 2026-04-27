@@ -98,6 +98,8 @@ const playerMode = ref<'system' | 'builtin'>('system')
 const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
 const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask')
 const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
+const autoSkipIntro = ref(false)
+const autoSkipOutro = ref(false)
 
 // GPU benchmark state
 const benchmarking = ref(false)
@@ -451,6 +453,8 @@ onMounted(async () => {
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
   hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
+  autoSkipIntro.value = ((await window.api.getSetting('autoSkipIntro')) as boolean | null) || false
+  autoSkipOutro.value = ((await window.api.getSetting('autoSkipOutro')) as boolean | null) || false
 
   // Probe WebGPU
   try {
@@ -603,6 +607,8 @@ watch(videoCodec, (val, oldVal) => {
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
 watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
+watch(autoSkipIntro, (val) => { if (loaded.value) autoSave('autoSkipIntro', val) })
+watch(autoSkipOutro, (val) => { if (loaded.value) autoSave('autoSkipOutro', val) })
 </script>
 
 <template>
@@ -977,6 +983,21 @@ watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeO
 
         <div class="setting-group">
           <p class="setting-hint">Note: the built-in player supports local MKV playback via the MSE remux pipeline. For non-downloaded episodes, MKV files are streamed from the server — a Play button will appear on those rows when player mode is "Built-in". If a local HEVC MKV can't be decoded by your platform, the fallback above decides what happens.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Auto-skip intros / outros</label>
+          <p class="setting-hint">Use community-contributed timestamps from <a href="https://aniskip.com" target="_blank" rel="noopener">aniskip.com</a> to jump past openings and endings automatically. Manual "Skip Intro" / "Skip Outro" buttons appear regardless of these toggles. Timestamps are crowdsourced and occasionally inaccurate.</p>
+          <label class="toggle-row">
+            <input type="checkbox" v-model="autoSkipIntro" class="toggle-input" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">Auto-skip openings: {{ autoSkipIntro ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+          <label class="toggle-row" style="margin-top: 0.4rem">
+            <input type="checkbox" v-model="autoSkipOutro" class="toggle-input" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">Auto-skip endings: {{ autoSkipOutro ? 'Enabled' : 'Disabled' }}</span>
+          </label>
         </div>
       </template>
 

@@ -241,6 +241,10 @@ const api = {
     ipcRenderer.removeAllListeners('shikimori:anime-details-updated')
   },
 
+  // Aniskip
+  aniskipGetSkipTimes: (malId: number, episode: number, duration: number) =>
+    ipcRenderer.invoke('aniskip:get-skip-times', malId, episode, duration) as Promise<SkipTime[]>,
+
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),
   updateCheck: () => ipcRenderer.invoke('update:check'),

@@ -31,6 +31,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/smotret-api.ts` | Smotret-Anime API client: search, anime/episode details, embed, subtitles, token validation |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
+| `src/main/aniskip.ts` | Aniskip API client: cache-first skip-intro/skip-outro timestamps (provisional, see "Aniskip Skip-Intro / Skip-Outro") |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
@@ -346,6 +347,7 @@ LibraryView shows both with indicators:
 | `player:cleanup-remux` | invoke | Kill any active stream sessions and delete all temp remuxed files |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 | `shell:open-external-file` | invoke | Open a local file with the OS default app via `shell.openPath` (returns `{ ok, error? }`) |
+| `aniskip:get-skip-times` | invoke | Cache-first lookup of OP/ED skip timestamps from aniskip.com (30-day TTL); returns `[]` on miss/error/`malId<=0`. Provider isolated in `src/main/aniskip.ts` for cheap swap |
 
 ## Key Types
 
@@ -420,6 +422,9 @@ interface EpisodeMeta {
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
 | `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
 | `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
+| `aniskipCache` | object | `{}` | Cached aniskip.com responses keyed by `malId:episode:roundedDuration`. Each entry: `{ times: SkipTime[]; fetchedAt: number }`. 30-day TTL |
+| `autoSkipIntro` | boolean | `false` | When true, the built-in player automatically jumps past openings using aniskip timestamps (button overlay still shows regardless) |
+| `autoSkipOutro` | boolean | `false` | When true, the built-in player automatically jumps past endings using aniskip timestamps |
 
 ## Watch Progress & Resume
 
@@ -506,6 +511,20 @@ Translation resolution for the target episode: (1) prefer any downloaded transla
 Auto-advance: when video ends and next episode is available, shows a 5-second countdown overlay. User can cancel or let it auto-navigate to the next episode.
 
 Configurable keyboard shortcuts: `playerPrevEpisode` (default Shift+ArrowLeft) and `playerNextEpisode` (default Shift+ArrowRight) in Settings > Shortcuts.
+
+### Aniskip Skip-Intro / Skip-Outro
+
+Crowdsourced opening/ending timestamps from [aniskip.com](https://aniskip.com), keyed by MAL ID + episode number. The provider is isolated to `src/main/aniskip.ts` and a single IPC channel (`aniskip:get-skip-times`) so it can be swapped cheaply later.
+
+- **API**: `GET https://api.aniskip.com/v2/skip-times/{malId}/{episode}?types[]=op&types[]=ed&episodeLength={duration}`. Returns `{ found, results: [{ skipType: 'op'|'ed', interval: { startTime, endTime }, episodeLength, skipId }] }`. 30s `AbortController`. On non-2xx, network error, or `found:false` the module returns `[]` silently — best-effort UX.
+- **Cache**: `aniskipCache` (electron-store) keyed by `${malId}:${episode}:${Math.round(duration)}`. 30-day TTL — expired entries are refetched on next ask. Lookups bail with `[]` for `malId <= 0` or non-finite episode.
+- **Renderer**: `PlayerView` watches `[currentEpisodeInt, duration]` and calls `aniskipGetSkipTimes(malId, parseInt(episodeInt), Math.round(duration))` once both are valid. Fractional `.5` recap episodes are skipped (`String(parseInt(epStr)) !== epStr`). The `currentTime` watcher computes `activeSkip` (`t >= start && t < end - 1`) and renders a bottom-right "Skip Intro" / "Skip Outro" overlay button. Click → `seek(end)`.
+- **Auto-skip**: When `activeSkip` becomes non-null AND the matching toggle (`autoSkipIntro` / `autoSkipOutro`) is on AND `lastAutoSkippedId !== skipId`, a 250 ms grace timer fires `seek(end)` and stamps `lastAutoSkippedId`. The grace prevents an immediate manual seek-back from re-firing; `lastAutoSkippedId` blocks re-skip if the user seeks back into the same interval. Both reset on episode change via `resetEpisodeTracking()`.
+- **Pre-fetch worker**: Module-level FIFO queue + 1 req/s throttle + dedup against the same cache. Triggered when:
+  - **`library-toggle` (add path)**: enqueues `1..min(episodes_aired, 100)` for the just-added anime if a positive MAL ID can be resolved (via `animeCache[id].animeDetail.myAnimeListId`). Episode count comes from cached `shikimoriAnimeDetails.episodes_aired`, falling back to `anime.numberOfEpisodes` or 12.
+  - **`onMergeComplete`**: enqueues just `[parseInt(episodeLabel)]` for the merged episode after resolving MAL ID via `downloadedAnime` lookup.
+  Pre-fetched entries warm the cache for offline playback of library/downloaded anime.
+- **UX caveats**: Aniskip is crowdsourced, so timestamps are occasionally inaccurate. v1 default is button-only; auto-skip is opt-in. Settings hint flags this. End-credits stingers are a known risk — if QA shows `ed` intervals routinely overshoot into stinger territory, `autoSkipOutro` can be ignored at the player level without schema changes.
 
 ### WebGPU Requirements
 

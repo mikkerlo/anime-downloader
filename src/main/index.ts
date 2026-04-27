@@ -13,6 +13,7 @@ import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
+import { getSkipTimes, type SkipTime } from './aniskip'
 import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
@@ -87,7 +88,10 @@ const store = new Store({
     shikimoriUserRates: [] as unknown[],
     shikimoriUpdateQueue: [] as unknown[],
     shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
-    recentAnimeMeta: {} as Record<string, AnimeSearchResult>
+    recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
+    aniskipCache: {} as Record<string, { times: SkipTime[]; fetchedAt: number }>,
+    autoSkipIntro: false,
+    autoSkipOutro: false
   }
 })
 
@@ -458,6 +462,98 @@ async function prefetchShikimoriDetails(): Promise<void> {
   } finally {
     prefetchInProgress = false
   }
+}
+
+// --- Aniskip cache + pre-fetch worker ---
+
+const ANISKIP_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const ANISKIP_PREFETCH_INTER_REQUEST_MS = 1000
+const ANISKIP_PREFETCH_MAX_EPISODES = 100
+
+function aniskipCacheKey(malId: number, episode: number, duration: number): string {
+  return `${malId}:${episode}:${Math.round(duration)}`
+}
+
+async function getSkipTimesCached(
+  malId: number,
+  episode: number,
+  duration: number
+): Promise<SkipTime[]> {
+  if (!Number.isFinite(malId) || malId <= 0) return []
+  if (!Number.isFinite(episode) || episode <= 0) return []
+  const key = aniskipCacheKey(malId, episode, duration)
+  const cache = store.get('aniskipCache') as Record<string, { times: SkipTime[]; fetchedAt: number }>
+  const entry = cache[key]
+  const now = Date.now()
+  if (entry && now - entry.fetchedAt < ANISKIP_TTL_MS) {
+    return entry.times
+  }
+  const times = await getSkipTimes(malId, episode, duration)
+  cache[key] = { times, fetchedAt: now }
+  store.set('aniskipCache', cache)
+  return times
+}
+
+const aniskipPrefetchQueue: Array<{ malId: number; episode: number; duration: number }> = []
+let aniskipPrefetchInFlight = false
+
+async function drainAniskipPrefetch(): Promise<void> {
+  if (aniskipPrefetchInFlight) return
+  aniskipPrefetchInFlight = true
+  try {
+    while (aniskipPrefetchQueue.length > 0) {
+      const item = aniskipPrefetchQueue.shift()!
+      try {
+        await getSkipTimesCached(item.malId, item.episode, item.duration)
+      } catch (err) {
+        console.warn('[aniskip prefetch] error', item.malId, item.episode, err)
+      }
+      if (aniskipPrefetchQueue.length > 0) {
+        await sleep(ANISKIP_PREFETCH_INTER_REQUEST_MS)
+      }
+    }
+  } finally {
+    aniskipPrefetchInFlight = false
+  }
+}
+
+function enqueueAniskipPrefetch(malId: number, episodes: number[]): void {
+  if (!Number.isFinite(malId) || malId <= 0) return
+  const now = Date.now()
+  const cache = store.get('aniskipCache') as Record<string, { times: SkipTime[]; fetchedAt: number }>
+  let added = 0
+  for (const ep of episodes.slice(0, ANISKIP_PREFETCH_MAX_EPISODES)) {
+    if (!Number.isFinite(ep) || ep <= 0) continue
+    // Skip if any cached entry for this (malId, ep) is still fresh — keys vary by
+    // duration, so check entries by prefix.
+    const prefix = `${malId}:${ep}:`
+    const fresh = Object.keys(cache).some(
+      (k) => k.startsWith(prefix) && now - cache[k].fetchedAt < ANISKIP_TTL_MS
+    )
+    if (fresh) continue
+    aniskipPrefetchQueue.push({ malId, episode: ep, duration: 0 })
+    added++
+  }
+  if (added > 0) void drainAniskipPrefetch()
+}
+
+function resolveMalIdForSmotretId(smotretId: number): number {
+  if (!Number.isFinite(smotretId) || smotretId <= 0) return 0
+  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
+  const detail = cache[String(smotretId)]?.animeDetail
+  const malId = detail?.myAnimeListId
+  return typeof malId === 'number' && Number.isFinite(malId) && malId > 0 ? malId : 0
+}
+
+function airedEpisodeCountForMalId(malId: number, fallback: number): number {
+  const details = store.get('shikimoriAnimeDetails') as Record<
+    string,
+    { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+  >
+  const cached = details[String(malId)]?.details
+  const aired = cached?.episodes_aired ?? cached?.episodes
+  if (typeof aired === 'number' && Number.isFinite(aired) && aired > 0) return aired
+  return fallback
 }
 
 // --- Anime cache helpers (for offline support of downloaded anime) ---
@@ -1226,6 +1322,13 @@ function registerIpcHandlers(): void {
     } else {
       lib[key] = anime
       store.set('library', lib)
+      const malId = resolveMalIdForSmotretId(anime.id)
+      if (malId > 0) {
+        const epCount = airedEpisodeCountForMalId(malId, anime.numberOfEpisodes || 12)
+        const episodes: number[] = []
+        for (let i = 1; i <= epCount; i++) episodes.push(i)
+        enqueueAniskipPrefetch(malId, episodes)
+      }
       return true
     }
   })
@@ -1517,6 +1620,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle('set-setting', (_event, key: string, value: unknown) => {
     store.set(key, value)
   })
+
+  ipcMain.handle(
+    'aniskip:get-skip-times',
+    (_event, malId: number, episode: number, duration: number) => {
+      return getSkipTimesCached(malId, episode, duration)
+    }
+  )
 
   // Watch progress tracking
   ipcMain.handle('watch-progress:save', (_event, animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => {
@@ -3268,6 +3378,17 @@ app.whenReady().then(async () => {
     const mode = store.get('notificationMode') as string
     if (mode === 'each') {
       showBackgroundNotification('Merge complete', `${animeName} \u2014 ${episodeLabel}`)
+    }
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const matched = Object.entries(downloaded).find(
+      ([, anime]) => anime.title === animeName || anime.titles?.ru === animeName || anime.titles?.romaji === animeName
+    )
+    if (matched) {
+      const malId = resolveMalIdForSmotretId(Number(matched[0]))
+      const epNum = parseInt(episodeLabel, 10)
+      if (malId > 0 && Number.isFinite(epNum) && epNum > 0) {
+        enqueueAniskipPrefetch(malId, [epNum])
+      }
     }
   })
 

@@ -157,6 +157,9 @@ interface Api {
   ) => void
   offShikimoriAnimeDetailsUpdated: () => void
 
+  // Aniskip
+  aniskipGetSkipTimes: (malId: number, episode: number, duration: number) => Promise<SkipTime[]>
+
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
@@ -164,6 +167,13 @@ interface Api {
   updateInstall: () => void
   onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
   offUpdateStatus: () => void
+}
+
+interface SkipTime {
+  skipType: 'op' | 'ed'
+  interval: { startTime: number; endTime: number }
+  episodeLength: number
+  skipId: string
 }
 
 interface AnimeSearchResult {

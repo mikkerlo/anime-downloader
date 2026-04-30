@@ -83,7 +83,12 @@ const store = new Store({
     playerMuted: false,
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
     hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
-    watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>,
+    watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>,
+    watchProgressMigrationV2: false,
+    autoCleanupWatchedDays: 0,
+    autoCleanupConfirm: true,
+    autoCleanupLastRun: null as { ranAt: number; deletedCount: number; freedBytes: number } | null,
+    cleanupLog: [] as { ranAt: number; animeId: number; animeName: string; episodeInt: string; bytes: number }[],
     shikimoriUserRates: [] as unknown[],
     shikimoriUpdateQueue: [] as unknown[],
     shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
@@ -837,6 +842,89 @@ function storageDirsForScan(): string[] {
   return dirs
 }
 
+function deleteEpisodeFiles(animeName: string, episodeInt: string, animeId?: number, translationId?: number): { bytesDeleted: number } {
+  fileCheckCache.delete(animeName)
+  const animeDirName = sanitizeFilename(animeName)
+  const dirsToCheck = storageDirsForScan()
+
+  const padded = episodeInt.padStart(2, '0')
+  const base = sanitizeFilename(`${animeName} - ${padded}`)
+
+  let bytesDeleted = 0
+  const trySize = (p: string): number => {
+    try { return fs.statSync(p).size } catch { return 0 }
+  }
+
+  if (translationId && animeId) {
+    // Delete specific translation's files — find by author tag from metadata
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    const metaKey = `${animeId}:${episodeInt}:${translationId}`
+    const legacyKey = `${animeId}:${episodeInt}`
+    const meta = episodes[metaKey] || episodes[legacyKey]
+    if (meta) {
+      const authorTag = sanitizeFilename(meta.author)
+      const taggedBase = `${base} [${authorTag}]`
+      for (const dir of dirsToCheck) {
+        const animeDir = path.join(dir, animeDirName)
+        for (const ext of ['.mkv', '.mp4', '.ass']) {
+          const taggedPath = path.join(animeDir, `${taggedBase}${ext}`)
+          const tSize = trySize(taggedPath)
+          try { fs.unlinkSync(taggedPath); bytesDeleted += tSize } catch { /* ignore */ }
+          const legacyPath = path.join(animeDir, `${base}${ext}`)
+          const lSize = trySize(legacyPath)
+          try { fs.unlinkSync(legacyPath); bytesDeleted += lSize } catch { /* ignore */ }
+        }
+      }
+      delete episodes[metaKey]
+      delete episodes[legacyKey]
+      store.set('downloadedEpisodes', episodes)
+    }
+  } else {
+    for (const dir of dirsToCheck) {
+      const animeDir = path.join(dir, animeDirName)
+      try {
+        const files = fs.readdirSync(animeDir)
+        for (const file of files) {
+          if (file.startsWith(base) && (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))) {
+            const fp = path.join(animeDir, file)
+            const sz = trySize(fp)
+            try { fs.unlinkSync(fp); bytesDeleted += sz } catch { /* ignore */ }
+          }
+        }
+      } catch { /* dir doesn't exist */ }
+    }
+
+    if (animeId) {
+      const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
+      const prefix = `${animeId}:${episodeInt}`
+      for (const key of Object.keys(episodes)) {
+        if (key === prefix || key.startsWith(prefix + ':')) {
+          delete episodes[key]
+        }
+      }
+      store.set('downloadedEpisodes', episodes)
+    }
+  }
+
+  return { bytesDeleted }
+}
+
+function episodeHasInProgressDownload(animeName: string, episodeInt: string): boolean {
+  const animeDirName = sanitizeFilename(animeName)
+  const padded = episodeInt.padStart(2, '0')
+  const base = sanitizeFilename(`${animeName} - ${padded}`)
+  for (const dir of storageDirsForScan()) {
+    const animeDir = path.join(dir, animeDirName)
+    try {
+      const files = fs.readdirSync(animeDir)
+      for (const file of files) {
+        if (file.startsWith(base) && file.endsWith('.part')) return true
+      }
+    } catch { /* dir missing */ }
+  }
+  return false
+}
+
 // Drops `downloadedEpisodes[animeId:episodeInt:translationId]` (and the legacy
 // `animeId:episodeInt` key if it points at the same translation) when no file
 // for that translation exists on disk. Called after cancel / cancel-by-episode.
@@ -1068,6 +1156,337 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
   }
   store.set('malIdMap', cached)
   return result
+}
+
+// Parse episodeInt from a sanitized download filename. Format produced by
+// download-manager.ts: `${name} - ${NN}[ [Author]].(mkv|mp4|ass|part)`.
+const FILENAME_EP_RE = /\s-\s(\d{1,4}(?:\.\d+)?)(?:\s\[[^\]]+\])?\.(mkv|mp4|ass)$/i
+
+function parseEpisodeFromFilename(file: string): { episodeInt: string; ext: 'mkv' | 'mp4' | 'ass' } | null {
+  const m = FILENAME_EP_RE.exec(file)
+  if (!m) return null
+  const raw = m[1]
+  const episodeInt = raw.includes('.') ? raw : String(parseInt(raw, 10))
+  return { episodeInt, ext: m[2].toLowerCase() as 'mkv' | 'mp4' | 'ass' }
+}
+
+interface UsageEpisodeFiles {
+  mkv?: { path: string; size: number }
+  mp4?: { path: string; size: number }
+  ass?: { path: string; size: number }
+}
+
+interface AnimeUsageAccum {
+  animeId: number
+  animeName: string
+  posterUrlSmall: string
+  bytesHot: number
+  bytesCold: number
+  fileCount: number
+  episodes: Map<string, { files: UsageEpisodeFiles; totalBytes: number }>
+}
+
+interface StorageEpisodeUsage {
+  episodeInt: string
+  files: UsageEpisodeFiles
+  totalBytes: number
+  watched: boolean
+  watchedAt?: number
+}
+
+interface StorageAnimeUsage {
+  animeId: number
+  animeName: string
+  posterUrlSmall: string
+  bytes: number
+  bytesHot: number
+  bytesCold: number
+  fileCount: number
+  episodes: StorageEpisodeUsage[]
+}
+
+interface StorageUsage {
+  totalBytes: number
+  bytesHot: number
+  bytesCold: number
+  fileCount: number
+  perAnime: StorageAnimeUsage[]
+}
+
+async function scanStorageUsage(): Promise<StorageUsage> {
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  const watchProgress = store.get('watchProgress') as Record<string, { watched?: boolean; watchedAt?: number }>
+  // Downloads are written under sanitizeFilename(getAnimeName(anime)), where
+  // getAnimeName prefers titles.romaji, then titles.ru, then title. Register all
+  // three candidates so the scan finds folders regardless of which variant was
+  // current at download time. The "preferred" name (matching the live folder
+  // name) is what we surface to the renderer so delete calls round-trip cleanly.
+  const dirNameToId = new Map<string, string>()
+  const idToDisplayName = new Map<string, string>()
+  for (const id of Object.keys(downloaded)) {
+    const a = downloaded[id]
+    if (!a) continue
+    const preferred = a.titles?.romaji || a.titles?.ru || a.title
+    if (!preferred) continue
+    idToDisplayName.set(id, preferred)
+    const candidates = [preferred, a.titles?.ru, a.titles?.romaji, a.title]
+    for (const name of candidates) {
+      if (!name) continue
+      const key = sanitizeFilename(name)
+      if (!dirNameToId.has(key)) dirNameToId.set(key, id)
+    }
+  }
+
+  const accum = new Map<string, AnimeUsageAccum>()
+  const hotDir = getDownloadDir()
+  const coldDir = isAdvancedStorage() ? getColdStorageDir() : ''
+
+  const dirs: Array<{ root: string; bucket: 'hot' | 'cold' }> = []
+  if (hotDir) dirs.push({ root: hotDir, bucket: 'hot' })
+  if (coldDir && coldDir !== hotDir) dirs.push({ root: coldDir, bucket: 'cold' })
+
+  // First pass: list anime folders so we can emit progress meaningfully
+  const animeFolders: Array<{ root: string; bucket: 'hot' | 'cold'; folder: string }> = []
+  for (const { root, bucket } of dirs) {
+    try {
+      const entries = await fsPromises.readdir(root, { withFileTypes: true })
+      for (const e of entries) {
+        if (e.isDirectory()) animeFolders.push({ root, bucket, folder: e.name })
+      }
+    } catch { /* dir missing */ }
+  }
+
+  const total = animeFolders.length
+  const reportProgress = total > 50
+  let scanned = 0
+
+  for (const { root, bucket, folder } of animeFolders) {
+    const animeId = dirNameToId.get(folder)
+    if (!animeId) {
+      scanned++
+      if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+      continue
+    }
+    const animeRec = downloaded[animeId]
+    let entry = accum.get(animeId)
+    if (!entry) {
+      entry = {
+        animeId: Number(animeId),
+        animeName: idToDisplayName.get(animeId) || animeRec.title,
+        posterUrlSmall: animeRec.posterUrlSmall || '',
+        bytesHot: 0,
+        bytesCold: 0,
+        fileCount: 0,
+        episodes: new Map()
+      }
+      accum.set(animeId, entry)
+    }
+
+    const animeDir = path.join(root, folder)
+    let files: string[]
+    try {
+      files = await fsPromises.readdir(animeDir)
+    } catch {
+      scanned++
+      if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+      continue
+    }
+
+    for (const file of files) {
+      const parsed = parseEpisodeFromFilename(file)
+      if (!parsed) continue
+      const fullPath = path.join(animeDir, file)
+      let size = 0
+      try { size = (await fsPromises.stat(fullPath)).size } catch { continue }
+
+      let ep = entry.episodes.get(parsed.episodeInt)
+      if (!ep) {
+        ep = { files: {}, totalBytes: 0 }
+        entry.episodes.set(parsed.episodeInt, ep)
+      }
+      // Cold storage takes priority when both buckets have the file.
+      const existing = ep.files[parsed.ext]
+      if (existing && bucket === 'hot') continue
+      ep.files[parsed.ext] = { path: fullPath, size }
+      ep.totalBytes = (ep.files.mkv?.size || 0) + (ep.files.mp4?.size || 0) + (ep.files.ass?.size || 0)
+      if (existing) {
+        // Replaced hot with cold — adjust counters.
+        entry.bytesHot -= existing.size
+        entry.fileCount -= 1
+      }
+      if (bucket === 'hot') entry.bytesHot += size
+      else entry.bytesCold += size
+      entry.fileCount += 1
+    }
+
+    scanned++
+    if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+  }
+
+  let totalBytes = 0
+  let totalHot = 0
+  let totalCold = 0
+  let totalFiles = 0
+  const perAnime = [...accum.values()].map((a) => {
+    const bytes = a.bytesHot + a.bytesCold
+    totalBytes += bytes
+    totalHot += a.bytesHot
+    totalCold += a.bytesCold
+    totalFiles += a.fileCount
+    const episodes = [...a.episodes.entries()]
+      .map(([episodeInt, ep]) => {
+        const wp = watchProgress[`${a.animeId}:${episodeInt}`]
+        return {
+          episodeInt,
+          files: ep.files,
+          totalBytes: ep.totalBytes,
+          watched: !!wp?.watched,
+          watchedAt: wp?.watchedAt
+        }
+      })
+      .sort((x, y) => Number(x.episodeInt) - Number(y.episodeInt))
+    return {
+      animeId: a.animeId,
+      animeName: a.animeName,
+      posterUrlSmall: a.posterUrlSmall,
+      bytes,
+      bytesHot: a.bytesHot,
+      bytesCold: a.bytesCold,
+      fileCount: a.fileCount,
+      episodes
+    }
+  }).sort((x, y) => y.bytes - x.bytes)
+
+  return { totalBytes, bytesHot: totalHot, bytesCold: totalCold, fileCount: totalFiles, perAnime }
+}
+
+interface CleanupCandidate {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  bytes: number
+  watchedAt: number
+}
+
+function findCleanupCandidates(days: number): CleanupCandidate[] {
+  if (!days || days <= 0) return []
+  const watchProgress = store.get('watchProgress') as Record<string, { watched?: boolean; watchedAt?: number }>
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  const cutoff = Date.now() - days * 86400_000
+  const candidates: CleanupCandidate[] = []
+
+  for (const [key, entry] of Object.entries(watchProgress)) {
+    if (!entry.watched || !entry.watchedAt || entry.watchedAt > cutoff) continue
+    const sep = key.indexOf(':')
+    if (sep < 0) continue
+    const animeId = key.slice(0, sep)
+    const episodeInt = key.slice(sep + 1)
+    const anime = downloaded[animeId]
+    if (!anime) continue
+    const animeName = anime.titles?.romaji || anime.titles?.ru || anime.title
+    if (!animeName) continue
+    if (episodeHasInProgressDownload(animeName, episodeInt)) continue
+
+    const animeDirName = sanitizeFilename(animeName)
+    const padded = episodeInt.padStart(2, '0')
+    const base = sanitizeFilename(`${animeName} - ${padded}`)
+    let bytes = 0
+    let hasFile = false
+    for (const dir of storageDirsForScan()) {
+      const animeDir = path.join(dir, animeDirName)
+      try {
+        const files = fs.readdirSync(animeDir)
+        for (const file of files) {
+          if (file.startsWith(base) && (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))) {
+            hasFile = true
+            try { bytes += fs.statSync(path.join(animeDir, file)).size } catch { /* ignore */ }
+          }
+        }
+      } catch { /* dir missing */ }
+    }
+    if (!hasFile) continue
+    candidates.push({
+      animeId: Number(animeId),
+      animeName,
+      episodeInt,
+      bytes,
+      watchedAt: entry.watchedAt
+    })
+  }
+  return candidates
+}
+
+let cleanupRunning = false
+
+async function runWatchedCleanup(force = false): Promise<{
+  ranAt: number
+  deletedCount: number
+  freedBytes: number
+  items: CleanupCandidate[]
+}> {
+  const ranAt = Date.now()
+  if (cleanupRunning) return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
+  cleanupRunning = true
+  try {
+    const days = store.get('autoCleanupWatchedDays') as number
+    if ((!days || days <= 0) && !force) {
+      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
+    }
+    const candidates = findCleanupCandidates(days)
+    if (candidates.length === 0) {
+      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
+    }
+
+    const requireConfirm = store.get('autoCleanupConfirm') as boolean
+    if (requireConfirm && !force) {
+      broadcastToAll('storage:cleanup-pending', { candidates })
+      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
+    }
+
+    const affectedAnime = new Set<string>()
+    let freedBytes = 0
+    const log = store.get('cleanupLog') as Array<{ ranAt: number; animeId: number; animeName: string; episodeInt: string; bytes: number }>
+    const items: CleanupCandidate[] = []
+
+    for (const c of candidates) {
+      const { bytesDeleted } = deleteEpisodeFiles(c.animeName, c.episodeInt, c.animeId)
+      freedBytes += bytesDeleted
+      affectedAnime.add(c.animeName)
+      log.unshift({ ranAt, animeId: c.animeId, animeName: c.animeName, episodeInt: c.episodeInt, bytes: bytesDeleted })
+      items.push({ ...c, bytes: bytesDeleted })
+    }
+
+    while (log.length > 100) log.pop()
+    store.set('cleanupLog', log)
+
+    const result = { ranAt, deletedCount: items.length, freedBytes, items }
+    store.set('autoCleanupLastRun', { ranAt, deletedCount: result.deletedCount, freedBytes: result.freedBytes })
+
+    for (const animeName of affectedAnime) {
+      try {
+        const data = scanEpisodeFiles(animeName)
+        broadcastToAll('file:episodes-changed', animeName, data)
+      } catch { /* ignore */ }
+    }
+    broadcastToAll('storage:cleanup-finished', result)
+    return result
+  } finally {
+    cleanupRunning = false
+  }
+}
+
+function migrateWatchProgressV2(): void {
+  if (store.get('watchProgressMigrationV2') as boolean) return
+  const all = store.get('watchProgress') as Record<string, { updatedAt: number; watched?: boolean; watchedAt?: number; position: number; duration: number }>
+  let changed = false
+  for (const entry of Object.values(all)) {
+    if (entry.watched && !entry.watchedAt) {
+      entry.watchedAt = entry.updatedAt
+      changed = true
+    }
+  }
+  if (changed) store.set('watchProgress', all)
+  store.set('watchProgressMigrationV2', true)
 }
 
 function registerIpcHandlers(): void {
@@ -1520,27 +1939,30 @@ function registerIpcHandlers(): void {
 
   // Watch progress tracking
   ipcMain.handle('watch-progress:save', (_event, animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
     const key = `${animeId}:${episodeInt}`
     const prev = all[key]
+    const nowWatched = watched || prev?.watched || false
+    const justWatched = nowWatched && !prev?.watched
     all[key] = {
       position,
       duration,
       updatedAt: Date.now(),
-      watched: watched || prev?.watched || false
+      watched: nowWatched,
+      watchedAt: justWatched ? Date.now() : prev?.watchedAt
     }
     store.set('watchProgress', all)
   })
 
   ipcMain.handle('watch-progress:get', (_event, animeId: number, episodeInt: string) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
     return all[`${animeId}:${episodeInt}`] || null
   })
 
   ipcMain.handle('watch-progress:get-all', (_event, animeId: number) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
     const prefix = `${animeId}:`
-    const out: Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }> = {}
+    const out: Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }> = {}
     for (const [key, val] of Object.entries(all)) {
       if (key.startsWith(prefix)) {
         out[key.slice(prefix.length)] = val
@@ -1863,68 +2285,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
-    fileCheckCache.delete(animeName)
-    const animeDirName = sanitizeFilename(animeName)
-    const dirsToCheck = [getDownloadDir()]
-    if (isAdvancedStorage()) {
-      const coldDir = getColdStorageDir()
-      if (coldDir) dirsToCheck.push(coldDir)
-    }
-
-    const padded = episodeInt.padStart(2, '0')
-    const base = sanitizeFilename(`${animeName} - ${padded}`)
-
-    if (translationId && animeId) {
-      // Delete specific translation's files — find by author tag from metadata
-      const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
-      const metaKey = `${animeId}:${episodeInt}:${translationId}`
-      const legacyKey = `${animeId}:${episodeInt}`
-      const meta = episodes[metaKey] || episodes[legacyKey]
-      if (meta) {
-        const authorTag = sanitizeFilename(meta.author)
-        const taggedBase = `${base} [${authorTag}]`
-        for (const dir of dirsToCheck) {
-          const animeDir = path.join(dir, animeDirName)
-          for (const ext of ['.mkv', '.mp4', '.ass']) {
-            // Try tagged filename first
-            const taggedPath = path.join(animeDir, `${taggedBase}${ext}`)
-            try { fs.unlinkSync(taggedPath) } catch { /* ignore */ }
-            // Also try legacy filename (for older downloads)
-            const legacyPath = path.join(animeDir, `${base}${ext}`)
-            try { fs.unlinkSync(legacyPath) } catch { /* ignore */ }
-          }
-        }
-        delete episodes[metaKey]
-        delete episodes[legacyKey]
-        store.set('downloadedEpisodes', episodes)
-      }
-    } else {
-      // Delete all versions of this episode (legacy behavior)
-      for (const dir of dirsToCheck) {
-        const animeDir = path.join(dir, animeDirName)
-        // List directory and delete all matching files for this episode
-        try {
-          const files = fs.readdirSync(animeDir)
-          for (const file of files) {
-            if (file.startsWith(base) && (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))) {
-              try { fs.unlinkSync(path.join(animeDir, file)) } catch { /* ignore */ }
-            }
-          }
-        } catch { /* dir doesn't exist */ }
-      }
-
-      // Clean up all episode metadata for this episode
-      if (animeId) {
-        const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
-        const prefix = `${animeId}:${episodeInt}`
-        for (const key of Object.keys(episodes)) {
-          if (key === prefix || key.startsWith(prefix + ':')) {
-            delete episodes[key]
-          }
-        }
-        store.set('downloadedEpisodes', episodes)
-      }
-    }
+    deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
   })
 
   ipcMain.handle('download:pick-dir', async () => {
@@ -1976,6 +2337,14 @@ function registerIpcHandlers(): void {
       }
     })
     return result
+  })
+
+  ipcMain.handle('storage:get-usage', async () => {
+    return scanStorageUsage()
+  })
+
+  ipcMain.handle('storage:run-cleanup', async (_event, opts?: { force?: boolean }) => {
+    return runWatchedCleanup(!!opts?.force)
   })
 
   // Shikimori integration
@@ -3279,6 +3648,15 @@ app.whenReady().then(async () => {
   })
 
   registerIpcHandlers()
+
+  migrateWatchProgressV2()
+
+  // Auto-cleanup of watched episodes — opt-in. Run 60s after launch (warmup),
+  // then once every 24h. First run that finds candidates while
+  // `autoCleanupConfirm` is still true emits `storage:cleanup-pending` instead
+  // of deleting; the renderer's confirm modal then calls back with force=true.
+  setTimeout(() => { void runWatchedCleanup() }, 60_000)
+  setInterval(() => { void runWatchedCleanup() }, 24 * 60 * 60 * 1000)
 
   if (getQueueLength() > 0) {
     startSyncTimer()

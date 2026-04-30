@@ -26,6 +26,8 @@ const selectedAuthor = ref('')
 const dataSource = ref<'api' | 'cache' | null>(null)
 const isOffline = computed(() => dataSource.value === 'cache')
 
+const isStarred = ref(false)
+
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
 const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
 
@@ -353,6 +355,8 @@ onMounted(async () => {
   } else {
     translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
   }
+
+  window.api.libraryHas(props.animeId).then((v) => { isStarred.value = v }).catch(() => {})
 
   try {
     const res = await window.api.getAnime(props.animeId)
@@ -781,6 +785,22 @@ async function continueWatching(): Promise<void> {
   }
 }
 
+async function toggleStar(): Promise<void> {
+  if (!anime.value) return
+  const stripped: AnimeSearchResult = {
+    id: anime.value.id,
+    title: anime.value.title,
+    titles: anime.value.titles,
+    posterUrlSmall: anime.value.posterUrlSmall,
+    numberOfEpisodes: anime.value.numberOfEpisodes,
+    type: anime.value.type,
+    typeTitle: anime.value.typeTitle,
+    year: anime.value.year,
+    season: anime.value.season
+  }
+  isStarred.value = await window.api.libraryToggle(JSON.parse(JSON.stringify(stripped)))
+}
+
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
@@ -1123,6 +1143,12 @@ function typeChip(type: string): { short: string; color: string } {
               <path d="M8 5v14l11-7z" />
             </svg>
             {{ continueLabel }}
+          </button>
+          <button class="library-btn" :class="{ active: isStarred }" @click="toggleStar">
+            <svg viewBox="0 0 24 24" :fill="isStarred ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+            </svg>
+            {{ isStarred ? 'In Library' : 'Add to Library' }}
           </button>
         </div>
         <div class="anime-info">
@@ -1571,6 +1597,34 @@ function typeChip(type: string): { short: string; color: string } {
   background: #2a2a4a;
   color: #6a6a8a;
   cursor: not-allowed;
+}
+
+.library-btn {
+  width: 200px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  color: #a0a0c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.library-btn:hover {
+  background: #16213e;
+  border-color: #3a3a5e;
+  color: #fbbf24;
+}
+
+.library-btn.active {
+  color: #fbbf24;
+  border-color: #fbbf24;
 }
 
 .anime-info {

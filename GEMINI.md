@@ -2,7 +2,7 @@
 
 ## Project
 
-Electron + Vue 3 + TypeScript desktop app for downloading anime. See `DESIGN.md` for architecture and `TODO.md` for planned work.
+Electron + Vue 3 + TypeScript desktop app for downloading anime. See `DESIGN.md` for architecture and GitHub Issues for planned work.
 
 ## Stack
 
@@ -34,10 +34,9 @@ jj git push
 ## Commit & release workflow
 
 When asked to "make a commit" or "make a cl":
-1. `jj describe -m "message"` — describe the working copy
+1. `jj describe -m "message"` — describe the working copy (reference GitHub issues as needed)
 2. Bump version in `package.json` if asked (ask which bump if unclear)
-3. Strike completed items in `TODO.md` if applicable
-4. `jj bookmark set main -r @` then `jj git push`
+3. `jj bookmark set main -r @` then `jj git push`
 
 CI auto-creates a GitHub release when `package.json` version changes on main.
 

@@ -79,6 +79,27 @@ const api = {
   offStorageMoveToColdProgress: () => {
     ipcRenderer.removeAllListeners('storage:move-to-cold-progress')
   },
+  storageGetUsage: () => ipcRenderer.invoke('storage:get-usage') as Promise<StorageUsage>,
+  storageRunCleanup: (opts?: { force?: boolean }) =>
+    ipcRenderer.invoke('storage:run-cleanup', opts) as Promise<CleanupResult>,
+  onStorageUsageProgress: (callback: (data: { scanned: number; total: number }) => void) => {
+    ipcRenderer.on('storage:usage-progress', (_event, data) => callback(data))
+  },
+  offStorageUsageProgress: () => {
+    ipcRenderer.removeAllListeners('storage:usage-progress')
+  },
+  onStorageCleanupPending: (callback: (data: { candidates: CleanupCandidate[] }) => void) => {
+    ipcRenderer.on('storage:cleanup-pending', (_event, data) => callback(data))
+  },
+  offStorageCleanupPending: () => {
+    ipcRenderer.removeAllListeners('storage:cleanup-pending')
+  },
+  onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => {
+    ipcRenderer.on('storage:cleanup-finished', (_event, data) => callback(data))
+  },
+  offStorageCleanupFinished: () => {
+    ipcRenderer.removeAllListeners('storage:cleanup-finished')
+  },
 
   downloadScanMerge: () => ipcRenderer.invoke('download:scan-merge'),
   downloadFixMetadata: () => ipcRenderer.invoke('download:fix-metadata'),

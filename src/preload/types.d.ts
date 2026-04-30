@@ -69,6 +69,14 @@ interface Api {
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>
   onStorageMoveToColdProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
   offStorageMoveToColdProgress: () => void
+  storageGetUsage: () => Promise<StorageUsage>
+  storageRunCleanup: (opts?: { force?: boolean }) => Promise<CleanupResult>
+  onStorageUsageProgress: (callback: (data: { scanned: number; total: number }) => void) => void
+  offStorageUsageProgress: () => void
+  onStorageCleanupPending: (callback: (data: { candidates: CleanupCandidate[] }) => void) => void
+  offStorageCleanupPending: () => void
+  onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => void
+  offStorageCleanupFinished: () => void
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
     Promise<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>
@@ -219,6 +227,57 @@ interface WatchProgressEntry {
   duration: number
   updatedAt: number
   watched?: boolean
+  watchedAt?: number
+}
+
+interface StorageEpisodeUsage {
+  episodeInt: string
+  files: { mkv?: { path: string; size: number }; mp4?: { path: string; size: number }; ass?: { path: string; size: number } }
+  totalBytes: number
+  watched: boolean
+  watchedAt?: number
+}
+
+interface StorageAnimeUsage {
+  animeId: number
+  animeName: string
+  posterUrlSmall: string
+  bytes: number
+  bytesHot: number
+  bytesCold: number
+  fileCount: number
+  episodes: StorageEpisodeUsage[]
+}
+
+interface StorageUsage {
+  totalBytes: number
+  bytesHot: number
+  bytesCold: number
+  fileCount: number
+  perAnime: StorageAnimeUsage[]
+}
+
+interface CleanupCandidate {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  bytes: number
+  watchedAt: number
+}
+
+interface CleanupResult {
+  ranAt: number
+  deletedCount: number
+  freedBytes: number
+  items: CleanupCandidate[]
+}
+
+interface CleanupLogEntry {
+  ranAt: number
+  animeId: number
+  animeName: string
+  episodeInt: string
+  bytes: number
 }
 
 interface ContinueWatchingEntry {

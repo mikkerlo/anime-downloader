@@ -238,6 +238,8 @@ const api = {
     ipcRenderer.invoke('shikimori:get-anime-rates', status) as Promise<ShikiAnimeRateEntry[]>,
   shikimoriGetFriendsActivity: () =>
     ipcRenderer.invoke('shikimori:get-friends-activity') as Promise<ShikiFriendActivityEntry[]>,
+  shikimoriGetCalendar: (force = false) =>
+    ipcRenderer.invoke('shikimori:get-calendar', force) as Promise<CalendarEntry[]>,
   shikimoriGetRelated: (malId: number) =>
     ipcRenderer.invoke('shikimori:get-related', malId) as Promise<ShikiRelatedEntry[]>,
   onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => {

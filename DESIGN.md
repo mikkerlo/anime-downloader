@@ -48,6 +48,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
 | `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
+| `src/renderer/src/components/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
 | `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, JASSUB ASS subtitles, MKV remux, keyboard controls |
 | `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
 
@@ -339,6 +340,7 @@ LibraryView shows both with indicators:
 | `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
 | `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
+| `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache invalidated on `shikimori:rate-updated`/`shikimori:rates-refreshed`/logout. Optional `force` flag bypasses the cache |
 | `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
@@ -435,6 +437,7 @@ interface EpisodeMeta {
 | `skipDetections` | object | `{}` | Per-anime OP/ED boundaries from local Chromaprint analysis, keyed by `animeId` |
 | `skipFingerprintCache` | object | `{}` | Per-file Chromaprint fingerprint cache, keyed by `animeId:episodeInt:fileSize:mtime` |
 | `enableLocalSkipDetection` | boolean | `true` | Run Chromaprint OP/ED detection in the background after each download/merge completes; turn off to disable background CPU usage |
+| `calendarView` | string | `'week'` | Default time range for the Airing Calendar tab: `week` (1×7 grid) or `month` (4×7 grid). Toggle in Settings > General |
 
 ## Watch Progress & Resume
 
@@ -583,6 +586,18 @@ An in-memory mutex (`syncInProgress`) prevents overlapping drains. Items are pro
 ### Friends Activity Feed
 
 `FriendsActivityView.vue` shows a chronological feed of recent anime activity from the user's Shikimori friends. The main process fetches `GET /api/users/:id/friends`, then for each friend calls `GET /api/users/:id/history?limit=100&target_type=Anime` (concurrency 2 to respect rate limits — same pattern as `getFriendsRatesForAnime`). Entries with a present `target` are mapped to `ShikiFriendActivity` records, merged into a single list, sorted globally by `created_at` desc, and trimmed to the top 50 most-recent events overall (not per-friend). The per-friend fetch uses Shikimori's max page size so a single very-active friend can fully populate the feed if their entries are all newer. MAL IDs are resolved via `lookupByMalIds` so feed rows can deep-link into `AnimeDetailView`. The renderer caches results in-memory for 5 minutes to avoid re-fetching on tab switches; the description HTML is stripped of tags before display. The sidebar entry only appears when logged in to Shikimori.
+
+### Airing Calendar
+
+`CalendarView.vue` (sidebar entry gated on Shikimori login) renders a Mon–Sun grid of upcoming episodes for shows the user tracks as `watching` / `rewatching` / `planned`. The grid is N rows × 7 columns where N comes from the `calendarView` setting (`'week'` → 1, `'month'` → 4).
+
+Data flow: `shikimori:get-calendar` calls Shikimori's public, unauthenticated `GET /api/calendar` (a sitewide list of currently-airing series), filters entries by the MAL ID set built from `shikimoriUserRates`, then resolves each surviving entry to a smotret-anime row via `lookupByMalIds` so card clicks deep-link into `AnimeDetailView` (rows that fail resolution show a "Not on smotret-anime" badge and are non-clickable). The handler returns `CalendarEntry[]` containing `{ malId, animeId | null, name, posterUrl, kind, episodeInt, nextEpisodeAt, userStatus }`. `episodeInt` is `rate.episodes + 1` so the card always shows the user's next-up episode label. The MAL ID lookup falls back to `shikiAnime.id` when older cached rates lack `rate.target_id`. If `shikimoriUserRates` is empty (user logged in but never opened ShikimoriView), the handler does an inline `fetchAndCacheShikimoriRates()` so the calendar isn't stuck empty on first use.
+
+Cache: a 5-minute in-memory cache lives in main (`calendarCache`) — `/api/calendar` returns hundreds of entries and changes slowly, so view re-mounts during normal navigation reuse the same payload. The cache is invalidated whenever the underlying tracked-set could change: every `broadcastToAll('shikimori:rate-updated', …)` site, the `broadcastToAll('shikimori:rates-refreshed', …)` site, and `shikimori:logout`. The IPC accepts an optional `force` arg (the topbar refresh button passes `true`) to bypass the cache.
+
+Renderer: `CalendarView` computes `pageStart` from a locale-aware first-day-of-week (`Intl.Locale(navigator.language).getWeekInfo?.().firstDay` — falls back to Monday). It bins entries by `new Date(nextEpisodeAt)` (the ISO offset is preserved so the platform converts to local TZ) into the configured rows × 7 grid. On the current page the grid is forward-looking — entries with timestamps before `now()` are dropped, so an episode that already aired earlier today disappears from today's cell. Today's cell is highlighted; status chips render Watching / Rewatching / Planned.
+
+Prev/next chevron buttons in the topbar shift `pageOffset` by ±1 page (1 week in week mode, 4 weeks in month mode). The center button shows the current range and clicking it resets to "now"; on past/future pages the `now()` floor is dropped (every entry that falls in the page range is shown) and the today highlight disappears. Settings → General → "Calendar View" toggles the mode and broadcasts a `calendar-view-changed` window event so the open view re-syncs without a manual refresh.
 
 ### AnimeDetailView Panel
 

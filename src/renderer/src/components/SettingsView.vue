@@ -39,6 +39,7 @@ const appVersion = ref('')
 const updateStatus = ref<{ status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'; version?: string; percent?: number; error?: string }>({ status: 'idle' })
 
 const notificationMode = ref('off')
+const calendarView = ref<'week' | 'month'>('week')
 const speedLimitPreset = ref('0')
 const customSpeedLimit = ref(1)
 const concurrentDownloads = ref(2)
@@ -594,6 +595,7 @@ onMounted(async () => {
   coldStorageDir.value = (await window.api.getSetting('coldStorageDir') as string) || ''
   autoMoveToCold.value = (await window.api.getSetting('autoMoveToCold') as boolean) || false
   notificationMode.value = (await window.api.getSetting('notificationMode') as string) || 'off'
+  calendarView.value = ((await window.api.getSetting('calendarView')) as 'week' | 'month') || 'week'
   concurrentDownloads.value = (await window.api.getSetting('concurrentDownloads') as number) || 2
   const savedSpeedLimit = (await window.api.getSetting('downloadSpeedLimit') as number) || 0
   const PRESETS = [0, 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024]
@@ -729,6 +731,11 @@ watch(token, (val) => {
 // Immediate watchers for dropdowns/toggles
 watch(translationType, (val) => { if (loaded.value) autoSave('translationType', val) })
 watch(notificationMode, (val) => { if (loaded.value) autoSave('notificationMode', val) })
+watch(calendarView, (val) => {
+  if (!loaded.value) return
+  autoSave('calendarView', val)
+  window.dispatchEvent(new Event('calendar-view-changed'))
+})
 watch(concurrentDownloads, (val) => { if (loaded.value) autoSave('concurrentDownloads', val) })
 watch(speedLimitPreset, (val) => {
   if (!loaded.value) return
@@ -817,6 +824,15 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
             <option value="off">Off</option>
             <option value="each">Each Episode</option>
             <option value="queue">Queue Complete</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="calendar-view">Calendar View</label>
+          <p class="setting-hint">Default time range shown in the Airing Calendar tab.</p>
+          <select id="calendar-view" v-model="calendarView" class="setting-input setting-select">
+            <option value="week">Week (7 days)</option>
+            <option value="month">Month (4 weeks)</option>
           </select>
         </div>
 

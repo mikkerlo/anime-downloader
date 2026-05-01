@@ -59,6 +59,13 @@ const shikiRelated = ref<ShikiRelatedEntry[]>([])
 const relatedLoading = ref(false)
 const relatedCollapsed = ref(true)
 
+// Skip detection (Chromaprint local fingerprinting — debug panel only for now)
+const skipPanelCollapsed = ref(true)
+const skipDetections = ref<ShowSkipDetections | null>(null)
+const skipAnalyzing = ref(false)
+const skipProgress = ref<SkipDetectorProgress | null>(null)
+const skipError = ref<string>('')
+
 const KIND_LABELS: Record<string, string> = {
   tv: 'TV',
   tv_13: 'TV',
@@ -347,6 +354,88 @@ async function loadShikimoriData(): Promise<void> {
   await Promise.all([ratePromise, friendsPromise, detailsPromise, relatedPromise])
 }
 
+// --- Skip Detection (debug) -------------------------------------------------
+
+interface SkipEpisodeInput { episodeInt: string; episodeLabel: string; filePath: string }
+
+const skipEpisodeInputs = computed<SkipEpisodeInput[]>(() => {
+  const inputs: SkipEpisodeInput[] = []
+  const seen = new Set<string>()
+  // Walk filteredEpisodes to keep an ordered, label-aware list. fileStatus is keyed by episodeInt.
+  for (const ep of filteredEpisodes.value) {
+    const files = fileStatus.value[ep.episodeInt]
+    if (!files || files.length === 0) continue
+    // Prefer .mkv (merged) over .mp4 (raw); first match wins.
+    const mkv = files.find(f => f.type === 'mkv')
+    const pick = mkv || files[0]
+    if (!pick || !pick.filePath) continue
+    if (seen.has(ep.episodeInt)) continue
+    seen.add(ep.episodeInt)
+    inputs.push({ episodeInt: ep.episodeInt, episodeLabel: ep.episodeFull || `Episode ${ep.episodeInt}`, filePath: pick.filePath })
+  }
+  return inputs
+})
+
+function formatSkipTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '—'
+  const total = Math.round(sec)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+const skipProgressLabel = computed<string>(() => {
+  const p = skipProgress.value
+  if (!p) return ''
+  if (p.phase === 'fingerprinting') {
+    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : ''
+    return `Fingerprinting ${p.current}/${p.total}${label}`
+  }
+  if (p.phase === 'comparing') {
+    return `Comparing pairs ${p.current}/${p.total}`
+  }
+  return 'Done'
+})
+
+async function loadSkipDetections(): Promise<void> {
+  if (!anime.value) return
+  try {
+    const res = await window.api.skipDetectorGetDetections(props.animeId)
+    skipDetections.value = res
+  } catch (err) {
+    console.error('Failed to load skip detections:', err)
+  }
+}
+
+async function runSkipAnalysis(): Promise<void> {
+  if (skipAnalyzing.value) return
+  const inputs = skipEpisodeInputs.value
+  if (inputs.length < 2) {
+    skipError.value = 'Need at least 2 downloaded episodes'
+    return
+  }
+  skipError.value = ''
+  skipAnalyzing.value = true
+  skipProgress.value = { animeId: props.animeId, phase: 'fingerprinting', current: 0, total: inputs.length }
+  try {
+    const result = await window.api.skipDetectorAnalyzeShow(props.animeId, inputs)
+    skipDetections.value = result
+  } catch (err) {
+    skipError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    skipAnalyzing.value = false
+    skipProgress.value = null
+  }
+}
+
+async function cancelSkipAnalysis(): Promise<void> {
+  try {
+    await window.api.skipDetectorCancel()
+  } catch (err) {
+    console.error('Failed to cancel skip analysis:', err)
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack)
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
@@ -486,6 +575,12 @@ onMounted(async () => {
     offlineQueueLength.value = s.queueLength
     lastSyncError.value = s.lastSyncError
   })
+  window.api.onSkipDetectorProgress((data) => {
+    if (data.animeId !== props.animeId) return
+    skipProgress.value = data
+  })
+  loadSkipDetections()
+
   window.api.onShikimoriSyncStatus((data) => {
     syncState.value = data.state
     offlineQueueLength.value = data.queueLength
@@ -503,6 +598,7 @@ onUnmounted(() => {
   window.api.offShikimoriAnimeDetailsUpdated()
   window.api.offShikimoriOfflineQueueChanged()
   window.api.offShikimoriSyncStatus()
+  window.api.offSkipDetectorProgress()
 })
 
 async function triggerSyncNow(): Promise<void> {
@@ -1331,6 +1427,89 @@ function typeChip(type: string): { short: string; color: string } {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="skip-panel">
+        <div class="skip-header" @click="skipPanelCollapsed = !skipPanelCollapsed">
+          <div class="skip-header-left">
+            <svg
+              class="skip-chevron"
+              :class="{ collapsed: skipPanelCollapsed }"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/>
+            </svg>
+            <span class="skip-label">Skip Detection (debug)</span>
+          </div>
+          <span v-if="skipAnalyzing" class="skip-summary">{{ skipProgressLabel }}</span>
+          <span v-else-if="skipDetections" class="skip-summary">
+            {{ Object.keys(skipDetections.perEpisode).length }} episodes analyzed
+          </span>
+          <span v-else class="skip-summary">{{ skipEpisodeInputs.length }} downloaded</span>
+        </div>
+        <div v-if="!skipPanelCollapsed" class="skip-body">
+          <div v-if="skipEpisodeInputs.length < 2" class="skip-disabled">
+            Need at least 2 downloaded episodes to analyze. Currently downloaded: {{ skipEpisodeInputs.length }}.
+          </div>
+          <template v-else>
+            <div class="skip-actions">
+              <button
+                v-if="!skipAnalyzing"
+                class="skip-button"
+                @click="runSkipAnalysis"
+              >
+                {{ skipDetections ? 'Re-analyze' : `Analyze ${skipEpisodeInputs.length} episodes` }}
+              </button>
+              <button
+                v-else
+                class="skip-button skip-button-cancel"
+                @click="cancelSkipAnalysis"
+              >Cancel</button>
+              <span v-if="skipAnalyzing" class="skip-progress-text">{{ skipProgressLabel }}</span>
+            </div>
+            <div v-if="skipError" class="skip-error">{{ skipError }}</div>
+            <div v-if="skipDetections" class="skip-results">
+              <div class="skip-results-meta">
+                Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} ·
+                window {{ skipDetections.algorithm.windowSec }}s ·
+                min run {{ skipDetections.algorithm.minRunSec }}s ·
+                threshold {{ skipDetections.algorithm.matchBitThreshold }}/32 bits
+              </div>
+              <table class="skip-table">
+                <thead>
+                  <tr>
+                    <th>Episode</th>
+                    <th>OP</th>
+                    <th>ED</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="ep in filteredEpisodes" :key="ep.episodeInt">
+                    <template v-if="skipDetections.perEpisode[ep.episodeInt]">
+                      <td>{{ ep.episodeFull || `Episode ${ep.episodeInt}` }}</td>
+                      <td>
+                        <template v-if="skipDetections.perEpisode[ep.episodeInt].op">
+                          {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.startSec) }}–{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.endSec) }}
+                          <span class="skip-pair-count">({{ skipDetections.perEpisode[ep.episodeInt].op!.pairCount }} pairs)</span>
+                        </template>
+                        <span v-else class="skip-empty">—</span>
+                      </td>
+                      <td>
+                        <template v-if="skipDetections.perEpisode[ep.episodeInt].ed">
+                          {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.startSec) }}–{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.endSec) }}
+                          <span class="skip-pair-count">({{ skipDetections.perEpisode[ep.episodeInt].ed!.pairCount }} pairs)</span>
+                        </template>
+                        <span v-else class="skip-empty">—</span>
+                      </td>
+                      <td>{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].durationSec) }}</td>
+                    </template>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -2285,6 +2464,140 @@ function typeChip(type: string): { short: string; color: string } {
   border-radius: 10px;
   padding: 14px 18px;
   margin-bottom: 20px;
+}
+
+.skip-panel {
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+
+.skip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.skip-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skip-chevron {
+  color: #a0a0b8;
+  transition: transform 0.15s;
+}
+
+.skip-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.skip-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #a0a0b8;
+}
+
+.skip-summary {
+  font-size: 0.8rem;
+  color: #6a6a8a;
+}
+
+.skip-body {
+  margin-top: 10px;
+}
+
+.skip-disabled {
+  font-size: 0.85rem;
+  color: #6a6a8a;
+  font-style: italic;
+}
+
+.skip-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.skip-button {
+  background-color: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1f4980;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.skip-button:hover {
+  background-color: #1a4880;
+}
+
+.skip-button-cancel {
+  background-color: #5a2222;
+  border-color: #803030;
+}
+
+.skip-button-cancel:hover {
+  background-color: #803030;
+}
+
+.skip-progress-text {
+  font-size: 0.8rem;
+  color: #a0a0b8;
+}
+
+.skip-error {
+  font-size: 0.8rem;
+  color: #ff6a6a;
+  margin-bottom: 10px;
+}
+
+.skip-results-meta {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+  margin-bottom: 8px;
+}
+
+.skip-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.skip-table th {
+  text-align: left;
+  padding: 4px 8px;
+  color: #a0a0b8;
+  font-weight: 600;
+  border-bottom: 1px solid #0f3460;
+}
+
+.skip-table td {
+  padding: 4px 8px;
+  color: #d0d0e0;
+  border-bottom: 1px solid #1a2a4d;
+}
+
+.skip-table tr:last-child td {
+  border-bottom: none;
+}
+
+.skip-pair-count {
+  color: #6a6a8a;
+  font-size: 0.7rem;
+  margin-left: 4px;
+}
+
+.skip-empty {
+  color: #4a4a6a;
 }
 
 .related-header {

@@ -32,6 +32,9 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
 | `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
+| `src/main/fpcalc-binaries.ts` | Auto-download Chromaprint `fpcalc` binary on first launch |
+| `src/main/fingerprint.ts` | Spawns fpcalc on a media file; parses raw 32-bit fingerprint hash array |
+| `src/main/skip-detector.ts` | Per-show OP/ED detection via pairwise Hamming-distance matching |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |
@@ -298,6 +301,12 @@ LibraryView shows both with indicators:
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |
 | `ffmpeg:download-progress` | send | FFmpeg/ffprobe download progress on first launch |
+| `fpcalc:download-progress` | send | Chromaprint fpcalc download progress on first launch |
+| `skip-detector:analyze-show` | invoke | Run Chromaprint fingerprinting + pairwise comparison for the given anime's downloaded episodes; persists per-episode OP/ED boundaries |
+| `skip-detector:get-detections` | invoke | Returns cached `ShowSkipDetections` for an anime (or `null`) |
+| `skip-detector:cancel` | invoke | Aborts an in-progress analysis (kills ffmpeg/fpcalc child processes) |
+| `skip-detector:cache-stats` | invoke | Returns the current count of cached fingerprints across all shows |
+| `skip-detector:analyze-progress` | send | Real-time analysis progress (`fingerprinting` / `comparing` / `done`, current/total) |
 | `app:version` | invoke | Get app version from package.json |
 | `update:check` | invoke | Check GitHub for newer version via electron-updater |
 | `update:download` | invoke | Download available update |
@@ -420,6 +429,8 @@ interface EpisodeMeta {
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
 | `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
 | `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
+| `skipDetections` | object | `{}` | Per-anime OP/ED boundaries from local Chromaprint analysis, keyed by `animeId` |
+| `skipFingerprintCache` | object | `{}` | Per-file Chromaprint fingerprint cache, keyed by `animeId:episodeInt:fileSize:mtime` |
 
 ## Watch Progress & Resume
 
@@ -596,6 +607,39 @@ Available video codecs for merge (filtered by what ffmpeg reports):
 - `hevc_videotoolbox` — H.265 macOS hardware
 
 Merge progress is calculated from `timemark / probed_duration` (works for all codecs). Sequential merging enforced (one merge at a time). Active merge can be cancelled (kills ffmpeg, cleans partial output).
+
+## Skip Detection (Chromaprint)
+
+Phase 1 of issue #59 — local OP/ED detection by fingerprinting the user's actual downloaded episodes. Currently exposed as a debug-only collapsible panel in `AnimeDetailView`; the player does not yet consume the results.
+
+### Binary distribution
+
+`fpcalc` (Chromaprint v1.5.1) is auto-downloaded on app launch via `src/main/fpcalc-binaries.ts`, mirroring the ffbinaries pattern. The archive (`tar.gz` on Linux/macOS, `zip` on Windows) is fetched from `github.com/acoustid/chromaprint/releases`, extracted with the system `tar` (Windows 10 1803+ ships tar in PATH), and the `fpcalc` binary is `chmod 0o755`'d into `app.getPath('userData')/fpcalc/`. Best-effort: a failed download logs to console, and the skip-detector IPC surfaces a clear error if the binary is missing.
+
+### Fingerprinting (`src/main/fingerprint.ts`)
+
+`fingerprintFile(fpcalcPath, sourcePath, { signal? })` spawns `fpcalc -raw -length 0 <file>`. The bundled fpcalc 1.5.x ships with FFmpeg statically linked and decodes the input itself, so it produces an accurate `DURATION=` line; piping raw PCM via stdin yielded `DURATION=0` (no container metadata) which broke detection. The handler parses `DURATION=` / `FINGERPRINT=` lines into a `Uint32Array`. AbortSignal sends `SIGKILL` to the fpcalc child.
+
+### Detection algorithm (`src/main/skip-detector.ts`)
+
+`analyzeShow(animeId, episodes, opts)` runs in two phases:
+
+1. **Fingerprint** each episode (using `skipFingerprintCache` keyed by `animeId:episodeInt:fileSize:mtime`). Cache hits skip the ffmpeg pipeline entirely.
+2. **Pairwise comparison** for every unordered pair `(i, j)`: for each diagonal offset, slide a 6-second window along the diagonal computing aligned per-hash Hamming distance via `popcount32`; positions where the average distance ≤ 6 bits are "match"; the longest contiguous match run ≥ 18 seconds is recorded. OP search is bounded to the first 8 minutes of each episode; ED search is bounded to the last 8 minutes. Match runs yield `(startA, startB, length)` in hash indices, converted to seconds via each fingerprint's `hashesPerSec`.
+3. **Edge refinement** on each coarse match: a per-hash scan around both edges (allowing brief gaps) tightens boundaries from window-grain to hash-grain. Without refinement, edges have up to one window's worth of slack (~6 s on each side) because the window-average match fires whenever the *majority* of the window matches.
+4. **Aggregate**: per episode, take the median start and median length across all pair samples for OP (and separately for ED). Episodes where no pair produced a qualifying run get `null` for that field — surfaced as `—` in the UI.
+
+Result is persisted in `skipDetections[animeId] = { perEpisode, analyzedAt, episodeCount, algorithm }`. Module-level `AbortController` enforces a single concurrent analysis; subsequent `analyze-show` calls abort the in-flight one.
+
+### Debug panel (`AnimeDetailView`)
+
+Collapsible `Skip Detection (debug)` panel rendered after the Chronology panel. States:
+- **<2 downloaded episodes** → disabled message with the current count.
+- **Idle** → "Analyze N episodes" button.
+- **Analyzing** → progress text (`Fingerprinting K/N — episode label`, then `Comparing pairs K/M`) + Cancel button.
+- **Results** → algorithm metadata header + per-episode table showing OP/ED `mm:ss–mm:ss` with the supporting pair count.
+
+The panel is purely diagnostic for Phase 1 — to validate detection accuracy against real encodes from smotret-anime.ru before wiring overlay highlighting and auto-skip into `PlayerView` in a follow-up.
 
 ## File Layout on Disk
 

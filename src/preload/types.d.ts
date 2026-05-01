@@ -92,6 +92,19 @@ interface Api {
   offScanMergeProgress: () => void
   onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
   offFfmpegDownloadProgress: () => void
+  onFpcalcDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
+  offFpcalcDownloadProgress: () => void
+
+  // Skip detection (Chromaprint)
+  skipDetectorAnalyzeShow: (
+    animeId: number,
+    episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
+  ) => Promise<ShowSkipDetections>
+  skipDetectorGetDetections: (animeId: number) => Promise<ShowSkipDetections | null>
+  skipDetectorCancel: () => Promise<void>
+  skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
+  onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void
+  offSkipDetectorProgress: () => void
 
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
@@ -351,6 +364,45 @@ interface UpdateStatus {
   version?: string
   percent?: number
   error?: string
+}
+
+interface SkipRange {
+  startSec: number
+  endSec: number
+  pairCount: number
+}
+
+interface EpisodeSkipDetection {
+  episodeInt: string
+  episodeLabel: string
+  filePath: string
+  durationSec: number
+  hashesPerSec: number
+  op: SkipRange | null
+  ed: SkipRange | null
+}
+
+interface ShowSkipDetections {
+  animeId: number
+  perEpisode: Record<string, EpisodeSkipDetection>
+  analyzedAt: number
+  episodeCount: number
+  algorithm: {
+    sampleRate: number
+    matchBitThreshold: number
+    minRunSec: number
+    windowSec: number
+    refineBitThreshold: number
+    refineSustainHashes: number
+  }
+}
+
+interface SkipDetectorProgress {
+  animeId: number
+  phase: 'fingerprinting' | 'comparing' | 'done'
+  current: number
+  total: number
+  episodeLabel?: string
 }
 
 interface ShikiUser {

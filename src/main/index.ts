@@ -1737,6 +1737,7 @@ function dropSkipDetectionsForAnime(animeId: number): boolean {
   if (!(key in detections)) return false
   delete detections[key]
   store.set('skipDetections', detections)
+  broadcastToAll('skip-detector:signature-updated', { animeId, perEpisode: {} })
   return true
 }
 
@@ -1750,6 +1751,7 @@ function dropSkipDetectionsForEpisode(animeId: number, episodeInt: string): bool
     delete detections[key]
   }
   store.set('skipDetections', detections)
+  broadcastToAll('skip-detector:signature-updated', { animeId, perEpisode: detections[key]?.perEpisode ?? {} })
   return true
 }
 

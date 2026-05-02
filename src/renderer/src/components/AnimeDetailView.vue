@@ -1463,7 +1463,7 @@ function typeChip(type: string): { short: string; color: string } {
             >
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/>
             </svg>
-            <span class="skip-label">Skip Detection (debug)</span>
+            <span class="skip-label">Skip Detection (experimental)</span>
           </div>
           <span v-if="skipAnalyzing" class="skip-summary">{{ skipProgressLabel }}</span>
           <span v-else-if="skipDetections" class="skip-summary">

@@ -1863,6 +1863,10 @@ onBeforeUnmount(() => {
     clearTimeout(persistVolumeTimer)
     persistVolumeTimer = null
   }
+  if (skipButtonGraceTimer) {
+    clearTimeout(skipButtonGraceTimer)
+    skipButtonGraceTimer = null
+  }
   // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
   if (hevcPromptResolver) {
     const fn = hevcPromptResolver

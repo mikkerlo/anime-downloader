@@ -1735,6 +1735,13 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
   user-select: none;
 }
 
+.skip-backfill {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .toggle-row.disabled {
   opacity: 0.4;
   cursor: not-allowed;

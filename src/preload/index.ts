@@ -145,6 +145,10 @@ const api = {
   skipDetectorCancel: () => ipcRenderer.invoke('skip-detector:cancel') as Promise<void>,
   skipDetectorCacheStats: () =>
     ipcRenderer.invoke('skip-detector:cache-stats') as Promise<{ fingerprintCount: number }>,
+  skipDetectorBackfillAll: () =>
+    ipcRenderer.invoke('skip-detector:backfill-all') as Promise<{ queued: number; alreadyAnalyzed: number; skippedFewEpisodes: number; total: number }>,
+  skipDetectorQueueStatus: () =>
+    ipcRenderer.invoke('skip-detector:queue-status') as Promise<{ currentAnimeId: number | null; queueLength: number }>,
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => {
     ipcRenderer.on('skip-detector:analyze-progress', (_event, data) => callback(data))
   },

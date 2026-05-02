@@ -2418,6 +2418,36 @@ function registerIpcHandlers(): void {
     return runSkipAnalysisInternal(animeId, episodes)
   })
 
+  // One-shot backfill for shows downloaded before Phase 3 was wired in.
+  // Honors the dedupe in `enqueueAutoSkipAnalysis` so a manual click doesn't
+  // double-queue a show that's already running or pending.
+  ipcMain.handle('skip-detector:backfill-all', () => {
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    let queued = 0
+    let alreadyAnalyzed = 0
+    let skippedFewEpisodes = 0
+    let total = 0
+    for (const [idStr, meta] of Object.entries(downloaded)) {
+      const animeId = Number(idStr)
+      if (!Number.isFinite(animeId) || animeId <= 0) continue
+      total++
+      if (detections[idStr]) { alreadyAnalyzed++; continue }
+      const eps = buildAutoSkipEpisodes(meta.title)
+      if (eps.length < 2) { skippedFewEpisodes++; continue }
+      enqueueAutoSkipAnalysis(animeId, meta.title)
+      queued++
+    }
+    return { queued, alreadyAnalyzed, skippedFewEpisodes, total }
+  })
+
+  ipcMain.handle('skip-detector:queue-status', () => {
+    return {
+      currentAnimeId: currentSkipAnalysis?.animeId ?? null,
+      queueLength: autoSkipQueue.length
+    }
+  })
+
 
   // File management handlers
   ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {

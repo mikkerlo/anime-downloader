@@ -629,7 +629,7 @@ Phase 1 of issue #59 — local OP/ED detection by fingerprinting the user's actu
 3. **Edge refinement** on each coarse match: a per-hash scan around both edges (allowing brief gaps) tightens boundaries from window-grain to hash-grain. Without refinement, edges have up to one window's worth of slack (~6 s on each side) because the window-average match fires whenever the *majority* of the window matches.
 4. **Aggregate**: per episode, take the median start and median length across all pair samples for OP (and separately for ED). Episodes where no pair produced a qualifying run get `null` for that field — surfaced as `—` in the UI.
 
-Result is persisted in `skipDetections[animeId] = { perEpisode, analyzedAt, episodeCount, algorithm }`. Module-level `AbortController` enforces a single concurrent analysis; subsequent `analyze-show` calls abort the in-flight one.
+Result is persisted in `skipDetections[animeId] = { perEpisode, analyzedAt, episodeCount, algorithm }`. A module-level `currentAnalysis = { animeId, controller, lastProgress, promise }` tracks the active run: `analyze-show` for the same `animeId` dedupes onto the in-flight promise (so a re-mounted panel rides the existing run), `analyze-show` for a different `animeId` rejects with a clear error rather than silently killing the original. `skip-detector:get-status` lets a re-mounted `AnimeDetailView` rehydrate `skipAnalyzing` + last progress; the `phase === 'done'` broadcast doubles as the completion signal when the awaiting promise has been orphaned by an unmount.
 
 ### Debug panel (`AnimeDetailView`)
 

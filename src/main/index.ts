@@ -2260,17 +2260,32 @@ function registerIpcHandlers(): void {
 
   // Skip detection (Chromaprint local fingerprinting). Phase 1: debug-only,
   // surfaced through a panel in AnimeDetailView. No player integration yet.
-  let skipAnalysisAbort: AbortController | null = null
+  // A single analysis runs at a time (CPU-bound). Concurrent calls for the
+  // *same* animeId dedupe onto the in-flight promise so re-mounting the
+  // panel doesn't kick off a duplicate run; calls for a *different* animeId
+  // are rejected so we don't silently kill the user's first analysis.
+  interface CurrentAnalysis {
+    animeId: number
+    controller: AbortController
+    lastProgress: AnalyzeProgress | null
+    promise: Promise<ShowSkipDetections>
+  }
+  let currentAnalysis: CurrentAnalysis | null = null
 
   ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
     return all[String(animeId)] ?? null
   })
 
+  ipcMain.handle('skip-detector:get-status', () => {
+    if (!currentAnalysis) return null
+    return { animeId: currentAnalysis.animeId, lastProgress: currentAnalysis.lastProgress }
+  })
+
   ipcMain.handle('skip-detector:cancel', () => {
-    if (skipAnalysisAbort) {
-      skipAnalysisAbort.abort()
-      skipAnalysisAbort = null
+    if (currentAnalysis) {
+      currentAnalysis.controller.abort()
+      // currentAnalysis is cleared by the analyze-show finally block
     }
   })
 
@@ -2280,22 +2295,26 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('skip-detector:analyze-show', async (_event, animeId: number, episodes: EpisodeInput[]) => {
+    if (currentAnalysis) {
+      if (currentAnalysis.animeId === animeId) {
+        // Re-mount or duplicate click — ride on the in-flight promise.
+        return currentAnalysis.promise
+      }
+      throw new Error(`Another analysis is in progress for anime ID ${currentAnalysis.animeId}; cancel it first`)
+    }
     const fpcalcPath = getFpcalcPath()
     if (!fpcalcPath) throw new Error('fpcalc binary not available — restart the app to retry the download')
     if (!Array.isArray(episodes) || episodes.length < 2) {
       throw new Error('Need at least 2 downloaded episodes to analyze')
     }
-    if (skipAnalysisAbort) {
-      skipAnalysisAbort.abort()
-    }
-    skipAnalysisAbort = new AbortController()
-    const controller = skipAnalysisAbort
 
+    const controller = new AbortController()
     const broadcastProgress = (p: AnalyzeProgress): void => {
+      if (currentAnalysis) currentAnalysis.lastProgress = p
       broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
     }
 
-    try {
+    const runPromise = (async (): Promise<ShowSkipDetections> => {
       const result = await analyzeShow(animeId, episodes, {
         fpcalcPath,
         signal: controller.signal,
@@ -2314,9 +2333,15 @@ function registerIpcHandlers(): void {
       all[String(animeId)] = result
       store.set('skipDetections', all)
       return result
-    } finally {
-      if (skipAnalysisAbort === controller) skipAnalysisAbort = null
-    }
+    })()
+
+    currentAnalysis = { animeId, controller, lastProgress: null, promise: runPromise }
+    runPromise.finally(() => {
+      if (currentAnalysis && currentAnalysis.controller === controller) {
+        currentAnalysis = null
+      }
+    })
+    return runPromise
   })
 
 

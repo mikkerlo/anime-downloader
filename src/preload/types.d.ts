@@ -101,6 +101,7 @@ interface Api {
     episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
   ) => Promise<ShowSkipDetections>
   skipDetectorGetDetections: (animeId: number) => Promise<ShowSkipDetections | null>
+  skipDetectorGetStatus: () => Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>
   skipDetectorCancel: () => Promise<void>
   skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void

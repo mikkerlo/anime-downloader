@@ -398,12 +398,28 @@ const skipProgressLabel = computed<string>(() => {
 })
 
 async function loadSkipDetections(): Promise<void> {
-  if (!anime.value) return
   try {
     const res = await window.api.skipDetectorGetDetections(props.animeId)
     skipDetections.value = res
   } catch (err) {
     console.error('Failed to load skip detections:', err)
+  }
+}
+
+// Recover the analyzing state if the user navigated away mid-analysis and
+// came back. Without this, the panel would show idle even though main is
+// still chewing on fingerprints — and a fresh "Analyze" click for this
+// same animeId would dedupe onto the in-flight promise (good), while a
+// click on a different anime's panel would now reject (also good).
+async function hydrateSkipStatus(): Promise<void> {
+  try {
+    const status = await window.api.skipDetectorGetStatus()
+    if (status && status.animeId === props.animeId) {
+      skipAnalyzing.value = true
+      skipProgress.value = status.lastProgress
+    }
+  } catch (err) {
+    console.error('Failed to hydrate skip status:', err)
   }
 }
 
@@ -578,8 +594,15 @@ onMounted(async () => {
   window.api.onSkipDetectorProgress((data) => {
     if (data.animeId !== props.animeId) return
     skipProgress.value = data
+    if (data.phase === 'done') {
+      // Background analysis (or one we missed the await on) finished — pick
+      // up the persisted result and clear the analyzing state.
+      skipAnalyzing.value = false
+      loadSkipDetections()
+    }
   })
   loadSkipDetections()
+  hydrateSkipStatus()
 
   window.api.onShikimoriSyncStatus((data) => {
     syncState.value = data.state

@@ -43,6 +43,7 @@ const speedLimitPreset = ref('0')
 const customSpeedLimit = ref(1)
 const concurrentDownloads = ref(2)
 const autoMerge = ref(false)
+const enableLocalSkipDetection = ref(true)
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
 
@@ -557,6 +558,8 @@ onMounted(async () => {
     customSpeedLimit.value = Math.round(savedSpeedLimit / (1024 * 1024) * 10) / 10
   }
   autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
+  const skipSetting = await window.api.getSetting('enableLocalSkipDetection')
+  enableLocalSkipDetection.value = skipSetting === undefined ? true : Boolean(skipSetting)
   backgroundQualityProbe.value = (await window.api.getSetting('backgroundQualityProbe') as boolean) || false
   videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
   ffmpeg.value = await window.api.ffmpegCheck()
@@ -699,6 +702,7 @@ watch(customSpeedLimit, (val) => {
 watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+watch(enableLocalSkipDetection, (val) => { if (loaded.value) autoSave('enableLocalSkipDetection', val) })
 watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
 let suppressVideoCodecSave = false
 watch(videoCodec, (val, oldVal) => {
@@ -1136,6 +1140,16 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
             <input type="checkbox" v-model="autoMerge" :disabled="!ffmpeg?.available" class="toggle-input" />
             <span class="toggle-slider"></span>
             <span class="toggle-label">{{ autoMerge ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Local skip detection</label>
+          <p class="setting-hint">Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the background after each download; first analysis on a show takes a minute or two of CPU.</p>
+          <label class="toggle-row">
+            <input type="checkbox" v-model="enableLocalSkipDetection" class="toggle-input" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">{{ enableLocalSkipDetection ? 'Enabled' : 'Disabled' }}</span>
           </label>
         </div>
 

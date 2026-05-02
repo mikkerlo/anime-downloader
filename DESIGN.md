@@ -307,6 +307,7 @@ LibraryView shows both with indicators:
 | `skip-detector:cancel` | invoke | Aborts an in-progress analysis (kills ffmpeg/fpcalc child processes) |
 | `skip-detector:cache-stats` | invoke | Returns the current count of cached fingerprints across all shows |
 | `skip-detector:analyze-progress` | send | Real-time analysis progress (`fingerprinting` / `comparing` / `done`, current/total) |
+| `skip-detector:signature-updated` | send | Broadcast when an analysis (manual or background-triggered) completes; payload `{ animeId, perEpisode }` for open views to refresh without polling |
 | `app:version` | invoke | Get app version from package.json |
 | `update:check` | invoke | Check GitHub for newer version via electron-updater |
 | `update:download` | invoke | Download available update |
@@ -431,6 +432,7 @@ interface EpisodeMeta {
 | `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
 | `skipDetections` | object | `{}` | Per-anime OP/ED boundaries from local Chromaprint analysis, keyed by `animeId` |
 | `skipFingerprintCache` | object | `{}` | Per-file Chromaprint fingerprint cache, keyed by `animeId:episodeInt:fileSize:mtime` |
+| `enableLocalSkipDetection` | boolean | `true` | Run Chromaprint OP/ED detection in the background after each download/merge completes; turn off to disable background CPU usage |
 
 ## Watch Progress & Resume
 
@@ -617,11 +619,11 @@ Local OP/ED detection by fingerprinting the user's actual downloaded episodes. R
 The feature is rolling out in stages so each one can be validated against real user data before the next starts.
 
 - **Phase 1 — local pipeline + debug panel (done).** Bundled `fpcalc`, built `fingerprint.ts` + `skip-detector.ts`, exposed results in a collapsible debug panel inside `AnimeDetailView`. Manual trigger only. Verified algorithm produces accurate timings against real smotret-anime.ru encodes (within ~2 s on Re:Zero S4) before committing the player UI to consuming the data.
-- **Phase 2 — player integration (current).** `PlayerView` fetches `skipDetectorGetDetections(animeId)` on mount and surfaces:
+- **Phase 2 — player integration (done).** `PlayerView` fetches `skipDetectorGetDetections(animeId)` on mount and surfaces:
   - **Seek-bar bands** — green OP / blue ED tint inside `.seek-track`, positioned by start/end percentages of `duration`. `pointer-events: none` so the bands don't block scrubbing.
   - **Skip OP/ED overlay button** — anchored bottom-right; `activeSkipRange` computed from `currentTime` (with a small lead-in tolerance) returns `'op' | 'ed' | null`. A 250 ms grace timer prevents flicker when scrubbing through a range. Clicking the button seeks to `range.endSec` and adds the range to `skippedRanges` (a per-`animeId:episodeInt:kind` `Set`) so it doesn't re-appear on rewind. The set resets on episode change.
   - No new IPC needed: Phase 1's persisted `skipDetections` already provides per-episode boundaries.
-- **Phase 3 — auto-trigger + offline-friendly UI updates.** When `>= 2` episodes of a show are on disk and no `skipDetections[animeId]` exists, queue a background analysis. Hook *both* `downloadManager.onEpisodeComplete` (when `autoMerge` is off) and `onMergeComplete` (when it's on) so the trigger fires regardless of merge preference. Add a `skip-detector:signature-updated` IPC broadcast so any open `AnimeDetailView` / `PlayerView` updates without polling — same pattern as `shikimori:rate-updated`. Add a user-facing `enableLocalSkipDetection` setting (default on) so users can opt out of background CPU usage.
+- **Phase 3 — auto-trigger + offline-friendly UI updates (current).** Each completed download (or, when `autoMerge` is on, each completed merge) calls `scheduleAutoSkipAnalysis(animeId, animeName)`. Per-anime 5 s debounce coalesces bursts (queue runs of the same show), then a serial drain enqueues the show; the drain reuses the same single-flight runner as the manual `skip-detector:analyze-show` IPC, so a manual click and a background trigger never collide and a re-analysis after a *new* episode lands replaces the prior signature with one informed by the larger pool — important for shows with mid-season OP/ED swaps. On completion, main broadcasts `skip-detector:signature-updated`; both `AnimeDetailView` and `PlayerView` re-fetch their cached detections without polling. The `enableLocalSkipDetection` setting (default on, exposed in the Downloads tab) lets users opt out of background CPU.
 - **Phase 4 — hygiene + fallback.** GC `skipFingerprintCache` entries when the underlying file is deleted (hook into `download:cancel-by-episode` and `file:delete-episode`). If/when an AniSkip module exists, demote it to a cold-start fallback: serve crowdsourced timestamps for shows where local analysis hasn't run yet, and replace them once a local signature is computed.
 
 ### Binary distribution

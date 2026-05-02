@@ -32,6 +32,8 @@ export interface DownloadItem {
 export interface EpisodeGroup {
   translationId: number
   animeName: string
+  animeId: number
+  episodeInt: string
   episodeLabel: string
   quality: number
   translationType: string
@@ -90,7 +92,7 @@ export class DownloadManager {
   private getSpeedLimit: () => number
   private getConcurrentLimit: () => number
   private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void) | null = null
-  private mergeCompleteCallback: ((animeName: string, episodeLabel: string) => void) | null = null
+  private mergeCompleteCallback: ((info: { animeName: string; animeId: number; episodeInt: string; episodeLabel: string }) => void) | null = null
   private queueCompleteCallback: (() => void) | null = null
   private merging = false
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
@@ -172,7 +174,7 @@ export class DownloadManager {
     this.episodeCompleteCallback = callback
   }
 
-  onMergeComplete(callback: (animeName: string, episodeLabel: string) => void): void {
+  onMergeComplete(callback: (info: { animeName: string; animeId: number; episodeInt: string; episodeLabel: string }) => void): void {
     this.mergeCompleteCallback = callback
   }
 
@@ -207,6 +209,8 @@ export class DownloadManager {
         groups.set(item.translationId, {
           translationId: item.translationId,
           animeName: item.animeName,
+          animeId: item.animeId,
+          episodeInt: item.episodeInt,
           episodeLabel: item.episodeLabel,
           quality: item.quality,
           translationType: item.translationType,
@@ -539,7 +543,12 @@ export class DownloadManager {
         this.schedulePersist()
         console.log(`[merge] Completed: ${mkvFilename}`)
         if (this.mergeCompleteCallback) {
-          this.mergeCompleteCallback(group.animeName, group.episodeLabel)
+          this.mergeCompleteCallback({
+            animeName: group.animeName,
+            animeId: group.animeId,
+            episodeInt: group.episodeInt,
+            episodeLabel: group.episodeLabel
+          })
         }
         // Delete source files after successful merge
         try { fs.unlinkSync(videoPath) } catch { /* ignore */ }

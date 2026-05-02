@@ -151,6 +151,12 @@ const api = {
   offSkipDetectorProgress: () => {
     ipcRenderer.removeAllListeners('skip-detector:analyze-progress')
   },
+  onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => {
+    ipcRenderer.on('skip-detector:signature-updated', (_event, data) => callback(data))
+  },
+  offSkipDetectorSignatureUpdated: () => {
+    ipcRenderer.removeAllListeners('skip-detector:signature-updated')
+  },
 
   shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 

@@ -106,6 +106,8 @@ interface Api {
   skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void
   offSkipDetectorProgress: () => void
+  onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => void
+  offSkipDetectorSignatureUpdated: () => void
 
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>

@@ -610,7 +610,18 @@ Merge progress is calculated from `timemark / probed_duration` (works for all co
 
 ## Skip Detection (Chromaprint)
 
-Phase 1 of issue #59 — local OP/ED detection by fingerprinting the user's actual downloaded episodes. Currently exposed as a debug-only collapsible panel in `AnimeDetailView`; the player does not yet consume the results.
+Local OP/ED detection by fingerprinting the user's actual downloaded episodes. Replaces (eventually) the planned crowdsourced AniSkip integration, which ties timestamps to a reference encode that often doesn't line up with smotret-anime.ru's encodes. Tracks issue #59.
+
+### Rollout phases
+
+The feature is rolling out in stages so each one can be validated against real user data before the next starts.
+
+- **Phase 1 — local pipeline + debug panel (current).** Bundle `fpcalc`, build `fingerprint.ts` + `skip-detector.ts`, expose results in a collapsible debug panel inside `AnimeDetailView`. Manual trigger only. Goal: prove the algorithm produces accurate timings against real smotret-anime.ru encodes (verified within ~2 s on Re:Zero S4) before any UI commits to consuming the data.
+- **Phase 2 — player integration.** Surface OP/ED bands on the `PlayerView` seek bar, and add a "Skip OP" / "Skip ED" overlay button that appears when playback enters a detected range, with a short grace timer and a `lastAutoSkippedId` guard to avoid re-firing on rewind. No new IPC needed — `skipDetectorGetDetections` already returns the per-episode boundaries.
+- **Phase 3 — auto-trigger + offline-friendly UI updates.** When `>= 2` episodes of a show are on disk and no `skipDetections[animeId]` exists, queue a background analysis. Hook *both* `downloadManager.onEpisodeComplete` (when `autoMerge` is off) and `onMergeComplete` (when it's on) so the trigger fires regardless of merge preference. Add a `skip-detector:signature-updated` IPC broadcast so any open `AnimeDetailView` updates the panel without polling — same pattern as `shikimori:rate-updated`. Add a user-facing `enableLocalSkipDetection` setting (default on) so users can opt out of background CPU usage.
+- **Phase 4 — hygiene + fallback.** GC `skipFingerprintCache` entries when the underlying file is deleted (hook into `download:cancel-by-episode` and `file:delete-episode`). If/when an AniSkip module exists, demote it to a cold-start fallback: serve crowdsourced timestamps for shows where local analysis hasn't run yet, and replace them once a local signature is computed.
+
+Phase 1 of issue #59 is the only part exposed in the current build; the player does not yet consume the results.
 
 ### Binary distribution
 

@@ -18,6 +18,9 @@ import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
+import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
+import { analyzeShow } from './skip-detector'
+import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress } from './skip-detector'
 
 // Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
 // PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
@@ -92,7 +95,9 @@ const store = new Store({
     shikimoriUserRates: [] as unknown[],
     shikimoriUpdateQueue: [] as unknown[],
     shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
-    recentAnimeMeta: {} as Record<string, AnimeSearchResult>
+    recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
+    skipDetections: {} as Record<string, ShowSkipDetections>,
+    skipFingerprintCache: {} as Record<string, CachedFingerprint>
   }
 })
 
@@ -2253,6 +2258,93 @@ function registerIpcHandlers(): void {
     return null
   })
 
+  // Skip detection (Chromaprint local fingerprinting). Phase 1: debug-only,
+  // surfaced through a panel in AnimeDetailView. No player integration yet.
+  // A single analysis runs at a time (CPU-bound). Concurrent calls for the
+  // *same* animeId dedupe onto the in-flight promise so re-mounting the
+  // panel doesn't kick off a duplicate run; calls for a *different* animeId
+  // are rejected so we don't silently kill the user's first analysis.
+  interface CurrentAnalysis {
+    animeId: number
+    controller: AbortController
+    lastProgress: AnalyzeProgress | null
+    promise: Promise<ShowSkipDetections>
+  }
+  let currentAnalysis: CurrentAnalysis | null = null
+
+  ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
+    const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    return all[String(animeId)] ?? null
+  })
+
+  ipcMain.handle('skip-detector:get-status', () => {
+    if (!currentAnalysis) return null
+    return { animeId: currentAnalysis.animeId, lastProgress: currentAnalysis.lastProgress }
+  })
+
+  ipcMain.handle('skip-detector:cancel', () => {
+    if (currentAnalysis) {
+      currentAnalysis.controller.abort()
+      // currentAnalysis is cleared by the analyze-show finally block
+    }
+  })
+
+  ipcMain.handle('skip-detector:cache-stats', () => {
+    const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+    return { fingerprintCount: Object.keys(cache).length }
+  })
+
+  ipcMain.handle('skip-detector:analyze-show', async (_event, animeId: number, episodes: EpisodeInput[]) => {
+    if (currentAnalysis) {
+      if (currentAnalysis.animeId === animeId) {
+        // Re-mount or duplicate click — ride on the in-flight promise.
+        return currentAnalysis.promise
+      }
+      throw new Error(`Another analysis is in progress for anime ID ${currentAnalysis.animeId}; cancel it first`)
+    }
+    const fpcalcPath = getFpcalcPath()
+    if (!fpcalcPath) throw new Error('fpcalc binary not available — restart the app to retry the download')
+    if (!Array.isArray(episodes) || episodes.length < 2) {
+      throw new Error('Need at least 2 downloaded episodes to analyze')
+    }
+
+    const controller = new AbortController()
+    const broadcastProgress = (p: AnalyzeProgress): void => {
+      if (currentAnalysis) currentAnalysis.lastProgress = p
+      broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
+    }
+
+    const runPromise = (async (): Promise<ShowSkipDetections> => {
+      const result = await analyzeShow(animeId, episodes, {
+        fpcalcPath,
+        signal: controller.signal,
+        onProgress: broadcastProgress,
+        loadCachedFingerprint: (key) => {
+          const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+          return cache[key]
+        },
+        saveCachedFingerprint: (key, value) => {
+          const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+          cache[key] = value
+          store.set('skipFingerprintCache', cache)
+        }
+      })
+      const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
+      all[String(animeId)] = result
+      store.set('skipDetections', all)
+      return result
+    })()
+
+    currentAnalysis = { animeId, controller, lastProgress: null, promise: runPromise }
+    runPromise.finally(() => {
+      if (currentAnalysis && currentAnalysis.controller === controller) {
+        currentAnalysis = null
+      }
+    })
+    return runPromise
+  })
+
+
   // File management handlers
   ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {
     const cached = fileCheckCache.get(animeName)
@@ -3580,6 +3672,8 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
   }
+  // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
+  ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
   const ffmpegInfo = await checkFfmpeg()
   downloadManager = new DownloadManager(
     getDownloadDir(),

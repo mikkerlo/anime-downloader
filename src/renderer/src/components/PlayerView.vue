@@ -141,6 +141,107 @@ const playerShortcuts = ref<Record<string, string>>({ ...DEFAULT_PLAYER_SHORTCUT
 
 // Watch progress tracking
 const currentEpisodeInt = computed(() => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || '')
+
+// Skip Detection (Phase 2): show OP/ED bands on the seek bar and a "Skip OP/ED"
+// overlay button when playback enters a detected range. Boundaries come from
+// `skipDetectorGetDetections(animeId)` — no new IPC needed (Phase 1 already
+// persists per-episode boundaries in electron-store).
+const showSkipDetections = ref<ShowSkipDetections | null>(null)
+const skippedRanges = ref<Set<string>>(new Set())
+const skipButtonVisible = ref(false)
+let skipButtonGraceTimer: ReturnType<typeof setTimeout> | null = null
+const SKIP_GRACE_MS = 250
+const SKIP_LEAD_IN_SEC = 0.25
+
+const currentEpisodeSkip = computed<EpisodeSkipDetection | null>(() => {
+  const det = showSkipDetections.value
+  const epInt = currentEpisodeInt.value
+  if (!det || !epInt) return null
+  return det.perEpisode[epInt] ?? null
+})
+
+// Returns 'op' | 'ed' | null based on current playback time. The lead-in
+// tolerance handles the case where the seek bar lands a few hundred ms before
+// the band edge.
+const activeSkipRange = computed<'op' | 'ed' | null>(() => {
+  const ep = currentEpisodeSkip.value
+  if (!ep) return null
+  const t = currentTime.value
+  if (ep.op && t >= ep.op.startSec - SKIP_LEAD_IN_SEC && t < ep.op.endSec) return 'op'
+  if (ep.ed && t >= ep.ed.startSec - SKIP_LEAD_IN_SEC && t < ep.ed.endSec) return 'ed'
+  return null
+})
+
+function skipRangeKey(kind: 'op' | 'ed'): string {
+  return `${props.animeId}:${currentEpisodeInt.value}:${kind}`
+}
+
+function activeSkipBounds(): { startSec: number; endSec: number; kind: 'op' | 'ed' } | null {
+  const kind = activeSkipRange.value
+  const ep = currentEpisodeSkip.value
+  if (!ep || !kind) return null
+  const range = kind === 'op' ? ep.op : ep.ed
+  if (!range) return null
+  return { startSec: range.startSec, endSec: range.endSec, kind }
+}
+
+function onSkipClick(): void {
+  const bounds = activeSkipBounds()
+  if (!bounds) return
+  skippedRanges.value.add(skipRangeKey(bounds.kind))
+  skipButtonVisible.value = false
+  if (skipButtonGraceTimer) {
+    clearTimeout(skipButtonGraceTimer)
+    skipButtonGraceTimer = null
+  }
+  seek(bounds.endSec)
+}
+
+watch(activeSkipRange, (kind) => {
+  if (skipButtonGraceTimer) {
+    clearTimeout(skipButtonGraceTimer)
+    skipButtonGraceTimer = null
+  }
+  if (!kind) {
+    skipButtonVisible.value = false
+    return
+  }
+  if (skippedRanges.value.has(skipRangeKey(kind))) {
+    // User already skipped this range this session; don't re-show on rewind.
+    skipButtonVisible.value = false
+    return
+  }
+  // Brief grace timer prevents flicker when scrubbing through the range.
+  skipButtonGraceTimer = setTimeout(() => {
+    skipButtonVisible.value = true
+    skipButtonGraceTimer = null
+  }, SKIP_GRACE_MS)
+})
+
+async function loadSkipDetections(): Promise<void> {
+  if (!props.animeId) {
+    showSkipDetections.value = null
+    return
+  }
+  try {
+    showSkipDetections.value = await window.api.skipDetectorGetDetections(props.animeId)
+  } catch (err) {
+    console.error('Failed to load skip detections:', err)
+    showSkipDetections.value = null
+  }
+}
+
+// Reset the per-range "already skipped" guard when the episode changes so the
+// button appears for the new episode's OP/ED. Detections themselves come from
+// the same per-show payload, so they don't need a refetch on episode flip.
+watch(currentEpisodeInt, () => {
+  skippedRanges.value = new Set()
+  if (skipButtonGraceTimer) {
+    clearTimeout(skipButtonGraceTimer)
+    skipButtonGraceTimer = null
+  }
+  skipButtonVisible.value = false
+})
 let cumulativePlayTime = 0
 let lastTimeUpdateAt = 0
 let lastSaveAt = 0
@@ -899,7 +1000,18 @@ function onSeekMouseMove(e: MouseEvent): void {
   const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
   const ratio = x / rect.width
   const time = ratio * duration.value
-  seekTooltipTime.value = formatTime(time)
+  // Append OP/ED label when hovering inside a detected band so the user gets
+  // feedback even though the bands themselves are pointer-events: none.
+  const ep = currentEpisodeSkip.value
+  let label = formatTime(time)
+  if (ep) {
+    if (ep.op && time >= ep.op.startSec && time < ep.op.endSec) {
+      label = `${formatTime(time)} · OP`
+    } else if (ep.ed && time >= ep.ed.startSec && time < ep.ed.endSec) {
+      label = `${formatTime(time)} · ED`
+    }
+  }
+  seekTooltipTime.value = label
   seekTooltipLeft.value = x
   seekTooltipVisible.value = true
 }
@@ -1625,6 +1737,8 @@ onMounted(async () => {
   const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
   playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) }
 
+  loadSkipDetections()
+
   // Subtitles extracted from MKV streams arrive asynchronously via IPC.
   window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
     if (sessionId !== streamSessionId.value) return
@@ -1748,6 +1862,10 @@ onBeforeUnmount(() => {
   if (persistVolumeTimer) {
     clearTimeout(persistVolumeTimer)
     persistVolumeTimer = null
+  }
+  if (skipButtonGraceTimer) {
+    clearTimeout(skipButtonGraceTimer)
+    skipButtonGraceTimer = null
   }
   // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
   if (hevcPromptResolver) {
@@ -1918,6 +2036,22 @@ const bufferedProgress = computed(() => {
       </div>
     </transition>
 
+    <!-- Skip OP/ED overlay button. Anchored bottom-right above the controls
+         bar; appears with a brief grace timer once playback enters a detected
+         range, hides on rewind once the user has clicked it. -->
+    <transition name="fade">
+      <button
+        v-if="skipButtonVisible && activeSkipRange"
+        class="skip-button-overlay"
+        @click.stop="onSkipClick"
+      >
+        Skip {{ activeSkipRange === 'op' ? 'OP' : 'ED' }}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="margin-left: 4px;">
+          <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+        </svg>
+      </button>
+    </transition>
+
     <!-- Controls bar -->
     <transition name="fade">
       <div v-show="showControls" class="controls-bar" @click.stop>
@@ -1926,6 +2060,22 @@ const bufferedProgress = computed(() => {
           <div class="seek-track">
             <div class="seek-buffered" :style="{ width: bufferedProgress + '%' }" />
             <div class="seek-progress" :style="{ width: seekProgress + '%' }" />
+            <div
+              v-if="currentEpisodeSkip?.op && duration > 0"
+              class="seek-band seek-band-op"
+              :style="{
+                left: ((currentEpisodeSkip.op.startSec / duration) * 100) + '%',
+                width: (((currentEpisodeSkip.op.endSec - currentEpisodeSkip.op.startSec) / duration) * 100) + '%'
+              }"
+            />
+            <div
+              v-if="currentEpisodeSkip?.ed && duration > 0"
+              class="seek-band seek-band-ed"
+              :style="{
+                left: ((currentEpisodeSkip.ed.startSec / duration) * 100) + '%',
+                width: (((currentEpisodeSkip.ed.endSec - currentEpisodeSkip.ed.startSec) / duration) * 100) + '%'
+              }"
+            />
           </div>
           <input
             type="range"
@@ -2420,6 +2570,58 @@ const bufferedProgress = computed(() => {
   height: 100%;
   background: #e94560;
   border-radius: 2px;
+}
+
+.seek-band {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  pointer-events: none;
+  /* Sits above buffered/progress fills so the band tint is visible regardless
+     of playback position. Below the seek-input thumb (which is invisible but
+     interactive) so clicks still seek normally. */
+  z-index: 1;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.seek-container:hover .seek-band {
+  opacity: 0.8;
+}
+
+.seek-band-op {
+  background: #4caf50;
+}
+
+.seek-band-ed {
+  background: #2196f3;
+}
+
+/* Skip OP/ED overlay button — anchored bottom-right of the player so it
+   doesn't obscure the seek bar but is still mouse-reachable while paused. */
+.skip-button-overlay {
+  position: absolute;
+  right: 24px;
+  bottom: 90px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  transition: background 0.12s, transform 0.12s;
+}
+
+.skip-button-overlay:hover {
+  background: rgba(20, 20, 20, 0.92);
+  transform: translateY(-1px);
 }
 
 .seek-input {

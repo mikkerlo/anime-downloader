@@ -128,6 +128,29 @@ const api = {
   offFfmpegDownloadProgress: () => {
     ipcRenderer.removeAllListeners('ffmpeg:download-progress')
   },
+  onFpcalcDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => {
+    ipcRenderer.on('fpcalc:download-progress', (_event, data) => callback(data))
+  },
+  offFpcalcDownloadProgress: () => {
+    ipcRenderer.removeAllListeners('fpcalc:download-progress')
+  },
+
+  // Skip detection (Phase 1: debug panel only)
+  skipDetectorAnalyzeShow: (animeId: number, episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]) =>
+    ipcRenderer.invoke('skip-detector:analyze-show', animeId, episodes) as Promise<ShowSkipDetections>,
+  skipDetectorGetDetections: (animeId: number) =>
+    ipcRenderer.invoke('skip-detector:get-detections', animeId) as Promise<ShowSkipDetections | null>,
+  skipDetectorGetStatus: () =>
+    ipcRenderer.invoke('skip-detector:get-status') as Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>,
+  skipDetectorCancel: () => ipcRenderer.invoke('skip-detector:cancel') as Promise<void>,
+  skipDetectorCacheStats: () =>
+    ipcRenderer.invoke('skip-detector:cache-stats') as Promise<{ fingerprintCount: number }>,
+  onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => {
+    ipcRenderer.on('skip-detector:analyze-progress', (_event, data) => callback(data))
+  },
+  offSkipDetectorProgress: () => {
+    ipcRenderer.removeAllListeners('skip-detector:analyze-progress')
+  },
 
   shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 

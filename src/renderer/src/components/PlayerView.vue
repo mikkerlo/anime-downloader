@@ -1738,6 +1738,10 @@ onMounted(async () => {
   playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) }
 
   loadSkipDetections()
+  window.api.onSkipDetectorSignatureUpdated((data) => {
+    if (data.animeId !== props.animeId) return
+    loadSkipDetections()
+  })
 
   // Subtitles extracted from MKV streams arrive asynchronously via IPC.
   window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
@@ -1867,6 +1871,7 @@ onBeforeUnmount(() => {
     clearTimeout(skipButtonGraceTimer)
     skipButtonGraceTimer = null
   }
+  window.api.offSkipDetectorSignatureUpdated()
   // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
   if (hevcPromptResolver) {
     const fn = hevcPromptResolver

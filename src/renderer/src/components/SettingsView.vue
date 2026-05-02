@@ -43,6 +43,44 @@ const speedLimitPreset = ref('0')
 const customSpeedLimit = ref(1)
 const concurrentDownloads = ref(2)
 const autoMerge = ref(false)
+const enableLocalSkipDetection = ref(true)
+const skipBackfillRunning = ref(false)
+const skipBackfillResult = ref('')
+const skipQueueStatus = ref<{ currentAnimeId: number | null; queueLength: number }>({ currentAnimeId: null, queueLength: 0 })
+let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null
+
+const skipQueueStatusLabel = computed<string>(() => {
+  const s = skipQueueStatus.value
+  if (s.currentAnimeId === null && s.queueLength === 0) return ''
+  const inFlight = s.currentAnimeId !== null ? 1 : 0
+  const remaining = s.queueLength + inFlight
+  return `Currently analyzing ${remaining} show${remaining === 1 ? '' : 's'}…`
+})
+
+async function refreshSkipQueueStatus(): Promise<void> {
+  try {
+    skipQueueStatus.value = await window.api.skipDetectorQueueStatus()
+  } catch { /* ignore */ }
+}
+
+async function onBackfillSkipDetection(): Promise<void> {
+  if (skipBackfillRunning.value) return
+  skipBackfillRunning.value = true
+  skipBackfillResult.value = ''
+  try {
+    const r = await window.api.skipDetectorBackfillAll()
+    const parts: string[] = []
+    parts.push(`Queued ${r.queued} of ${r.total} downloaded shows.`)
+    if (r.alreadyAnalyzed > 0) parts.push(`${r.alreadyAnalyzed} already analyzed.`)
+    if (r.skippedFewEpisodes > 0) parts.push(`${r.skippedFewEpisodes} skipped (need ≥2 episodes).`)
+    skipBackfillResult.value = parts.join(' ')
+    await refreshSkipQueueStatus()
+  } catch (err) {
+    skipBackfillResult.value = `Backfill failed: ${err instanceof Error ? err.message : String(err)}`
+  } finally {
+    skipBackfillRunning.value = false
+  }
+}
 const videoCodec = ref('copy')
 const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
 
@@ -502,6 +540,11 @@ onMounted(async () => {
   window.api.onStorageCleanupPending(onCleanupPending)
   window.api.onStorageCleanupFinished(onCleanupFinished)
   refreshMismatchCount()
+  refreshSkipQueueStatus()
+  // Poll the skip-detector queue while the Settings page is open so the
+  // status line decrements as the backfill drains. 4 s is fine — analyses
+  // take 30+ s each.
+  skipQueuePollTimer = setInterval(refreshSkipQueueStatus, 4000)
 
   appVersion.value = await window.api.appVersion()
 })
@@ -514,6 +557,10 @@ onUnmounted(() => {
   window.api.offStorageUsageProgress()
   window.api.offStorageCleanupPending()
   window.api.offStorageCleanupFinished()
+  if (skipQueuePollTimer) {
+    clearInterval(skipQueuePollTimer)
+    skipQueuePollTimer = null
+  }
 })
 
 const TRANSLATION_TYPES = [
@@ -557,6 +604,8 @@ onMounted(async () => {
     customSpeedLimit.value = Math.round(savedSpeedLimit / (1024 * 1024) * 10) / 10
   }
   autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
+  const skipSetting = await window.api.getSetting('enableLocalSkipDetection')
+  enableLocalSkipDetection.value = skipSetting === undefined ? true : Boolean(skipSetting)
   backgroundQualityProbe.value = (await window.api.getSetting('backgroundQualityProbe') as boolean) || false
   videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
   ffmpeg.value = await window.api.ffmpegCheck()
@@ -699,6 +748,7 @@ watch(customSpeedLimit, (val) => {
 watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+watch(enableLocalSkipDetection, (val) => { if (loaded.value) autoSave('enableLocalSkipDetection', val) })
 watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
 let suppressVideoCodecSave = false
 watch(videoCodec, (val, oldVal) => {
@@ -1137,6 +1187,26 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
             <span class="toggle-slider"></span>
             <span class="toggle-label">{{ autoMerge ? 'Enabled' : 'Disabled' }}</span>
           </label>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Local skip detection</label>
+          <p class="setting-hint">Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the background after each download; first analysis on a show takes a minute or two of CPU.</p>
+          <label class="toggle-row">
+            <input type="checkbox" v-model="enableLocalSkipDetection" class="toggle-input" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">{{ enableLocalSkipDetection ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+          <div class="skip-backfill">
+            <button
+              type="button"
+              class="browse-btn"
+              :disabled="skipBackfillRunning"
+              @click="onBackfillSkipDetection"
+            >{{ skipBackfillRunning ? 'Queuing…' : 'Run detection on all downloaded shows' }}</button>
+            <p v-if="skipBackfillResult" class="setting-hint">{{ skipBackfillResult }}</p>
+            <p v-if="skipQueueStatusLabel" class="setting-hint">{{ skipQueueStatusLabel }}</p>
+          </div>
         </div>
 
         <div class="setting-group">
@@ -1663,6 +1733,13 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
   gap: 12px;
   cursor: pointer;
   user-select: none;
+}
+
+.skip-backfill {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .toggle-row.disabled {

@@ -104,8 +104,12 @@ interface Api {
   skipDetectorGetStatus: () => Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>
   skipDetectorCancel: () => Promise<void>
   skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
+  skipDetectorBackfillAll: () => Promise<{ queued: number; alreadyAnalyzed: number; skippedFewEpisodes: number; total: number }>
+  skipDetectorQueueStatus: () => Promise<{ currentAnimeId: number | null; queueLength: number }>
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void
   offSkipDetectorProgress: () => void
+  onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => void
+  offSkipDetectorSignatureUpdated: () => void
 
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>

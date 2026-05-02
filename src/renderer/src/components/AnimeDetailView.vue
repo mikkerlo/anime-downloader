@@ -594,12 +594,11 @@ onMounted(async () => {
   window.api.onSkipDetectorProgress((data) => {
     if (data.animeId !== props.animeId) return
     skipProgress.value = data
-    if (data.phase === 'done') {
-      // Background analysis (or one we missed the await on) finished — pick
-      // up the persisted result and clear the analyzing state.
-      skipAnalyzing.value = false
-      loadSkipDetections()
-    }
+    skipAnalyzing.value = data.phase !== 'done'
+  })
+  window.api.onSkipDetectorSignatureUpdated((data) => {
+    if (data.animeId !== props.animeId) return
+    loadSkipDetections()
   })
   loadSkipDetections()
   hydrateSkipStatus()
@@ -622,6 +621,7 @@ onUnmounted(() => {
   window.api.offShikimoriOfflineQueueChanged()
   window.api.offShikimoriSyncStatus()
   window.api.offSkipDetectorProgress()
+  window.api.offSkipDetectorSignatureUpdated()
 })
 
 async function triggerSyncNow(): Promise<void> {

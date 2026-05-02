@@ -97,7 +97,8 @@ const store = new Store({
     shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
     recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
     skipDetections: {} as Record<string, ShowSkipDetections>,
-    skipFingerprintCache: {} as Record<string, CachedFingerprint>
+    skipFingerprintCache: {} as Record<string, CachedFingerprint>,
+    enableLocalSkipDetection: true
   }
 })
 
@@ -1494,6 +1495,139 @@ function migrateWatchProgressV2(): void {
   store.set('watchProgressMigrationV2', true)
 }
 
+// Skip detection orchestration. Lifted to module scope so the auto-trigger
+// invoked from download/merge completion hooks shares the same in-flight
+// state as the manual `skip-detector:analyze-show` IPC handler.
+interface CurrentSkipAnalysis {
+  animeId: number
+  controller: AbortController
+  lastProgress: AnalyzeProgress | null
+  promise: Promise<ShowSkipDetections>
+}
+
+let currentSkipAnalysis: CurrentSkipAnalysis | null = null
+
+const autoSkipDebounce = new Map<number, ReturnType<typeof setTimeout>>()
+const autoSkipQueue: { animeId: number; animeName: string }[] = []
+let autoSkipDraining = false
+const AUTO_SKIP_DEBOUNCE_MS = 5000
+
+function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
+  if (currentSkipAnalysis && currentSkipAnalysis.animeId === animeId) {
+    currentSkipAnalysis.lastProgress = p
+  }
+  broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
+}
+
+function runSkipAnalysisInternal(animeId: number, episodes: EpisodeInput[]): Promise<ShowSkipDetections> {
+  if (currentSkipAnalysis) {
+    if (currentSkipAnalysis.animeId === animeId) return currentSkipAnalysis.promise
+    return Promise.reject(new Error(`Another analysis is in progress for anime ID ${currentSkipAnalysis.animeId}; cancel it first`))
+  }
+  const fpcalcPath = getFpcalcPath()
+  if (!fpcalcPath) return Promise.reject(new Error('fpcalc binary not available — restart the app to retry the download'))
+  if (!Array.isArray(episodes) || episodes.length < 2) {
+    return Promise.reject(new Error('Need at least 2 downloaded episodes to analyze'))
+  }
+
+  const controller = new AbortController()
+  const runPromise = (async (): Promise<ShowSkipDetections> => {
+    const result = await analyzeShow(animeId, episodes, {
+      fpcalcPath,
+      signal: controller.signal,
+      onProgress: (p) => broadcastSkipProgress(animeId, p),
+      loadCachedFingerprint: (key) => {
+        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+        return cache[key]
+      },
+      saveCachedFingerprint: (key, value) => {
+        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+        cache[key] = value
+        store.set('skipFingerprintCache', cache)
+      }
+    })
+    const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    all[String(animeId)] = result
+    store.set('skipDetections', all)
+    broadcastToAll('skip-detector:signature-updated', { animeId, perEpisode: result.perEpisode })
+    return result
+  })()
+
+  currentSkipAnalysis = { animeId, controller, lastProgress: null, promise: runPromise }
+  runPromise.finally(() => {
+    if (currentSkipAnalysis && currentSkipAnalysis.controller === controller) {
+      currentSkipAnalysis = null
+    }
+    void drainAutoSkipQueue()
+  })
+  return runPromise
+}
+
+// Build EpisodeInput[] from disk for an anime folder. Mirrors the renderer's
+// skipEpisodeInputs computed: prefer .mkv (merged) over .mp4 (raw), one entry
+// per episodeInt, sorted by numeric episode.
+function buildAutoSkipEpisodes(animeName: string): EpisodeInput[] {
+  const scan = scanEpisodeFiles(animeName)
+  const sanitized = sanitizeFilename(animeName)
+  const inputs: EpisodeInput[] = []
+  for (const [base, files] of Object.entries(scan)) {
+    if (!base.startsWith(sanitized + ' - ')) continue
+    const tail = base.slice(sanitized.length + 3)
+    const m = tail.match(/^(\d+(?:\.\d+)?)/)
+    if (!m) continue
+    const episodeInt = m[1].replace(/^0+(?=\d)/, '')
+    const mkv = files.find(f => f.type === 'mkv')
+    const pick = mkv || files[0]
+    if (!pick || !pick.filePath) continue
+    if (inputs.some(e => e.episodeInt === episodeInt)) continue
+    inputs.push({ episodeInt, episodeLabel: `Episode ${episodeInt}`, filePath: pick.filePath })
+  }
+  inputs.sort((a, b) => parseFloat(a.episodeInt) - parseFloat(b.episodeInt))
+  return inputs
+}
+
+function scheduleAutoSkipAnalysis(animeId: number, animeName: string): void {
+  if (animeId <= 0) return
+  if (!(store.get('enableLocalSkipDetection') as boolean)) return
+  // Coalesce bursts (e.g. bulk download): each new event resets the debounce
+  // so the analysis fires once after activity settles, with all newly-arrived
+  // episodes included.
+  const existing = autoSkipDebounce.get(animeId)
+  if (existing) clearTimeout(existing)
+  autoSkipDebounce.set(animeId, setTimeout(() => {
+    autoSkipDebounce.delete(animeId)
+    enqueueAutoSkipAnalysis(animeId, animeName)
+  }, AUTO_SKIP_DEBOUNCE_MS))
+}
+
+function enqueueAutoSkipAnalysis(animeId: number, animeName: string): void {
+  if (autoSkipQueue.some(x => x.animeId === animeId)) return
+  if (currentSkipAnalysis && currentSkipAnalysis.animeId === animeId) return
+  autoSkipQueue.push({ animeId, animeName })
+  void drainAutoSkipQueue()
+}
+
+async function drainAutoSkipQueue(): Promise<void> {
+  if (autoSkipDraining) return
+  if (currentSkipAnalysis) return
+  autoSkipDraining = true
+  try {
+    while (autoSkipQueue.length > 0 && !currentSkipAnalysis) {
+      const next = autoSkipQueue.shift()!
+      try {
+        const episodes = buildAutoSkipEpisodes(next.animeName)
+        if (episodes.length < 2) continue
+        await runSkipAnalysisInternal(next.animeId, episodes)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.warn(`[skip-detector] auto-analysis failed for animeId=${next.animeId}: ${msg}`)
+      }
+    }
+  } finally {
+    autoSkipDraining = false
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle('app:version', () => app.getVersion())
 
@@ -2258,35 +2392,21 @@ function registerIpcHandlers(): void {
     return null
   })
 
-  // Skip detection (Chromaprint local fingerprinting). Phase 1: debug-only,
-  // surfaced through a panel in AnimeDetailView. No player integration yet.
-  // A single analysis runs at a time (CPU-bound). Concurrent calls for the
-  // *same* animeId dedupe onto the in-flight promise so re-mounting the
-  // panel doesn't kick off a duplicate run; calls for a *different* animeId
-  // are rejected so we don't silently kill the user's first analysis.
-  interface CurrentAnalysis {
-    animeId: number
-    controller: AbortController
-    lastProgress: AnalyzeProgress | null
-    promise: Promise<ShowSkipDetections>
-  }
-  let currentAnalysis: CurrentAnalysis | null = null
-
+  // Skip detection (Chromaprint local fingerprinting). Orchestration lives at
+  // module scope so the auto-trigger from download/merge hooks shares the same
+  // single-flight state as these handlers.
   ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
     return all[String(animeId)] ?? null
   })
 
   ipcMain.handle('skip-detector:get-status', () => {
-    if (!currentAnalysis) return null
-    return { animeId: currentAnalysis.animeId, lastProgress: currentAnalysis.lastProgress }
+    if (!currentSkipAnalysis) return null
+    return { animeId: currentSkipAnalysis.animeId, lastProgress: currentSkipAnalysis.lastProgress }
   })
 
   ipcMain.handle('skip-detector:cancel', () => {
-    if (currentAnalysis) {
-      currentAnalysis.controller.abort()
-      // currentAnalysis is cleared by the analyze-show finally block
-    }
+    if (currentSkipAnalysis) currentSkipAnalysis.controller.abort()
   })
 
   ipcMain.handle('skip-detector:cache-stats', () => {
@@ -2294,54 +2414,38 @@ function registerIpcHandlers(): void {
     return { fingerprintCount: Object.keys(cache).length }
   })
 
-  ipcMain.handle('skip-detector:analyze-show', async (_event, animeId: number, episodes: EpisodeInput[]) => {
-    if (currentAnalysis) {
-      if (currentAnalysis.animeId === animeId) {
-        // Re-mount or duplicate click — ride on the in-flight promise.
-        return currentAnalysis.promise
-      }
-      throw new Error(`Another analysis is in progress for anime ID ${currentAnalysis.animeId}; cancel it first`)
-    }
-    const fpcalcPath = getFpcalcPath()
-    if (!fpcalcPath) throw new Error('fpcalc binary not available — restart the app to retry the download')
-    if (!Array.isArray(episodes) || episodes.length < 2) {
-      throw new Error('Need at least 2 downloaded episodes to analyze')
-    }
+  ipcMain.handle('skip-detector:analyze-show', (_event, animeId: number, episodes: EpisodeInput[]) => {
+    return runSkipAnalysisInternal(animeId, episodes)
+  })
 
-    const controller = new AbortController()
-    const broadcastProgress = (p: AnalyzeProgress): void => {
-      if (currentAnalysis) currentAnalysis.lastProgress = p
-      broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
+  // One-shot backfill for shows downloaded before Phase 3 was wired in.
+  // Honors the dedupe in `enqueueAutoSkipAnalysis` so a manual click doesn't
+  // double-queue a show that's already running or pending.
+  ipcMain.handle('skip-detector:backfill-all', () => {
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    let queued = 0
+    let alreadyAnalyzed = 0
+    let skippedFewEpisodes = 0
+    let total = 0
+    for (const [idStr, meta] of Object.entries(downloaded)) {
+      const animeId = Number(idStr)
+      if (!Number.isFinite(animeId) || animeId <= 0) continue
+      total++
+      if (detections[idStr]) { alreadyAnalyzed++; continue }
+      const eps = buildAutoSkipEpisodes(meta.title)
+      if (eps.length < 2) { skippedFewEpisodes++; continue }
+      enqueueAutoSkipAnalysis(animeId, meta.title)
+      queued++
     }
+    return { queued, alreadyAnalyzed, skippedFewEpisodes, total }
+  })
 
-    const runPromise = (async (): Promise<ShowSkipDetections> => {
-      const result = await analyzeShow(animeId, episodes, {
-        fpcalcPath,
-        signal: controller.signal,
-        onProgress: broadcastProgress,
-        loadCachedFingerprint: (key) => {
-          const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-          return cache[key]
-        },
-        saveCachedFingerprint: (key, value) => {
-          const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-          cache[key] = value
-          store.set('skipFingerprintCache', cache)
-        }
-      })
-      const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
-      all[String(animeId)] = result
-      store.set('skipDetections', all)
-      return result
-    })()
-
-    currentAnalysis = { animeId, controller, lastProgress: null, promise: runPromise }
-    runPromise.finally(() => {
-      if (currentAnalysis && currentAnalysis.controller === controller) {
-        currentAnalysis = null
-      }
-    })
-    return runPromise
+  ipcMain.handle('skip-detector:queue-status', () => {
+    return {
+      currentAnimeId: currentSkipAnalysis?.animeId ?? null,
+      queueLength: autoSkipQueue.length
+    }
   })
 
 
@@ -3719,10 +3823,14 @@ app.whenReady().then(async () => {
       if (mode === 'each') {
         showBackgroundNotification('Download complete', `${animeName} \u2014 ${episodeLabel}`)
       }
+      // With autoMerge off, the .mp4 is the final artifact \u2014 trigger here.
+      // With autoMerge on, the merge-complete hook below triggers against the
+      // .mkv instead, so we don't double-fingerprint.
+      if (animeId > 0) scheduleAutoSkipAnalysis(animeId, animeName)
     }
   })
 
-  downloadManager.onMergeComplete(async (animeName, episodeLabel) => {
+  downloadManager.onMergeComplete(async ({ animeName, animeId, episodeLabel }) => {
     fileCheckCache.delete(animeName)
     // Auto-move to cold after merge
     if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
@@ -3732,6 +3840,7 @@ app.whenReady().then(async () => {
     if (mode === 'each') {
       showBackgroundNotification('Merge complete', `${animeName} \u2014 ${episodeLabel}`)
     }
+    if (animeId > 0) scheduleAutoSkipAnalysis(animeId, animeName)
   })
 
   downloadManager.onQueueComplete(() => {

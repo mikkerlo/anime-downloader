@@ -1628,6 +1628,131 @@ async function drainAutoSkipQueue(): Promise<void> {
   }
 }
 
+// Phase 4 — cache GC. The fingerprint cache is keyed by
+// `animeId:episodeInt:fileSize:mtime` and grows unbounded otherwise:
+// every successful merge produces a new key (mkv vs the source mp4),
+// every re-download produces a new key (mtime differs), and deletes
+// orphan their entries. The event-driven helpers below catch the
+// common cases immediately; `sweepSkipFingerprintCache` runs at startup
+// as a backstop for anything we miss (external rm, file replaced,
+// in-place rename outside the app).
+
+function pruneSkipCacheForEpisode(animeId: number, episodeInt: string): number {
+  if (animeId <= 0 || !episodeInt) return 0
+  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+  const prefix = `${animeId}:${episodeInt}:`
+  let dropped = 0
+  for (const key of Object.keys(cache)) {
+    if (key.startsWith(prefix)) {
+      delete cache[key]
+      dropped++
+    }
+  }
+  if (dropped > 0) store.set('skipFingerprintCache', cache)
+  return dropped
+}
+
+function pruneSkipCacheForAnime(animeId: number): number {
+  if (animeId <= 0) return 0
+  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+  const prefix = `${animeId}:`
+  let dropped = 0
+  for (const key of Object.keys(cache)) {
+    if (key.startsWith(prefix)) {
+      delete cache[key]
+      dropped++
+    }
+  }
+  if (dropped > 0) store.set('skipFingerprintCache', cache)
+  return dropped
+}
+
+// Reconcile the cache against disk. Per anime: scan the folder, stat each
+// file, compute the (size, mtime) tuple the cache would key under, and
+// drop any cache entry for that animeId that doesn't match a live file.
+// Anime missing from `downloadedAnime` → all entries for that animeId go.
+function sweepSkipFingerprintCache(): { kept: number; dropped: number } {
+  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+
+  const byAnimeId = new Map<string, { key: string; episodeInt: string; fileSize: number; fileMtimeMs: number }[]>()
+  for (const [key, val] of Object.entries(cache)) {
+    const parts = key.split(':')
+    if (parts.length < 4) continue
+    const [animeIdStr, episodeInt] = parts
+    const list = byAnimeId.get(animeIdStr) ?? []
+    list.push({ key, episodeInt, fileSize: val.fileSize, fileMtimeMs: val.fileMtimeMs })
+    byAnimeId.set(animeIdStr, list)
+  }
+
+  const next: Record<string, CachedFingerprint> = {}
+  let kept = 0
+  let dropped = 0
+
+  for (const [animeIdStr, entries] of byAnimeId) {
+    const meta = downloaded[animeIdStr]
+    if (!meta) {
+      dropped += entries.length
+      continue
+    }
+    const scan = scanEpisodeFiles(meta.title)
+    const sanitized = sanitizeFilename(meta.title)
+    const expectedByEpisode = new Map<string, { fileSize: number; fileMtimeMs: number }[]>()
+    for (const [base, files] of Object.entries(scan)) {
+      if (!base.startsWith(sanitized + ' - ')) continue
+      const tail = base.slice(sanitized.length + 3)
+      const m = tail.match(/^(\d+(?:\.\d+)?)/)
+      if (!m) continue
+      const episodeInt = m[1].replace(/^0+(?=\d)/, '')
+      for (const f of files) {
+        if (!f.filePath) continue
+        try {
+          const stat = fs.statSync(f.filePath)
+          const list = expectedByEpisode.get(episodeInt) ?? []
+          list.push({ fileSize: stat.size, fileMtimeMs: stat.mtimeMs })
+          expectedByEpisode.set(episodeInt, list)
+        } catch { /* file vanished between scan and stat — skip */ }
+      }
+    }
+
+    for (const e of entries) {
+      const candidates = expectedByEpisode.get(e.episodeInt) ?? []
+      const match = candidates.some(c => c.fileSize === e.fileSize && Math.floor(c.fileMtimeMs) === Math.floor(e.fileMtimeMs))
+      if (match) {
+        next[e.key] = cache[e.key]
+        kept++
+      } else {
+        dropped++
+      }
+    }
+  }
+
+  if (dropped > 0) store.set('skipFingerprintCache', next)
+  return { kept, dropped }
+}
+
+function dropSkipDetectionsForAnime(animeId: number): boolean {
+  const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
+  const key = String(animeId)
+  if (!(key in detections)) return false
+  delete detections[key]
+  store.set('skipDetections', detections)
+  return true
+}
+
+function dropSkipDetectionsForEpisode(animeId: number, episodeInt: string): boolean {
+  const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
+  const key = String(animeId)
+  const show = detections[key]
+  if (!show || !show.perEpisode[episodeInt]) return false
+  delete show.perEpisode[episodeInt]
+  if (Object.keys(show.perEpisode).length === 0) {
+    delete detections[key]
+  }
+  store.set('skipDetections', detections)
+  return true
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle('app:version', () => app.getVersion())
 
@@ -2065,6 +2190,8 @@ function registerIpcHandlers(): void {
     }
     // Clean cache
     deleteCacheEntry(animeId)
+    pruneSkipCacheForAnime(animeId)
+    dropSkipDetectionsForAnime(animeId)
   })
 
   ipcMain.handle('get-setting', (_event, key: string) => {
@@ -2482,6 +2609,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('file:delete-episode', (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
     deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
+    if (animeId && animeId > 0) {
+      pruneSkipCacheForEpisode(animeId, episodeInt)
+      dropSkipDetectionsForEpisode(animeId, episodeInt)
+    }
   })
 
   ipcMain.handle('download:pick-dir', async () => {
@@ -3860,6 +3991,21 @@ app.whenReady().then(async () => {
   // of deleting; the renderer's confirm modal then calls back with force=true.
   setTimeout(() => { void runWatchedCleanup() }, 60_000)
   setInterval(() => { void runWatchedCleanup() }, 24 * 60 * 60 * 1000)
+
+  // Reconcile the skip-detector fingerprint cache against disk. Runs once at
+  // startup as the backstop for anything the file:delete-episode and
+  // downloaded-anime-delete hooks miss (external rm, in-place rename,
+  // file replaced outside the app, leftover .mp4 cache after merge, etc.).
+  setTimeout(() => {
+    try {
+      const r = sweepSkipFingerprintCache()
+      if (r.dropped > 0) {
+        console.log(`[skip-detector] cache sweep: kept ${r.kept}, dropped ${r.dropped} stale entries`)
+      }
+    } catch (e) {
+      console.warn(`[skip-detector] cache sweep failed: ${e instanceof Error ? e.message : e}`)
+    }
+  }, 30_000)
 
   if (getQueueLength() > 0) {
     startSyncTimer()

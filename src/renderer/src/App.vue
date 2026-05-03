@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
     <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" @open-anime="openAnime" />
-    <CalendarView v-show="currentView === 'calendar' && !activeAnimeId" @open-anime="openAnime" />
+    <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" :anime-id="playerState.animeId" :mal-id="playerState.malId" @close="closePlayer" />

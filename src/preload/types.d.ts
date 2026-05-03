@@ -184,6 +184,27 @@ interface Api {
   ) => void
   offShikimoriAnimeDetailsUpdated: () => void
 
+  // Syncplay (Watch Together)
+  syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>
+  syncplayDisconnect: () => Promise<void>
+  syncplaySetFile: (file: SyncplayFilePayload) => Promise<void>
+  syncplaySendLocalState: (payload: { paused: boolean; position: number; cause: 'play' | 'pause' | 'seek' }) => Promise<void>
+  syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
+  syncplaySetReady: (isReady: boolean) => Promise<void>
+  syncplayGetStatus: () => Promise<SyncplayStatus>
+  onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => void
+  offSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => void
+  onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => void
+  offSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => void
+  onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => void
+  offSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => void
+  onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => void
+  offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => void
+  onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
+  offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
+  onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
+  offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
+
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
@@ -191,6 +212,75 @@ interface Api {
   updateInstall: () => void
   onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
   offUpdateStatus: () => void
+}
+
+interface SyncplayConnectConfig {
+  host: string
+  port: number
+  room: string
+  username: string
+  password?: string
+  autoReconnect: boolean
+}
+
+interface SyncplayFilePayload {
+  animeId: number
+  malId: number | null
+  episodeInt: string
+  translationId: number | null
+  canonicalName: string
+  duration: number
+}
+
+interface SyncplayStatus {
+  state:
+    | 'idle'
+    | 'connecting'
+    | 'tls-probing'
+    | 'tls-handshake'
+    | 'hello-sent'
+    | 'ready'
+    | 'reconnecting'
+    | 'disconnected'
+  host?: string
+  port?: number
+  room?: string
+  username?: string
+  tls?: boolean
+  error?: string
+}
+
+interface SyncplayRemoteState {
+  paused: boolean
+  position: number
+  setBy: string | null
+  doSeek: boolean
+}
+
+interface SyncplayRoomUser {
+  username: string
+  file: { name: string; duration: number; size?: number } | null
+  isReady?: boolean
+  animeDlAppMeta?: {
+    animeId: number
+    malId: number | null
+    episodeInt: string
+    translationId: number | null
+  }
+}
+
+interface SyncplayRoomEvent {
+  level: 'info' | 'warn' | 'error' | 'chat'
+  text: string
+}
+
+interface SyncplayRemoteEpisode {
+  animeId: number
+  malId: number | null
+  episodeInt: string
+  translationId: number | null
+  canonicalName: string
+  fromUser: string
 }
 
 interface AnimeSearchResult {

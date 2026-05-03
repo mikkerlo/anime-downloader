@@ -1,4 +1,33 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+
+// Per-channel map of {original-callback → wrapped-handler} so the matching
+// off* helper can call ipcRenderer.removeListener with the actual wrapped
+// function (the one we registered on ipcRenderer.on). Without this map,
+// the only way to remove a listener is removeAllListeners — which would
+// also rip out listeners installed by other components in the same view.
+type SyncplayHandler<T> = (data: T) => void
+type SyncplayWrapped = (event: IpcRendererEvent, data: unknown) => void
+const syncplayWrappers = new Map<string, Map<SyncplayHandler<unknown>, SyncplayWrapped>>()
+
+function syncplayOn<T>(channel: string, cb: SyncplayHandler<T>): void {
+  const wrapped: SyncplayWrapped = (_event, data) => cb(data as T)
+  let bucket = syncplayWrappers.get(channel)
+  if (!bucket) {
+    bucket = new Map()
+    syncplayWrappers.set(channel, bucket)
+  }
+  bucket.set(cb as SyncplayHandler<unknown>, wrapped)
+  ipcRenderer.on(channel, wrapped)
+}
+
+function syncplayOff<T>(channel: string, cb: SyncplayHandler<T>): void {
+  const bucket = syncplayWrappers.get(channel)
+  if (!bucket) return
+  const wrapped = bucket.get(cb as SyncplayHandler<unknown>)
+  if (!wrapped) return
+  ipcRenderer.removeListener(channel, wrapped)
+  bucket.delete(cb as SyncplayHandler<unknown>)
+}
 
 const api = {
   validateToken: () => ipcRenderer.invoke('validate-token'),
@@ -296,6 +325,59 @@ const api = {
   offShikimoriAnimeDetailsUpdated: () => {
     ipcRenderer.removeAllListeners('shikimori:anime-details-updated')
   },
+
+  // Syncplay (Watch Together)
+  syncplayConnect: (cfg: {
+    host: string
+    port: number
+    room: string
+    username: string
+    password?: string
+    autoReconnect: boolean
+  }) => ipcRenderer.invoke('syncplay:connect', cfg) as Promise<void>,
+  syncplayDisconnect: () => ipcRenderer.invoke('syncplay:disconnect') as Promise<void>,
+  syncplaySetFile: (file: {
+    animeId: number
+    malId: number | null
+    episodeInt: string
+    translationId: number | null
+    canonicalName: string
+    duration: number
+  }) => ipcRenderer.invoke('syncplay:set-file', file) as Promise<void>,
+  syncplaySendLocalState: (payload: {
+    paused: boolean
+    position: number
+    cause: 'play' | 'pause' | 'seek'
+  }) => ipcRenderer.invoke('syncplay:local-state', payload) as Promise<void>,
+  syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) =>
+    ipcRenderer.invoke('syncplay:local-snapshot', snap) as Promise<void>,
+  syncplaySetReady: (isReady: boolean) =>
+    ipcRenderer.invoke('syncplay:set-ready', isReady) as Promise<void>,
+  syncplayGetStatus: () => ipcRenderer.invoke('syncplay:get-status') as Promise<SyncplayStatus>,
+  onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
+    syncplayOn('syncplay:connection-status', callback),
+  offSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
+    syncplayOff('syncplay:connection-status', callback),
+  onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
+    syncplayOn('syncplay:remote-state', callback),
+  offSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
+    syncplayOff('syncplay:remote-state', callback),
+  onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
+    syncplayOn('syncplay:room-users', callback),
+  offSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
+    syncplayOff('syncplay:room-users', callback),
+  onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
+    syncplayOn('syncplay:room-event', callback),
+  offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
+    syncplayOff('syncplay:room-event', callback),
+  onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
+    syncplayOn('syncplay:remote-episode-change', callback),
+  offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
+    syncplayOff('syncplay:remote-episode-change', callback),
+  onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
+    syncplayOn('syncplay:trace', callback),
+  offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
+    syncplayOff('syncplay:trace', callback),
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

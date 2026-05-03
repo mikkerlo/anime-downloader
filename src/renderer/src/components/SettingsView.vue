@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { formatBytes } from '../utils'
 
-const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'player' | 'shortcuts' | 'debug'>('general')
+const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'player' | 'shortcuts' | 'watch-together' | 'debug'>('general')
 
 const token = ref('')
 const translationType = ref('subRu')
@@ -145,6 +145,16 @@ const shikimoriCode = ref('')
 const shikimoriConnecting = ref(false)
 const shikimoriError = ref('')
 const shikimoriShowUrl = ref(false)
+
+// Watch Together (Syncplay)
+const syncplayHost = ref('syncplay.pl')
+const syncplayPort = ref(8999)
+const syncplayRoom = ref('')
+const syncplayUsername = ref('')
+const syncplayPassword = ref('')
+const syncplayAutoReconnect = ref(true)
+const syncplayTestStatus = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
+const syncplayTestError = ref('')
 
 // Player settings
 const playerMode = ref<'system' | 'builtin'>('system')
@@ -562,6 +572,10 @@ onUnmounted(() => {
     clearInterval(skipQueuePollTimer)
     skipQueuePollTimer = null
   }
+  if (syncplaySaveTimer) {
+    clearTimeout(syncplaySaveTimer)
+    syncplaySaveTimer = null
+  }
 })
 
 const TRANSLATION_TYPES = [
@@ -621,6 +635,25 @@ onMounted(async () => {
   shortcutBindings.value = saved ? { ...DEFAULT_SHORTCUTS, ...saved } : { ...DEFAULT_SHORTCUTS }
 
   shikimoriUser.value = await window.api.shikimoriGetUser()
+
+  // Watch Together settings
+  const sp = (await window.api.getSetting('syncplay')) as {
+    lastHost?: string
+    lastPort?: number
+    lastRoom?: string
+    username?: string
+    autoReconnect?: boolean
+  } | null
+  if (sp) {
+    syncplayHost.value = sp.lastHost || 'syncplay.pl'
+    syncplayPort.value = sp.lastPort || 8999
+    syncplayRoom.value = sp.lastRoom || ''
+    syncplayUsername.value = sp.username || ''
+    syncplayAutoReconnect.value = sp.autoReconnect ?? true
+  }
+  if (!syncplayUsername.value && shikimoriUser.value) {
+    syncplayUsername.value = shikimoriUser.value.nickname
+  }
 
   // Player settings
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
@@ -790,6 +823,77 @@ watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
 watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
 watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatchedDays', Number(val) || 0) })
+
+function saveSyncplaySettings(): void {
+  if (!loaded.value) return
+  window.api.setSetting('syncplay', {
+    lastHost: syncplayHost.value.trim(),
+    lastPort: Math.max(1, Math.min(65535, Number(syncplayPort.value) || 8999)),
+    lastRoom: syncplayRoom.value.trim(),
+    username: syncplayUsername.value.trim(),
+    autoReconnect: syncplayAutoReconnect.value
+  })
+  showSaved()
+}
+let syncplaySaveTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleSyncplaySave(): void {
+  if (syncplaySaveTimer) clearTimeout(syncplaySaveTimer)
+  syncplaySaveTimer = setTimeout(saveSyncplaySettings, 600)
+}
+watch([syncplayHost, syncplayPort, syncplayRoom, syncplayUsername], () => {
+  if (loaded.value) scheduleSyncplaySave()
+})
+watch(syncplayAutoReconnect, () => {
+  if (loaded.value) saveSyncplaySettings()
+})
+
+async function testSyncplayConnection(): Promise<void> {
+  const host = syncplayHost.value.trim()
+  const port = Number(syncplayPort.value) || 8999
+  const room = syncplayRoom.value.trim() || 'test-room'
+  const username = syncplayUsername.value.trim() || 'anime-dl-user'
+  if (!host) return
+  syncplayTestStatus.value = 'testing'
+  syncplayTestError.value = ''
+
+  const handler = (status: SyncplayStatus): void => {
+    if (status.state === 'ready') {
+      syncplayTestStatus.value = 'ok'
+      window.api.offSyncplayConnectionStatus(handler)
+      window.api.syncplayDisconnect()
+    } else if (status.state === 'disconnected') {
+      if (syncplayTestStatus.value === 'testing') {
+        syncplayTestStatus.value = 'failed'
+        syncplayTestError.value = status.error || 'Connection closed'
+      }
+      window.api.offSyncplayConnectionStatus(handler)
+    }
+  }
+  window.api.onSyncplayConnectionStatus(handler)
+
+  try {
+    await window.api.syncplayConnect({
+      host,
+      port,
+      room,
+      username,
+      password: syncplayPassword.value || undefined,
+      autoReconnect: false
+    })
+    setTimeout(() => {
+      if (syncplayTestStatus.value === 'testing') {
+        syncplayTestStatus.value = 'failed'
+        syncplayTestError.value = 'Timed out after 10s'
+        window.api.offSyncplayConnectionStatus(handler)
+        window.api.syncplayDisconnect()
+      }
+    }, 10_000)
+  } catch (err) {
+    syncplayTestStatus.value = 'failed'
+    syncplayTestError.value = String(err)
+    window.api.offSyncplayConnectionStatus(handler)
+  }
+}
 </script>
 
 <template>
@@ -804,6 +908,10 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
       <button class="tab" :class="{ active: activeTab === 'merging' }" @click="activeTab = 'merging'">Merging</button>
       <button class="tab" :class="{ active: activeTab === 'player' }" @click="activeTab = 'player'">Player</button>
       <button class="tab" :class="{ active: activeTab === 'shortcuts' }" @click="activeTab = 'shortcuts'">Shortcuts</button>
+      <button class="tab" :class="{ active: activeTab === 'watch-together' }" @click="activeTab = 'watch-together'">
+        Watch Together
+        <span class="tab-dev-badge">in development</span>
+      </button>
       <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount()">Debug</button>
     </div>
     <div class="body">
@@ -1337,6 +1445,78 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
       </template>
 
       <!-- Debug tab -->
+      <template v-if="activeTab === 'watch-together'">
+        <div class="dev-banner">
+          <strong>Feature in development.</strong>
+          Sync, attribution, and reconnect behavior may misfire — especially on
+          rapid arrow-key seeks or shaky connections. Please report quirks with
+          a screen recording or the renderer console log.
+        </div>
+        <div class="setting-group">
+          <label class="setting-label">Watch Together (Syncplay)</label>
+          <p class="setting-hint">
+            Sync play/pause/seek with friends over the Internet via the Syncplay protocol.
+            Works with other Syncplay clients (mpv, VLC) in the same room.
+          </p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="sp-host">Server</label>
+          <p class="setting-hint">Default: <code>syncplay.pl</code> on port <code>8999</code>.</p>
+          <div class="sp-host-row">
+            <input id="sp-host" v-model="syncplayHost" type="text" class="setting-input" placeholder="syncplay.pl" />
+            <input v-model.number="syncplayPort" type="number" min="1" max="65535" class="setting-input sp-port-input" />
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="sp-room">Default room</label>
+          <p class="setting-hint">Preselected room name when you open the Watch Together popover in the player. Any non-empty string is accepted; share it with friends out-of-band.</p>
+          <input id="sp-room" v-model="syncplayRoom" type="text" class="setting-input" placeholder="my-anime-room" />
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="sp-user">Username</label>
+          <p class="setting-hint">Shown to other room members. Defaults to your Shikimori nickname if signed in.</p>
+          <input id="sp-user" v-model="syncplayUsername" type="text" class="setting-input" placeholder="username" />
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label" for="sp-password">Password (optional)</label>
+          <p class="setting-hint">Some servers require a password to log in. Leave empty for public servers.</p>
+          <input id="sp-password" v-model="syncplayPassword" type="password" class="setting-input" placeholder="" />
+        </div>
+
+        <div class="setting-group">
+          <p class="setting-hint">
+            Connections are encrypted with TLS (required). The server must run Syncplay 1.6.3+ and present a
+            valid TLS certificate for its hostname; servers that only accept plaintext are not supported.
+          </p>
+        </div>
+
+        <div class="setting-group">
+          <label class="toggle-row">
+            <input type="checkbox" v-model="syncplayAutoReconnect" />
+            <span>Auto-reconnect on disconnect</span>
+          </label>
+          <p class="setting-hint">Retry with exponential backoff up to 5 times after a network drop.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Test connection</label>
+          <p class="setting-hint">Connects briefly with the current settings, then disconnects.</p>
+          <button class="merge-all-btn" @click="testSyncplayConnection" :disabled="syncplayTestStatus === 'testing'">
+            {{ syncplayTestStatus === 'testing' ? 'Testing…' : 'Test connection' }}
+          </button>
+          <div v-if="syncplayTestStatus === 'ok'" class="token-result token-valid" style="margin-top: 6px">
+            Connected successfully
+          </div>
+          <div v-if="syncplayTestStatus === 'failed'" class="token-result token-invalid" style="margin-top: 6px">
+            {{ syncplayTestError || 'Connection failed' }}
+          </div>
+        </div>
+      </template>
+
       <template v-if="activeTab === 'debug'">
         <div class="setting-group">
           <label class="setting-label">FFmpeg Info</label>
@@ -1536,6 +1716,35 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
   border-bottom-color: #e94560;
 }
 
+.tab-dev-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.18);
+  color: #f59e0b;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.dev-banner {
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: #e0c382;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.dev-banner strong {
+  color: #f59e0b;
+  margin-right: 4px;
+}
+
 .body {
   flex: 1;
   overflow-y: auto;
@@ -1641,6 +1850,16 @@ watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatched
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+.sp-host-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sp-port-input {
+  max-width: 100px;
 }
 
 .speed-input {

@@ -450,3 +450,27 @@ export async function getFranchise(malId: number): Promise<ShikiFranchise> {
   const response = await shikiFetch(`/api/animes/${malId}/franchise`)
   return response.json() as Promise<ShikiFranchise>
 }
+
+export interface ShikiCalendarEntry {
+  next_episode_at: string | null
+  duration: number | null
+  anime: {
+    id: number
+    name: string
+    russian: string
+    image: { original: string; preview: string; x96: string; x48: string }
+    url: string
+    kind: string
+    score: string
+    status: string
+    episodes: number
+    episodes_aired: number
+    aired_on: string | null
+    released_on: string | null
+  }
+}
+
+export async function getCalendar(): Promise<ShikiCalendarEntry[]> {
+  const response = await shikiFetch('/api/calendar')
+  return response.json() as Promise<ShikiCalendarEntry[]>
+}

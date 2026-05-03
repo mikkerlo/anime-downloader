@@ -98,7 +98,8 @@ const store = new Store({
     recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
     skipDetections: {} as Record<string, ShowSkipDetections>,
     skipFingerprintCache: {} as Record<string, CachedFingerprint>,
-    enableLocalSkipDetection: true
+    enableLocalSkipDetection: true,
+    calendarView: 'week' as 'week' | 'month'
   }
 })
 
@@ -179,6 +180,12 @@ const PREFETCH_STATUSES = new Set<shikimori.ShikiUserRateStatus>(['watching', 'p
 
 let prefetchInProgress = false
 let prefetchAbort = false
+
+const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000
+let calendarCache: { data: CalendarEntry[]; fetchedAt: number } | null = null
+function invalidateCalendarCache(): void {
+  calendarCache = null
+}
 
 function getQueueLength(): number {
   return (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).length
@@ -268,6 +275,7 @@ function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): v
     }
   }
   store.set('shikimoriUserRates', cached)
+  invalidateCalendarCache()
   broadcastToAll('shikimori:rate-updated', cached[idx])
 }
 
@@ -2696,6 +2704,7 @@ function registerIpcHandlers(): void {
     store.set('shikimoriUpdateQueue', [])
     store.set('shikimoriAnimeDetails', {})
     prefetchAbort = true
+    invalidateCalendarCache()
     stopSyncTimer()
     broadcastToAll('shikimori:offline-queue-changed', { length: 0 })
     broadcastSyncStatus()
@@ -2741,6 +2750,7 @@ function registerIpcHandlers(): void {
             }
           }
           store.set('shikimoriUserRates', cached)
+          invalidateCalendarCache()
           broadcastToAll('shikimori:rate-updated', cached[idx])
         } else {
           refreshShikimoriRatesInBackground()
@@ -2775,6 +2785,7 @@ function registerIpcHandlers(): void {
           }
         }
         store.set('shikimoriUserRates', cached)
+        invalidateCalendarCache()
         broadcastToAll('shikimori:rate-updated', cached[idx])
         broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
         startSyncTimer()
@@ -2830,6 +2841,7 @@ function registerIpcHandlers(): void {
   function refreshShikimoriRatesInBackground(): void {
     fetchAndCacheShikimoriRates()
       .then((entries) => {
+        invalidateCalendarCache()
         broadcastToAll('shikimori:rates-refreshed', entries)
         void syncShikimoriQueue()
         void prefetchShikimoriDetails()
@@ -2891,6 +2903,87 @@ function registerIpcHandlers(): void {
       ...a,
       smotretAnime: malMap[a.malId] ?? null
     }))
+  })
+
+  ipcMain.handle('shikimori:get-calendar', async (_event, force = false) => {
+    if (!force && calendarCache && Date.now() - calendarCache.fetchedAt < CALENDAR_CACHE_TTL_MS) {
+      return calendarCache.data
+    }
+
+    let cachedRates = store.get('shikimoriUserRates') as {
+      rate: { target_id?: number; episodes: number; status: shikimori.ShikiUserRateStatus }
+      shikiAnime?: { id: number }
+    }[]
+
+    if (cachedRates.length === 0) {
+      try {
+        await fetchAndCacheShikimoriRates()
+        cachedRates = store.get('shikimoriUserRates') as typeof cachedRates
+      } catch (err) {
+        console.warn('[shikimori] calendar: rate fetch failed:', err)
+      }
+    }
+
+    // Older cached entries may lack `rate.target_id`; fall back to `shikiAnime.id`
+    // (also the MAL ID) — same compatibility shim used by `home:get-continue-watching`.
+    function malIdOf(r: (typeof cachedRates)[number]): number | undefined {
+      return r.rate.target_id ?? r.shikiAnime?.id
+    }
+
+    const tracked = new Set<number>()
+    const episodesByMal = new Map<number, number>()
+    const statusByMal = new Map<number, shikimori.ShikiUserRateStatus>()
+    for (const r of cachedRates) {
+      const malId = malIdOf(r)
+      if (!malId) continue
+      statusByMal.set(malId, r.rate.status)
+      episodesByMal.set(malId, r.rate.episodes)
+      if (
+        r.rate.status === 'watching' ||
+        r.rate.status === 'rewatching' ||
+        r.rate.status === 'planned'
+      ) {
+        tracked.add(malId)
+      }
+    }
+
+    if (tracked.size === 0) {
+      calendarCache = { data: [], fetchedAt: Date.now() }
+      return []
+    }
+
+    const calendar = await shikimori.getCalendar()
+    const filtered = calendar.filter((c) => c.next_episode_at && tracked.has(c.anime.id))
+
+    const malIds = Array.from(new Set(filtered.map((c) => c.anime.id)))
+    const malMap = await lookupByMalIds(malIds)
+
+    const SHIKI_BASE = 'https://shikimori.one'
+    function absoluteImage(url: string): string {
+      return url.startsWith('http') ? url : `${SHIKI_BASE}${url}`
+    }
+
+    const entries: CalendarEntry[] = filtered.map((c) => {
+      const malId = c.anime.id
+      const smotret = malMap[malId] ?? null
+      const watchedEps = episodesByMal.get(malId) ?? 0
+      const posterUrl =
+        smotret?.posterUrlSmall ||
+        absoluteImage(c.anime.image.preview || c.anime.image.x96 || c.anime.image.original)
+      return {
+        malId,
+        animeId: smotret?.id ?? null,
+        name: c.anime.russian || c.anime.name,
+        posterUrl,
+        kind: c.anime.kind,
+        episodeInt: String(watchedEps + 1),
+        nextEpisodeAt: c.next_episode_at!,
+        userStatus: statusByMal.get(malId) ?? 'planned'
+      }
+    })
+
+    calendarCache = { data: entries, fetchedAt: Date.now() }
+    return entries
   })
 
   ipcMain.handle('shikimori:get-related', async (_event, malId: number) => {
@@ -3816,8 +3909,8 @@ async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<s
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1400,
+    height: 850,
     minWidth: 900,
     minHeight: 600,
     show: false,

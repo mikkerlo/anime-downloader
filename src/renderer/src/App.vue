@@ -8,6 +8,7 @@ import DownloadsView from './components/DownloadsView.vue'
 import AnimeDetailView from './components/AnimeDetailView.vue'
 import ShikimoriView from './components/ShikimoriView.vue'
 import FriendsActivityView from './components/FriendsActivityView.vue'
+import CalendarView from './components/CalendarView.vue'
 import HomeView from './components/HomeView.vue'
 import PlayerView from './components/PlayerView.vue'
 
@@ -19,14 +20,16 @@ const animeByView = ref<Record<string, number | null>>({
   search: null,
   library: null,
   shikimori: null,
-  friends: null
+  friends: null,
+  calendar: null
 })
 const animeHistoryByView = ref<Record<string, number[]>>({
   home: [],
   search: [],
   library: [],
   shikimori: [],
-  friends: []
+  friends: [],
+  calendar: []
 })
 const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
 
@@ -192,6 +195,7 @@ onBeforeUnmount(() => {
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
     <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" @open-anime="openAnime" />
+    <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" :anime-id="playerState.animeId" :mal-id="playerState.malId" @close="closePlayer" />

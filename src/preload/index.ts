@@ -43,6 +43,8 @@ const api = {
     ipcRenderer.invoke('report-quality-mismatch', data),
   getQualityMismatchCount: () => ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,
   dumpQualityMismatches: () => ipcRenderer.invoke('dump-quality-mismatches') as Promise<{ count: number; path: string }>,
+  debugGetMp4Stats: () => ipcRenderer.invoke('debug:get-mp4-stats') as Promise<Mp4StreamingStats>,
+  debugResetMp4Stats: () => ipcRenderer.invoke('debug:reset-mp4-stats') as Promise<void>,
   getCachedPoster: (animeId: number) => ipcRenderer.invoke('cache-get-poster', animeId) as Promise<string | null>,
   libraryGet: () => ipcRenderer.invoke('library-get'),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke('library-toggle', anime),

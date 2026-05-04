@@ -24,6 +24,8 @@ interface Api {
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>
+  debugGetMp4Stats: () => Promise<Mp4StreamingStats>
+  debugResetMp4Stats: () => Promise<void>
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
   libraryHas: (id: number) => Promise<boolean>
@@ -499,6 +501,22 @@ interface SkipDetectorProgress {
   current: number
   total: number
   episodeLabel?: string
+}
+
+interface Mp4StreamingStatsSample {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  episodeLabel: string
+  filePath: string
+  firstNonFtypBox: string
+  checkedAt: number
+}
+
+interface Mp4StreamingStats {
+  totalChecked: number
+  faststartCount: number
+  nonFaststartSamples: Mp4StreamingStatsSample[]
 }
 
 interface ShikiUser {

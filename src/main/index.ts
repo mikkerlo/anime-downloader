@@ -31,6 +31,8 @@ import type {
   SyncplayRemoteEpisode,
   SyncplayStatus
 } from './syncplay'
+import { probeMp4Faststart } from './mp4-faststart'
+import type { Mp4StreamingStats } from './mp4-faststart'
 
 // Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
 // PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
@@ -122,7 +124,12 @@ const store = new Store({
       lastRoom: string
       username: string
       autoReconnect: boolean
-    }
+    },
+    mp4StreamingStats: {
+      totalChecked: 0,
+      faststartCount: 0,
+      nonFaststartSamples: [] as { animeId: number; animeName: string; episodeInt: string; episodeLabel: string; filePath: string; firstNonFtypBox: string; checkedAt: number }[]
+    } as Mp4StreamingStats
   }
 })
 
@@ -162,6 +169,42 @@ function isNetworkError(err: unknown): boolean {
   const code = errorCode(err)
   if (code && NETWORK_ERROR_CODES.has(code)) return true
   return false
+}
+
+// In-memory set of MP4 paths probed this session, so re-opening the same file
+// in the player doesn't double-count. Stats persist across sessions; this set
+// resets on app restart, which is fine — it's a sampling check, not an exact
+// per-file ledger.
+const mp4FaststartChecked = new Set<string>()
+
+async function recordMp4FaststartCheck(
+  filePath: string,
+  context: { animeId: number; animeName: string; episodeInt: string; episodeLabel: string }
+): Promise<void> {
+  if (mp4FaststartChecked.has(filePath)) return
+  mp4FaststartChecked.add(filePath)
+  const probe = await probeMp4Faststart(filePath)
+  if (!probe) return
+  const stats = store.get('mp4StreamingStats') as Mp4StreamingStats
+  stats.totalChecked += 1
+  if (probe.faststart) {
+    stats.faststartCount += 1
+  } else {
+    stats.nonFaststartSamples.push({
+      animeId: context.animeId,
+      animeName: context.animeName,
+      episodeInt: context.episodeInt,
+      episodeLabel: context.episodeLabel,
+      filePath,
+      firstNonFtypBox: probe.firstNonFtypBox,
+      checkedAt: Date.now()
+    })
+    if (stats.nonFaststartSamples.length > 10) {
+      stats.nonFaststartSamples = stats.nonFaststartSamples.slice(-10)
+    }
+    console.error(`[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`)
+  }
+  store.set('mp4StreamingStats', stats)
 }
 
 interface QueuedShikimoriUpdate {
@@ -1891,6 +1934,14 @@ function registerIpcHandlers(): void {
     return qualityMismatches.size
   })
 
+  ipcMain.handle('debug:get-mp4-stats', () => {
+    return store.get('mp4StreamingStats') as Mp4StreamingStats
+  })
+
+  ipcMain.handle('debug:reset-mp4-stats', () => {
+    store.set('mp4StreamingStats', { totalChecked: 0, faststartCount: 0, nonFaststartSamples: [] })
+  })
+
   ipcMain.handle('dump-quality-mismatches', () => {
     const outPath = path.join(getDownloadDir(), 'quality-mismatches.json')
     const data = [...qualityMismatches.values()]
@@ -3206,6 +3257,17 @@ function registerIpcHandlers(): void {
       if (coldDir) dirsToCheck.push(coldDir)
     }
 
+    const onResolved = (fp: string): void => {
+      if (fp.toLowerCase().endsWith('.mp4')) {
+        void recordMp4FaststartCheck(fp, {
+          animeId: 0,
+          animeName,
+          episodeInt,
+          episodeLabel: `Ep ${episodeInt}`
+        })
+      }
+    }
+
     for (const dir of dirsToCheck) {
       const animeDir = path.join(dir, animeDirName)
       // Try tagged filename first
@@ -3216,6 +3278,7 @@ function registerIpcHandlers(): void {
             const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
             try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
           })()
+          onResolved(fp)
           return { filePath: fp, subtitleContent }
         }
       }
@@ -3227,6 +3290,7 @@ function registerIpcHandlers(): void {
             const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
             try { return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null } catch { return null }
           })()
+          onResolved(fp)
           return { filePath: fp, subtitleContent }
         }
       }
@@ -4135,6 +4199,16 @@ app.whenReady().then(async () => {
     if (mode === 'queue') {
       showBackgroundNotification('Downloads complete', 'All downloads have finished')
     }
+  })
+
+  downloadManager.onVideoDownloaded((filePath, item) => {
+    if (!filePath.toLowerCase().endsWith('.mp4')) return
+    void recordMp4FaststartCheck(filePath, {
+      animeId: item.animeId,
+      animeName: item.animeName,
+      episodeInt: item.episodeInt,
+      episodeLabel: item.episodeLabel
+    })
   })
 
   registerIpcHandlers()

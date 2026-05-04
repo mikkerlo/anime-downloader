@@ -202,7 +202,7 @@ async function recordMp4FaststartCheck(
     if (stats.nonFaststartSamples.length > 10) {
       stats.nonFaststartSamples = stats.nonFaststartSamples.slice(-10)
     }
-    console.error(`[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`)
+    console.warn(`[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`)
   }
   store.set('mp4StreamingStats', stats)
 }
@@ -1940,6 +1940,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('debug:reset-mp4-stats', () => {
     store.set('mp4StreamingStats', { totalChecked: 0, faststartCount: 0, nonFaststartSamples: [] })
+    mp4FaststartChecked.clear()
   })
 
   ipcMain.handle('dump-quality-mismatches', () => {
@@ -3259,6 +3260,10 @@ function registerIpcHandlers(): void {
 
     const onResolved = (fp: string): void => {
       if (fp.toLowerCase().endsWith('.mp4')) {
+        // animeId is 0 here because this handler only receives animeName; resolving
+        // back to an id would require scanning recentAnimeMeta. The stats sample is
+        // for human inspection (anime title + episode + filepath), so the missing
+        // id is acceptable.
         void recordMp4FaststartCheck(fp, {
           animeId: 0,
           animeName,

@@ -102,12 +102,23 @@ review is two lines.
 2. <constrained question>
 ```
 
-After the comment markdown, on its own final line, append exactly one of:
+After the comment markdown, append two markers on their own final lines.
+
+Label marker — exactly one of:
 
 - `<!-- LABEL_ACTION: add -->` — recommend adding `Ready for implementation`
 - `<!-- LABEL_ACTION: remove -->` — recommend removing it (regression)
 - `<!-- LABEL_ACTION: none -->` — leave label state alone (the
-  question-pinging path, or no change)
+  question-pinging path, or a clean re-run with only nits)
 
-The marker is invisible in the rendered comment but the workflow parses it
-to apply labels. Do not output anything after the marker.
+Assign marker — exactly one of:
+
+- `<!-- ASSIGN_AUTHOR: yes -->` — emit this whenever you @-mention the
+  author with blocking questions. The workflow assigns them so the issue
+  shows up on their dashboard.
+- `<!-- ASSIGN_AUTHOR: no -->` — otherwise (label `add`, label `remove`,
+  or a clean nits-only review).
+
+The markers are invisible in the rendered comment but the workflow parses
+them to apply labels and assignees. Do not output anything after the
+markers.

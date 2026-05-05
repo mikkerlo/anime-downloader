@@ -93,7 +93,7 @@ jobs:
           prompt-file: prompt.md
           max-tokens: 4000
 
-      - name: Post comment and apply label decision
+      - name: Post comment and apply label / assignee decision
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.target.outputs.number }}
@@ -107,6 +107,11 @@ jobs:
             ACTION="remove"
           fi
 
+          ASSIGN_AUTHOR="no"
+          if echo "$RESPONSE" | grep -q '<!-- ASSIGN_AUTHOR: yes -->'; then
+            ASSIGN_AUTHOR="yes"
+          fi
+
           printf '%s\n' "$RESPONSE" > comment.md
           gh issue comment "$ISSUE_NUMBER" --body-file comment.md
 
@@ -118,3 +123,8 @@ jobs:
               gh issue edit "$ISSUE_NUMBER" --remove-label "Ready for implementation" || true
               ;;
           esac
+
+          if [ "$ASSIGN_AUTHOR" = "yes" ]; then
+            AUTHOR=$(jq -r '.author.login' issue.json)
+            gh issue edit "$ISSUE_NUMBER" --add-assignee "$AUTHOR"
+          fi

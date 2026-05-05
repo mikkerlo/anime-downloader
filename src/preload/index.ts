@@ -60,12 +60,12 @@ const api = {
     ipcRenderer.invoke('home:get-continue-watching') as Promise<ContinueWatchingEntry[]>,
 
   // Watch progress
-  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) =>
-    ipcRenderer.invoke('watch-progress:save', animeId, episodeInt, position, duration, watched),
+  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean, translationId?: number) =>
+    ipcRenderer.invoke('watch-progress:save', animeId, episodeInt, position, duration, watched, translationId),
   watchProgressGet: (animeId: number, episodeInt: string) =>
-    ipcRenderer.invoke('watch-progress:get', animeId, episodeInt) as Promise<{ position: number; duration: number; updatedAt: number; watched?: boolean } | null>,
+    ipcRenderer.invoke('watch-progress:get', animeId, episodeInt) as Promise<{ position: number; duration: number; updatedAt: number; watched?: boolean; translationId?: number } | null>,
   watchProgressGetAll: (animeId: number) =>
-    ipcRenderer.invoke('watch-progress:get-all', animeId) as Promise<Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean }>>,
+    ipcRenderer.invoke('watch-progress:get-all', animeId) as Promise<Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; translationId?: number }>>,
 
   // Downloads
   downloadEnqueue: (requests: unknown[]) => ipcRenderer.invoke('download:enqueue', requests),

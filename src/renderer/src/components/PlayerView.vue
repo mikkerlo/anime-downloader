@@ -467,10 +467,24 @@ async function saveProgress(force = false): Promise<void> {
   // When watched, clear the position so we don't try to resume near the end later
   const positionToSave = watchedReported ? 0 : video.currentTime
   try {
-    await window.api.watchProgressSave(props.animeId, epInt, positionToSave, duration.value, watchedReported)
+    await window.api.watchProgressSave(props.animeId, epInt, positionToSave, duration.value, watchedReported, activeTranslationId.value ?? undefined)
     window.dispatchEvent(new CustomEvent('watch-progress-updated'))
   } catch (err) {
     console.warn('[player] failed to save watch progress:', err)
+  }
+}
+
+async function persistSelectedTranslation(translationId: number): Promise<void> {
+  const epInt = currentEpisodeInt.value
+  if (!props.animeId || !epInt) return
+  const video = videoRef.value
+  const pos = watchedReported ? 0 : (video?.currentTime ?? 0)
+  const dur = duration.value || (video?.duration ?? 0)
+  try {
+    await window.api.watchProgressSave(props.animeId, epInt, pos, dur, watchedReported, translationId)
+    window.dispatchEvent(new CustomEvent('watch-progress-updated'))
+  } catch (err) {
+    console.warn('[player] failed to persist translation choice:', err)
   }
 }
 
@@ -1662,6 +1676,7 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
       const localResult = await window.api.playerFindLocalFile(props.animeName, activeEpisodeLabel.value, tr.id, friendlyLabel)
       if (localResult) {
         activeTranslationId.value = tr.id
+        persistSelectedTranslation(tr.id)
 
         // Clean up previous remux / stream session if any
         if (remuxedPath.value || streamSessionId.value) {
@@ -1710,6 +1725,7 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
     }
 
     activeTranslationId.value = tr.id
+    persistSelectedTranslation(tr.id)
 
     // Clean up previous remux / MSE stream if switching from local to stream
     if (remuxedPath.value || streamSessionId.value) {

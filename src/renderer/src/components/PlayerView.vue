@@ -1657,7 +1657,9 @@ async function selectTranslation(tr: { id: number; label: string; type: string; 
   try {
     // Check if this translation has a local file
     if (activeDownloadedTrIds.value.includes(tr.id)) {
-      const localResult = await window.api.playerFindLocalFile(props.animeName, activeEpisodeLabel.value, tr.id)
+      const currentEp = props.allEpisodes[activeEpisodeIndex.value]
+      const friendlyLabel = currentEp?.episodeFull || activeEpisodeLabel.value
+      const localResult = await window.api.playerFindLocalFile(props.animeName, activeEpisodeLabel.value, tr.id, friendlyLabel)
       if (localResult) {
         activeTranslationId.value = tr.id
 
@@ -1827,7 +1829,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
     // Try local file first if downloaded (forceLocal means we specifically chose a downloaded translation)
     if (forceLocal || targetEp.downloadedTrIds.includes(resolvedTr.id)) {
-      const localResult = await window.api.playerFindLocalFile(props.animeName, targetEp.episodeInt, resolvedTr.id)
+      const localResult = await window.api.playerFindLocalFile(props.animeName, targetEp.episodeInt, resolvedTr.id, targetEp.episodeFull)
       if (localResult) {
         activeFilePath.value = localResult.filePath
         activeStreamUrl.value = ''

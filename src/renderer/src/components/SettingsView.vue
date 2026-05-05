@@ -1660,7 +1660,7 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">MP4 streaming-optimization check</label>
-          <p class="setting-hint">After every video download or when an MP4 is opened in the player, the first ~64 KB are scanned for the MP4 box order. Streaming-optimized files (`moov` before `mdat`) are required to play while still downloading. If a non-faststart file is found, an example is shown below for inspection.</p>
+          <p class="setting-hint">After every video download or when an MP4 is opened in the player, the first ~64 KB are scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before <code>mdat</code>) are required to play while still downloading. If a non-faststart file is found, an example is shown below for inspection.</p>
           <button class="merge-all-btn" @click="refreshMp4Stats">Refresh</button>
           <button class="merge-all-btn" style="margin-left: 0.5rem" @click="resetMp4Stats" :disabled="!mp4Stats || mp4Stats.totalChecked === 0">Reset</button>
 

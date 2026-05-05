@@ -177,6 +177,10 @@ function isNetworkError(err: unknown): boolean {
 // per-file ledger.
 const mp4FaststartChecked = new Set<string>()
 
+// Serialize stats read-modify-write so concurrent download finishes can't
+// clobber each other's increments.
+let mp4StatsWriteChain: Promise<void> = Promise.resolve()
+
 async function recordMp4FaststartCheck(
   filePath: string,
   context: { animeId: number; animeName: string; episodeInt: string; episodeLabel: string }
@@ -185,26 +189,30 @@ async function recordMp4FaststartCheck(
   mp4FaststartChecked.add(filePath)
   const probe = await probeMp4Faststart(filePath)
   if (!probe) return
-  const stats = store.get('mp4StreamingStats') as Mp4StreamingStats
-  stats.totalChecked += 1
-  if (probe.faststart) {
-    stats.faststartCount += 1
-  } else {
-    stats.nonFaststartSamples.push({
-      animeId: context.animeId,
-      animeName: context.animeName,
-      episodeInt: context.episodeInt,
-      episodeLabel: context.episodeLabel,
-      filePath,
-      firstNonFtypBox: probe.firstNonFtypBox,
-      checkedAt: Date.now()
-    })
-    if (stats.nonFaststartSamples.length > 10) {
-      stats.nonFaststartSamples = stats.nonFaststartSamples.slice(-10)
+  const next = mp4StatsWriteChain.then(() => {
+    const stats = store.get('mp4StreamingStats') as Mp4StreamingStats
+    stats.totalChecked += 1
+    if (probe.faststart) {
+      stats.faststartCount += 1
+    } else {
+      stats.nonFaststartSamples.push({
+        animeId: context.animeId,
+        animeName: context.animeName,
+        episodeInt: context.episodeInt,
+        episodeLabel: context.episodeLabel,
+        filePath,
+        firstNonFtypBox: probe.firstNonFtypBox,
+        checkedAt: Date.now()
+      })
+      if (stats.nonFaststartSamples.length > 10) {
+        stats.nonFaststartSamples = stats.nonFaststartSamples.slice(-10)
+      }
+      console.warn(`[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`)
     }
-    console.warn(`[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`)
-  }
-  store.set('mp4StreamingStats', stats)
+    store.set('mp4StreamingStats', stats)
+  })
+  mp4StatsWriteChain = next.catch(() => undefined)
+  await next
 }
 
 interface QueuedShikimoriUpdate {
@@ -3230,7 +3238,7 @@ function registerIpcHandlers(): void {
     return null
   })
 
-  ipcMain.handle('player:find-local-file', async (_event, animeName: string, episodeInt: string, translationId: number) => {
+  ipcMain.handle('player:find-local-file', async (_event, animeName: string, episodeInt: string, translationId: number, episodeLabel: string) => {
     const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
     // Find meta for this translation — try new key format, then scan for legacy
     let meta: { author: string } | null = null
@@ -3268,7 +3276,7 @@ function registerIpcHandlers(): void {
           animeId: 0,
           animeName,
           episodeInt,
-          episodeLabel: `Ep ${episodeInt}`
+          episodeLabel
         })
       }
     }

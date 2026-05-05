@@ -119,7 +119,7 @@ interface Api {
   // Player
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) => Promise<{ filePath: string; subtitleContent: string | null } | null>
+  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) => Promise<{ filePath: string; subtitleContent: string | null } | null>
   playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) => Promise<
     | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }

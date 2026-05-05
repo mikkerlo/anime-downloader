@@ -200,8 +200,8 @@ const api = {
     ipcRenderer.invoke('player:get-stream-url', translationId, maxHeight),
   playerGetLocalSubtitles: (filePath: string) =>
     ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) =>
-    ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
+  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) =>
+    ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId, episodeLabel) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>

@@ -478,8 +478,19 @@ async function persistSelectedTranslation(translationId: number): Promise<void> 
   const epInt = currentEpisodeInt.value
   if (!props.animeId || !epInt) return
   const video = videoRef.value
-  const pos = watchedReported ? 0 : (video?.currentTime ?? 0)
-  const dur = duration.value || (video?.duration ?? 0)
+  const vidDur = video?.duration && !Number.isNaN(video.duration) ? video.duration : 0
+  let pos = watchedReported ? 0 : (video?.currentTime ?? 0)
+  let dur = duration.value || vidDur
+  if (!dur) {
+    // Pre-loadedmetadata switch: avoid clobbering existing resume position with 0/0
+    try {
+      const prev = await window.api.watchProgressGet(props.animeId, epInt)
+      if (prev) {
+        pos = prev.watched ? 0 : prev.position
+        dur = prev.duration
+      }
+    } catch { /* ignore */ }
+  }
   try {
     await window.api.watchProgressSave(props.animeId, epInt, pos, dur, watchedReported, translationId)
     window.dispatchEvent(new CustomEvent('watch-progress-updated'))

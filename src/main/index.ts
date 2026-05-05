@@ -19,8 +19,8 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
-import { analyzeShow } from './skip-detector'
-import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress } from './skip-detector'
+import { analyzeShow, detectStream } from './skip-detector'
+import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress, EpisodeSkipDetection } from './skip-detector'
 import { syncplay } from './syncplay'
 import type {
   SyncplayConfig,
@@ -1601,6 +1601,18 @@ function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
   broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
 }
 
+function normalizeSkipDetections(detections: ShowSkipDetections | null): ShowSkipDetections | null {
+  if (!detections) return null
+  if (detections.algorithm?.source === 'local') return detections
+  return {
+    ...detections,
+    algorithm: {
+      ...detections.algorithm,
+      source: 'local'
+    }
+  }
+}
+
 function runSkipAnalysisInternal(animeId: number, episodes: EpisodeInput[]): Promise<ShowSkipDetections> {
   if (currentSkipAnalysis) {
     if (currentSkipAnalysis.animeId === animeId) return currentSkipAnalysis.promise
@@ -2618,7 +2630,7 @@ function registerIpcHandlers(): void {
   // single-flight state as these handlers.
   ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
-    return all[String(animeId)] ?? null
+    return normalizeSkipDetections(all[String(animeId)] ?? null)
   })
 
   ipcMain.handle('skip-detector:get-status', () => {
@@ -2637,6 +2649,30 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('skip-detector:analyze-show', (_event, animeId: number, episodes: EpisodeInput[]) => {
     return runSkipAnalysisInternal(animeId, episodes)
+  })
+
+  ipcMain.handle('skip-detector:detect-stream', async (_event, animeId: number, episodeInt: string, streamUrl: string): Promise<EpisodeSkipDetection | null> => {
+    const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    const detections = normalizeSkipDetections(all[String(animeId)] ?? null)
+    if (!detections) return null
+    if (!streamUrl) return null
+    const fpcalcPath = getFpcalcPath()
+    if (!fpcalcPath) throw new Error('fpcalc binary not available — restart the app to retry the download')
+    if (!ffmpegPath) throw new Error('ffmpeg not available')
+    return detectStream(animeId, episodeInt, streamUrl, detections, {
+      fpcalcPath,
+      ffmpegPath,
+      ffprobePath: ffprobePath || undefined,
+      loadCachedFingerprint: (key) => {
+        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+        return cache[key]
+      },
+      saveCachedFingerprint: (key, value) => {
+        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+        cache[key] = value
+        store.set('skipFingerprintCache', cache)
+      }
+    })
   })
 
   // One-shot backfill for shows downloaded before Phase 3 was wired in.

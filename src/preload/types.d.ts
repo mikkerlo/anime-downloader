@@ -103,6 +103,7 @@ interface Api {
     episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
   ) => Promise<ShowSkipDetections>
   skipDetectorGetDetections: (animeId: number) => Promise<ShowSkipDetections | null>
+  skipDetectorDetectStream: (animeId: number, episodeInt: string, streamUrl: string) => Promise<EpisodeSkipDetection | null>
   skipDetectorGetStatus: () => Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>
   skipDetectorCancel: () => Promise<void>
   skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
@@ -487,6 +488,7 @@ interface ShowSkipDetections {
   analyzedAt: number
   episodeCount: number
   algorithm: {
+    source: 'local'
     sampleRate: number
     matchBitThreshold: number
     minRunSec: number

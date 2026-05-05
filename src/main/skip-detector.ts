@@ -1,4 +1,7 @@
 import * as fs from 'fs/promises'
+import * as os from 'os'
+import * as path from 'path'
+import { spawn, type ChildProcess } from 'child_process'
 import { fingerprintFile, popcount32, type Fingerprint } from './fingerprint'
 
 export interface EpisodeInput {
@@ -29,6 +32,7 @@ export interface ShowSkipDetections {
   analyzedAt: number
   episodeCount: number
   algorithm: {
+    source: 'local'
     sampleRate: number
     matchBitThreshold: number
     minRunSec: number
@@ -58,6 +62,15 @@ export interface AnalyzeOptions {
   fpcalcPath: string
   signal?: AbortSignal
   onProgress?: (p: AnalyzeProgress) => void
+  loadCachedFingerprint: (key: string) => CachedFingerprint | undefined
+  saveCachedFingerprint: (key: string, value: CachedFingerprint) => void
+}
+
+export interface DetectStreamOptions {
+  fpcalcPath: string
+  ffmpegPath: string
+  ffprobePath?: string
+  signal?: AbortSignal
   loadCachedFingerprint: (key: string) => CachedFingerprint | undefined
   saveCachedFingerprint: (key: string, value: CachedFingerprint) => void
 }
@@ -112,6 +125,20 @@ interface MatchRun {
   startA: number  // hash index into A's slice
   startB: number  // hash index into B's slice
   length: number  // hash count
+}
+
+interface FingerprintRegion {
+  fingerprint: Fingerprint
+  offsetHashes: number
+  lengthHashes: number
+  sourceOffsetSec: number
+}
+
+interface RegionMatch {
+  startSecA: number
+  startSecB: number
+  lengthSecA: number
+  lengthSecB: number
 }
 
 // Slide a single fixed-length window over diagonal `d = a - b` to find the
@@ -225,6 +252,38 @@ function median(values: number[]): number {
   return (sorted[mid - 1] + sorted[mid]) / 2
 }
 
+function matchFingerprintRegions(a: FingerprintRegion, b: FingerprintRegion): RegionMatch | null {
+  if (a.lengthHashes <= 0 || b.lengthHashes <= 0) return null
+  const minHashesPerSec = Math.min(a.fingerprint.hashesPerSec, b.fingerprint.hashesPerSec)
+  const windowHashes = Math.max(8, Math.round(WINDOW_SECONDS * minHashesPerSec))
+  const minRunHashes = Math.max(windowHashes + 1, Math.round(MIN_RUN_SECONDS * minHashesPerSec))
+  const coarse = findBestMatch(
+    a.fingerprint.hashes,
+    a.offsetHashes,
+    a.lengthHashes,
+    b.fingerprint.hashes,
+    b.offsetHashes,
+    b.lengthHashes,
+    windowHashes,
+    minRunHashes,
+    MATCH_BIT_THRESHOLD
+  )
+  if (!coarse) return null
+  const refined = refineMatch(
+    a.fingerprint.hashes,
+    b.fingerprint.hashes,
+    coarse,
+    REFINE_BIT_THRESHOLD,
+    REFINE_SUSTAIN_HASHES
+  )
+  return {
+    startSecA: a.sourceOffsetSec + (refined.startA / a.fingerprint.hashesPerSec),
+    startSecB: b.sourceOffsetSec + (refined.startB / b.fingerprint.hashesPerSec),
+    lengthSecA: refined.length / a.fingerprint.hashesPerSec,
+    lengthSecB: refined.length / b.fingerprint.hashesPerSec
+  }
+}
+
 interface PerEpisodeSamples {
   opStart: number[]
   opLength: number[]
@@ -270,27 +329,20 @@ export async function analyzeShow(
 
     const a = loaded[pairs[p].i]
     const b = loaded[pairs[p].j]
-    // Use the slower of the two hash rates so window-in-hashes is safely sized for both
-    const minHashesPerSec = Math.min(a.fingerprint.hashesPerSec, b.fingerprint.hashesPerSec)
-    const windowHashes = Math.max(8, Math.round(WINDOW_SECONDS * minHashesPerSec))
-    const minRunHashes = Math.max(windowHashes + 1, Math.round(MIN_RUN_SECONDS * minHashesPerSec))
-
     // OP region: search the first 8 minutes of each episode
     const opRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * 8 * 60))
     const opRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * 8 * 60))
-    const opMatch = findBestMatch(
-      a.fingerprint.hashes, 0, opRegionHashesA,
-      b.fingerprint.hashes, 0, opRegionHashesB,
-      windowHashes, minRunHashes, MATCH_BIT_THRESHOLD
+    const opMatch = matchFingerprintRegions(
+      { fingerprint: a.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesA, sourceOffsetSec: 0 },
+      { fingerprint: b.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesB, sourceOffsetSec: 0 }
     )
     if (opMatch) {
-      const refined = refineMatch(a.fingerprint.hashes, b.fingerprint.hashes, opMatch, REFINE_BIT_THRESHOLD, REFINE_SUSTAIN_HASHES)
       const sA = samplesByEpisode.get(a.episodeInt)!
       const sB = samplesByEpisode.get(b.episodeInt)!
-      sA.opStart.push(refined.startA / a.fingerprint.hashesPerSec)
-      sA.opLength.push(refined.length / a.fingerprint.hashesPerSec)
-      sB.opStart.push(refined.startB / b.fingerprint.hashesPerSec)
-      sB.opLength.push(refined.length / b.fingerprint.hashesPerSec)
+      sA.opStart.push(opMatch.startSecA)
+      sA.opLength.push(opMatch.lengthSecA)
+      sB.opStart.push(opMatch.startSecB)
+      sB.opLength.push(opMatch.lengthSecB)
     }
 
     // ED region: search the last 8 minutes of each episode
@@ -299,20 +351,18 @@ export async function analyzeShow(
     const edRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * edSearchSec))
     const edStartA = a.fingerprint.hashes.length - edRegionHashesA
     const edStartB = b.fingerprint.hashes.length - edRegionHashesB
-    const edMatch = findBestMatch(
-      a.fingerprint.hashes, edStartA, edRegionHashesA,
-      b.fingerprint.hashes, edStartB, edRegionHashesB,
-      windowHashes, minRunHashes, MATCH_BIT_THRESHOLD
+    const edMatch = matchFingerprintRegions(
+      { fingerprint: a.fingerprint, offsetHashes: edStartA, lengthHashes: edRegionHashesA, sourceOffsetSec: 0 },
+      { fingerprint: b.fingerprint, offsetHashes: edStartB, lengthHashes: edRegionHashesB, sourceOffsetSec: 0 }
     )
     // Suppress duplicate detection of the OP showing through into ED region (rare with the offsets above, but possible for short shows)
     if (edMatch) {
-      const refined = refineMatch(a.fingerprint.hashes, b.fingerprint.hashes, edMatch, REFINE_BIT_THRESHOLD, REFINE_SUSTAIN_HASHES)
       const sA = samplesByEpisode.get(a.episodeInt)!
       const sB = samplesByEpisode.get(b.episodeInt)!
-      sA.edStart.push(refined.startA / a.fingerprint.hashesPerSec)
-      sA.edLength.push(refined.length / a.fingerprint.hashesPerSec)
-      sB.edStart.push(refined.startB / b.fingerprint.hashesPerSec)
-      sB.edLength.push(refined.length / b.fingerprint.hashesPerSec)
+      sA.edStart.push(edMatch.startSecA)
+      sA.edLength.push(edMatch.lengthSecA)
+      sB.edStart.push(edMatch.startSecB)
+      sB.edLength.push(edMatch.lengthSecB)
     }
   }
   opts.onProgress?.({ phase: 'comparing', current: pairs.length, total: pairs.length })
@@ -349,6 +399,7 @@ export async function analyzeShow(
     analyzedAt: Date.now(),
     episodeCount: episodes.length,
     algorithm: {
+      source: 'local',
       sampleRate: 11025,
       matchBitThreshold: MATCH_BIT_THRESHOLD,
       minRunSec: MIN_RUN_SECONDS,
@@ -356,5 +407,222 @@ export async function analyzeShow(
       refineBitThreshold: REFINE_BIT_THRESHOLD,
       refineSustainHashes: REFINE_SUSTAIN_HASHES
     }
+  }
+}
+
+function killChild(proc: ChildProcess | null): void {
+  if (!proc || proc.killed) return
+  try { proc.kill('SIGKILL') } catch { /* ignore */ }
+}
+
+async function runChild(command: string, args: string[], opts?: { signal?: AbortSignal }): Promise<void> {
+  let proc: ChildProcess | null = null
+  if (opts?.signal?.aborted) throw new Error('operation cancelled')
+  const onAbort = (): void => killChild(proc)
+  opts?.signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      proc = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+      let stderr = ''
+      proc.stderr?.on('data', (chunk) => { stderr += chunk.toString() })
+      proc.on('error', reject)
+      proc.on('exit', (code, signal) => {
+        if (signal === 'SIGKILL') {
+          reject(new Error('operation cancelled'))
+          return
+        }
+        if (code !== 0) {
+          reject(new Error(`${path.basename(command)} exited ${code}: ${stderr.trim() || 'no stderr'}`))
+          return
+        }
+        resolve()
+      })
+    })
+  } finally {
+    opts?.signal?.removeEventListener('abort', onAbort)
+    killChild(proc)
+  }
+}
+
+async function probeDurationSec(sourcePath: string, ffprobePath: string, signal?: AbortSignal): Promise<number | null> {
+  let proc: ChildProcess | null = null
+  if (signal?.aborted) throw new Error('operation cancelled')
+  const onAbort = (): void => killChild(proc)
+  signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    return await new Promise<number | null>((resolve, reject) => {
+      proc = spawn(ffprobePath, [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        sourcePath
+      ], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      proc.stdout?.on('data', (chunk) => { stdout += chunk.toString() })
+      proc.stderr?.on('data', (chunk) => { stderr += chunk.toString() })
+      proc.on('error', reject)
+      proc.on('exit', (code, exitSignal) => {
+        if (exitSignal === 'SIGKILL') {
+          reject(new Error('operation cancelled'))
+          return
+        }
+        if (code !== 0) {
+          reject(new Error(`ffprobe exited ${code}: ${stderr.trim() || 'no stderr'}`))
+          return
+        }
+        const value = Number(stdout.trim())
+        resolve(Number.isFinite(value) && value > 0 ? value : null)
+      })
+    })
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    killChild(proc)
+  }
+}
+
+async function fingerprintStreamClip(
+  streamUrl: string,
+  ffmpegPath: string,
+  fpcalcPath: string,
+  mode: 'start' | 'end',
+  clipLengthSec: number,
+  streamDurationSec: number | null,
+  signal?: AbortSignal
+): Promise<{ fingerprint: Fingerprint; offsetSec: number }> {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-dl-skip-stream-'))
+  const outputPath = path.join(tmpDir, `${mode}.wav`)
+  try {
+    const args = ['-y', '-hide_banner', '-loglevel', 'error', '-nostdin']
+    if (mode === 'end') {
+      args.push('-sseof', `-${clipLengthSec}`)
+    }
+    args.push(
+      '-i', streamUrl,
+      '-vn',
+      '-ac', '1',
+      '-ar', '11025',
+      '-c:a', 'pcm_s16le',
+      '-t', String(clipLengthSec),
+      outputPath
+    )
+    await runChild(ffmpegPath, args, { signal })
+    const fingerprint = await fingerprintFile(fpcalcPath, outputPath, { signal })
+    const offsetSec = mode === 'end' && streamDurationSec
+      ? Math.max(0, streamDurationSec - fingerprint.durationSec)
+      : 0
+    return { fingerprint, offsetSec }
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  }
+}
+
+async function loadEpisodeFingerprint(
+  animeId: number,
+  ep: EpisodeSkipDetection,
+  opts: DetectStreamOptions
+): Promise<Fingerprint | null> {
+  if (!ep.filePath) return null
+  try {
+    return await getFingerprint(animeId, {
+      episodeInt: ep.episodeInt,
+      episodeLabel: ep.episodeLabel,
+      filePath: ep.filePath
+    }, opts)
+  } catch {
+    return null
+  }
+}
+
+async function detectStreamRange(
+  animeId: number,
+  kind: 'op' | 'ed',
+  clip: { fingerprint: Fingerprint; offsetSec: number },
+  detections: ShowSkipDetections,
+  opts: DetectStreamOptions
+): Promise<SkipRange | null> {
+  const starts: number[] = []
+  const lengths: number[] = []
+  for (const ep of Object.values(detections.perEpisode)) {
+    const range = kind === 'op' ? ep.op : ep.ed
+    if (!range) continue
+    const localFingerprint = await loadEpisodeFingerprint(animeId, ep, opts)
+    if (!localFingerprint) continue
+    const startHash = Math.max(0, Math.round(range.startSec * localFingerprint.hashesPerSec))
+    const endHash = Math.min(localFingerprint.hashes.length, Math.round(range.endSec * localFingerprint.hashesPerSec))
+    const match = matchFingerprintRegions(
+      {
+        fingerprint: clip.fingerprint,
+        offsetHashes: 0,
+        lengthHashes: clip.fingerprint.hashes.length,
+        sourceOffsetSec: clip.offsetSec
+      },
+      {
+        fingerprint: localFingerprint,
+        offsetHashes: startHash,
+        lengthHashes: Math.max(0, endHash - startHash),
+        sourceOffsetSec: 0
+      }
+    )
+    if (!match) continue
+    starts.push(match.startSecA)
+    lengths.push(match.lengthSecA)
+  }
+  if (starts.length < 2) return null
+  const startSec = median(starts)
+  return {
+    startSec,
+    endSec: startSec + median(lengths),
+    pairCount: starts.length
+  }
+}
+
+export async function detectStream(
+  animeId: number,
+  episodeInt: string,
+  streamUrl: string,
+  detections: ShowSkipDetections,
+  opts: DetectStreamOptions
+): Promise<EpisodeSkipDetection | null> {
+  const streamDurationSec = opts.ffprobePath
+    ? await probeDurationSec(streamUrl, opts.ffprobePath, opts.signal).catch(() => null)
+    : null
+  const opCandidates = Object.values(detections.perEpisode).some((ep) => !!ep.op)
+  const edCandidates = Object.values(detections.perEpisode).some((ep) => !!ep.ed)
+
+  let op: SkipRange | null = null
+  let ed: SkipRange | null = null
+  let opFingerprint: Fingerprint | null = null
+  let edFingerprint: Fingerprint | null = null
+
+  if (opCandidates) {
+    try {
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', 8 * 60, streamDurationSec, opts.signal)
+      opFingerprint = clip.fingerprint
+      op = await detectStreamRange(animeId, 'op', clip, detections, opts)
+    } catch {
+      op = null
+    }
+  }
+
+  if (edCandidates && streamDurationSec) {
+    try {
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', 8 * 60, streamDurationSec, opts.signal)
+      edFingerprint = clip.fingerprint
+      ed = await detectStreamRange(animeId, 'ed', clip, detections, opts)
+    } catch {
+      ed = null
+    }
+  }
+
+  if (!op && !ed) return null
+  return {
+    episodeInt,
+    episodeLabel: `Episode ${episodeInt}`,
+    filePath: '',
+    durationSec: streamDurationSec ?? 0,
+    hashesPerSec: opFingerprint?.hashesPerSec ?? edFingerprint?.hashesPerSec ?? 0,
+    op,
+    ed
   }
 }

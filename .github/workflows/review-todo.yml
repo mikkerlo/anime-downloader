@@ -88,7 +88,7 @@ jobs:
         id: review
         uses: actions/ai-inference@v2
         with:
-          model: openai/gpt-4o
+          model: openai/gpt-5.4
           system-prompt-file: .github/prompts/review-todo.prompt.md
           prompt-file: prompt.md
           max-tokens: 4000

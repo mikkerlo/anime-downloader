@@ -277,12 +277,22 @@ watch(currentEpisodeInt, () => {
   resetSkipUiState()
 })
 
+const streamSkipSignatureVersion = computed(() => {
+  if (!isStreaming.value) return 0
+  return showSkipDetections.value?.analyzedAt ?? 0
+})
+
+const streamSkipSource = computed(() => {
+  if (!isStreaming.value) return ''
+  return showSkipDetections.value?.algorithm?.source ?? ''
+})
+
 watch([
   isStreaming,
   activeStreamUrl,
   currentEpisodeInt,
-  () => showSkipDetections.value?.analyzedAt ?? 0,
-  () => showSkipDetections.value?.algorithm?.source ?? ''
+  streamSkipSignatureVersion,
+  streamSkipSource
 ], () => {
   if (!isStreaming.value) {
     streamSkipRequestId++

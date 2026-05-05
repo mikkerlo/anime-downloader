@@ -78,6 +78,10 @@ export interface DetectStreamOptions {
 const MATCH_BIT_THRESHOLD = 6
 const MIN_RUN_SECONDS = 18
 const WINDOW_SECONDS = 6
+const SEARCH_REGION_SECONDS = 8 * 60
+// Streamed playback should only surface ranges when multiple locally-derived
+// episodes agree on the match; a single episode is too noisy to trust.
+const MIN_STREAM_MATCHES = 2
 // Strict per-hash threshold used to tighten edges INWARD after the coarse
 // window match. Chromaprint distances for the same audio are typically 0–3;
 // 4 catches true matches while rejecting coincidental window-average matches.
@@ -330,8 +334,8 @@ export async function analyzeShow(
     const a = loaded[pairs[p].i]
     const b = loaded[pairs[p].j]
     // OP region: search the first 8 minutes of each episode
-    const opRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * 8 * 60))
-    const opRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * 8 * 60))
+    const opRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
+    const opRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
     const opMatch = matchFingerprintRegions(
       { fingerprint: a.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesA, sourceOffsetSec: 0 },
       { fingerprint: b.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesB, sourceOffsetSec: 0 }
@@ -346,9 +350,8 @@ export async function analyzeShow(
     }
 
     // ED region: search the last 8 minutes of each episode
-    const edSearchSec = 8 * 60
-    const edRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * edSearchSec))
-    const edRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * edSearchSec))
+    const edRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
+    const edRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
     const edStartA = a.fingerprint.hashes.length - edRegionHashesA
     const edStartB = b.fingerprint.hashes.length - edRegionHashesB
     const edMatch = matchFingerprintRegions(
@@ -579,7 +582,7 @@ async function detectStreamRange(
     starts.push(match.startSecA)
     lengths.push(match.lengthSecA)
   }
-  if (starts.length < 2) return null
+  if (starts.length < MIN_STREAM_MATCHES) return null
   const startSec = median(starts)
   return {
     startSec,
@@ -608,7 +611,7 @@ export async function detectStream(
 
   if (opCandidates) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', 8 * 60, streamDurationSec, opts.signal)
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal)
       opFingerprint = clip.fingerprint
       op = await detectStreamRange(animeId, 'op', clip, detections, opts)
     } catch {
@@ -618,7 +621,7 @@ export async function detectStream(
 
   if (edCandidates && streamDurationSec) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', 8 * 60, streamDurationSec, opts.signal)
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal)
       edFingerprint = clip.fingerprint
       ed = await detectStreamRange(animeId, 'ed', clip, detections, opts)
     } catch {

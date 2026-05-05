@@ -352,8 +352,18 @@ export async function analyzeShow(
     const edStartA = a.fingerprint.hashes.length - edRegionHashesA
     const edStartB = b.fingerprint.hashes.length - edRegionHashesB
     const edMatch = matchFingerprintRegions(
-      { fingerprint: a.fingerprint, offsetHashes: edStartA, lengthHashes: edRegionHashesA, sourceOffsetSec: 0 },
-      { fingerprint: b.fingerprint, offsetHashes: edStartB, lengthHashes: edRegionHashesB, sourceOffsetSec: 0 }
+      {
+        fingerprint: a.fingerprint,
+        offsetHashes: edStartA,
+        lengthHashes: edRegionHashesA,
+        sourceOffsetSec: edStartA / a.fingerprint.hashesPerSec
+      },
+      {
+        fingerprint: b.fingerprint,
+        offsetHashes: edStartB,
+        lengthHashes: edRegionHashesB,
+        sourceOffsetSec: edStartB / b.fingerprint.hashesPerSec
+      }
     )
     // Suppress duplicate detection of the OP showing through into ED region (rare with the offsets above, but possible for short shows)
     if (edMatch) {

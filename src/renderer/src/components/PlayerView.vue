@@ -277,7 +277,13 @@ watch(currentEpisodeInt, () => {
   resetSkipUiState()
 })
 
-watch([isStreaming, activeStreamUrl, currentEpisodeInt, showSkipDetections], () => {
+watch([
+  isStreaming,
+  activeStreamUrl,
+  currentEpisodeInt,
+  () => showSkipDetections.value?.analyzedAt ?? 0,
+  () => showSkipDetections.value?.algorithm?.source ?? ''
+], () => {
   resetSkipUiState()
   void refreshStreamSkipDetection()
 })

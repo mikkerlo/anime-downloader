@@ -41,21 +41,9 @@ Ask only the questions that matter — skip anything that's obvious from the des
 
 ## Step 4: Write the TODO entry
 
-After getting answers, write a detailed TODO entry following the existing format in TODO.md:
+After getting answers, write a detailed TODO entry following the sequential numbering in TODO.md and strictly following the standardized issue template (refer to the **Issue / Plan Template** in `@CLAUDE.md` or `@GEMINI.md`).
 
-```markdown
-## N. Feature title
-
-**Priority:** High/Medium/Low | **Effort:** Small/Medium/Large
-
-Brief description of the problem or motivation.
-
-**Plan:**
-1. Step-by-step implementation plan
-2. Reference specific files and functions
-3. Include IPC changes if needed (4-file pattern)
-4. Note edge cases or gotchas discovered during research
-```
+Begin the entry with `## N. Feature title`. Then provide the rest of the template sections (Motivation, Approach & Architecture, UI/UX, Implementation Plan by architectural boundary, Files to Touch, Testing Strategy, Risks & Edge Cases, and Out of Scope).
 
 Requirements for the plan:
 - Reference actual file paths and function names from the code you read

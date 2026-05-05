@@ -71,17 +71,20 @@ Ask the user how to bump the version in package.json:
 
 Apply the chosen bump to package.json if applicable. Show the correct option in the option variants by your understanding.
 
-## Step 6: Finalize and push
+## Step 6: Finalize, Push, and Create PR
 
 1. If working on a TODO item, strike through the completed item in TODO.md (wrap it with `~~`).
 2. Update DESIGN.md if any architectural changes were made
-3. Create a CL and push using jj (NEVER use git directly):
+3. Create a CL, push, and open a PR using jj and gh (NEVER use git directly, and do not push directly to main unless the user specifically asks you to):
 
 ```bash
 jj describe -m "Commit message describing the change"
 # If working on an issue, append "Fixes #<number>" to the commit message
-jj bookmark set main -r @
-jj git push
+jj bookmark create <branch-name> -r @
+jj git push -b <branch-name>
+gh pr create --fill
 ```
+
+*(If pushing directly to main was requested, use `jj bookmark set main -r @` and `jj git push` instead).*
 
 Craft a clear, concise commit message that describes what was implemented and why.

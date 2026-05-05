@@ -41,19 +41,7 @@ Ask only the questions that matter — skip anything that's obvious from the des
 
 ## Step 4: Create the GitHub Issue
 
-After getting answers, write a detailed issue body following the format we commit to TODO.md:
-
-```markdown
-**Priority:** High/Medium/Low | **Effort:** Small/Medium/Large
-
-Brief description of the problem or motivation.
-
-**Plan:**
-1. Step-by-step implementation plan
-2. Reference specific files and functions
-3. Include IPC changes if needed (4-file pattern)
-4. Note edge cases or gotchas discovered during research
-```
+After getting answers, write a detailed issue body strictly following the standardized issue template (refer to the **Issue / Plan Template** in `@CLAUDE.md` or `@GEMINI.md`). Make sure to include all sections (Motivation, Approach & Architecture, UI/UX, Implementation Plan by architectural boundary, Files to Touch, Testing Strategy, Risks & Edge Cases, and Out of Scope).
 
 Create the issue using the GitHub CLI:
 

@@ -24,9 +24,11 @@ Implement a TODO item, GitHub issue, or Pull Request end-to-end, following the p
     *   If it was a TODO item, strike through the item in `TODO.md` (`~~`).
     *   If it was an issue, ensure the commit message references it (e.g., "Fixes #<number>").
     *   Update `DESIGN.md` if necessary.
-8.  **Commit and Push**: Use `jj` for the final commit.
+8.  **Commit, Push, and PR**: Use `jj` for the final commit and `gh` to create a PR (unless the user specifically asks to push directly to main).
     ```bash
     jj describe -m "Commit message. Fixes #<issue-number>"
-    jj bookmark set main -r @
-    jj git push
+    jj bookmark create <branch-name> -r @
+    jj git push -b <branch-name>
+    gh pr create --fill
     ```
+    *(If pushing directly to main was requested, use `jj bookmark set main -r @` and `jj git push` instead).*

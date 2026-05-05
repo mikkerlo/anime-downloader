@@ -1,0 +1,120 @@
+name: Review TODO issue
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to review'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  review:
+    # Auto-trigger only on `todo`-labeled issues. Comment trigger requires
+    # `/review-todo` and ignores PRs. workflow_dispatch always runs.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'todo')) ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '/review-todo'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve target issue number
+        id: target
+        run: |
+          set -e
+          case "${{ github.event_name }}" in
+            workflow_dispatch) NUMBER='${{ inputs.issue_number }}' ;;
+            issue_comment)     NUMBER='${{ github.event.issue.number }}' ;;
+            issues)            NUMBER='${{ github.event.issue.number }}' ;;
+          esac
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Build review prompt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ steps.target.outputs.number }}
+        run: |
+          set -e
+          gh issue view "$ISSUE_NUMBER" --json title,body,author,labels > issue.json
+
+          {
+            echo "## Issue #$ISSUE_NUMBER"
+            jq -r '"**Title:** \(.title)\n**Author:** @\(.author.login)\n**Labels:** \(.labels | map(.name) | join(", "))\n\n---\n\n\(.body)"' issue.json
+            echo
+            echo "---"
+            echo "## CLAUDE.md"
+            cat CLAUDE.md
+            echo
+            echo "---"
+            echo "## DESIGN.md"
+            cat DESIGN.md
+            echo
+            echo "---"
+            echo "## Source tree (paths only)"
+            find src -type f \( -name '*.ts' -o -name '*.vue' \) | sort
+          } > prompt.md
+
+          # Append every src/ or resources/ file referenced in backticks in
+          # the issue body. Capped to keep the prompt within model limits.
+          jq -r '.body' issue.json \
+            | grep -oE '`(src|resources)/[^[:space:]`]+`' \
+            | tr -d '`' \
+            | sort -u \
+            | head -n 20 \
+            | while read -r f; do
+                if [ -f "$f" ]; then
+                  echo
+                  echo "---"
+                  echo "## File: $f"
+                  echo '```'
+                  head -c 50000 "$f"
+                  echo
+                  echo '```'
+                fi
+              done >> prompt.md
+
+      - name: Run review model
+        id: review
+        uses: actions/ai-inference@v2
+        with:
+          model: openai/gpt-4o
+          system-prompt-file: .github/prompts/review-todo.prompt.md
+          prompt-file: prompt.md
+          max-tokens: 4000
+
+      - name: Post comment and apply label decision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ steps.target.outputs.number }}
+          RESPONSE: ${{ steps.review.outputs.response }}
+        run: |
+          set -e
+          ACTION="none"
+          if echo "$RESPONSE" | grep -q '<!-- LABEL_ACTION: add -->'; then
+            ACTION="add"
+          elif echo "$RESPONSE" | grep -q '<!-- LABEL_ACTION: remove -->'; then
+            ACTION="remove"
+          fi
+
+          printf '%s\n' "$RESPONSE" > comment.md
+          gh issue comment "$ISSUE_NUMBER" --body-file comment.md
+
+          case "$ACTION" in
+            add)
+              gh issue edit "$ISSUE_NUMBER" --add-label "Ready for implementation"
+              ;;
+            remove)
+              gh issue edit "$ISSUE_NUMBER" --remove-label "Ready for implementation" || true
+              ;;
+          esac

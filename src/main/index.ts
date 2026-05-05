@@ -3385,8 +3385,9 @@ function registerIpcHandlers(): void {
       h264Encoder: null
     }
     mseSessions.set(sessionId, session)
-    const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
-    console.log(`[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}"`)
+    const requestedSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+    const startSeek = requestedSeek > 0 ? await findKeyframeBefore(mkvPath, requestedSeek) : 0
+    console.log(`[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`)
     session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
 
     // Kick off subtitle extraction in parallel; push to renderer when ready.
@@ -3466,8 +3467,9 @@ function registerIpcHandlers(): void {
       h264Encoder: encoder.name
     }
     mseSessions.set(sessionId, session)
-    const startSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
-    console.log(`[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}"`)
+    const requestedSeek = typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+    const startSeek = requestedSeek > 0 ? await findKeyframeBefore(mkvPath, requestedSeek) : 0
+    console.log(`[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`)
     session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
 
     const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
@@ -3508,9 +3510,11 @@ function registerIpcHandlers(): void {
   // already set sourceBuffer.timestampOffset to place fragments on the correct
   // MSE timeline position. Stale chunks from the old proc are filtered out by
   // the generation counter captured in spawnFfmpegForSession.
-  ipcMain.handle('player:stream-seek', (event, sessionId: string, seekSeconds: number) => {
+  ipcMain.handle('player:stream-seek', async (event, sessionId: string, seekSeconds: number) => {
     const session = mseSessions.get(sessionId)
     if (!session) return { error: 'session not found' }
+    const requestedSeek = Math.max(0, seekSeconds)
+    const keyframeTime = requestedSeek > 0 ? await findKeyframeBefore(session.mkvPath, requestedSeek) : 0
     session.generation++
     try { session.proc.kill('SIGKILL') } catch { /* ignore */ }
     session.pendingBytes = 0
@@ -3525,8 +3529,8 @@ function registerIpcHandlers(): void {
     if (session.proc.stdout && session.proc.stdout.isPaused()) {
       try { session.proc.stdout.resume() } catch { /* ignore */ }
     }
-    session.proc = spawnFfmpegForSession(session, event, sessionId, Math.max(0, seekSeconds))
-    return { ok: true, generation: session.generation }
+    session.proc = spawnFfmpegForSession(session, event, sessionId, keyframeTime)
+    return { ok: true, generation: session.generation, keyframeTime }
   })
 
   // Handshake: renderer's MediaSource + SourceBuffer are ready to receive chunks.
@@ -3805,6 +3809,45 @@ interface MkvProbeResult {
   // Set when the source audio is AAC — carries the precise AAC object-type
   // codec string (e.g. mp4a.40.2, mp4a.40.5) for HE-AAC/HE-AACv2 variants.
   audioCodecString: string | null
+}
+
+// Find the latest video keyframe at-or-before `time` (in seconds) by scanning a
+// short window of frames with ffprobe. The fmp4 muxer normalizes per-output
+// `tfdt` to start at 0 regardless of `-copyts`, so we cannot ask ffmpeg to emit
+// absolute timestamps in its fragmented MP4 output. Instead we tell ffmpeg to
+// `-ss <keyframeTime>` exactly, then let the renderer set
+// `sourceBuffer.timestampOffset = keyframeTime` so the video element's timeline
+// aligns with the original file. Without this, seeking lands on the keyframe
+// PTS rather than the user's target (off by up to one GOP).
+async function findKeyframeBefore(filePath: string, time: number): Promise<number> {
+  if (!ffprobePath || time <= 0) return Math.max(0, time)
+  const start = Math.max(0, time - 15)
+  return new Promise<number>((resolve) => {
+    const proc = spawn(ffprobePath!, [
+      '-v', 'error',
+      '-skip_frame', 'nokey',
+      '-read_intervals', `${start.toFixed(3)}%${time.toFixed(3)}`,
+      '-select_streams', 'v:0',
+      '-show_entries', 'frame=pts_time,key_frame',
+      '-of', 'csv=print_section=0',
+      filePath
+    ], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let buf = ''
+    proc.stdout.on('data', (data: Buffer) => { buf += data.toString() })
+    proc.on('error', () => resolve(Math.max(0, time)))
+    proc.on('exit', () => {
+      let latest = 0
+      for (const line of buf.split('\n')) {
+        const parts = line.trim().split(',')
+        if (parts.length < 2) continue
+        const isKey = parts[0] === '1'
+        const pts = parseFloat(parts[1])
+        if (!isKey || !isFinite(pts)) continue
+        if (pts <= time && pts > latest) latest = pts
+      }
+      resolve(latest > 0 ? latest : Math.max(0, time))
+    })
+  })
 }
 
 async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {

@@ -131,7 +131,7 @@ interface Api {
   >
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
-  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true; generation: number } | { error: string }>
+  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>
   playerCleanupRemux: () => Promise<void>
   onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => void
   offPlayerStreamSubtitles: () => void

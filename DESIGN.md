@@ -278,7 +278,7 @@ LibraryView shows both with indicators:
 | `downloaded-episodes-get` | invoke | Get translation metadata per episode (array of metas per episode, supports multiple translations) |
 | `get-setting` | invoke | Read setting value |
 | `set-setting` | invoke | Write setting value |
-| `watch-progress:save` | invoke | Save playback position + optional watched flag for an episode |
+| `watch-progress:save` | invoke | Save playback position + optional watched flag + optional remembered translationId for an episode |
 | `watch-progress:get` | invoke | Fetch saved progress for a single episode |
 | `watch-progress:get-all` | invoke | Fetch all saved progress entries for an anime (keyed by episodeInt) |
 | `download:enqueue` | invoke | Queue download requests + save episode metadata |
@@ -445,7 +445,7 @@ interface EpisodeMeta {
 | `playerMode` | string | `'system'` | Default player: `system` (OS default) or `builtin` (in-app HTML5 player) |
 | `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |
 | `hevcTranscodeOnPlay` | string | `'ask'` | HEVC fallback when the built-in player has no decoder: `ask` (show modal), `always` (transcode to H.264), `never` (open in external player) |
-| `watchProgress` | object | `{}` | Per-episode playback position + watched flag (key: `animeId:episodeInt`) |
+| `watchProgress` | object | `{}` | Per-episode playback position + watched flag + last-used translationId (key: `animeId:episodeInt`) |
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
 | `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
 | `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
@@ -465,6 +465,8 @@ The built-in player auto-saves playback position to `watchProgress` (electron-st
 When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and, if `epNum > rate.episodes`, calls `shikimoriUpdateRate` with `'watching'` (or `'rewatching'` if current status was `'completed'`).
 
 `AnimeDetailView` loads all watch-progress entries for the anime on mount via `watchProgressGetAll` and renders a small ✓ badge (watched) or mini progress bar (partial) on each episode row. The view listens on a `watch-progress-updated` window event — dispatched by `PlayerView` after each save — to refresh indicators live.
+
+The active translation choice is persisted into `watchProgress[key].translationId` from two paths: the player (`saveProgress` passes `activeTranslationId` on every save; `selectTranslation` writes it immediately on switch, bypassing the trivial-time guard) and the pre-player dropdown in `AnimeDetailView` (`onEpisodeTranslationChange` calls `watchProgressSave`, reusing any prior `position`/`duration` so partial-watch progress isn't clobbered). When `AnimeDetailView` builds `episodeRows`, the per-episode `selectedTr` is resolved by priority: (1) active queue lock → (2) per-episode override (in-session, sync) → (3) remembered `translationId` from `watchProgress` → (4) any downloaded translation → (5) global type+author default. An explicit user choice — even a stream — therefore wins over a downloaded file. Queue-lock stays at the top because the row UI replaces the dropdown with a "Queued" label while a download is in flight, preventing a race between user switching and the in-flight download.
 
 ## Hot/Cold Storage
 

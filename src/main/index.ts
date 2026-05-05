@@ -98,7 +98,7 @@ const store = new Store({
     playerMuted: false,
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
     hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
-    watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>,
+    watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }>,
     watchProgressMigrationV2: false,
     autoCleanupWatchedDays: 0,
     autoCleanupConfirm: true,
@@ -2297,8 +2297,8 @@ function registerIpcHandlers(): void {
   })
 
   // Watch progress tracking
-  ipcMain.handle('watch-progress:save', (_event, animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
+  ipcMain.handle('watch-progress:save', (_event, animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean, translationId?: number) => {
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }>
     const key = `${animeId}:${episodeInt}`
     const prev = all[key]
     const nowWatched = watched || prev?.watched || false
@@ -2308,20 +2308,21 @@ function registerIpcHandlers(): void {
       duration,
       updatedAt: Date.now(),
       watched: nowWatched,
-      watchedAt: justWatched ? Date.now() : prev?.watchedAt
+      watchedAt: justWatched ? Date.now() : prev?.watchedAt,
+      translationId: translationId !== undefined ? translationId : prev?.translationId
     }
     store.set('watchProgress', all)
   })
 
   ipcMain.handle('watch-progress:get', (_event, animeId: number, episodeInt: string) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }>
     return all[`${animeId}:${episodeInt}`] || null
   })
 
   ipcMain.handle('watch-progress:get-all', (_event, animeId: number) => {
-    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }>
+    const all = store.get('watchProgress') as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }>
     const prefix = `${animeId}:`
-    const out: Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number }> = {}
+    const out: Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }> = {}
     for (const [key, val] of Object.entries(all)) {
       if (key.startsWith(prefix)) {
         out[key.slice(prefix.length)] = val

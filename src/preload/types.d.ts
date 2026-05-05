@@ -39,7 +39,7 @@ interface Api {
   homeGetContinueWatching: () => Promise<ContinueWatchingEntry[]>
 
   // Watch progress
-  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean) => Promise<void>
+  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean, translationId?: number) => Promise<void>
   watchProgressGet: (animeId: number, episodeInt: string) => Promise<WatchProgressEntry | null>
   watchProgressGetAll: (animeId: number) => Promise<Record<string, WatchProgressEntry>>
 
@@ -339,6 +339,7 @@ interface WatchProgressEntry {
   updatedAt: number
   watched?: boolean
   watchedAt?: number
+  translationId?: number
 }
 
 interface StorageEpisodeUsage {

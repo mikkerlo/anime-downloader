@@ -265,12 +265,23 @@ const episodeRows = computed((): EpisodeRow[] => {
       }
     }
 
-    // Priority 2: User per-episode override
+    // Priority 2: User per-episode override (in-session, sync; gives instant feedback
+    // after a dropdown click before the persisted watchProgress update lands)
     if (!isLocked && episodeOverrides.value.has(ep.id)) {
       selectedTr = sorted.find(tr => tr.id === episodeOverrides.value.get(ep.id)) || null
     }
 
-    // Priority 3: Prefer any downloaded translation on this episode — avoids silent fallback to
+    // Priority 3: Last-used translation for this episode (persisted in watchProgress).
+    // Sits ABOVE downloaded so an explicit user choice — even a stream — wins over
+    // a downloaded file. Falls through if the remembered id is no longer available.
+    if (!isLocked && !selectedTr) {
+      const remembered = watchProgress.value[ep.episodeInt]?.translationId
+      if (remembered != null) {
+        selectedTr = sorted.find(tr => tr.id === remembered) || null
+      }
+    }
+
+    // Priority 4: Prefer any downloaded translation on this episode — avoids silent fallback to
     // streaming when the global default (type+author) doesn't match what's on disk.
     // Within same-type downloads, honor the user's author preference before picking highest quality.
     if (!isLocked && !selectedTr && downloadedTrIds.size > 0) {
@@ -281,7 +292,7 @@ const episodeRows = computed((): EpisodeRow[] => {
       selectedTr = sameAuthor || bestSameType || downloaded[0] || null
     }
 
-    // Priority 4: Global default (same type + author)
+    // Priority 5: Global default (same type + author)
     if (!isLocked && !selectedTr) {
       const typeFiltered = sorted.filter(tr => tr.type === translationType.value)
       selectedTr = typeFiltered.find(tr => tr.authorsSummary === selectedAuthor.value)
@@ -292,8 +303,20 @@ const episodeRows = computed((): EpisodeRow[] => {
   })
 })
 
-function onEpisodeTranslationChange(episodeId: number, translationId: number): void {
+function onEpisodeTranslationChange(episodeId: number, episodeInt: string, translationId: number): void {
   episodeOverrides.value = new Map(episodeOverrides.value.set(episodeId, translationId))
+  // Persist so the choice survives page reloads and feeds back into Priority 3
+  // resolution. Reuse any existing playback position/duration so we don't clobber
+  // partial-watch progress when the user just changes translation.
+  const prev = watchProgress.value[episodeInt]
+  window.api.watchProgressSave(
+    props.animeId,
+    episodeInt,
+    prev?.position ?? 0,
+    prev?.duration ?? 0,
+    prev?.watched,
+    translationId
+  ).catch(err => console.warn('[anime-detail] failed to persist translation choice:', err))
 }
 
 function onMouseBack(e: MouseEvent): void {
@@ -1627,7 +1650,7 @@ function typeChip(type: string): { short: string; color: string } {
             <select
               class="ep-select"
               :value="row.selectedTr?.id || ''"
-              @change="onEpisodeTranslationChange(row.episode.id, Number(($event.target as HTMLSelectElement).value))"
+              @change="onEpisodeTranslationChange(row.episode.id, row.episode.episodeInt, Number(($event.target as HTMLSelectElement).value))"
             >
               <!-- Show selected type first, then the rest -->
               <template v-for="type in [TRANSLATION_TYPES.find(t => t.value === translationType)!, ...TRANSLATION_TYPES.filter(t => t.value !== translationType)]" :key="type.value">

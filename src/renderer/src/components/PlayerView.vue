@@ -284,6 +284,12 @@ watch([
   () => showSkipDetections.value?.analyzedAt ?? 0,
   () => showSkipDetections.value?.algorithm?.source ?? ''
 ], () => {
+  if (!isStreaming.value) {
+    streamSkipRequestId++
+    streamSkipDetection.value = null
+    streamSkipDetecting.value = false
+    return
+  }
   resetSkipUiState()
   void refreshStreamSkipDetection()
 })

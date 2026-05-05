@@ -505,6 +505,7 @@ async function fingerprintStreamClip(
   try {
     const args = ['-y', '-hide_banner', '-loglevel', 'error', '-nostdin']
     if (mode === 'end') {
+      if (!streamDurationSec) throw new Error('stream duration required for end-clip detection')
       args.push('-sseof', `-${clipLengthSec}`)
     }
     args.push(
@@ -571,7 +572,7 @@ async function detectStreamRange(
         fingerprint: localFingerprint,
         offsetHashes: startHash,
         lengthHashes: Math.max(0, endHash - startHash),
-        sourceOffsetSec: 0
+        sourceOffsetSec: range.startSec
       }
     )
     if (!match) continue

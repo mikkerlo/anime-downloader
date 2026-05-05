@@ -94,6 +94,7 @@ export class DownloadManager {
   private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void) | null = null
   private mergeCompleteCallback: ((info: { animeName: string; animeId: number; episodeInt: string; episodeLabel: string }) => void) | null = null
   private queueCompleteCallback: (() => void) | null = null
+  private videoDownloadedCallback: ((filePath: string, item: DownloadItem) => void) | null = null
   private merging = false
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
@@ -180,6 +181,10 @@ export class DownloadManager {
 
   onQueueComplete(callback: () => void): void {
     this.queueCompleteCallback = callback
+  }
+
+  onVideoDownloaded(callback: (filePath: string, item: DownloadItem) => void): void {
+    this.videoDownloadedCallback = callback
   }
 
   setDownloadDir(dir: string): void {
@@ -849,6 +854,12 @@ export class DownloadManager {
       item.status = 'completed'
       item.speed = 0
       this.schedulePersist()
+
+      if (item.kind === 'video' && this.videoDownloadedCallback) {
+        try { this.videoDownloadedCallback(filePath, item) } catch (e) {
+          console.warn('[download] videoDownloaded callback failed:', e)
+        }
+      }
 
       this.checkEpisodeComplete(item.translationId)
 

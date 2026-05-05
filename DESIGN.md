@@ -349,7 +349,7 @@ LibraryView shows both with indicators:
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |
 | `player:get-stream-url` | invoke | Fetch CDN stream URL + raw ASS subtitle content + all available stream qualities for a translation |
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
-| `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId |
+| `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId. Renderer also passes the friendly `episodeLabel` so any non-faststart sample recorded from this path uses the same labeling as the download path |
 | `player:remux-mkv` | invoke | Legacy: remux MKV→MP4 via ffmpeg stream copy, await completion before returning (used as fallback when codecs aren't MSE-compatible) |
 | `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending }` for MSE consumption |
 | `player:remux-mkv-stream-transcode` | invoke | Same as `player:remux-mkv-stream` but re-encodes video to H.264 (and audio to AAC when not already AAC) for platforms with no HEVC decoder |
@@ -373,6 +373,8 @@ LibraryView shows both with indicators:
 | `syncplay:room-users` | send | Current room member list with each member's advertised file info and `animeDlAppMeta` (if available) |
 | `syncplay:room-event` | send | Info/warn/error/chat messages rendered as a toast in the player (join/leave/chat/disconnect) |
 | `syncplay:remote-episode-change` | send | Another room member (same anime) switched to a different episode; PlayerView auto-navigates via `goToEpisode` |
+| `debug:get-mp4-stats` | invoke | Returns the persisted `mp4StreamingStats` snapshot (totals + recent non-faststart samples) for the Settings > Debug panel |
+| `debug:reset-mp4-stats` | invoke | Zeroes `mp4StreamingStats` and clears the in-session de-duplication set so re-opening previously-checked files re-probes them |
 
 ## Key Types
 
@@ -452,6 +454,7 @@ interface EpisodeMeta {
 | `enableLocalSkipDetection` | boolean | `true` | Run Chromaprint OP/ED detection in the background after each download/merge completes; turn off to disable background CPU usage |
 | `calendarView` | string | `'week'` | Default time range for the Airing Calendar tab: `week` (1×7 grid) or `month` (4×7 grid). Toggle in Settings > General |
 | `syncplay` | object | `{ lastHost:'syncplay.pl', lastPort:8999, lastRoom:'', username:'', autoReconnect:true }` | Watch Together session intent (host/port/room/username + auto-reconnect toggle; TLS is always on). The connection itself is NOT persisted — users must rejoin after restart |
+| `mp4StreamingStats` | object | `{ totalChecked:0, faststartCount:0, nonFaststartSamples:[] }` | Telemetry from the MP4 faststart probe: total files scanned, count that had `moov` before `mdat`, and up to 10 most-recent non-faststart samples (anime + episode + path + first non-`ftyp` box). Surfaced in Settings > Debug |
 
 ## Watch Progress & Resume
 

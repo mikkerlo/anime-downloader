@@ -43,6 +43,8 @@ const api = {
     ipcRenderer.invoke('report-quality-mismatch', data),
   getQualityMismatchCount: () => ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,
   dumpQualityMismatches: () => ipcRenderer.invoke('dump-quality-mismatches') as Promise<{ count: number; path: string }>,
+  debugGetMp4Stats: () => ipcRenderer.invoke('debug:get-mp4-stats') as Promise<Mp4StreamingStats>,
+  debugResetMp4Stats: () => ipcRenderer.invoke('debug:reset-mp4-stats') as Promise<void>,
   getCachedPoster: (animeId: number) => ipcRenderer.invoke('cache-get-poster', animeId) as Promise<string | null>,
   libraryGet: () => ipcRenderer.invoke('library-get'),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke('library-toggle', anime),
@@ -198,8 +200,8 @@ const api = {
     ipcRenderer.invoke('player:get-stream-url', translationId, maxHeight),
   playerGetLocalSubtitles: (filePath: string) =>
     ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) =>
-    ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
+  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) =>
+    ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId, episodeLabel) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>

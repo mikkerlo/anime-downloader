@@ -138,6 +138,14 @@ const dumpingMismatches = ref(false)
 const dumpResult = ref<{ count: number; path: string } | null>(null)
 const mismatchCount = ref(0)
 
+// MP4 streaming-optimization (faststart) check stats
+const mp4Stats = ref<Mp4StreamingStats | null>(null)
+const latestNonFaststart = computed<Mp4StreamingStatsSample | null>(() => {
+  const s = mp4Stats.value
+  if (!s || s.nonFaststartSamples.length === 0) return null
+  return s.nonFaststartSamples[s.nonFaststartSamples.length - 1]
+})
+
 // Shikimori state
 const shikimoriUser = ref<ShikiUser | null>(null)
 const shikimoriAuthUrl = ref('')
@@ -282,6 +290,17 @@ function onFixProgress(data: { current: number; total: number; file: string }): 
 
 async function refreshMismatchCount(): Promise<void> {
   mismatchCount.value = await window.api.getQualityMismatchCount()
+}
+
+async function refreshMp4Stats(): Promise<void> {
+  try {
+    mp4Stats.value = await window.api.debugGetMp4Stats()
+  } catch { /* ignore */ }
+}
+
+async function resetMp4Stats(): Promise<void> {
+  await window.api.debugResetMp4Stats()
+  await refreshMp4Stats()
 }
 
 async function dumpMismatches(): Promise<void> {
@@ -912,7 +931,7 @@ async function testSyncplayConnection(): Promise<void> {
         Watch Together
         <span class="tab-dev-badge">in development</span>
       </button>
-      <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount()">Debug</button>
+      <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount(); refreshMp4Stats()">Debug</button>
     </div>
     <div class="body">
       <!-- General tab -->
@@ -1636,6 +1655,27 @@ async function testSyncplayConnection(): Promise<void> {
               Saved {{ dumpResult.count }} mismatch(es)
             </div>
             <div class="scan-error-item">{{ dumpResult.path }}</div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">MP4 streaming-optimization check</label>
+          <p class="setting-hint">After every video download or when an MP4 is opened in the player, the first ~64 KB are scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before <code>mdat</code>) are required to play while still downloading. If a non-faststart file is found, an example is shown below for inspection.</p>
+          <button class="merge-all-btn" @click="refreshMp4Stats">Refresh</button>
+          <button class="merge-all-btn" style="margin-left: 0.5rem" @click="resetMp4Stats" :disabled="!mp4Stats || mp4Stats.totalChecked === 0">Reset</button>
+
+          <div v-if="mp4Stats" class="scan-result" :class="{ 'has-errors': mp4Stats.nonFaststartSamples.length > 0 }">
+            <div class="scan-result-ok">
+              Faststart: {{ mp4Stats.faststartCount }} / {{ mp4Stats.totalChecked }}
+            </div>
+            <div v-if="latestNonFaststart" class="scan-result-errors">
+              <div>Sample non-faststart MP4 (most recent of {{ mp4Stats.nonFaststartSamples.length }}):</div>
+              <div class="scan-error-item">
+                {{ latestNonFaststart.animeName }} — {{ latestNonFaststart.episodeLabel }}
+                (first non-ftyp box: {{ latestNonFaststart.firstNonFtypBox }})
+              </div>
+              <div class="scan-error-item" style="opacity: 0.7">{{ latestNonFaststart.filePath }}</div>
+            </div>
           </div>
         </div>
       </template>

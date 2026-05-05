@@ -24,6 +24,8 @@ interface Api {
   reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>
+  debugGetMp4Stats: () => Promise<Mp4StreamingStats>
+  debugResetMp4Stats: () => Promise<void>
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
   libraryHas: (id: number) => Promise<boolean>
@@ -117,7 +119,7 @@ interface Api {
   // Player
   playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number) => Promise<{ filePath: string; subtitleContent: string | null } | null>
+  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) => Promise<{ filePath: string; subtitleContent: string | null } | null>
   playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) => Promise<
     | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
@@ -499,6 +501,22 @@ interface SkipDetectorProgress {
   current: number
   total: number
   episodeLabel?: string
+}
+
+interface Mp4StreamingStatsSample {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  episodeLabel: string
+  filePath: string
+  firstNonFtypBox: string
+  checkedAt: number
+}
+
+interface Mp4StreamingStats {
+  totalChecked: number
+  faststartCount: number
+  nonFaststartSamples: Mp4StreamingStatsSample[]
 }
 
 interface ShikiUser {

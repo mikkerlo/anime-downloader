@@ -68,6 +68,10 @@ const skipDetections = ref<ShowSkipDetections | null>(null)
 const skipAnalyzing = ref(false)
 const skipProgress = ref<SkipDetectorProgress | null>(null)
 const skipError = ref<string>('')
+const chapterInjecting = ref(false)
+const chapterInjectProgress = ref<ChapterInjectProgress | null>(null)
+const chapterInjectError = ref<string>('')
+const chapterInjectResult = ref<{ written: number; skipped: number; failed: number; total: number } | null>(null)
 
 const KIND_LABELS: Record<string, string> = {
   tv: 'TV',
@@ -478,6 +482,42 @@ async function cancelSkipAnalysis(): Promise<void> {
   }
 }
 
+const skipMkvEpisodeCount = computed<number>(() =>
+  skipEpisodeInputs.value.filter(e => e.filePath.toLowerCase().endsWith('.mkv')).length
+)
+
+const chapterInjectProgressLabel = computed<string>(() => {
+  const p = chapterInjectProgress.value
+  if (!p) return ''
+  if (p.phase === 'analyzing') return 'Analyzing fingerprints…'
+  if (p.phase === 'writing') {
+    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : ''
+    return `Writing chapters ${p.current + 1}/${p.total}${label}`
+  }
+  return 'Done'
+})
+
+async function injectChaptersToMkv(): Promise<void> {
+  if (chapterInjecting.value) return
+  if (skipMkvEpisodeCount.value < 3) {
+    chapterInjectError.value = 'Need at least 3 downloaded MKV episodes'
+    return
+  }
+  chapterInjectError.value = ''
+  chapterInjectResult.value = null
+  chapterInjecting.value = true
+  chapterInjectProgress.value = { animeId: props.animeId, phase: 'writing', current: 0, total: skipMkvEpisodeCount.value }
+  try {
+    const res = await window.api.injectChapters(props.animeId, skipEpisodeInputs.value)
+    chapterInjectResult.value = res
+  } catch (err) {
+    chapterInjectError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    chapterInjecting.value = false
+    chapterInjectProgress.value = null
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack)
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
@@ -618,6 +658,11 @@ onMounted(async () => {
     if (data.animeId !== props.animeId) return
     loadSkipDetections()
   })
+  window.api.onChapterInjectProgress((data) => {
+    if (data.animeId !== props.animeId) return
+    chapterInjectProgress.value = data
+    chapterInjecting.value = data.phase !== 'done'
+  })
   loadSkipDetections()
   hydrateSkipStatus()
 
@@ -642,6 +687,7 @@ onUnmounted(() => {
   window.api.offShikimoriSyncStatus()
   window.api.offSkipDetectorProgress()
   window.api.offSkipDetectorSignatureUpdated()
+  window.api.offChapterInjectProgress()
 })
 
 async function triggerSyncNow(): Promise<void> {
@@ -1519,8 +1565,27 @@ function typeChip(type: string): { short: string; color: string } {
                 @click="cancelSkipAnalysis"
               >Cancel</button>
               <span v-if="skipAnalyzing" class="skip-progress-text">{{ skipProgressLabel }}</span>
+              <button
+                v-if="skipMkvEpisodeCount >= 3"
+                class="skip-button"
+                :disabled="chapterInjecting || skipAnalyzing"
+                @click="injectChaptersToMkv"
+              >
+                {{ chapterInjecting ? 'Saving chapters…' : 'Save chapters to MKV' }}
+              </button>
+              <span v-if="chapterInjecting" class="skip-progress-text">{{ chapterInjectProgressLabel }}</span>
             </div>
             <div v-if="skipError" class="skip-error">{{ skipError }}</div>
+            <div v-if="chapterInjectError" class="skip-error">{{ chapterInjectError }}</div>
+            <div v-if="chapterInjectResult" class="skip-results-meta">
+              Wrote chapters to {{ chapterInjectResult.written }}/{{ chapterInjectResult.total }} episodes
+              <template v-if="chapterInjectResult.skipped">
+                · {{ chapterInjectResult.skipped }} skipped (no detection)
+              </template>
+              <template v-if="chapterInjectResult.failed">
+                · {{ chapterInjectResult.failed }} failed
+              </template>
+            </div>
             <div v-if="skipDetections" class="skip-results">
               <div class="skip-results-meta">
                 Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} ·

@@ -197,6 +197,15 @@ const api = {
     ipcRenderer.removeAllListeners('skip-detector:signature-updated')
   },
 
+  injectChapters: (animeId: number, episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]) =>
+    ipcRenderer.invoke('download:inject-chapters', animeId, episodes) as Promise<{ written: number; skipped: number; failed: number; total: number }>,
+  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => {
+    ipcRenderer.on('chapter-inject:progress', (_event, data) => callback(data))
+  },
+  offChapterInjectProgress: () => {
+    ipcRenderer.removeAllListeners('chapter-inject:progress')
+  },
+
   shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 
   // Player

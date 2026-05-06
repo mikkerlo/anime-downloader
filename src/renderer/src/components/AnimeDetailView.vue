@@ -26,6 +26,9 @@ const selectedAuthor = ref('')
 const dataSource = ref<'api' | 'cache' | null>(null)
 const isOffline = computed(() => dataSource.value === 'cache')
 
+let loadGeneration = 0
+let disposed = false
+
 const isStarred = ref(false)
 
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
@@ -486,50 +489,42 @@ onMounted(async () => {
 
   window.api.libraryHas(props.animeId).then((v) => { isStarred.value = v }).catch(() => {})
 
+  const gen = ++loadGeneration
+  let renderedFromCache = false
   try {
-    const res = await window.api.getAnime(props.animeId)
-    anime.value = res.data
-    dataSource.value = res.source
-    await loadPageEpisodes()
-    await checkFileStatus()
-    // If the user hasn't explicitly picked a translation type on this anime
-    // before, and something is already downloaded, prefer the (type, author)
-    // of the downloaded file(s) over the global settings default.
-    if (!props.initialPrefs?.translationType) {
-      const counts = new Map<string, number>()
-      for (const metaArr of Object.values(episodeMeta.value)) {
-        for (const m of metaArr) {
-          const key = `${m.translationType}\u0000${m.author}`
-          counts.set(key, (counts.get(key) || 0) + 1)
-        }
-      }
-      if (counts.size > 0) {
-        let bestKey = ''
-        let bestCount = 0
-        for (const [key, count] of counts) {
-          if (count > bestCount) { bestKey = key; bestCount = count }
-        }
-        if (bestKey) {
-          const [bestType, bestAuthor] = bestKey.split('\u0000')
-          translationType.value = bestType
-          // Only override selectedAuthor if the downloaded author is still
-          // offered for this type — the translation may have been deactivated
-          // or removed upstream, which would leave the <select> blank.
-          if (bestAuthor && availableAuthors.value.some(([a]) => a === bestAuthor)) {
-            selectedAuthor.value = bestAuthor
-          }
-        }
-      }
+    const cached = await window.api.getAnimeCache(props.animeId)
+    if (cached && !disposed && gen === loadGeneration) {
+      anime.value = cached.data
+      dataSource.value = 'cache'
+      loading.value = false
+      renderedFromCache = true
+      await loadPageEpisodes()
+      await checkFileStatus()
+      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault()
     }
   } catch (err) {
-    console.error('Failed to load anime detail view:', err)
-  } finally {
-    loading.value = false
+    console.error('Failed to read anime cache:', err)
   }
 
-  // If served from cache, try a background refresh
-  if (dataSource.value === 'cache') {
-    backgroundRefresh()
+  try {
+    const res = await window.api.getAnime(props.animeId)
+    if (disposed || gen !== loadGeneration) return
+    anime.value = res.data
+    dataSource.value = res.source
+    if (res.source === 'api') {
+      window.api.setAnimeCache(props.animeId, res.data).catch(() => {})
+    }
+    await loadPageEpisodes()
+    if (disposed || gen !== loadGeneration) return
+    await checkFileStatus()
+    if (disposed || gen !== loadGeneration) return
+    if (!renderedFromCache && !props.initialPrefs?.translationType) {
+      applyDownloadedTranslationDefault()
+    }
+  } catch (err) {
+    if (!renderedFromCache) console.error('Failed to load anime detail view:', err)
+  } finally {
+    if (!disposed && gen === loadGeneration) loading.value = false
   }
 
   // Subscribe to download progress
@@ -634,6 +629,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  loadGeneration++
   window.removeEventListener('mouseup', onMouseBack)
   window.removeEventListener('watch-progress-updated', loadWatchProgress)
   window.api.offDownloadProgress()
@@ -688,6 +685,28 @@ async function shikiSave(): Promise<void> {
     shikiError.value = String(err)
   } finally {
     shikiSaving.value = false
+  }
+}
+
+function applyDownloadedTranslationDefault(): void {
+  const counts = new Map<string, { type: string; author: string; count: number }>()
+  for (const metaArr of Object.values(episodeMeta.value)) {
+    for (const m of metaArr) {
+      const key = `${m.translationType}|${m.author}`
+      const existing = counts.get(key)
+      if (existing) existing.count++
+      else counts.set(key, { type: m.translationType, author: m.author, count: 1 })
+    }
+  }
+  if (counts.size === 0) return
+  let best: { type: string; author: string; count: number } | null = null
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count) best = entry
+  }
+  if (!best) return
+  translationType.value = best.type
+  if (best.author && availableAuthors.value.some(([a]) => a === best!.author)) {
+    selectedAuthor.value = best.author
   }
 }
 
@@ -1098,19 +1117,6 @@ watch([translationType, selectedAuthor], () => {
   emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value)
   probeSelectedQualities()
 })
-
-async function backgroundRefresh(): Promise<void> {
-  try {
-    const res = await window.api.getAnime(props.animeId)
-    if (res.source === 'api') {
-      anime.value = res.data
-      dataSource.value = 'api'
-      await loadPageEpisodes()
-    }
-  } catch {
-    // Stay on cached data
-  }
-}
 
 const posterSrc = ref('')
 const posterFallbackAttempted = ref(false)

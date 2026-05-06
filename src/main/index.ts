@@ -553,11 +553,22 @@ async function prefetchShikimoriDetails(): Promise<void> {
   }
 }
 
-// --- Anime cache helpers (for offline support of downloaded anime) ---
+// --- Anime cache helpers (for offline support + fast-loading detail view) ---
+
+const ANIME_DETAIL_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 function isDownloadedAnime(animeId: number): boolean {
   const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
   return !!downloaded[String(animeId)]
+}
+
+function isStarredAnime(animeId: number): boolean {
+  const lib = store.get('library') as Record<string, AnimeSearchResult>
+  return !!lib[String(animeId)]
+}
+
+function isCachableAnime(animeId: number): boolean {
+  return isDownloadedAnime(animeId) || isStarredAnime(animeId)
 }
 
 type FileCheckResult = Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>
@@ -754,7 +765,7 @@ function ensureCacheEntry(animeId: number): AnimeCacheEntry {
 }
 
 function updateAnimeDetailCache(animeId: number, detail: AnimeDetail): void {
-  if (!isDownloadedAnime(animeId)) return
+  if (!isCachableAnime(animeId)) return
   const entry = ensureCacheEntry(animeId)
   entry.animeDetail = detail
   entry.cachedAt = Date.now()
@@ -769,7 +780,7 @@ function updateAnimeDetailCache(animeId: number, detail: AnimeDetail): void {
 }
 
 function updateEpisodeCache(animeId: number, episodeId: number, detail: EpisodeDetail): void {
-  if (!isDownloadedAnime(animeId)) return
+  if (!isCachableAnime(animeId)) return
   const entry = ensureCacheEntry(animeId)
   entry.episodes[episodeId] = detail
   entry.cachedAt = Date.now()
@@ -777,7 +788,7 @@ function updateEpisodeCache(animeId: number, episodeId: number, detail: EpisodeD
 }
 
 function updateQualityProbeCache(animeId: number, translationId: number, height: number): void {
-  if (!isDownloadedAnime(animeId)) return
+  if (!isCachableAnime(animeId)) return
   const entry = ensureCacheEntry(animeId)
   entry.qualityProbes[translationId] = height
   setCacheEntry(animeId, entry)
@@ -786,9 +797,10 @@ function updateQualityProbeCache(animeId: number, translationId: number, height:
 function cleanupStaleCache(): void {
   const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
   const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+  const lib = store.get('library') as Record<string, AnimeSearchResult>
   let changed = false
   for (const key of Object.keys(cache)) {
-    if (!downloaded[key]) {
+    if (!downloaded[key] && !lib[key]) {
       delete cache[key]
       const posterPath = getPosterCachePath(Number(key))
       try { fs.unlinkSync(posterPath) } catch { /* ignore */ }
@@ -1998,12 +2010,26 @@ function registerIpcHandlers(): void {
     if (lib[key]) {
       delete lib[key]
       store.set('library', lib)
+      if (!isDownloadedAnime(anime.id)) deleteCacheEntry(anime.id)
       return false
     } else {
       lib[key] = anime
       store.set('library', lib)
       return true
     }
+  })
+
+  ipcMain.handle('get-anime-cache', (_event, id: number) => {
+    const entry = getCacheEntry(id)
+    if (!entry?.animeDetail || !entry.cachedAt) return null
+    if (Date.now() - entry.cachedAt > ANIME_DETAIL_CACHE_TTL_MS) return null
+    return { data: entry.animeDetail, cachedAt: entry.cachedAt }
+  })
+
+  ipcMain.handle('set-anime-cache', (_event, id: number, data: AnimeDetail) => {
+    if (!isCachableAnime(id)) return false
+    updateAnimeDetailCache(id, data)
+    return true
   })
 
   ipcMain.handle('library-has', (_event, id: number) => {

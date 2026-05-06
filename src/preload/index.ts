@@ -33,6 +33,10 @@ const api = {
   validateToken: () => ipcRenderer.invoke('validate-token'),
   searchAnime: (query: string) => ipcRenderer.invoke('search-anime', query),
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
+  getAnimeCache: (id: number) =>
+    ipcRenderer.invoke('get-anime-cache', id) as Promise<{ data: AnimeDetail; cachedAt: number } | null>,
+  setAnimeCache: (id: number, data: AnimeDetail) =>
+    ipcRenderer.invoke('set-anime-cache', id, data) as Promise<boolean>,
   getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),
   probeEmbedQuality: (translationId: number, animeId?: number) => ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
   probeFullScanNeeded: (animeId: number, episodeCount: number) =>

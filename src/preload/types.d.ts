@@ -16,6 +16,8 @@ interface Api {
   validateToken: () => Promise<{ valid: boolean; error?: string }>
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
+  getAnimeCache: (id: number) => Promise<{ data: AnimeDetail; cachedAt: number } | null>
+  setAnimeCache: (id: number, data: AnimeDetail) => Promise<boolean>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
   probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
   getCachedPoster: (animeId: number) => Promise<string | null>

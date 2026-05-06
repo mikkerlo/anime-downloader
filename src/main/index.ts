@@ -2757,6 +2757,7 @@ function registerIpcHandlers(): void {
           const newKey = fingerprintCacheKey(animeId, ep.episodeInt, newStat.size, newStat.mtimeMs)
           delete cache[oldKey]
           cache[newKey] = { ...cached, fileSize: newStat.size, fileMtimeMs: newStat.mtimeMs }
+          store.set('skipFingerprintCache', cache)
         }
         written++
       } catch (err) {
@@ -2769,7 +2770,6 @@ function registerIpcHandlers(): void {
       }
     }
 
-    store.set('skipFingerprintCache', cache)
     broadcastToAll('chapter-inject:progress', { animeId, phase: 'done', current: episodes.length, total: episodes.length })
     return { written, skipped, failed, total: episodes.length }
   })

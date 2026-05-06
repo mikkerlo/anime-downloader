@@ -221,7 +221,7 @@ const api = {
   playerStreamAck: (sessionId: string, bytes: number) =>
     ipcRenderer.invoke('player:stream-ack', sessionId, bytes) as Promise<void>,
   playerStreamSeek: (sessionId: string, seekSeconds: number) =>
-    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number } | { error: string }>,
+    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>,
   playerCleanupRemux: () =>
     ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
   onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => {

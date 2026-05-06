@@ -2732,18 +2732,23 @@ function registerIpcHandlers(): void {
       const dir = path.dirname(ep.filePath)
       const base = path.basename(ep.filePath)
       const tmpOut = path.join(dir, `.${base}.chapters.tmp.mkv`)
+      const chaptersMetaFile = path.join(os.tmpdir(), `anime-dl-chapters-${process.pid}-${Date.now()}-${i}.txt`)
       try {
         const oldStat = fs.statSync(ep.filePath)
         const oldKey = fingerprintCacheKey(animeId, ep.episodeInt, oldStat.size, oldStat.mtimeMs)
         const cached = cache[oldKey]
 
-        await downloadManager.runFfmpeg({
-          ffmpegPath,
-          ffprobePath,
-          videoPath: ep.filePath,
-          outputPath: tmpOut,
-          codec: 'copy',
-          chaptersMeta
+        fs.writeFileSync(chaptersMetaFile, chaptersMeta, 'utf8')
+        await new Promise<void>((resolve, reject) => {
+          Ffmpeg.setFfmpegPath(ffmpegPath)
+          Ffmpeg(ep.filePath)
+            .input(chaptersMetaFile)
+            .outputOptions('-y')
+            .outputOptions(['-map', '0', '-map_chapters', '1', '-c', 'copy'])
+            .output(tmpOut)
+            .on('end', () => resolve())
+            .on('error', reject)
+            .run()
         })
         fs.renameSync(tmpOut, ep.filePath)
 
@@ -2759,6 +2764,8 @@ function registerIpcHandlers(): void {
         try { fs.unlinkSync(tmpOut) } catch { /* ignore */ }
         const msg = err instanceof Error ? err.message : String(err)
         console.error(`[chapter-inject] failed for ${ep.episodeLabel}: ${msg}`)
+      } finally {
+        try { fs.unlinkSync(chaptersMetaFile) } catch { /* ignore */ }
       }
     }
 

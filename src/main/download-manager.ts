@@ -1,13 +1,12 @@
 import { BrowserWindow } from 'electron'
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
 
-export interface RunFfmpegOptions {
+interface RunFfmpegOptions {
   ffmpegPath: string
   ffprobePath: string
   videoPath: string
@@ -15,7 +14,6 @@ export interface RunFfmpegOptions {
   subtitlePath?: string | null
   codec?: string
   subMeta?: { language: string; title: string }
-  chaptersMeta?: string | null
   onPercent?: (pct: number) => void
 }
 
@@ -618,20 +616,12 @@ export class DownloadManager {
     })
   }
 
-  async runFfmpeg(opts: RunFfmpegOptions): Promise<void> {
-    const { ffmpegPath, ffprobePath, videoPath, outputPath, subMeta, chaptersMeta, onPercent } = opts
+  private async runFfmpeg(opts: RunFfmpegOptions): Promise<void> {
+    const { ffmpegPath, ffprobePath, videoPath, outputPath, subMeta, onPercent } = opts
     const subtitlePath = opts.subtitlePath ?? null
     const videoCodec = opts.codec ?? 'copy'
     const totalDuration = await this.probeDuration(ffmpegPath, ffprobePath, videoPath)
     console.log(`[merge] Probed duration: ${totalDuration}s for ${videoPath}`)
-
-    let chaptersMetaFile: string | null = null
-    if (chaptersMeta) {
-      chaptersMetaFile = path.join(os.tmpdir(), `anime-dl-chapters-${process.pid}-${Date.now()}.txt`)
-      fs.writeFileSync(chaptersMetaFile, chaptersMeta, 'utf8')
-    }
-
-    const hasSubtitle = !!(subtitlePath && fs.existsSync(subtitlePath))
 
     return new Promise((resolve, reject) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
@@ -641,9 +631,9 @@ export class DownloadManager {
         .videoCodec(videoCodec)
         .audioCodec('copy')
 
-      if (hasSubtitle) {
+      if (subtitlePath && fs.existsSync(subtitlePath)) {
         cmd = cmd
-          .input(subtitlePath!)
+          .input(subtitlePath)
           .outputOptions(['-map', '0:v', '-map', '0:a', '-map', '1:s'])
           .outputOptions('-c:s', 'ass')
           .outputOptions('-disposition:s:0', 'default')
@@ -654,21 +644,7 @@ export class DownloadManager {
         }
       }
 
-      if (chaptersMetaFile) {
-        const chaptersInputIdx = hasSubtitle ? 2 : 1
-        cmd = cmd
-          .input(chaptersMetaFile)
-          .outputOptions('-map_chapters', String(chaptersInputIdx))
-      }
-
-      console.log(`[merge] Running ffmpeg: ${videoPath} -> ${outputPath} (codec: ${videoCodec}${chaptersMetaFile ? ', +chapters' : ''})`)
-
-      const cleanupTmp = (): void => {
-        if (chaptersMetaFile) {
-          try { fs.unlinkSync(chaptersMetaFile) } catch { /* ignore */ }
-          chaptersMetaFile = null
-        }
-      }
+      console.log(`[merge] Running ffmpeg: ${videoPath} -> ${outputPath} (codec: ${videoCodec})`)
 
       cmd
         .output(outputPath)
@@ -685,13 +661,11 @@ export class DownloadManager {
         .on('end', () => {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
-          cleanupTmp()
           resolve()
         })
         .on('error', (err) => {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
-          cleanupTmp()
           reject(err)
         })
 

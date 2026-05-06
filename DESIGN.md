@@ -98,7 +98,8 @@ translation type and author selections across re-mounts.
 ### Episode Loading & Translation Selection
 
 ```
-AnimeDetailView  -->  getAnime(id) --> full anime with episode list
+AnimeDetailView  -->  getAnimeCache(id) --> instant render if cached and fresh
+                 -->  getAnime(id) --> full anime with episode list (background-refresh)
                  -->  getEpisode(id) x N (batches of 5) --> translations per episode
                  -->  all active translations shown (no quality minimum)
                  -->  best quality per author+type deduplication
@@ -108,6 +109,15 @@ AnimeDetailView  -->  getAnime(id) --> full anime with episode list
 Episode list is paginated (30 per page) when anime has >30 TV episodes.
 Only translations for the visible page are fetched (in batches of 5).
 Cached translations are reused when revisiting a page.
+
+For starred or downloaded anime, the full AnimeDetail payload is cached in
+`animeCache[animeId].animeDetail` with a 24h TTL. AnimeDetailView calls
+`getAnimeCache(id)` on mount: on a hit, the page renders instantly from the
+cache while a background `getAnime(id)` refreshes the data; on miss, the
+spinner stays up until the API responds. A per-mount generation counter +
+`disposed` flag prevent stale background fetches from polluting state when
+the user rapidly switches anime. Cache writes are gated on starred OR
+downloaded; unstarring evicts the cache entry if the anime isn't downloaded.
 
 Per-episode translation selector with priority chain:
   1. In download queue → locked to queued translation
@@ -262,6 +272,8 @@ LibraryView shows both with indicators:
 | `validate-token` | invoke | Validate API token against smotret-anime.ru |
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID |
+| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
+| `set-anime-cache` | invoke | Write AnimeDetail to cache (no-op if anime is neither starred nor downloaded) |
 | `get-episode` | invoke | Fetch episode translations |
 | `probe-embed-quality` | invoke | Probe embed API for actual stream height |
 | `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |

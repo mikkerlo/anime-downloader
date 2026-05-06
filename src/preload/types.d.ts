@@ -115,6 +115,13 @@ interface Api {
   onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => void
   offSkipDetectorSignatureUpdated: () => void
 
+  injectChapters: (
+    animeId: number,
+    episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
+  ) => Promise<{ written: number; skipped: number; failed: number; total: number }>
+  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => void
+  offChapterInjectProgress: () => void
+
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
@@ -501,6 +508,14 @@ interface ShowSkipDetections {
 interface SkipDetectorProgress {
   animeId: number
   phase: 'fingerprinting' | 'comparing' | 'done'
+  current: number
+  total: number
+  episodeLabel?: string
+}
+
+interface ChapterInjectProgress {
+  animeId: number
+  phase: 'analyzing' | 'writing' | 'done'
   current: number
   total: number
   episodeLabel?: string

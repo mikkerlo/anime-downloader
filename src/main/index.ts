@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
-import { analyzeShow } from './skip-detector'
+import { analyzeShow, fingerprintCacheKey, formatChaptersMetadata } from './skip-detector'
 import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress } from './skip-detector'
 import { syncplay } from './syncplay'
 import type {
@@ -2695,6 +2695,77 @@ function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('download:inject-chapters', async (_event, animeId: number, allInputs: EpisodeInput[]) => {
+    if (!Number.isFinite(animeId) || animeId <= 0) throw new Error('invalid animeId')
+    if (!ffmpegPath || !ffprobePath) throw new Error('ffmpeg/ffprobe not available')
+    if (!Array.isArray(allInputs) || allInputs.length === 0) throw new Error('no episode inputs')
+
+    const episodes = allInputs.filter(e => e.filePath.toLowerCase().endsWith('.mkv') && fs.existsSync(e.filePath))
+    if (episodes.length < 3) throw new Error(`need at least 3 downloaded MKV episodes (have ${episodes.length})`)
+
+    let detections = (store.get('skipDetections') as Record<string, ShowSkipDetections>)[String(animeId)] ?? null
+    if (!detections) {
+      broadcastToAll('chapter-inject:progress', { animeId, phase: 'analyzing', current: 0, total: episodes.length })
+      detections = await runSkipAnalysisInternal(animeId, allInputs)
+    }
+
+    const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+    let written = 0
+    let skipped = 0
+    let failed = 0
+
+    for (let i = 0; i < episodes.length; i++) {
+      const ep = episodes[i]
+      broadcastToAll('chapter-inject:progress', {
+        animeId,
+        phase: 'writing',
+        current: i,
+        total: episodes.length,
+        episodeLabel: ep.episodeLabel
+      })
+
+      const det = detections.perEpisode[ep.episodeInt]
+      if (!det) { skipped++; continue }
+      const chaptersMeta = formatChaptersMetadata(det.durationSec, det.op, det.ed)
+      if (!chaptersMeta) { skipped++; continue }
+
+      const dir = path.dirname(ep.filePath)
+      const base = path.basename(ep.filePath)
+      const tmpOut = path.join(dir, `.${base}.chapters.tmp.mkv`)
+      try {
+        const oldStat = fs.statSync(ep.filePath)
+        const oldKey = fingerprintCacheKey(animeId, ep.episodeInt, oldStat.size, oldStat.mtimeMs)
+        const cached = cache[oldKey]
+
+        await downloadManager.runFfmpeg({
+          ffmpegPath,
+          ffprobePath,
+          videoPath: ep.filePath,
+          outputPath: tmpOut,
+          codec: 'copy',
+          chaptersMeta
+        })
+        fs.renameSync(tmpOut, ep.filePath)
+
+        if (cached) {
+          const newStat = fs.statSync(ep.filePath)
+          const newKey = fingerprintCacheKey(animeId, ep.episodeInt, newStat.size, newStat.mtimeMs)
+          delete cache[oldKey]
+          cache[newKey] = { ...cached, fileSize: newStat.size, fileMtimeMs: newStat.mtimeMs }
+        }
+        written++
+      } catch (err) {
+        failed++
+        try { fs.unlinkSync(tmpOut) } catch { /* ignore */ }
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[chapter-inject] failed for ${ep.episodeLabel}: ${msg}`)
+      }
+    }
+
+    store.set('skipFingerprintCache', cache)
+    broadcastToAll('chapter-inject:progress', { animeId, phase: 'done', current: episodes.length, total: episodes.length })
+    return { written, skipped, failed, total: episodes.length }
+  })
 
   // File management handlers
   ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {

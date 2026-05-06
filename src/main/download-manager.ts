@@ -1,10 +1,23 @@
 import { BrowserWindow } from 'electron'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
+
+export interface RunFfmpegOptions {
+  ffmpegPath: string
+  ffprobePath: string
+  videoPath: string
+  outputPath: string
+  subtitlePath?: string | null
+  codec?: string
+  subMeta?: { language: string; title: string }
+  chaptersMeta?: string | null
+  onPercent?: (pct: number) => void
+}
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled'
 export type MergeStatus = 'pending' | 'merging' | 'completed' | 'failed'
@@ -541,9 +554,18 @@ export class DownloadManager {
       } : undefined
 
       try {
-        await this.runFfmpeg(ffmpegPath, ffprobePath, videoPath, subtitlePath, mkvPath, videoCodec, (pct) => {
-          this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
-        }, subMeta)
+        await this.runFfmpeg({
+          ffmpegPath,
+          ffprobePath,
+          videoPath,
+          subtitlePath,
+          outputPath: mkvPath,
+          codec: videoCodec,
+          subMeta,
+          onPercent: (pct) => {
+            this.mergeStatuses.set(group.translationId, { status: 'merging', percent: pct })
+          }
+        })
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
         this.schedulePersist()
         console.log(`[merge] Completed: ${mkvFilename}`)
@@ -596,9 +618,20 @@ export class DownloadManager {
     })
   }
 
-  private async runFfmpeg(ffmpegPath: string, ffprobePath: string, videoPath: string, subtitlePath: string | null, outputPath: string, videoCodec = 'copy', onPercent?: (pct: number) => void, subMeta?: { language: string; title: string }): Promise<void> {
+  async runFfmpeg(opts: RunFfmpegOptions): Promise<void> {
+    const { ffmpegPath, ffprobePath, videoPath, outputPath, subMeta, chaptersMeta, onPercent } = opts
+    const subtitlePath = opts.subtitlePath ?? null
+    const videoCodec = opts.codec ?? 'copy'
     const totalDuration = await this.probeDuration(ffmpegPath, ffprobePath, videoPath)
     console.log(`[merge] Probed duration: ${totalDuration}s for ${videoPath}`)
+
+    let chaptersMetaFile: string | null = null
+    if (chaptersMeta) {
+      chaptersMetaFile = path.join(os.tmpdir(), `anime-dl-chapters-${process.pid}-${Date.now()}.txt`)
+      fs.writeFileSync(chaptersMetaFile, chaptersMeta, 'utf8')
+    }
+
+    const hasSubtitle = !!(subtitlePath && fs.existsSync(subtitlePath))
 
     return new Promise((resolve, reject) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
@@ -608,9 +641,9 @@ export class DownloadManager {
         .videoCodec(videoCodec)
         .audioCodec('copy')
 
-      if (subtitlePath && fs.existsSync(subtitlePath)) {
+      if (hasSubtitle) {
         cmd = cmd
-          .input(subtitlePath)
+          .input(subtitlePath!)
           .outputOptions(['-map', '0:v', '-map', '0:a', '-map', '1:s'])
           .outputOptions('-c:s', 'ass')
           .outputOptions('-disposition:s:0', 'default')
@@ -621,7 +654,21 @@ export class DownloadManager {
         }
       }
 
-      console.log(`[merge] Running ffmpeg: ${videoPath} -> ${outputPath} (codec: ${videoCodec})`)
+      if (chaptersMetaFile) {
+        const chaptersInputIdx = hasSubtitle ? 2 : 1
+        cmd = cmd
+          .input(chaptersMetaFile)
+          .outputOptions('-map_chapters', String(chaptersInputIdx))
+      }
+
+      console.log(`[merge] Running ffmpeg: ${videoPath} -> ${outputPath} (codec: ${videoCodec}${chaptersMetaFile ? ', +chapters' : ''})`)
+
+      const cleanupTmp = (): void => {
+        if (chaptersMetaFile) {
+          try { fs.unlinkSync(chaptersMetaFile) } catch { /* ignore */ }
+          chaptersMetaFile = null
+        }
+      }
 
       cmd
         .output(outputPath)
@@ -638,11 +685,13 @@ export class DownloadManager {
         .on('end', () => {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
+          cleanupTmp()
           resolve()
         })
         .on('error', (err) => {
           this.activeFfmpegCmd = null
           this.activeMergeTranslationId = null
+          cleanupTmp()
           reject(err)
         })
 
@@ -693,8 +742,16 @@ export class DownloadManager {
         onProgress?.(i + 1, toMerge.length, item.label, 0)
 
         try {
-          await this.runFfmpeg(ffmpegPath, ffprobePath, item.videoPath, item.subtitlePath, item.outputPath, videoCodec, (pct) => {
-            onProgress?.(i + 1, toMerge.length, item.label, pct)
+          await this.runFfmpeg({
+            ffmpegPath,
+            ffprobePath,
+            videoPath: item.videoPath,
+            subtitlePath: item.subtitlePath,
+            outputPath: item.outputPath,
+            codec: videoCodec,
+            onPercent: (pct) => {
+              onProgress?.(i + 1, toMerge.length, item.label, pct)
+            }
           })
 
           // Delete source files

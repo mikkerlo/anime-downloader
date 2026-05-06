@@ -452,6 +452,7 @@ export async function getFranchise(malId: number): Promise<ShikiFranchise> {
 }
 
 export interface ShikiCalendarEntry {
+  next_episode: number | null
   next_episode_at: string | null
   duration: number | null
   anime: {

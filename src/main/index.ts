@@ -3015,13 +3015,11 @@ function registerIpcHandlers(): void {
     }
 
     const tracked = new Set<number>()
-    const episodesByMal = new Map<number, number>()
     const statusByMal = new Map<number, shikimori.ShikiUserRateStatus>()
     for (const r of cachedRates) {
       const malId = malIdOf(r)
       if (!malId) continue
       statusByMal.set(malId, r.rate.status)
-      episodesByMal.set(malId, r.rate.episodes)
       if (
         r.rate.status === 'watching' ||
         r.rate.status === 'rewatching' ||
@@ -3050,7 +3048,6 @@ function registerIpcHandlers(): void {
     const entries: CalendarEntry[] = filtered.map((c) => {
       const malId = c.anime.id
       const smotret = malMap[malId] ?? null
-      const watchedEps = episodesByMal.get(malId) ?? 0
       const posterUrl =
         smotret?.posterUrlSmall ||
         absoluteImage(c.anime.image.preview || c.anime.image.x96 || c.anime.image.original)
@@ -3060,7 +3057,7 @@ function registerIpcHandlers(): void {
         name: c.anime.russian || c.anime.name,
         posterUrl,
         kind: c.anime.kind,
-        episodeInt: String(watchedEps + 1),
+        episodeInt: String(c.next_episode ?? c.anime.episodes_aired + 1),
         nextEpisodeAt: c.next_episode_at!,
         userStatus: statusByMal.get(malId) ?? 'planned'
       }

@@ -3780,8 +3780,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'auto-dl:set-subscription',
-    (_event, animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) => {
-      const sub = autoDlSetSubscription(animeId, enabled, meta)
+    async (_event, animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) => {
+      const sub = await autoDlSetSubscription(animeId, enabled, meta)
       if (enabled && sub) {
         // Fire a tick shortly after subscribing so the user sees the system catch up
         // (forward-only stamp ensures nothing backfills, this just exercises the path).

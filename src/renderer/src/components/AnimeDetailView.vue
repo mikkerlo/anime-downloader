@@ -1047,6 +1047,10 @@ async function toggleAutoDl(): Promise<void> {
         ? { malId: anime.value.myAnimeListId, animeName: getAnimeName() }
         : undefined
     )
+    if (enable && !result) {
+      alert("Couldn't read this show's airing data from Shikimori. Please try again in a moment.")
+      return
+    }
     autoDlSubscription.value = result
   } catch (err) {
     console.error('Failed to toggle auto-download:', err)

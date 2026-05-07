@@ -102,11 +102,11 @@ export function getSubscription(animeId: number): AutoDownloadSubscription | nul
   return map[String(animeId)] ?? null
 }
 
-export function setSubscription(
+export async function setSubscription(
   animeId: number,
   enabled: boolean,
   meta?: { malId: number; animeName: string }
-): AutoDownloadSubscription | null {
+): Promise<AutoDownloadSubscription | null> {
   if (!deps) return null
   const map = { ...(deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>) }
   const key = String(animeId)
@@ -123,9 +123,22 @@ export function setSubscription(
     return existing
   }
   // Stamp lastEnqueuedEpisodeInt to the current episodes_aired so we never backfill.
+  // If the cache is missing or stale, inline-refresh first — otherwise an empty cache
+  // would leave the stamp at 0 and the next tick would download the entire show.
   const cache = deps.store.get('shikimoriAnimeDetails') as Record<string, ShikiAnimeDetailsCacheEntry>
-  const cacheEntry = cache[String(meta.malId)]
+  let cacheEntry = cache[String(meta.malId)]
+  const cacheAge = cacheEntry ? Date.now() - cacheEntry.fetchedAt : Infinity
+  if (!cacheEntry || cacheAge > DETAILS_FRESHNESS_MS) {
+    const fresh = await deps.refreshShikimoriDetails(meta.malId)
+    if (fresh) {
+      cacheEntry = { details: fresh, fetchedAt: Date.now() }
+    }
+  }
   const aired = cacheEntry?.details?.episodes_aired ?? 0
+  if (aired <= 0) {
+    // Refuse rather than silently arming a backfill. Caller surfaces this to the user.
+    return null
+  }
   const sub: AutoDownloadSubscription = {
     animeId,
     malId: meta.malId,
@@ -408,6 +421,6 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
     return result
   } finally {
     tickRunning = false
-    lockReleaseAt = 0
+    // Keep lockReleaseAt as the cooldown deadline so manual triggers actually wait REENTRANCY_LOCK_MS.
   }
 }

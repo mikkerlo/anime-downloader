@@ -665,7 +665,7 @@ async function maybeBroadcastCleanupPrompt(
   })
 }
 
-function sumShowFiles(animeName: string): { bytes: number; files: number } {
+async function sumShowFiles(animeName: string): Promise<{ bytes: number; files: number }> {
   const animeDirName = sanitizeFilename(animeName)
   let bytes = 0
   let files = 0
@@ -673,19 +673,29 @@ function sumShowFiles(animeName: string): { bytes: number; files: number } {
     const showDir = path.join(dir, animeDirName)
     let entries: fs.Dirent[]
     try {
-      entries = fs.readdirSync(showDir, { withFileTypes: true })
+      entries = await fs.promises.readdir(showDir, { withFileTypes: true })
     } catch {
       continue
     }
-    for (const entry of entries) {
-      if (!entry.isFile()) continue
+    const targets = entries.filter((entry) => {
+      if (!entry.isFile()) return false
       const lower = entry.name.toLowerCase()
-      if (!(lower.endsWith('.mkv') || lower.endsWith('.mp4') || lower.endsWith('.ass') || lower.endsWith('.srt'))) continue
-      try {
-        const stat = fs.statSync(path.join(showDir, entry.name))
-        bytes += stat.size
-        files++
-      } catch { /* ignore */ }
+      return lower.endsWith('.mkv') || lower.endsWith('.mp4') || lower.endsWith('.ass') || lower.endsWith('.srt')
+    })
+    const sizes = await Promise.all(
+      targets.map(async (entry) => {
+        try {
+          const stat = await fs.promises.stat(path.join(showDir, entry.name))
+          return stat.size
+        } catch {
+          return null
+        }
+      })
+    )
+    for (const size of sizes) {
+      if (size === null) continue
+      bytes += size
+      files++
     }
   }
   return { bytes, files }
@@ -2433,8 +2443,8 @@ function registerIpcHandlers(): void {
     dropSkipDetectionsForAnime(animeId)
   })
 
-  ipcMain.handle('cleanup:get-size', (_event, _animeId: number, animeName: string) => {
-    return sumShowFiles(animeName)
+  ipcMain.handle('cleanup:get-size', async (_event, _animeId: number, animeName: string) => {
+    return await sumShowFiles(animeName)
   })
 
   ipcMain.handle('cleanup:get-active-downloads', (_event, animeName: string) => {

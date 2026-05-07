@@ -4,6 +4,15 @@ import { is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
 import { DownloadManager, sanitizeFilename } from './download-manager'
 import type { DownloadRequest } from './download-manager'
+import {
+  initAutoDownloader,
+  startAutoDownloaderTimer,
+  runAutoDownloadTick,
+  getAutoDownloaderStatus,
+  listSubscriptions as autoDlListSubscriptions,
+  getSubscription as autoDlGetSubscription,
+  setSubscription as autoDlSetSubscription
+} from './auto-downloader'
 import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
@@ -60,6 +69,15 @@ interface AnimeCacheEntry {
   fullProbeEpisodeCount?: number
 }
 
+export interface AutoDownloadSubscription {
+  animeId: number
+  malId: number
+  animeName: string
+  subscribedAt: number
+  lastEnqueuedEpisodeInt: number
+  lastCheckedAt: number
+}
+
 const store = new Store({
   defaults: {
     token: '',
@@ -107,6 +125,8 @@ const store = new Store({
     shikimoriUserRates: [] as unknown[],
     shikimoriUpdateQueue: [] as unknown[],
     shikimoriAnimeDetails: {} as Record<string, { details: shikimori.ShikiAnimeDetails; fetchedAt: number }>,
+    autoDownloadSubscriptions: {} as Record<string, AutoDownloadSubscription>,
+    autoDownloadEnabled: true,
     recentAnimeMeta: {} as Record<string, AnimeSearchResult>,
     skipDetections: {} as Record<string, ShowSkipDetections>,
     skipFingerprintCache: {} as Record<string, CachedFingerprint>,
@@ -489,6 +509,37 @@ function getStaleOrMissingMalIds(): number[] {
     }
   }
   return result
+}
+
+async function refreshShikimoriDetailsForMalId(malId: number): Promise<shikimori.ShikiAnimeDetails | null> {
+  const creds = store.get('shikimoriCredentials') as shikimori.ShikiCredentials | null
+  const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+  if (!creds || !user) return null
+  let accessToken: string
+  try {
+    accessToken = await shikimori.ensureFreshToken(store)
+  } catch (err) {
+    if (!isNetworkError(err)) {
+      console.warn('[shikimori] single-show refresh auth failed:', err)
+    }
+    return null
+  }
+  try {
+    const details = await shikimori.getAnimeDetails(accessToken, malId)
+    const cache = store.get('shikimoriAnimeDetails') as Record<
+      string,
+      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+    >
+    cache[String(malId)] = { details, fetchedAt: Date.now() }
+    store.set('shikimoriAnimeDetails', cache)
+    broadcastToAll('shikimori:anime-details-updated', { malId, details })
+    return details
+  } catch (err) {
+    if (!isNetworkError(err)) {
+      console.warn('[shikimori] single-show refresh failed for', malId, err)
+    }
+    return null
+  }
 }
 
 async function prefetchShikimoriDetails(): Promise<void> {
@@ -3033,6 +3084,9 @@ function registerIpcHandlers(): void {
         broadcastToAll('shikimori:rates-refreshed', entries)
         void syncShikimoriQueue()
         void prefetchShikimoriDetails()
+        void runAutoDownloadTick('rates-refreshed').catch((err) =>
+          console.warn('[auto-dl] rates-refreshed tick failed:', err)
+        )
       })
       .catch((err) => console.warn('[shikimori] background refresh failed:', err))
   }
@@ -3718,6 +3772,41 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('syncplay:get-status', () => syncplay.getStatus())
+
+  // Auto-downloader
+  ipcMain.handle('auto-dl:get-subscription', (_event, animeId: number) => {
+    return autoDlGetSubscription(animeId)
+  })
+
+  ipcMain.handle(
+    'auto-dl:set-subscription',
+    (_event, animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) => {
+      const sub = autoDlSetSubscription(animeId, enabled, meta)
+      if (enabled && sub) {
+        // Fire a tick shortly after subscribing so the user sees the system catch up
+        // (forward-only stamp ensures nothing backfills, this just exercises the path).
+        setTimeout(() => {
+          void runAutoDownloadTick('manual')
+        }, 1000)
+      }
+      return sub
+    }
+  )
+
+  ipcMain.handle('auto-dl:list-subscriptions', () => autoDlListSubscriptions())
+
+  ipcMain.handle('auto-dl:trigger', async () => {
+    return runAutoDownloadTick('manual')
+  })
+
+  ipcMain.handle('auto-dl:get-status', () => getAutoDownloaderStatus())
+
+  ipcMain.handle('auto-dl:get-enabled', () => Boolean(store.get('autoDownloadEnabled')))
+
+  ipcMain.handle('auto-dl:set-enabled', (_event, enabled: boolean) => {
+    store.set('autoDownloadEnabled', Boolean(enabled))
+    return Boolean(enabled)
+  })
 }
 
 interface MseOpenResult {
@@ -4370,6 +4459,21 @@ app.whenReady().then(async () => {
   })
 
   registerIpcHandlers()
+
+  initAutoDownloader({
+    store,
+    smotretApi,
+    downloadManager,
+    broadcast: broadcastToAll,
+    isShikimoriLoggedIn: () => Boolean(store.get('shikimoriCredentials')),
+    refreshShikimoriDetails: refreshShikimoriDetailsForMalId
+  })
+  startAutoDownloaderTimer()
+  setTimeout(() => {
+    void runAutoDownloadTick('startup').catch((err) =>
+      console.warn('[auto-dl] startup tick failed:', err)
+    )
+  }, 30_000)
 
   migrateWatchProgressV2()
 

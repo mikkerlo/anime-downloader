@@ -357,6 +357,14 @@ LibraryView shows both with indicators:
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache invalidated on `shikimori:rate-updated`/`shikimori:rates-refreshed`/logout. Optional `force` flag bypasses the cache |
 | `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |
+| `auto-dl:get-subscription` | invoke | Get the auto-download subscription for a smotret-anime ID, or `null` |
+| `auto-dl:set-subscription` | invoke | Toggle auto-download for a show. On enable, stamps `lastEnqueuedEpisodeInt` to the current `episodes_aired` (forward-only) and kicks a manual tick |
+| `auto-dl:list-subscriptions` | invoke | List all current auto-download subscriptions |
+| `auto-dl:trigger` | invoke | Run an auto-download tick now (manual reason) and return the result |
+| `auto-dl:get-status` | invoke | Returns `{ lastResult, locked, enabled }` for the auto-downloader |
+| `auto-dl:get-enabled` / `auto-dl:set-enabled` | invoke | Read/write the global master toggle |
+| `auto-dl:tick-result` | send | Broadcast after each tick: `{ ranAt, reason, enqueued, skipped, errors, details }` |
+| `auto-dl:enqueued` | send | Broadcast each time the tick enqueues an episode: `{ animeId, episodeInt, animeName }` |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -469,6 +477,8 @@ interface EpisodeMeta {
 | `calendarView` | string | `'week'` | Default time range for the Airing Calendar tab: `week` (1×7 grid) or `month` (4×7 grid). Toggle in Settings > General |
 | `syncplay` | object | `{ lastHost:'syncplay.pl', lastPort:8999, lastRoom:'', username:'', autoReconnect:true }` | Watch Together session intent (host/port/room/username + auto-reconnect toggle; TLS is always on). The connection itself is NOT persisted — users must rejoin after restart |
 | `mp4StreamingStats` | object | `{ totalChecked:0, faststartCount:0, nonFaststartSamples:[] }` | Telemetry from the MP4 faststart probe: total files scanned, count that had `moov` before `mdat`, and up to 10 most-recent non-faststart samples (anime + episode + path + first non-`ftyp` box). Surfaced in Settings > Debug |
+| `autoDownloadSubscriptions` | object | `{}` | Per-show auto-download subscriptions keyed by smotret-anime ID. Each entry: `{ animeId, malId, animeName, subscribedAt, lastEnqueuedEpisodeInt, lastCheckedAt }`. `lastEnqueuedEpisodeInt` is stamped to current `episodes_aired` at subscribe time so newly-subscribed shows never backfill |
+| `autoDownloadEnabled` | boolean | `true` | Master toggle that gates the auto-download worker. When false, all ticks become no-ops; subscriptions are preserved |
 
 ## Watch Progress & Resume
 
@@ -647,6 +657,16 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 ### Series Chronology
 
 Below the Shikimori panel, `AnimeDetailView` renders a Chronology list of the entire franchise sourced from `GET /api/animes/:id/franchise` (a public, unauthenticated endpoint, so the panel renders for logged-out users too). The main-process handler `shikimori:get-related` fetches the franchise graph (`{ nodes, links, current_id }`), then does a BFS from `current_id` through a whitelist of canonical relation edges (sequel/prequel/side_story/parent_story/alternative_version/summary/full_story/spin_off/alternative_setting) to drop unrelated bridges — e.g. the Isekai-Quartet `"other"` edges that otherwise pull Overlord/Konosuba/Re:Zero into a Youjo Senki franchise query. Reachable nodes are sorted chronologically by release `date`, then `lookupByMalIds` resolves each node's MAL ID to its smotret-anime entry (reusing the persistent `malIdMap` cache). Direct edges from `current_id` are walked to attach a `relation` label (source-side only, since Shikimori emits all current-node links as `source_id`); nodes more than one hop away simply omit the label. Each row shows title, kind badge (TV/movie/OVA/…), release year, relation label (when available), and — cross-referenced against `shikimoriUserRates` — a watch-status badge when the current user tracks that entry. Promos/CMs/music videos are filtered out. The current anime's node is highlighted with a "Current" badge and is non-clickable. Rows where `lookupByMalIds` returned no smotret-anime match display a "Not available" badge and are non-clickable. Clickable rows emit `open-anime` up through `App.vue`, which maintains a per-view navigation stack (`animeHistoryByView`) so Back returns to the previously-opened anime in the same tab rather than the list view. The panel is collapsed by default on every mount (header chevron toggles the body) so the page opens compact; users expand it on demand.
+
+### Auto-download
+
+`src/main/auto-downloader.ts` runs a forward-only worker that auto-queues newly-aired episodes for shows the user has explicitly subscribed to. Subscriptions live in `autoDownloadSubscriptions` and are managed per show from `AnimeDetailView` (an "Auto-download" pill next to "Add to Library", visible only when the show has a MAL ID, the user is logged into Shikimori, and `shikiDetails.status !== 'released'`).
+
+`runAutoDownloadTick(reason)` is invoked from four places: ~30s after `app.whenReady` (`'startup'`), every 15 minutes (`'timer'`), inside `refreshShikimoriRatesInBackground` after the broadcast fires (`'rates-refreshed'`), and via the `auto-dl:trigger` IPC ("Run now" button — `'manual'`). A 60s reentrancy lock + an in-flight flag coalesces overlapping triggers.
+
+Each tick walks every subscription, reads `episodes_aired` from the existing `shikimoriAnimeDetails[malId]` cache (skips the show silently if the cache is empty — the existing detail-prefetch worker will populate it), and walks integer episodes from `lastEnqueuedEpisodeInt + 1` to `episodes_aired`. For each candidate it dedupes against `downloadedEpisodes` (both `animeId:episodeInt:translationId` and legacy `animeId:episodeInt` keys), the live `downloadManager.getEpisodeGroups()` queue, and an in-tick set; resolves the translation by preferring the most-recent entry in `downloadedEpisodes` for the same `animeId` (falling back to the global `translationType` default with any author); probes the real height via `getEmbed`; and calls `downloadManager.enqueue(...)`. `lastEnqueuedEpisodeInt` is bumped after each successful enqueue or already-downloaded/already-queued detection (never on `no-translation`, so a not-yet-uploaded episode is retried next tick).
+
+Hard cap of `MAX_ENQUEUES_PER_TICK = 10` per worker run protects against pathological cases (e.g. a show that suddenly reports `episodes_aired = 200`). At subscribe time, `lastEnqueuedEpisodeInt` is stamped to the current `episodes_aired`, so newly-subscribed shows never backfill — they only catch episodes that air *after* the subscription click. After each tick, `auto-dl:tick-result` broadcasts `{ ranAt, reason, enqueued, skipped, errors, details }`; per-episode `auto-dl:enqueued` fires with `{ animeId, episodeInt, animeName }`. `CalendarView` shows a ↻ chip on subscribed entries (hydrated once per mount via `auto-dl:list-subscriptions`); the master toggle, "Run now" button, and subscription list live in `Settings > General > Auto-download`. Disabling the master toggle makes ticks no-ops without dropping subscriptions.
 
 ## Watch Together (Syncplay)
 

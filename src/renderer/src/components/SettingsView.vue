@@ -27,6 +27,8 @@ const cleanupRunning = ref(false)
 const cleanupResult = ref<CleanupResult | null>(null)
 const cleanupPending = ref<CleanupCandidate[] | null>(null)
 const cleanupLogExpanded = ref(false)
+const snoozedEntries = ref<{ animeId: number; animeName: string }[]>([])
+const snoozedLoading = ref(false)
 const loaded = ref(false)
 const savedVisible = ref(false)
 let savedTimeout: ReturnType<typeof setTimeout> | null = null
@@ -534,6 +536,30 @@ async function reloadCleanupLog(): Promise<void> {
   cleanupLog.value = log || []
 }
 
+async function reloadSnoozedCleanups(): Promise<void> {
+  snoozedLoading.value = true
+  try {
+    const map = await window.api.cleanupGetSnoozed()
+    snoozedEntries.value = Object.entries(map)
+      .map(([id, v]) => ({ animeId: Number(id), animeName: v.animeName }))
+      .sort((a, b) => a.animeName.localeCompare(b.animeName))
+  } finally {
+    snoozedLoading.value = false
+  }
+}
+
+async function unsnoozeCleanup(animeId: number): Promise<void> {
+  await window.api.cleanupSetSnoozed(animeId, false)
+  await reloadSnoozedCleanups()
+}
+
+async function resetAllCleanupSnoozes(): Promise<void> {
+  for (const entry of snoozedEntries.value) {
+    await window.api.cleanupSetSnoozed(entry.animeId, false)
+  }
+  await reloadSnoozedCleanups()
+}
+
 function onUsageProgress(data: { scanned: number; total: number }): void {
   usageProgress.value = data
 }
@@ -582,6 +608,11 @@ onMounted(async () => {
   skipQueuePollTimer = setInterval(refreshSkipQueueStatus, 4000)
 
   appVersion.value = await window.api.appVersion()
+  await reloadSnoozedCleanups()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'storage') reloadSnoozedCleanups()
 })
 
 onUnmounted(() => {
@@ -1331,6 +1362,26 @@ async function testSyncplayConnection(): Promise<void> {
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Cleanup prompts</label>
+          <p class="setting-hint">When a Shikimori rate is flipped to «Completed», a prompt offers to delete the show's local files. Use «Don't ask for this show» on a prompt to silence it; manage silenced shows here.</p>
+          <div v-if="snoozedLoading" class="usage-meta-row">Loading…</div>
+          <template v-else>
+            <div v-if="snoozedEntries.length === 0" class="usage-meta-row">No shows are snoozed.</div>
+            <template v-else>
+              <div class="cleanup-log-list">
+                <div v-for="entry in snoozedEntries" :key="entry.animeId" class="cleanup-log-row">
+                  <span class="cleanup-log-name">{{ entry.animeName }}</span>
+                  <button class="cleanup-log-toggle" @click="unsnoozeCleanup(entry.animeId)">Un-snooze</button>
+                </div>
+              </div>
+              <div class="usage-actions" style="margin-top: 12px">
+                <button class="merge-all-btn" @click="resetAllCleanupSnoozes">Reset all ({{ snoozedEntries.length }})</button>
+              </div>
+            </template>
+          </template>
         </div>
       </template>
 

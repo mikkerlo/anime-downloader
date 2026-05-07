@@ -149,7 +149,8 @@ const store = new Store({
       totalChecked: 0,
       faststartCount: 0,
       nonFaststartSamples: [] as { animeId: number; animeName: string; episodeInt: string; episodeLabel: string; filePath: string; firstNonFtypBox: string; checkedAt: number }[]
-    } as Mp4StreamingStats
+    } as Mp4StreamingStats,
+    autoCleanupSnoozedAnimeIds: {} as Record<string, true>
   }
 })
 
@@ -620,6 +621,74 @@ function isStarredAnime(animeId: number): boolean {
 
 function isCachableAnime(animeId: number): boolean {
   return isDownloadedAnime(animeId) || isStarredAnime(animeId)
+}
+
+function getDisplayName(anime: AnimeSearchResult): string {
+  return anime.titles?.romaji || anime.titles?.ru || anime.title
+}
+
+function isCleanupSnoozed(animeId: number): boolean {
+  const snoozed = store.get('autoCleanupSnoozedAnimeIds') as Record<string, true>
+  return !!snoozed[String(animeId)]
+}
+
+async function resolveSmotretFromMalId(malId: number, fallback: unknown): Promise<AnimeSearchResult | null> {
+  if (fallback && typeof fallback === 'object' && typeof (fallback as { id?: unknown }).id === 'number') {
+    return fallback as AnimeSearchResult
+  }
+  const map = store.get('malIdMap') as Record<string, AnimeSearchResult>
+  const cached = map[String(malId)]
+  if (cached?.id) return cached
+  try {
+    const resolved = await lookupByMalIds([malId])
+    return resolved[malId] ?? null
+  } catch {
+    return null
+  }
+}
+
+async function maybeBroadcastCleanupPrompt(
+  smotretAnime: unknown,
+  malId: number,
+  status: shikimori.ShikiUserRateStatus,
+  prevStatus?: shikimori.ShikiUserRateStatus
+): Promise<void> {
+  if (status !== 'completed' || prevStatus === 'completed') return
+  const sa = await resolveSmotretFromMalId(malId, smotretAnime)
+  if (!sa || typeof sa.id !== 'number') return
+  if (!isDownloadedAnime(sa.id)) return
+  if (isCleanupSnoozed(sa.id)) return
+  broadcastToAll('cleanup:prompt', {
+    animeId: sa.id,
+    animeName: getDisplayName(sa),
+    malId
+  })
+}
+
+function sumShowFiles(animeName: string): { bytes: number; files: number } {
+  const animeDirName = sanitizeFilename(animeName)
+  let bytes = 0
+  let files = 0
+  for (const dir of storageDirsForScan()) {
+    const showDir = path.join(dir, animeDirName)
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(showDir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      const lower = entry.name.toLowerCase()
+      if (!(lower.endsWith('.mkv') || lower.endsWith('.mp4') || lower.endsWith('.ass') || lower.endsWith('.srt'))) continue
+      try {
+        const stat = fs.statSync(path.join(showDir, entry.name))
+        bytes += stat.size
+        files++
+      } catch { /* ignore */ }
+    }
+  }
+  return { bytes, files }
 }
 
 type FileCheckResult = Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>
@@ -2364,6 +2433,68 @@ function registerIpcHandlers(): void {
     dropSkipDetectionsForAnime(animeId)
   })
 
+  ipcMain.handle('cleanup:get-size', (_event, _animeId: number, animeName: string) => {
+    return sumShowFiles(animeName)
+  })
+
+  ipcMain.handle('cleanup:get-active-downloads', (_event, animeName: string) => {
+    const groups = downloadManager.getEpisodeGroups()
+    const active = groups.filter((g) => g.animeName === animeName).length
+    return { active }
+  })
+
+  ipcMain.handle('cleanup:execute', (_event, animeId: number, animeName: string) => {
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    delete downloaded[String(animeId)]
+    store.set('downloadedAnime', downloaded)
+
+    const dirName = sanitizeFilename(animeName)
+    for (const dir of storageDirsForScan()) {
+      const dirPath = path.join(dir, dirName)
+      try { fs.rmSync(dirPath, { recursive: true }) } catch { /* ignore */ }
+    }
+
+    const episodes = store.get('downloadedEpisodes') as Record<string, { translationType: string; author: string; quality: number; translationId: number }>
+    const prefix = `${animeId}:`
+    let mutated = false
+    for (const key of Object.keys(episodes)) {
+      if (key.startsWith(prefix)) {
+        delete episodes[key]
+        mutated = true
+      }
+    }
+    if (mutated) store.set('downloadedEpisodes', episodes)
+
+    fileCheckCache.delete(animeName)
+    deleteCacheEntry(animeId)
+    pruneSkipCacheForAnime(animeId)
+    dropSkipDetectionsForAnime(animeId)
+  })
+
+  ipcMain.handle('cleanup:get-snoozed', () => {
+    const snoozed = store.get('autoCleanupSnoozedAnimeIds') as Record<string, true>
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    const lib = store.get('library') as Record<string, AnimeSearchResult>
+    const recent = store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>
+    const out: Record<string, { animeName: string }> = {}
+    for (const id of Object.keys(snoozed)) {
+      const entry = downloaded[id] || lib[id] || recent[id]
+      out[id] = { animeName: entry ? getDisplayName(entry) : `Anime ${id}` }
+    }
+    return out
+  })
+
+  ipcMain.handle('cleanup:set-snoozed', (_event, animeId: number, snoozed: boolean) => {
+    const map = store.get('autoCleanupSnoozedAnimeIds') as Record<string, true>
+    const key = String(animeId)
+    if (snoozed) {
+      map[key] = true
+    } else {
+      delete map[key]
+    }
+    store.set('autoCleanupSnoozedAnimeIds', map)
+  })
+
   ipcMain.handle('get-setting', (_event, key: string) => {
     if (key === 'downloadDir') return getDownloadDir()
     return store.get(key)
@@ -2968,6 +3099,7 @@ function registerIpcHandlers(): void {
 
       const cached = store.get('shikimoriUserRates') as { rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number }; shikiAnime: unknown; smotretAnime: unknown }[]
       const idx = cached.findIndex((e) => e.rate.target_id === malId)
+      const prevStatus = idx !== -1 ? cached[idx].rate.status : undefined
 
       try {
         const accessToken = await shikimori.ensureFreshToken(store)
@@ -2991,8 +3123,10 @@ function registerIpcHandlers(): void {
           store.set('shikimoriUserRates', cached)
           invalidateCalendarCache()
           broadcastToAll('shikimori:rate-updated', cached[idx])
+          void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, updatedRate.status, prevStatus)
         } else {
           refreshShikimoriRatesInBackground()
+          void maybeBroadcastCleanupPrompt(null, malId, updatedRate.status, undefined)
         }
 
         void syncShikimoriQueue()
@@ -3028,6 +3162,7 @@ function registerIpcHandlers(): void {
         broadcastToAll('shikimori:rate-updated', cached[idx])
         broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
         startSyncTimer()
+        void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
 
         return {
           id: rateId ?? -1,

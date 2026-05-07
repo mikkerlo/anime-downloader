@@ -57,6 +57,22 @@ const api = {
   libraryIsDownloaded: (id: number) => ipcRenderer.invoke('library-is-downloaded', id),
   downloadedAnimeAdd: (anime: unknown) => ipcRenderer.invoke('downloaded-anime-add', anime),
   downloadedAnimeDelete: (animeId: number, animeName: string) => ipcRenderer.invoke('downloaded-anime-delete', animeId, animeName),
+  cleanupGetSize: (animeId: number, animeName: string) =>
+    ipcRenderer.invoke('cleanup:get-size', animeId, animeName) as Promise<{ bytes: number; files: number }>,
+  cleanupGetActiveDownloads: (animeName: string) =>
+    ipcRenderer.invoke('cleanup:get-active-downloads', animeName) as Promise<{ active: number }>,
+  cleanupExecute: (animeId: number, animeName: string) =>
+    ipcRenderer.invoke('cleanup:execute', animeId, animeName) as Promise<void>,
+  cleanupGetSnoozed: () =>
+    ipcRenderer.invoke('cleanup:get-snoozed') as Promise<Record<string, { animeName: string }>>,
+  cleanupSetSnoozed: (animeId: number, snoozed: boolean) =>
+    ipcRenderer.invoke('cleanup:set-snoozed', animeId, snoozed) as Promise<void>,
+  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => {
+    ipcRenderer.on('cleanup:prompt', (_event, data) => callback(data))
+  },
+  offCleanupPrompt: () => {
+    ipcRenderer.removeAllListeners('cleanup:prompt')
+  },
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
 

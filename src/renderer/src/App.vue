@@ -11,6 +11,8 @@ import FriendsActivityView from './components/FriendsActivityView.vue'
 import CalendarView from './components/CalendarView.vue'
 import HomeView from './components/HomeView.vue'
 import PlayerView from './components/PlayerView.vue'
+import CleanupModal from './components/CleanupModal.vue'
+import { formatBytes } from './utils'
 
 const currentView = ref('home')
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
@@ -163,6 +165,68 @@ async function loadShortcuts(): Promise<void> {
 const ffmpegDownloading = ref(false)
 const ffmpegProgress = ref(0)
 
+// Cleanup prompt (Shikimori "completed" transition)
+const cleanupToast = ref<{
+  animeId: number
+  animeName: string
+  bytes: number
+  files: number
+  loading: boolean
+} | null>(null)
+const cleanupModal = ref<{ animeId: number; animeName: string } | null>(null)
+let cleanupToastTimer: ReturnType<typeof setTimeout> | null = null
+
+function dismissCleanupToast(): void {
+  if (cleanupToastTimer) {
+    clearTimeout(cleanupToastTimer)
+    cleanupToastTimer = null
+  }
+  cleanupToast.value = null
+}
+
+async function handleCleanupPrompt(data: { animeId: number; animeName: string; malId: number }): Promise<void> {
+  dismissCleanupToast()
+  cleanupToast.value = {
+    animeId: data.animeId,
+    animeName: data.animeName,
+    bytes: 0,
+    files: 0,
+    loading: true
+  }
+  cleanupToastTimer = setTimeout(dismissCleanupToast, 30000)
+  try {
+    const size = await window.api.cleanupGetSize(data.animeId, data.animeName)
+    if (cleanupToast.value && cleanupToast.value.animeId === data.animeId) {
+      cleanupToast.value.bytes = size.bytes
+      cleanupToast.value.files = size.files
+      cleanupToast.value.loading = false
+    }
+  } catch {
+    if (cleanupToast.value && cleanupToast.value.animeId === data.animeId) {
+      cleanupToast.value.loading = false
+    }
+  }
+}
+
+function openCleanupModalFromToast(): void {
+  if (!cleanupToast.value) return
+  cleanupModal.value = { animeId: cleanupToast.value.animeId, animeName: cleanupToast.value.animeName }
+  dismissCleanupToast()
+}
+
+async function snoozeCleanupFromToast(): Promise<void> {
+  if (!cleanupToast.value) return
+  const id = cleanupToast.value.animeId
+  dismissCleanupToast()
+  try {
+    await window.api.cleanupSetSnoozed(id, true)
+  } catch { /* ignore */ }
+}
+
+function closeCleanupModal(): void {
+  cleanupModal.value = null
+}
+
 onMounted(async () => {
   await loadShortcuts()
   const shikiUser = await window.api.shikimoriGetUser()
@@ -176,6 +240,7 @@ onMounted(async () => {
       ffmpegDownloading.value = false
     }
   })
+  window.api.onCleanupPrompt(handleCleanupPrompt)
   // Expose test hook for Playwright screenshot script
   ;(window as any).__openTestPlayer = openPlayer
 })
@@ -183,6 +248,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.api.offFfmpegDownloadProgress()
+  window.api.offCleanupPrompt()
+  if (cleanupToastTimer) clearTimeout(cleanupToastTimer)
 })
 </script>
 
@@ -199,6 +266,27 @@ onBeforeUnmount(() => {
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" :anime-id="playerState.animeId" :mal-id="playerState.malId" @close="closePlayer" />
+    <CleanupModal
+      v-if="cleanupModal"
+      :anime-id="cleanupModal.animeId"
+      :anime-name="cleanupModal.animeName"
+      @closed="closeCleanupModal"
+    />
+    <div v-if="cleanupToast" class="cleanup-toast">
+      <div class="cleanup-toast-body">
+        <div class="cleanup-toast-title">✓ You finished «{{ cleanupToast.animeName }}»</div>
+        <div class="cleanup-toast-size">
+          <template v-if="cleanupToast.loading">Calculating size…</template>
+          <template v-else-if="cleanupToast.files === 0">No local files</template>
+          <template v-else>{{ cleanupToast.files }} file{{ cleanupToast.files === 1 ? '' : 's' }} · {{ formatBytes(cleanupToast.bytes) }} on disk</template>
+        </div>
+      </div>
+      <div class="cleanup-toast-actions">
+        <button class="cleanup-toast-btn primary" @click="openCleanupModalFromToast">Cleanup files</button>
+        <button class="cleanup-toast-btn" @click="dismissCleanupToast">Keep</button>
+        <button class="cleanup-toast-btn subtle" @click="snoozeCleanupFromToast">Don't ask for this show</button>
+      </div>
+    </div>
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
       <div class="ffmpeg-modal">
         <div class="ffmpeg-spinner"></div>
@@ -311,5 +399,72 @@ body {
   margin-top: 0.5rem;
   font-size: 0.75rem;
   color: #6a6a8a;
+}
+
+.cleanup-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 360px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 8000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cleanup-toast-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+}
+
+.cleanup-toast-size {
+  font-size: 0.8rem;
+  color: #a0a0b8;
+}
+
+.cleanup-toast-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cleanup-toast-btn {
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  border-radius: 5px;
+  border: 1px solid #0f3460;
+  background: transparent;
+  color: #c0c0d0;
+  cursor: pointer;
+}
+
+.cleanup-toast-btn:hover {
+  background: rgba(15, 52, 96, 0.4);
+}
+
+.cleanup-toast-btn.primary {
+  background: #e94560;
+  border-color: #e94560;
+  color: #ffffff;
+}
+
+.cleanup-toast-btn.primary:hover {
+  background: #f25670;
+}
+
+.cleanup-toast-btn.subtle {
+  color: #7a7a98;
+  border-color: transparent;
+}
+
+.cleanup-toast-btn.subtle:hover {
+  color: #c0c0d0;
 }
 </style>

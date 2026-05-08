@@ -1611,11 +1611,17 @@ function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
 function normalizeSkipDetections(detections: ShowSkipDetections | null): ShowSkipDetections | null {
   if (!detections) return null
   if (detections.algorithm?.source === 'local') return detections
+  const alg = detections.algorithm
   return {
     ...detections,
     algorithm: {
-      ...detections.algorithm,
-      source: 'local'
+      source: 'local',
+      sampleRate: alg?.sampleRate ?? 11025,
+      matchBitThreshold: alg?.matchBitThreshold ?? 6,
+      minRunSec: alg?.minRunSec ?? 18,
+      windowSec: alg?.windowSec ?? 6,
+      refineBitThreshold: alg?.refineBitThreshold ?? 4,
+      refineSustainHashes: alg?.refineSustainHashes ?? 5
     }
   }
 }
@@ -1683,19 +1689,16 @@ function runStreamSkipDetectionInternal(
 
   cancelStreamSkipDetection(senderId)
   const controller = new AbortController()
+  const fingerprintCache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
   const runPromise = detectStream(animeId, episodeInt, streamUrl, detections, {
     fpcalcPath,
     ffmpegPath,
     ffprobePath: ffprobePath || undefined,
     signal: controller.signal,
-    loadCachedFingerprint: (key) => {
-      const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-      return cache[key]
-    },
+    loadCachedFingerprint: (key) => fingerprintCache[key],
     saveCachedFingerprint: (key, value) => {
-      const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-      cache[key] = value
-      store.set('skipFingerprintCache', cache)
+      fingerprintCache[key] = value
+      store.set('skipFingerprintCache', fingerprintCache)
     }
   })
 

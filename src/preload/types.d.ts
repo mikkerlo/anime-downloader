@@ -216,6 +216,27 @@ interface Api {
   onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
   offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
 
+  // Auto-downloader
+  autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>
+  autoDlSetSubscription: (
+    animeId: number,
+    enabled: boolean,
+    meta?: { malId: number; animeName: string }
+  ) => Promise<AutoDownloadSubscription | null>
+  autoDlListSubscriptions: () => Promise<AutoDownloadSubscription[]>
+  autoDlTrigger: () => Promise<AutoDlTickResult>
+  autoDlGetStatus: () => Promise<{
+    lastResult: AutoDlTickResult | null
+    locked: boolean
+    enabled: boolean
+  }>
+  autoDlGetEnabled: () => Promise<boolean>
+  autoDlSetEnabled: (enabled: boolean) => Promise<boolean>
+  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => void
+  offAutoDlTickResult: () => void
+  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => void
+  offAutoDlEnqueued: () => void
+
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
@@ -223,6 +244,41 @@ interface Api {
   updateInstall: () => void
   onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
   offUpdateStatus: () => void
+}
+
+interface AutoDownloadSubscription {
+  animeId: number
+  malId: number
+  animeName: string
+  subscribedAt: number
+  lastEnqueuedEpisodeInt: number
+  lastCheckedAt: number
+}
+
+interface AutoDlOutcome {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  outcome:
+    | 'enqueued'
+    | 'no-translation'
+    | 'no-episode'
+    | 'already-downloaded'
+    | 'already-queued'
+    | 'embed-failed'
+    | 'no-episodes-aired'
+    | 'cap-reached'
+    | 'error'
+  message?: string
+}
+
+interface AutoDlTickResult {
+  ranAt: number
+  reason: 'startup' | 'timer' | 'rates-refreshed' | 'manual'
+  enqueued: number
+  skipped: number
+  errors: number
+  details: AutoDlOutcome[]
 }
 
 interface SyncplayConnectConfig {

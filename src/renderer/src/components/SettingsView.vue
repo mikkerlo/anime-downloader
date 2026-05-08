@@ -40,6 +40,11 @@ const updateStatus = ref<{ status: 'idle' | 'checking' | 'up-to-date' | 'availab
 
 const notificationMode = ref('off')
 const calendarView = ref<'week' | 'month'>('week')
+const autoDownloadEnabled = ref(true)
+const autoDlSubscriptions = ref<AutoDownloadSubscription[]>([])
+const autoDlSubscriptionsExpanded = ref(false)
+const autoDlRunning = ref(false)
+const autoDlLastResult = ref<AutoDlTickResult | null>(null)
 const speedLimitPreset = ref('0')
 const customSpeedLimit = ref(1)
 const concurrentDownloads = ref(2)
@@ -587,6 +592,7 @@ onUnmounted(() => {
   window.api.offStorageUsageProgress()
   window.api.offStorageCleanupPending()
   window.api.offStorageCleanupFinished()
+  window.api.offAutoDlTickResult()
   if (skipQueuePollTimer) {
     clearInterval(skipQueuePollTimer)
     skipQueuePollTimer = null
@@ -678,6 +684,16 @@ onMounted(async () => {
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
   hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
+
+  // Auto-download
+  autoDownloadEnabled.value = await window.api.autoDlGetEnabled()
+  await refreshAutoDlSubscriptions()
+  const autoDlStatus = await window.api.autoDlGetStatus()
+  autoDlLastResult.value = autoDlStatus.lastResult
+  window.api.onAutoDlTickResult((result) => {
+    autoDlLastResult.value = result
+    void refreshAutoDlSubscriptions()
+  })
 
   // Storage cleanup settings
   autoCleanupDays.value = ((await window.api.getSetting('autoCleanupWatchedDays')) as number) || 0
@@ -807,6 +823,44 @@ watch(customSpeedLimit, (val) => {
 watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
 watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
 watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+watch(autoDownloadEnabled, (val) => {
+  if (loaded.value) {
+    void window.api.autoDlSetEnabled(val).then(() => showSaved())
+  }
+})
+
+async function refreshAutoDlSubscriptions(): Promise<void> {
+  try {
+    autoDlSubscriptions.value = await window.api.autoDlListSubscriptions()
+  } catch (err) {
+    console.warn('Failed to load auto-dl subscriptions:', err)
+  }
+}
+
+async function runAutoDlNow(): Promise<void> {
+  if (autoDlRunning.value) return
+  autoDlRunning.value = true
+  try {
+    await window.api.autoDlTrigger()
+    await refreshAutoDlSubscriptions()
+  } finally {
+    autoDlRunning.value = false
+  }
+}
+
+async function unsubscribeAutoDl(animeId: number): Promise<void> {
+  await window.api.autoDlSetSubscription(animeId, false)
+  await refreshAutoDlSubscriptions()
+}
+
+function autoDlLastCheckedLabel(ts: number): string {
+  if (!ts) return 'never'
+  const diff = Date.now() - ts
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`
+  return `${Math.round(diff / 86_400_000)}d ago`
+}
 watch(enableLocalSkipDetection, (val) => { if (loaded.value) autoSave('enableLocalSkipDetection', val) })
 watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
 let suppressVideoCodecSave = false
@@ -993,6 +1047,46 @@ async function testSyncplayConnection(): Promise<void> {
             <option :value="2">2</option>
             <option :value="3">3</option>
           </select>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Auto-download</label>
+          <p class="setting-hint">
+            Subscribed shows queue newly-aired episodes automatically. Subscribe per show on its detail page.
+            Forward-only — already-aired episodes are never backfilled.
+          </p>
+          <label class="toggle-row">
+            <input v-model="autoDownloadEnabled" type="checkbox" class="toggle-input" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">{{ autoDownloadEnabled ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+          <div class="auto-dl-status">
+            <button class="test-token-btn" :disabled="autoDlRunning || !autoDownloadEnabled" @click="runAutoDlNow">
+              {{ autoDlRunning ? 'Running...' : 'Run now' }}
+            </button>
+            <span v-if="autoDlLastResult" class="setting-hint" style="margin: 0 0 0 12px">
+              Last run: {{ autoDlLastResult.enqueued }} enqueued, {{ autoDlLastResult.skipped }} skipped, {{ autoDlLastResult.errors }} errors
+            </span>
+          </div>
+          <div class="auto-dl-subs">
+            <button
+              type="button"
+              class="auto-dl-subs-toggle"
+              @click="autoDlSubscriptionsExpanded = !autoDlSubscriptionsExpanded"
+            >
+              {{ autoDlSubscriptions.length }} show{{ autoDlSubscriptions.length === 1 ? '' : 's' }} subscribed
+              <span class="caret">{{ autoDlSubscriptionsExpanded ? '▾' : '▸' }}</span>
+            </button>
+            <ul v-if="autoDlSubscriptionsExpanded && autoDlSubscriptions.length > 0" class="auto-dl-sub-list">
+              <li v-for="sub in autoDlSubscriptions" :key="sub.animeId">
+                <span class="auto-dl-sub-name">{{ sub.animeName }}</span>
+                <span class="auto-dl-sub-meta">
+                  next: Ep {{ sub.lastEnqueuedEpisodeInt + 1 }} · checked {{ autoDlLastCheckedLabel(sub.lastCheckedAt) }}
+                </span>
+                <button class="auto-dl-unsub-btn" @click="unsubscribeAutoDl(sub.animeId)">Unsubscribe</button>
+              </li>
+            </ul>
+          </div>
         </div>
 
         <div class="setting-group">
@@ -1869,6 +1963,69 @@ async function testSyncplayConnection(): Promise<void> {
 .test-token-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.auto-dl-status {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.auto-dl-subs {
+  margin-top: 10px;
+}
+
+.auto-dl-subs-toggle {
+  background: none;
+  border: none;
+  color: #8aa8d0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 4px 0;
+}
+
+.auto-dl-subs-toggle .caret {
+  margin-left: 4px;
+  font-size: 0.7rem;
+}
+
+.auto-dl-sub-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.auto-dl-sub-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.85rem;
+}
+
+.auto-dl-sub-name {
+  flex: 1;
+  color: #e0e0f0;
+}
+
+.auto-dl-sub-meta {
+  color: #6a6a8a;
+  font-size: 0.75rem;
+}
+
+.auto-dl-unsub-btn {
+  background: rgba(120, 50, 50, 0.6);
+  color: #e0a0a0;
+  border: none;
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.auto-dl-unsub-btn:hover {
+  background: rgba(150, 60, 60, 0.8);
 }
 
 .token-result {

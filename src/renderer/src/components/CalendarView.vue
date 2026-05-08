@@ -9,6 +9,7 @@ const entries = ref<CalendarEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const weeksPerPage = ref(1)
+const subscribedAnimeIds = ref<Set<number>>(new Set())
 
 const DAY_LABELS_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DAY_LABELS_SUN_FIRST = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -180,9 +181,19 @@ function onCalendarViewChanged(): void {
   void loadViewSetting()
 }
 
+async function loadAutoDlSubscriptions(): Promise<void> {
+  try {
+    const subs = await window.api.autoDlListSubscriptions()
+    subscribedAnimeIds.value = new Set(subs.map((s) => s.animeId))
+  } catch (err) {
+    console.warn('Failed to load auto-dl subscriptions:', err)
+  }
+}
+
 onMounted(() => {
   window.addEventListener('calendar-view-changed', onCalendarViewChanged)
   load()
+  loadAutoDlSubscriptions()
 })
 
 onBeforeUnmount(() => {
@@ -286,6 +297,12 @@ onBeforeUnmount(() => {
                     }}</span>
                     <span v-if="entry.animeId === null" class="chip chip-na"
                       >Not on smotret-anime</span
+                    >
+                    <span
+                      v-if="entry.animeId !== null && subscribedAnimeIds.has(entry.animeId)"
+                      class="chip chip-auto-dl"
+                      title="Auto-download is on for this show"
+                      >↻ Auto-DL</span
                     >
                   </div>
                 </div>
@@ -550,6 +567,11 @@ onBeforeUnmount(() => {
 .chip-na {
   background: rgba(80, 80, 100, 0.4);
   color: #8a8aa8;
+}
+
+.chip-auto-dl {
+  background: rgba(40, 90, 60, 0.7);
+  color: #8fd6a8;
 }
 
 .status-text {

@@ -394,6 +394,36 @@ const api = {
   offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
     syncplayOff('syncplay:trace', callback),
 
+  // Auto-downloader
+  autoDlGetSubscription: (animeId: number) =>
+    ipcRenderer.invoke('auto-dl:get-subscription', animeId) as Promise<AutoDownloadSubscription | null>,
+  autoDlSetSubscription: (animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) =>
+    ipcRenderer.invoke('auto-dl:set-subscription', animeId, enabled, meta) as Promise<AutoDownloadSubscription | null>,
+  autoDlListSubscriptions: () =>
+    ipcRenderer.invoke('auto-dl:list-subscriptions') as Promise<AutoDownloadSubscription[]>,
+  autoDlTrigger: () => ipcRenderer.invoke('auto-dl:trigger') as Promise<AutoDlTickResult>,
+  autoDlGetStatus: () =>
+    ipcRenderer.invoke('auto-dl:get-status') as Promise<{
+      lastResult: AutoDlTickResult | null
+      locked: boolean
+      enabled: boolean
+    }>,
+  autoDlGetEnabled: () => ipcRenderer.invoke('auto-dl:get-enabled') as Promise<boolean>,
+  autoDlSetEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke('auto-dl:set-enabled', enabled) as Promise<boolean>,
+  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => {
+    ipcRenderer.on('auto-dl:tick-result', (_event, result) => callback(result))
+  },
+  offAutoDlTickResult: () => {
+    ipcRenderer.removeAllListeners('auto-dl:tick-result')
+  },
+  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => {
+    ipcRenderer.on('auto-dl:enqueued', (_event, data) => callback(data))
+  },
+  offAutoDlEnqueued: () => {
+    ipcRenderer.removeAllListeners('auto-dl:enqueued')
+  },
+
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),
   updateCheck: () => ipcRenderer.invoke('update:check'),

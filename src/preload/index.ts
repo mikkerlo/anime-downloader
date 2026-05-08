@@ -173,6 +173,8 @@ const api = {
     ipcRenderer.invoke('skip-detector:get-detections', animeId) as Promise<ShowSkipDetections | null>,
   skipDetectorDetectStream: (animeId: number, episodeInt: string, streamUrl: string) =>
     ipcRenderer.invoke('skip-detector:detect-stream', animeId, episodeInt, streamUrl) as Promise<EpisodeSkipDetection | null>,
+  skipDetectorCancelStreamDetect: () =>
+    ipcRenderer.invoke('skip-detector:cancel-stream-detect') as Promise<void>,
   skipDetectorGetStatus: () =>
     ipcRenderer.invoke('skip-detector:get-status') as Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>,
   skipDetectorCancel: () => ipcRenderer.invoke('skip-detector:cancel') as Promise<void>,

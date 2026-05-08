@@ -254,6 +254,11 @@ async function refreshStreamSkipDetection(): Promise<void> {
   if (!showSkipDetections.value) return
   const source = showSkipDetections.value.algorithm?.source ?? 'local'
   if (source !== 'local') return
+  try {
+    await window.api.skipDetectorCancelStreamDetect()
+  } catch {
+    // ignore best-effort cancel races before starting a fresh request
+  }
   streamSkipDetecting.value = true
   try {
     const result = await window.api.skipDetectorDetectStream(props.animeId, currentEpisodeInt.value, activeStreamUrl.value)
@@ -298,6 +303,7 @@ watch([
     streamSkipRequestId++
     streamSkipDetection.value = null
     streamSkipDetecting.value = false
+    void window.api.skipDetectorCancelStreamDetect()
     return
   }
   resetSkipUiState()
@@ -2257,6 +2263,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   streamSkipRequestId++
   streamSkipDetecting.value = false
+  void window.api.skipDetectorCancelStreamDetect()
   saveProgress(true)
   if (resumeToastTimer) clearTimeout(resumeToastTimer)
   document.removeEventListener('keydown', onKeyDown)

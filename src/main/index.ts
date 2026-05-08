@@ -1587,7 +1587,14 @@ interface CurrentSkipAnalysis {
   promise: Promise<ShowSkipDetections>
 }
 
+interface CurrentStreamSkipDetection {
+  senderId: number
+  controller: AbortController
+  promise: Promise<EpisodeSkipDetection | null>
+}
+
 let currentSkipAnalysis: CurrentSkipAnalysis | null = null
+const currentStreamSkipDetections = new Map<number, CurrentStreamSkipDetection>()
 
 const autoSkipDebounce = new Map<number, ReturnType<typeof setTimeout>>()
 const autoSkipQueue: { animeId: number; animeName: string }[] = []
@@ -1653,6 +1660,51 @@ function runSkipAnalysisInternal(animeId: number, episodes: EpisodeInput[]): Pro
       currentSkipAnalysis = null
     }
     void drainAutoSkipQueue()
+  })
+  return runPromise
+}
+
+function cancelStreamSkipDetection(senderId: number): void {
+  const current = currentStreamSkipDetections.get(senderId)
+  if (!current) return
+  current.controller.abort()
+}
+
+function runStreamSkipDetectionInternal(
+  senderId: number,
+  animeId: number,
+  episodeInt: string,
+  streamUrl: string,
+  detections: ShowSkipDetections
+): Promise<EpisodeSkipDetection | null> {
+  const fpcalcPath = getFpcalcPath()
+  if (!fpcalcPath) return Promise.reject(new Error('fpcalc binary not available — restart the app to retry the download'))
+  if (!ffmpegPath) return Promise.reject(new Error('ffmpeg not available'))
+
+  cancelStreamSkipDetection(senderId)
+  const controller = new AbortController()
+  const runPromise = detectStream(animeId, episodeInt, streamUrl, detections, {
+    fpcalcPath,
+    ffmpegPath,
+    ffprobePath: ffprobePath || undefined,
+    signal: controller.signal,
+    loadCachedFingerprint: (key) => {
+      const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+      return cache[key]
+    },
+    saveCachedFingerprint: (key, value) => {
+      const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+      cache[key] = value
+      store.set('skipFingerprintCache', cache)
+    }
+  })
+
+  currentStreamSkipDetections.set(senderId, { senderId, controller, promise: runPromise })
+  runPromise.finally(() => {
+    const current = currentStreamSkipDetections.get(senderId)
+    if (current && current.controller === controller) {
+      currentStreamSkipDetections.delete(senderId)
+    }
   })
   return runPromise
 }
@@ -2651,28 +2703,16 @@ function registerIpcHandlers(): void {
     return runSkipAnalysisInternal(animeId, episodes)
   })
 
-  ipcMain.handle('skip-detector:detect-stream', async (_event, animeId: number, episodeInt: string, streamUrl: string): Promise<EpisodeSkipDetection | null> => {
+  ipcMain.handle('skip-detector:detect-stream', async (event, animeId: number, episodeInt: string, streamUrl: string): Promise<EpisodeSkipDetection | null> => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
     const detections = normalizeSkipDetections(all[String(animeId)] ?? null)
     if (!detections) return null
     if (!streamUrl) return null
-    const fpcalcPath = getFpcalcPath()
-    if (!fpcalcPath) throw new Error('fpcalc binary not available — restart the app to retry the download')
-    if (!ffmpegPath) throw new Error('ffmpeg not available')
-    return detectStream(animeId, episodeInt, streamUrl, detections, {
-      fpcalcPath,
-      ffmpegPath,
-      ffprobePath: ffprobePath || undefined,
-      loadCachedFingerprint: (key) => {
-        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-        return cache[key]
-      },
-      saveCachedFingerprint: (key, value) => {
-        const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-        cache[key] = value
-        store.set('skipFingerprintCache', cache)
-      }
-    })
+    return runStreamSkipDetectionInternal(event.sender.id, animeId, episodeInt, streamUrl, detections)
+  })
+
+  ipcMain.handle('skip-detector:cancel-stream-detect', (event) => {
+    cancelStreamSkipDetection(event.sender.id)
   })
 
   // One-shot backfill for shows downloaded before Phase 3 was wired in.

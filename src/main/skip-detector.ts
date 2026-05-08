@@ -281,8 +281,8 @@ function matchFingerprintRegions(a: FingerprintRegion, b: FingerprintRegion): Re
     REFINE_SUSTAIN_HASHES
   )
   return {
-    startSecA: a.sourceOffsetSec + (refined.startA / a.fingerprint.hashesPerSec),
-    startSecB: b.sourceOffsetSec + (refined.startB / b.fingerprint.hashesPerSec),
+    startSecA: a.sourceOffsetSec + ((refined.startA - a.offsetHashes) / a.fingerprint.hashesPerSec),
+    startSecB: b.sourceOffsetSec + ((refined.startB - b.offsetHashes) / b.fingerprint.hashesPerSec),
     lengthSecA: refined.length / a.fingerprint.hashesPerSec,
     lengthSecB: refined.length / b.fingerprint.hashesPerSec
   }

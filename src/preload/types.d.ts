@@ -35,6 +35,13 @@ interface Api {
   libraryIsDownloaded: (id: number) => Promise<boolean>
   downloadedAnimeAdd: (anime: AnimeSearchResult) => Promise<void>
   downloadedAnimeDelete: (animeId: number, animeName: string) => Promise<void>
+  cleanupGetSize: (animeId: number, animeName: string) => Promise<{ bytes: number; files: number }>
+  cleanupGetActiveDownloads: (animeName: string) => Promise<{ active: number }>
+  cleanupExecute: (animeId: number, animeName: string) => Promise<void>
+  cleanupGetSnoozed: () => Promise<Record<string, { animeName: string }>>
+  cleanupSetSnoozed: (animeId: number, snoozed: boolean) => Promise<void>
+  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => void
+  offCleanupPrompt: () => void
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
 

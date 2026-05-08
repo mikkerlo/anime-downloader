@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, sanitizeFilename } from '../utils'
+import CleanupModal from './CleanupModal.vue'
 
 const props = defineProps<{
   animeId: number
@@ -32,6 +33,8 @@ let disposed = false
 const isStarred = ref(false)
 const autoDlSubscription = ref<AutoDownloadSubscription | null>(null)
 const autoDlSaving = ref(false)
+const isDownloaded = ref(false)
+const cleanupModalOpen = ref(false)
 
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
 const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
@@ -531,6 +534,7 @@ onMounted(async () => {
 
   window.api.libraryHas(props.animeId).then((v) => { isStarred.value = v }).catch(() => {})
   window.api.autoDlGetSubscription(props.animeId).then((s) => { autoDlSubscription.value = s }).catch(() => {})
+  window.api.libraryIsDownloaded(props.animeId).then((v) => { isDownloaded.value = v }).catch(() => {})
 
   const gen = ++loadGeneration
   let renderedFromCache = false
@@ -1059,6 +1063,12 @@ async function toggleAutoDl(): Promise<void> {
   }
 }
 
+async function onCleanupDeleted(): Promise<void> {
+  isDownloaded.value = false
+  episodeMeta.value = {}
+  await checkFileStatus()
+}
+
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
@@ -1407,6 +1417,12 @@ function typeChip(type: string): { short: string; color: string } {
               <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75" />
             </svg>
             {{ autoDlSubscription ? 'Auto-download on' : 'Auto-download' }}
+          </button>
+          <button v-if="isDownloaded" class="cleanup-btn" @click="cleanupModalOpen = true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            Cleanup files…
           </button>
         </div>
         <div class="anime-info">
@@ -1874,6 +1890,13 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
       </div>
     </div>
+    <CleanupModal
+      v-if="cleanupModalOpen && anime"
+      :anime-id="props.animeId"
+      :anime-name="getAnimeName()"
+      @closed="cleanupModalOpen = false"
+      @deleted="onCleanupDeleted"
+    />
   </main>
 </template>
 
@@ -1985,6 +2008,30 @@ function typeChip(type: string): { short: string; color: string } {
 .library-btn.active {
   color: #fbbf24;
   border-color: #fbbf24;
+}
+
+.cleanup-btn {
+  width: 200px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  color: #a0a0c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.cleanup-btn:hover {
+  background: #16213e;
+  border-color: #5a3a4e;
+  color: #f0a070;
 }
 
 .anime-info {

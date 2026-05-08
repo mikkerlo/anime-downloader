@@ -253,6 +253,28 @@ File scan cache (session-level, in-memory):
   - file:open verifies existence; if missing, invalidates cache + returns error
 ```
 
+### Completion-triggered cleanup
+
+When `shikimori:update-rate` flips a status to `completed` (and the prior
+status was not `completed`), main resolves the smotret-anime entry from the
+cached rate (`smotretAnime` field), checks `downloadedAnime[animeId]` and
+`autoCleanupSnoozedAnimeIds[animeId]`, and broadcasts `cleanup:prompt` with
+`{ animeId, animeName, malId }`. The same broadcast fires on the offline
+fallback path so the prompt still appears for offline status flips.
+
+`App.vue` listens and shows a toast (auto-dismisses after 30 s) with three
+actions: open `CleanupModal` → calls `cleanup:execute`; "Keep" → dismiss;
+"Don't ask for this show" → `cleanup:set-snoozed`. `cleanup:execute` deletes
+the show folder in every storage dir, drops `downloadedAnime[animeId]` and
+every `downloadedEpisodes` entry whose key starts with `${animeId}:`, and
+prunes the anime/skip caches. `library`, `watchProgress`, and the Shikimori
+rate are left intact. If active downloads exist for the show, the modal
+chains `download:cancel-by-episode` first.
+
+A "Cleanup files…" button in the AnimeDetailView header (visible when
+`library-is-downloaded`) opens the same modal manually. Settings > Storage >
+Cleanup prompts lists snoozed shows with un-snooze + reset-all controls.
+
 ### Library
 
 ```
@@ -287,6 +309,12 @@ LibraryView shows both with indicators:
 | `library-get-status` | invoke | Batch check starred + downloaded status for multiple anime IDs |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
 | `downloaded-anime-delete` | invoke | Remove anime + delete folder |
+| `cleanup:get-size` | invoke | Sum bytes + file count for a show across hot+cold dirs (.mkv/.mp4/.ass/.srt) |
+| `cleanup:get-active-downloads` | invoke | Count download groups still in flight for the given anime name |
+| `cleanup:execute` | invoke | Delete the show's folder(s), drop its `downloadedAnime` + `downloadedEpisodes` entries, prune caches; preserves `library`/`watchProgress`/Shikimori rate |
+| `cleanup:get-snoozed` | invoke | Return `Record<animeId, { animeName }>` of shows the user silenced from completion-cleanup prompts |
+| `cleanup:set-snoozed` | invoke | Toggle a show's entry in `autoCleanupSnoozedAnimeIds` |
+| `cleanup:prompt` | send | Broadcast when a Shikimori rate transitions to `completed` for a show with local files (and not snoozed); App.vue surfaces a toast |
 | `downloaded-episodes-get` | invoke | Get translation metadata per episode (array of metas per episode, supports multiple translations) |
 | `get-setting` | invoke | Read setting value |
 | `set-setting` | invoke | Write setting value |
@@ -479,6 +507,7 @@ interface EpisodeMeta {
 | `mp4StreamingStats` | object | `{ totalChecked:0, faststartCount:0, nonFaststartSamples:[] }` | Telemetry from the MP4 faststart probe: total files scanned, count that had `moov` before `mdat`, and up to 10 most-recent non-faststart samples (anime + episode + path + first non-`ftyp` box). Surfaced in Settings > Debug |
 | `autoDownloadSubscriptions` | object | `{}` | Per-show auto-download subscriptions keyed by smotret-anime ID. Each entry: `{ animeId, malId, animeName, subscribedAt, lastEnqueuedEpisodeInt, lastCheckedAt }`. `lastEnqueuedEpisodeInt` is stamped to current `episodes_aired` at subscribe time so newly-subscribed shows never backfill |
 | `autoDownloadEnabled` | boolean | `true` | Master toggle that gates the auto-download worker. When false, all ticks become no-ops; subscriptions are preserved |
+| `autoCleanupSnoozedAnimeIds` | object | `{}` | Map of smotret-anime IDs (as strings) the user silenced from the Shikimori-completion cleanup prompt via "Don't ask for this show". Settings > Storage > Cleanup prompts manages the list |
 
 ## Watch Progress & Resume
 

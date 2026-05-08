@@ -98,7 +98,8 @@ translation type and author selections across re-mounts.
 ### Episode Loading & Translation Selection
 
 ```
-AnimeDetailView  -->  getAnime(id) --> full anime with episode list
+AnimeDetailView  -->  getAnimeCache(id) --> instant render if cached and fresh
+                 -->  getAnime(id) --> full anime with episode list (background-refresh)
                  -->  getEpisode(id) x N (batches of 5) --> translations per episode
                  -->  all active translations shown (no quality minimum)
                  -->  best quality per author+type deduplication
@@ -108,6 +109,15 @@ AnimeDetailView  -->  getAnime(id) --> full anime with episode list
 Episode list is paginated (30 per page) when anime has >30 TV episodes.
 Only translations for the visible page are fetched (in batches of 5).
 Cached translations are reused when revisiting a page.
+
+For starred or downloaded anime, the full AnimeDetail payload is cached in
+`animeCache[animeId].animeDetail` with a 24h TTL. AnimeDetailView calls
+`getAnimeCache(id)` on mount: on a hit, the page renders instantly from the
+cache while a background `getAnime(id)` refreshes the data; on miss, the
+spinner stays up until the API responds. A per-mount generation counter +
+`disposed` flag prevent stale background fetches from polluting state when
+the user rapidly switches anime. Cache writes are gated on starred OR
+downloaded; unstarring evicts the cache entry if the anime isn't downloaded.
 
 Per-episode translation selector with priority chain:
   1. In download queue → locked to queued translation
@@ -243,6 +253,28 @@ File scan cache (session-level, in-memory):
   - file:open verifies existence; if missing, invalidates cache + returns error
 ```
 
+### Completion-triggered cleanup
+
+When `shikimori:update-rate` flips a status to `completed` (and the prior
+status was not `completed`), main resolves the smotret-anime entry from the
+cached rate (`smotretAnime` field), checks `downloadedAnime[animeId]` and
+`autoCleanupSnoozedAnimeIds[animeId]`, and broadcasts `cleanup:prompt` with
+`{ animeId, animeName, malId }`. The same broadcast fires on the offline
+fallback path so the prompt still appears for offline status flips.
+
+`App.vue` listens and shows a toast (auto-dismisses after 30 s) with three
+actions: open `CleanupModal` → calls `cleanup:execute`; "Keep" → dismiss;
+"Don't ask for this show" → `cleanup:set-snoozed`. `cleanup:execute` deletes
+the show folder in every storage dir, drops `downloadedAnime[animeId]` and
+every `downloadedEpisodes` entry whose key starts with `${animeId}:`, and
+prunes the anime/skip caches. `library`, `watchProgress`, and the Shikimori
+rate are left intact. If active downloads exist for the show, the modal
+chains `download:cancel-by-episode` first.
+
+A "Cleanup files…" button in the AnimeDetailView header (visible when
+`library-is-downloaded`) opens the same modal manually. Settings > Storage >
+Cleanup prompts lists snoozed shows with un-snooze + reset-all controls.
+
 ### Library
 
 ```
@@ -262,6 +294,8 @@ LibraryView shows both with indicators:
 | `validate-token` | invoke | Validate API token against smotret-anime.ru |
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID |
+| `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
+| `set-anime-cache` | invoke | Write AnimeDetail to cache (no-op if anime is neither starred nor downloaded) |
 | `get-episode` | invoke | Fetch episode translations |
 | `probe-embed-quality` | invoke | Probe embed API for actual stream height |
 | `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |
@@ -275,6 +309,12 @@ LibraryView shows both with indicators:
 | `library-get-status` | invoke | Batch check starred + downloaded status for multiple anime IDs |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
 | `downloaded-anime-delete` | invoke | Remove anime + delete folder |
+| `cleanup:get-size` | invoke | Sum bytes + file count for a show across hot+cold dirs (.mkv/.mp4/.ass/.srt) |
+| `cleanup:get-active-downloads` | invoke | Count download groups still in flight for the given anime name |
+| `cleanup:execute` | invoke | Delete the show's folder(s), drop its `downloadedAnime` + `downloadedEpisodes` entries, prune caches; preserves `library`/`watchProgress`/Shikimori rate |
+| `cleanup:get-snoozed` | invoke | Return `Record<animeId, { animeName }>` of shows the user silenced from completion-cleanup prompts |
+| `cleanup:set-snoozed` | invoke | Toggle a show's entry in `autoCleanupSnoozedAnimeIds` |
+| `cleanup:prompt` | send | Broadcast when a Shikimori rate transitions to `completed` for a show with local files (and not snoozed); App.vue surfaces a toast |
 | `downloaded-episodes-get` | invoke | Get translation metadata per episode (array of metas per episode, supports multiple translations) |
 | `get-setting` | invoke | Read setting value |
 | `set-setting` | invoke | Write setting value |
@@ -314,6 +354,8 @@ LibraryView shows both with indicators:
 | `skip-detector:signature-updated` | send | Broadcast when an analysis (manual or background-triggered) completes; payload `{ animeId, perEpisode }` for open views to refresh without polling |
 | `skip-detector:backfill-all` | invoke | Enqueue every downloaded show that has ≥2 episodes on disk and no cached signature; returns `{ queued, alreadyAnalyzed, skippedFewEpisodes, total }` so the UI can report what happened |
 | `skip-detector:queue-status` | invoke | Snapshot `{ currentAnimeId, queueLength }` of the auto-analysis queue, polled by the Settings backfill control while a drain is in flight |
+| `download:inject-chapters` | invoke | Manual per-anime: rewrite each merged MKV in place with OP/ED chapters (Intro/OP/Episode/ED/Outro) using the cached `skipDetections`. Triggers a fresh analysis if none exists. Returns `{ written, skipped, failed, total }` |
+| `chapter-inject:progress` | send | Per-episode progress for `download:inject-chapters` (`analyzing` / `writing` / `done`, current/total) |
 | `app:version` | invoke | Get app version from package.json |
 | `update:check` | invoke | Check GitHub for newer version via electron-updater |
 | `update:download` | invoke | Download available update |
@@ -345,6 +387,14 @@ LibraryView shows both with indicators:
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache invalidated on `shikimori:rate-updated`/`shikimori:rates-refreshed`/logout. Optional `force` flag bypasses the cache |
 | `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |
+| `auto-dl:get-subscription` | invoke | Get the auto-download subscription for a smotret-anime ID, or `null` |
+| `auto-dl:set-subscription` | invoke | Toggle auto-download for a show. On enable, stamps `lastEnqueuedEpisodeInt` to the current `episodes_aired` (forward-only) and kicks a manual tick |
+| `auto-dl:list-subscriptions` | invoke | List all current auto-download subscriptions |
+| `auto-dl:trigger` | invoke | Run an auto-download tick now (manual reason) and return the result |
+| `auto-dl:get-status` | invoke | Returns `{ lastResult, locked, enabled }` for the auto-downloader |
+| `auto-dl:get-enabled` / `auto-dl:set-enabled` | invoke | Read/write the global master toggle |
+| `auto-dl:tick-result` | send | Broadcast after each tick: `{ ranAt, reason, enqueued, skipped, errors, details }` |
+| `auto-dl:enqueued` | send | Broadcast each time the tick enqueues an episode: `{ animeId, episodeInt, animeName }` |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
@@ -353,7 +403,7 @@ LibraryView shows both with indicators:
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
 | `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId. Renderer also passes the friendly `episodeLabel` so any non-faststart sample recorded from this path uses the same labeling as the download path |
 | `player:remux-mkv` | invoke | Legacy: remux MKV→MP4 via ffmpeg stream copy, await completion before returning (used as fallback when codecs aren't MSE-compatible) |
-| `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending }` for MSE consumption |
+| `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending, initialSeek }` (where `initialSeek` is the actual keyframe time ffmpeg seeked to, used by the renderer as `sourceBuffer.timestampOffset`) for MSE consumption |
 | `player:remux-mkv-stream-transcode` | invoke | Same as `player:remux-mkv-stream` but re-encodes video to H.264 (and audio to AAC when not already AAC) for platforms with no HEVC decoder |
 | `player:stream-chunk` | event (main→renderer) | Fragmented-MP4 bytes from an active session, appended into the renderer's `SourceBuffer` |
 | `player:stream-end` | event (main→renderer) | ffmpeg finished writing; renderer calls `mediaSource.endOfStream()` after draining its queue |
@@ -457,6 +507,9 @@ interface EpisodeMeta {
 | `calendarView` | string | `'week'` | Default time range for the Airing Calendar tab: `week` (1×7 grid) or `month` (4×7 grid). Toggle in Settings > General |
 | `syncplay` | object | `{ lastHost:'syncplay.pl', lastPort:8999, lastRoom:'', username:'', autoReconnect:true }` | Watch Together session intent (host/port/room/username + auto-reconnect toggle; TLS is always on). The connection itself is NOT persisted — users must rejoin after restart |
 | `mp4StreamingStats` | object | `{ totalChecked:0, faststartCount:0, nonFaststartSamples:[] }` | Telemetry from the MP4 faststart probe: total files scanned, count that had `moov` before `mdat`, and up to 10 most-recent non-faststart samples (anime + episode + path + first non-`ftyp` box). Surfaced in Settings > Debug |
+| `autoDownloadSubscriptions` | object | `{}` | Per-show auto-download subscriptions keyed by smotret-anime ID. Each entry: `{ animeId, malId, animeName, subscribedAt, lastEnqueuedEpisodeInt, lastCheckedAt }`. `lastEnqueuedEpisodeInt` is stamped to current `episodes_aired` at subscribe time so newly-subscribed shows never backfill |
+| `autoDownloadEnabled` | boolean | `true` | Master toggle that gates the auto-download worker. When false, all ticks become no-ops; subscriptions are preserved |
+| `autoCleanupSnoozedAnimeIds` | object | `{}` | Map of smotret-anime IDs (as strings) the user silenced from the Shikimori-completion cleanup prompt via "Don't ask for this show". Settings > Storage > Cleanup prompts manages the list |
 
 ## Watch Progress & Resume
 
@@ -503,7 +556,9 @@ In-app HTML5 video player with optional Anime4K WebGPU upscaling shaders. Uses `
 ### Video Playback
 
 - **Local .mp4**: Served via `anime-video://` protocol
-- **Local .mkv**: Progressive playback via **MSE (MediaSource Extensions)**. The main process ffprobes the MKV for duration and codec parameters (H.264 → `avc1.…`, HEVC Main / Main 10 / Main Still Picture → `hvc1.…`, plus AAC → `mp4a.40.2/.5/.29`), then spawns ffmpeg with `-c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1` and streams its stdout to the renderer via `player:stream-chunk` events. For HEVC, `-tag:v hvc1` is added so the fMP4 track carries parameter sets in the sample entry (Chromium's MSE rejects `hev1` tags). `player:remux-mkv-stream` returns `{ sessionId, duration, mimeType, hasSubtitlesPending }` immediately. The renderer creates a `MediaSource`, sets `duration` upfront, calls `addSourceBuffer(mimeType)`, appends each incoming chunk, and binds `<video>` to the `URL.createObjectURL(mediaSource)`. Backpressure: main tracks pending-bytes per session, pauses `ffmpeg.stdout` when pending data exceeds 64 MB, and resumes once it drains below 16 MB; renderer acks via `player:stream-ack` each 1 MB appended. Subtitle extraction runs in parallel and is pushed via `player:stream-subtitles` when ready. SourceBuffer quota is managed by evicting buffered data >60 s behind the playhead on every `updateend`, with a `QuotaExceededError` retry path. `player:cleanup-remux` SIGKILLs active ffmpeg processes and sweeps the temp dir (`os.tmpdir()/anime-dl-remux/`, used for temporary remuxed `.mp4` files and extracted subtitle files such as `.ass`).
+- **Local .mkv**: Progressive playback via **MSE (MediaSource Extensions)**. The main process ffprobes the MKV for duration and codec parameters (H.264 → `avc1.…`, HEVC Main / Main 10 / Main Still Picture → `hvc1.…`, plus AAC → `mp4a.40.2/.5/.29`), then spawns ffmpeg with `-c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1` and streams its stdout to the renderer via `player:stream-chunk` events. For HEVC, `-tag:v hvc1` is added so the fMP4 track carries parameter sets in the sample entry (Chromium's MSE rejects `hev1` tags). `player:remux-mkv-stream` returns `{ sessionId, duration, mimeType, hasSubtitlesPending, initialSeek }` immediately. The renderer creates a `MediaSource`, sets `duration` upfront, calls `addSourceBuffer(mimeType)`, appends each incoming chunk, and binds `<video>` to the `URL.createObjectURL(mediaSource)`. Backpressure: main tracks pending-bytes per session, pauses `ffmpeg.stdout` when pending data exceeds 64 MB, and resumes once it drains below 16 MB; renderer acks via `player:stream-ack` each 1 MB appended. Subtitle extraction runs in parallel and is pushed via `player:stream-subtitles` when ready. SourceBuffer quota is managed by evicting buffered data >60 s behind the playhead on every `updateend`, with a `QuotaExceededError` retry path. `player:cleanup-remux` SIGKILLs active ffmpeg processes and sweeps the temp dir (`os.tmpdir()/anime-dl-remux/`, used for temporary remuxed `.mp4` files and extracted subtitle files such as `.ass`).
+
+  **Frame-accurate seeking**: ffmpeg's fmp4 muxer always normalizes its output PTS to start at 0 per session (`tfdt.baseMediaDecodeTime` is written relative to track start, not absolute file PTS, even with `-copyts`). To preserve the absolute file timeline through MSE, the main process probes the actual keyframe at-or-before the requested seek with a focused `ffprobe -skip_frame nokey -read_intervals` scan over a 15 s window, then passes that exact keyframe time as ffmpeg's `-ss` and returns it to the renderer as `keyframeTime` (initial open: via `MseOpenResult.initialSeek`; mid-stream seek: via `player:stream-seek`'s response). The renderer sets `sourceBuffer.timestampOffset = keyframeTime` so the buffered range maps onto the absolute file timeline; `<video>.currentTime` keeps the user's exact seek target and lands on it within container precision. Without this, `timestampOffset` would be set to the renderer's pre-seek "best guess" and the playhead would land on the keyframe instead of the user's target — off by up to one GOP.
 
   **HEVC transcode fallback**: When `MediaSource.isTypeSupported` returns false for an `hvc1`/`hev1` mime (typical on Linux Electron builds, WSL2, and any machine without a platform HEVC decoder), the renderer branches to `player:remux-mkv-stream-transcode`. This path reuses the same session/backpressure/generation-counter plumbing but replaces `-c copy` with a real-time H.264 encode. Encoder selection is performed on demand the first time this path is used via `pickH264Encoder()`, which then caches the first successful result for subsequent transcode sessions. The probe order is `h264_vaapi` (Linux, trying each available `/dev/dri/renderD*` render node), `h264_nvenc`, `h264_qsv`, and `libx264`, using a 1-frame `testsrc` dry-run encode; the first one to succeed is cached. Audio is stream-copied when the source is AAC, otherwise transcoded to AAC 192 kbps. The resulting mime is `video/mp4; codecs="avc1.640028, mp4a.40.2"`. Consent UX is controlled by the `hevcTranscodeOnPlay` setting (`ask` | `always` | `never`): in `ask` mode the renderer shows a modal with four choices — Transcode once, Always transcode (persists the setting to `always`), Open in external player (uses `shell:open-external-file` → `shell.openPath`), or Cancel. Legacy `player:remux-mkv` is still used as a fallback for other non-MSE-compatible codec combinations. To keep IPC traffic under control when the encoder runs at 30×+ realtime, the main process coalesces ffmpeg stdout into ~256 KB batches before sending `player:stream-chunk` events; without batching the renderer main thread sees 200+ IPC events per second and the video compositor starves. **Known limitation**: on systems with a weak Chromium video render path (notably WSL2), even the transcoded H.264 stream can exhibit picture-lag during steady-state playback where audio and subtitles advance at 1× but displayed frames fall progressively behind. The "Open in external player" modal option is the workaround on affected systems.
 - **Non-downloaded episodes**: Streams directly from smotret-anime CDN via `player:get-stream-url` IPC
@@ -612,7 +667,7 @@ An in-memory mutex (`syncInProgress`) prevents overlapping drains. Items are pro
 
 `CalendarView.vue` (sidebar entry gated on Shikimori login) renders a Mon–Sun grid of upcoming episodes for shows the user tracks as `watching` / `rewatching` / `planned`. The grid is N rows × 7 columns where N comes from the `calendarView` setting (`'week'` → 1, `'month'` → 4).
 
-Data flow: `shikimori:get-calendar` calls Shikimori's public, unauthenticated `GET /api/calendar` (a sitewide list of currently-airing series), filters entries by the MAL ID set built from `shikimoriUserRates`, then resolves each surviving entry to a smotret-anime row via `lookupByMalIds` so card clicks deep-link into `AnimeDetailView` (rows that fail resolution show a "Not on smotret-anime" badge and are non-clickable). The handler returns `CalendarEntry[]` containing `{ malId, animeId | null, name, posterUrl, kind, episodeInt, nextEpisodeAt, userStatus }`. `episodeInt` is `rate.episodes + 1` so the card always shows the user's next-up episode label. The MAL ID lookup falls back to `shikiAnime.id` when older cached rates lack `rate.target_id`. If `shikimoriUserRates` is empty (user logged in but never opened ShikimoriView), the handler does an inline `fetchAndCacheShikimoriRates()` so the calendar isn't stuck empty on first use.
+Data flow: `shikimori:get-calendar` calls Shikimori's public, unauthenticated `GET /api/calendar` (a sitewide list of currently-airing series), filters entries by the MAL ID set built from `shikimoriUserRates`, then resolves each surviving entry to a smotret-anime row via `lookupByMalIds` so card clicks deep-link into `AnimeDetailView` (rows that fail resolution show a "Not on smotret-anime" badge and are non-clickable). The handler returns `CalendarEntry[]` containing `{ malId, animeId | null, name, posterUrl, kind, episodeInt, nextEpisodeAt, userStatus }`. `episodeInt` comes from Shikimori's `next_episode` field (the actual episode scheduled to air at `nextEpisodeAt`), falling back to `episodes_aired + 1` if the API omits it — i.e. it reflects what's airing, not the user's personal next-up. The MAL ID lookup falls back to `shikiAnime.id` when older cached rates lack `rate.target_id`. If `shikimoriUserRates` is empty (user logged in but never opened ShikimoriView), the handler does an inline `fetchAndCacheShikimoriRates()` so the calendar isn't stuck empty on first use.
 
 Cache: a 5-minute in-memory cache lives in main (`calendarCache`) — `/api/calendar` returns hundreds of entries and changes slowly, so view re-mounts during normal navigation reuse the same payload. The cache is invalidated whenever the underlying tracked-set could change: every `broadcastToAll('shikimori:rate-updated', …)` site, the `broadcastToAll('shikimori:rates-refreshed', …)` site, and `shikimori:logout`. The IPC accepts an optional `force` arg (the topbar refresh button passes `true`) to bypass the cache.
 
@@ -633,6 +688,16 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 ### Series Chronology
 
 Below the Shikimori panel, `AnimeDetailView` renders a Chronology list of the entire franchise sourced from `GET /api/animes/:id/franchise` (a public, unauthenticated endpoint, so the panel renders for logged-out users too). The main-process handler `shikimori:get-related` fetches the franchise graph (`{ nodes, links, current_id }`), then does a BFS from `current_id` through a whitelist of canonical relation edges (sequel/prequel/side_story/parent_story/alternative_version/summary/full_story/spin_off/alternative_setting) to drop unrelated bridges — e.g. the Isekai-Quartet `"other"` edges that otherwise pull Overlord/Konosuba/Re:Zero into a Youjo Senki franchise query. Reachable nodes are sorted chronologically by release `date`, then `lookupByMalIds` resolves each node's MAL ID to its smotret-anime entry (reusing the persistent `malIdMap` cache). Direct edges from `current_id` are walked to attach a `relation` label (source-side only, since Shikimori emits all current-node links as `source_id`); nodes more than one hop away simply omit the label. Each row shows title, kind badge (TV/movie/OVA/…), release year, relation label (when available), and — cross-referenced against `shikimoriUserRates` — a watch-status badge when the current user tracks that entry. Promos/CMs/music videos are filtered out. The current anime's node is highlighted with a "Current" badge and is non-clickable. Rows where `lookupByMalIds` returned no smotret-anime match display a "Not available" badge and are non-clickable. Clickable rows emit `open-anime` up through `App.vue`, which maintains a per-view navigation stack (`animeHistoryByView`) so Back returns to the previously-opened anime in the same tab rather than the list view. The panel is collapsed by default on every mount (header chevron toggles the body) so the page opens compact; users expand it on demand.
+
+### Auto-download
+
+`src/main/auto-downloader.ts` runs a forward-only worker that auto-queues newly-aired episodes for shows the user has explicitly subscribed to. Subscriptions live in `autoDownloadSubscriptions` and are managed per show from `AnimeDetailView` (an "Auto-download" pill next to "Add to Library", visible only when the show has a MAL ID, the user is logged into Shikimori, and `shikiDetails.status !== 'released'`).
+
+`runAutoDownloadTick(reason)` is invoked from four places: ~30s after `app.whenReady` (`'startup'`), every 15 minutes (`'timer'`), inside `refreshShikimoriRatesInBackground` after the broadcast fires (`'rates-refreshed'`), and via the `auto-dl:trigger` IPC ("Run now" button — `'manual'`). A 60s reentrancy lock + an in-flight flag coalesces overlapping triggers.
+
+Each tick walks every subscription, reads `episodes_aired` from the existing `shikimoriAnimeDetails[malId]` cache (skips the show silently if the cache is empty — the existing detail-prefetch worker will populate it), and walks integer episodes from `lastEnqueuedEpisodeInt + 1` to `episodes_aired`. For each candidate it dedupes against `downloadedEpisodes` (both `animeId:episodeInt:translationId` and legacy `animeId:episodeInt` keys), the live `downloadManager.getEpisodeGroups()` queue, and an in-tick set; resolves the translation by preferring the most-recent entry in `downloadedEpisodes` for the same `animeId` (falling back to the global `translationType` default with any author); probes the real height via `getEmbed`; and calls `downloadManager.enqueue(...)`. `lastEnqueuedEpisodeInt` is bumped after each successful enqueue or already-downloaded/already-queued detection (never on `no-translation`, so a not-yet-uploaded episode is retried next tick).
+
+Hard cap of `MAX_ENQUEUES_PER_TICK = 10` per worker run protects against pathological cases (e.g. a show that suddenly reports `episodes_aired = 200`). At subscribe time, `lastEnqueuedEpisodeInt` is stamped to the current `episodes_aired`, so newly-subscribed shows never backfill — they only catch episodes that air *after* the subscription click. After each tick, `auto-dl:tick-result` broadcasts `{ ranAt, reason, enqueued, skipped, errors, details }`; per-episode `auto-dl:enqueued` fires with `{ animeId, episodeInt, animeName }`. `CalendarView` shows a ↻ chip on subscribed entries (hydrated once per mount via `auto-dl:list-subscriptions`); the master toggle, "Run now" button, and subscription list live in `Settings > General > Auto-download`. Disabling the master toggle makes ticks no-ops without dropping subscriptions.
 
 ## Watch Together (Syncplay)
 
@@ -714,6 +779,7 @@ The feature is rolling out in stages so each one can be validated against real u
 - **Phase 2.5 — streamed playback matching (current).** For streamed playback, the renderer still loads `skipDetectorGetDetections(animeId)` as the gate, but it does **not** trust the downloaded episode's raw timestamps against a different CDN encode. Instead it calls `skip-detector:detect-stream(animeId, episodeInt, streamUrl)` once per opened stream. Main extracts short audio clips from the first and last 8 minutes of the remote stream via ffmpeg into temp WAVs, fingerprints them with fpcalc, and compares those clip hashes against the locally-derived OP/ED regions from each downloaded episode already in `skipDetections[animeId]`. A streamed OP/ED range is surfaced only if at least two locally-derived episode samples match; otherwise the player stays silent. `PlayerView` shows a small "Detecting OP/ED markers…" toast while this on-demand fingerprint pass runs, then reuses the same seek-bar bands and skip button as local playback. Renderer unmounts and episode/stream switches call `skip-detector:cancel-stream-detect` so superseded stream probes abort promptly instead of leaving ffmpeg/fpcalc running in the main process.
 - **Phase 3 — auto-trigger + offline-friendly UI updates (current).** Each completed download (or, when `autoMerge` is on, each completed merge) calls `scheduleAutoSkipAnalysis(animeId, animeName)`. Per-anime 5 s debounce coalesces bursts (queue runs of the same show), then a serial drain enqueues the show; the drain reuses the same single-flight runner as the manual `skip-detector:analyze-show` IPC, so a manual click and a background trigger never collide and a re-analysis after a *new* episode lands replaces the prior signature with one informed by the larger pool — important for shows with mid-season OP/ED swaps. On completion, main broadcasts `skip-detector:signature-updated`; both `AnimeDetailView` and `PlayerView` re-fetch their cached detections without polling. The `enableLocalSkipDetection` setting (default on, exposed in the Merging tab) lets users opt out of background CPU. A "Run detection on all downloaded shows" button in the same setting group calls `skip-detector:backfill-all` to enqueue every previously-downloaded show that lacks a cached signature, with a polled `skip-detector:queue-status` line that decrements as the queue drains — handles the cohort of shows downloaded before Phase 3 was wired in.
 - **Phase 4 — hygiene + fallback (current).** Cache GC: `file:delete-episode` and `downloaded-anime-delete` IPC handlers prune `skipFingerprintCache` entries for the affected `(animeId, episodeInt)` and the whole `animeId` respectively, and also drop the corresponding `skipDetections` entries so the player no longer surfaces OP/ED for files the user has removed. As a backstop, `sweepSkipFingerprintCache()` runs ~30 s after launch and reconciles every cached entry against disk: per anime, scan the folder, stat each file, drop any cache entry for that animeId whose `(fileSize, mtime)` doesn't match a live file (or whose anime is no longer in `downloadedAnime`). Catches external `rm`, in-place rename, file replaced, and the leftover `.mp4` cache entry after a successful merge unlinks the source. AniSkip cold-start fallback is deferred — no AniSkip module exists in the repo yet; once it does, demote it to seed `skipDetections[animeId]` for shows that haven't been locally analyzed.
+- **Phase 5 — chapter export (current).** Manual `download:inject-chapters` per anime in the Skip Detection panel (visible only when ≥3 merged MKVs are on disk). For each MKV, `formatChaptersMetadata(durationSec, op, ed)` in `skip-detector.ts` builds an `;FFMETADATA1` document with `TIMEBASE=1/1000` chapters (`Intro`, `OP`, `Episode`, `ED`, `Outro`); segments shorter than 2 s are dropped, inverted ranges (OP end past ED start) drop ED rather than overlap, and chapter titles escape `=;#\\\n`. The ffmpeg invocation passes the metadata file as an extra input and uses `-map_chapters <idx>` (idx = subtitle ? 2 : 1) so global metadata stays untouched. Output goes to `.<base>.chapters.tmp.mkv` and is renamed over the original; the `skipFingerprintCache` key is rewritten with the new `(size, mtime)` pointing at the unchanged audio fingerprint so subsequent re-analyses don't refingerprint. We deliberately do **not** auto-inject during the original merge — this stays out of the hot path so a bad detection never silently corrupts new files.
 
 ### Binary distribution
 

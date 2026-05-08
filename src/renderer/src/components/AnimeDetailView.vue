@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, sanitizeFilename } from '../utils'
+import CleanupModal from './CleanupModal.vue'
 
 const props = defineProps<{
   animeId: number
@@ -26,7 +27,14 @@ const selectedAuthor = ref('')
 const dataSource = ref<'api' | 'cache' | null>(null)
 const isOffline = computed(() => dataSource.value === 'cache')
 
+let loadGeneration = 0
+let disposed = false
+
 const isStarred = ref(false)
+const autoDlSubscription = ref<AutoDownloadSubscription | null>(null)
+const autoDlSaving = ref(false)
+const isDownloaded = ref(false)
+const cleanupModalOpen = ref(false)
 
 const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
 const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
@@ -65,6 +73,10 @@ const skipDetections = ref<ShowSkipDetections | null>(null)
 const skipAnalyzing = ref(false)
 const skipProgress = ref<SkipDetectorProgress | null>(null)
 const skipError = ref<string>('')
+const chapterInjecting = ref(false)
+const chapterInjectProgress = ref<ChapterInjectProgress | null>(null)
+const chapterInjectError = ref<string>('')
+const chapterInjectResult = ref<{ written: number; skipped: number; failed: number; total: number } | null>(null)
 
 const KIND_LABELS: Record<string, string> = {
   tv: 'TV',
@@ -475,6 +487,42 @@ async function cancelSkipAnalysis(): Promise<void> {
   }
 }
 
+const skipMkvEpisodeCount = computed<number>(() =>
+  skipEpisodeInputs.value.filter(e => e.filePath.toLowerCase().endsWith('.mkv')).length
+)
+
+const chapterInjectProgressLabel = computed<string>(() => {
+  const p = chapterInjectProgress.value
+  if (!p) return ''
+  if (p.phase === 'analyzing') return 'Analyzing fingerprints…'
+  if (p.phase === 'writing') {
+    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : ''
+    return `Writing chapters ${p.current + 1}/${p.total}${label}`
+  }
+  return 'Done'
+})
+
+async function injectChaptersToMkv(): Promise<void> {
+  if (chapterInjecting.value) return
+  if (skipMkvEpisodeCount.value < 3) {
+    chapterInjectError.value = 'Need at least 3 downloaded MKV episodes'
+    return
+  }
+  chapterInjectError.value = ''
+  chapterInjectResult.value = null
+  chapterInjecting.value = true
+  chapterInjectProgress.value = { animeId: props.animeId, phase: 'writing', current: 0, total: skipMkvEpisodeCount.value }
+  try {
+    const res = await window.api.injectChapters(props.animeId, skipEpisodeInputs.value)
+    chapterInjectResult.value = res
+  } catch (err) {
+    chapterInjectError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    chapterInjecting.value = false
+    chapterInjectProgress.value = null
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack)
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
@@ -485,51 +533,45 @@ onMounted(async () => {
   }
 
   window.api.libraryHas(props.animeId).then((v) => { isStarred.value = v }).catch(() => {})
+  window.api.autoDlGetSubscription(props.animeId).then((s) => { autoDlSubscription.value = s }).catch(() => {})
+  window.api.libraryIsDownloaded(props.animeId).then((v) => { isDownloaded.value = v }).catch(() => {})
+
+  const gen = ++loadGeneration
+  let renderedFromCache = false
+  try {
+    const cached = await window.api.getAnimeCache(props.animeId)
+    if (cached && !disposed && gen === loadGeneration) {
+      anime.value = cached.data
+      dataSource.value = 'cache'
+      loading.value = false
+      renderedFromCache = true
+      await loadPageEpisodes()
+      await checkFileStatus()
+      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault()
+    }
+  } catch (err) {
+    console.error('Failed to read anime cache:', err)
+  }
 
   try {
     const res = await window.api.getAnime(props.animeId)
+    if (disposed || gen !== loadGeneration) return
     anime.value = res.data
     dataSource.value = res.source
+    if (res.source === 'api') {
+      window.api.setAnimeCache(props.animeId, res.data).catch(() => {})
+    }
     await loadPageEpisodes()
+    if (disposed || gen !== loadGeneration) return
     await checkFileStatus()
-    // If the user hasn't explicitly picked a translation type on this anime
-    // before, and something is already downloaded, prefer the (type, author)
-    // of the downloaded file(s) over the global settings default.
-    if (!props.initialPrefs?.translationType) {
-      const counts = new Map<string, number>()
-      for (const metaArr of Object.values(episodeMeta.value)) {
-        for (const m of metaArr) {
-          const key = `${m.translationType}\u0000${m.author}`
-          counts.set(key, (counts.get(key) || 0) + 1)
-        }
-      }
-      if (counts.size > 0) {
-        let bestKey = ''
-        let bestCount = 0
-        for (const [key, count] of counts) {
-          if (count > bestCount) { bestKey = key; bestCount = count }
-        }
-        if (bestKey) {
-          const [bestType, bestAuthor] = bestKey.split('\u0000')
-          translationType.value = bestType
-          // Only override selectedAuthor if the downloaded author is still
-          // offered for this type — the translation may have been deactivated
-          // or removed upstream, which would leave the <select> blank.
-          if (bestAuthor && availableAuthors.value.some(([a]) => a === bestAuthor)) {
-            selectedAuthor.value = bestAuthor
-          }
-        }
-      }
+    if (disposed || gen !== loadGeneration) return
+    if (!renderedFromCache && !props.initialPrefs?.translationType) {
+      applyDownloadedTranslationDefault()
     }
   } catch (err) {
-    console.error('Failed to load anime detail view:', err)
+    if (!renderedFromCache) console.error('Failed to load anime detail view:', err)
   } finally {
-    loading.value = false
-  }
-
-  // If served from cache, try a background refresh
-  if (dataSource.value === 'cache') {
-    backgroundRefresh()
+    if (!disposed && gen === loadGeneration) loading.value = false
   }
 
   // Subscribe to download progress
@@ -623,6 +665,11 @@ onMounted(async () => {
     if (data.animeId !== props.animeId) return
     loadSkipDetections()
   })
+  window.api.onChapterInjectProgress((data) => {
+    if (data.animeId !== props.animeId) return
+    chapterInjectProgress.value = data
+    chapterInjecting.value = data.phase !== 'done'
+  })
   loadSkipDetections()
   hydrateSkipStatus()
 
@@ -634,6 +681,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  loadGeneration++
   window.removeEventListener('mouseup', onMouseBack)
   window.removeEventListener('watch-progress-updated', loadWatchProgress)
   window.api.offDownloadProgress()
@@ -645,6 +694,7 @@ onUnmounted(() => {
   window.api.offShikimoriSyncStatus()
   window.api.offSkipDetectorProgress()
   window.api.offSkipDetectorSignatureUpdated()
+  window.api.offChapterInjectProgress()
 })
 
 async function triggerSyncNow(): Promise<void> {
@@ -688,6 +738,28 @@ async function shikiSave(): Promise<void> {
     shikiError.value = String(err)
   } finally {
     shikiSaving.value = false
+  }
+}
+
+function applyDownloadedTranslationDefault(): void {
+  const counts = new Map<string, { type: string; author: string; count: number }>()
+  for (const metaArr of Object.values(episodeMeta.value)) {
+    for (const m of metaArr) {
+      const key = `${m.translationType}|${m.author}`
+      const existing = counts.get(key)
+      if (existing) existing.count++
+      else counts.set(key, { type: m.translationType, author: m.author, count: 1 })
+    }
+  }
+  if (counts.size === 0) return
+  let best: { type: string; author: string; count: number } | null = null
+  for (const entry of counts.values()) {
+    if (!best || entry.count > best.count) best = entry
+  }
+  if (!best) return
+  translationType.value = best.type
+  if (best.author && availableAuthors.value.some(([a]) => a === best!.author)) {
+    selectedAuthor.value = best.author
   }
 }
 
@@ -943,6 +1015,60 @@ async function toggleStar(): Promise<void> {
   isStarred.value = await window.api.libraryToggle(JSON.parse(JSON.stringify(stripped)))
 }
 
+const isShowFinished = computed<boolean>(() => {
+  const status = shikiDetails.value?.status
+  return status === 'released'
+})
+
+const canAutoDl = computed<boolean>(() => {
+  if (!anime.value?.myAnimeListId) return false
+  if (!shikiUser.value) return false
+  if (isShowFinished.value) return false
+  return true
+})
+
+const autoDlTooltip = computed<string>(() => {
+  if (!anime.value?.myAnimeListId) return 'Auto-download requires a Shikimori entry'
+  if (!shikiUser.value) return 'Connect to Shikimori to enable auto-download'
+  if (isShowFinished.value) return 'Show is fully aired — no new episodes to auto-download'
+  if (autoDlSubscription.value) {
+    const next = autoDlSubscription.value.lastEnqueuedEpisodeInt + 1
+    return `Will auto-download new episodes from Ep ${next} onward`
+  }
+  return 'Auto-download new episodes as they air'
+})
+
+async function toggleAutoDl(): Promise<void> {
+  if (!anime.value || autoDlSaving.value) return
+  if (!canAutoDl.value && !autoDlSubscription.value) return
+  autoDlSaving.value = true
+  try {
+    const enable = !autoDlSubscription.value
+    const result = await window.api.autoDlSetSubscription(
+      anime.value.id,
+      enable,
+      enable && anime.value.myAnimeListId
+        ? { malId: anime.value.myAnimeListId, animeName: getAnimeName() }
+        : undefined
+    )
+    if (enable && !result) {
+      alert("Couldn't read this show's airing data from Shikimori. Please try again in a moment.")
+      return
+    }
+    autoDlSubscription.value = result
+  } catch (err) {
+    console.error('Failed to toggle auto-download:', err)
+  } finally {
+    autoDlSaving.value = false
+  }
+}
+
+async function onCleanupDeleted(): Promise<void> {
+  isDownloaded.value = false
+  episodeMeta.value = {}
+  await checkFileStatus()
+}
+
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
 const downloading = ref(false)
@@ -1098,19 +1224,6 @@ watch([translationType, selectedAuthor], () => {
   emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value)
   probeSelectedQualities()
 })
-
-async function backgroundRefresh(): Promise<void> {
-  try {
-    const res = await window.api.getAnime(props.animeId)
-    if (res.source === 'api') {
-      anime.value = res.data
-      dataSource.value = 'api'
-      await loadPageEpisodes()
-    }
-  } catch {
-    // Stay on cached data
-  }
-}
 
 const posterSrc = ref('')
 const posterFallbackAttempted = ref(false)
@@ -1291,6 +1404,25 @@ function typeChip(type: string): { short: string; color: string } {
               <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
             </svg>
             {{ isStarred ? 'In Library' : 'Add to Library' }}
+          </button>
+          <button
+            v-if="canAutoDl || autoDlSubscription"
+            class="library-btn auto-dl-btn"
+            :class="{ active: !!autoDlSubscription }"
+            :disabled="autoDlSaving || (!canAutoDl && !autoDlSubscription)"
+            :title="autoDlTooltip"
+            @click="toggleAutoDl"
+          >
+            <svg viewBox="0 0 24 24" :fill="autoDlSubscription ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75" />
+            </svg>
+            {{ autoDlSubscription ? 'Auto-download on' : 'Auto-download' }}
+          </button>
+          <button v-if="isDownloaded" class="cleanup-btn" @click="cleanupModalOpen = true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            Cleanup files…
           </button>
         </div>
         <div class="anime-info">
@@ -1513,8 +1645,27 @@ function typeChip(type: string): { short: string; color: string } {
                 @click="cancelSkipAnalysis"
               >Cancel</button>
               <span v-if="skipAnalyzing" class="skip-progress-text">{{ skipProgressLabel }}</span>
+              <button
+                v-if="skipMkvEpisodeCount >= 3"
+                class="skip-button"
+                :disabled="chapterInjecting || skipAnalyzing"
+                @click="injectChaptersToMkv"
+              >
+                {{ chapterInjecting ? 'Saving chapters…' : 'Save chapters to MKV' }}
+              </button>
+              <span v-if="chapterInjecting" class="skip-progress-text">{{ chapterInjectProgressLabel }}</span>
             </div>
             <div v-if="skipError" class="skip-error">{{ skipError }}</div>
+            <div v-if="chapterInjectError" class="skip-error">{{ chapterInjectError }}</div>
+            <div v-if="chapterInjectResult" class="skip-results-meta">
+              Wrote chapters to {{ chapterInjectResult.written }}/{{ chapterInjectResult.total }} episodes
+              <template v-if="chapterInjectResult.skipped">
+                · {{ chapterInjectResult.skipped }} skipped (no detection)
+              </template>
+              <template v-if="chapterInjectResult.failed">
+                · {{ chapterInjectResult.failed }} failed
+              </template>
+            </div>
             <div v-if="skipDetections" class="skip-results">
               <div class="skip-results-meta">
                 Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} ·
@@ -1739,6 +1890,13 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
       </div>
     </div>
+    <CleanupModal
+      v-if="cleanupModalOpen && anime"
+      :anime-id="props.animeId"
+      :anime-name="getAnimeName()"
+      @closed="cleanupModalOpen = false"
+      @deleted="onCleanupDeleted"
+    />
   </main>
 </template>
 
@@ -1850,6 +2008,30 @@ function typeChip(type: string): { short: string; color: string } {
 .library-btn.active {
   color: #fbbf24;
   border-color: #fbbf24;
+}
+
+.cleanup-btn {
+  width: 200px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  color: #a0a0c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.cleanup-btn:hover {
+  background: #16213e;
+  border-color: #5a3a4e;
+  color: #f0a070;
 }
 
 .anime-info {

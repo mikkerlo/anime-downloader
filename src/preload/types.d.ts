@@ -16,6 +16,8 @@ interface Api {
   validateToken: () => Promise<{ valid: boolean; error?: string }>
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
+  getAnimeCache: (id: number) => Promise<{ data: AnimeDetail; cachedAt: number } | null>
+  setAnimeCache: (id: number, data: AnimeDetail) => Promise<boolean>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
   probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
   getCachedPoster: (animeId: number) => Promise<string | null>
@@ -33,6 +35,13 @@ interface Api {
   libraryIsDownloaded: (id: number) => Promise<boolean>
   downloadedAnimeAdd: (anime: AnimeSearchResult) => Promise<void>
   downloadedAnimeDelete: (animeId: number, animeName: string) => Promise<void>
+  cleanupGetSize: (animeId: number, animeName: string) => Promise<{ bytes: number; files: number }>
+  cleanupGetActiveDownloads: (animeName: string) => Promise<{ active: number }>
+  cleanupExecute: (animeId: number, animeName: string) => Promise<void>
+  cleanupGetSnoozed: () => Promise<Record<string, { animeName: string }>>
+  cleanupSetSnoozed: (animeId: number, snoozed: boolean) => Promise<void>
+  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => void
+  offCleanupPrompt: () => void
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
 
@@ -115,6 +124,13 @@ interface Api {
   onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => void
   offSkipDetectorSignatureUpdated: () => void
 
+  injectChapters: (
+    animeId: number,
+    episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
+  ) => Promise<{ written: number; skipped: number; failed: number; total: number }>
+  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => void
+  offChapterInjectProgress: () => void
+
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
@@ -133,7 +149,7 @@ interface Api {
   >
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
-  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true; generation: number } | { error: string }>
+  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>
   playerCleanupRemux: () => Promise<void>
   onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => void
   offPlayerStreamSubtitles: () => void
@@ -209,6 +225,27 @@ interface Api {
   onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
   offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
 
+  // Auto-downloader
+  autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>
+  autoDlSetSubscription: (
+    animeId: number,
+    enabled: boolean,
+    meta?: { malId: number; animeName: string }
+  ) => Promise<AutoDownloadSubscription | null>
+  autoDlListSubscriptions: () => Promise<AutoDownloadSubscription[]>
+  autoDlTrigger: () => Promise<AutoDlTickResult>
+  autoDlGetStatus: () => Promise<{
+    lastResult: AutoDlTickResult | null
+    locked: boolean
+    enabled: boolean
+  }>
+  autoDlGetEnabled: () => Promise<boolean>
+  autoDlSetEnabled: (enabled: boolean) => Promise<boolean>
+  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => void
+  offAutoDlTickResult: () => void
+  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => void
+  offAutoDlEnqueued: () => void
+
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
@@ -216,6 +253,41 @@ interface Api {
   updateInstall: () => void
   onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
   offUpdateStatus: () => void
+}
+
+interface AutoDownloadSubscription {
+  animeId: number
+  malId: number
+  animeName: string
+  subscribedAt: number
+  lastEnqueuedEpisodeInt: number
+  lastCheckedAt: number
+}
+
+interface AutoDlOutcome {
+  animeId: number
+  animeName: string
+  episodeInt: string
+  outcome:
+    | 'enqueued'
+    | 'no-translation'
+    | 'no-episode'
+    | 'already-downloaded'
+    | 'already-queued'
+    | 'embed-failed'
+    | 'no-episodes-aired'
+    | 'cap-reached'
+    | 'error'
+  message?: string
+}
+
+interface AutoDlTickResult {
+  ranAt: number
+  reason: 'startup' | 'timer' | 'rates-refreshed' | 'manual'
+  enqueued: number
+  skipped: number
+  errors: number
+  details: AutoDlOutcome[]
 }
 
 interface SyncplayConnectConfig {
@@ -502,6 +574,14 @@ interface ShowSkipDetections {
 interface SkipDetectorProgress {
   animeId: number
   phase: 'fingerprinting' | 'comparing' | 'done'
+  current: number
+  total: number
+  episodeLabel?: string
+}
+
+interface ChapterInjectProgress {
+  animeId: number
+  phase: 'analyzing' | 'writing' | 'done'
   current: number
   total: number
   episodeLabel?: string

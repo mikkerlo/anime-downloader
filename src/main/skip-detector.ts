@@ -94,6 +94,95 @@ export function fingerprintCacheKey(animeId: number, episodeInt: string, fileSiz
   return `${animeId}:${episodeInt}:${fileSize}:${Math.floor(fileMtimeMs)}`
 }
 
+const MIN_CHAPTER_SECONDS = 2
+
+function escapeFfmetadata(value: string): string {
+  return value.replace(/[=;#\\\n]/g, (m) => (m === '\n' ? '\\n' : `\\${m}`))
+}
+
+interface ChapterSegment {
+  startMs: number
+  endMs: number
+  title: string
+}
+
+// Build an FFMETADATA1 string defining Intro/OP/Episode/ED/Outro chapters for a
+// single episode. Returns null when there's nothing useful to write (no OP/ED,
+// or every candidate segment collapses below MIN_CHAPTER_SECONDS).
+//
+// Inverted ranges (op.endSec > ed.startSec) drop ED entirely rather than
+// emitting overlapping chapters that some external players parse incorrectly.
+export function formatChaptersMetadata(
+  durationSec: number,
+  op: SkipRange | null,
+  ed: SkipRange | null
+): string | null {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return null
+
+  let opRange = op && op.endSec > op.startSec ? { startSec: op.startSec, endSec: op.endSec } : null
+  let edRange = ed && ed.endSec > ed.startSec ? { startSec: ed.startSec, endSec: ed.endSec } : null
+
+  if (opRange && edRange && opRange.endSec > edRange.startSec) {
+    edRange = null
+  }
+  if (edRange) {
+    edRange.startSec = Math.max(0, Math.min(edRange.startSec, durationSec))
+    edRange.endSec = Math.max(edRange.startSec, Math.min(edRange.endSec, durationSec))
+    if (edRange.endSec - edRange.startSec < MIN_CHAPTER_SECONDS) edRange = null
+  }
+  if (opRange) {
+    opRange.startSec = Math.max(0, Math.min(opRange.startSec, durationSec))
+    opRange.endSec = Math.max(opRange.startSec, Math.min(opRange.endSec, durationSec))
+    if (opRange.endSec - opRange.startSec < MIN_CHAPTER_SECONDS) opRange = null
+  }
+
+  if (!opRange && !edRange) return null
+
+  const segments: ChapterSegment[] = []
+  const push = (startSec: number, endSec: number, title: string): void => {
+    if (endSec - startSec < MIN_CHAPTER_SECONDS) return
+    segments.push({
+      startMs: Math.round(startSec * 1000),
+      endMs: Math.round(endSec * 1000),
+      title
+    })
+  }
+
+  const opStart = opRange?.startSec ?? null
+  const opEnd = opRange?.endSec ?? null
+  const edStart = edRange?.startSec ?? null
+  const edEnd = edRange?.endSec ?? null
+
+  if (opStart !== null) push(0, opStart, 'Intro')
+  if (opStart !== null && opEnd !== null) push(opStart, opEnd, 'OP')
+
+  const epStart = opEnd ?? 0
+  const epEnd = edStart ?? durationSec
+  push(epStart, epEnd, 'Episode')
+
+  if (edStart !== null && edEnd !== null) push(edStart, edEnd, 'ED')
+  if (edEnd !== null) push(edEnd, durationSec, 'Outro')
+
+  if (segments.length === 0) return null
+
+  // Ensure adjacent chapters touch (no gaps from rounding).
+  for (let i = 1; i < segments.length; i++) {
+    if (segments[i].startMs < segments[i - 1].endMs) {
+      segments[i].startMs = segments[i - 1].endMs
+    }
+  }
+
+  const lines: string[] = [';FFMETADATA1']
+  for (const seg of segments) {
+    lines.push('[CHAPTER]')
+    lines.push('TIMEBASE=1/1000')
+    lines.push(`START=${seg.startMs}`)
+    lines.push(`END=${seg.endMs}`)
+    lines.push(`title=${escapeFfmetadata(seg.title)}`)
+  }
+  return lines.join('\n') + '\n'
+}
+
 interface LoadedEpisode extends EpisodeInput {
   fingerprint: Fingerprint
 }

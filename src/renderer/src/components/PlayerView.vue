@@ -722,11 +722,13 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
   transcodeSpeed.value = null
 
   let initialSeek = 0
+  let resumeTarget = 0
   try {
     const epInt = currentEpisodeInt.value
     if (props.animeId && epInt) {
       const saved = await window.api.watchProgressGet(props.animeId, epInt)
       if (saved && !saved.watched && saved.position > 5 && saved.duration > 0 && saved.position / saved.duration < 0.95) {
+        resumeTarget = saved.position
         initialSeek = Math.max(0, saved.position - 1)
       }
     }
@@ -737,7 +739,7 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
     const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType)
     console.log(`[player] MSE negotiate mime="${streamResult.mimeType}" supported=${mseOk}`)
     if (mseOk) {
-      startMseSession(streamResult.sessionId, streamResult.generation, streamResult.duration, streamResult.mimeType, streamResult.initialSeek)
+      startMseSession(streamResult.sessionId, streamResult.generation, streamResult.duration, streamResult.mimeType, resumeTarget, streamResult.initialSeek)
       mkvBuffering.value = true
       return { ok: true }
     }
@@ -766,7 +768,7 @@ async function prepareMkvForPlayback(filePath: string): Promise<{ ok: true } | {
       if (choice === 'always-transcode') {
         try { await window.api.setSetting('hevcTranscodeOnPlay', 'always') } catch { /* ignore */ }
       }
-      return await prepareHevcTranscode(filePath, initialSeek)
+      return await prepareHevcTranscode(filePath, initialSeek, resumeTarget)
     }
   } else {
     console.warn('[player] MSE stream open failed, falling back to legacy remux:', streamResult.error)
@@ -803,7 +805,7 @@ function resolveHevcPrompt(choice: HevcPromptChoice): void {
   if (fn) fn(choice)
 }
 
-async function prepareHevcTranscode(filePath: string, initialSeek: number): Promise<{ ok: true } | { ok: false; error: string }> {
+async function prepareHevcTranscode(filePath: string, initialSeek: number, resumeTarget: number): Promise<{ ok: true } | { ok: false; error: string }> {
   transcodingHevc.value = true
   const r = await window.api.playerRemuxMkvStreamTranscode(filePath, initialSeek)
   if ('error' in r) {
@@ -818,7 +820,7 @@ async function prepareHevcTranscode(filePath: string, initialSeek: number): Prom
     await window.api.playerCleanupRemux()
     return { ok: false, error: `Browser rejected transcoded mime: ${r.mimeType}` }
   }
-  startMseSession(r.sessionId, r.generation, r.duration, r.mimeType, r.initialSeek)
+  startMseSession(r.sessionId, r.generation, r.duration, r.mimeType, resumeTarget, r.initialSeek)
   mkvBuffering.value = true
   return { ok: true }
 }
@@ -830,21 +832,26 @@ async function cancelHevcTranscode(): Promise<void> {
   emit('close')
 }
 
-function startMseSession(sessionId: string, generation: number, duration: number, mimeType: string, initialSeek: number): void {
+function startMseSession(sessionId: string, generation: number, duration: number, mimeType: string, resumeTarget: number, keyframeTime: number): void {
   streamSessionId.value = sessionId
   currentStreamGen = generation
-  mseInitialSeek = initialSeek
+  mseInitialSeek = resumeTarget
   const ms = new MediaSource()
   mediaSource = ms
   mseSrcUrl.value = URL.createObjectURL(ms)
   ms.addEventListener('sourceopen', () => {
     try {
-      console.log('[player] sourceopen, adding SourceBuffer:', mimeType, 'initialSeek=', initialSeek)
+      console.log('[player] sourceopen, adding SourceBuffer:', mimeType, 'resumeTarget=', resumeTarget, 'keyframeTime=', keyframeTime)
       const sb = ms.addSourceBuffer(mimeType)
       sourceBuffer = sb
       try { ms.duration = duration } catch (e) { console.warn('[player] set duration failed:', e) }
-      if (initialSeek > 0) {
-        try { sb.timestampOffset = initialSeek } catch (e) { console.warn('[player] initial timestampOffset failed:', e) }
+      // ffmpeg's fmp4 muxer normalizes its output PTS to start at 0 regardless
+      // of `-copyts`, so we have to add the keyframe-time-from-file as a
+      // SourceBuffer offset to map fragments back onto the absolute timeline.
+      // Without this, video.currentTime = target plays the wrong content
+      // because the buffered range is shifted by (target - keyframeTime).
+      if (keyframeTime > 0) {
+        try { sb.timestampOffset = keyframeTime } catch (e) { console.warn('[player] initial timestampOffset failed:', e) }
       }
       sb.addEventListener('updateend', onSourceBufferUpdateEnd)
       sb.addEventListener('error', (e) => console.error('[player] SourceBuffer error event:', e))
@@ -1033,8 +1040,14 @@ async function handleUnbufferedSeek(): Promise<void> {
       console.error('[player] video element errored during seek:', v.error.code, v.error.message)
       return
     }
+    // ffmpeg's fmp4 muxer always normalizes output PTS to start at 0 (the
+    // `tfdt.baseMediaDecodeTime` is written relative to track start, not
+    // absolute file PTS, even with -copyts). So map the new run's PTS=0 to
+    // the actual keyframe time we asked ffmpeg to start at — main probed it
+    // with ffprobe so the buffered range lines up with the absolute file
+    // timeline. video.currentTime keeps the user's exact target.
     try {
-      sb.timestampOffset = seekAt
+      sb.timestampOffset = result.keyframeTime
     } catch (e) {
       console.warn('[player] timestampOffset set failed:', e)
     }
@@ -3346,6 +3359,26 @@ const bufferedProgress = computed(() => {
   opacity: 0;
   cursor: pointer;
   -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Zero-width thumb keeps the input's click-to-value mapping linear so it
+   matches the seek tooltip's `x / width * duration` math. With the browser's
+   default ~16px thumb, the input clamps the value range to the thumb's
+   reachable center positions — at the right edge of a 1000px bar that's a
+   ~10s offset for a 1420s episode, which manifests as "tooltip says 22:18 but
+   click lands at 22:25". */
+.seek-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+  border: 0;
+}
+.seek-input::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
 }
 
 .seek-container:hover .seek-track {

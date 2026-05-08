@@ -33,6 +33,10 @@ const api = {
   validateToken: () => ipcRenderer.invoke('validate-token'),
   searchAnime: (query: string) => ipcRenderer.invoke('search-anime', query),
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
+  getAnimeCache: (id: number) =>
+    ipcRenderer.invoke('get-anime-cache', id) as Promise<{ data: AnimeDetail; cachedAt: number } | null>,
+  setAnimeCache: (id: number, data: AnimeDetail) =>
+    ipcRenderer.invoke('set-anime-cache', id, data) as Promise<boolean>,
   getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),
   probeEmbedQuality: (translationId: number, animeId?: number) => ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
   probeFullScanNeeded: (animeId: number, episodeCount: number) =>
@@ -53,6 +57,22 @@ const api = {
   libraryIsDownloaded: (id: number) => ipcRenderer.invoke('library-is-downloaded', id),
   downloadedAnimeAdd: (anime: unknown) => ipcRenderer.invoke('downloaded-anime-add', anime),
   downloadedAnimeDelete: (animeId: number, animeName: string) => ipcRenderer.invoke('downloaded-anime-delete', animeId, animeName),
+  cleanupGetSize: (animeId: number, animeName: string) =>
+    ipcRenderer.invoke('cleanup:get-size', animeId, animeName) as Promise<{ bytes: number; files: number }>,
+  cleanupGetActiveDownloads: (animeName: string) =>
+    ipcRenderer.invoke('cleanup:get-active-downloads', animeName) as Promise<{ active: number }>,
+  cleanupExecute: (animeId: number, animeName: string) =>
+    ipcRenderer.invoke('cleanup:execute', animeId, animeName) as Promise<void>,
+  cleanupGetSnoozed: () =>
+    ipcRenderer.invoke('cleanup:get-snoozed') as Promise<Record<string, { animeName: string }>>,
+  cleanupSetSnoozed: (animeId: number, snoozed: boolean) =>
+    ipcRenderer.invoke('cleanup:set-snoozed', animeId, snoozed) as Promise<void>,
+  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => {
+    ipcRenderer.on('cleanup:prompt', (_event, data) => callback(data))
+  },
+  offCleanupPrompt: () => {
+    ipcRenderer.removeAllListeners('cleanup:prompt')
+  },
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
 
@@ -197,6 +217,15 @@ const api = {
     ipcRenderer.removeAllListeners('skip-detector:signature-updated')
   },
 
+  injectChapters: (animeId: number, episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]) =>
+    ipcRenderer.invoke('download:inject-chapters', animeId, episodes) as Promise<{ written: number; skipped: number; failed: number; total: number }>,
+  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => {
+    ipcRenderer.on('chapter-inject:progress', (_event, data) => callback(data))
+  },
+  offChapterInjectProgress: () => {
+    ipcRenderer.removeAllListeners('chapter-inject:progress')
+  },
+
   shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 
   // Player
@@ -225,7 +254,7 @@ const api = {
   playerStreamAck: (sessionId: string, bytes: number) =>
     ipcRenderer.invoke('player:stream-ack', sessionId, bytes) as Promise<void>,
   playerStreamSeek: (sessionId: string, seekSeconds: number) =>
-    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number } | { error: string }>,
+    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>,
   playerCleanupRemux: () =>
     ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
   onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => {
@@ -384,6 +413,36 @@ const api = {
     syncplayOn('syncplay:trace', callback),
   offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
     syncplayOff('syncplay:trace', callback),
+
+  // Auto-downloader
+  autoDlGetSubscription: (animeId: number) =>
+    ipcRenderer.invoke('auto-dl:get-subscription', animeId) as Promise<AutoDownloadSubscription | null>,
+  autoDlSetSubscription: (animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) =>
+    ipcRenderer.invoke('auto-dl:set-subscription', animeId, enabled, meta) as Promise<AutoDownloadSubscription | null>,
+  autoDlListSubscriptions: () =>
+    ipcRenderer.invoke('auto-dl:list-subscriptions') as Promise<AutoDownloadSubscription[]>,
+  autoDlTrigger: () => ipcRenderer.invoke('auto-dl:trigger') as Promise<AutoDlTickResult>,
+  autoDlGetStatus: () =>
+    ipcRenderer.invoke('auto-dl:get-status') as Promise<{
+      lastResult: AutoDlTickResult | null
+      locked: boolean
+      enabled: boolean
+    }>,
+  autoDlGetEnabled: () => ipcRenderer.invoke('auto-dl:get-enabled') as Promise<boolean>,
+  autoDlSetEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke('auto-dl:set-enabled', enabled) as Promise<boolean>,
+  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => {
+    ipcRenderer.on('auto-dl:tick-result', (_event, result) => callback(result))
+  },
+  offAutoDlTickResult: () => {
+    ipcRenderer.removeAllListeners('auto-dl:tick-result')
+  },
+  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => {
+    ipcRenderer.on('auto-dl:enqueued', (_event, data) => callback(data))
+  },
+  offAutoDlEnqueued: () => {
+    ipcRenderer.removeAllListeners('auto-dl:enqueued')
+  },
 
   // Updates
   appVersion: () => ipcRenderer.invoke('app:version'),

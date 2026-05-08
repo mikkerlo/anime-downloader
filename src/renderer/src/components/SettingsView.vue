@@ -175,6 +175,7 @@ const syncplayTestError = ref('')
 const playerMode = ref<'system' | 'builtin'>('system')
 const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
 const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask')
+const prefetchNextEpisode = ref<'off' | 'open' | 'time-5min' | 'progress-50'>('progress-50')
 const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
 
 // GPU benchmark state
@@ -715,6 +716,7 @@ onMounted(async () => {
   playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
   anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
   hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
+  prefetchNextEpisode.value = ((await window.api.getSetting('prefetchNextEpisode')) as string as typeof prefetchNextEpisode.value) || 'progress-50'
 
   // Auto-download
   autoDownloadEnabled.value = await window.api.autoDlGetEnabled()
@@ -926,6 +928,11 @@ watch(videoCodec, (val, oldVal) => {
 watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
 watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
 watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
+watch(prefetchNextEpisode, (val) => {
+  if (!loaded.value) return
+  autoSave('prefetchNextEpisode', val)
+  window.dispatchEvent(new CustomEvent('prefetch-setting-changed', { detail: val }))
+})
 watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatchedDays', Number(val) || 0) })
 
 function saveSyncplaySettings(): void {
@@ -1566,6 +1573,19 @@ async function testSyncplayConnection(): Promise<void> {
           <div v-else class="status-line warn" style="margin-top: 0.4rem">
             HEVC MSE decoder: not available — this setting controls the fallback for local MKV playback.
           </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Pre-fetch next episode</label>
+          <p class="setting-hint">
+            Starts downloading the next episode in the background while you're watching the current one. Uses your active translation and quality. Subscribed shows are skipped — the auto-downloader handles them.
+          </p>
+          <select v-model="prefetchNextEpisode" class="setting-input setting-select">
+            <option value="off">Off</option>
+            <option value="open">On player open</option>
+            <option value="time-5min">After 5 minutes of playback</option>
+            <option value="progress-50">At 50% playback</option>
+          </select>
         </div>
 
         <div class="setting-group">

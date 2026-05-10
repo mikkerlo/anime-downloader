@@ -70,6 +70,7 @@ export interface DetectStreamOptions {
   fpcalcPath: string
   ffmpegPath: string
   ffprobePath?: string
+  userAgent?: string
   signal?: AbortSignal
   loadCachedFingerprint: (key: string) => CachedFingerprint | undefined
   saveCachedFingerprint: (key: string, value: CachedFingerprint) => void
@@ -590,14 +591,20 @@ async function fingerprintStreamClip(
   mode: 'start' | 'end',
   clipLengthSec: number,
   streamDurationSec: number | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  userAgent?: string
 ): Promise<{ fingerprint: Fingerprint; offsetSec: number }> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-dl-skip-stream-'))
   const outputPath = path.join(tmpDir, `${mode}.wav`)
   try {
     const args = ['-y', '-hide_banner', '-loglevel', 'error', '-nostdin']
+    if (userAgent) {
+      args.push('-user_agent', userAgent)
+    }
     if (mode === 'end') {
       if (!streamDurationSec) throw new Error('stream duration required for end-clip detection')
+      // NOTE: -sseof requires the server to expose Content-Length / seekable range.
+      // This works for direct MP4 CDN URLs but would fail silently for HLS/m3u8 sources.
       args.push('-sseof', `-${clipLengthSec}`)
     }
     args.push(
@@ -700,7 +707,7 @@ export async function detectStream(
 
   if (opCandidates) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal)
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal, opts.userAgent)
       opFingerprint = clip.fingerprint
       op = await detectStreamRange(animeId, 'op', clip, detections, opts)
     } catch {
@@ -710,12 +717,14 @@ export async function detectStream(
 
   if (edCandidates && streamDurationSec) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal)
+      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal, opts.userAgent)
       edFingerprint = clip.fingerprint
       ed = await detectStreamRange(animeId, 'ed', clip, detections, opts)
     } catch {
       ed = null
     }
+  } else if (edCandidates && !streamDurationSec) {
+    console.warn('[skip-detector] ED detection skipped: stream duration unavailable (ffprobe missing or probe failed)')
   }
 
   if (!op && !ed) return null

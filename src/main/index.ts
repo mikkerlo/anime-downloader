@@ -1831,16 +1831,19 @@ function runStreamSkipDetectionInternal(
 
   cancelStreamSkipDetection(senderId)
   const controller = new AbortController()
-  const fingerprintCache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+  const fingerprintCacheSnapshot = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
   const runPromise = detectStream(animeId, episodeInt, streamUrl, detections, {
     fpcalcPath,
     ffmpegPath,
     ffprobePath: ffprobePath || undefined,
+    userAgent: 'smotret-anime-dl',
     signal: controller.signal,
-    loadCachedFingerprint: (key) => fingerprintCache[key],
+    loadCachedFingerprint: (key) => fingerprintCacheSnapshot[key],
     saveCachedFingerprint: (key, value) => {
-      fingerprintCache[key] = value
-      store.set('skipFingerprintCache', fingerprintCache)
+      fingerprintCacheSnapshot[key] = value
+      const fresh = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+      fresh[key] = value
+      store.set('skipFingerprintCache', fresh)
     }
   })
 
@@ -4525,6 +4528,10 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('destroyed', () => {
+    cancelStreamSkipDetection(mainWindow.webContents.id)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

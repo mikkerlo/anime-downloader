@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import SubtitlesOctopus from 'libass-wasm/dist/js/subtitles-octopus.js'
+import { formatSpeed } from '../utils'
 
 const props = defineProps<{
   filePath: string
@@ -278,8 +279,12 @@ async function refreshStreamSkipDetection(): Promise<void> {
 // Reset the per-range "already skipped" guard when the episode changes so the
 // button appears for the new episode's OP/ED. Detections themselves come from
 // the same per-show payload, so they don't need a refetch on episode flip.
-watch(currentEpisodeInt, () => {
+watch(currentEpisodeInt, (epInt) => {
   resetSkipUiState()
+  if (prefetchInFlight.value && prefetchInFlight.value.episodeInt === epInt) {
+    prefetchInFlight.value = null
+    stopPrefetchPolling()
+  }
 })
 
 const streamSkipSignatureVersion = computed(() => {
@@ -317,6 +322,68 @@ let episodeOpenedAt = Date.now()
 let pendingPrevEpisodeInt = ''
 const resumeToast = ref('')
 let resumeToastTimer: ReturnType<typeof setTimeout> | null = null
+
+// Pre-fetch next episode (issue #78)
+type PrefetchSetting = 'off' | 'open' | 'time-5min' | 'progress-50'
+const prefetchSetting = ref<PrefetchSetting>('progress-50')
+const prefetchFiredKeys = new Set<string>()
+const prefetchInProgressKeys = new Set<string>()
+const prefetchInFlight = ref<{ animeId: number; episodeInt: string; translationId: number; progress: number; speed: number } | null>(null)
+const prefetchToast = ref('')
+let prefetchToastTimer: ReturnType<typeof setTimeout> | null = null
+let prefetchPollTimer: ReturnType<typeof setInterval> | null = null
+// Pause the in-flight pre-fetch during seek bursts so its disk writes don't
+// fight ffmpeg's source reads on the same drive (regression observed when
+// prefetch landed: seeks stuttered until the download completed).
+let prefetchPausedForSeek = false
+let prefetchSeekResumeTimer: ReturnType<typeof setTimeout> | null = null
+const PREFETCH_SEEK_RESUME_DEBOUNCE_MS = 1500
+
+function showPrefetchToast(text: string, ms = 2500): void {
+  prefetchToast.value = text
+  if (prefetchToastTimer) clearTimeout(prefetchToastTimer)
+  prefetchToastTimer = setTimeout(() => { prefetchToast.value = '' }, ms)
+}
+
+function pausePrefetchForSeek(): void {
+  const target = prefetchInFlight.value
+  if (!target) return
+  // Only pause when the seek will trigger a disk-heavy ffmpeg respawn —
+  // i.e. MSE playback (sourceBuffer set) AND target outside the buffered
+  // range. In-buffer seeks are pure SourceBuffer scrubs with no disk read,
+  // and non-MSE playback (direct URL) doesn't read from the same disk
+  // we're writing to.
+  const v = videoRef.value
+  const sb = sourceBuffer
+  if (!v || !sb) return
+  if (sb.buffered.length === 0) return
+  const t = v.currentTime
+  for (let i = 0; i < sb.buffered.length; i++) {
+    if (t >= sb.buffered.start(i) - 0.25 && t <= sb.buffered.end(i) + 0.25) return
+  }
+  if (prefetchSeekResumeTimer) {
+    clearTimeout(prefetchSeekResumeTimer)
+    prefetchSeekResumeTimer = null
+  }
+  if (!prefetchPausedForSeek) {
+    void window.api.downloadPause(`video-${target.translationId}`).catch(() => { /* ignore */ })
+    prefetchPausedForSeek = true
+  }
+}
+
+function scheduleResumePrefetchAfterSeek(): void {
+  if (!prefetchPausedForSeek) return
+  if (prefetchSeekResumeTimer) clearTimeout(prefetchSeekResumeTimer)
+  prefetchSeekResumeTimer = setTimeout(() => {
+    prefetchSeekResumeTimer = null
+    if (!prefetchPausedForSeek) return
+    const target = prefetchInFlight.value
+    if (target) {
+      void window.api.downloadResume(`video-${target.translationId}`).catch(() => { /* ignore */ })
+    }
+    prefetchPausedForSeek = false
+  }, PREFETCH_SEEK_RESUME_DEBOUNCE_MS)
+}
 
 // Syncplay (Watch Together) state
 const syncplayStatus = ref<SyncplayStatus>({ state: 'idle' })
@@ -519,6 +586,9 @@ function trackProgressDelta(now: number): void {
     if (delta > 0 && delta < 2) cumulativePlayTime += delta
   }
   lastTimeUpdateAt = now
+  if (prefetchSetting.value === 'time-5min' && cumulativePlayTime >= 300) {
+    tryPrefetch()
+  }
 }
 
 async function saveProgress(force = false): Promise<void> {
@@ -622,6 +692,159 @@ function resetEpisodeTracking(): void {
   lastSaveAt = 0
   watchedReported = false
   episodeOpenedAt = Date.now()
+}
+
+async function tryPrefetch(): Promise<void> {
+  if (prefetchSetting.value === 'off') return
+  if (!canNext.value) return
+  const nextEp = props.allEpisodes[activeEpisodeIndex.value + 1]
+  if (!nextEp) return
+  const key = `${props.animeId}:${nextEp.episodeInt}`
+  if (prefetchFiredKeys.has(key)) return
+  // De-dupe concurrent attempts (timeupdate fires often) without permanently
+  // blocking the key — a guard-induced bail must allow a future retry if the
+  // underlying state changes (e.g. user unsubscribes mid-session).
+  if (prefetchInProgressKeys.has(key)) return
+  prefetchInProgressKeys.add(key)
+  console.log(`[prefetch] checking ${key}`)
+
+  try {
+    // Guard 1: subscribed shows — defer to the auto-downloader for episodes
+    // that aired AFTER the subscription was created. Older episodes (including
+    // the entire pre-subscription backlog and any episode the user later
+    // deleted) are still pre-fetched.
+    const sub = await window.api.autoDlGetSubscription(props.animeId)
+    if (sub) {
+      const nextNum = parseInt(nextEp.episodeInt, 10)
+      const boundary = sub.initialEpisodesAired ?? sub.lastEnqueuedEpisodeInt
+      if (Number.isFinite(nextNum) && nextNum > boundary) {
+        console.log(`[prefetch] skip: ep ${nextEp.episodeInt} aired after subscription (boundary=${boundary})`)
+        return
+      }
+    }
+
+    // Guard 2: already on disk.
+    const downloaded = await window.api.downloadedEpisodesGet(props.animeId)
+    if (downloaded[nextEp.episodeInt] && downloaded[nextEp.episodeInt].length > 0) {
+      console.log(`[prefetch] skip: ep ${nextEp.episodeInt} already on disk`)
+      prefetchFiredKeys.add(key)
+      return
+    }
+
+    // Guard 3: already in the live download queue (any non-terminal state).
+    const queue = await window.api.downloadGetQueue()
+    const inQueue = queue.some(g =>
+      g.animeId === props.animeId
+      && g.episodeInt === nextEp.episodeInt
+      && (!g.video || ['queued', 'downloading', 'paused', 'failed'].includes(g.video.status))
+    )
+    if (inQueue) {
+      console.log(`[prefetch] skip: ep ${nextEp.episodeInt} already in queue`)
+      prefetchFiredKeys.add(key)
+      return
+    }
+
+    // Resolve translation: match the current episode's (type, label) where
+    // `label` carries the author tag (authorsSummary). Fallback: same type,
+    // best quality.
+    const currentTr = activeTranslations.value.find(t => t.id === activeTranslationId.value)
+    if (!currentTr) {
+      console.log('[prefetch] skip: no active translation found in activeTranslations')
+      return
+    }
+    const candidates = nextEp.translations
+    let pick = candidates.find(t => t.type === currentTr.type && t.label === currentTr.label) || null
+    if (!pick) {
+      const sameType = candidates.filter(t => t.type === currentTr.type)
+      pick = [...sameType].sort((a, b) => b.height - a.height)[0] || null
+    }
+    if (!pick) {
+      console.log(`[prefetch] skip: no candidate translation on ep ${nextEp.episodeInt} matching type=${currentTr.type}`)
+      prefetchFiredKeys.add(key)
+      return
+    }
+    console.log(`[prefetch] enqueueing ep ${nextEp.episodeInt} via translation ${pick.id} (${pick.type}/${pick.label})`)
+
+    const targetHeight = selectedHeight.value || pick.height
+    await window.api.downloadEnqueue([{
+      translationId: pick.id,
+      height: targetHeight,
+      animeName: props.animeName,
+      episodeLabel: nextEp.episodeFull,
+      episodeInt: nextEp.episodeInt,
+      animeId: props.animeId,
+      translationType: pick.type,
+      author: pick.label
+    }])
+
+    prefetchFiredKeys.add(key)
+    prefetchInFlight.value = {
+      animeId: props.animeId,
+      episodeInt: nextEp.episodeInt,
+      translationId: pick.id,
+      progress: 0,
+      speed: 0
+    }
+    showPrefetchToast(`Pre-fetching episode ${nextEp.episodeInt}…`)
+    startPrefetchPolling()
+  } catch (err) {
+    console.warn('[prefetch] failed:', err)
+  } finally {
+    prefetchInProgressKeys.delete(key)
+  }
+}
+
+function stopPrefetchPolling(): void {
+  if (prefetchPollTimer) {
+    clearInterval(prefetchPollTimer)
+    prefetchPollTimer = null
+  }
+  // Reset the seek-pause flag so a future pre-fetch on the next episode starts
+  // from a clean slate; no resume IPC needed because the entry is gone.
+  if (prefetchSeekResumeTimer) {
+    clearTimeout(prefetchSeekResumeTimer)
+    prefetchSeekResumeTimer = null
+  }
+  prefetchPausedForSeek = false
+}
+
+function startPrefetchPolling(): void {
+  stopPrefetchPolling()
+  prefetchPollTimer = setInterval(async () => {
+    const target = prefetchInFlight.value
+    if (!target) {
+      stopPrefetchPolling()
+      return
+    }
+    try {
+      const queue = await window.api.downloadGetQueue()
+      const entry = queue.find(g => g.translationId === target.translationId)
+      if (!entry) {
+        prefetchInFlight.value = null
+        stopPrefetchPolling()
+        return
+      }
+      if (entry.video?.status === 'completed' || entry.mergeStatus === 'completed') {
+        prefetchInFlight.value = null
+        stopPrefetchPolling()
+        return
+      }
+      if (entry.video?.status === 'failed' || entry.video?.status === 'cancelled') {
+        prefetchInFlight.value = null
+        stopPrefetchPolling()
+        return
+      }
+      const v = entry.video
+      const progress = v && v.totalBytes > 0 ? Math.round((v.bytesReceived / v.totalBytes) * 100) : 0
+      prefetchInFlight.value = {
+        ...target,
+        progress,
+        speed: v?.speed || 0
+      }
+    } catch {
+      // Ignore transient polling errors
+    }
+  }, 1000)
 }
 
 async function resumeFromSavedPosition(): Promise<void> {
@@ -1273,6 +1496,10 @@ function onTimeUpdate(): void {
   saveProgress()
   maybeMarkWatched()
   maybeMarkPendingPrevWatched()
+  if (prefetchSetting.value === 'progress-50' && duration.value > 0
+      && currentTime.value / duration.value >= 0.5) {
+    tryPrefetch()
+  }
 }
 
 function onDurationChange(): void {
@@ -1280,6 +1507,9 @@ function onDurationChange(): void {
     duration.value = videoRef.value.duration
   }
   pushSyncplayFile()
+  if (prefetchSetting.value === 'open') {
+    tryPrefetch()
+  }
 }
 
 function onProgress(): void {
@@ -2055,13 +2285,26 @@ function destroySubtitles(): void {
   }
 }
 
+function onPrefetchSettingChanged(ev: Event): void {
+  const value = (ev as CustomEvent).detail as PrefetchSetting | undefined
+  if (value === 'off' || value === 'open' || value === 'time-5min' || value === 'progress-50') {
+    prefetchSetting.value = value
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('mouseup', onAuxMouseUp, true)
   window.addEventListener('mousedown', onAuxMouseDown, true)
+  window.addEventListener('prefetch-setting-changed', onPrefetchSettingChanged as EventListener)
   const savedShortcuts = await window.api.getSetting('keyboardShortcuts') as Record<string, string> | null
   playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) }
+
+  const savedPrefetch = await window.api.getSetting('prefetchNextEpisode') as PrefetchSetting | null
+  if (savedPrefetch === 'off' || savedPrefetch === 'open' || savedPrefetch === 'time-5min' || savedPrefetch === 'progress-50') {
+    prefetchSetting.value = savedPrefetch
+  }
 
   loadSkipDetections()
   window.api.onSkipDetectorSignatureUpdated((data) => {
@@ -2200,7 +2443,13 @@ onMounted(async () => {
     // Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
     // so a burst collapses into one respawn at the final target — native seeks
     // inside the buffered range are filtered out in the debounced callback.
-    v.addEventListener('seeking', () => maybeRespawnForUnbufferedPosition())
+    v.addEventListener('seeking', () => {
+      maybeRespawnForUnbufferedPosition()
+      pausePrefetchForSeek()
+    })
+    v.addEventListener('seeked', () => {
+      scheduleResumePrefetchAfterSeek()
+    })
   }, { immediate: true })
 
   // Start MKV remux stream (or fall back to legacy full remux)
@@ -2278,11 +2527,21 @@ onBeforeUnmount(() => {
   streamSkipDetecting.value = false
   void window.api.skipDetectorCancelStreamDetect()
   saveProgress(true)
+  stopPrefetchPolling()
+  if (prefetchSeekResumeTimer) clearTimeout(prefetchSeekResumeTimer)
+  if (prefetchPausedForSeek && prefetchInFlight.value) {
+    // Don't leave the download stranded in 'paused' if the player closes
+    // mid-seek-debounce — fire the resume so the queue keeps draining.
+    void window.api.downloadResume(`video-${prefetchInFlight.value.translationId}`).catch(() => { /* ignore */ })
+    prefetchPausedForSeek = false
+  }
+  if (prefetchToastTimer) clearTimeout(prefetchToastTimer)
   if (resumeToastTimer) clearTimeout(resumeToastTimer)
   document.removeEventListener('keydown', onKeyDown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('mouseup', onAuxMouseUp, true)
   window.removeEventListener('mousedown', onAuxMouseDown, true)
+  window.removeEventListener('prefetch-setting-changed', onPrefetchSettingChanged as EventListener)
   if (controlsTimer) clearTimeout(controlsTimer)
   if (streamingBannerTimer) {
     clearTimeout(streamingBannerTimer)
@@ -2454,6 +2713,11 @@ const bufferedProgress = computed(() => {
       <div v-if="resumeToast" class="resume-toast">{{ resumeToast }}</div>
     </transition>
 
+    <!-- Pre-fetch start toast -->
+    <transition name="fade">
+      <div v-if="prefetchToast" class="prefetch-toast">{{ prefetchToast }}</div>
+    </transition>
+
     <!-- Syncplay toast -->
     <transition name="fade">
       <div v-if="syncplayToast" class="syncplay-toast">{{ syncplayToast }}</div>
@@ -2516,6 +2780,9 @@ const bufferedProgress = computed(() => {
           </svg>
         </button>
         <span class="title-text">{{ animeName }} — {{ activeEpisodeLabel }}</span>
+        <span v-if="prefetchInFlight" class="prefetch-indicator" :title="`Pre-fetching episode ${prefetchInFlight.episodeInt}`">
+          ↓ Ep {{ prefetchInFlight.episodeInt }} · {{ prefetchInFlight.progress }}%<template v-if="prefetchInFlight.speed > 0"> · {{ formatSpeed(prefetchInFlight.speed) }}</template>
+        </span>
         <button v-if="props.allEpisodes.length > 1" class="ep-nav-btn" :disabled="!canNext || navigating" @click="goToEpisode('next')" title="Next episode (Shift+→)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
@@ -2882,6 +3149,20 @@ const bufferedProgress = computed(() => {
   pointer-events: none;
 }
 
+.prefetch-toast {
+  position: absolute;
+  top: 140px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 52, 96, 0.9);
+  color: #e0e0e0;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+}
+
 .mkv-buffering-toast {
   position: absolute;
   top: 100px;
@@ -3193,6 +3474,18 @@ const bufferedProgress = computed(() => {
   font-size: 0.9rem;
   font-weight: 500;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.prefetch-indicator {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
 }
 
 .ep-nav-btn {

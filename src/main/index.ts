@@ -76,6 +76,11 @@ export interface AutoDownloadSubscription {
   subscribedAt: number
   lastEnqueuedEpisodeInt: number
   lastCheckedAt: number
+  // Episodes_aired snapshot at subscribe time; frozen for life of the
+  // subscription. The player's pre-fetch uses this (not the rolling
+  // `lastEnqueuedEpisodeInt`) to decide which episodes the auto-downloader
+  // owns. Optional for legacy subs created before this field existed.
+  initialEpisodesAired?: number
 }
 
 const store = new Store({
@@ -116,6 +121,7 @@ const store = new Store({
     playerMuted: false,
     anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
     hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
+    prefetchNextEpisode: 'progress-50' as 'off' | 'open' | 'time-5min' | 'progress-50',
     watchProgress: {} as Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; watchedAt?: number; translationId?: number }>,
     watchProgressMigrationV2: false,
     autoCleanupWatchedDays: 0,

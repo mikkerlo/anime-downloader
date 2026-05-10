@@ -262,6 +262,7 @@ interface AutoDownloadSubscription {
   subscribedAt: number
   lastEnqueuedEpisodeInt: number
   lastCheckedAt: number
+  initialEpisodesAired?: number
 }
 
 interface AutoDlOutcome {
@@ -516,8 +517,12 @@ interface DownloadProgressItem {
 interface EpisodeGroup {
   translationId: number
   animeName: string
+  animeId: number
+  episodeInt: string
   episodeLabel: string
   quality: number
+  translationType: string
+  author: string
   video: DownloadProgressItem | null
   subtitle: DownloadProgressItem | null
   mergeStatus: 'pending' | 'merging' | 'completed' | 'failed'

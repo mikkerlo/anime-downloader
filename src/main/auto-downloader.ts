@@ -145,7 +145,8 @@ export async function setSubscription(
     animeName: meta.animeName,
     subscribedAt: Date.now(),
     lastEnqueuedEpisodeInt: aired,
-    lastCheckedAt: 0
+    lastCheckedAt: 0,
+    initialEpisodesAired: aired
   }
   map[key] = sub
   deps.store.set('autoDownloadSubscriptions', map)

@@ -142,18 +142,24 @@ const playerShortcuts = ref<Record<string, string>>({ ...DEFAULT_PLAYER_SHORTCUT
 // Watch progress tracking
 const currentEpisodeInt = computed(() => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || '')
 
-// Skip Detection (Phase 2): show OP/ED bands on the seek bar and a "Skip OP/ED"
-// overlay button when playback enters a detected range. Boundaries come from
-// `skipDetectorGetDetections(animeId)` — no new IPC needed (Phase 1 already
-// persists per-episode boundaries in electron-store).
+// Skip Detection: local playback uses stored per-episode boundaries from
+// `skipDetectorGetDetections(animeId)`. Streamed playback asks main to fingerprint
+// the current stream and only surfaces ranges when it confidently matches the
+// locally-derived show signatures.
 const showSkipDetections = ref<ShowSkipDetections | null>(null)
+const streamSkipDetection = ref<EpisodeSkipDetection | null>(null)
+const streamSkipDetecting = ref(false)
 const skippedRanges = ref<Set<string>>(new Set())
 const skipButtonVisible = ref(false)
 let skipButtonGraceTimer: ReturnType<typeof setTimeout> | null = null
 const SKIP_GRACE_MS = 250
 const SKIP_LEAD_IN_SEC = 0.25
+let streamSkipRequestId = 0
 
 const currentEpisodeSkip = computed<EpisodeSkipDetection | null>(() => {
+  if (isStreaming.value) {
+    return streamSkipDetection.value
+  }
   const det = showSkipDetections.value
   const epInt = currentEpisodeInt.value
   if (!det || !epInt) return null
@@ -231,16 +237,77 @@ async function loadSkipDetections(): Promise<void> {
   }
 }
 
-// Reset the per-range "already skipped" guard when the episode changes so the
-// button appears for the new episode's OP/ED. Detections themselves come from
-// the same per-show payload, so they don't need a refetch on episode flip.
-watch(currentEpisodeInt, () => {
+function resetSkipUiState(): void {
   skippedRanges.value = new Set()
   if (skipButtonGraceTimer) {
     clearTimeout(skipButtonGraceTimer)
     skipButtonGraceTimer = null
   }
   skipButtonVisible.value = false
+}
+
+async function refreshStreamSkipDetection(): Promise<void> {
+  const requestId = ++streamSkipRequestId
+  streamSkipDetection.value = null
+  streamSkipDetecting.value = false
+  if (!isStreaming.value || !props.animeId || !currentEpisodeInt.value || !activeStreamUrl.value) return
+  if (!showSkipDetections.value) return
+  const source = showSkipDetections.value.algorithm?.source ?? 'local'
+  if (source !== 'local') return
+  try {
+    await window.api.skipDetectorCancelStreamDetect()
+  } catch {
+    // ignore best-effort cancel races before starting a fresh request
+  }
+  streamSkipDetecting.value = true
+  try {
+    const result = await window.api.skipDetectorDetectStream(props.animeId, currentEpisodeInt.value, activeStreamUrl.value)
+    if (requestId !== streamSkipRequestId) return
+    streamSkipDetection.value = result
+  } catch (err) {
+    if (requestId !== streamSkipRequestId) return
+    console.error('Failed to detect streamed skip ranges:', err)
+    streamSkipDetection.value = null
+  } finally {
+    if (requestId === streamSkipRequestId) {
+      streamSkipDetecting.value = false
+    }
+  }
+}
+
+// Reset the per-range "already skipped" guard when the episode changes so the
+// button appears for the new episode's OP/ED. Detections themselves come from
+// the same per-show payload, so they don't need a refetch on episode flip.
+watch(currentEpisodeInt, () => {
+  resetSkipUiState()
+})
+
+const streamSkipSignatureVersion = computed(() => {
+  if (!isStreaming.value) return 0
+  return showSkipDetections.value?.analyzedAt ?? 0
+})
+
+const streamSkipSource = computed(() => {
+  if (!isStreaming.value) return ''
+  return showSkipDetections.value?.algorithm?.source ?? ''
+})
+
+watch([
+  isStreaming,
+  activeStreamUrl,
+  currentEpisodeInt,
+  streamSkipSignatureVersion,
+  streamSkipSource
+], () => {
+  if (!isStreaming.value) {
+    streamSkipRequestId++
+    streamSkipDetection.value = null
+    streamSkipDetecting.value = false
+    void window.api.skipDetectorCancelStreamDetect()
+    return
+  }
+  resetSkipUiState()
+  void refreshStreamSkipDetection()
 })
 let cumulativePlayTime = 0
 let lastTimeUpdateAt = 0
@@ -2207,6 +2274,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  streamSkipRequestId++
+  streamSkipDetecting.value = false
+  void window.api.skipDetectorCancelStreamDetect()
   saveProgress(true)
   if (resumeToastTimer) clearTimeout(resumeToastTimer)
   document.removeEventListener('keydown', onKeyDown)
@@ -2370,6 +2440,12 @@ const bufferedProgress = computed(() => {
     <transition name="fade">
       <div v-if="streamingBannerVisible" class="streaming-banner">
         Streaming from server
+      </div>
+    </transition>
+
+    <transition name="fade">
+      <div v-if="streamSkipDetecting" class="stream-skip-toast">
+        Detecting OP/ED markers…
       </div>
     </transition>
 
@@ -2779,6 +2855,20 @@ const bufferedProgress = computed(() => {
 }
 
 .resume-toast {
+  position: absolute;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 52, 96, 0.9);
+  color: #e0e0e0;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.stream-skip-toast {
   position: absolute;
   top: 100px;
   left: 50%;

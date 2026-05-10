@@ -28,8 +28,8 @@ import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, EpisodeDetail, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
-import { analyzeShow, fingerprintCacheKey, formatChaptersMetadata } from './skip-detector'
-import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress } from './skip-detector'
+import { analyzeShow, detectStream, fingerprintCacheKey, formatChaptersMetadata } from './skip-detector'
+import type { EpisodeInput, ShowSkipDetections, CachedFingerprint, AnalyzeProgress, EpisodeSkipDetection } from './skip-detector'
 import { syncplay } from './syncplay'
 import type {
   SyncplayConfig,
@@ -1729,7 +1729,14 @@ interface CurrentSkipAnalysis {
   promise: Promise<ShowSkipDetections>
 }
 
+interface CurrentStreamSkipDetection {
+  senderId: number
+  controller: AbortController
+  promise: Promise<EpisodeSkipDetection | null>
+}
+
 let currentSkipAnalysis: CurrentSkipAnalysis | null = null
+const currentStreamSkipDetections = new Map<number, CurrentStreamSkipDetection>()
 
 const autoSkipDebounce = new Map<number, ReturnType<typeof setTimeout>>()
 const autoSkipQueue: { animeId: number; animeName: string }[] = []
@@ -1741,6 +1748,24 @@ function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
     currentSkipAnalysis.lastProgress = p
   }
   broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
+}
+
+function normalizeSkipDetections(detections: ShowSkipDetections | null): ShowSkipDetections | null {
+  if (!detections) return null
+  if (detections.algorithm?.source === 'local') return detections
+  const alg = detections.algorithm
+  return {
+    ...detections,
+    algorithm: {
+      source: 'local',
+      sampleRate: alg?.sampleRate ?? 11025,
+      matchBitThreshold: alg?.matchBitThreshold ?? 6,
+      minRunSec: alg?.minRunSec ?? 18,
+      windowSec: alg?.windowSec ?? 6,
+      refineBitThreshold: alg?.refineBitThreshold ?? 4,
+      refineSustainHashes: alg?.refineSustainHashes ?? 5
+    }
+  }
 }
 
 function runSkipAnalysisInternal(animeId: number, episodes: EpisodeInput[]): Promise<ShowSkipDetections> {
@@ -1783,6 +1808,51 @@ function runSkipAnalysisInternal(animeId: number, episodes: EpisodeInput[]): Pro
       currentSkipAnalysis = null
     }
     void drainAutoSkipQueue()
+  })
+  return runPromise
+}
+
+function cancelStreamSkipDetection(senderId: number): void {
+  const current = currentStreamSkipDetections.get(senderId)
+  if (!current) return
+  current.controller.abort()
+}
+
+function runStreamSkipDetectionInternal(
+  senderId: number,
+  animeId: number,
+  episodeInt: string,
+  streamUrl: string,
+  detections: ShowSkipDetections
+): Promise<EpisodeSkipDetection | null> {
+  const fpcalcPath = getFpcalcPath()
+  if (!fpcalcPath) return Promise.reject(new Error('fpcalc binary not available — restart the app to retry the download'))
+  if (!ffmpegPath) return Promise.reject(new Error('ffmpeg not available'))
+
+  cancelStreamSkipDetection(senderId)
+  const controller = new AbortController()
+  const fingerprintCacheSnapshot = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+  const runPromise = detectStream(animeId, episodeInt, streamUrl, detections, {
+    fpcalcPath,
+    ffmpegPath,
+    ffprobePath: ffprobePath || undefined,
+    userAgent: 'smotret-anime-dl',
+    signal: controller.signal,
+    loadCachedFingerprint: (key) => fingerprintCacheSnapshot[key],
+    saveCachedFingerprint: (key, value) => {
+      fingerprintCacheSnapshot[key] = value
+      const fresh = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
+      fresh[key] = value
+      store.set('skipFingerprintCache', fresh)
+    }
+  })
+
+  currentStreamSkipDetections.set(senderId, { senderId, controller, promise: runPromise })
+  runPromise.finally(() => {
+    const current = currentStreamSkipDetections.get(senderId)
+    if (current && current.controller === controller) {
+      currentStreamSkipDetections.delete(senderId)
+    }
   })
   return runPromise
 }
@@ -2836,7 +2906,7 @@ function registerIpcHandlers(): void {
   // single-flight state as these handlers.
   ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
-    return all[String(animeId)] ?? null
+    return normalizeSkipDetections(all[String(animeId)] ?? null)
   })
 
   ipcMain.handle('skip-detector:get-status', () => {
@@ -2855,6 +2925,18 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('skip-detector:analyze-show', (_event, animeId: number, episodes: EpisodeInput[]) => {
     return runSkipAnalysisInternal(animeId, episodes)
+  })
+
+  ipcMain.handle('skip-detector:detect-stream', async (event, animeId: number, episodeInt: string, streamUrl: string): Promise<EpisodeSkipDetection | null> => {
+    const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
+    const detections = normalizeSkipDetections(all[String(animeId)] ?? null)
+    if (!detections) return null
+    if (!streamUrl) return null
+    return runStreamSkipDetectionInternal(event.sender.id, animeId, episodeInt, streamUrl, detections)
+  })
+
+  ipcMain.handle('skip-detector:cancel-stream-detect', (event) => {
+    cancelStreamSkipDetection(event.sender.id)
   })
 
   // One-shot backfill for shows downloaded before Phase 3 was wired in.
@@ -4446,6 +4528,10 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('destroyed', () => {
+    cancelStreamSkipDetection(mainWindow.webContents.id)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

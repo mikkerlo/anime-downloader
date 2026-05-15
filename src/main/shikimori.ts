@@ -26,6 +26,7 @@ export interface ShikiUserRate {
   score: number
   status: ShikiUserRateStatus
   episodes: number
+  rewatches: number
   target_id: number
   target_type: string
 }
@@ -35,6 +36,7 @@ export interface ShikiAnimeRateEntry {
   score: number
   status: ShikiUserRateStatus
   episodes: number
+  rewatches: number
   updated_at: string
   target_id: number
   target_type: string
@@ -170,7 +172,8 @@ export async function createUserRate(
   malId: number,
   episodes: number,
   status: ShikiUserRateStatus,
-  score: number
+  score: number,
+  rewatches: number
 ): Promise<ShikiUserRate> {
   const response = await shikiFetch('/api/v2/user_rates', {
     method: 'POST',
@@ -182,7 +185,8 @@ export async function createUserRate(
         target_type: 'Anime',
         episodes,
         status,
-        score
+        score,
+        rewatches
       }
     })
   })
@@ -194,13 +198,14 @@ export async function updateUserRate(
   rateId: number,
   episodes: number,
   status: ShikiUserRateStatus,
-  score: number
+  score: number,
+  rewatches: number
 ): Promise<ShikiUserRate> {
   const response = await shikiFetch(`/api/v2/user_rates/${rateId}`, {
     method: 'PATCH',
     headers: authHeaders(accessToken),
     body: JSON.stringify({
-      user_rate: { episodes, status, score }
+      user_rate: { episodes, status, score, rewatches }
     })
   })
   return response.json() as Promise<ShikiUserRate>

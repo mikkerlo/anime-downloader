@@ -168,7 +168,7 @@ interface Api {
   shikimoriLogout: () => Promise<void>
   shikimoriGetUser: () => Promise<ShikiUser | null>
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
-  shikimoriUpdateRate: (malId: number, episodes: number, status: ShikiUserRateStatus, score: number) => Promise<ShikiUserRate>
+  shikimoriUpdateRate: (malId: number, episodes: number, status: ShikiUserRateStatus, score: number, rewatches: number) => Promise<ShikiUserRate>
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
@@ -616,6 +616,7 @@ interface ShikiUserRate {
   score: number
   status: ShikiUserRateStatus
   episodes: number
+  rewatches: number
   target_id: number
   target_type: string
 }
@@ -638,6 +639,7 @@ interface ShikiAnimeRateEntry {
     score: number
     status: ShikiUserRateStatus
     episodes: number
+    rewatches: number
     updated_at: string
     target_id: number
   }

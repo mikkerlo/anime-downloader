@@ -239,8 +239,8 @@ async function recordMp4FaststartCheck(
 interface QueuedShikimoriUpdate {
   malId: number
   rateId: number | null
-  before: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
-  after: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
+  before: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number; rewatches: number }
+  after: { episodes: number; status: shikimori.ShikiUserRateStatus; score: number; rewatches: number }
   queuedAt: number
 }
 
@@ -352,7 +352,7 @@ function sleep(ms: number): Promise<void> {
 
 function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): void {
   const cached = store.get('shikimoriUserRates') as {
-    rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number }
+    rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number; rewatches?: number }
     shikiAnime: unknown
     smotretAnime: unknown
   }[]
@@ -366,6 +366,7 @@ function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): v
       episodes: rate.episodes,
       status: rate.status,
       score: rate.score,
+      rewatches: rate.rewatches ?? 0,
       updated_at: new Date().toISOString()
     }
   }
@@ -429,7 +430,8 @@ async function syncShikimoriQueue(): Promise<void> {
           item.malId,
           item.after.episodes,
           item.after.status,
-          item.after.score
+          item.after.score,
+          item.after.rewatches
         )
         reconcileCacheFromRate(item.malId, created)
       } else {
@@ -444,7 +446,8 @@ async function syncShikimoriQueue(): Promise<void> {
             current.id,
             item.after.episodes,
             item.after.status,
-            item.after.score
+            item.after.score,
+            item.after.rewatches
           )
           reconcileCacheFromRate(item.malId, updated)
         } else if (shouldApplyOnDrift(current, item.after)) {
@@ -453,7 +456,8 @@ async function syncShikimoriQueue(): Promise<void> {
             current.id,
             item.after.episodes,
             item.after.status,
-            item.after.score
+            item.after.score,
+            item.after.rewatches
           )
           reconcileCacheFromRate(item.malId, updated)
         } else {
@@ -2355,9 +2359,12 @@ function registerIpcHandlers(): void {
     // Resume rows' sort key with the Shikimori clock so the Home view orders
     // entries the same way as the Shikimori "To Watch" tab.
     const rateUpdatedByAnimeId = new Map<number, number>()
+    const statusByAnimeId = new Map<number, string>()
     for (const r of rates) {
       const animeId = r.smotretAnime?.id ?? (r.rate.target_id ? malMap[String(r.rate.target_id)]?.id : undefined)
-      if (!animeId || !r.rate.updated_at) continue
+      if (!animeId) continue
+      statusByAnimeId.set(animeId, r.rate.status)
+      if (!r.rate.updated_at) continue
       const ms = Date.parse(r.rate.updated_at)
       if (Number.isFinite(ms)) rateUpdatedByAnimeId.set(animeId, ms)
     }
@@ -2365,6 +2372,18 @@ function registerIpcHandlers(): void {
       if (r.kind !== 'resume') continue
       const ms = rateUpdatedByAnimeId.get(r.animeId)
       if (ms) r.updatedAt = ms
+    }
+
+    // Hide stale "Resume" rows when Shikimori says the show is completed —
+    // their watch is done, lingering local progress shouldn't drag them back
+    // into Continue Watching.
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const r = raw[i]
+      if (r.kind !== 'resume') continue
+      if (statusByAnimeId.get(r.animeId) === 'completed') {
+        raw.splice(i, 1)
+        resumeKeys.delete(String(r.animeId))
+      }
     }
 
     for (const entry of rates) {
@@ -3185,11 +3204,11 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'shikimori:update-rate',
-    async (_event, malId: number, episodes: number, status: shikimori.ShikiUserRateStatus, score: number) => {
+    async (_event, malId: number, episodes: number, status: shikimori.ShikiUserRateStatus, score: number, rewatches: number) => {
       const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
       if (!user) throw new Error('Not logged in to Shikimori')
 
-      const cached = store.get('shikimoriUserRates') as { rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number }; shikiAnime: unknown; smotretAnime: unknown }[]
+      const cached = store.get('shikimoriUserRates') as { rate: Record<string, unknown> & { id?: number; target_id: number; episodes: number; status: shikimori.ShikiUserRateStatus; score: number; rewatches?: number }; shikiAnime: unknown; smotretAnime: unknown }[]
       const idx = cached.findIndex((e) => e.rate.target_id === malId)
       const prevStatus = idx !== -1 ? cached[idx].rate.status : undefined
 
@@ -3197,8 +3216,8 @@ function registerIpcHandlers(): void {
         const accessToken = await shikimori.ensureFreshToken(store)
         const existing = await shikimori.getUserRate(accessToken, user.id, malId)
         const updatedRate = existing
-          ? await shikimori.updateUserRate(accessToken, existing.id, episodes, status, score)
-          : await shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score)
+          ? await shikimori.updateUserRate(accessToken, existing.id, episodes, status, score, rewatches)
+          : await shikimori.createUserRate(accessToken, user.id, malId, episodes, status, score, rewatches)
 
         if (idx !== -1) {
           cached[idx] = {
@@ -3208,6 +3227,7 @@ function registerIpcHandlers(): void {
               score: updatedRate.score,
               status: updatedRate.status,
               episodes: updatedRate.episodes,
+              rewatches: updatedRate.rewatches ?? 0,
               updated_at: new Date().toISOString(),
               target_id: updatedRate.target_id
             }
@@ -3231,9 +3251,10 @@ function registerIpcHandlers(): void {
         const before = {
           episodes: cachedEntry.rate.episodes,
           status: cachedEntry.rate.status,
-          score: cachedEntry.rate.score
+          score: cachedEntry.rate.score,
+          rewatches: cachedEntry.rate.rewatches ?? 0
         }
-        const after = { episodes, status, score }
+        const after = { episodes, status, score, rewatches }
 
         const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
         queue.push({ malId, rateId, before, after, queuedAt: Date.now() })
@@ -3246,6 +3267,7 @@ function registerIpcHandlers(): void {
             episodes,
             status,
             score,
+            rewatches,
             updated_at: new Date().toISOString()
           }
         }
@@ -3261,6 +3283,7 @@ function registerIpcHandlers(): void {
           score,
           status,
           episodes,
+          rewatches,
           target_id: malId,
           target_type: 'Anime'
         } satisfies shikimori.ShikiUserRate
@@ -3292,6 +3315,7 @@ function registerIpcHandlers(): void {
         score: rate.score,
         status: rate.status,
         episodes: rate.episodes,
+        rewatches: rate.rewatches ?? 0,
         updated_at: rate.updated_at,
         target_id: rate.target_id
       },

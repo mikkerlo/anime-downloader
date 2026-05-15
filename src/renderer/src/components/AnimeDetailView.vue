@@ -45,6 +45,7 @@ const shikiRate = ref<ShikiUserRate | null>(null)
 const shikiStatus = ref<ShikiUserRateStatus>('planned')
 const shikiEpisodes = ref(0)
 const shikiScore = ref(0)
+const shikiRewatches = ref(0)
 const shikiLoading = ref(false)
 const shikiSaving = ref(false)
 const shikiError = ref('')
@@ -372,6 +373,7 @@ async function loadShikimoriData(): Promise<void> {
         shikiStatus.value = rate.status
         shikiEpisodes.value = rate.episodes
         shikiScore.value = rate.score
+        shikiRewatches.value = rate.rewatches ?? 0
       }
     })
     .catch(err => console.error('Failed to load Shikimori rate:', err))
@@ -612,12 +614,14 @@ onMounted(async () => {
         score: entry.rate.score,
         status: entry.rate.status,
         episodes: entry.rate.episodes,
+        rewatches: entry.rate.rewatches ?? 0,
         target_id: entry.rate.target_id,
         target_type: 'Anime'
       }
       shikiStatus.value = entry.rate.status
       shikiEpisodes.value = entry.rate.episodes
       shikiScore.value = entry.rate.score
+      shikiRewatches.value = entry.rate.rewatches ?? 0
     }
   })
 
@@ -636,12 +640,14 @@ onMounted(async () => {
         score: match.rate.score,
         status: match.rate.status,
         episodes: match.rate.episodes,
+        rewatches: match.rate.rewatches ?? 0,
         target_id: match.rate.target_id,
         target_type: 'Anime'
       }
       shikiStatus.value = match.rate.status
       shikiEpisodes.value = match.rate.episodes
       shikiScore.value = match.rate.score
+      shikiRewatches.value = match.rate.rewatches ?? 0
     }
   })
 
@@ -731,9 +737,11 @@ async function shikiSave(): Promise<void> {
       anime.value.myAnimeListId,
       shikiEpisodes.value,
       shikiStatus.value,
-      shikiScore.value
+      shikiScore.value,
+      shikiRewatches.value
     )
     shikiRate.value = rate
+    shikiRewatches.value = rate.rewatches ?? shikiRewatches.value
   } catch (err) {
     shikiError.value = String(err)
   } finally {
@@ -920,12 +928,19 @@ function episodeProgressPercent(episodeInt: string): number {
 }
 
 function isEpisodeWatched(episodeInt: string): boolean {
+  if (shikiRate.value?.status === 'completed') return true
   return !!watchProgress.value[episodeInt]?.watched
 }
 
 const continueTarget = computed((): EpisodeSummary | null => {
   const eps = filteredEpisodes.value
   if (eps.length === 0) return null
+
+  // Completed → "Continue" means "start rewatching from ep 1". Without this the
+  // shikiEpisodes >= eps.length branch below would land on the last episode.
+  if (shikiRate.value?.status === 'completed') {
+    return eps[0]
+  }
 
   // 1) If Shikimori reports N completed episodes, jump to episode N+1.
   // Shikimori is authoritative — ignore local saved positions for earlier episodes.
@@ -1472,6 +1487,15 @@ function typeChip(type: string): { short: string; color: string } {
                 <option :value="0">—</option>
                 <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
               </select>
+            </div>
+            <div class="shiki-episodes" title="Number of times you've rewatched this anime">
+              <span>Rewatches:</span>
+              <input
+                v-model.number="shikiRewatches"
+                type="number"
+                min="0"
+                class="shiki-ep-input"
+              />
             </div>
             <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
               {{ shikiSaving ? 'Saving...' : 'Save' }}

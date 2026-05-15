@@ -59,7 +59,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 
 `HomeView` is the default landing view. It calls `home:get-continue-watching`, which merges two local sources (no network) into a single, time-sorted list capped at 24 entries:
 
-- **Resume rows** — entries in `watchProgress` where `watched !== true`, `position > 5`, `duration > 0`, and `position / duration < 0.95`. Collapsed to a single entry per anime: the most-recently-updated unfinished episode wins.
+- **Resume rows** — entries in `watchProgress` where `watched !== true`, `position > 5`, `duration > 0`, and `position / duration < 0.95`. Collapsed to a single entry per anime: the most-recently-updated unfinished episode wins. Rows whose Shikimori rate status is `completed` are dropped — lingering local progress shouldn't drag a finished show back into Continue Watching.
 - **Next-up rows** — entries in `shikimoriUserRates` with `status ∈ {watching, rewatching}` and `episodes_aired === 0 || rate.episodes + 1 <= episodes_aired`.
 
 Dedup rule: if a `(animeId, _)` resume row exists, no Next-up row is emitted for that anime — Resume already represents the user's most recent intent on the show.
@@ -372,7 +372,7 @@ LibraryView shows both with indicators:
 | `shikimori:logout` | invoke | Clear Shikimori credentials and user |
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
-| `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score); updates cached rates and broadcasts change |
+| `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score, rewatches); updates cached rates and broadcasts change |
 | `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |
 | `shikimori:rate-updated` | send | Single rate entry changed (after update-rate); renderer views surgically update their local state |
 | `shikimori:rates-refreshed` | send | Full rate list refreshed from API in background; renderer views replace their entries |
@@ -517,7 +517,9 @@ The built-in player auto-saves playback position to `watchProgress` (electron-st
 
 "Watched" detection counts real playback time via `timeupdate` deltas (clamped `< 2s` to ignore seek jumps). An episode is marked `watched: true` when `position / duration >= 0.8` AND cumulative playback `>= 180s`. The flag is set once per episode per session.
 
-When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and, if `epNum > rate.episodes`, calls `shikimoriUpdateRate` with `'watching'` (or `'rewatching'` if current status was `'completed'`).
+When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and:
+- If `rate.status === 'completed'`: flips to `'rewatching'`, resets `episodes` to the just-watched episode number, and increments `rewatches` by 1 (starts a fresh rewatch cycle from whichever episode the user opened — typically ep 1). The status check itself prevents double-bumping: after the flip the status is `'rewatching'`, so the branch no longer fires.
+- Otherwise, if `epNum > rate.episodes`: calls `shikimoriUpdateRate` with `'watching'`, preserving the existing `rewatches` count.
 
 `AnimeDetailView` loads all watch-progress entries for the anime on mount via `watchProgressGetAll` and renders a small ✓ badge (watched) or mini progress bar (partial) on each episode row. The view listens on a `watch-progress-updated` window event — dispatched by `PlayerView` after each save — to refresh indicators live.
 
@@ -681,9 +683,11 @@ Shown when user is logged in AND anime has `myAnimeListId`. Displays:
 - Status dropdown (planned/watching/rewatching/completed/on_hold/dropped)
 - Episode count input
 - Score dropdown (1–10)
+- Rewatches numeric input (`rate.rewatches`, edited manually here; auto-incremented by PlayerView when transitioning from `completed` → `rewatching`)
 - Save button to push changes
 - Link to anime on Shikimori
 - Auto-status: episodes > 0 → watching (from planned) / rewatching (from completed); episodes = max → completed
+- When `rate.status === 'completed'`, every episode in the list is shown with the ✓ watched badge (regardless of local `watchProgress`), and "Continue" jumps to episode 1 so the user can start a rewatch.
 
 ### Series Chronology
 

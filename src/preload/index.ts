@@ -294,8 +294,8 @@ const api = {
   shikimoriLogout: () => ipcRenderer.invoke('shikimori:logout'),
   shikimoriGetUser: () => ipcRenderer.invoke('shikimori:get-user'),
   shikimoriGetRate: (malId: number) => ipcRenderer.invoke('shikimori:get-rate', malId),
-  shikimoriUpdateRate: (malId: number, episodes: number, status: string, score: number) =>
-    ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score),
+  shikimoriUpdateRate: (malId: number, episodes: number, status: string, score: number, rewatches: number) =>
+    ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score, rewatches),
   shikimoriGetFriendsRates: (malId: number) =>
     ipcRenderer.invoke('shikimori:get-friends-rates', malId) as Promise<ShikiFriendRate[]>,
   shikimoriGetAnimeRates: (status?: string) =>

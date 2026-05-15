@@ -651,9 +651,16 @@ async function markEpisodeWatched(episodeInt: string): Promise<void> {
   try {
     const rate = await window.api.shikimoriGetRate(props.malId)
     const currentEps = rate?.episodes ?? 0
-    if (epNum > currentEps) {
-      const nextStatus = rate?.status === 'completed' ? 'rewatching' : 'watching'
-      await window.api.shikimoriUpdateRate(props.malId, epNum, nextStatus, rate?.score ?? 0)
+    const score = rate?.score ?? 0
+    const rewatches = rate?.rewatches ?? 0
+    // Rewatching a completed show: flip status, reset episode count to the one
+    // just finished, bump the rewatch counter. Guarded once-per-watched event by
+    // the status check itself — after the flip, rate.status is 'rewatching' and
+    // this branch no longer fires.
+    if (rate?.status === 'completed') {
+      await window.api.shikimoriUpdateRate(props.malId, epNum, 'rewatching', score, rewatches + 1)
+    } else if (epNum > currentEps) {
+      await window.api.shikimoriUpdateRate(props.malId, epNum, 'watching', score, rewatches)
     }
   } catch (err) {
     console.warn('[player] failed to update Shikimori episode count:', err)
@@ -677,9 +684,12 @@ async function maybeMarkWatched(): Promise<void> {
   try {
     const rate = await window.api.shikimoriGetRate(props.malId)
     const currentEps = rate?.episodes ?? 0
-    if (epNum > currentEps) {
-      const nextStatus = rate?.status === 'completed' ? 'rewatching' : 'watching'
-      await window.api.shikimoriUpdateRate(props.malId, epNum, nextStatus, rate?.score ?? 0)
+    const score = rate?.score ?? 0
+    const rewatches = rate?.rewatches ?? 0
+    if (rate?.status === 'completed') {
+      await window.api.shikimoriUpdateRate(props.malId, epNum, 'rewatching', score, rewatches + 1)
+    } else if (epNum > currentEps) {
+      await window.api.shikimoriUpdateRate(props.malId, epNum, 'watching', score, rewatches)
     }
   } catch (err) {
     console.warn('[player] failed to update Shikimori episode count:', err)

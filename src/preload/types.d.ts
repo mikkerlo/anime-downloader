@@ -23,7 +23,13 @@ interface Api {
   getCachedPoster: (animeId: number) => Promise<string | null>
   probeFullScanNeeded: (animeId: number, episodeCount: number) => Promise<boolean>
   probeFullScanDone: (animeId: number, episodeCount: number) => Promise<void>
-  reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) => Promise<void>
+  reportQualityMismatch: (data: {
+    translationId: number
+    author: string
+    type: string
+    reported: number
+    actual: number
+  }) => Promise<void>
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>
   debugGetMp4Stats: () => Promise<Mp4StreamingStats>
@@ -31,7 +37,9 @@ interface Api {
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
   libraryHas: (id: number) => Promise<boolean>
-  libraryGetStatus: (ids: number[]) => Promise<Record<number, { starred: boolean; downloaded: boolean }>>
+  libraryGetStatus: (
+    ids: number[]
+  ) => Promise<Record<number, { starred: boolean; downloaded: boolean }>>
   libraryIsDownloaded: (id: number) => Promise<boolean>
   downloadedAnimeAdd: (anime: AnimeSearchResult) => Promise<void>
   downloadedAnimeDelete: (animeId: number, animeName: string) => Promise<void>
@@ -40,7 +48,9 @@ interface Api {
   cleanupExecute: (animeId: number, animeName: string) => Promise<void>
   cleanupGetSnoozed: () => Promise<Record<string, { animeName: string }>>
   cleanupSetSnoozed: (animeId: number, snoozed: boolean) => Promise<void>
-  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => void
+  onCleanupPrompt: (
+    callback: (data: { animeId: number; animeName: string; malId: number }) => void
+  ) => void
   offCleanupPrompt: () => void
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
@@ -48,7 +58,14 @@ interface Api {
   homeGetContinueWatching: () => Promise<ContinueWatchingEntry[]>
 
   // Watch progress
-  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean, translationId?: number) => Promise<void>
+  watchProgressSave: (
+    animeId: number,
+    episodeInt: string,
+    position: number,
+    duration: number,
+    watched?: boolean,
+    translationId?: number
+  ) => Promise<void>
   watchProgressGet: (animeId: number, episodeInt: string) => Promise<WatchProgressEntry | null>
   watchProgressGetAll: (animeId: number) => Promise<Record<string, WatchProgressEntry>>
 
@@ -69,16 +86,25 @@ interface Api {
   downloadMerge: () => Promise<void>
   downloadScanMerge: () => Promise<{ merged: number; failed: string[] }>
   downloadFixMetadata: () => Promise<{ fixed: number; failed: string[] }>
-  onFixMetadataProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
+  onFixMetadataProgress: (
+    callback: (data: { current: number; total: number; file: string }) => void
+  ) => void
   offFixMetadataProgress: () => void
-  ffmpegCheck: () => Promise<{ available: boolean; version: string; path: string; encoders: string[] }>
+  ffmpegCheck: () => Promise<{
+    available: boolean
+    version: string
+    path: string
+    encoders: string[]
+  }>
   ffmpegDelete: () => Promise<void>
   downloadPickDir: () => Promise<string | null>
   // Storage
   storagePickHotDir: () => Promise<string | null>
   storagePickColdDir: () => Promise<string | null>
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>
-  onStorageMoveToColdProgress: (callback: (data: { current: number; total: number; file: string }) => void) => void
+  onStorageMoveToColdProgress: (
+    callback: (data: { current: number; total: number; file: string }) => void
+  ) => void
   offStorageMoveToColdProgress: () => void
   storageGetUsage: () => Promise<StorageUsage>
   storageRunCleanup: (opts?: { force?: boolean }) => Promise<CleanupResult>
@@ -89,21 +115,45 @@ interface Api {
   onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => void
   offStorageCleanupFinished: () => void
   // File management
-  fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
-    Promise<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>
+  fileCheckEpisodes: (
+    animeName: string,
+    episodeInts: string[]
+  ) => Promise<
+    Record<
+      string,
+      { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+    >
+  >
   fileOpen: (filePath: string) => Promise<string>
   fileShowInFolder: (filePath: string) => Promise<void>
-  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) => Promise<void>
-  onFileEpisodesChanged: (callback: (animeName: string, data: Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>) => void) => void
+  fileDeleteEpisode: (
+    animeName: string,
+    episodeInt: string,
+    animeId?: number,
+    translationId?: number
+  ) => Promise<void>
+  onFileEpisodesChanged: (
+    callback: (
+      animeName: string,
+      data: Record<
+        string,
+        { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+      >
+    ) => void
+  ) => void
   offFileEpisodesChanged: () => void
 
   onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => void
   offDownloadProgress: () => void
   onScanMergeProgress: (callback: (data: ScanMergeProgress) => void) => void
   offScanMergeProgress: () => void
-  onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
+  onFfmpegDownloadProgress: (
+    callback: (data: { status: string; progress?: number }) => void
+  ) => void
   offFfmpegDownloadProgress: () => void
-  onFpcalcDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => void
+  onFpcalcDownloadProgress: (
+    callback: (data: { status: string; progress?: number }) => void
+  ) => void
   offFpcalcDownloadProgress: () => void
 
   // Skip detection (Chromaprint)
@@ -112,16 +162,30 @@ interface Api {
     episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
   ) => Promise<ShowSkipDetections>
   skipDetectorGetDetections: (animeId: number) => Promise<ShowSkipDetections | null>
-  skipDetectorDetectStream: (animeId: number, episodeInt: string, streamUrl: string) => Promise<EpisodeSkipDetection | null>
+  skipDetectorDetectStream: (
+    animeId: number,
+    episodeInt: string,
+    streamUrl: string
+  ) => Promise<EpisodeSkipDetection | null>
   skipDetectorCancelStreamDetect: () => Promise<void>
-  skipDetectorGetStatus: () => Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>
+  skipDetectorGetStatus: () => Promise<{
+    animeId: number
+    lastProgress: SkipDetectorProgress | null
+  } | null>
   skipDetectorCancel: () => Promise<void>
   skipDetectorCacheStats: () => Promise<{ fingerprintCount: number }>
-  skipDetectorBackfillAll: () => Promise<{ queued: number; alreadyAnalyzed: number; skippedFewEpisodes: number; total: number }>
+  skipDetectorBackfillAll: () => Promise<{
+    queued: number
+    alreadyAnalyzed: number
+    skippedFewEpisodes: number
+    total: number
+  }>
   skipDetectorQueueStatus: () => Promise<{ currentAnimeId: number | null; queueLength: number }>
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void
   offSkipDetectorProgress: () => void
-  onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => void
+  onSkipDetectorSignatureUpdated: (
+    callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void
+  ) => void
   offSkipDetectorSignatureUpdated: () => void
 
   injectChapters: (
@@ -135,31 +199,79 @@ interface Api {
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
   // Player
-  playerGetStreamUrl: (translationId: number, maxHeight: number) => Promise<{ streamUrl: string; subtitleContent: string | null; availableStreams: { height: number; url: string }[] } | null>
+  playerGetStreamUrl: (
+    translationId: number,
+    maxHeight: number
+  ) => Promise<{
+    streamUrl: string
+    subtitleContent: string | null
+    availableStreams: { height: number; url: string }[]
+  } | null>
   playerGetLocalSubtitles: (filePath: string) => Promise<string | null>
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) => Promise<{ filePath: string; subtitleContent: string | null } | null>
-  playerRemuxMkv: (mkvPath: string) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
-  playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) => Promise<
-    | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+  playerFindLocalFile: (
+    animeName: string,
+    episodeInt: string,
+    translationId: number,
+    episodeLabel: string
+  ) => Promise<{ filePath: string; subtitleContent: string | null } | null>
+  playerRemuxMkv: (
+    mkvPath: string
+  ) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>
+  playerRemuxMkvStream: (
+    mkvPath: string,
+    initialSeek?: number
+  ) => Promise<
+    | {
+        sessionId: string
+        generation: number
+        duration: number
+        mimeType: string
+        hasSubtitlesPending: boolean
+        initialSeek: number
+      }
     | { error: string }
   >
-  playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) => Promise<
-    | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+  playerRemuxMkvStreamTranscode: (
+    mkvPath: string,
+    initialSeek?: number
+  ) => Promise<
+    | {
+        sessionId: string
+        generation: number
+        duration: number
+        mimeType: string
+        hasSubtitlesPending: boolean
+        initialSeek: number
+      }
     | { error: string }
   >
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
-  playerStreamSeek: (sessionId: string, seekSeconds: number) => Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>
+  playerStreamSeek: (
+    sessionId: string,
+    seekSeconds: number
+  ) => Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>
   playerCleanupRemux: () => Promise<void>
-  onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => void
+  onPlayerStreamSubtitles: (
+    callback: (data: { sessionId: string; content: string }) => void
+  ) => void
   offPlayerStreamSubtitles: () => void
-  onPlayerStreamChunk: (callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void) => void
+  onPlayerStreamChunk: (
+    callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
+  ) => void
   offPlayerStreamChunk: () => void
   onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => void
   offPlayerStreamEnd: () => void
   onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => void
   offPlayerStreamError: () => void
-  onPlayerStreamProgress: (callback: (data: { sessionId: string; gen: number; speed: number | null; time: number | null }) => void) => void
+  onPlayerStreamProgress: (
+    callback: (data: {
+      sessionId: string
+      gen: number
+      speed: number | null
+      time: number | null
+    }) => void
+  ) => void
   offPlayerStreamProgress: () => void
 
   // Shikimori
@@ -168,7 +280,13 @@ interface Api {
   shikimoriLogout: () => Promise<void>
   shikimoriGetUser: () => Promise<ShikiUser | null>
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
-  shikimoriUpdateRate: (malId: number, episodes: number, status: ShikiUserRateStatus, score: number, rewatches: number) => Promise<ShikiUserRate>
+  shikimoriUpdateRate: (
+    malId: number,
+    episodes: number,
+    status: ShikiUserRateStatus,
+    score: number,
+    rewatches: number
+  ) => Promise<ShikiUserRate>
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
@@ -208,7 +326,11 @@ interface Api {
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>
   syncplayDisconnect: () => Promise<void>
   syncplaySetFile: (file: SyncplayFilePayload) => Promise<void>
-  syncplaySendLocalState: (payload: { paused: boolean; position: number; cause: 'play' | 'pause' | 'seek' }) => Promise<void>
+  syncplaySendLocalState: (payload: {
+    paused: boolean
+    position: number
+    cause: 'play' | 'pause' | 'seek'
+  }) => Promise<void>
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
@@ -222,8 +344,12 @@ interface Api {
   offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => void
   onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
   offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
-  onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
-  offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) => void
+  onSyncplayTrace: (
+    callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
+  ) => void
+  offSyncplayTrace: (
+    callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
+  ) => void
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>
@@ -243,7 +369,9 @@ interface Api {
   autoDlSetEnabled: (enabled: boolean) => Promise<boolean>
   onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => void
   offAutoDlTickResult: () => void
-  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => void
+  onAutoDlEnqueued: (
+    callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void
+  ) => void
   offAutoDlEnqueued: () => void
 
   // Updates
@@ -419,7 +547,11 @@ interface WatchProgressEntry {
 
 interface StorageEpisodeUsage {
   episodeInt: string
-  files: { mkv?: { path: string; size: number }; mp4?: { path: string; size: number }; ass?: { path: string; size: number } }
+  files: {
+    mkv?: { path: string; size: number }
+    mp4?: { path: string; size: number }
+    ass?: { path: string; size: number }
+  }
   totalBytes: number
   watched: boolean
   watchedAt?: number
@@ -614,7 +746,13 @@ interface ShikiUser {
   avatar: string
 }
 
-type ShikiUserRateStatus = 'planned' | 'watching' | 'rewatching' | 'completed' | 'on_hold' | 'dropped'
+type ShikiUserRateStatus =
+  | 'planned'
+  | 'watching'
+  | 'rewatching'
+  | 'completed'
+  | 'on_hold'
+  | 'dropped'
 
 interface ShikiUserRate {
   id: number

@@ -30,24 +30,45 @@ function detectPlatform(): PlatformInfo | null {
   const plat = process.platform
   const arch = process.arch
   if (plat === 'linux' && arch === 'x64') {
-    return { archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-linux-x86_64.tar.gz`, archiveFormat: 'tar.gz', binaryName: 'fpcalc' }
+    return {
+      archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-linux-x86_64.tar.gz`,
+      archiveFormat: 'tar.gz',
+      binaryName: 'fpcalc'
+    }
   }
   if (plat === 'darwin') {
     // Single x86_64 release; runs on Apple Silicon via Rosetta
-    return { archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-macos-x86_64.tar.gz`, archiveFormat: 'tar.gz', binaryName: 'fpcalc' }
+    return {
+      archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-macos-x86_64.tar.gz`,
+      archiveFormat: 'tar.gz',
+      binaryName: 'fpcalc'
+    }
   }
   if (plat === 'win32') {
     if (arch === 'ia32') {
-      return { archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-i686.zip`, archiveFormat: 'zip', binaryName: 'fpcalc.exe' }
+      return {
+        archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-i686.zip`,
+        archiveFormat: 'zip',
+        binaryName: 'fpcalc.exe'
+      }
     }
-    return { archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-x86_64.zip`, archiveFormat: 'zip', binaryName: 'fpcalc.exe' }
+    return {
+      archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-x86_64.zip`,
+      archiveFormat: 'zip',
+      binaryName: 'fpcalc.exe'
+    }
   }
   return null
 }
 
-async function downloadToFile(url: string, dest: string, onProgress?: (received: number, total: number) => void): Promise<void> {
+async function downloadToFile(
+  url: string,
+  dest: string,
+  onProgress?: (received: number, total: number) => void
+): Promise<void> {
   const res = await fetch(url, { redirect: 'follow' })
-  if (!res.ok || !res.body) throw new Error(`fpcalc download failed: ${res.status} ${res.statusText}`)
+  if (!res.ok || !res.body)
+    throw new Error(`fpcalc download failed: ${res.status} ${res.statusText}`)
   const totalHeader = res.headers.get('content-length')
   const total = totalHeader ? Number(totalHeader) : 0
   let received = 0
@@ -62,7 +83,9 @@ function runTar(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn('tar', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
     let stderr = ''
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString() })
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
     proc.on('error', reject)
     proc.on('exit', (code) => {
       if (code === 0) resolve()
@@ -73,7 +96,11 @@ function runTar(args: string[], cwd: string): Promise<void> {
 
 async function findBinaryRecursively(dir: string, name: string): Promise<string | null> {
   let entries: fs.Dirent[]
-  try { entries = await fsPromises.readdir(dir, { withFileTypes: true }) } catch { return null }
+  try {
+    entries = await fsPromises.readdir(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
     if (entry.isFile() && entry.name === name) return full
@@ -113,9 +140,13 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
 
   const tmpArchive = path.join(os.tmpdir(), `${randomToken()}-${platInfo.archiveName}`)
   try {
-    await downloadToFile(`${RELEASE_BASE}/${platInfo.archiveName}`, tmpArchive, (received, total) => {
-      if (total > 0) sendProgress('downloading', Math.round((received / total) * 100))
-    })
+    await downloadToFile(
+      `${RELEASE_BASE}/${platInfo.archiveName}`,
+      tmpArchive,
+      (received, total) => {
+        if (total > 0) sendProgress('downloading', Math.round((received / total) * 100))
+      }
+    )
 
     if (platInfo.archiveFormat === 'tar.gz') {
       await runTar(['-xzf', tmpArchive], dest)
@@ -125,12 +156,19 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
     }
 
     const extracted = await findBinaryRecursively(dest, platInfo.binaryName)
-    if (!extracted) throw new Error(`fpcalc: binary ${platInfo.binaryName} not found after extracting ${platInfo.archiveName}`)
+    if (!extracted)
+      throw new Error(
+        `fpcalc: binary ${platInfo.binaryName} not found after extracting ${platInfo.archiveName}`
+      )
     if (extracted !== binary) {
       await fsPromises.rename(extracted, binary)
     }
     if (process.platform !== 'win32') {
-      try { fs.chmodSync(binary, 0o755) } catch { /* ignore */ }
+      try {
+        fs.chmodSync(binary, 0o755)
+      } catch {
+        /* ignore */
+      }
     }
     fpcalcPath = binary
     sendProgress('done', 100)
@@ -141,7 +179,11 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
     console.error('[fpcalc] Failed to install:', err)
     throw err
   } finally {
-    try { fs.unlinkSync(tmpArchive) } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpArchive)
+    } catch {
+      /* ignore */
+    }
   }
 }
 

@@ -17,7 +17,13 @@ interface RunFfmpegOptions {
   onPercent?: (pct: number) => void
 }
 
-export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled'
+export type DownloadStatus =
+  | 'queued'
+  | 'downloading'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 export type MergeStatus = 'pending' | 'merging' | 'completed' | 'failed'
 
 export interface DownloadItem {
@@ -83,18 +89,34 @@ const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
 
 export function sanitizeFilename(name: string): string {
-  return name.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim()
+  return name
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function subtitleLanguage(translationType: string): string {
-  if (translationType.endsWith('Ru') || translationType === 'voiceRu' || translationType === 'subRu') return 'rus'
-  if (translationType.endsWith('En') || translationType === 'voiceEn' || translationType === 'subEn') return 'eng'
+  if (
+    translationType.endsWith('Ru') ||
+    translationType === 'voiceRu' ||
+    translationType === 'subRu'
+  )
+    return 'rus'
+  if (
+    translationType.endsWith('En') ||
+    translationType === 'voiceEn' ||
+    translationType === 'subEn'
+  )
+    return 'eng'
   return 'und'
 }
 
 export class DownloadManager {
   private queue: DownloadItem[] = []
-  private mergeStatuses = new Map<number, { status: MergeStatus; error?: string; percent?: number }>()
+  private mergeStatuses = new Map<
+    number,
+    { status: MergeStatus; error?: string; percent?: number }
+  >()
   private activeCount = 0
   private abortControllers = new Map<string, AbortController>()
   private progressTimer: ReturnType<typeof setInterval> | null = null
@@ -103,7 +125,14 @@ export class DownloadManager {
   private getSpeedLimit: () => number
   private getConcurrentLimit: () => number
   private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void) | null = null
-  private mergeCompleteCallback: ((info: { animeName: string; animeId: number; episodeInt: string; episodeLabel: string }) => void) | null = null
+  private mergeCompleteCallback:
+    | ((info: {
+        animeName: string
+        animeId: number
+        episodeInt: string
+        episodeLabel: string
+      }) => void)
+    | null = null
   private queueCompleteCallback: (() => void) | null = null
   private videoDownloadedCallback: ((filePath: string, item: DownloadItem) => void) | null = null
   private merging = false
@@ -113,7 +142,13 @@ export class DownloadManager {
   private queueFilePath: string
   private persistScheduled = false
 
-  constructor(downloadDir: string, api: SmotretApi, userDataPath: string, getSpeedLimit: () => number = () => 0, getConcurrentLimit: () => number = () => 2) {
+  constructor(
+    downloadDir: string,
+    api: SmotretApi,
+    userDataPath: string,
+    getSpeedLimit: () => number = () => 0,
+    getConcurrentLimit: () => number = () => 2
+  ) {
     this.downloadDir = downloadDir
     this.api = api
     this.getSpeedLimit = getSpeedLimit
@@ -123,13 +158,17 @@ export class DownloadManager {
   }
 
   private persistQueue(): void {
-    const activeItems = this.queue.filter(i => i.status !== 'cancelled')
+    const activeItems = this.queue.filter((i) => i.status !== 'cancelled')
     if (activeItems.length === 0) {
-      try { fs.unlinkSync(this.queueFilePath) } catch { /* ignore */ }
+      try {
+        fs.unlinkSync(this.queueFilePath)
+      } catch {
+        /* ignore */
+      }
       return
     }
     const data = {
-      queue: activeItems.map(item => ({ ...item, speed: 0 })),
+      queue: activeItems.map((item) => ({ ...item, speed: 0 })),
       mergeStatuses: Object.fromEntries(this.mergeStatuses)
     }
     const tmpPath = this.queueFilePath + '.tmp'
@@ -186,7 +225,14 @@ export class DownloadManager {
     this.episodeCompleteCallback = callback
   }
 
-  onMergeComplete(callback: (info: { animeName: string; animeId: number; episodeInt: string; episodeLabel: string }) => void): void {
+  onMergeComplete(
+    callback: (info: {
+      animeName: string
+      animeId: number
+      episodeInt: string
+      episodeLabel: string
+    }) => void
+  ): void {
     this.mergeCompleteCallback = callback
   }
 
@@ -203,15 +249,16 @@ export class DownloadManager {
   }
 
   getItem(id: string): DownloadItem | null {
-    return this.queue.find(i => i.id === id) || null
+    return this.queue.find((i) => i.id === id) || null
   }
 
   findCancellableItems(animeName: string, episodeLabel?: string): DownloadItem[] {
-    return this.queue.filter(i =>
-      i.animeName === animeName &&
-      (!episodeLabel || i.episodeLabel === episodeLabel) &&
-      i.status !== 'completed' &&
-      i.status !== 'cancelled'
+    return this.queue.filter(
+      (i) =>
+        i.animeName === animeName &&
+        (!episodeLabel || i.episodeLabel === episodeLabel) &&
+        i.status !== 'completed' &&
+        i.status !== 'cancelled'
     )
   }
 
@@ -249,7 +296,9 @@ export class DownloadManager {
   private async fetchEmbed(translationId: number) {
     console.log(`[download] Fetching embed for translation ${translationId}`)
     const data = await this.api.getEmbed(translationId)
-    console.log(`[download] Embed response for ${translationId}: ${data.stream?.length || 0} stream URLs, subtitles: ${!!data.subtitlesUrl}`)
+    console.log(
+      `[download] Embed response for ${translationId}: ${data.stream?.length || 0} stream URLs, subtitles: ${!!data.subtitlesUrl}`
+    )
     return data
   }
 
@@ -261,11 +310,15 @@ export class DownloadManager {
       const baseFilename = sanitizeFilename(`${req.animeName} - ${padded}`) + ` [${authorTag}]`
 
       const videoId = `video-${req.translationId}`
-      const existing = this.queue.find(i => i.id === videoId)
+      const existing = this.queue.find((i) => i.id === videoId)
       if (existing) {
-        if (existing.status === 'completed' || existing.status === 'cancelled' || existing.status === 'failed') {
+        if (
+          existing.status === 'completed' ||
+          existing.status === 'cancelled' ||
+          existing.status === 'failed'
+        ) {
           // Remove stale entry so it can be re-enqueued
-          this.queue = this.queue.filter(i => i.translationId !== req.translationId)
+          this.queue = this.queue.filter((i) => i.translationId !== req.translationId)
           this.mergeStatuses.delete(req.translationId)
         } else {
           continue // still active — skip
@@ -276,7 +329,7 @@ export class DownloadManager {
         const embed = await this.fetchEmbed(req.translationId)
 
         const sorted = [...embed.stream].sort((a, b) => b.height - a.height)
-        const best = sorted.find(d => d.height <= req.height) || sorted[0]
+        const best = sorted.find((d) => d.height <= req.height) || sorted[0]
 
         if (best && best.urls.length > 0) {
           console.log(`[download] Using stream URL for ${req.translationId} at ${best.height}p`)
@@ -302,7 +355,7 @@ export class DownloadManager {
 
         if (embed.subtitlesUrl) {
           const subId = `sub-${req.translationId}`
-          if (!this.queue.find(i => i.id === subId)) {
+          if (!this.queue.find((i) => i.id === subId)) {
             this.queue.push({
               id: subId,
               translationId: req.translationId,
@@ -351,7 +404,7 @@ export class DownloadManager {
   }
 
   pause(id: string): void {
-    const item = this.queue.find(i => i.id === id)
+    const item = this.queue.find((i) => i.id === id)
     if (!item) return
     if (item.status === 'downloading') {
       const controller = this.abortControllers.get(id)
@@ -367,7 +420,7 @@ export class DownloadManager {
   }
 
   resume(id: string): void {
-    const item = this.queue.find(i => i.id === id)
+    const item = this.queue.find((i) => i.id === id)
     if (item && (item.status === 'paused' || item.status === 'failed')) {
       item.status = 'queued'
       item.error = undefined
@@ -396,12 +449,16 @@ export class DownloadManager {
   }
 
   async restart(id: string): Promise<void> {
-    const item = this.queue.find(i => i.id === id)
+    const item = this.queue.find((i) => i.id === id)
     if (!item || (item.status !== 'failed' && item.status !== 'paused')) return
 
     // Delete .part file
     const partPath = path.join(this.downloadDir, item.filename + '.part')
-    try { fs.unlinkSync(partPath) } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(partPath)
+    } catch {
+      /* ignore */
+    }
 
     // Re-fetch embed API for fresh URLs
     try {
@@ -409,7 +466,7 @@ export class DownloadManager {
 
       if (item.kind === 'video') {
         const sorted = [...embed.stream].sort((a, b) => b.height - a.height)
-        const best = sorted.find(d => d.height <= item.quality) || sorted[0]
+        const best = sorted.find((d) => d.height <= item.quality) || sorted[0]
         if (best && best.urls.length > 0) {
           item.url = best.urls[0]
           item.quality = best.height
@@ -431,7 +488,7 @@ export class DownloadManager {
   }
 
   async restartAllFailed(): Promise<void> {
-    const failed = this.queue.filter(i => i.status === 'failed')
+    const failed = this.queue.filter((i) => i.status === 'failed')
     for (const item of failed) {
       await this.restart(item.id)
     }
@@ -439,7 +496,7 @@ export class DownloadManager {
   }
 
   cancel(id: string): void {
-    const item = this.queue.find(i => i.id === id)
+    const item = this.queue.find((i) => i.id === id)
     if (!item) return
     if (item.status === 'downloading') {
       const controller = this.abortControllers.get(id)
@@ -452,12 +509,22 @@ export class DownloadManager {
     // Delete .part file and completed file
     const partPath = path.join(this.downloadDir, item.filename + '.part')
     const filePath = path.join(this.downloadDir, item.filename)
-    try { fs.unlinkSync(partPath) } catch { /* ignore */ }
-    try { fs.unlinkSync(filePath) } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(partPath)
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(filePath)
+    } catch {
+      /* ignore */
+    }
 
     // Also cancel and clean up the subtitle for this translation
     if (item.kind === 'video') {
-      const subItem = this.queue.find(i => i.translationId === item.translationId && i.kind === 'subtitle')
+      const subItem = this.queue.find(
+        (i) => i.translationId === item.translationId && i.kind === 'subtitle'
+      )
       if (subItem && subItem.status !== 'cancelled') {
         this.cancel(subItem.id)
       }
@@ -507,14 +574,18 @@ export class DownloadManager {
         }
       }
     }
-    this.queue = this.queue.filter(i => !removedTrIds.has(i.translationId))
+    this.queue = this.queue.filter((i) => !removedTrIds.has(i.translationId))
     for (const trId of removedTrIds) {
       this.mergeStatuses.delete(trId)
     }
     this.schedulePersist()
   }
 
-  async mergeCompleted(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy'): Promise<void> {
+  async mergeCompleted(
+    ffmpegPath: string,
+    ffprobePath: string,
+    videoCodec = 'copy'
+  ): Promise<void> {
     if (this.merging) return
     this.merging = true
 
@@ -525,7 +596,11 @@ export class DownloadManager {
     }
   }
 
-  private async _mergeAll(ffmpegPath: string, ffprobePath: string, videoCodec: string): Promise<void> {
+  private async _mergeAll(
+    ffmpegPath: string,
+    ffprobePath: string,
+    videoCodec: string
+  ): Promise<void> {
     this.mergeCancelled = false
     const groups = this.getEpisodeGroups()
 
@@ -538,7 +613,9 @@ export class DownloadManager {
       if (!fs.existsSync(videoPath)) continue
 
       const hasSubtitle = group.subtitle && group.subtitle.status === 'completed'
-      const subtitlePath = hasSubtitle ? path.join(this.downloadDir, group.subtitle!.filename) : null
+      const subtitlePath = hasSubtitle
+        ? path.join(this.downloadDir, group.subtitle!.filename)
+        : null
 
       const mkvFilename = group.video.filename.replace(/\.mp4$/, '.mkv')
       const mkvPath = path.join(this.downloadDir, mkvFilename)
@@ -546,10 +623,12 @@ export class DownloadManager {
       this.mergeStatuses.set(group.translationId, { status: 'merging' })
       this.activeMergeTranslationId = group.translationId
 
-      const subMeta = hasSubtitle ? {
-        language: subtitleLanguage(group.translationType),
-        title: group.author || 'Subtitles'
-      } : undefined
+      const subMeta = hasSubtitle
+        ? {
+            language: subtitleLanguage(group.translationType),
+            title: group.author || 'Subtitles'
+          }
+        : undefined
 
       try {
         await this.runFfmpeg({
@@ -576,13 +655,25 @@ export class DownloadManager {
           })
         }
         // Delete source files after successful merge
-        try { fs.unlinkSync(videoPath) } catch { /* ignore */ }
+        try {
+          fs.unlinkSync(videoPath)
+        } catch {
+          /* ignore */
+        }
         if (subtitlePath) {
-          try { fs.unlinkSync(subtitlePath) } catch { /* ignore */ }
+          try {
+            fs.unlinkSync(subtitlePath)
+          } catch {
+            /* ignore */
+          }
         }
       } catch (err) {
         // Clean up partial output file
-        try { fs.unlinkSync(mkvPath) } catch { /* ignore */ }
+        try {
+          fs.unlinkSync(mkvPath)
+        } catch {
+          /* ignore */
+        }
         if (this.mergeCancelled) {
           this.mergeStatuses.delete(group.translationId)
           console.log(`[merge] Cancelled: ${mkvFilename}`)
@@ -597,7 +688,11 @@ export class DownloadManager {
     this.activeMergeTranslationId = null
   }
 
-  private probeDuration(ffmpegPath: string, ffprobePath: string, videoPath: string): Promise<number> {
+  private probeDuration(
+    ffmpegPath: string,
+    ffprobePath: string,
+    videoPath: string
+  ): Promise<number> {
     return new Promise((resolve) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
       Ffmpeg.setFfprobePath(ffprobePath)
@@ -626,10 +721,7 @@ export class DownloadManager {
     return new Promise((resolve, reject) => {
       Ffmpeg.setFfmpegPath(ffmpegPath)
 
-      let cmd = Ffmpeg(videoPath)
-        .outputOptions('-y')
-        .videoCodec(videoCodec)
-        .audioCodec('copy')
+      let cmd = Ffmpeg(videoPath).outputOptions('-y').videoCodec(videoCodec).audioCodec('copy')
 
       if (subtitlePath && fs.existsSync(subtitlePath)) {
         cmd = cmd
@@ -674,28 +766,40 @@ export class DownloadManager {
     })
   }
 
-  async scanAndMerge(ffmpegPath: string, ffprobePath: string, videoCodec = 'copy', onProgress?: (current: number, total: number, file: string, percent: number) => void, extraDirs?: string[]): Promise<{ merged: number; failed: string[] }> {
+  async scanAndMerge(
+    ffmpegPath: string,
+    ffprobePath: string,
+    videoCodec = 'copy',
+    onProgress?: (current: number, total: number, file: string, percent: number) => void,
+    extraDirs?: string[]
+  ): Promise<{ merged: number; failed: string[] }> {
     if (this.merging) return { merged: 0, failed: [] }
     this.merging = true
 
     const result = { merged: 0, failed: [] as string[] }
 
     try {
-      const scanDirs = [this.downloadDir, ...(extraDirs || [])].filter(d => fs.existsSync(d))
+      const scanDirs = [this.downloadDir, ...(extraDirs || [])].filter((d) => fs.existsSync(d))
 
       // Collect all mp4 files that have no matching mkv
-      const toMerge: { videoPath: string; subtitlePath: string | null; outputPath: string; label: string }[] = []
+      const toMerge: {
+        videoPath: string
+        subtitlePath: string | null
+        outputPath: string
+        label: string
+      }[] = []
 
       for (const scanDir of scanDirs) {
-        const animeDirs = fs.readdirSync(scanDir, { withFileTypes: true })
-          .filter(d => d.isDirectory())
-          .map(d => d.name)
+        const animeDirs = fs
+          .readdirSync(scanDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)
 
         for (const dir of animeDirs) {
           const dirPath = path.join(scanDir, dir)
           const files = fs.readdirSync(dirPath)
 
-          const mp4Files = files.filter(f => f.endsWith('.mp4'))
+          const mp4Files = files.filter((f) => f.endsWith('.mp4'))
           for (const mp4 of mp4Files) {
             const base = mp4.replace(/\.mp4$/, '')
             const mkvPath = path.join(dirPath, `${base}.mkv`)
@@ -729,9 +833,17 @@ export class DownloadManager {
           })
 
           // Delete source files
-          try { fs.unlinkSync(item.videoPath) } catch { /* ignore */ }
+          try {
+            fs.unlinkSync(item.videoPath)
+          } catch {
+            /* ignore */
+          }
           if (item.subtitlePath) {
-            try { fs.unlinkSync(item.subtitlePath) } catch { /* ignore */ }
+            try {
+              fs.unlinkSync(item.subtitlePath)
+            } catch {
+              /* ignore */
+            }
           }
 
           result.merged++
@@ -751,7 +863,7 @@ export class DownloadManager {
 
   private processQueue(): void {
     while (this.activeCount < this.getConcurrentLimit()) {
-      const next = this.queue.find(i => i.status === 'queued')
+      const next = this.queue.find((i) => i.status === 'queued')
       if (!next) break
       this.startDownload(next)
     }
@@ -779,7 +891,9 @@ export class DownloadManager {
       if (existingBytes > 0) {
         headers['Range'] = `bytes=${existingBytes}-`
       }
-    } catch { /* file doesn't exist yet */ }
+    } catch {
+      /* file doesn't exist yet */
+    }
 
     try {
       console.log(`[download] Starting: ${item.filename} -> ${item.url.substring(0, 120)}...`)
@@ -789,12 +903,18 @@ export class DownloadManager {
         redirect: 'follow'
       })
 
-      console.log(`[download] Response: ${response.status} ${response.statusText} for ${item.filename}`)
+      console.log(
+        `[download] Response: ${response.status} ${response.statusText} for ${item.filename}`
+      )
 
       // Range not satisfiable — .part file is stale, delete and retry from zero
       if (response.status === 416) {
         console.log(`[download] Got 416, deleting .part and retrying from zero: ${item.filename}`)
-        try { fs.unlinkSync(partPath) } catch { /* ignore */ }
+        try {
+          fs.unlinkSync(partPath)
+        } catch {
+          /* ignore */
+        }
         this.abortControllers.delete(item.id)
         this.activeCount--
         item.status = 'queued'
@@ -887,13 +1007,14 @@ export class DownloadManager {
       this.schedulePersist()
 
       if (item.kind === 'video' && this.videoDownloadedCallback) {
-        try { this.videoDownloadedCallback(filePath, item) } catch (e) {
+        try {
+          this.videoDownloadedCallback(filePath, item)
+        } catch (e) {
           console.warn('[download] videoDownloaded callback failed:', e)
         }
       }
 
       this.checkEpisodeComplete(item.translationId)
-
     } catch (err: unknown) {
       this.abortControllers.delete(item.id)
 
@@ -923,8 +1044,10 @@ export class DownloadManager {
   }
 
   private checkEpisodeComplete(translationId: number): void {
-    const items = this.queue.filter(i => i.translationId === translationId && i.status !== 'cancelled')
-    const allDone = items.length > 0 && items.every(i => i.status === 'completed')
+    const items = this.queue.filter(
+      (i) => i.translationId === translationId && i.status !== 'cancelled'
+    )
+    const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
     if (allDone) {
       const first = items[0]
       if (this.episodeCompleteCallback) {
@@ -946,9 +1069,7 @@ export class DownloadManager {
 
   private checkQueueComplete(): void {
     if (!this.queueCompleteCallback) return
-    const hasRemaining = this.queue.some(i =>
-      i.status === 'queued' || i.status === 'downloading'
-    )
+    const hasRemaining = this.queue.some((i) => i.status === 'queued' || i.status === 'downloading')
     if (!hasRemaining) {
       setTimeout(() => this.queueCompleteCallback?.(), 200)
     }

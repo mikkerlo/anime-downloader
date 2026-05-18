@@ -64,6 +64,9 @@ export async function probeMp4Faststart(filePath: string): Promise<Mp4FaststartP
   } catch {
     return null
   } finally {
-    if (fh) await fh.close().catch(() => { /* ignore */ })
+    if (fh)
+      await fh.close().catch(() => {
+        /* ignore */
+      })
   }
 }

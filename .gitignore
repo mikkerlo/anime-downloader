@@ -4,7 +4,12 @@ dist/
 *.tgz
 *.tar.gz
 *:Zone.Identifier
+run_log.txt
 tsconfig.web.tsbuildinfo
+*.tsbuildinfo
+coverage/
+test-results/
+playwright-report/
 scripts/browse.js
 .claude/scheduled_tasks.lock
 .claude/settings.local.json

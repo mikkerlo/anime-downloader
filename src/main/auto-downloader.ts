@@ -92,13 +92,19 @@ export function getAutoDownloaderStatus(): {
 
 export function listSubscriptions(): AutoDownloadSubscription[] {
   if (!deps) return []
-  const map = deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>
+  const map = deps.store.get('autoDownloadSubscriptions') as Record<
+    string,
+    AutoDownloadSubscription
+  >
   return Object.values(map)
 }
 
 export function getSubscription(animeId: number): AutoDownloadSubscription | null {
   if (!deps) return null
-  const map = deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>
+  const map = deps.store.get('autoDownloadSubscriptions') as Record<
+    string,
+    AutoDownloadSubscription
+  >
   return map[String(animeId)] ?? null
 }
 
@@ -108,7 +114,9 @@ export async function setSubscription(
   meta?: { malId: number; animeName: string }
 ): Promise<AutoDownloadSubscription | null> {
   if (!deps) return null
-  const map = { ...(deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>) }
+  const map = {
+    ...(deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>)
+  }
   const key = String(animeId)
   if (!enabled) {
     if (key in map) {
@@ -125,7 +133,10 @@ export async function setSubscription(
   // Stamp lastEnqueuedEpisodeInt to the current episodes_aired so we never backfill.
   // If the cache is missing or stale, inline-refresh first — otherwise an empty cache
   // would leave the stamp at 0 and the next tick would download the entire show.
-  const cache = deps.store.get('shikimoriAnimeDetails') as Record<string, ShikiAnimeDetailsCacheEntry>
+  const cache = deps.store.get('shikimoriAnimeDetails') as Record<
+    string,
+    ShikiAnimeDetailsCacheEntry
+  >
   let cacheEntry = cache[String(meta.malId)]
   const cacheAge = cacheEntry ? Date.now() - cacheEntry.fetchedAt : Infinity
   if (!cacheEntry || cacheAge > DETAILS_FRESHNESS_MS) {
@@ -208,7 +219,11 @@ function isAlreadyDownloaded(
   return false
 }
 
-function isAlreadyQueued(downloadManager: DownloadManager, animeId: number, episodeInt: string): boolean {
+function isAlreadyQueued(
+  downloadManager: DownloadManager,
+  animeId: number,
+  episodeInt: string
+): boolean {
   const groups = downloadManager.getEpisodeGroups()
   return groups.some((g) => g.animeId === animeId && g.episodeInt === episodeInt)
 }
@@ -252,7 +267,9 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
       return result
     }
 
-    const map = { ...(deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>) }
+    const map = {
+      ...(deps.store.get('autoDownloadSubscriptions') as Record<string, AutoDownloadSubscription>)
+    }
     const subscriptions = Object.values(map)
     if (subscriptions.length === 0) {
       lastTickResult = result
@@ -275,7 +292,10 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
       sub.lastCheckedAt = Date.now()
       mapDirty = true
 
-      const detailsCache = deps.store.get('shikimoriAnimeDetails') as Record<string, ShikiAnimeDetailsCacheEntry>
+      const detailsCache = deps.store.get('shikimoriAnimeDetails') as Record<
+        string,
+        ShikiAnimeDetailsCacheEntry
+      >
       let cacheEntry = detailsCache[String(sub.malId)]
       const cacheAge = cacheEntry ? Date.now() - cacheEntry.fetchedAt : Infinity
       if (cacheAge > DETAILS_FRESHNESS_MS) {

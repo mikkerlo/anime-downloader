@@ -34,31 +34,50 @@ const api = {
   searchAnime: (query: string) => ipcRenderer.invoke('search-anime', query),
   getAnime: (id: number) => ipcRenderer.invoke('get-anime', id),
   getAnimeCache: (id: number) =>
-    ipcRenderer.invoke('get-anime-cache', id) as Promise<{ data: AnimeDetail; cachedAt: number } | null>,
+    ipcRenderer.invoke('get-anime-cache', id) as Promise<{
+      data: AnimeDetail
+      cachedAt: number
+    } | null>,
   setAnimeCache: (id: number, data: AnimeDetail) =>
     ipcRenderer.invoke('set-anime-cache', id, data) as Promise<boolean>,
   getEpisode: (id: number, animeId?: number) => ipcRenderer.invoke('get-episode', id, animeId),
-  probeEmbedQuality: (translationId: number, animeId?: number) => ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
+  probeEmbedQuality: (translationId: number, animeId?: number) =>
+    ipcRenderer.invoke('probe-embed-quality', translationId, animeId) as Promise<number | null>,
   probeFullScanNeeded: (animeId: number, episodeCount: number) =>
     ipcRenderer.invoke('probe-full-scan-needed', animeId, episodeCount) as Promise<boolean>,
   probeFullScanDone: (animeId: number, episodeCount: number) =>
     ipcRenderer.invoke('probe-full-scan-done', animeId, episodeCount) as Promise<void>,
-  reportQualityMismatch: (data: { translationId: number; author: string; type: string; reported: number; actual: number }) =>
-    ipcRenderer.invoke('report-quality-mismatch', data),
-  getQualityMismatchCount: () => ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,
-  dumpQualityMismatches: () => ipcRenderer.invoke('dump-quality-mismatches') as Promise<{ count: number; path: string }>,
+  reportQualityMismatch: (data: {
+    translationId: number
+    author: string
+    type: string
+    reported: number
+    actual: number
+  }) => ipcRenderer.invoke('report-quality-mismatch', data),
+  getQualityMismatchCount: () =>
+    ipcRenderer.invoke('get-quality-mismatch-count') as Promise<number>,
+  dumpQualityMismatches: () =>
+    ipcRenderer.invoke('dump-quality-mismatches') as Promise<{ count: number; path: string }>,
   debugGetMp4Stats: () => ipcRenderer.invoke('debug:get-mp4-stats') as Promise<Mp4StreamingStats>,
   debugResetMp4Stats: () => ipcRenderer.invoke('debug:reset-mp4-stats') as Promise<void>,
-  getCachedPoster: (animeId: number) => ipcRenderer.invoke('cache-get-poster', animeId) as Promise<string | null>,
+  getCachedPoster: (animeId: number) =>
+    ipcRenderer.invoke('cache-get-poster', animeId) as Promise<string | null>,
   libraryGet: () => ipcRenderer.invoke('library-get'),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke('library-toggle', anime),
   libraryHas: (id: number) => ipcRenderer.invoke('library-has', id),
-  libraryGetStatus: (ids: number[]) => ipcRenderer.invoke('library-get-status', ids) as Promise<Record<number, { starred: boolean; downloaded: boolean }>>,
+  libraryGetStatus: (ids: number[]) =>
+    ipcRenderer.invoke('library-get-status', ids) as Promise<
+      Record<number, { starred: boolean; downloaded: boolean }>
+    >,
   libraryIsDownloaded: (id: number) => ipcRenderer.invoke('library-is-downloaded', id),
   downloadedAnimeAdd: (anime: unknown) => ipcRenderer.invoke('downloaded-anime-add', anime),
-  downloadedAnimeDelete: (animeId: number, animeName: string) => ipcRenderer.invoke('downloaded-anime-delete', animeId, animeName),
+  downloadedAnimeDelete: (animeId: number, animeName: string) =>
+    ipcRenderer.invoke('downloaded-anime-delete', animeId, animeName),
   cleanupGetSize: (animeId: number, animeName: string) =>
-    ipcRenderer.invoke('cleanup:get-size', animeId, animeName) as Promise<{ bytes: number; files: number }>,
+    ipcRenderer.invoke('cleanup:get-size', animeId, animeName) as Promise<{
+      bytes: number
+      files: number
+    }>,
   cleanupGetActiveDownloads: (animeName: string) =>
     ipcRenderer.invoke('cleanup:get-active-downloads', animeName) as Promise<{ active: number }>,
   cleanupExecute: (animeId: number, animeName: string) =>
@@ -67,7 +86,9 @@ const api = {
     ipcRenderer.invoke('cleanup:get-snoozed') as Promise<Record<string, { animeName: string }>>,
   cleanupSetSnoozed: (animeId: number, snoozed: boolean) =>
     ipcRenderer.invoke('cleanup:set-snoozed', animeId, snoozed) as Promise<void>,
-  onCleanupPrompt: (callback: (data: { animeId: number; animeName: string; malId: number }) => void) => {
+  onCleanupPrompt: (
+    callback: (data: { animeId: number; animeName: string; malId: number }) => void
+  ) => {
     ipcRenderer.on('cleanup:prompt', (_event, data) => callback(data))
   },
   offCleanupPrompt: () => {
@@ -80,12 +101,44 @@ const api = {
     ipcRenderer.invoke('home:get-continue-watching') as Promise<ContinueWatchingEntry[]>,
 
   // Watch progress
-  watchProgressSave: (animeId: number, episodeInt: string, position: number, duration: number, watched?: boolean, translationId?: number) =>
-    ipcRenderer.invoke('watch-progress:save', animeId, episodeInt, position, duration, watched, translationId),
+  watchProgressSave: (
+    animeId: number,
+    episodeInt: string,
+    position: number,
+    duration: number,
+    watched?: boolean,
+    translationId?: number
+  ) =>
+    ipcRenderer.invoke(
+      'watch-progress:save',
+      animeId,
+      episodeInt,
+      position,
+      duration,
+      watched,
+      translationId
+    ),
   watchProgressGet: (animeId: number, episodeInt: string) =>
-    ipcRenderer.invoke('watch-progress:get', animeId, episodeInt) as Promise<{ position: number; duration: number; updatedAt: number; watched?: boolean; translationId?: number } | null>,
+    ipcRenderer.invoke('watch-progress:get', animeId, episodeInt) as Promise<{
+      position: number
+      duration: number
+      updatedAt: number
+      watched?: boolean
+      translationId?: number
+    } | null>,
   watchProgressGetAll: (animeId: number) =>
-    ipcRenderer.invoke('watch-progress:get-all', animeId) as Promise<Record<string, { position: number; duration: number; updatedAt: number; watched?: boolean; translationId?: number }>>,
+    ipcRenderer.invoke('watch-progress:get-all', animeId) as Promise<
+      Record<
+        string,
+        {
+          position: number
+          duration: number
+          updatedAt: number
+          watched?: boolean
+          translationId?: number
+        }
+      >
+    >,
 
   // Downloads
   downloadEnqueue: (requests: unknown[]) => ipcRenderer.invoke('download:enqueue', requests),
@@ -99,7 +152,8 @@ const api = {
   downloadGetQueue: () => ipcRenderer.invoke('download:get-queue'),
   downloadCancelByEpisode: (animeName: string, episodeLabel?: string) =>
     ipcRenderer.invoke('download:cancel-by-episode', animeName, episodeLabel),
-  downloadedEpisodesGet: (animeId: number) => ipcRenderer.invoke('downloaded-episodes-get', animeId),
+  downloadedEpisodesGet: (animeId: number) =>
+    ipcRenderer.invoke('downloaded-episodes-get', animeId),
   downloadClearCompleted: () => ipcRenderer.invoke('download:clear-completed'),
   downloadCancelMerge: () => ipcRenderer.invoke('download:cancel-merge'),
   downloadMerge: () => ipcRenderer.invoke('download:merge'),
@@ -111,9 +165,21 @@ const api = {
     ipcRenderer.invoke('file:check-episodes', animeName, episodeInts),
   fileOpen: (filePath: string) => ipcRenderer.invoke('file:open', filePath),
   fileShowInFolder: (filePath: string) => ipcRenderer.invoke('file:show-in-folder', filePath),
-  fileDeleteEpisode: (animeName: string, episodeInt: string, animeId?: number, translationId?: number) =>
-    ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId, translationId),
-  onFileEpisodesChanged: (callback: (animeName: string, data: Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>) => void) => {
+  fileDeleteEpisode: (
+    animeName: string,
+    episodeInt: string,
+    animeId?: number,
+    translationId?: number
+  ) => ipcRenderer.invoke('file:delete-episode', animeName, episodeInt, animeId, translationId),
+  onFileEpisodesChanged: (
+    callback: (
+      animeName: string,
+      data: Record<
+        string,
+        { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+      >
+    ) => void
+  ) => {
     ipcRenderer.on('file:episodes-changed', (_event, animeName, data) => callback(animeName, data))
   },
   offFileEpisodesChanged: () => {
@@ -124,7 +190,9 @@ const api = {
   storagePickHotDir: () => ipcRenderer.invoke('storage:pick-hot-dir'),
   storagePickColdDir: () => ipcRenderer.invoke('storage:pick-cold-dir'),
   storageMoveToCold: () => ipcRenderer.invoke('storage:move-to-cold'),
-  onStorageMoveToColdProgress: (callback: (data: { current: number; total: number; file: string }) => void) => {
+  onStorageMoveToColdProgress: (
+    callback: (data: { current: number; total: number; file: string }) => void
+  ) => {
     ipcRenderer.on('storage:move-to-cold-progress', (_event, data) => callback(data))
   },
   offStorageMoveToColdProgress: () => {
@@ -187,38 +255,74 @@ const api = {
   },
 
   // Skip detection (Phase 1: debug panel only)
-  skipDetectorAnalyzeShow: (animeId: number, episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]) =>
-    ipcRenderer.invoke('skip-detector:analyze-show', animeId, episodes) as Promise<ShowSkipDetections>,
+  skipDetectorAnalyzeShow: (
+    animeId: number,
+    episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
+  ) =>
+    ipcRenderer.invoke(
+      'skip-detector:analyze-show',
+      animeId,
+      episodes
+    ) as Promise<ShowSkipDetections>,
   skipDetectorGetDetections: (animeId: number) =>
-    ipcRenderer.invoke('skip-detector:get-detections', animeId) as Promise<ShowSkipDetections | null>,
+    ipcRenderer.invoke(
+      'skip-detector:get-detections',
+      animeId
+    ) as Promise<ShowSkipDetections | null>,
   skipDetectorDetectStream: (animeId: number, episodeInt: string, streamUrl: string) =>
-    ipcRenderer.invoke('skip-detector:detect-stream', animeId, episodeInt, streamUrl) as Promise<EpisodeSkipDetection | null>,
+    ipcRenderer.invoke(
+      'skip-detector:detect-stream',
+      animeId,
+      episodeInt,
+      streamUrl
+    ) as Promise<EpisodeSkipDetection | null>,
   skipDetectorCancelStreamDetect: () =>
     ipcRenderer.invoke('skip-detector:cancel-stream-detect') as Promise<void>,
   skipDetectorGetStatus: () =>
-    ipcRenderer.invoke('skip-detector:get-status') as Promise<{ animeId: number; lastProgress: SkipDetectorProgress | null } | null>,
+    ipcRenderer.invoke('skip-detector:get-status') as Promise<{
+      animeId: number
+      lastProgress: SkipDetectorProgress | null
+    } | null>,
   skipDetectorCancel: () => ipcRenderer.invoke('skip-detector:cancel') as Promise<void>,
   skipDetectorCacheStats: () =>
     ipcRenderer.invoke('skip-detector:cache-stats') as Promise<{ fingerprintCount: number }>,
   skipDetectorBackfillAll: () =>
-    ipcRenderer.invoke('skip-detector:backfill-all') as Promise<{ queued: number; alreadyAnalyzed: number; skippedFewEpisodes: number; total: number }>,
+    ipcRenderer.invoke('skip-detector:backfill-all') as Promise<{
+      queued: number
+      alreadyAnalyzed: number
+      skippedFewEpisodes: number
+      total: number
+    }>,
   skipDetectorQueueStatus: () =>
-    ipcRenderer.invoke('skip-detector:queue-status') as Promise<{ currentAnimeId: number | null; queueLength: number }>,
+    ipcRenderer.invoke('skip-detector:queue-status') as Promise<{
+      currentAnimeId: number | null
+      queueLength: number
+    }>,
   onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => {
     ipcRenderer.on('skip-detector:analyze-progress', (_event, data) => callback(data))
   },
   offSkipDetectorProgress: () => {
     ipcRenderer.removeAllListeners('skip-detector:analyze-progress')
   },
-  onSkipDetectorSignatureUpdated: (callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void) => {
+  onSkipDetectorSignatureUpdated: (
+    callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void
+  ) => {
     ipcRenderer.on('skip-detector:signature-updated', (_event, data) => callback(data))
   },
   offSkipDetectorSignatureUpdated: () => {
     ipcRenderer.removeAllListeners('skip-detector:signature-updated')
   },
 
-  injectChapters: (animeId: number, episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]) =>
-    ipcRenderer.invoke('download:inject-chapters', animeId, episodes) as Promise<{ written: number; skipped: number; failed: number; total: number }>,
+  injectChapters: (
+    animeId: number,
+    episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
+  ) =>
+    ipcRenderer.invoke('download:inject-chapters', animeId, episodes) as Promise<{
+      written: number
+      skipped: number
+      failed: number
+      total: number
+    }>,
   onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => {
     ipcRenderer.on('chapter-inject:progress', (_event, data) => callback(data))
   },
@@ -226,44 +330,78 @@ const api = {
     ipcRenderer.removeAllListeners('chapter-inject:progress')
   },
 
-  shellOpenExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
+  shellOpenExternal: (url: string) =>
+    ipcRenderer.invoke('shell:open-external', url) as Promise<boolean>,
 
   // Player
   playerGetStreamUrl: (translationId: number, maxHeight: number) =>
     ipcRenderer.invoke('player:get-stream-url', translationId, maxHeight),
   playerGetLocalSubtitles: (filePath: string) =>
     ipcRenderer.invoke('player:get-local-subtitles', filePath) as Promise<string | null>,
-  playerFindLocalFile: (animeName: string, episodeInt: string, translationId: number, episodeLabel: string) =>
-    ipcRenderer.invoke('player:find-local-file', animeName, episodeInt, translationId, episodeLabel) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
+  playerFindLocalFile: (
+    animeName: string,
+    episodeInt: string,
+    translationId: number,
+    episodeLabel: string
+  ) =>
+    ipcRenderer.invoke(
+      'player:find-local-file',
+      animeName,
+      episodeInt,
+      translationId,
+      episodeLabel
+    ) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
   playerRemuxMkv: (mkvPath: string) =>
-    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>,
+    ipcRenderer.invoke('player:remux-mkv', mkvPath) as Promise<
+      { mp4Path: string; subtitleContent?: string } | { error: string }
+    >,
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke('player:remux-mkv-stream', mkvPath, initialSeek) as Promise<
-      | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+      | {
+          sessionId: string
+          generation: number
+          duration: number
+          mimeType: string
+          hasSubtitlesPending: boolean
+          initialSeek: number
+        }
       | { error: string }
     >,
   playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke('player:remux-mkv-stream-transcode', mkvPath, initialSeek) as Promise<
-      | { sessionId: string; generation: number; duration: number; mimeType: string; hasSubtitlesPending: boolean; initialSeek: number }
+      | {
+          sessionId: string
+          generation: number
+          duration: number
+          mimeType: string
+          hasSubtitlesPending: boolean
+          initialSeek: number
+        }
       | { error: string }
     >,
   shellOpenExternalFile: (filePath: string) =>
-    ipcRenderer.invoke('shell:open-external-file', filePath) as Promise<{ ok: boolean; error?: string }>,
+    ipcRenderer.invoke('shell:open-external-file', filePath) as Promise<{
+      ok: boolean
+      error?: string
+    }>,
   playerStreamStart: (sessionId: string) =>
     ipcRenderer.invoke('player:stream-start', sessionId) as Promise<void>,
   playerStreamAck: (sessionId: string, bytes: number) =>
     ipcRenderer.invoke('player:stream-ack', sessionId, bytes) as Promise<void>,
   playerStreamSeek: (sessionId: string, seekSeconds: number) =>
-    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>,
-  playerCleanupRemux: () =>
-    ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
+    ipcRenderer.invoke('player:stream-seek', sessionId, seekSeconds) as Promise<
+      { ok: true; generation: number; keyframeTime: number } | { error: string }
+    >,
+  playerCleanupRemux: () => ipcRenderer.invoke('player:cleanup-remux') as Promise<void>,
   onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => {
     ipcRenderer.on('player:stream-subtitles', (_event, data) => callback(data))
   },
   offPlayerStreamSubtitles: () => {
     ipcRenderer.removeAllListeners('player:stream-subtitles')
   },
-  onPlayerStreamChunk: (callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void) => {
+  onPlayerStreamChunk: (
+    callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
+  ) => {
     ipcRenderer.on('player:stream-chunk', (_event, data) => callback(data))
   },
   offPlayerStreamChunk: () => {
@@ -281,7 +419,14 @@ const api = {
   offPlayerStreamError: () => {
     ipcRenderer.removeAllListeners('player:stream-error')
   },
-  onPlayerStreamProgress: (callback: (data: { sessionId: string; gen: number; speed: number | null; time: number | null }) => void) => {
+  onPlayerStreamProgress: (
+    callback: (data: {
+      sessionId: string
+      gen: number
+      speed: number | null
+      time: number | null
+    }) => void
+  ) => {
     ipcRenderer.on('player:stream-progress', (_event, data) => callback(data))
   },
   offPlayerStreamProgress: () => {
@@ -294,8 +439,13 @@ const api = {
   shikimoriLogout: () => ipcRenderer.invoke('shikimori:logout'),
   shikimoriGetUser: () => ipcRenderer.invoke('shikimori:get-user'),
   shikimoriGetRate: (malId: number) => ipcRenderer.invoke('shikimori:get-rate', malId),
-  shikimoriUpdateRate: (malId: number, episodes: number, status: string, score: number, rewatches: number) =>
-    ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score, rewatches),
+  shikimoriUpdateRate: (
+    malId: number,
+    episodes: number,
+    status: string,
+    score: number,
+    rewatches: number
+  ) => ipcRenderer.invoke('shikimori:update-rate', malId, episodes, status, score, rewatches),
   shikimoriGetFriendsRates: (malId: number) =>
     ipcRenderer.invoke('shikimori:get-friends-rates', malId) as Promise<ShikiFriendRate[]>,
   shikimoriGetAnimeRates: (status?: string) =>
@@ -333,8 +483,7 @@ const api = {
       lastSyncAt: number
       lastSyncError: string | null
     }>,
-  shikimoriTriggerSync: () =>
-    ipcRenderer.invoke('shikimori:trigger-sync') as Promise<void>,
+  shikimoriTriggerSync: () => ipcRenderer.invoke('shikimori:trigger-sync') as Promise<void>,
   onShikimoriSyncStatus: (
     callback: (data: {
       state: 'idle' | 'syncing'
@@ -411,14 +560,27 @@ const api = {
     syncplayOff('syncplay:remote-episode-change', callback),
   onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
     syncplayOn('syncplay:trace', callback),
-  offSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
-    syncplayOff('syncplay:trace', callback),
+  offSyncplayTrace: (
+    callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
+  ) => syncplayOff('syncplay:trace', callback),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>
-    ipcRenderer.invoke('auto-dl:get-subscription', animeId) as Promise<AutoDownloadSubscription | null>,
-  autoDlSetSubscription: (animeId: number, enabled: boolean, meta?: { malId: number; animeName: string }) =>
-    ipcRenderer.invoke('auto-dl:set-subscription', animeId, enabled, meta) as Promise<AutoDownloadSubscription | null>,
+    ipcRenderer.invoke(
+      'auto-dl:get-subscription',
+      animeId
+    ) as Promise<AutoDownloadSubscription | null>,
+  autoDlSetSubscription: (
+    animeId: number,
+    enabled: boolean,
+    meta?: { malId: number; animeName: string }
+  ) =>
+    ipcRenderer.invoke(
+      'auto-dl:set-subscription',
+      animeId,
+      enabled,
+      meta
+    ) as Promise<AutoDownloadSubscription | null>,
   autoDlListSubscriptions: () =>
     ipcRenderer.invoke('auto-dl:list-subscriptions') as Promise<AutoDownloadSubscription[]>,
   autoDlTrigger: () => ipcRenderer.invoke('auto-dl:trigger') as Promise<AutoDlTickResult>,
@@ -437,7 +599,9 @@ const api = {
   offAutoDlTickResult: () => {
     ipcRenderer.removeAllListeners('auto-dl:tick-result')
   },
-  onAutoDlEnqueued: (callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void) => {
+  onAutoDlEnqueued: (
+    callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void
+  ) => {
     ipcRenderer.on('auto-dl:enqueued', (_event, data) => callback(data))
   },
   offAutoDlEnqueued: () => {

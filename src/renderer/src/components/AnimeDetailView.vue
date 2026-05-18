@@ -1,83 +1,113 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import { formatBytes, formatSpeed, formatEta, getAnimeName as _getAnimeName, sanitizeFilename } from '../utils'
-import CleanupModal from './CleanupModal.vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
+import {
+  formatBytes,
+  formatSpeed,
+  formatEta,
+  getAnimeName as _getAnimeName,
+  sanitizeFilename
+} from '../utils';
+import CleanupModal from './CleanupModal.vue';
 
 const props = defineProps<{
-  animeId: number
-  initialPrefs?: { translationType?: string; author?: string }
-  focusEpisodeInt?: string
-}>()
+  animeId: number;
+  initialPrefs?: { translationType?: string; author?: string };
+  focusEpisodeInt?: string;
+}>();
 
 const emit = defineEmits<{
-  back: []
-  prefsChanged: [animeId: number, translationType: string, author: string]
-  playFile: [filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[], downloadedTrIds: number[], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[], episodeIndex: number, animeId: number, malId: number]
-  openAnime: [animeId: number, focusEpisodeInt?: string]
-  focusApplied: [animeId: number]
-}>()
+  back: [];
+  prefsChanged: [animeId: number, translationType: string, author: string];
+  playFile: [
+    filePath: string,
+    streamUrl: string,
+    subtitleContent: string,
+    animeName: string,
+    episodeLabel: string,
+    availableStreams: { height: number; url: string }[],
+    translationId: number,
+    translations: { id: number; label: string; type: string; height: number }[],
+    downloadedTrIds: number[],
+    allEpisodes: {
+      episodeInt: string;
+      episodeFull: string;
+      translations: { id: number; label: string; type: string; height: number }[];
+      downloadedTrIds: number[];
+    }[],
+    episodeIndex: number,
+    animeId: number,
+    malId: number
+  ];
+  openAnime: [animeId: number, focusEpisodeInt?: string];
+  focusApplied: [animeId: number];
+}>();
 
-const anime = ref<AnimeDetail | null>(null)
-const episodes = ref<Map<number, EpisodeDetail>>(new Map())
-const loading = ref(true)
-const loadingEpisodes = ref(false)
-const translationType = ref('subRu')
-const selectedAuthor = ref('')
+const anime = ref<AnimeDetail | null>(null);
+const episodes = ref<Map<number, EpisodeDetail>>(new Map());
+const loading = ref(true);
+const loadingEpisodes = ref(false);
+const translationType = ref('subRu');
+const selectedAuthor = ref('');
 
-const dataSource = ref<'api' | 'cache' | null>(null)
-const isOffline = computed(() => dataSource.value === 'cache')
+const dataSource = ref<'api' | 'cache' | null>(null);
+const isOffline = computed(() => dataSource.value === 'cache');
 
-let loadGeneration = 0
-let disposed = false
+let loadGeneration = 0;
+let disposed = false;
 
-const isStarred = ref(false)
-const autoDlSubscription = ref<AutoDownloadSubscription | null>(null)
-const autoDlSaving = ref(false)
-const isDownloaded = ref(false)
-const cleanupModalOpen = ref(false)
+const isStarred = ref(false);
+const autoDlSubscription = ref<AutoDownloadSubscription | null>(null);
+const autoDlSaving = ref(false);
+const isDownloaded = ref(false);
+const cleanupModalOpen = ref(false);
 
-const episodeOverrides = ref<Map<number, number>>(new Map()) // episodeId -> translationId
-const realQuality = ref<Map<number, number>>(new Map()) // translationId -> actual height from embed
+const episodeOverrides = ref<Map<number, number>>(new Map()); // episodeId -> translationId
+const realQuality = ref<Map<number, number>>(new Map()); // translationId -> actual height from embed
 
 // Shikimori state
-const shikiUser = ref<ShikiUser | null>(null)
-const shikiRate = ref<ShikiUserRate | null>(null)
-const shikiStatus = ref<ShikiUserRateStatus>('planned')
-const shikiEpisodes = ref(0)
-const shikiScore = ref(0)
-const shikiRewatches = ref(0)
-const shikiLoading = ref(false)
-const shikiSaving = ref(false)
-const shikiError = ref('')
-const offlineQueueLength = ref(0)
-const syncState = ref<'idle' | 'syncing'>('idle')
-const lastSyncError = ref<string | null>(null)
+const shikiUser = ref<ShikiUser | null>(null);
+const shikiRate = ref<ShikiUserRate | null>(null);
+const shikiStatus = ref<ShikiUserRateStatus>('planned');
+const shikiEpisodes = ref(0);
+const shikiScore = ref(0);
+const shikiRewatches = ref(0);
+const shikiLoading = ref(false);
+const shikiSaving = ref(false);
+const shikiError = ref('');
+const offlineQueueLength = ref(0);
+const syncState = ref<'idle' | 'syncing'>('idle');
+const lastSyncError = ref<string | null>(null);
 
 // Friends state
-const friendsRates = ref<ShikiFriendRate[]>([])
-const friendsLoading = ref(false)
-const friendsCollapsed = ref(false)
-const shikiUserChecked = ref(false)
+const friendsRates = ref<ShikiFriendRate[]>([]);
+const friendsLoading = ref(false);
+const friendsCollapsed = ref(false);
+const shikiUserChecked = ref(false);
 
 // Shikimori detailed info (description / genres) — cached in main process
-const shikiDetails = ref<ShikiAnimeDetails | null>(null)
-const descExpanded = ref(false)
+const shikiDetails = ref<ShikiAnimeDetails | null>(null);
+const descExpanded = ref(false);
 
 // Shikimori chronology (related anime in the franchise)
-const shikiRelated = ref<ShikiRelatedEntry[]>([])
-const relatedLoading = ref(false)
-const relatedCollapsed = ref(true)
+const shikiRelated = ref<ShikiRelatedEntry[]>([]);
+const relatedLoading = ref(false);
+const relatedCollapsed = ref(true);
 
 // Skip detection (Chromaprint local fingerprinting — debug panel only for now)
-const skipPanelCollapsed = ref(true)
-const skipDetections = ref<ShowSkipDetections | null>(null)
-const skipAnalyzing = ref(false)
-const skipProgress = ref<SkipDetectorProgress | null>(null)
-const skipError = ref<string>('')
-const chapterInjecting = ref(false)
-const chapterInjectProgress = ref<ChapterInjectProgress | null>(null)
-const chapterInjectError = ref<string>('')
-const chapterInjectResult = ref<{ written: number; skipped: number; failed: number; total: number } | null>(null)
+const skipPanelCollapsed = ref(true);
+const skipDetections = ref<ShowSkipDetections | null>(null);
+const skipAnalyzing = ref(false);
+const skipProgress = ref<SkipDetectorProgress | null>(null);
+const skipError = ref<string>('');
+const chapterInjecting = ref(false);
+const chapterInjectProgress = ref<ChapterInjectProgress | null>(null);
+const chapterInjectError = ref<string>('');
+const chapterInjectResult = ref<{
+  written: number;
+  skipped: number;
+  failed: number;
+  total: number;
+} | null>(null);
 
 const KIND_LABELS: Record<string, string> = {
   tv: 'TV',
@@ -92,7 +122,7 @@ const KIND_LABELS: Record<string, string> = {
   tv_special: 'TV Special',
   pv: 'PV',
   cm: 'CM'
-}
+};
 
 const STATUS_LABELS: Record<string, string> = {
   planned: 'Planned',
@@ -101,25 +131,25 @@ const STATUS_LABELS: Record<string, string> = {
   completed: 'Watched',
   on_hold: 'On Hold',
   dropped: 'Dropped'
-}
+};
 
 const shikiDetailsDescription = computed<string>(() => {
-  if (!shikiDetails.value) return ''
-  const src = shikiDetails.value.description
+  if (!shikiDetails.value) return '';
+  const src = shikiDetails.value.description;
   if (src) {
     return src
       .replace(/\[\/?[a-zA-Z][^\]]*\]/g, '')
       .replace(/\s+/g, ' ')
-      .trim()
+      .trim();
   }
-  const html = shikiDetails.value.description_html
-  if (!html) return ''
-  let stripped = html.replace(/<br\s*\/?>/gi, ' ')
-  let prev: string
+  const html = shikiDetails.value.description_html;
+  if (!html) return '';
+  let stripped = html.replace(/<br\s*\/?>/gi, ' ');
+  let prev: string;
   do {
-    prev = stripped
-    stripped = stripped.replace(/<[^>]*>/g, '')
-  } while (stripped !== prev)
+    prev = stripped;
+    stripped = stripped.replace(/<[^>]*>/g, '');
+  } while (stripped !== prev);
   const entities: Record<string, string> = {
     '&amp;': '&',
     '&nbsp;': ' ',
@@ -127,28 +157,32 @@ const shikiDetailsDescription = computed<string>(() => {
     '&gt;': '>',
     '&quot;': '"',
     '&#39;': "'"
-  }
+  };
   return stripped
     .replace(/&(?:amp|nbsp|lt|gt|quot|#39);/gi, (m) => entities[m.toLowerCase()] ?? m)
     .replace(/\s+/g, ' ')
-    .trim()
-})
+    .trim();
+});
 
 const friendsSummary = computed(() => {
-  const counts = new Map<string, number>()
+  const counts = new Map<string, number>();
   for (const r of friendsRates.value) {
-    counts.set(r.status, (counts.get(r.status) || 0) + 1)
+    counts.set(r.status, (counts.get(r.status) || 0) + 1);
   }
   const labels: Record<string, string> = {
-    watching: 'watching', completed: 'completed', planned: 'planned',
-    on_hold: 'on hold', dropped: 'dropped', rewatching: 'rewatching'
-  }
+    watching: 'watching',
+    completed: 'completed',
+    planned: 'planned',
+    on_hold: 'on hold',
+    dropped: 'dropped',
+    rewatching: 'rewatching'
+  };
   return [...counts.entries()]
     .map(([status, count]) => `${count} ${labels[status] || status}`)
-    .join(' \u00b7 ')
-})
+    .join(' \u00b7 ');
+});
 
-const playerMode = ref<'system' | 'builtin'>('system')
+const playerMode = ref<'system' | 'builtin'>('system');
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
@@ -156,141 +190,149 @@ const TRANSLATION_TYPES = [
   { value: 'voiceRu', label: 'Russian Voice', short: 'RU DUB', color: '#e94560' },
   { value: 'voiceEn', label: 'English Voice', short: 'EN DUB', color: '#9b59b6' },
   { value: 'raw', label: 'RAW', short: 'RAW', color: '#6a6a8a' }
-]
+];
 
 const filteredEpisodes = computed(() => {
-  if (!anime.value) return []
+  if (!anime.value) return [];
 
-  const allActive = anime.value.episodes.filter(ep => ep.isActive === 1 && ep.episodeType !== 'preview')
+  const allActive = anime.value.episodes.filter(
+    (ep) => ep.isActive === 1 && ep.episodeType !== 'preview'
+  );
 
-  if (!anime.value.type) return allActive
+  if (!anime.value.type) return allActive;
 
   const matchedEpisodes = anime.value.episodes.filter(
-    ep => ep.isActive === 1 && ep.episodeType === anime.value!.type
-  )
+    (ep) => ep.isActive === 1 && ep.episodeType === anime.value!.type
+  );
 
-  if (matchedEpisodes.length === 0) return allActive
-  if (anime.value.numberOfEpisodes && matchedEpisodes.length !== anime.value.numberOfEpisodes) return allActive
+  if (matchedEpisodes.length === 0) return allActive;
+  if (anime.value.numberOfEpisodes && matchedEpisodes.length !== anime.value.numberOfEpisodes)
+    return allActive;
 
-  return matchedEpisodes
-})
+  return matchedEpisodes;
+});
 
-const PAGE_SIZE = 30
-const currentPage = ref(0)
-const totalPages = computed(() => Math.max(1, Math.ceil(filteredEpisodes.value.length / PAGE_SIZE)))
-const isPaginated = computed(() => filteredEpisodes.value.length > PAGE_SIZE)
+const PAGE_SIZE = 30;
+const currentPage = ref(0);
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredEpisodes.value.length / PAGE_SIZE))
+);
+const isPaginated = computed(() => filteredEpisodes.value.length > PAGE_SIZE);
 const pagedEpisodes = computed(() => {
-  if (!isPaginated.value) return filteredEpisodes.value
-  const start = currentPage.value * PAGE_SIZE
-  return filteredEpisodes.value.slice(start, start + PAGE_SIZE)
-})
+  if (!isPaginated.value) return filteredEpisodes.value;
+  const start = currentPage.value * PAGE_SIZE;
+  return filteredEpisodes.value.slice(start, start + PAGE_SIZE);
+});
 
 // Count unique episodes per translation type
 const translationTypeCounts = computed(() => {
-  const counts = new Map<string, number>()
+  const counts = new Map<string, number>();
   for (const ep of episodes.value.values()) {
-    const typesInEp = new Set<string>()
+    const typesInEp = new Set<string>();
     for (const tr of ep.translations) {
-      if (tr.isActive === 1) typesInEp.add(tr.type)
+      if (tr.isActive === 1) typesInEp.add(tr.type);
     }
     for (const t of typesInEp) {
-      counts.set(t, (counts.get(t) || 0) + 1)
+      counts.set(t, (counts.get(t) || 0) + 1);
     }
   }
-  return counts
-})
+  return counts;
+});
 
 const availableAuthors = computed(() => {
-  const counts = new Map<string, number>()
+  const counts = new Map<string, number>();
   for (const ep of episodes.value.values()) {
     // Track unique authors per episode (count each author once per episode)
-    const seen = new Set<string>()
+    const seen = new Set<string>();
     for (const tr of ep.translations) {
       if (tr.type === translationType.value && tr.isActive === 1 && !seen.has(tr.authorsSummary)) {
-        seen.add(tr.authorsSummary)
-        counts.set(tr.authorsSummary, (counts.get(tr.authorsSummary) || 0) + 1)
+        seen.add(tr.authorsSummary);
+        counts.set(tr.authorsSummary, (counts.get(tr.authorsSummary) || 0) + 1);
       }
     }
   }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])
-})
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+});
 
 interface EpisodeRow {
-  episode: EpisodeSummary
-  allTranslations: Translation[]
-  selectedTr: Translation | null
-  isLocked: boolean
-  lockSource: 'downloaded' | 'queued' | null
-  downloadedTrIds: Set<number>
+  episode: EpisodeSummary;
+  allTranslations: Translation[];
+  selectedTr: Translation | null;
+  isLocked: boolean;
+  lockSource: 'downloaded' | 'queued' | null;
+  downloadedTrIds: Set<number>;
 }
 
 // For each author+type combo, keep only the best quality translation
 function bestPerAuthor(translations: Translation[]): Translation[] {
-  const best = new Map<string, Translation>()
+  const best = new Map<string, Translation>();
   for (const tr of translations) {
-    const key = `${tr.type}:${tr.authorsSummary}`
-    const existing = best.get(key)
+    const key = `${tr.type}:${tr.authorsSummary}`;
+    const existing = best.get(key);
     if (!existing || getRealHeight(tr) > getRealHeight(existing)) {
-      best.set(key, tr)
+      best.set(key, tr);
     }
   }
-  return [...best.values()]
+  return [...best.values()];
 }
 
 const episodeRows = computed((): EpisodeRow[] => {
-  return pagedEpisodes.value.map(ep => {
-    const detail = episodes.value.get(ep.id)
-    const rawTranslations = detail
-      ? detail.translations.filter(tr => tr.isActive === 1)
-      : []
-    const allTranslations = bestPerAuthor(rawTranslations)
+  return pagedEpisodes.value.map((ep) => {
+    const detail = episodes.value.get(ep.id);
+    const rawTranslations = detail ? detail.translations.filter((tr) => tr.isActive === 1) : [];
+    const allTranslations = bestPerAuthor(rawTranslations);
 
     // Sort: global type first, then by quality desc, then by type order
     const sorted = [...allTranslations].sort((a, b) => {
-      const aMatch = a.type === translationType.value ? 0 : 1
-      const bMatch = b.type === translationType.value ? 0 : 1
-      if (aMatch !== bMatch) return aMatch - bMatch
-      const aH = getRealHeight(a), bH = getRealHeight(b)
-      if (aH !== bH) return bH - aH
-      const typeOrder = TRANSLATION_TYPES.map(t => t.value)
-      return typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type)
-    })
+      const aMatch = a.type === translationType.value ? 0 : 1;
+      const bMatch = b.type === translationType.value ? 0 : 1;
+      if (aMatch !== bMatch) return aMatch - bMatch;
+      const aH = getRealHeight(a),
+        bH = getRealHeight(b);
+      if (aH !== bH) return bH - aH;
+      const typeOrder = TRANSLATION_TYPES.map((t) => t.value);
+      return typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type);
+    });
 
-    const metas = episodeMeta.value[ep.episodeInt] || []
-    const group = downloadGroups.value.get(ep.episodeFull)
+    const metas = episodeMeta.value[ep.episodeInt] || [];
+    const group = downloadGroups.value.get(ep.episodeFull);
 
     // Build set of downloaded translation IDs from metadata + files on disk
-    const downloadedTrIds = new Set<number>()
+    const downloadedTrIds = new Set<number>();
     for (const m of metas) {
-      if (m.translationId) downloadedTrIds.add(m.translationId)
+      if (m.translationId) downloadedTrIds.add(m.translationId);
     }
 
-    let selectedTr: Translation | null = null
-    let isLocked = false
-    let lockSource: 'downloaded' | 'queued' | null = null
+    let selectedTr: Translation | null = null;
+    let isLocked = false;
+    let lockSource: 'downloaded' | 'queued' | null = null;
 
     // Priority 1: In download queue (active) — lock the row
-    if (group && group.video && !['completed', 'cancelled', 'failed'].includes(group.video.status)) {
-      selectedTr = sorted.find(tr => tr.id === group.translationId) || null
+    if (
+      group &&
+      group.video &&
+      !['completed', 'cancelled', 'failed'].includes(group.video.status)
+    ) {
+      selectedTr = sorted.find((tr) => tr.id === group.translationId) || null;
       if (selectedTr) {
-        isLocked = true
-        lockSource = 'queued'
+        isLocked = true;
+        lockSource = 'queued';
       }
     }
 
     // Priority 2: User per-episode override (in-session, sync; gives instant feedback
     // after a dropdown click before the persisted watchProgress update lands)
     if (!isLocked && episodeOverrides.value.has(ep.id)) {
-      selectedTr = sorted.find(tr => tr.id === episodeOverrides.value.get(ep.id)) || null
+      selectedTr = sorted.find((tr) => tr.id === episodeOverrides.value.get(ep.id)) || null;
     }
 
     // Priority 3: Last-used translation for this episode (persisted in watchProgress).
     // Sits ABOVE downloaded so an explicit user choice — even a stream — wins over
     // a downloaded file. Falls through if the remembered id is no longer available.
     if (!isLocked && !selectedTr) {
-      const remembered = watchProgress.value[ep.episodeInt]?.translationId
+      const remembered = watchProgress.value[ep.episodeInt]?.translationId;
       if (remembered != null) {
-        selectedTr = sorted.find(tr => tr.id === remembered) || null
+        selectedTr = sorted.find((tr) => tr.id === remembered) || null;
       }
     }
 
@@ -298,148 +340,185 @@ const episodeRows = computed((): EpisodeRow[] => {
     // streaming when the global default (type+author) doesn't match what's on disk.
     // Within same-type downloads, honor the user's author preference before picking highest quality.
     if (!isLocked && !selectedTr && downloadedTrIds.size > 0) {
-      const downloaded = sorted.filter(tr => downloadedTrIds.has(tr.id))
-      const sameType = downloaded.filter(tr => tr.type === translationType.value)
-      const sameAuthor = sameType.find(tr => tr.authorsSummary === selectedAuthor.value)
-      const bestSameType = [...sameType].sort((a, b) => getRealHeight(b) - getRealHeight(a))[0]
-      selectedTr = sameAuthor || bestSameType || downloaded[0] || null
+      const downloaded = sorted.filter((tr) => downloadedTrIds.has(tr.id));
+      const sameType = downloaded.filter((tr) => tr.type === translationType.value);
+      const sameAuthor = sameType.find((tr) => tr.authorsSummary === selectedAuthor.value);
+      const bestSameType = [...sameType].sort((a, b) => getRealHeight(b) - getRealHeight(a))[0];
+      selectedTr = sameAuthor || bestSameType || downloaded[0] || null;
     }
 
     // Priority 5: Global default (same type + author)
     if (!isLocked && !selectedTr) {
-      const typeFiltered = sorted.filter(tr => tr.type === translationType.value)
-      selectedTr = typeFiltered.find(tr => tr.authorsSummary === selectedAuthor.value)
-        || typeFiltered[0] || null
+      const typeFiltered = sorted.filter((tr) => tr.type === translationType.value);
+      selectedTr =
+        typeFiltered.find((tr) => tr.authorsSummary === selectedAuthor.value) ||
+        typeFiltered[0] ||
+        null;
     }
 
-    return { episode: ep, allTranslations: sorted, selectedTr, isLocked, lockSource, downloadedTrIds }
-  })
-})
+    return {
+      episode: ep,
+      allTranslations: sorted,
+      selectedTr,
+      isLocked,
+      lockSource,
+      downloadedTrIds
+    };
+  });
+});
 
-function onEpisodeTranslationChange(episodeId: number, episodeInt: string, translationId: number): void {
-  episodeOverrides.value = new Map(episodeOverrides.value.set(episodeId, translationId))
+function onEpisodeTranslationChange(
+  episodeId: number,
+  episodeInt: string,
+  translationId: number
+): void {
+  episodeOverrides.value = new Map(episodeOverrides.value.set(episodeId, translationId));
   // Persist so the choice survives page reloads and feeds back into Priority 3
   // resolution. Reuse any existing playback position/duration so we don't clobber
   // partial-watch progress when the user just changes translation.
-  const prev = watchProgress.value[episodeInt]
-  window.api.watchProgressSave(
-    props.animeId,
-    episodeInt,
-    prev?.position ?? 0,
-    prev?.duration ?? 0,
-    prev?.watched,
-    translationId
-  ).catch(err => console.warn('[anime-detail] failed to persist translation choice:', err))
+  const prev = watchProgress.value[episodeInt];
+  window.api
+    .watchProgressSave(
+      props.animeId,
+      episodeInt,
+      prev?.position ?? 0,
+      prev?.duration ?? 0,
+      prev?.watched,
+      translationId
+    )
+    .catch((err) => console.warn('[anime-detail] failed to persist translation choice:', err));
 }
 
 function onMouseBack(e: MouseEvent): void {
   if (e.button === 3) {
-    e.preventDefault()
-    emit('back')
+    e.preventDefault();
+    emit('back');
   }
 }
 
 async function loadShikimoriData(): Promise<void> {
   try {
-    shikiUser.value = await window.api.shikimoriGetUser()
+    shikiUser.value = await window.api.shikimoriGetUser();
   } catch (err) {
-    console.error('Failed to load Shikimori user:', err)
+    console.error('Failed to load Shikimori user:', err);
   } finally {
-    shikiUserChecked.value = true
+    shikiUserChecked.value = true;
   }
-  if (!anime.value?.myAnimeListId) return
+  if (!anime.value?.myAnimeListId) return;
 
-  relatedLoading.value = true
-  const relatedPromise = window.api.shikimoriGetRelated(anime.value.myAnimeListId)
+  relatedLoading.value = true;
+  const relatedPromise = window.api
+    .shikimoriGetRelated(anime.value.myAnimeListId)
     .then((related) => {
-      shikiRelated.value = related
+      shikiRelated.value = related;
     })
-    .catch(err => console.error('Failed to load Shikimori related:', err))
-    .finally(() => { relatedLoading.value = false })
+    .catch((err) => console.error('Failed to load Shikimori related:', err))
+    .finally(() => {
+      relatedLoading.value = false;
+    });
 
   if (!shikiUser.value) {
-    await relatedPromise
-    return
+    await relatedPromise;
+    return;
   }
 
-  shikiLoading.value = true
-  friendsLoading.value = true
+  shikiLoading.value = true;
+  friendsLoading.value = true;
 
   // Load rate and friends in parallel, neither blocks the other
-  const ratePromise = window.api.shikimoriGetRate(anime.value.myAnimeListId)
-    .then(rate => {
-      shikiRate.value = rate
+  const ratePromise = window.api
+    .shikimoriGetRate(anime.value.myAnimeListId)
+    .then((rate) => {
+      shikiRate.value = rate;
       if (rate) {
-        shikiStatus.value = rate.status
-        shikiEpisodes.value = rate.episodes
-        shikiScore.value = rate.score
-        shikiRewatches.value = rate.rewatches ?? 0
+        shikiStatus.value = rate.status;
+        shikiEpisodes.value = rate.episodes;
+        shikiScore.value = rate.score;
+        shikiRewatches.value = rate.rewatches ?? 0;
       }
     })
-    .catch(err => console.error('Failed to load Shikimori rate:', err))
-    .finally(() => { shikiLoading.value = false })
+    .catch((err) => console.error('Failed to load Shikimori rate:', err))
+    .finally(() => {
+      shikiLoading.value = false;
+    });
 
-  const friendsPromise = window.api.shikimoriGetFriendsRates(anime.value.myAnimeListId)
-    .then(rates => { friendsRates.value = rates })
-    .catch(err => console.error('Failed to load friends rates:', err))
-    .finally(() => { friendsLoading.value = false })
+  const friendsPromise = window.api
+    .shikimoriGetFriendsRates(anime.value.myAnimeListId)
+    .then((rates) => {
+      friendsRates.value = rates;
+    })
+    .catch((err) => console.error('Failed to load friends rates:', err))
+    .finally(() => {
+      friendsLoading.value = false;
+    });
 
-  const detailsPromise = window.api.shikimoriGetAnimeDetails(anime.value.myAnimeListId)
-    .then(details => { shikiDetails.value = details })
-    .catch(err => console.error('Failed to load Shikimori details:', err))
+  const detailsPromise = window.api
+    .shikimoriGetAnimeDetails(anime.value.myAnimeListId)
+    .then((details) => {
+      shikiDetails.value = details;
+    })
+    .catch((err) => console.error('Failed to load Shikimori details:', err));
 
-  await Promise.all([ratePromise, friendsPromise, detailsPromise, relatedPromise])
+  await Promise.all([ratePromise, friendsPromise, detailsPromise, relatedPromise]);
 }
 
 // --- Skip Detection (debug) -------------------------------------------------
 
-interface SkipEpisodeInput { episodeInt: string; episodeLabel: string; filePath: string }
+interface SkipEpisodeInput {
+  episodeInt: string;
+  episodeLabel: string;
+  filePath: string;
+}
 
 const skipEpisodeInputs = computed<SkipEpisodeInput[]>(() => {
-  const inputs: SkipEpisodeInput[] = []
-  const seen = new Set<string>()
+  const inputs: SkipEpisodeInput[] = [];
+  const seen = new Set<string>();
   // Walk filteredEpisodes to keep an ordered, label-aware list. fileStatus is keyed by episodeInt.
   for (const ep of filteredEpisodes.value) {
-    const files = fileStatus.value[ep.episodeInt]
-    if (!files || files.length === 0) continue
+    const files = fileStatus.value[ep.episodeInt];
+    if (!files || files.length === 0) continue;
     // Prefer .mkv (merged) over .mp4 (raw); first match wins.
-    const mkv = files.find(f => f.type === 'mkv')
-    const pick = mkv || files[0]
-    if (!pick || !pick.filePath) continue
-    if (seen.has(ep.episodeInt)) continue
-    seen.add(ep.episodeInt)
-    inputs.push({ episodeInt: ep.episodeInt, episodeLabel: ep.episodeFull || `Episode ${ep.episodeInt}`, filePath: pick.filePath })
+    const mkv = files.find((f) => f.type === 'mkv');
+    const pick = mkv || files[0];
+    if (!pick || !pick.filePath) continue;
+    if (seen.has(ep.episodeInt)) continue;
+    seen.add(ep.episodeInt);
+    inputs.push({
+      episodeInt: ep.episodeInt,
+      episodeLabel: ep.episodeFull || `Episode ${ep.episodeInt}`,
+      filePath: pick.filePath
+    });
   }
-  return inputs
-})
+  return inputs;
+});
 
 function formatSkipTime(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) return '—'
-  const total = Math.round(sec)
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
+  if (!Number.isFinite(sec) || sec < 0) return '—';
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 const skipProgressLabel = computed<string>(() => {
-  const p = skipProgress.value
-  if (!p) return ''
+  const p = skipProgress.value;
+  if (!p) return '';
   if (p.phase === 'fingerprinting') {
-    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : ''
-    return `Fingerprinting ${p.current}/${p.total}${label}`
+    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : '';
+    return `Fingerprinting ${p.current}/${p.total}${label}`;
   }
   if (p.phase === 'comparing') {
-    return `Comparing pairs ${p.current}/${p.total}`
+    return `Comparing pairs ${p.current}/${p.total}`;
   }
-  return 'Done'
-})
+  return 'Done';
+});
 
 async function loadSkipDetections(): Promise<void> {
   try {
-    const res = await window.api.skipDetectorGetDetections(props.animeId)
-    skipDetections.value = res
+    const res = await window.api.skipDetectorGetDetections(props.animeId);
+    skipDetections.value = res;
   } catch (err) {
-    console.error('Failed to load skip detections:', err)
+    console.error('Failed to load skip detections:', err);
   }
 }
 
@@ -450,162 +529,188 @@ async function loadSkipDetections(): Promise<void> {
 // click on a different anime's panel would now reject (also good).
 async function hydrateSkipStatus(): Promise<void> {
   try {
-    const status = await window.api.skipDetectorGetStatus()
+    const status = await window.api.skipDetectorGetStatus();
     if (status && status.animeId === props.animeId) {
-      skipAnalyzing.value = true
-      skipProgress.value = status.lastProgress
+      skipAnalyzing.value = true;
+      skipProgress.value = status.lastProgress;
     }
   } catch (err) {
-    console.error('Failed to hydrate skip status:', err)
+    console.error('Failed to hydrate skip status:', err);
   }
 }
 
 async function runSkipAnalysis(): Promise<void> {
-  if (skipAnalyzing.value) return
-  const inputs = skipEpisodeInputs.value
+  if (skipAnalyzing.value) return;
+  const inputs = skipEpisodeInputs.value;
   if (inputs.length < 2) {
-    skipError.value = 'Need at least 2 downloaded episodes'
-    return
+    skipError.value = 'Need at least 2 downloaded episodes';
+    return;
   }
-  skipError.value = ''
-  skipAnalyzing.value = true
-  skipProgress.value = { animeId: props.animeId, phase: 'fingerprinting', current: 0, total: inputs.length }
+  skipError.value = '';
+  skipAnalyzing.value = true;
+  skipProgress.value = {
+    animeId: props.animeId,
+    phase: 'fingerprinting',
+    current: 0,
+    total: inputs.length
+  };
   try {
-    const result = await window.api.skipDetectorAnalyzeShow(props.animeId, inputs)
-    skipDetections.value = result
+    const result = await window.api.skipDetectorAnalyzeShow(props.animeId, inputs);
+    skipDetections.value = result;
   } catch (err) {
-    skipError.value = err instanceof Error ? err.message : String(err)
+    skipError.value = err instanceof Error ? err.message : String(err);
   } finally {
-    skipAnalyzing.value = false
-    skipProgress.value = null
+    skipAnalyzing.value = false;
+    skipProgress.value = null;
   }
 }
 
 async function cancelSkipAnalysis(): Promise<void> {
   try {
-    await window.api.skipDetectorCancel()
+    await window.api.skipDetectorCancel();
   } catch (err) {
-    console.error('Failed to cancel skip analysis:', err)
+    console.error('Failed to cancel skip analysis:', err);
   }
 }
 
-const skipMkvEpisodeCount = computed<number>(() =>
-  skipEpisodeInputs.value.filter(e => e.filePath.toLowerCase().endsWith('.mkv')).length
-)
+const skipMkvEpisodeCount = computed<number>(
+  () => skipEpisodeInputs.value.filter((e) => e.filePath.toLowerCase().endsWith('.mkv')).length
+);
 
 const chapterInjectProgressLabel = computed<string>(() => {
-  const p = chapterInjectProgress.value
-  if (!p) return ''
-  if (p.phase === 'analyzing') return 'Analyzing fingerprints…'
+  const p = chapterInjectProgress.value;
+  if (!p) return '';
+  if (p.phase === 'analyzing') return 'Analyzing fingerprints…';
   if (p.phase === 'writing') {
-    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : ''
-    return `Writing chapters ${p.current + 1}/${p.total}${label}`
+    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : '';
+    return `Writing chapters ${p.current + 1}/${p.total}${label}`;
   }
-  return 'Done'
-})
+  return 'Done';
+});
 
 async function injectChaptersToMkv(): Promise<void> {
-  if (chapterInjecting.value) return
+  if (chapterInjecting.value) return;
   if (skipMkvEpisodeCount.value < 3) {
-    chapterInjectError.value = 'Need at least 3 downloaded MKV episodes'
-    return
+    chapterInjectError.value = 'Need at least 3 downloaded MKV episodes';
+    return;
   }
-  chapterInjectError.value = ''
-  chapterInjectResult.value = null
-  chapterInjecting.value = true
-  chapterInjectProgress.value = { animeId: props.animeId, phase: 'writing', current: 0, total: skipMkvEpisodeCount.value }
+  chapterInjectError.value = '';
+  chapterInjectResult.value = null;
+  chapterInjecting.value = true;
+  chapterInjectProgress.value = {
+    animeId: props.animeId,
+    phase: 'writing',
+    current: 0,
+    total: skipMkvEpisodeCount.value
+  };
   try {
-    const res = await window.api.injectChapters(props.animeId, skipEpisodeInputs.value)
-    chapterInjectResult.value = res
+    const res = await window.api.injectChapters(props.animeId, skipEpisodeInputs.value);
+    chapterInjectResult.value = res;
   } catch (err) {
-    chapterInjectError.value = err instanceof Error ? err.message : String(err)
+    chapterInjectError.value = err instanceof Error ? err.message : String(err);
   } finally {
-    chapterInjecting.value = false
-    chapterInjectProgress.value = null
+    chapterInjecting.value = false;
+    chapterInjectProgress.value = null;
   }
 }
 
 onMounted(async () => {
-  window.addEventListener('mouseup', onMouseBack)
-  playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
+  window.addEventListener('mouseup', onMouseBack);
+  playerMode.value =
+    ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system';
   if (props.initialPrefs?.translationType) {
-    translationType.value = props.initialPrefs.translationType
+    translationType.value = props.initialPrefs.translationType;
   } else {
-    translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
+    translationType.value = ((await window.api.getSetting('translationType')) as string) || 'subRu';
   }
 
-  window.api.libraryHas(props.animeId).then((v) => { isStarred.value = v }).catch(() => {})
-  window.api.autoDlGetSubscription(props.animeId).then((s) => { autoDlSubscription.value = s }).catch(() => {})
-  window.api.libraryIsDownloaded(props.animeId).then((v) => { isDownloaded.value = v }).catch(() => {})
+  window.api
+    .libraryHas(props.animeId)
+    .then((v) => {
+      isStarred.value = v;
+    })
+    .catch(() => {});
+  window.api
+    .autoDlGetSubscription(props.animeId)
+    .then((s) => {
+      autoDlSubscription.value = s;
+    })
+    .catch(() => {});
+  window.api
+    .libraryIsDownloaded(props.animeId)
+    .then((v) => {
+      isDownloaded.value = v;
+    })
+    .catch(() => {});
 
-  const gen = ++loadGeneration
-  let renderedFromCache = false
+  const gen = ++loadGeneration;
+  let renderedFromCache = false;
   try {
-    const cached = await window.api.getAnimeCache(props.animeId)
+    const cached = await window.api.getAnimeCache(props.animeId);
     if (cached && !disposed && gen === loadGeneration) {
-      anime.value = cached.data
-      dataSource.value = 'cache'
-      loading.value = false
-      renderedFromCache = true
-      await loadPageEpisodes()
-      await checkFileStatus()
-      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault()
+      anime.value = cached.data;
+      dataSource.value = 'cache';
+      loading.value = false;
+      renderedFromCache = true;
+      await loadPageEpisodes();
+      await checkFileStatus();
+      if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault();
     }
   } catch (err) {
-    console.error('Failed to read anime cache:', err)
+    console.error('Failed to read anime cache:', err);
   }
 
   try {
-    const res = await window.api.getAnime(props.animeId)
-    if (disposed || gen !== loadGeneration) return
-    anime.value = res.data
-    dataSource.value = res.source
+    const res = await window.api.getAnime(props.animeId);
+    if (disposed || gen !== loadGeneration) return;
+    anime.value = res.data;
+    dataSource.value = res.source;
     if (res.source === 'api') {
-      window.api.setAnimeCache(props.animeId, res.data).catch(() => {})
+      window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
     }
-    await loadPageEpisodes()
-    if (disposed || gen !== loadGeneration) return
-    await checkFileStatus()
-    if (disposed || gen !== loadGeneration) return
+    await loadPageEpisodes();
+    if (disposed || gen !== loadGeneration) return;
+    await checkFileStatus();
+    if (disposed || gen !== loadGeneration) return;
     if (!renderedFromCache && !props.initialPrefs?.translationType) {
-      applyDownloadedTranslationDefault()
+      applyDownloadedTranslationDefault();
     }
   } catch (err) {
-    if (!renderedFromCache) console.error('Failed to load anime detail view:', err)
+    if (!renderedFromCache) console.error('Failed to load anime detail view:', err);
   } finally {
-    if (!disposed && gen === loadGeneration) loading.value = false
+    if (!disposed && gen === loadGeneration) loading.value = false;
   }
 
   // Subscribe to download progress
-  const queue = await window.api.downloadGetQueue()
-  updateDownloadGroups(queue)
-  window.api.onDownloadProgress(updateDownloadGroups)
+  const queue = await window.api.downloadGetQueue();
+  updateDownloadGroups(queue);
+  window.api.onDownloadProgress(updateDownloadGroups);
 
   // Subscribe to background file rescan updates
   window.api.onFileEpisodesChanged((animeName, data) => {
     if (anime.value && animeName === getAnimeName()) {
-      const episodeInts = filteredEpisodes.value.map(ep => ep.episodeInt)
-      const baseMap = new Map<string, string>()
+      const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
+      const baseMap = new Map<string, string>();
       for (const epInt of episodeInts) {
-        const padded = epInt.padStart(2, '0')
-        const base = sanitizeFilename(`${animeName} - ${padded}`)
-        baseMap.set(base, epInt)
+        const padded = epInt.padStart(2, '0');
+        const base = sanitizeFilename(`${animeName} - ${padded}`);
+        baseMap.set(base, epInt);
       }
-      const filtered: typeof fileStatus.value = {}
+      const filtered: typeof fileStatus.value = {};
       for (const [base, files] of Object.entries(data)) {
-        const epInt = baseMap.get(base)
-        if (epInt) filtered[epInt] = files
+        const epInt = baseMap.get(base);
+        if (epInt) filtered[epInt] = files;
       }
-      fileStatus.value = filtered
+      fileStatus.value = filtered;
     }
-  })
+  });
 
   // Load Shikimori data (non-blocking — don't hold up the episode list)
-  loadShikimoriData()
+  loadShikimoriData();
 
   // Load watch progress for episode indicators
-  loadWatchProgress()
-  window.addEventListener('watch-progress-updated', loadWatchProgress)
+  loadWatchProgress();
+  window.addEventListener('watch-progress-updated', loadWatchProgress);
 
   window.api.onShikimoriRateUpdated((entry) => {
     if (anime.value?.myAnimeListId && entry.rate.target_id === anime.value.myAnimeListId) {
@@ -617,23 +722,23 @@ onMounted(async () => {
         rewatches: entry.rate.rewatches ?? 0,
         target_id: entry.rate.target_id,
         target_type: 'Anime'
-      }
-      shikiStatus.value = entry.rate.status
-      shikiEpisodes.value = entry.rate.episodes
-      shikiScore.value = entry.rate.score
-      shikiRewatches.value = entry.rate.rewatches ?? 0
+      };
+      shikiStatus.value = entry.rate.status;
+      shikiEpisodes.value = entry.rate.episodes;
+      shikiScore.value = entry.rate.score;
+      shikiRewatches.value = entry.rate.rewatches ?? 0;
     }
-  })
+  });
 
   window.api.onShikimoriAnimeDetailsUpdated(({ malId, details }) => {
     if (anime.value?.myAnimeListId === malId) {
-      shikiDetails.value = details
+      shikiDetails.value = details;
     }
-  })
+  });
 
   window.api.onShikimoriRatesRefreshed((entries) => {
-    if (!anime.value?.myAnimeListId) return
-    const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId)
+    if (!anime.value?.myAnimeListId) return;
+    const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId);
     if (match) {
       shikiRate.value = {
         id: match.rate.id,
@@ -643,68 +748,68 @@ onMounted(async () => {
         rewatches: match.rate.rewatches ?? 0,
         target_id: match.rate.target_id,
         target_type: 'Anime'
-      }
-      shikiStatus.value = match.rate.status
-      shikiEpisodes.value = match.rate.episodes
-      shikiScore.value = match.rate.score
-      shikiRewatches.value = match.rate.rewatches ?? 0
+      };
+      shikiStatus.value = match.rate.status;
+      shikiEpisodes.value = match.rate.episodes;
+      shikiScore.value = match.rate.score;
+      shikiRewatches.value = match.rate.rewatches ?? 0;
     }
-  })
+  });
 
   window.api.shikimoriGetOfflineQueueLength().then((n) => {
-    offlineQueueLength.value = n
-  })
+    offlineQueueLength.value = n;
+  });
   window.api.onShikimoriOfflineQueueChanged((data) => {
-    offlineQueueLength.value = data.length
-  })
+    offlineQueueLength.value = data.length;
+  });
   window.api.shikimoriGetSyncStatus().then((s) => {
-    syncState.value = s.state
-    offlineQueueLength.value = s.queueLength
-    lastSyncError.value = s.lastSyncError
-  })
+    syncState.value = s.state;
+    offlineQueueLength.value = s.queueLength;
+    lastSyncError.value = s.lastSyncError;
+  });
   window.api.onSkipDetectorProgress((data) => {
-    if (data.animeId !== props.animeId) return
-    skipProgress.value = data
-    skipAnalyzing.value = data.phase !== 'done'
-  })
+    if (data.animeId !== props.animeId) return;
+    skipProgress.value = data;
+    skipAnalyzing.value = data.phase !== 'done';
+  });
   window.api.onSkipDetectorSignatureUpdated((data) => {
-    if (data.animeId !== props.animeId) return
-    loadSkipDetections()
-  })
+    if (data.animeId !== props.animeId) return;
+    loadSkipDetections();
+  });
   window.api.onChapterInjectProgress((data) => {
-    if (data.animeId !== props.animeId) return
-    chapterInjectProgress.value = data
-    chapterInjecting.value = data.phase !== 'done'
-  })
-  loadSkipDetections()
-  hydrateSkipStatus()
+    if (data.animeId !== props.animeId) return;
+    chapterInjectProgress.value = data;
+    chapterInjecting.value = data.phase !== 'done';
+  });
+  loadSkipDetections();
+  hydrateSkipStatus();
 
   window.api.onShikimoriSyncStatus((data) => {
-    syncState.value = data.state
-    offlineQueueLength.value = data.queueLength
-    lastSyncError.value = data.lastSyncError
-  })
-})
+    syncState.value = data.state;
+    offlineQueueLength.value = data.queueLength;
+    lastSyncError.value = data.lastSyncError;
+  });
+});
 
 onUnmounted(() => {
-  disposed = true
-  loadGeneration++
-  window.removeEventListener('mouseup', onMouseBack)
-  window.removeEventListener('watch-progress-updated', loadWatchProgress)
-  window.api.offDownloadProgress()
-  window.api.offFileEpisodesChanged()
-  window.api.offShikimoriRateUpdated()
-  window.api.offShikimoriRatesRefreshed()
-  window.api.offShikimoriAnimeDetailsUpdated()
-  window.api.offShikimoriOfflineQueueChanged()
-  window.api.offShikimoriSyncStatus()
-  window.api.offSkipDetectorProgress()
-  window.api.offSkipDetectorSignatureUpdated()
-  window.api.offChapterInjectProgress()
-})
+  disposed = true;
+  loadGeneration++;
+  window.removeEventListener('mouseup', onMouseBack);
+  window.removeEventListener('watch-progress-updated', loadWatchProgress);
+  window.api.offDownloadProgress();
+  window.api.offFileEpisodesChanged();
+  window.api.offShikimoriRateUpdated();
+  window.api.offShikimoriRatesRefreshed();
+  window.api.offShikimoriAnimeDetailsUpdated();
+  window.api.offShikimoriOfflineQueueChanged();
+  window.api.offShikimoriSyncStatus();
+  window.api.offSkipDetectorProgress();
+  window.api.offSkipDetectorSignatureUpdated();
+  window.api.offChapterInjectProgress();
+});
 
 async function triggerSyncNow(): Promise<void> {
-  await window.api.shikimoriTriggerSync()
+  await window.api.shikimoriTriggerSync();
 }
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
@@ -714,24 +819,24 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   { value: 'completed', label: 'Completed' },
   { value: 'on_hold', label: 'On Hold' },
   { value: 'dropped', label: 'Dropped' }
-]
+];
 
 watch(shikiEpisodes, (eps) => {
   if (anime.value?.numberOfEpisodes && eps >= anime.value.numberOfEpisodes) {
-    shikiStatus.value = 'completed'
+    shikiStatus.value = 'completed';
   } else if (eps > 0) {
     if (shikiStatus.value === 'completed') {
-      shikiStatus.value = 'rewatching'
+      shikiStatus.value = 'rewatching';
     } else if (shikiStatus.value === 'planned') {
-      shikiStatus.value = 'watching'
+      shikiStatus.value = 'watching';
     }
   }
-})
+});
 
 async function shikiSave(): Promise<void> {
-  if (!anime.value?.myAnimeListId) return
-  shikiSaving.value = true
-  shikiError.value = ''
+  if (!anime.value?.myAnimeListId) return;
+  shikiSaving.value = true;
+  shikiError.value = '';
   try {
     const rate = await window.api.shikimoriUpdateRate(
       anime.value.myAnimeListId,
@@ -739,125 +844,128 @@ async function shikiSave(): Promise<void> {
       shikiStatus.value,
       shikiScore.value,
       shikiRewatches.value
-    )
-    shikiRate.value = rate
-    shikiRewatches.value = rate.rewatches ?? shikiRewatches.value
+    );
+    shikiRate.value = rate;
+    shikiRewatches.value = rate.rewatches ?? shikiRewatches.value;
   } catch (err) {
-    shikiError.value = String(err)
+    shikiError.value = String(err);
   } finally {
-    shikiSaving.value = false
+    shikiSaving.value = false;
   }
 }
 
 function applyDownloadedTranslationDefault(): void {
-  const counts = new Map<string, { type: string; author: string; count: number }>()
+  const counts = new Map<string, { type: string; author: string; count: number }>();
   for (const metaArr of Object.values(episodeMeta.value)) {
     for (const m of metaArr) {
-      const key = `${m.translationType}|${m.author}`
-      const existing = counts.get(key)
-      if (existing) existing.count++
-      else counts.set(key, { type: m.translationType, author: m.author, count: 1 })
+      const key = `${m.translationType}|${m.author}`;
+      const existing = counts.get(key);
+      if (existing) existing.count++;
+      else counts.set(key, { type: m.translationType, author: m.author, count: 1 });
     }
   }
-  if (counts.size === 0) return
-  let best: { type: string; author: string; count: number } | null = null
+  if (counts.size === 0) return;
+  let best: { type: string; author: string; count: number } | null = null;
   for (const entry of counts.values()) {
-    if (!best || entry.count > best.count) best = entry
+    if (!best || entry.count > best.count) best = entry;
   }
-  if (!best) return
-  translationType.value = best.type
+  if (!best) return;
+  translationType.value = best.type;
   if (best.author && availableAuthors.value.some(([a]) => a === best!.author)) {
-    selectedAuthor.value = best.author
+    selectedAuthor.value = best.author;
   }
 }
 
 async function loadPageEpisodes(): Promise<void> {
-  if (!anime.value || pagedEpisodes.value.length === 0) return
-  loadingEpisodes.value = true
+  if (!anime.value || pagedEpisodes.value.length === 0) return;
+  loadingEpisodes.value = true;
 
-  const batch = 5
-  const toLoad = pagedEpisodes.value.filter(ep => !episodes.value.has(ep.id))
+  const batch = 5;
+  const toLoad = pagedEpisodes.value.filter((ep) => !episodes.value.has(ep.id));
 
   for (let i = 0; i < toLoad.length; i += batch) {
-    const chunk = toLoad.slice(i, i + batch)
+    const chunk = toLoad.slice(i, i + batch);
     const fetched = await Promise.all(
-      chunk.map(ep => window.api.getEpisode(ep.id, props.animeId).then(r => r.data))
-    )
-    const updated = new Map(episodes.value)
+      chunk.map((ep) => window.api.getEpisode(ep.id, props.animeId).then((r) => r.data))
+    );
+    const updated = new Map(episodes.value);
     for (const ep of fetched) {
-      updated.set(ep.id, ep)
+      updated.set(ep.id, ep);
     }
-    episodes.value = updated
+    episodes.value = updated;
   }
 
   if (availableAuthors.value.length > 0 && !selectedAuthor.value) {
-    if (props.initialPrefs?.author && availableAuthors.value.some(([a]) => a === props.initialPrefs!.author)) {
-      selectedAuthor.value = props.initialPrefs.author
+    if (
+      props.initialPrefs?.author &&
+      availableAuthors.value.some(([a]) => a === props.initialPrefs!.author)
+    ) {
+      selectedAuthor.value = props.initialPrefs.author;
     } else {
-      selectedAuthor.value = availableAuthors.value[0][0]
+      selectedAuthor.value = availableAuthors.value[0][0];
     }
   }
 
-  loadingEpisodes.value = false
-  probeSelectedQualities()
+  loadingEpisodes.value = false;
+  probeSelectedQualities();
 }
 
 async function goToPage(page: number): Promise<void> {
-  currentPage.value = page
-  await loadPageEpisodes()
-  await checkFileStatus()
+  currentPage.value = page;
+  await loadPageEpisodes();
+  await checkFileStatus();
 }
 
-let probeGeneration = 0
+let probeGeneration = 0;
 
 async function probeSelectedQualities(): Promise<void> {
-  const gen = ++probeGeneration
+  const gen = ++probeGeneration;
 
   // Build translation metadata lookup
-  const trMeta = new Map<number, Translation>()
+  const trMeta = new Map<number, Translation>();
   for (const row of episodeRows.value) {
     for (const tr of row.allTranslations) {
-      trMeta.set(tr.id, tr)
+      trMeta.set(tr.id, tr);
     }
   }
 
   // Phase 1: probe only currently selected translations
-  const selectedIds: number[] = []
+  const selectedIds: number[] = [];
   for (const row of episodeRows.value) {
     if (row.selectedTr && !realQuality.value.has(row.selectedTr.id)) {
-      selectedIds.push(row.selectedTr.id)
+      selectedIds.push(row.selectedTr.id);
     }
   }
 
   if (selectedIds.length > 0) {
-    const updated = await probeIds(selectedIds, trMeta, gen)
-    if (updated) realQuality.value = updated
+    const updated = await probeIds(selectedIds, trMeta, gen);
+    if (updated) realQuality.value = updated;
   }
 
-  if (gen !== probeGeneration) return
+  if (gen !== probeGeneration) return;
 
   // Phase 2: full scan only if enabled in settings and needed
-  const bgProbeEnabled = await window.api.getSetting('backgroundQualityProbe') as boolean
-  if (!bgProbeEnabled) return
+  const bgProbeEnabled = (await window.api.getSetting('backgroundQualityProbe')) as boolean;
+  if (!bgProbeEnabled) return;
 
-  const episodeCount = filteredEpisodes.value.length
-  const needsFullScan = await window.api.probeFullScanNeeded(props.animeId, episodeCount)
-  if (!needsFullScan || gen !== probeGeneration) return
+  const episodeCount = filteredEpisodes.value.length;
+  const needsFullScan = await window.api.probeFullScanNeeded(props.animeId, episodeCount);
+  if (!needsFullScan || gen !== probeGeneration) return;
 
-  const remainingIds: number[] = []
+  const remainingIds: number[] = [];
   for (const id of trMeta.keys()) {
     if (!realQuality.value.has(id)) {
-      remainingIds.push(id)
+      remainingIds.push(id);
     }
   }
 
   if (remainingIds.length > 0) {
-    const updated = await probeIds(remainingIds, trMeta, gen, true)
-    if (updated) realQuality.value = updated
+    const updated = await probeIds(remainingIds, trMeta, gen, true);
+    if (updated) realQuality.value = updated;
   }
 
   if (gen === probeGeneration) {
-    window.api.probeFullScanDone(props.animeId, episodeCount)
+    window.api.probeFullScanDone(props.animeId, episodeCount);
   }
 }
 
@@ -867,155 +975,167 @@ async function probeIds(
   gen: number,
   throttle = false
 ): Promise<Map<number, number> | null> {
-  const batchSize = throttle ? 2 : 5
-  const collected = new Map<number, number>()
+  const batchSize = throttle ? 2 : 5;
+  const collected = new Map<number, number>();
   for (let i = 0; i < ids.length; i += batchSize) {
-    if (gen !== probeGeneration) return null
-    if (throttle) await new Promise(r => setTimeout(r, 100))
-    const batch = ids.slice(i, i + batchSize)
+    if (gen !== probeGeneration) return null;
+    if (throttle) await new Promise((r) => setTimeout(r, 100));
+    const batch = ids.slice(i, i + batchSize);
     const results = await Promise.all(
-      batch.map(id => window.api.probeEmbedQuality(id, props.animeId).then(h => ({ id, height: h })))
-    )
+      batch.map((id) =>
+        window.api.probeEmbedQuality(id, props.animeId).then((h) => ({ id, height: h }))
+      )
+    );
     for (const r of results) {
       if (r.height !== null) {
-        collected.set(r.id, r.height)
-        const tr = trMeta.get(r.id)
+        collected.set(r.id, r.height);
+        const tr = trMeta.get(r.id);
         if (tr && tr.height !== r.height) {
-          console.warn(`[quality-mismatch] Translation ${r.id} (${tr.authorsSummary}, ${tr.type}): reported=${tr.height}p, actual=${r.height}p`)
+          console.warn(
+            `[quality-mismatch] Translation ${r.id} (${tr.authorsSummary}, ${tr.type}): reported=${tr.height}p, actual=${r.height}p`
+          );
           window.api.reportQualityMismatch({
-            translationId: r.id, author: tr.authorsSummary, type: tr.type,
-            reported: tr.height, actual: r.height
-          })
+            translationId: r.id,
+            author: tr.authorsSummary,
+            type: tr.type,
+            reported: tr.height,
+            actual: r.height
+          });
         }
       }
     }
   }
-  if (gen !== probeGeneration) return null
-  const merged = new Map(realQuality.value)
+  if (gen !== probeGeneration) return null;
+  const merged = new Map(realQuality.value);
   for (const [id, h] of collected) {
-    merged.set(id, h)
+    merged.set(id, h);
   }
-  return merged
+  return merged;
 }
 
 function getRealHeight(tr: Translation): number {
-  return realQuality.value.get(tr.id) ?? tr.height
+  return realQuality.value.get(tr.id) ?? tr.height;
 }
 
 function qualityLabel(height: number): string {
-  if (height >= 1080) return '1080p'
-  if (height >= 720) return '720p'
-  if (height >= 480) return '480p'
-  return `${height}p`
+  if (height >= 1080) return '1080p';
+  if (height >= 720) return '720p';
+  if (height >= 480) return '480p';
+  return `${height}p`;
 }
 
-const fileStatus = ref<Record<string, { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]>>({})
-const watchProgress = ref<Record<string, WatchProgressEntry>>({})
+const fileStatus = ref<
+  Record<
+    string,
+    { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+  >
+>({});
+const watchProgress = ref<Record<string, WatchProgressEntry>>({});
 
 async function loadWatchProgress(): Promise<void> {
   try {
-    watchProgress.value = await window.api.watchProgressGetAll(props.animeId)
+    watchProgress.value = await window.api.watchProgressGetAll(props.animeId);
   } catch (err) {
-    console.error('Failed to load watch progress:', err)
+    console.error('Failed to load watch progress:', err);
   }
 }
 
 function episodeProgressPercent(episodeInt: string): number {
-  const entry = watchProgress.value[episodeInt]
-  if (!entry || !entry.duration) return 0
-  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100))
-  return pct < 2 ? 0 : pct
+  const entry = watchProgress.value[episodeInt];
+  if (!entry || !entry.duration) return 0;
+  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100));
+  return pct < 2 ? 0 : pct;
 }
 
 function isEpisodeWatched(episodeInt: string): boolean {
-  if (shikiRate.value?.status === 'completed') return true
-  return !!watchProgress.value[episodeInt]?.watched
+  if (shikiRate.value?.status === 'completed') return true;
+  return !!watchProgress.value[episodeInt]?.watched;
 }
 
 const continueTarget = computed((): EpisodeSummary | null => {
-  const eps = filteredEpisodes.value
-  if (eps.length === 0) return null
+  const eps = filteredEpisodes.value;
+  if (eps.length === 0) return null;
 
   // Completed → "Continue" means "start rewatching from ep 1". Without this the
   // shikiEpisodes >= eps.length branch below would land on the last episode.
   if (shikiRate.value?.status === 'completed') {
-    return eps[0]
+    return eps[0];
   }
 
   // 1) If Shikimori reports N completed episodes, jump to episode N+1.
   // Shikimori is authoritative — ignore local saved positions for earlier episodes.
   if (shikiUser.value && shikiEpisodes.value > 0 && shikiEpisodes.value < eps.length) {
-    return eps[shikiEpisodes.value]
+    return eps[shikiEpisodes.value];
   }
 
   // 2) Prefer an episode with an unfinished saved position (most recent).
-  let bestResume: EpisodeSummary | null = null
-  let bestUpdatedAt = 0
+  let bestResume: EpisodeSummary | null = null;
+  let bestUpdatedAt = 0;
   for (const ep of eps) {
-    const entry = watchProgress.value[ep.episodeInt]
-    if (!entry || entry.watched) continue
-    if (!entry.position || !entry.duration) continue
+    const entry = watchProgress.value[ep.episodeInt];
+    if (!entry || entry.watched) continue;
+    if (!entry.position || !entry.duration) continue;
     if (entry.updatedAt > bestUpdatedAt) {
-      bestUpdatedAt = entry.updatedAt
-      bestResume = ep
+      bestUpdatedAt = entry.updatedAt;
+      bestResume = ep;
     }
   }
-  if (bestResume) return bestResume
+  if (bestResume) return bestResume;
 
   // 3) First episode after the last locally-watched one.
-  let lastWatchedIdx = -1
+  let lastWatchedIdx = -1;
   for (let i = 0; i < eps.length; i++) {
-    if (isEpisodeWatched(eps[i].episodeInt)) lastWatchedIdx = i
+    if (isEpisodeWatched(eps[i].episodeInt)) lastWatchedIdx = i;
   }
-  const nextIdx = lastWatchedIdx + 1
-  if (nextIdx < eps.length) return eps[nextIdx]
+  const nextIdx = lastWatchedIdx + 1;
+  if (nextIdx < eps.length) return eps[nextIdx];
 
   // 4) Everything watched — fall back to the last episode.
-  return eps[eps.length - 1]
-})
+  return eps[eps.length - 1];
+});
 
 const continueReady = computed((): boolean => {
-  if (!anime.value || filteredEpisodes.value.length === 0) return false
-  if (loadingEpisodes.value) return false
-  if (anime.value.myAnimeListId && !shikiUserChecked.value) return false
-  if (shikiUser.value && shikiLoading.value) return false
-  return continueTarget.value !== null
-})
+  if (!anime.value || filteredEpisodes.value.length === 0) return false;
+  if (loadingEpisodes.value) return false;
+  if (anime.value.myAnimeListId && !shikiUserChecked.value) return false;
+  if (shikiUser.value && shikiLoading.value) return false;
+  return continueTarget.value !== null;
+});
 
 const continueLabel = computed((): string => {
-  const target = continueTarget.value
-  if (!target) return 'Continue'
-  const entry = watchProgress.value[target.episodeInt]
-  const verb = entry && entry.position > 0 && !entry.watched ? 'Resume' : 'Continue'
-  return `${verb} · Ep ${target.episodeInt}`
-})
+  const target = continueTarget.value;
+  if (!target) return 'Continue';
+  const entry = watchProgress.value[target.episodeInt];
+  const verb = entry && entry.position > 0 && !entry.watched ? 'Resume' : 'Continue';
+  return `${verb} · Ep ${target.episodeInt}`;
+});
 
 async function continueWatching(): Promise<void> {
-  const target = continueTarget.value
-  if (!target) return
+  const target = continueTarget.value;
+  if (!target) return;
 
-  const eps = filteredEpisodes.value
-  const targetIdx = eps.findIndex(e => e.episodeInt === target.episodeInt)
-  if (targetIdx < 0) return
+  const eps = filteredEpisodes.value;
+  const targetIdx = eps.findIndex((e) => e.episodeInt === target.episodeInt);
+  if (targetIdx < 0) return;
 
-  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0
+  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0;
   if (targetPage !== currentPage.value) {
-    await goToPage(targetPage)
+    await goToPage(targetPage);
   }
-  await nextTick()
+  await nextTick();
 
-  const row = episodeRows.value.find(r => r.episode.episodeInt === target.episodeInt)
-  if (!row || !row.selectedTr) return
+  const row = episodeRows.value.find((r) => r.episode.episodeInt === target.episodeInt);
+  if (!row || !row.selectedTr) return;
 
   if (selectedTrHasFile(row)) {
-    await openFile(row)
+    await openFile(row);
   } else {
-    await playStream(row)
+    await playStream(row);
   }
 }
 
 async function toggleStar(): Promise<void> {
-  if (!anime.value) return
+  if (!anime.value) return;
   const stripped: AnimeSearchResult = {
     id: anime.value.id,
     title: anime.value.title,
@@ -1026,124 +1146,128 @@ async function toggleStar(): Promise<void> {
     typeTitle: anime.value.typeTitle,
     year: anime.value.year,
     season: anime.value.season
-  }
-  isStarred.value = await window.api.libraryToggle(JSON.parse(JSON.stringify(stripped)))
+  };
+  isStarred.value = await window.api.libraryToggle(JSON.parse(JSON.stringify(stripped)));
 }
 
 const isShowFinished = computed<boolean>(() => {
-  const status = shikiDetails.value?.status
-  return status === 'released'
-})
+  const status = shikiDetails.value?.status;
+  return status === 'released';
+});
 
 const canAutoDl = computed<boolean>(() => {
-  if (!anime.value?.myAnimeListId) return false
-  if (!shikiUser.value) return false
-  if (isShowFinished.value) return false
-  return true
-})
+  if (!anime.value?.myAnimeListId) return false;
+  if (!shikiUser.value) return false;
+  if (isShowFinished.value) return false;
+  return true;
+});
 
 const autoDlTooltip = computed<string>(() => {
-  if (!anime.value?.myAnimeListId) return 'Auto-download requires a Shikimori entry'
-  if (!shikiUser.value) return 'Connect to Shikimori to enable auto-download'
-  if (isShowFinished.value) return 'Show is fully aired — no new episodes to auto-download'
+  if (!anime.value?.myAnimeListId) return 'Auto-download requires a Shikimori entry';
+  if (!shikiUser.value) return 'Connect to Shikimori to enable auto-download';
+  if (isShowFinished.value) return 'Show is fully aired — no new episodes to auto-download';
   if (autoDlSubscription.value) {
-    const next = autoDlSubscription.value.lastEnqueuedEpisodeInt + 1
-    return `Will auto-download new episodes from Ep ${next} onward`
+    const next = autoDlSubscription.value.lastEnqueuedEpisodeInt + 1;
+    return `Will auto-download new episodes from Ep ${next} onward`;
   }
-  return 'Auto-download new episodes as they air'
-})
+  return 'Auto-download new episodes as they air';
+});
 
 async function toggleAutoDl(): Promise<void> {
-  if (!anime.value || autoDlSaving.value) return
-  if (!canAutoDl.value && !autoDlSubscription.value) return
-  autoDlSaving.value = true
+  if (!anime.value || autoDlSaving.value) return;
+  if (!canAutoDl.value && !autoDlSubscription.value) return;
+  autoDlSaving.value = true;
   try {
-    const enable = !autoDlSubscription.value
+    const enable = !autoDlSubscription.value;
     const result = await window.api.autoDlSetSubscription(
       anime.value.id,
       enable,
       enable && anime.value.myAnimeListId
         ? { malId: anime.value.myAnimeListId, animeName: getAnimeName() }
         : undefined
-    )
+    );
     if (enable && !result) {
-      alert("Couldn't read this show's airing data from Shikimori. Please try again in a moment.")
-      return
+      alert("Couldn't read this show's airing data from Shikimori. Please try again in a moment.");
+      return;
     }
-    autoDlSubscription.value = result
+    autoDlSubscription.value = result;
   } catch (err) {
-    console.error('Failed to toggle auto-download:', err)
+    console.error('Failed to toggle auto-download:', err);
   } finally {
-    autoDlSaving.value = false
+    autoDlSaving.value = false;
   }
 }
 
 async function onCleanupDeleted(): Promise<void> {
-  isDownloaded.value = false
-  episodeMeta.value = {}
-  await checkFileStatus()
+  isDownloaded.value = false;
+  episodeMeta.value = {};
+  await checkFileStatus();
 }
 
-const episodeMeta = ref<Record<string, EpisodeMeta[]>>({})
-const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map())
-const downloading = ref(false)
-const errorMessage = ref('')
+const episodeMeta = ref<Record<string, EpisodeMeta[]>>({});
+const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map());
+const downloading = ref(false);
+const errorMessage = ref('');
 
-const focusApplied = ref(false)
+const focusApplied = ref(false);
 async function applyFocusEpisode(target: string): Promise<void> {
-  if (focusApplied.value) return
-  const eps = filteredEpisodes.value
-  if (eps.length === 0) return
-  const targetIdx = eps.findIndex((e) => e.episodeInt === target)
+  if (focusApplied.value) return;
+  const eps = filteredEpisodes.value;
+  if (eps.length === 0) return;
+  const targetIdx = eps.findIndex((e) => e.episodeInt === target);
   if (targetIdx < 0) {
-    focusApplied.value = true
-    emit('focusApplied', props.animeId)
-    return
+    focusApplied.value = true;
+    emit('focusApplied', props.animeId);
+    return;
   }
-  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0
+  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0;
   if (targetPage !== currentPage.value) {
-    await goToPage(targetPage)
+    await goToPage(targetPage);
   }
-  await nextTick()
-  const el = document.querySelector(`.episode-row[data-ep-int="${CSS.escape(target)}"]`) as HTMLElement | null
-  if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  focusApplied.value = true
-  emit('focusApplied', props.animeId)
+  await nextTick();
+  const el = document.querySelector(
+    `.episode-row[data-ep-int="${CSS.escape(target)}"]`
+  ) as HTMLElement | null;
+  if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  focusApplied.value = true;
+  emit('focusApplied', props.animeId);
 }
 
 watch(
   [() => props.focusEpisodeInt, filteredEpisodes, loadingEpisodes],
   async () => {
-    const target = props.focusEpisodeInt
-    if (!target || focusApplied.value) return
-    if (loadingEpisodes.value) return
-    if (filteredEpisodes.value.length === 0) return
-    await applyFocusEpisode(target)
+    const target = props.focusEpisodeInt;
+    if (!target || focusApplied.value) return;
+    if (loadingEpisodes.value) return;
+    if (filteredEpisodes.value.length === 0) return;
+    await applyFocusEpisode(target);
   },
   { immediate: true }
-)
+);
 
 function getAnimeName(): string {
-  if (!anime.value) return ''
-  return _getAnimeName(anime.value)
+  if (!anime.value) return '';
+  return _getAnimeName(anime.value);
 }
 
 async function checkToken(): Promise<boolean> {
-  const token = await window.api.getSetting('token') as string
+  const token = (await window.api.getSetting('token')) as string;
   if (!token) {
-    errorMessage.value = 'API token is required for downloads. Set it in Settings.'
-    setTimeout(() => { errorMessage.value = '' }, 5000)
-    return false
+    errorMessage.value = 'API token is required for downloads. Set it in Settings.';
+    setTimeout(() => {
+      errorMessage.value = '';
+    }, 5000);
+    return false;
   }
-  return true
+  return true;
 }
 
 async function downloadAll(): Promise<void> {
-  if (!anime.value) return
-  if (!(await checkToken())) return
+  if (!anime.value) return;
+  if (!(await checkToken())) return;
 
-  const name = getAnimeName()
-  const requests: DownloadRequest[] = []
+  const name = getAnimeName();
+  const requests: DownloadRequest[] = [];
 
   for (const row of episodeRows.value) {
     if (row.selectedTr && !row.isLocked && !selectedTrHasFile(row)) {
@@ -1156,233 +1280,304 @@ async function downloadAll(): Promise<void> {
         animeId: anime.value!.id,
         translationType: row.selectedTr.type,
         author: row.selectedTr.authorsSummary
-      })
+      });
     }
   }
 
-  if (requests.length === 0) return
-  downloading.value = true
+  if (requests.length === 0) return;
+  downloading.value = true;
   try {
-    await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)))
-    await window.api.downloadEnqueue(requests)
+    await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)));
+    await window.api.downloadEnqueue(requests);
   } finally {
-    downloading.value = false
+    downloading.value = false;
   }
 }
 
 async function downloadEpisode(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr || !anime.value) return
-  if (!(await checkToken())) return
+  if (!row.selectedTr || !anime.value) return;
+  if (!(await checkToken())) return;
 
-  await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)))
-  await window.api.downloadEnqueue([{
-    translationId: row.selectedTr.id,
-    height: getRealHeight(row.selectedTr),
-    animeName: getAnimeName(),
-    episodeLabel: row.episode.episodeFull,
-    episodeInt: row.episode.episodeInt,
-    animeId: anime.value!.id,
-    translationType: row.selectedTr.type,
-    author: row.selectedTr.authorsSummary
-  }])
+  await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)));
+  await window.api.downloadEnqueue([
+    {
+      translationId: row.selectedTr.id,
+      height: getRealHeight(row.selectedTr),
+      animeName: getAnimeName(),
+      episodeLabel: row.episode.episodeFull,
+      episodeInt: row.episode.episodeInt,
+      animeId: anime.value!.id,
+      translationType: row.selectedTr.type,
+      author: row.selectedTr.authorsSummary
+    }
+  ]);
 }
 
 function downloadGroupChanged(a: EpisodeGroup | undefined, b: EpisodeGroup | undefined): boolean {
-  if (!a && !b) return false
-  if (!a || !b) return true
-  if (a.mergeStatus !== b.mergeStatus || a.mergePercent !== b.mergePercent) return true
-  const av = a.video, bv = b.video
-  if (!av && !bv) return false
-  if (!av || !bv) return true
-  return av.status !== bv.status || av.bytesReceived !== bv.bytesReceived || av.totalBytes !== bv.totalBytes || av.speed !== bv.speed
+  if (!a && !b) return false;
+  if (!a || !b) return true;
+  if (a.mergeStatus !== b.mergeStatus || a.mergePercent !== b.mergePercent) return true;
+  const av = a.video,
+    bv = b.video;
+  if (!av && !bv) return false;
+  if (!av || !bv) return true;
+  return (
+    av.status !== bv.status ||
+    av.bytesReceived !== bv.bytesReceived ||
+    av.totalBytes !== bv.totalBytes ||
+    av.speed !== bv.speed
+  );
 }
 
 function updateDownloadGroups(groups: EpisodeGroup[]): void {
-  const prev = downloadGroups.value
-  const map = new Map<string, EpisodeGroup>()
-  let newlyCompleted = false
-  let changed = false
+  const prev = downloadGroups.value;
+  const map = new Map<string, EpisodeGroup>();
+  let newlyCompleted = false;
+  let changed = false;
   for (const g of groups) {
     if (g.animeName === getAnimeName()) {
-      map.set(g.episodeLabel, g)
-      const old = prev.get(g.episodeLabel)
-      if (downloadGroupChanged(old, g)) changed = true
+      map.set(g.episodeLabel, g);
+      const old = prev.get(g.episodeLabel);
+      if (downloadGroupChanged(old, g)) changed = true;
       if (g.mergeStatus === 'completed' && old?.mergeStatus !== 'completed') {
-        newlyCompleted = true
+        newlyCompleted = true;
       }
       if (g.video?.status === 'completed' && old?.video?.status !== 'completed') {
-        newlyCompleted = true
+        newlyCompleted = true;
       }
     }
   }
   // Also detect removals (prev had entries that new map doesn't)
-  if (prev.size !== map.size) changed = true
-  if (!changed) return
-  downloadGroups.value = map
+  if (prev.size !== map.size) changed = true;
+  if (!changed) return;
+  downloadGroups.value = map;
   if (newlyCompleted) {
-    checkFileStatus()
+    checkFileStatus();
   }
 }
 
 function dlProgress(item: DownloadProgressItem | null): number {
-  if (!item || item.totalBytes <= 0) return 0
-  return (item.bytesReceived / item.totalBytes) * 100
+  if (!item || item.totalBytes <= 0) return 0;
+  return (item.bytesReceived / item.totalBytes) * 100;
 }
 
-
 function getGroup(episodeFull: string): EpisodeGroup | undefined {
-  return downloadGroups.value.get(episodeFull)
+  return downloadGroups.value.get(episodeFull);
 }
 
 watch([translationType, selectedAuthor], () => {
-  episodeOverrides.value = new Map()
-  emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value)
-  probeSelectedQualities()
-})
+  episodeOverrides.value = new Map();
+  emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value);
+  probeSelectedQualities();
+});
 
-const posterSrc = ref('')
-const posterFallbackAttempted = ref(false)
+const posterSrc = ref('');
+const posterFallbackAttempted = ref(false);
 
-watch(anime, async (val) => {
-  if (val) {
-    posterSrc.value = val.posterUrl || val.posterUrlSmall
-    posterFallbackAttempted.value = false
-  }
-}, { immediate: true })
+watch(
+  anime,
+  async (val) => {
+    if (val) {
+      posterSrc.value = val.posterUrl || val.posterUrlSmall;
+      posterFallbackAttempted.value = false;
+    }
+  },
+  { immediate: true }
+);
 
 async function onPosterError(): Promise<void> {
-  if (posterFallbackAttempted.value) return
-  posterFallbackAttempted.value = true
-  const cached = await window.api.getCachedPoster(props.animeId)
-  if (cached) posterSrc.value = cached
+  if (posterFallbackAttempted.value) return;
+  posterFallbackAttempted.value = true;
+  const cached = await window.api.getCachedPoster(props.animeId);
+  if (cached) posterSrc.value = cached;
 }
 
 async function checkFileStatus(): Promise<void> {
-  if (!anime.value || filteredEpisodes.value.length === 0) return
-  const name = getAnimeName()
-  const episodeInts = filteredEpisodes.value.map(ep => ep.episodeInt)
-  fileStatus.value = await window.api.fileCheckEpisodes(name, episodeInts)
-  episodeMeta.value = await window.api.downloadedEpisodesGet(props.animeId)
+  if (!anime.value || filteredEpisodes.value.length === 0) return;
+  const name = getAnimeName();
+  const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
+  fileStatus.value = await window.api.fileCheckEpisodes(name, episodeInts);
+  episodeMeta.value = await window.api.downloadedEpisodesGet(props.animeId);
 }
 
-function buildTranslationList(row: EpisodeRow | undefined): { id: number; label: string; type: string; height: number }[] {
-  if (!row) return []
-  return row.allTranslations.map(tr => ({
+function buildTranslationList(
+  row: EpisodeRow | undefined
+): { id: number; label: string; type: string; height: number }[] {
+  if (!row) return [];
+  return row.allTranslations.map((tr) => ({
     id: tr.id,
     label: tr.authorsSummary,
     type: tr.type,
     height: getRealHeight(tr)
-  }))
+  }));
 }
 
-function buildAllEpisodes(): { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[] {
-  return filteredEpisodes.value.map(ep => {
-    const detail = episodes.value.get(ep.id)
+function buildAllEpisodes(): {
+  episodeInt: string;
+  episodeFull: string;
+  translations: { id: number; label: string; type: string; height: number }[];
+  downloadedTrIds: number[];
+}[] {
+  return filteredEpisodes.value.map((ep) => {
+    const detail = episodes.value.get(ep.id);
     const translations = detail
-      ? detail.translations.filter(t => t.isActive === 1).map(t => ({ id: t.id, label: t.authorsSummary, type: t.type, height: getRealHeight(t) }))
-      : []
-    const metas = episodeMeta.value[ep.episodeInt] || []
-    const downloadedTrIds = metas.map(m => m.translationId)
-    return { episodeInt: ep.episodeInt, episodeFull: ep.episodeFull, translations, downloadedTrIds }
-  })
+      ? detail.translations
+          .filter((t) => t.isActive === 1)
+          .map((t) => ({
+            id: t.id,
+            label: t.authorsSummary,
+            type: t.type,
+            height: getRealHeight(t)
+          }))
+      : [];
+    const metas = episodeMeta.value[ep.episodeInt] || [];
+    const downloadedTrIds = metas.map((m) => m.translationId);
+    return {
+      episodeInt: ep.episodeInt,
+      episodeFull: ep.episodeFull,
+      translations,
+      downloadedTrIds
+    };
+  });
 }
 
-function getFileForTranslation(episodeInt: string, translationId: number | undefined): { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string } | null {
-  const files = fileStatus.value[episodeInt]
-  if (!files || files.length === 0) return null
+function getFileForTranslation(
+  episodeInt: string,
+  translationId: number | undefined
+): { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string } | null {
+  const files = fileStatus.value[episodeInt];
+  if (!files || files.length === 0) return null;
   // Find file matching the translation's author via metadata
   if (translationId) {
-    const metas = episodeMeta.value[episodeInt] || []
-    const meta = metas.find(m => m.translationId === translationId)
+    const metas = episodeMeta.value[episodeInt] || [];
+    const meta = metas.find((m) => m.translationId === translationId);
     if (meta) {
       // Match by author tag
-      const authorTag = sanitizeFilename(meta.author)
-      const match = files.find(f => f.author === authorTag)
-      if (match) return match
+      const authorTag = sanitizeFilename(meta.author);
+      const match = files.find((f) => f.author === authorTag);
+      if (match) return match;
       // Legacy file (no author tag) — only match if it's the sole metadata entry
       if (metas.length === 1 && files.length === 1 && !files[0].author) {
-        return files[0]
+        return files[0];
       }
     }
   }
   // No specific match found
-  return null
+  return null;
 }
 
 function hasAnyFile(episodeInt: string): boolean {
-  const files = fileStatus.value[episodeInt]
-  return !!files && files.length > 0
+  const files = fileStatus.value[episodeInt];
+  return !!files && files.length > 0;
 }
 
 function selectedTrHasFile(row: EpisodeRow): boolean {
-  if (!row.selectedTr) return false
-  return !!getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
+  if (!row.selectedTr) return false;
+  return !!getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
 }
 
 async function openFile(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
-  if (!info) return
+  if (!row.selectedTr) return;
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
+  if (!info) return;
 
   if (playerMode.value === 'builtin') {
-    const name = anime.value ? getAnimeName() : ''
-    const localSubs = await window.api.playerGetLocalSubtitles(info.filePath)
-    const allEps = buildAllEpisodes()
-    const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
-    emit('playFile', info.filePath, '', localSubs || '', name, row.episode.episodeInt, [], row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx, props.animeId, anime.value?.myAnimeListId ?? 0)
+    const name = anime.value ? getAnimeName() : '';
+    const localSubs = await window.api.playerGetLocalSubtitles(info.filePath);
+    const allEps = buildAllEpisodes();
+    const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
+    emit(
+      'playFile',
+      info.filePath,
+      '',
+      localSubs || '',
+      name,
+      row.episode.episodeInt,
+      [],
+      row.selectedTr.id,
+      buildTranslationList(row),
+      [...row.downloadedTrIds],
+      allEps,
+      epIdx,
+      props.animeId,
+      anime.value?.myAnimeListId ?? 0
+    );
   } else {
-    const result = await window.api.fileOpen(info.filePath)
+    const result = await window.api.fileOpen(info.filePath);
     if (result) {
-      errorMessage.value = result
-      await checkFileStatus()
+      errorMessage.value = result;
+      await checkFileStatus();
     }
   }
 }
 
 async function playStream(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return
-  const name = anime.value ? getAnimeName() : ''
-  const result = await window.api.playerGetStreamUrl(row.selectedTr.id, getRealHeight(row.selectedTr))
+  if (!row.selectedTr) return;
+  const name = anime.value ? getAnimeName() : '';
+  const result = await window.api.playerGetStreamUrl(
+    row.selectedTr.id,
+    getRealHeight(row.selectedTr)
+  );
   if (result) {
-    const allEps = buildAllEpisodes()
-    const epIdx = allEps.findIndex(e => e.episodeInt === row.episode.episodeInt)
-    emit('playFile', '', result.streamUrl, result.subtitleContent || '', name, row.episode.episodeInt, result.availableStreams, row.selectedTr.id, buildTranslationList(row), [...row.downloadedTrIds], allEps, epIdx, props.animeId, anime.value?.myAnimeListId ?? 0)
+    const allEps = buildAllEpisodes();
+    const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
+    emit(
+      'playFile',
+      '',
+      result.streamUrl,
+      result.subtitleContent || '',
+      name,
+      row.episode.episodeInt,
+      result.availableStreams,
+      row.selectedTr.id,
+      buildTranslationList(row),
+      [...row.downloadedTrIds],
+      allEps,
+      epIdx,
+      props.animeId,
+      anime.value?.myAnimeListId ?? 0
+    );
   }
 }
 
 function showInFolder(row: EpisodeRow): void {
-  if (!row.selectedTr) return
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
-  if (!info) return
-  window.api.fileShowInFolder(info.filePath)
+  if (!row.selectedTr) return;
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
+  if (!info) return;
+  window.api.fileShowInFolder(info.filePath);
 }
 
 async function deleteFile(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
-  if (!info) return
-  await window.api.fileDeleteEpisode(getAnimeName(), row.episode.episodeInt, props.animeId, row.selectedTr.id)
-  await checkFileStatus()
+  if (!row.selectedTr) return;
+  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
+  if (!info) return;
+  await window.api.fileDeleteEpisode(
+    getAnimeName(),
+    row.episode.episodeInt,
+    props.animeId,
+    row.selectedTr.id
+  );
+  await checkFileStatus();
 }
 
 async function cancelEpisodeDownload(episodeLabel: string): Promise<void> {
-  await window.api.downloadCancelByEpisode(getAnimeName(), episodeLabel)
+  await window.api.downloadCancelByEpisode(getAnimeName(), episodeLabel);
 }
 
-const hasActiveDownloads = computed(() => downloadGroups.value.size > 0)
+const hasActiveDownloads = computed(() => downloadGroups.value.size > 0);
 
 async function cancelAllDownloads(): Promise<void> {
-  await window.api.downloadCancelByEpisode(getAnimeName())
+  await window.api.downloadCancelByEpisode(getAnimeName());
 }
 
 function translationTypeLabel(type: string): string {
-  const t = TRANSLATION_TYPES.find(tt => tt.value === type)
-  return t ? t.label : type
+  const t = TRANSLATION_TYPES.find((tt) => tt.value === type);
+  return t ? t.label : type;
 }
 
 function typeChip(type: string): { short: string; color: string } {
-  const t = TRANSLATION_TYPES.find(tt => tt.value === type)
-  return t ? { short: t.short, color: t.color } : { short: type, color: '#6a6a8a' }
+  const t = TRANSLATION_TYPES.find((tt) => tt.value === type);
+  return t ? { short: t.short, color: t.color } : { short: type, color: '#6a6a8a' };
 }
 </script>
 
@@ -1390,8 +1585,19 @@ function typeChip(type: string): { short: string; color: string } {
   <main class="detail-view">
     <header class="topbar">
       <button class="back-btn" @click="emit('back')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          width="18"
+          height="18"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+          />
         </svg>
         Back
       </button>
@@ -1415,8 +1621,19 @@ function typeChip(type: string): { short: string; color: string } {
             {{ continueLabel }}
           </button>
           <button class="library-btn" :class="{ active: isStarred }" @click="toggleStar">
-            <svg viewBox="0 0 24 24" :fill="isStarred ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.5" width="14" height="14">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+            <svg
+              viewBox="0 0 24 24"
+              :fill="isStarred ? 'currentColor' : 'none'"
+              stroke="currentColor"
+              stroke-width="1.5"
+              width="14"
+              height="14"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
+              />
             </svg>
             {{ isStarred ? 'In Library' : 'Add to Library' }}
           </button>
@@ -1428,14 +1645,36 @@ function typeChip(type: string): { short: string; color: string } {
             :title="autoDlTooltip"
             @click="toggleAutoDl"
           >
-            <svg viewBox="0 0 24 24" :fill="autoDlSubscription ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.5" width="14" height="14">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75" />
+            <svg
+              viewBox="0 0 24 24"
+              :fill="autoDlSubscription ? 'currentColor' : 'none'"
+              stroke="currentColor"
+              stroke-width="1.5"
+              width="14"
+              height="14"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75"
+              />
             </svg>
             {{ autoDlSubscription ? 'Auto-download on' : 'Auto-download' }}
           </button>
           <button v-if="isDownloaded" class="cleanup-btn" @click="cleanupModalOpen = true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              width="14"
+              height="14"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+              />
             </svg>
             Cleanup files…
           </button>
@@ -1453,7 +1692,9 @@ function typeChip(type: string): { short: string; color: string } {
           <div v-if="anime.genres?.length" class="genres">
             <span v-for="g in anime.genres" :key="g.id" class="genre-tag">{{ g.title }}</span>
           </div>
-          <p v-if="anime.descriptions?.length" class="description">{{ anime.descriptions[0].value }}</p>
+          <p v-if="anime.descriptions?.length" class="description">
+            {{ anime.descriptions[0].value }}
+          </p>
         </div>
       </div>
 
@@ -1461,14 +1702,20 @@ function typeChip(type: string): { short: string; color: string } {
         <template v-if="shikiUser">
           <div class="shiki-header">
             <span class="shiki-label">Shikimori</span>
-            <a :href="`https://shikimori.one/animes/${anime.myAnimeListId}`" target="_blank" class="shiki-link">
+            <a
+              :href="`https://shikimori.one/animes/${anime.myAnimeListId}`"
+              target="_blank"
+              class="shiki-link"
+            >
               Open on Shikimori
             </a>
           </div>
           <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
           <div v-else class="shiki-controls">
             <select v-model="shikiStatus" class="select shiki-select">
-              <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">{{ s.label }}</option>
+              <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">
+                {{ s.label }}
+              </option>
             </select>
             <div class="shiki-episodes">
               <span>Episodes:</span>
@@ -1479,7 +1726,9 @@ function typeChip(type: string): { short: string; color: string } {
                 :max="anime.numberOfEpisodes || undefined"
                 class="shiki-ep-input"
               />
-              <span v-if="anime.numberOfEpisodes" class="shiki-ep-total">/ {{ anime.numberOfEpisodes }}</span>
+              <span v-if="anime.numberOfEpisodes" class="shiki-ep-total"
+                >/ {{ anime.numberOfEpisodes }}</span
+              >
             </div>
             <div class="shiki-episodes">
               <span>Score:</span>
@@ -1490,12 +1739,7 @@ function typeChip(type: string): { short: string; color: string } {
             </div>
             <div class="shiki-episodes" title="Number of times you've rewatched this anime">
               <span>Rewatches:</span>
-              <input
-                v-model.number="shikiRewatches"
-                type="number"
-                min="0"
-                class="shiki-ep-input"
-              />
+              <input v-model.number="shikiRewatches" type="number" min="0" class="shiki-ep-input" />
             </div>
             <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
               {{ shikiSaving ? 'Saving...' : 'Save' }}
@@ -1529,13 +1773,20 @@ function typeChip(type: string): { short: string; color: string } {
               width="14"
               height="14"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M12 5a7 7 0 016.95 6.155A4 4 0 0118 19H9m-3-2a4 4 0 01-1.9-7.516" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M3 3l18 18M12 5a7 7 0 016.95 6.155A4 4 0 0118 19H9m-3-2a4 4 0 01-1.9-7.516"
+              />
             </svg>
             <span v-if="syncState === 'syncing'">
               Syncing {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }}…
             </span>
             <span v-else>
-              Working offline — {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} queued
+              Working offline — {{ offlineQueueLength }} change{{
+                offlineQueueLength > 1 ? 's' : ''
+              }}
+              queued
             </span>
             <button
               v-if="syncState === 'idle'"
@@ -1581,14 +1832,21 @@ function typeChip(type: string): { short: string; color: string } {
             <svg
               class="related-chevron"
               :class="{ collapsed: relatedCollapsed }"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
             </svg>
             <span class="related-label">Chronology</span>
           </div>
           <span v-if="relatedLoading" class="related-summary">Loading...</span>
-          <span v-else-if="shikiRelated.length > 0" class="related-summary">{{ shikiRelated.length }} {{ shikiRelated.length === 1 ? 'entry' : 'entries' }}</span>
+          <span v-else-if="shikiRelated.length > 0" class="related-summary"
+            >{{ shikiRelated.length }} {{ shikiRelated.length === 1 ? 'entry' : 'entries' }}</span
+          >
         </div>
         <div v-if="!relatedCollapsed" class="related-body">
           <div v-if="relatedLoading" class="related-loading">Loading chronology...</div>
@@ -1597,12 +1855,22 @@ function typeChip(type: string): { short: string; color: string } {
               v-for="entry in shikiRelated"
               :key="entry.shikiAnime.id"
               class="related-row"
-              :class="{ clickable: entry.smotretAnime && !entry.isCurrent, unavailable: !entry.smotretAnime, current: entry.isCurrent }"
+              :class="{
+                clickable: entry.smotretAnime && !entry.isCurrent,
+                unavailable: !entry.smotretAnime,
+                current: entry.isCurrent
+              }"
               :role="entry.smotretAnime && !entry.isCurrent ? 'button' : undefined"
               :tabindex="entry.smotretAnime && !entry.isCurrent ? 0 : undefined"
-              @click="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
-              @keydown.enter.prevent="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
-              @keydown.space.prevent="entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)"
+              @click="
+                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+              "
+              @keydown.enter.prevent="
+                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+              "
+              @keydown.space.prevent="
+                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+              "
             >
               <img
                 :src="entry.smotretAnime?.posterUrlSmall || entry.shikiAnime.image_url || ''"
@@ -1613,8 +1881,12 @@ function typeChip(type: string): { short: string; color: string } {
               <div class="related-info">
                 <div class="related-title">{{ entry.shikiAnime.name }}</div>
                 <div class="related-meta">
-                  <span v-if="entry.shikiAnime.kind" class="related-kind">{{ KIND_LABELS[entry.shikiAnime.kind] || entry.shikiAnime.kind.toUpperCase() }}</span>
-                  <span v-if="entry.shikiAnime.year" class="related-year">{{ entry.shikiAnime.year }}</span>
+                  <span v-if="entry.shikiAnime.kind" class="related-kind">{{
+                    KIND_LABELS[entry.shikiAnime.kind] || entry.shikiAnime.kind.toUpperCase()
+                  }}</span>
+                  <span v-if="entry.shikiAnime.year" class="related-year">{{
+                    entry.shikiAnime.year
+                  }}</span>
                   <span v-if="entry.relation" class="related-relation">{{ entry.relation }}</span>
                   <span v-if="entry.isCurrent" class="related-current-badge">Current</span>
                   <span
@@ -1624,7 +1896,11 @@ function typeChip(type: string): { short: string; color: string } {
                   >
                     {{ STATUS_LABELS[entry.watchStatus] }}
                   </span>
-                  <span v-if="!entry.smotretAnime && !entry.isCurrent" class="related-unavailable-badge">Not available</span>
+                  <span
+                    v-if="!entry.smotretAnime && !entry.isCurrent"
+                    class="related-unavailable-badge"
+                    >Not available</span
+                  >
                 </div>
               </div>
             </div>
@@ -1638,9 +1914,14 @@ function typeChip(type: string): { short: string; color: string } {
             <svg
               class="skip-chevron"
               :class="{ collapsed: skipPanelCollapsed }"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
             </svg>
             <span class="skip-label">Skip Detection (experimental)</span>
           </div>
@@ -1652,22 +1933,17 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
         <div v-if="!skipPanelCollapsed" class="skip-body">
           <div v-if="skipEpisodeInputs.length < 2" class="skip-disabled">
-            Need at least 2 downloaded episodes to analyze. Currently downloaded: {{ skipEpisodeInputs.length }}.
+            Need at least 2 downloaded episodes to analyze. Currently downloaded:
+            {{ skipEpisodeInputs.length }}.
           </div>
           <template v-else>
             <div class="skip-actions">
-              <button
-                v-if="!skipAnalyzing"
-                class="skip-button"
-                @click="runSkipAnalysis"
-              >
+              <button v-if="!skipAnalyzing" class="skip-button" @click="runSkipAnalysis">
                 {{ skipDetections ? 'Re-analyze' : `Analyze ${skipEpisodeInputs.length} episodes` }}
               </button>
-              <button
-                v-else
-                class="skip-button skip-button-cancel"
-                @click="cancelSkipAnalysis"
-              >Cancel</button>
+              <button v-else class="skip-button skip-button-cancel" @click="cancelSkipAnalysis">
+                Cancel
+              </button>
               <span v-if="skipAnalyzing" class="skip-progress-text">{{ skipProgressLabel }}</span>
               <button
                 v-if="skipMkvEpisodeCount >= 3"
@@ -1677,12 +1953,15 @@ function typeChip(type: string): { short: string; color: string } {
               >
                 {{ chapterInjecting ? 'Saving chapters…' : 'Save chapters to MKV' }}
               </button>
-              <span v-if="chapterInjecting" class="skip-progress-text">{{ chapterInjectProgressLabel }}</span>
+              <span v-if="chapterInjecting" class="skip-progress-text">{{
+                chapterInjectProgressLabel
+              }}</span>
             </div>
             <div v-if="skipError" class="skip-error">{{ skipError }}</div>
             <div v-if="chapterInjectError" class="skip-error">{{ chapterInjectError }}</div>
             <div v-if="chapterInjectResult" class="skip-results-meta">
-              Wrote chapters to {{ chapterInjectResult.written }}/{{ chapterInjectResult.total }} episodes
+              Wrote chapters to {{ chapterInjectResult.written }}/{{ chapterInjectResult.total }}
+              episodes
               <template v-if="chapterInjectResult.skipped">
                 · {{ chapterInjectResult.skipped }} skipped (no detection)
               </template>
@@ -1692,10 +1971,10 @@ function typeChip(type: string): { short: string; color: string } {
             </div>
             <div v-if="skipDetections" class="skip-results">
               <div class="skip-results-meta">
-                Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} ·
-                window {{ skipDetections.algorithm.windowSec }}s ·
-                min run {{ skipDetections.algorithm.minRunSec }}s ·
-                threshold {{ skipDetections.algorithm.matchBitThreshold }}/32 bits
+                Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} · window
+                {{ skipDetections.algorithm.windowSec }}s · min run
+                {{ skipDetections.algorithm.minRunSec }}s · threshold
+                {{ skipDetections.algorithm.matchBitThreshold }}/32 bits
               </div>
               <table class="skip-table">
                 <thead>
@@ -1712,19 +1991,39 @@ function typeChip(type: string): { short: string; color: string } {
                       <td>{{ ep.episodeFull || `Episode ${ep.episodeInt}` }}</td>
                       <td>
                         <template v-if="skipDetections.perEpisode[ep.episodeInt].op">
-                          {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.startSec) }}–{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.endSec) }}
-                          <span class="skip-pair-count">({{ skipDetections.perEpisode[ep.episodeInt].op!.pairCount }} pairs)</span>
+                          {{
+                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.startSec)
+                          }}–{{
+                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.endSec)
+                          }}
+                          <span class="skip-pair-count"
+                            >({{
+                              skipDetections.perEpisode[ep.episodeInt].op!.pairCount
+                            }}
+                            pairs)</span
+                          >
                         </template>
                         <span v-else class="skip-empty">—</span>
                       </td>
                       <td>
                         <template v-if="skipDetections.perEpisode[ep.episodeInt].ed">
-                          {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.startSec) }}–{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.endSec) }}
-                          <span class="skip-pair-count">({{ skipDetections.perEpisode[ep.episodeInt].ed!.pairCount }} pairs)</span>
+                          {{
+                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.startSec)
+                          }}–{{
+                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.endSec)
+                          }}
+                          <span class="skip-pair-count"
+                            >({{
+                              skipDetections.perEpisode[ep.episodeInt].ed!.pairCount
+                            }}
+                            pairs)</span
+                          >
                         </template>
                         <span v-else class="skip-empty">—</span>
                       </td>
-                      <td>{{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].durationSec) }}</td>
+                      <td>
+                        {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].durationSec) }}
+                      </td>
                     </template>
                   </tr>
                 </tbody>
@@ -1740,27 +2039,51 @@ function typeChip(type: string): { short: string; color: string } {
             <svg
               class="friends-chevron"
               :class="{ collapsed: friendsCollapsed }"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
             </svg>
             <span class="friends-label">Friends</span>
           </div>
-          <span v-if="!friendsLoading && friendsRates.length > 0" class="friends-summary">{{ friendsSummary }}</span>
+          <span v-if="!friendsLoading && friendsRates.length > 0" class="friends-summary">{{
+            friendsSummary
+          }}</span>
           <span v-if="friendsLoading" class="friends-summary">Loading...</span>
         </div>
         <div v-if="!friendsCollapsed" class="friends-body">
           <div v-if="friendsLoading" class="friends-loading">Loading friends...</div>
-          <div v-else-if="friendsRates.length === 0" class="friends-empty">None of your friends have watched this anime</div>
+          <div v-else-if="friendsRates.length === 0" class="friends-empty">
+            None of your friends have watched this anime
+          </div>
           <div v-else class="friends-list">
             <div v-for="friend in friendsRates" :key="friend.nickname" class="friend-row">
               <img :src="friend.avatar" class="friend-avatar" />
               <span class="friend-name">{{ friend.nickname }}</span>
               <span class="friend-status-badge" :class="'status-' + friend.status">
-                {{ { planned: 'Planned', watching: 'Watching', rewatching: 'Rewatching', completed: 'Completed', on_hold: 'On Hold', dropped: 'Dropped' }[friend.status] }}
+                {{
+                  {
+                    planned: 'Planned',
+                    watching: 'Watching',
+                    rewatching: 'Rewatching',
+                    completed: 'Completed',
+                    on_hold: 'On Hold',
+                    dropped: 'Dropped'
+                  }[friend.status]
+                }}
               </span>
               <span class="friend-score">{{ friend.score > 0 ? friend.score + '/10' : '—' }}</span>
-              <span class="friend-episodes">{{ friend.episodes > 0 ? 'ep ' + friend.episodes + (anime.numberOfEpisodes ? '/' + anime.numberOfEpisodes : '') : '' }}</span>
+              <span class="friend-episodes">{{
+                friend.episodes > 0
+                  ? 'ep ' +
+                    friend.episodes +
+                    (anime.numberOfEpisodes ? '/' + anime.numberOfEpisodes : '')
+                  : ''
+              }}</span>
             </div>
           </div>
         </div>
@@ -1770,7 +2093,11 @@ function typeChip(type: string): { short: string; color: string } {
         <div class="control-group">
           <label>Translation type</label>
           <select v-model="translationType" class="select">
-            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">{{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{ filteredEpisodes.length }})</option>
+            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
+              {{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{
+                filteredEpisodes.length
+              }})
+            </option>
           </select>
         </div>
         <div class="control-group">
@@ -1781,8 +2108,18 @@ function typeChip(type: string): { short: string; color: string } {
             </option>
           </select>
         </div>
-        <button class="download-btn" @click="downloadAll" :disabled="episodeRows.every(r => !r.selectedTr) || downloading">
-          {{ downloading ? 'Enqueuing...' : isPaginated ? `Download Page ${currentPage + 1}` : 'Download All' }}
+        <button
+          class="download-btn"
+          @click="downloadAll"
+          :disabled="episodeRows.every((r) => !r.selectedTr) || downloading"
+        >
+          {{
+            downloading
+              ? 'Enqueuing...'
+              : isPaginated
+                ? `Download Page ${currentPage + 1}`
+                : 'Download All'
+          }}
         </button>
         <button v-if="hasActiveDownloads" class="cancel-all-btn" @click="cancelAllDownloads">
           Cancel All
@@ -1795,25 +2132,52 @@ function typeChip(type: string): { short: string; color: string } {
 
       <div v-if="isPaginated" class="pagination">
         <button class="page-btn" :disabled="currentPage === 0" @click="goToPage(currentPage - 1)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="14"
+            height="14"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <button v-for="p in totalPages" :key="p - 1"
-          class="page-btn" :class="{ active: currentPage === p - 1 }"
-          @click="goToPage(p - 1)">
+        <button
+          v-for="p in totalPages"
+          :key="p - 1"
+          class="page-btn"
+          :class="{ active: currentPage === p - 1 }"
+          @click="goToPage(p - 1)"
+        >
           {{ p }}
         </button>
-        <button class="page-btn" :disabled="currentPage === totalPages - 1" @click="goToPage(currentPage + 1)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+        <button
+          class="page-btn"
+          :disabled="currentPage === totalPages - 1"
+          @click="goToPage(currentPage + 1)"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="14"
+            height="14"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
           </svg>
         </button>
         <span class="page-info">{{ filteredEpisodes.length }} episodes</span>
       </div>
 
       <div class="episode-list">
-        <div v-for="row in episodeRows" :key="row.episode.id" :data-ep-int="row.episode.episodeInt" class="episode-row">
+        <div
+          v-for="row in episodeRows"
+          :key="row.episode.id"
+          :data-ep-int="row.episode.episodeInt"
+          class="episode-row"
+        >
           <span class="ep-name">{{ row.episode.episodeFull }}</span>
           <template v-if="row.isLocked">
             <span class="ep-author locked">
@@ -1825,15 +2189,36 @@ function typeChip(type: string): { short: string; color: string } {
             <select
               class="ep-select"
               :value="row.selectedTr?.id || ''"
-              @change="onEpisodeTranslationChange(row.episode.id, row.episode.episodeInt, Number(($event.target as HTMLSelectElement).value))"
+              @change="
+                onEpisodeTranslationChange(
+                  row.episode.id,
+                  row.episode.episodeInt,
+                  Number(($event.target as HTMLSelectElement).value)
+                )
+              "
             >
               <!-- Show selected type first, then the rest -->
-              <template v-for="type in [TRANSLATION_TYPES.find(t => t.value === translationType)!, ...TRANSLATION_TYPES.filter(t => t.value !== translationType)]" :key="type.value">
-                <optgroup v-if="row.allTranslations.some(tr => tr.type === type.value)"
-                          :label="type.label">
-                  <option v-for="tr in row.allTranslations.filter(t => t.type === type.value).sort((a, b) => getRealHeight(b) - getRealHeight(a))"
-                          :key="tr.id" :value="tr.id">
-                    {{ row.downloadedTrIds.has(tr.id) ? '⬇ ' : '' }}{{ tr.authorsSummary }} ({{ qualityLabel(getRealHeight(tr)) }})
+              <template
+                v-for="type in [
+                  TRANSLATION_TYPES.find((t) => t.value === translationType)!,
+                  ...TRANSLATION_TYPES.filter((t) => t.value !== translationType)
+                ]"
+                :key="type.value"
+              >
+                <optgroup
+                  v-if="row.allTranslations.some((tr) => tr.type === type.value)"
+                  :label="type.label"
+                >
+                  <option
+                    v-for="tr in row.allTranslations
+                      .filter((t) => t.type === type.value)
+                      .sort((a, b) => getRealHeight(b) - getRealHeight(a))"
+                    :key="tr.id"
+                    :value="tr.id"
+                  >
+                    {{ row.downloadedTrIds.has(tr.id) ? '⬇ ' : '' }}{{ tr.authorsSummary }} ({{
+                      qualityLabel(getRealHeight(tr))
+                    }})
                   </option>
                 </optgroup>
               </template>
@@ -1841,30 +2226,65 @@ function typeChip(type: string): { short: string; color: string } {
           </template>
           <span v-else class="ep-missing">No translation</span>
           <!-- Download / merge status -->
-          <div v-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'merging'" class="ep-dl-status merging">
-            Merging {{ getGroup(row.episode.episodeFull)?.mergePercent != null ? getGroup(row.episode.episodeFull)?.mergePercent + '%' : '...' }}
+          <div
+            v-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'merging'"
+            class="ep-dl-status merging"
+          >
+            Merging
+            {{
+              getGroup(row.episode.episodeFull)?.mergePercent != null
+                ? getGroup(row.episode.episodeFull)?.mergePercent + '%'
+                : '...'
+            }}
           </div>
-          <div v-else-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'failed'" class="ep-dl-status merge-failed">
+          <div
+            v-else-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'failed'"
+            class="ep-dl-status merge-failed"
+          >
             Merge failed
           </div>
-          <div v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'downloading'" class="ep-dl-status">
+          <div
+            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'downloading'"
+            class="ep-dl-status"
+          >
             <div class="ep-progress-wrap">
-              <div class="ep-progress-bar" :style="{ width: dlProgress(getGroup(row.episode.episodeFull)!.video) + '%' }"></div>
+              <div
+                class="ep-progress-bar"
+                :style="{ width: dlProgress(getGroup(row.episode.episodeFull)!.video) + '%' }"
+              ></div>
             </div>
-            <span class="ep-dl-text">{{ formatSpeed(getGroup(row.episode.episodeFull)!.video!.speed) }}</span>
-            <span class="ep-dl-text">ETA {{ formatEta(getGroup(row.episode.episodeFull)!.video!) }}</span>
+            <span class="ep-dl-text">{{
+              formatSpeed(getGroup(row.episode.episodeFull)!.video!.speed)
+            }}</span>
+            <span class="ep-dl-text"
+              >ETA {{ formatEta(getGroup(row.episode.episodeFull)!.video!) }}</span
+            >
           </div>
-          <div v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'queued'" class="ep-dl-status queued">
+          <div
+            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'queued'"
+            class="ep-dl-status queued"
+          >
             Queued
           </div>
-          <div v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'paused'" class="ep-dl-status paused">
+          <div
+            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'paused'"
+            class="ep-dl-status paused"
+          >
             Paused ({{ Math.round(dlProgress(getGroup(row.episode.episodeFull)!.video)) }}%)
           </div>
-          <div v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'failed'" class="ep-dl-status failed">
+          <div
+            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'failed'"
+            class="ep-dl-status failed"
+          >
             Failed
           </div>
           <div class="ep-right">
-            <span v-if="isEpisodeWatched(row.episode.episodeInt)" class="watched-badge" title="Watched">✓</span>
+            <span
+              v-if="isEpisodeWatched(row.episode.episodeInt)"
+              class="watched-badge"
+              title="Watched"
+              >✓</span
+            >
             <span
               v-else-if="episodeProgressPercent(row.episode.episodeInt) > 0"
               class="watch-progress-badge"
@@ -1872,10 +2292,28 @@ function typeChip(type: string): { short: string; color: string } {
             >
               {{ episodeProgressPercent(row.episode.episodeInt) }}%
             </span>
-            <span v-if="row.selectedTr" class="type-chip" :style="{ backgroundColor: typeChip(row.selectedTr.type).color + '22', color: typeChip(row.selectedTr.type).color }">{{ typeChip(row.selectedTr.type).short }}</span>
-            <span v-if="row.selectedTr" class="quality-badge" :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }">{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span>
+            <span
+              v-if="row.selectedTr"
+              class="type-chip"
+              :style="{
+                backgroundColor: typeChip(row.selectedTr.type).color + '22',
+                color: typeChip(row.selectedTr.type).color
+              }"
+              >{{ typeChip(row.selectedTr.type).short }}</span
+            >
+            <span
+              v-if="row.selectedTr"
+              class="quality-badge"
+              :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }"
+              >{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span
+            >
             <template v-if="selectedTrHasFile(row)">
-              <span class="file-type-badge">{{ getFileForTranslation(row.episode.episodeInt, row.selectedTr?.id)?.type.toUpperCase() }}</span>
+              <span class="file-type-badge">{{
+                getFileForTranslation(
+                  row.episode.episodeInt,
+                  row.selectedTr?.id
+                )?.type.toUpperCase()
+              }}</span>
             </template>
             <template v-else-if="hasAnyFile(row.episode.episodeInt)">
               <span class="file-type-badge other-dl">⬇</span>
@@ -1885,29 +2323,90 @@ function typeChip(type: string): { short: string; color: string } {
             <template v-if="selectedTrHasFile(row)">
               <button class="link-btn open" @click="openFile(row)" title="Open file">Open</button>
               <button class="link-btn folder" @click="showInFolder(row)" title="Show in folder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M2 7.5V18a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-6.5l-2-2.5H4a2 2 0 00-2 2z"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M2 7.5V18a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-6.5l-2-2.5H4a2 2 0 00-2 2z"
+                  />
                 </svg>
               </button>
               <button class="link-btn delete" @click="deleteFile(row)" title="Delete file">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                  />
                 </svg>
               </button>
             </template>
-            <button v-if="getGroup(row.episode.episodeFull) && (!['completed','cancelled'].includes(getGroup(row.episode.episodeFull)?.video?.status || '') || getGroup(row.episode.episodeFull)?.mergeStatus === 'merging')" class="link-btn cancel" @click="cancelEpisodeDownload(row.episode.episodeFull)" title="Cancel">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            <button
+              v-if="
+                getGroup(row.episode.episodeFull) &&
+                (!['completed', 'cancelled'].includes(
+                  getGroup(row.episode.episodeFull)?.video?.status || ''
+                ) ||
+                  getGroup(row.episode.episodeFull)?.mergeStatus === 'merging')
+              "
+              class="link-btn cancel"
+              @click="cancelEpisodeDownload(row.episode.episodeFull)"
+              title="Cancel"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                width="14"
+                height="14"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <button v-if="playerMode === 'builtin' && row.selectedTr && !selectedTrHasFile(row)" class="link-btn play" @click="playStream(row)" title="Play (stream)">
+            <button
+              v-if="playerMode === 'builtin' && row.selectedTr && !selectedTrHasFile(row)"
+              class="link-btn play"
+              @click="playStream(row)"
+              title="Play (stream)"
+            >
               <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                <path d="M8 5v14l11-7z"/>
+                <path d="M8 5v14l11-7z" />
               </svg>
             </button>
-            <button v-if="row.selectedTr && !row.isLocked && !selectedTrHasFile(row)" class="link-btn dl" @click="downloadEpisode(row)" title="Download this episode">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M2 19.5h20M12 2v14m0 0l-4-4m4 4l4-4"/>
+            <button
+              v-if="row.selectedTr && !row.isLocked && !selectedTrHasFile(row)"
+              class="link-btn dl"
+              @click="downloadEpisode(row)"
+              title="Download this episode"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                width="14"
+                height="14"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M2 19.5h20M12 2v14m0 0l-4-4m4 4l4-4"
+                />
               </svg>
             </button>
           </div>
@@ -1993,7 +2492,9 @@ function typeChip(type: string): { short: string; color: string } {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: background 0.15s ease, opacity 0.15s ease;
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .continue-btn:hover:not(:disabled) {
@@ -2020,7 +2521,10 @@ function typeChip(type: string): { short: string; color: string } {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .library-btn:hover {
@@ -2049,7 +2553,10 @@ function typeChip(type: string): { short: string; color: string } {
   justify-content: center;
   gap: 8px;
   margin-top: 8px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .cleanup-btn:hover {
@@ -2316,7 +2823,9 @@ function typeChip(type: string): { short: string; color: string } {
   flex-shrink: 0;
 }
 
-.type-chip, .quality-badge, .file-type-badge {
+.type-chip,
+.quality-badge,
+.file-type-badge {
   padding: 3px 8px;
   border-radius: 4px;
   font-size: 0.65rem;
@@ -2462,11 +2971,22 @@ function typeChip(type: string): { short: string; color: string } {
   flex-shrink: 0;
 }
 
-.ep-dl-status.queued { color: #6a6a8a; }
-.ep-dl-status.paused { color: #f39c12; }
-.ep-dl-status.failed { color: #e94560; }
-.ep-dl-status.merging { color: #f39c12; font-weight: 600; }
-.ep-dl-status.merge-failed { color: #e94560; }
+.ep-dl-status.queued {
+  color: #6a6a8a;
+}
+.ep-dl-status.paused {
+  color: #f39c12;
+}
+.ep-dl-status.failed {
+  color: #e94560;
+}
+.ep-dl-status.merging {
+  color: #f39c12;
+  font-weight: 600;
+}
+.ep-dl-status.merge-failed {
+  color: #e94560;
+}
 
 .ep-progress-wrap {
   flex: 1;
@@ -3091,12 +3611,30 @@ function typeChip(type: string): { short: string; color: string } {
   white-space: nowrap;
 }
 
-.status-watching { background-color: #27ae601a; color: #6ab04c; }
-.status-completed { background-color: #3498db1a; color: #3498db; }
-.status-planned { background-color: #9b59b61a; color: #9b59b6; }
-.status-on_hold { background-color: #f39c121a; color: #f39c12; }
-.status-dropped { background-color: #e945601a; color: #e94560; }
-.status-rewatching { background-color: #1abc9c1a; color: #1abc9c; }
+.status-watching {
+  background-color: #27ae601a;
+  color: #6ab04c;
+}
+.status-completed {
+  background-color: #3498db1a;
+  color: #3498db;
+}
+.status-planned {
+  background-color: #9b59b61a;
+  color: #9b59b6;
+}
+.status-on_hold {
+  background-color: #f39c121a;
+  color: #f39c12;
+}
+.status-dropped {
+  background-color: #e945601a;
+  color: #e94560;
+}
+.status-rewatching {
+  background-color: #1abc9c1a;
+  color: #1abc9c;
+}
 
 .friend-score {
   color: #f39c12;

@@ -1,41 +1,41 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import AnimeCard from './AnimeCard.vue'
-import { getAnimeName } from '../utils'
+import { ref, onMounted } from 'vue';
+import AnimeCard from './AnimeCard.vue';
+import { getAnimeName } from '../utils';
 
 const emit = defineEmits<{
-  openAnime: [id: number]
-}>()
+  openAnime: [id: number];
+}>();
 
-const library = ref<AnimeSearchResult[]>([])
-const starredIds = ref(new Set<number>())
-const downloadedIds = ref(new Set<number>())
+const library = ref<AnimeSearchResult[]>([]);
+const starredIds = ref(new Set<number>());
+const downloadedIds = ref(new Set<number>());
 
-onMounted(loadLibrary)
+onMounted(loadLibrary);
 
 async function loadLibrary(): Promise<void> {
-  library.value = await window.api.libraryGet()
-  const ids = library.value.map(a => a.id)
-  const statuses = await window.api.libraryGetStatus(ids)
-  const starred = new Set<number>()
-  const downloaded = new Set<number>()
+  library.value = await window.api.libraryGet();
+  const ids = library.value.map((a) => a.id);
+  const statuses = await window.api.libraryGetStatus(ids);
+  const starred = new Set<number>();
+  const downloaded = new Set<number>();
   for (const [id, s] of Object.entries(statuses)) {
-    if (s.starred) starred.add(Number(id))
-    if (s.downloaded) downloaded.add(Number(id))
+    if (s.starred) starred.add(Number(id));
+    if (s.downloaded) downloaded.add(Number(id));
   }
-  starredIds.value = starred
-  downloadedIds.value = downloaded
+  starredIds.value = starred;
+  downloadedIds.value = downloaded;
 }
 
 async function toggleStar(anime: AnimeSearchResult): Promise<void> {
-  await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)))
-  await loadLibrary()
+  await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
+  await loadLibrary();
 }
 
 async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
-  const name = getAnimeName(anime)
-  await window.api.downloadedAnimeDelete(anime.id, name)
-  await loadLibrary()
+  const name = getAnimeName(anime);
+  await window.api.downloadedAnimeDelete(anime.id, name);
+  await loadLibrary();
 }
 </script>
 
@@ -59,8 +59,19 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             @click.stop="deleteAnime(anime)"
             title="Delete downloaded files"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              width="14"
+              height="14"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
             </svg>
             Remove files
           </button>

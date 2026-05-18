@@ -1,22 +1,22 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import Sidebar from './components/Sidebar.vue'
-import SearchView from './components/SearchView.vue'
-import LibraryView from './components/LibraryView.vue'
-import SettingsView from './components/SettingsView.vue'
-import DownloadsView from './components/DownloadsView.vue'
-import AnimeDetailView from './components/AnimeDetailView.vue'
-import ShikimoriView from './components/ShikimoriView.vue'
-import FriendsActivityView from './components/FriendsActivityView.vue'
-import CalendarView from './components/CalendarView.vue'
-import HomeView from './components/HomeView.vue'
-import PlayerView from './components/PlayerView.vue'
-import CleanupModal from './components/CleanupModal.vue'
-import { formatBytes } from './utils'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import Sidebar from './components/Sidebar.vue';
+import SearchView from './components/SearchView.vue';
+import LibraryView from './components/LibraryView.vue';
+import SettingsView from './components/SettingsView.vue';
+import DownloadsView from './components/DownloadsView.vue';
+import AnimeDetailView from './components/AnimeDetailView.vue';
+import ShikimoriView from './components/ShikimoriView.vue';
+import FriendsActivityView from './components/FriendsActivityView.vue';
+import CalendarView from './components/CalendarView.vue';
+import HomeView from './components/HomeView.vue';
+import PlayerView from './components/PlayerView.vue';
+import CleanupModal from './components/CleanupModal.vue';
+import { formatBytes } from './utils';
 
-const currentView = ref('home')
-const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null)
-const shortcuts = ref<Record<string, string>>({})
+const currentView = ref('home');
+const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
+const shortcuts = ref<Record<string, string>>({});
 const animeByView = ref<Record<string, number | null>>({
   home: null,
   search: null,
@@ -24,7 +24,7 @@ const animeByView = ref<Record<string, number | null>>({
   shikimori: null,
   friends: null,
   calendar: null
-})
+});
 const animeHistoryByView = ref<Record<string, number[]>>({
   home: [],
   search: [],
@@ -32,240 +32,329 @@ const animeHistoryByView = ref<Record<string, number[]>>({
   shikimori: [],
   friends: [],
   calendar: []
-})
-const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
+});
+const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({});
 
-const shikimoriLoggedIn = ref(false)
+const shikimoriLoggedIn = ref(false);
 
 // Player overlay state
 const playerState = ref<{
-  filePath: string
-  streamUrl: string
-  subtitleContent: string
-  animeName: string
-  episodeLabel: string
-  availableStreams: { height: number; url: string }[]
-  translationId: number
-  translations: { id: number; label: string; type: string; height: number }[]
-  downloadedTrIds: number[]
-  allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[]
-  episodeIndex: number
-  animeId: number
-  malId: number
-} | null>(null)
+  filePath: string;
+  streamUrl: string;
+  subtitleContent: string;
+  animeName: string;
+  episodeLabel: string;
+  availableStreams: { height: number; url: string }[];
+  translationId: number;
+  translations: { id: number; label: string; type: string; height: number }[];
+  downloadedTrIds: number[];
+  allEpisodes: {
+    episodeInt: string;
+    episodeFull: string;
+    translations: { id: number; label: string; type: string; height: number }[];
+    downloadedTrIds: number[];
+  }[];
+  episodeIndex: number;
+  animeId: number;
+  malId: number;
+} | null>(null);
 
-function openPlayer(filePath: string, streamUrl: string, subtitleContent: string, animeName: string, episodeLabel: string, availableStreams: { height: number; url: string }[], translationId: number, translations: { id: number; label: string; type: string; height: number }[] = [], downloadedTrIds: number[] = [], allEpisodes: { episodeInt: string; episodeFull: string; translations: { id: number; label: string; type: string; height: number }[]; downloadedTrIds: number[] }[] = [], episodeIndex: number = 0, animeId = 0, malId = 0): void {
-  playerState.value = { filePath, streamUrl, subtitleContent, animeName, episodeLabel, availableStreams, translationId, translations, downloadedTrIds, allEpisodes, episodeIndex, animeId, malId }
+function openPlayer(
+  filePath: string,
+  streamUrl: string,
+  subtitleContent: string,
+  animeName: string,
+  episodeLabel: string,
+  availableStreams: { height: number; url: string }[],
+  translationId: number,
+  translations: { id: number; label: string; type: string; height: number }[] = [],
+  downloadedTrIds: number[] = [],
+  allEpisodes: {
+    episodeInt: string;
+    episodeFull: string;
+    translations: { id: number; label: string; type: string; height: number }[];
+    downloadedTrIds: number[];
+  }[] = [],
+  episodeIndex: number = 0,
+  animeId = 0,
+  malId = 0
+): void {
+  playerState.value = {
+    filePath,
+    streamUrl,
+    subtitleContent,
+    animeName,
+    episodeLabel,
+    availableStreams,
+    translationId,
+    translations,
+    downloadedTrIds,
+    allEpisodes,
+    episodeIndex,
+    animeId,
+    malId
+  };
 }
 
 function closePlayer(): void {
-  playerState.value = null
+  playerState.value = null;
 }
 
 // Persist translation type and author selections per anime across re-mounts
-const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({})
+const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({});
 
-const activeAnimeId = computed(() => animeByView.value[currentView.value] ?? null)
+const activeAnimeId = computed(() => animeByView.value[currentView.value] ?? null);
 
 function openAnime(id: number, focusEpisodeInt?: string): void {
-  const view = currentView.value
-  const current = animeByView.value[view]
+  const view = currentView.value;
+  const current = animeByView.value[view];
   if (current != null && current !== id) {
-    animeHistoryByView.value[view].push(current)
+    animeHistoryByView.value[view].push(current);
   }
   if (focusEpisodeInt) {
-    focusEpisodeIntForAnime.value[id] = focusEpisodeInt
+    focusEpisodeIntForAnime.value[id] = focusEpisodeInt;
   }
-  animeByView.value[view] = id
+  animeByView.value[view] = id;
 }
 
 function clearFocusEpisode(id: number): void {
   if (focusEpisodeIntForAnime.value[id] !== undefined) {
-    delete focusEpisodeIntForAnime.value[id]
+    delete focusEpisodeIntForAnime.value[id];
   }
 }
 
 function closeAnime(): void {
-  const view = currentView.value
-  const stack = animeHistoryByView.value[view]
-  animeByView.value[view] = stack.length > 0 ? stack.pop()! : null
+  const view = currentView.value;
+  const stack = animeHistoryByView.value[view];
+  animeByView.value[view] = stack.length > 0 ? stack.pop()! : null;
 }
 
 function saveAnimePrefs(animeId: number, translationType: string, author: string): void {
-  animePrefs.value[animeId] = { translationType, author }
+  animePrefs.value[animeId] = { translationType, author };
 }
 
 function navigate(view: string): void {
-  if (currentView.value === 'settings' && view !== 'settings') loadShortcuts()
-  currentView.value = view
+  if (currentView.value === 'settings' && view !== 'settings') loadShortcuts();
+  currentView.value = view;
 }
 
-const isMac = navigator.platform.toUpperCase().includes('MAC')
+const isMac = navigator.platform.toUpperCase().includes('MAC');
 
 function matchesBinding(e: KeyboardEvent, binding: string): boolean {
-  const parts = binding.split('+')
-  const key = parts[parts.length - 1]
-  const mods = parts.slice(0, -1).map((m) => m.toLowerCase())
+  const parts = binding.split('+');
+  const key = parts[parts.length - 1];
+  const mods = parts.slice(0, -1).map((m) => m.toLowerCase());
 
-  const needCtrl = mods.includes('ctrl')
-  const needMeta = mods.includes('meta')
-  const needCmdOrCtrl = mods.includes('cmdorctrl')
-  const needShift = mods.includes('shift')
-  const needAlt = mods.includes('alt')
+  const needCtrl = mods.includes('ctrl');
+  const needMeta = mods.includes('meta');
+  const needCmdOrCtrl = mods.includes('cmdorctrl');
+  const needShift = mods.includes('shift');
+  const needAlt = mods.includes('alt');
 
-  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac)
-  const wantMeta = needMeta || (needCmdOrCtrl && isMac)
+  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac);
+  const wantMeta = needMeta || (needCmdOrCtrl && isMac);
 
-  if (e.ctrlKey !== wantCtrl) return false
-  if (e.metaKey !== wantMeta) return false
-  if (e.shiftKey !== needShift) return false
-  if (e.altKey !== needAlt) return false
+  if (e.ctrlKey !== wantCtrl) return false;
+  if (e.metaKey !== wantMeta) return false;
+  if (e.shiftKey !== needShift) return false;
+  if (e.altKey !== needAlt) return false;
 
-  return e.key.toLowerCase() === key.toLowerCase()
+  return e.key.toLowerCase() === key.toLowerCase();
 }
 
 function executeAction(action: string): void {
   switch (action) {
     case 'back':
-      if (activeAnimeId.value) closeAnime()
-      break
+      if (activeAnimeId.value) closeAnime();
+      break;
     case 'focusSearch':
-      navigate('search')
-      animeByView.value.search = null
-      nextTick(() => searchViewRef.value?.focusInput())
-      break
+      navigate('search');
+      animeByView.value.search = null;
+      nextTick(() => searchViewRef.value?.focusInput());
+      break;
     case 'goDownloads':
-      navigate('downloads')
-      break
+      navigate('downloads');
+      break;
   }
 }
 
 function handleKeydown(e: KeyboardEvent): void {
   // Don't intercept shortcuts when the player overlay is active
-  if (playerState.value) return
+  if (playerState.value) return;
 
-  const tag = (e.target as HTMLElement).tagName
-  const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  const tag = (e.target as HTMLElement).tagName;
+  const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 
   for (const [action, binding] of Object.entries(shortcuts.value)) {
-    if (!binding) continue
+    if (!binding) continue;
     if (matchesBinding(e, binding)) {
-      if (action === 'back' && isInput) continue
-      e.preventDefault()
-      executeAction(action)
-      return
+      if (action === 'back' && isInput) continue;
+      e.preventDefault();
+      executeAction(action);
+      return;
     }
   }
 }
 
 async function loadShortcuts(): Promise<void> {
-  shortcuts.value = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string>
+  shortcuts.value = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string>;
 }
 
-const ffmpegDownloading = ref(false)
-const ffmpegProgress = ref(0)
+const ffmpegDownloading = ref(false);
+const ffmpegProgress = ref(0);
 
 // Cleanup prompt (Shikimori "completed" transition)
 const cleanupToast = ref<{
-  animeId: number
-  animeName: string
-  bytes: number
-  files: number
-  loading: boolean
-} | null>(null)
-const cleanupModal = ref<{ animeId: number; animeName: string } | null>(null)
-let cleanupToastTimer: ReturnType<typeof setTimeout> | null = null
+  animeId: number;
+  animeName: string;
+  bytes: number;
+  files: number;
+  loading: boolean;
+} | null>(null);
+const cleanupModal = ref<{ animeId: number; animeName: string } | null>(null);
+let cleanupToastTimer: ReturnType<typeof setTimeout> | null = null;
 
 function dismissCleanupToast(): void {
   if (cleanupToastTimer) {
-    clearTimeout(cleanupToastTimer)
-    cleanupToastTimer = null
+    clearTimeout(cleanupToastTimer);
+    cleanupToastTimer = null;
   }
-  cleanupToast.value = null
+  cleanupToast.value = null;
 }
 
-async function handleCleanupPrompt(data: { animeId: number; animeName: string; malId: number }): Promise<void> {
-  dismissCleanupToast()
+async function handleCleanupPrompt(data: {
+  animeId: number;
+  animeName: string;
+  malId: number;
+}): Promise<void> {
+  dismissCleanupToast();
   cleanupToast.value = {
     animeId: data.animeId,
     animeName: data.animeName,
     bytes: 0,
     files: 0,
     loading: true
-  }
-  cleanupToastTimer = setTimeout(dismissCleanupToast, 30000)
+  };
+  cleanupToastTimer = setTimeout(dismissCleanupToast, 30000);
   try {
-    const size = await window.api.cleanupGetSize(data.animeId, data.animeName)
+    const size = await window.api.cleanupGetSize(data.animeId, data.animeName);
     if (cleanupToast.value && cleanupToast.value.animeId === data.animeId) {
-      cleanupToast.value.bytes = size.bytes
-      cleanupToast.value.files = size.files
-      cleanupToast.value.loading = false
+      cleanupToast.value.bytes = size.bytes;
+      cleanupToast.value.files = size.files;
+      cleanupToast.value.loading = false;
     }
   } catch {
     if (cleanupToast.value && cleanupToast.value.animeId === data.animeId) {
-      cleanupToast.value.loading = false
+      cleanupToast.value.loading = false;
     }
   }
 }
 
 function openCleanupModalFromToast(): void {
-  if (!cleanupToast.value) return
-  cleanupModal.value = { animeId: cleanupToast.value.animeId, animeName: cleanupToast.value.animeName }
-  dismissCleanupToast()
+  if (!cleanupToast.value) return;
+  cleanupModal.value = {
+    animeId: cleanupToast.value.animeId,
+    animeName: cleanupToast.value.animeName
+  };
+  dismissCleanupToast();
 }
 
 async function snoozeCleanupFromToast(): Promise<void> {
-  if (!cleanupToast.value) return
-  const id = cleanupToast.value.animeId
-  dismissCleanupToast()
+  if (!cleanupToast.value) return;
+  const id = cleanupToast.value.animeId;
+  dismissCleanupToast();
   try {
-    await window.api.cleanupSetSnoozed(id, true)
-  } catch { /* ignore */ }
+    await window.api.cleanupSetSnoozed(id, true);
+  } catch {
+    /* ignore */
+  }
 }
 
 function closeCleanupModal(): void {
-  cleanupModal.value = null
+  cleanupModal.value = null;
 }
 
 onMounted(async () => {
-  await loadShortcuts()
-  const shikiUser = await window.api.shikimoriGetUser()
-  shikimoriLoggedIn.value = !!shikiUser
-  window.addEventListener('keydown', handleKeydown)
+  await loadShortcuts();
+  const shikiUser = await window.api.shikimoriGetUser();
+  shikimoriLoggedIn.value = !!shikiUser;
+  window.addEventListener('keydown', handleKeydown);
   window.api.onFfmpegDownloadProgress((data) => {
     if (data.status === 'downloading') {
-      ffmpegDownloading.value = true
-      ffmpegProgress.value = data.progress ?? 0
+      ffmpegDownloading.value = true;
+      ffmpegProgress.value = data.progress ?? 0;
     } else {
-      ffmpegDownloading.value = false
+      ffmpegDownloading.value = false;
     }
-  })
-  window.api.onCleanupPrompt(handleCleanupPrompt)
+  });
+  window.api.onCleanupPrompt(handleCleanupPrompt);
   // Expose test hook for Playwright screenshot script
-  ;(window as any).__openTestPlayer = openPlayer
-})
+  (window as any).__openTestPlayer = openPlayer;
+});
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleKeydown)
-  window.api.offFfmpegDownloadProgress()
-  window.api.offCleanupPrompt()
-  if (cleanupToastTimer) clearTimeout(cleanupToastTimer)
-})
+  window.removeEventListener('keydown', handleKeydown);
+  window.api.offFfmpegDownloadProgress();
+  window.api.offCleanupPrompt();
+  if (cleanupToastTimer) clearTimeout(cleanupToastTimer);
+});
 </script>
 
 <template>
   <div class="app">
-    <Sidebar :current-view="currentView" :shikimori-logged-in="shikimoriLoggedIn" @navigate="navigate" />
-    <AnimeDetailView v-if="activeAnimeId" :key="activeAnimeId" :anime-id="activeAnimeId" :initial-prefs="animePrefs[activeAnimeId]" :focus-episode-int="focusEpisodeIntForAnime[activeAnimeId]" @back="closeAnime" @prefs-changed="saveAnimePrefs" @play-file="openPlayer" @open-anime="openAnime" @focus-applied="clearFocusEpisode" />
-    <HomeView v-show="currentView === 'home' && !activeAnimeId" @open-anime="openAnime" @navigate="navigate" />
-    <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" @open-anime="openAnime" />
+    <Sidebar
+      :current-view="currentView"
+      :shikimori-logged-in="shikimoriLoggedIn"
+      @navigate="navigate"
+    />
+    <AnimeDetailView
+      v-if="activeAnimeId"
+      :key="activeAnimeId"
+      :anime-id="activeAnimeId"
+      :initial-prefs="animePrefs[activeAnimeId]"
+      :focus-episode-int="focusEpisodeIntForAnime[activeAnimeId]"
+      @back="closeAnime"
+      @prefs-changed="saveAnimePrefs"
+      @play-file="openPlayer"
+      @open-anime="openAnime"
+      @focus-applied="clearFocusEpisode"
+    />
+    <HomeView
+      v-show="currentView === 'home' && !activeAnimeId"
+      @open-anime="openAnime"
+      @navigate="navigate"
+    />
+    <SearchView
+      ref="searchViewRef"
+      v-show="currentView === 'search' && !activeAnimeId"
+      @open-anime="openAnime"
+    />
     <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
-    <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" @open-anime="openAnime" />
+    <FriendsActivityView
+      v-show="currentView === 'friends' && !activeAnimeId"
+      @open-anime="openAnime"
+    />
     <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" @open-anime="openAnime" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
-    <PlayerView v-if="playerState" :file-path="playerState.filePath" :stream-url="playerState.streamUrl" :subtitle-content="playerState.subtitleContent" :anime-name="playerState.animeName" :episode-label="playerState.episodeLabel" :available-streams="playerState.availableStreams" :translation-id="playerState.translationId" :translations="playerState.translations" :downloaded-tr-ids="playerState.downloadedTrIds" :all-episodes="playerState.allEpisodes" :episode-index="playerState.episodeIndex" :anime-id="playerState.animeId" :mal-id="playerState.malId" @close="closePlayer" />
+    <PlayerView
+      v-if="playerState"
+      :file-path="playerState.filePath"
+      :stream-url="playerState.streamUrl"
+      :subtitle-content="playerState.subtitleContent"
+      :anime-name="playerState.animeName"
+      :episode-label="playerState.episodeLabel"
+      :available-streams="playerState.availableStreams"
+      :translation-id="playerState.translationId"
+      :translations="playerState.translations"
+      :downloaded-tr-ids="playerState.downloadedTrIds"
+      :all-episodes="playerState.allEpisodes"
+      :episode-index="playerState.episodeIndex"
+      :anime-id="playerState.animeId"
+      :mal-id="playerState.malId"
+      @close="closePlayer"
+    />
     <CleanupModal
       v-if="cleanupModal"
       :anime-id="cleanupModal.animeId"
@@ -278,13 +367,20 @@ onBeforeUnmount(() => {
         <div class="cleanup-toast-size">
           <template v-if="cleanupToast.loading">Calculating size…</template>
           <template v-else-if="cleanupToast.files === 0">No local files</template>
-          <template v-else>{{ cleanupToast.files }} file{{ cleanupToast.files === 1 ? '' : 's' }} · {{ formatBytes(cleanupToast.bytes) }} on disk</template>
+          <template v-else
+            >{{ cleanupToast.files }} file{{ cleanupToast.files === 1 ? '' : 's' }} ·
+            {{ formatBytes(cleanupToast.bytes) }} on disk</template
+          >
         </div>
       </div>
       <div class="cleanup-toast-actions">
-        <button class="cleanup-toast-btn primary" @click="openCleanupModalFromToast">Cleanup files</button>
+        <button class="cleanup-toast-btn primary" @click="openCleanupModalFromToast">
+          Cleanup files
+        </button>
         <button class="cleanup-toast-btn" @click="dismissCleanupToast">Keep</button>
-        <button class="cleanup-toast-btn subtle" @click="snoozeCleanupFromToast">Don't ask for this show</button>
+        <button class="cleanup-toast-btn subtle" @click="snoozeCleanupFromToast">
+          Don't ask for this show
+        </button>
       </div>
     </div>
     <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
@@ -315,11 +411,23 @@ body {
   overflow: hidden;
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #1a1a2e; }
-::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #3a3a5a; }
-::-webkit-scrollbar-corner { background: #1a1a2e; }
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a4a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a5a;
+}
+::-webkit-scrollbar-corner {
+  background: #1a1a2e;
+}
 
 .app {
   display: flex;
@@ -365,7 +473,9 @@ body {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ffmpeg-title {

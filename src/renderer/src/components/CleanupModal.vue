@@ -1,60 +1,60 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { formatBytes } from '../utils'
+import { ref, onMounted } from 'vue';
+import { formatBytes } from '../utils';
 
 const props = defineProps<{
-  animeId: number
-  animeName: string
-}>()
+  animeId: number;
+  animeName: string;
+}>();
 
 const emit = defineEmits<{
-  closed: []
-  deleted: []
-}>()
+  closed: [];
+  deleted: [];
+}>();
 
-const sizeLoading = ref(true)
-const bytes = ref(0)
-const fileCount = ref(0)
-const activeDownloads = ref(0)
-const deleting = ref(false)
-const error = ref('')
+const sizeLoading = ref(true);
+const bytes = ref(0);
+const fileCount = ref(0);
+const activeDownloads = ref(0);
+const deleting = ref(false);
+const error = ref('');
 
 onMounted(async () => {
   try {
     const [size, active] = await Promise.all([
       window.api.cleanupGetSize(props.animeId, props.animeName),
       window.api.cleanupGetActiveDownloads(props.animeName)
-    ])
-    bytes.value = size.bytes
-    fileCount.value = size.files
-    activeDownloads.value = active.active
+    ]);
+    bytes.value = size.bytes;
+    fileCount.value = size.files;
+    activeDownloads.value = active.active;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = err instanceof Error ? err.message : String(err);
   } finally {
-    sizeLoading.value = false
+    sizeLoading.value = false;
   }
-})
+});
 
 async function confirmDelete(): Promise<void> {
-  if (deleting.value) return
-  deleting.value = true
-  error.value = ''
+  if (deleting.value) return;
+  deleting.value = true;
+  error.value = '';
   try {
     if (activeDownloads.value > 0) {
-      await window.api.downloadCancelByEpisode(props.animeName)
+      await window.api.downloadCancelByEpisode(props.animeName);
     }
-    await window.api.cleanupExecute(props.animeId, props.animeName)
-    emit('deleted')
-    emit('closed')
+    await window.api.cleanupExecute(props.animeId, props.animeName);
+    emit('deleted');
+    emit('closed');
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
-    deleting.value = false
+    error.value = err instanceof Error ? err.message : String(err);
+    deleting.value = false;
   }
 }
 
 function cancel(): void {
-  if (deleting.value) return
-  emit('closed')
+  if (deleting.value) return;
+  emit('closed');
 }
 </script>
 
@@ -64,9 +64,7 @@ function cancel(): void {
       <div class="cleanup-title">Clean up «{{ animeName }}»?</div>
       <p v-if="sizeLoading" class="cleanup-hint">Calculating disk usage…</p>
       <template v-else>
-        <p v-if="fileCount === 0" class="cleanup-hint">
-          No local files found for this anime.
-        </p>
+        <p v-if="fileCount === 0" class="cleanup-hint">No local files found for this anime.</p>
         <p v-else class="cleanup-hint">
           {{ fileCount }} file{{ fileCount === 1 ? '' : 's' }} · {{ formatBytes(bytes) }} on disk.
         </p>
@@ -84,7 +82,13 @@ function cancel(): void {
           :disabled="deleting || sizeLoading || fileCount === 0"
           @click="confirmDelete"
         >
-          {{ deleting ? 'Deleting…' : (activeDownloads > 0 ? 'Cancel downloads + delete files' : 'Delete files') }}
+          {{
+            deleting
+              ? 'Deleting…'
+              : activeDownloads > 0
+                ? 'Cancel downloads + delete files'
+                : 'Delete files'
+          }}
         </button>
       </div>
     </div>

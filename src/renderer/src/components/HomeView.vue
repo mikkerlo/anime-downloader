@@ -1,27 +1,27 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue';
 
 const emit = defineEmits<{
-  openAnime: [id: number, focusEpisodeInt?: string]
-  navigate: [view: string]
-}>()
+  openAnime: [id: number, focusEpisodeInt?: string];
+  navigate: [view: string];
+}>();
 
-const entries = ref<ContinueWatchingEntry[]>([])
-const loading = ref(true)
-const failedPosters = ref(new Set<string>())
+const entries = ref<ContinueWatchingEntry[]>([]);
+const loading = ref(true);
+const failedPosters = ref(new Set<string>());
 
-let refreshTimer: ReturnType<typeof setTimeout> | null = null
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 function entryKey(e: ContinueWatchingEntry): string {
-  return `${e.kind}:${e.animeId}:${e.episodeInt}`
+  return `${e.kind}:${e.animeId}:${e.episodeInt}`;
 }
 
 function showPoster(e: ContinueWatchingEntry): boolean {
-  return !!e.posterUrl && !failedPosters.value.has(entryKey(e))
+  return !!e.posterUrl && !failedPosters.value.has(entryKey(e));
 }
 
 function onPosterError(e: ContinueWatchingEntry): void {
-  failedPosters.value = new Set(failedPosters.value).add(entryKey(e))
+  failedPosters.value = new Set(failedPosters.value).add(entryKey(e));
 }
 
 function onPosterLoad(e: ContinueWatchingEntry, evt: Event): void {
@@ -29,73 +29,73 @@ function onPosterLoad(e: ContinueWatchingEntry, evt: Event): void {
   // for missing posters. The browser fires `load` (not `error`) and renders an
   // empty <img>, leaving the dark container visible forever. Detect via the
   // decoded dimensions and treat as failed.
-  const img = evt.target as HTMLImageElement
+  const img = evt.target as HTMLImageElement;
   if (img.naturalWidth === 0 || img.naturalHeight === 0) {
-    failedPosters.value = new Set(failedPosters.value).add(entryKey(e))
+    failedPosters.value = new Set(failedPosters.value).add(entryKey(e));
   }
 }
 
 async function refresh(): Promise<void> {
   try {
-    entries.value = await window.api.homeGetContinueWatching()
-    failedPosters.value = new Set()
+    entries.value = await window.api.homeGetContinueWatching();
+    failedPosters.value = new Set();
   } catch (err) {
-    console.error('Failed to load continue-watching list:', err)
-    entries.value = []
+    console.error('Failed to load continue-watching list:', err);
+    entries.value = [];
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function manualRefresh(): Promise<void> {
-  loading.value = true
+  loading.value = true;
   // Kick a Shikimori rates refresh — returns cached instantly and triggers a
   // background fetch. When the fetch completes the `rates-refreshed` broadcast
   // re-fires `refresh()` via our existing listener, picking up anything newly
   // added on Shikimori.
   try {
-    void window.api.shikimoriGetAnimeRates()
+    void window.api.shikimoriGetAnimeRates();
   } catch (err) {
-    console.error('Failed to trigger Shikimori refresh:', err)
+    console.error('Failed to trigger Shikimori refresh:', err);
   }
-  await refresh()
+  await refresh();
 }
 
 function debouncedRefresh(): void {
-  if (refreshTimer) clearTimeout(refreshTimer)
+  if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
-    refreshTimer = null
-    void refresh()
-  }, 1000)
+    refreshTimer = null;
+    void refresh();
+  }, 1000);
 }
 
 function progressPercent(entry: ContinueWatchingEntry): number {
-  if (!entry.position || !entry.duration) return 0
-  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100))
-  return pct < 2 ? 2 : pct
+  if (!entry.position || !entry.duration) return 0;
+  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100));
+  return pct < 2 ? 2 : pct;
 }
 
 function onClick(entry: ContinueWatchingEntry): void {
-  if (!entry.animeId) return
-  emit('openAnime', entry.animeId, entry.episodeInt)
+  if (!entry.animeId) return;
+  emit('openAnime', entry.animeId, entry.episodeInt);
 }
 
 onMounted(async () => {
-  await refresh()
-  window.addEventListener('watch-progress-updated', debouncedRefresh)
-  window.api.onShikimoriRatesRefreshed(refresh)
-  window.api.onShikimoriRateUpdated(refresh)
-})
+  await refresh();
+  window.addEventListener('watch-progress-updated', debouncedRefresh);
+  window.api.onShikimoriRatesRefreshed(refresh);
+  window.api.onShikimoriRateUpdated(refresh);
+});
 
 onUnmounted(() => {
   if (refreshTimer) {
-    clearTimeout(refreshTimer)
-    refreshTimer = null
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
-  window.removeEventListener('watch-progress-updated', debouncedRefresh)
-  window.api.offShikimoriRatesRefreshed()
-  window.api.offShikimoriRateUpdated()
-})
+  window.removeEventListener('watch-progress-updated', debouncedRefresh);
+  window.api.offShikimoriRatesRefreshed();
+  window.api.offShikimoriRateUpdated();
+});
 </script>
 
 <template>
@@ -120,13 +120,21 @@ onUnmounted(() => {
           @click="onClick(e)"
         >
           <div class="poster">
-            <img v-if="showPoster(e)" :src="e.posterUrl" :alt="e.animeName" @error="onPosterError(e)" @load="onPosterLoad(e, $event)" />
+            <img
+              v-if="showPoster(e)"
+              :src="e.posterUrl"
+              :alt="e.animeName"
+              @error="onPosterError(e)"
+              @load="onPosterLoad(e, $event)"
+            />
             <div v-else class="poster-fallback"></div>
           </div>
           <div class="info">
             <div class="title">{{ e.animeName || 'Unknown anime' }}</div>
             <div class="ep">
-              <span class="chip" :class="e.kind">{{ e.kind === 'resume' ? 'Resume' : 'Next' }}</span>
+              <span class="chip" :class="e.kind">{{
+                e.kind === 'resume' ? 'Resume' : 'Next'
+              }}</span>
               <span class="ep-label">{{ e.episodeLabel }}</span>
             </div>
             <div v-if="e.kind === 'resume'" class="progress-bar">

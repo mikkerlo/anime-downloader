@@ -1,99 +1,119 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { formatBytes, formatSpeed, formatEta } from '../utils'
+import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { formatBytes, formatSpeed, formatEta } from '../utils';
 
-const groups = ref<EpisodeGroup[]>([])
+const groups = ref<EpisodeGroup[]>([]);
 
 function onProgress(data: EpisodeGroup[]): void {
-  groups.value = data
+  groups.value = data;
 }
 
 onMounted(async () => {
-  groups.value = await window.api.downloadGetQueue()
-  window.api.onDownloadProgress(onProgress)
-})
+  groups.value = await window.api.downloadGetQueue();
+  window.api.onDownloadProgress(onProgress);
+});
 
 onUnmounted(() => {
-  window.api.offDownloadProgress()
-})
+  window.api.offDownloadProgress();
+});
 
 function progress(item: DownloadProgressItem): number {
-  if (item.totalBytes <= 0) return 0
-  return (item.bytesReceived / item.totalBytes) * 100
+  if (item.totalBytes <= 0) return 0;
+  return (item.bytesReceived / item.totalBytes) * 100;
 }
 
 function groupStatus(g: EpisodeGroup): string {
-  const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
-  if (items.every(i => i.status === 'completed')) {
-    if (g.mergeStatus === 'completed') return 'merged'
-    if (g.mergeStatus === 'merging') return 'merging'
-    if (g.mergeStatus === 'failed') return 'merge-failed'
-    return 'ready-for-merge'
+  const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
+  if (items.every((i) => i.status === 'completed')) {
+    if (g.mergeStatus === 'completed') return 'merged';
+    if (g.mergeStatus === 'merging') return 'merging';
+    if (g.mergeStatus === 'failed') return 'merge-failed';
+    return 'ready-for-merge';
   }
-  if (items.some(i => i.status === 'failed')) return 'failed'
-  if (items.some(i => i.status === 'downloading')) return 'downloading'
-  if (items.some(i => i.status === 'paused')) return 'paused'
-  return 'queued'
+  if (items.some((i) => i.status === 'failed')) return 'failed';
+  if (items.some((i) => i.status === 'downloading')) return 'downloading';
+  if (items.some((i) => i.status === 'paused')) return 'paused';
+  return 'queued';
 }
 
 const hasFailed = computed(() =>
-  groups.value.some(g => {
-    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
-    return items.some(i => i.status === 'failed')
+  groups.value.some((g) => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
+    return items.some((i) => i.status === 'failed');
   })
-)
+);
 
 const hasFinished = computed(() =>
-  groups.value.some(g => {
-    const s = groupStatus(g)
-    return s === 'merged' || s === 'failed'
+  groups.value.some((g) => {
+    const s = groupStatus(g);
+    return s === 'merged' || s === 'failed';
   })
-)
+);
 
 const hasMergeable = computed(() =>
-  groups.value.some(g => {
-    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
-    return items.every(i => i.status === 'completed') && g.mergeStatus !== 'completed' && g.mergeStatus !== 'merging'
+  groups.value.some((g) => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
+    return (
+      items.every((i) => i.status === 'completed') &&
+      g.mergeStatus !== 'completed' &&
+      g.mergeStatus !== 'merging'
+    );
   })
-)
+);
 
 const hasActive = computed(() =>
-  groups.value.some(g => {
-    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
-    return items.some(i => i.status === 'downloading' || i.status === 'queued')
+  groups.value.some((g) => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
+    return items.some((i) => i.status === 'downloading' || i.status === 'queued');
   })
-)
+);
 
 const hasPaused = computed(() =>
-  groups.value.some(g => {
-    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[]
-    return items.some(i => i.status === 'paused')
+  groups.value.some((g) => {
+    const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
+    return items.some((i) => i.status === 'paused');
   })
-)
+);
 
-const merging = ref(false)
+const merging = ref(false);
 
-function pauseItem(id: string): void { window.api.downloadPause(id) }
-function resumeItem(id: string): void { window.api.downloadResume(id) }
-function restartItem(id: string): void { window.api.downloadRestart(id) }
-function cancelItem(id: string): void { window.api.downloadCancel(id) }
-function cancelMerge(): void { window.api.downloadCancelMerge() }
-function retryAllFailed(): void { window.api.downloadRestartAllFailed() }
-function pauseAll(): void { window.api.downloadPauseAll() }
-function resumeAll(): void { window.api.downloadResumeAll() }
+function pauseItem(id: string): void {
+  window.api.downloadPause(id);
+}
+function resumeItem(id: string): void {
+  window.api.downloadResume(id);
+}
+function restartItem(id: string): void {
+  window.api.downloadRestart(id);
+}
+function cancelItem(id: string): void {
+  window.api.downloadCancel(id);
+}
+function cancelMerge(): void {
+  window.api.downloadCancelMerge();
+}
+function retryAllFailed(): void {
+  window.api.downloadRestartAllFailed();
+}
+function pauseAll(): void {
+  window.api.downloadPauseAll();
+}
+function resumeAll(): void {
+  window.api.downloadResumeAll();
+}
 
 async function clearCompleted(): Promise<void> {
-  await window.api.downloadClearCompleted()
-  groups.value = await window.api.downloadGetQueue()
+  await window.api.downloadClearCompleted();
+  groups.value = await window.api.downloadGetQueue();
 }
 
 async function mergeFinished(): Promise<void> {
-  merging.value = true
+  merging.value = true;
   try {
-    await window.api.downloadMerge()
+    await window.api.downloadMerge();
   } finally {
-    merging.value = false
-    groups.value = await window.api.downloadGetQueue()
+    merging.value = false;
+    groups.value = await window.api.downloadGetQueue();
   }
 }
 </script>
@@ -105,7 +125,9 @@ async function mergeFinished(): Promise<void> {
       <div class="topbar-actions">
         <button v-if="hasActive" class="pause-all-btn" @click="pauseAll">Pause all</button>
         <button v-if="hasPaused" class="resume-all-btn" @click="resumeAll">Resume all</button>
-        <button v-if="hasFailed" class="retry-all-btn" @click="retryAllFailed">Retry all failed</button>
+        <button v-if="hasFailed" class="retry-all-btn" @click="retryAllFailed">
+          Retry all failed
+        </button>
         <button v-if="hasMergeable" class="merge-btn" @click="mergeFinished" :disabled="merging">
           {{ merging ? 'Merging...' : 'Merge finished' }}
         </button>
@@ -117,12 +139,19 @@ async function mergeFinished(): Promise<void> {
         No downloads yet. Open an anime and click "Download All".
       </div>
       <div v-else class="download-list">
-        <div v-for="g in groups" :key="g.translationId" class="episode-group" :class="groupStatus(g)">
+        <div
+          v-for="g in groups"
+          :key="g.translationId"
+          class="episode-group"
+          :class="groupStatus(g)"
+        >
           <div class="group-header">
             <span class="group-title">{{ g.animeName }} - {{ g.episodeLabel }}</span>
             <span class="group-quality">{{ g.quality }}p</span>
             <span class="group-status" :class="groupStatus(g)">
-              <template v-if="g.mergeStatus === 'merging'">merging {{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</template>
+              <template v-if="g.mergeStatus === 'merging'"
+                >merging {{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</template
+              >
               <template v-else-if="groupStatus(g) === 'ready-for-merge'">ready for merge</template>
               <template v-else-if="groupStatus(g) === 'merge-failed'">merge failed</template>
               <template v-else>{{ groupStatus(g) }}</template>
@@ -130,10 +159,26 @@ async function mergeFinished(): Promise<void> {
             <div v-if="g.mergeStatus === 'merging'" class="progress-bar-wrap merge-bar">
               <div class="progress-bar merge" :style="{ width: (g.mergePercent || 0) + '%' }"></div>
             </div>
-            <button v-if="g.mergeStatus === 'merging'" class="action-btn cancel" @click="cancelMerge()" title="Cancel merge">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            <button
+              v-if="g.mergeStatus === 'merging'"
+              class="action-btn cancel"
+              @click="cancelMerge()"
+              title="Cancel merge"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                width="14"
+                height="14"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
-            <span v-if="g.mergeStatus === 'failed' && g.mergeError" class="merge-error">{{ g.mergeError }}</span>
+            <span v-if="g.mergeStatus === 'failed' && g.mergeError" class="merge-error">{{
+              g.mergeError
+            }}</span>
           </div>
 
           <!-- Video row -->
@@ -152,20 +197,69 @@ async function mergeFinished(): Promise<void> {
                 <div class="progress-bar paused" :style="{ width: progress(g.video) + '%' }"></div>
               </div>
             </template>
-            <span v-if="g.video.totalBytes > 0" class="dl-size">{{ formatBytes(g.video.bytesReceived) }} / {{ formatBytes(g.video.totalBytes) }}</span>
+            <span v-if="g.video.totalBytes > 0" class="dl-size"
+              >{{ formatBytes(g.video.bytesReceived) }} /
+              {{ formatBytes(g.video.totalBytes) }}</span
+            >
             <span v-if="g.video.error" class="dl-error">{{ g.video.error }}</span>
             <div class="dl-actions">
-              <button v-if="g.video.status === 'downloading'" class="action-btn" @click="pauseItem(g.video.id)" title="Pause">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
+              <button
+                v-if="g.video.status === 'downloading'"
+                class="action-btn"
+                @click="pauseItem(g.video.id)"
+                title="Pause"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                </svg>
               </button>
-              <button v-if="g.video.status === 'paused' || g.video.status === 'failed'" class="action-btn resume" @click="resumeItem(g.video.id)" :title="g.video.status === 'failed' ? 'Retry' : 'Resume'">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>
+              <button
+                v-if="g.video.status === 'paused' || g.video.status === 'failed'"
+                class="action-btn resume"
+                @click="resumeItem(g.video.id)"
+                :title="g.video.status === 'failed' ? 'Retry' : 'Resume'"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
               </button>
-              <button v-if="g.video.status === 'failed'" class="action-btn restart" @click="restartItem(g.video.id)" title="Restart from scratch (re-fetch URLs)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/></svg>
+              <button
+                v-if="g.video.status === 'failed'"
+                class="action-btn restart"
+                @click="restartItem(g.video.id)"
+                title="Restart from scratch (re-fetch URLs)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                  />
+                </svg>
               </button>
-              <button v-if="g.video.status !== 'completed' && g.video.status !== 'cancelled'" class="action-btn cancel" @click="cancelItem(g.video.id)" title="Cancel">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+              <button
+                v-if="g.video.status !== 'completed' && g.video.status !== 'cancelled'"
+                class="action-btn cancel"
+                @click="cancelItem(g.video.id)"
+                title="Cancel"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
           </div>
@@ -180,20 +274,69 @@ async function mergeFinished(): Promise<void> {
               </div>
               <span class="dl-speed">{{ formatSpeed(g.subtitle.speed) }}</span>
             </template>
-            <span v-if="g.subtitle.totalBytes > 0" class="dl-size">{{ formatBytes(g.subtitle.bytesReceived) }} / {{ formatBytes(g.subtitle.totalBytes) }}</span>
+            <span v-if="g.subtitle.totalBytes > 0" class="dl-size"
+              >{{ formatBytes(g.subtitle.bytesReceived) }} /
+              {{ formatBytes(g.subtitle.totalBytes) }}</span
+            >
             <span v-if="g.subtitle.error" class="dl-error">{{ g.subtitle.error }}</span>
             <div class="dl-actions">
-              <button v-if="g.subtitle.status === 'downloading'" class="action-btn" @click="pauseItem(g.subtitle.id)" title="Pause">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
+              <button
+                v-if="g.subtitle.status === 'downloading'"
+                class="action-btn"
+                @click="pauseItem(g.subtitle.id)"
+                title="Pause"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                </svg>
               </button>
-              <button v-if="g.subtitle.status === 'paused' || g.subtitle.status === 'failed'" class="action-btn resume" @click="resumeItem(g.subtitle.id)" :title="g.subtitle.status === 'failed' ? 'Retry' : 'Resume'">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>
+              <button
+                v-if="g.subtitle.status === 'paused' || g.subtitle.status === 'failed'"
+                class="action-btn resume"
+                @click="resumeItem(g.subtitle.id)"
+                :title="g.subtitle.status === 'failed' ? 'Retry' : 'Resume'"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
               </button>
-              <button v-if="g.subtitle.status === 'failed'" class="action-btn restart" @click="restartItem(g.subtitle.id)" title="Restart from scratch (re-fetch URLs)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"/></svg>
+              <button
+                v-if="g.subtitle.status === 'failed'"
+                class="action-btn restart"
+                @click="restartItem(g.subtitle.id)"
+                title="Restart from scratch (re-fetch URLs)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                  />
+                </svg>
               </button>
-              <button v-if="g.subtitle.status !== 'completed' && g.subtitle.status !== 'cancelled'" class="action-btn cancel" @click="cancelItem(g.subtitle.id)" title="Cancel">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+              <button
+                v-if="g.subtitle.status !== 'completed' && g.subtitle.status !== 'cancelled'"
+                class="action-btn cancel"
+                @click="cancelItem(g.subtitle.id)"
+                title="Cancel"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
           </div>
@@ -230,7 +373,11 @@ async function mergeFinished(): Promise<void> {
   gap: 8px;
 }
 
-.clear-btn, .merge-btn, .retry-all-btn, .pause-all-btn, .resume-all-btn {
+.clear-btn,
+.merge-btn,
+.retry-all-btn,
+.pause-all-btn,
+.resume-all-btn {
   padding: 6px 14px;
   border: none;
   border-radius: 6px;
@@ -316,13 +463,27 @@ async function mergeFinished(): Promise<void> {
   border-left: 3px solid #0f3460;
 }
 
-.episode-group.downloading { border-left-color: #3498db; }
-.episode-group.ready-for-merge { border-left-color: #f39c12; }
-.episode-group.merged { border-left-color: #9b59b6; }
-.episode-group.merging { border-left-color: #f39c12; }
-.episode-group.failed { border-left-color: #e94560; }
-.episode-group.merge-failed { border-left-color: #e94560; }
-.episode-group.paused { border-left-color: #f39c12; }
+.episode-group.downloading {
+  border-left-color: #3498db;
+}
+.episode-group.ready-for-merge {
+  border-left-color: #f39c12;
+}
+.episode-group.merged {
+  border-left-color: #9b59b6;
+}
+.episode-group.merging {
+  border-left-color: #f39c12;
+}
+.episode-group.failed {
+  border-left-color: #e94560;
+}
+.episode-group.merge-failed {
+  border-left-color: #e94560;
+}
+.episode-group.paused {
+  border-left-color: #f39c12;
+}
 
 .group-header {
   display: flex;
@@ -360,14 +521,30 @@ async function mergeFinished(): Promise<void> {
   flex-shrink: 0;
 }
 
-.group-status.downloading { color: #3498db; }
-.group-status.queued { color: #6a6a8a; }
-.group-status.paused { color: #f39c12; }
-.group-status.ready-for-merge { color: #f39c12; }
-.group-status.merged { color: #9b59b6; }
-.group-status.merging { color: #f39c12; }
-.group-status.failed { color: #e94560; }
-.group-status.merge-failed { color: #e94560; }
+.group-status.downloading {
+  color: #3498db;
+}
+.group-status.queued {
+  color: #6a6a8a;
+}
+.group-status.paused {
+  color: #f39c12;
+}
+.group-status.ready-for-merge {
+  color: #f39c12;
+}
+.group-status.merged {
+  color: #9b59b6;
+}
+.group-status.merging {
+  color: #f39c12;
+}
+.group-status.failed {
+  color: #e94560;
+}
+.group-status.merge-failed {
+  color: #e94560;
+}
 
 .merge-error {
   font-size: 0.7rem;
@@ -407,11 +584,21 @@ async function mergeFinished(): Promise<void> {
   flex-shrink: 0;
 }
 
-.dl-status-badge.downloading { color: #3498db; }
-.dl-status-badge.queued { color: #6a6a8a; }
-.dl-status-badge.paused { color: #f39c12; }
-.dl-status-badge.completed { color: #6ab04c; }
-.dl-status-badge.failed { color: #e94560; }
+.dl-status-badge.downloading {
+  color: #3498db;
+}
+.dl-status-badge.queued {
+  color: #6a6a8a;
+}
+.dl-status-badge.paused {
+  color: #f39c12;
+}
+.dl-status-badge.completed {
+  color: #6ab04c;
+}
+.dl-status-badge.failed {
+  color: #e94560;
+}
 
 .progress-bar-wrap {
   flex: 1;
@@ -429,12 +616,22 @@ async function mergeFinished(): Promise<void> {
   transition: width 0.3s ease;
 }
 
-.progress-bar.paused { background-color: #f39c12; }
-.progress-bar.merge { background-color: #9b59b6; }
-.merge-bar { max-width: 120px; }
-.progress-bar.sub { background-color: #6ab04c; }
+.progress-bar.paused {
+  background-color: #f39c12;
+}
+.progress-bar.merge {
+  background-color: #9b59b6;
+}
+.merge-bar {
+  max-width: 120px;
+}
+.progress-bar.sub {
+  background-color: #6ab04c;
+}
 
-.dl-speed, .dl-eta, .dl-size {
+.dl-speed,
+.dl-eta,
+.dl-size {
   font-size: 0.7rem;
   color: #6a6a8a;
   flex-shrink: 0;
@@ -466,11 +663,26 @@ async function mergeFinished(): Promise<void> {
   transition: all 0.15s;
 }
 
-.action-btn:hover { background-color: #1a4a7a; color: #e0e0e0; }
-.action-btn.resume { color: #6ab04c; }
-.action-btn.resume:hover { color: #8ee070; }
-.action-btn.restart { color: #f0932b; }
-.action-btn.restart:hover { color: #f5b041; }
-.action-btn.cancel { color: #e94560; }
-.action-btn.cancel:hover { color: #ff6b81; }
+.action-btn:hover {
+  background-color: #1a4a7a;
+  color: #e0e0e0;
+}
+.action-btn.resume {
+  color: #6ab04c;
+}
+.action-btn.resume:hover {
+  color: #8ee070;
+}
+.action-btn.restart {
+  color: #f0932b;
+}
+.action-btn.restart:hover {
+  color: #f5b041;
+}
+.action-btn.cancel {
+  color: #e94560;
+}
+.action-btn.cancel:hover {
+  color: #ff6b81;
+}
 </style>

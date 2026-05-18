@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Notification, protocol, net } from 'electron'
+import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
@@ -949,7 +950,7 @@ async function backgroundRescan(animeName: string): Promise<void> {
   if (newJson !== cachedJson) {
     fileCheckCache.set(animeName, result)
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('file:episodes-changed', animeName, result)
+      win.webContents.send(EVENT_CHANNELS.FILE_EPISODES_CHANGED, animeName, result)
     }
   }
 }
@@ -1083,7 +1084,7 @@ function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
 
   const sendProgress = (status: string, progress?: number): void => {
     if (win && !win.isDestroyed()) {
-      win.webContents.send('ffmpeg:download-progress', { status, progress })
+      win.webContents.send(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS, { status, progress })
     }
   }
 
@@ -2304,14 +2305,14 @@ function dropSkipDetectionsForEpisode(animeId: number, episodeInt: string): bool
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle(CHANNELS.APP_VERSION, () => app.getVersion())
 
-  ipcMain.handle('update:check', async () => {
+  ipcMain.handle(CHANNELS.UPDATE_CHECK, async () => {
     try {
       const result = await autoUpdater.checkForUpdates()
       if (!result) {
         for (const win of BrowserWindow.getAllWindows()) {
-          win.webContents.send('update:status', {
+          win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
             status: 'error',
             error: 'Update check not available in development mode'
           })
@@ -2319,7 +2320,7 @@ function registerIpcHandlers(): void {
       }
     } catch (err) {
       for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('update:status', {
+        win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
           status: 'error',
           error: err instanceof Error ? err.message : String(err)
         })
@@ -2327,12 +2328,12 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:download', async () => {
+  ipcMain.handle(CHANNELS.UPDATE_DOWNLOAD, async () => {
     try {
       await autoUpdater.downloadUpdate()
     } catch (err) {
       for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('update:status', {
+        win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
           status: 'error',
           error: err instanceof Error ? err.message : String(err)
         })
@@ -2340,17 +2341,17 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('update:install', () => {
+  ipcMain.handle(CHANNELS.UPDATE_INSTALL, () => {
     autoUpdater.quitAndInstall()
   })
 
-  ipcMain.handle('validate-token', () => smotretApi.validateToken())
+  ipcMain.handle(CHANNELS.VALIDATE_TOKEN, () => smotretApi.validateToken())
 
-  ipcMain.handle('search-anime', async (_event, query: string) => {
+  ipcMain.handle(CHANNELS.SEARCH_ANIME, async (_event, query: string) => {
     return smotretApi.searchAnime(query)
   })
 
-  ipcMain.handle('get-anime', async (_event, id: number) => {
+  ipcMain.handle(CHANNELS.GET_ANIME, async (_event, id: number) => {
     try {
       const result = await smotretApi.getAnime(id)
       updateAnimeDetailCache(id, result.data)
@@ -2365,32 +2366,38 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('probe-embed-quality', async (_event, translationId: number, animeId?: number) => {
-    try {
-      const embed = await smotretApi.getEmbed(translationId)
-      const streams = embed.stream || []
-      if (streams.length === 0) return null
-      const best = streams.reduce((a, b) => (a.height > b.height ? a : b))
-      if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
-      return best.height
-    } catch {
-      if (animeId) {
-        const cached = getCacheEntry(animeId)
-        return cached?.qualityProbes[translationId] ?? null
+  ipcMain.handle(
+    CHANNELS.PROBE_EMBED_QUALITY,
+    async (_event, translationId: number, animeId?: number) => {
+      try {
+        const embed = await smotretApi.getEmbed(translationId)
+        const streams = embed.stream || []
+        if (streams.length === 0) return null
+        const best = streams.reduce((a, b) => (a.height > b.height ? a : b))
+        if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
+        return best.height
+      } catch {
+        if (animeId) {
+          const cached = getCacheEntry(animeId)
+          return cached?.qualityProbes[translationId] ?? null
+        }
+        return null
       }
-      return null
     }
-  })
+  )
 
-  ipcMain.handle('probe-full-scan-needed', (_event, animeId: number, episodeCount: number) => {
-    const entry = getCacheEntry(animeId)
-    if (!entry?.fullProbeAt) return true
-    if (entry.fullProbeEpisodeCount !== episodeCount) return true
-    const weekMs = 7 * 24 * 60 * 60 * 1000
-    return Date.now() - entry.fullProbeAt > weekMs
-  })
+  ipcMain.handle(
+    CHANNELS.PROBE_FULL_SCAN_NEEDED,
+    (_event, animeId: number, episodeCount: number) => {
+      const entry = getCacheEntry(animeId)
+      if (!entry?.fullProbeAt) return true
+      if (entry.fullProbeEpisodeCount !== episodeCount) return true
+      const weekMs = 7 * 24 * 60 * 60 * 1000
+      return Date.now() - entry.fullProbeAt > weekMs
+    }
+  )
 
-  ipcMain.handle('probe-full-scan-done', (_event, animeId: number, episodeCount: number) => {
+  ipcMain.handle(CHANNELS.PROBE_FULL_SCAN_DONE, (_event, animeId: number, episodeCount: number) => {
     const entry = getCacheEntry(animeId)
     if (!entry) return
     entry.fullProbeAt = Date.now()
@@ -2404,7 +2411,7 @@ function registerIpcHandlers(): void {
   >()
 
   ipcMain.handle(
-    'report-quality-mismatch',
+    CHANNELS.REPORT_QUALITY_MISMATCH,
     (
       _event,
       data: {
@@ -2419,20 +2426,20 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('get-quality-mismatch-count', () => {
+  ipcMain.handle(CHANNELS.GET_QUALITY_MISMATCH_COUNT, () => {
     return qualityMismatches.size
   })
 
-  ipcMain.handle('debug:get-mp4-stats', () => {
+  ipcMain.handle(CHANNELS.DEBUG_GET_MP4_STATS, () => {
     return store.get('mp4StreamingStats') as Mp4StreamingStats
   })
 
-  ipcMain.handle('debug:reset-mp4-stats', () => {
+  ipcMain.handle(CHANNELS.DEBUG_RESET_MP4_STATS, () => {
     store.set('mp4StreamingStats', { totalChecked: 0, faststartCount: 0, nonFaststartSamples: [] })
     mp4FaststartChecked.clear()
   })
 
-  ipcMain.handle('dump-quality-mismatches', () => {
+  ipcMain.handle(CHANNELS.DUMP_QUALITY_MISMATCHES, () => {
     const outPath = path.join(getDownloadDir(), 'quality-mismatches.json')
     const data = [...qualityMismatches.values()]
     fs.mkdirSync(path.dirname(outPath), { recursive: true })
@@ -2441,7 +2448,7 @@ function registerIpcHandlers(): void {
     return { count: data.length, path: outPath }
   })
 
-  ipcMain.handle('get-episode', async (_event, id: number, animeId?: number) => {
+  ipcMain.handle(CHANNELS.GET_EPISODE, async (_event, id: number, animeId?: number) => {
     try {
       const result = await smotretApi.getEpisode(id)
       if (animeId) updateEpisodeCache(animeId, id, result.data)
@@ -2457,7 +2464,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('library-get', () => {
+  ipcMain.handle(CHANNELS.LIBRARY_GET, () => {
     const lib = store.get('library') as Record<string, AnimeSearchResult>
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const merged = new Map<string, AnimeSearchResult>()
@@ -2468,12 +2475,12 @@ function registerIpcHandlers(): void {
     return [...merged.values()]
   })
 
-  ipcMain.handle('library-is-downloaded', (_event, id: number) => {
+  ipcMain.handle(CHANNELS.LIBRARY_IS_DOWNLOADED, (_event, id: number) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     return !!downloaded[String(id)]
   })
 
-  ipcMain.handle('library-toggle', (_event, anime: AnimeSearchResult) => {
+  ipcMain.handle(CHANNELS.LIBRARY_TOGGLE, (_event, anime: AnimeSearchResult) => {
     const lib = store.get('library') as Record<string, AnimeSearchResult>
     const key = String(anime.id)
     if (lib[key]) {
@@ -2488,25 +2495,25 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('get-anime-cache', (_event, id: number) => {
+  ipcMain.handle(CHANNELS.GET_ANIME_CACHE, (_event, id: number) => {
     const entry = getCacheEntry(id)
     if (!entry?.animeDetail || !entry.cachedAt) return null
     if (Date.now() - entry.cachedAt > ANIME_DETAIL_CACHE_TTL_MS) return null
     return { data: entry.animeDetail, cachedAt: entry.cachedAt }
   })
 
-  ipcMain.handle('set-anime-cache', (_event, id: number, data: AnimeDetail) => {
+  ipcMain.handle(CHANNELS.SET_ANIME_CACHE, (_event, id: number, data: AnimeDetail) => {
     if (!isCachableAnime(id)) return false
     updateAnimeDetailCache(id, data)
     return true
   })
 
-  ipcMain.handle('library-has', (_event, id: number) => {
+  ipcMain.handle(CHANNELS.LIBRARY_HAS, (_event, id: number) => {
     const lib = store.get('library') as Record<string, AnimeSearchResult>
     return !!lib[String(id)]
   })
 
-  ipcMain.handle('library-get-status', (_event, ids: number[]) => {
+  ipcMain.handle(CHANNELS.LIBRARY_GET_STATUS, (_event, ids: number[]) => {
     const lib = store.get('library') as Record<string, AnimeSearchResult>
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const result: Record<number, { starred: boolean; downloaded: boolean }> = {}
@@ -2517,7 +2524,7 @@ function registerIpcHandlers(): void {
     return result
   })
 
-  ipcMain.handle('home:get-continue-watching', async () => {
+  ipcMain.handle(CHANNELS.HOME_GET_CONTINUE_WATCHING, async () => {
     const lib = store.get('library') as Record<string, AnimeSearchResult>
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const malMap = store.get('malIdMap') as Record<string, AnimeSearchResult>
@@ -2806,13 +2813,13 @@ function registerIpcHandlers(): void {
     return out.slice(0, 24)
   })
 
-  ipcMain.handle('downloaded-anime-add', (_event, anime: AnimeSearchResult) => {
+  ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_ADD, (_event, anime: AnimeSearchResult) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     downloaded[String(anime.id)] = anime
     store.set('downloadedAnime', downloaded)
   })
 
-  ipcMain.handle('downloaded-anime-delete', (_event, animeId: number, animeName: string) => {
+  ipcMain.handle(CHANNELS.DOWNLOADED_ANIME_DELETE, (_event, animeId: number, animeName: string) => {
     // Remove from store
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     delete downloaded[String(animeId)]
@@ -2838,17 +2845,17 @@ function registerIpcHandlers(): void {
     dropSkipDetectionsForAnime(animeId)
   })
 
-  ipcMain.handle('cleanup:get-size', async (_event, _animeId: number, animeName: string) => {
+  ipcMain.handle(CHANNELS.CLEANUP_GET_SIZE, async (_event, _animeId: number, animeName: string) => {
     return await sumShowFiles(animeName)
   })
 
-  ipcMain.handle('cleanup:get-active-downloads', (_event, animeName: string) => {
+  ipcMain.handle(CHANNELS.CLEANUP_GET_ACTIVE_DOWNLOADS, (_event, animeName: string) => {
     const groups = downloadManager.getEpisodeGroups()
     const active = groups.filter((g) => g.animeName === animeName).length
     return { active }
   })
 
-  ipcMain.handle('cleanup:execute', (_event, animeId: number, animeName: string) => {
+  ipcMain.handle(CHANNELS.CLEANUP_EXECUTE, (_event, animeId: number, animeName: string) => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     delete downloaded[String(animeId)]
     store.set('downloadedAnime', downloaded)
@@ -2883,7 +2890,7 @@ function registerIpcHandlers(): void {
     dropSkipDetectionsForAnime(animeId)
   })
 
-  ipcMain.handle('cleanup:get-snoozed', () => {
+  ipcMain.handle(CHANNELS.CLEANUP_GET_SNOOZED, () => {
     const snoozed = store.get('autoCleanupSnoozedAnimeIds') as Record<string, true>
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const lib = store.get('library') as Record<string, AnimeSearchResult>
@@ -2896,7 +2903,7 @@ function registerIpcHandlers(): void {
     return out
   })
 
-  ipcMain.handle('cleanup:set-snoozed', (_event, animeId: number, snoozed: boolean) => {
+  ipcMain.handle(CHANNELS.CLEANUP_SET_SNOOZED, (_event, animeId: number, snoozed: boolean) => {
     const map = store.get('autoCleanupSnoozedAnimeIds') as Record<string, true>
     const key = String(animeId)
     if (snoozed) {
@@ -2907,18 +2914,18 @@ function registerIpcHandlers(): void {
     store.set('autoCleanupSnoozedAnimeIds', map)
   })
 
-  ipcMain.handle('get-setting', (_event, key: string) => {
+  ipcMain.handle(CHANNELS.GET_SETTING, (_event, key: string) => {
     if (key === 'downloadDir') return getDownloadDir()
     return store.get(key)
   })
 
-  ipcMain.handle('set-setting', (_event, key: string, value: unknown) => {
+  ipcMain.handle(CHANNELS.SET_SETTING, (_event, key: string, value: unknown) => {
     store.set(key, value)
   })
 
   // Watch progress tracking
   ipcMain.handle(
-    'watch-progress:save',
+    CHANNELS.WATCH_PROGRESS_SAVE,
     (
       _event,
       animeId: number,
@@ -2955,7 +2962,7 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('watch-progress:get', (_event, animeId: number, episodeInt: string) => {
+  ipcMain.handle(CHANNELS.WATCH_PROGRESS_GET, (_event, animeId: number, episodeInt: string) => {
     const all = store.get('watchProgress') as Record<
       string,
       {
@@ -2970,7 +2977,7 @@ function registerIpcHandlers(): void {
     return all[`${animeId}:${episodeInt}`] || null
   })
 
-  ipcMain.handle('watch-progress:get-all', (_event, animeId: number) => {
+  ipcMain.handle(CHANNELS.WATCH_PROGRESS_GET_ALL, (_event, animeId: number) => {
     const all = store.get('watchProgress') as Record<
       string,
       {
@@ -3003,38 +3010,38 @@ function registerIpcHandlers(): void {
   })
 
   // Download handlers
-  ipcMain.handle('download:enqueue', async (_event, requests: DownloadRequest[]) => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_ENQUEUE, async (_event, requests: DownloadRequest[]) => {
     await downloadManager.enqueue(requests)
     // Metadata in `downloadedEpisodes` is written by the onEpisodeComplete callback
     // once the video is actually on disk — premature writes here caused stale ⬇ icons
     // to survive cancelled or never-finished downloads.
   })
 
-  ipcMain.handle('download:pause', (_event, id: string) => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_PAUSE, (_event, id: string) => {
     downloadManager.pause(id)
   })
 
-  ipcMain.handle('download:resume', (_event, id: string) => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_RESUME, (_event, id: string) => {
     downloadManager.resume(id)
   })
 
-  ipcMain.handle('download:restart', async (_event, id: string) => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_RESTART, async (_event, id: string) => {
     await downloadManager.restart(id)
   })
 
-  ipcMain.handle('download:restart-all-failed', async () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_RESTART_ALL_FAILED, async () => {
     await downloadManager.restartAllFailed()
   })
 
-  ipcMain.handle('download:pause-all', () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_PAUSE_ALL, () => {
     downloadManager.pauseAll()
   })
 
-  ipcMain.handle('download:resume-all', () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_RESUME_ALL, () => {
     downloadManager.resumeAll()
   })
 
-  ipcMain.handle('download:cancel', (_event, id: string) => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_CANCEL, (_event, id: string) => {
     const item = downloadManager.getItem(id)
     downloadManager.cancel(id)
     if (item && item.animeId > 0 && item.episodeInt) {
@@ -3048,12 +3055,12 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('download:get-queue', () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_GET_QUEUE, () => {
     return downloadManager.getEpisodeGroups()
   })
 
   ipcMain.handle(
-    'download:cancel-by-episode',
+    CHANNELS.DOWNLOAD_CANCEL_BY_EPISODE,
     (_event, animeName: string, episodeLabel?: string) => {
       // Snapshot items before cancellation so we can prune metadata for any translation
       // whose file never landed on disk.
@@ -3106,7 +3113,7 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('downloaded-episodes-get', (_event, animeId: number) => {
+  ipcMain.handle(CHANNELS.DOWNLOADED_EPISODES_GET, (_event, animeId: number) => {
     const episodes = store.get('downloadedEpisodes') as Record<
       string,
       { translationType: string; author: string; quality: number; translationId: number }
@@ -3158,23 +3165,23 @@ function registerIpcHandlers(): void {
     return result
   })
 
-  ipcMain.handle('download:cancel-merge', () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_CANCEL_MERGE, () => {
     downloadManager.cancelMerge()
   })
 
-  ipcMain.handle('download:clear-completed', () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_CLEAR_COMPLETED, () => {
     downloadManager.clearCompleted()
   })
 
-  ipcMain.handle('download:merge', async () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_MERGE, async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = (store.get('videoCodec') as string) || 'copy'
     await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
   })
 
-  ipcMain.handle('ffmpeg:check', () => checkFfmpeg())
+  ipcMain.handle(CHANNELS.FFMPEG_CHECK, () => checkFfmpeg())
 
-  ipcMain.handle('ffmpeg:delete', () => {
+  ipcMain.handle(CHANNELS.FFMPEG_DELETE, () => {
     const dest = getFfmpegDir()
     const ext = process.platform === 'win32' ? '.exe' : ''
     const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
@@ -3202,7 +3209,7 @@ function registerIpcHandlers(): void {
     ffprobePath = ''
   })
 
-  ipcMain.handle('download:scan-merge', async () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_SCAN_MERGE, async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = (store.get('videoCodec') as string) || 'copy'
     const extraDirs = isAdvancedStorage() && getColdStorageDir() ? [getColdStorageDir()] : undefined
@@ -3213,7 +3220,12 @@ function registerIpcHandlers(): void {
       (current, total, file, percent) => {
         const windows = BrowserWindow.getAllWindows()
         for (const win of windows) {
-          win.webContents.send('scan-merge:progress', { current, total, file, percent })
+          win.webContents.send(EVENT_CHANNELS.SCAN_MERGE_PROGRESS, {
+            current,
+            total,
+            file,
+            percent
+          })
         }
       },
       extraDirs
@@ -3221,7 +3233,7 @@ function registerIpcHandlers(): void {
     return result
   })
 
-  ipcMain.handle('download:fix-metadata', async () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_FIX_METADATA, async () => {
     if (!ffmpegPath || !ffprobePath) throw new Error('ffmpeg/ffprobe not found')
 
     Ffmpeg.setFfmpegPath(ffmpegPath)
@@ -3304,7 +3316,7 @@ function registerIpcHandlers(): void {
       // Broadcast progress
       const windows = BrowserWindow.getAllWindows()
       for (const win of windows) {
-        win.webContents.send('fix-metadata:progress', {
+        win.webContents.send(EVENT_CHANNELS.FIX_METADATA_PROGRESS, {
           current: i + 1,
           total: toFix.length,
           file: item.label
@@ -3345,7 +3357,7 @@ function registerIpcHandlers(): void {
     return result
   })
 
-  ipcMain.handle('cache-get-poster', (_event, animeId: number) => {
+  ipcMain.handle(CHANNELS.CACHE_GET_POSTER, (_event, animeId: number) => {
     const posterPath = getPosterCachePath(animeId)
     if (fs.existsSync(posterPath)) return `file://${posterPath}`
     return null
@@ -3354,34 +3366,34 @@ function registerIpcHandlers(): void {
   // Skip detection (Chromaprint local fingerprinting). Orchestration lives at
   // module scope so the auto-trigger from download/merge hooks shares the same
   // single-flight state as these handlers.
-  ipcMain.handle('skip-detector:get-detections', (_event, animeId: number) => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_GET_DETECTIONS, (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
     return normalizeSkipDetections(all[String(animeId)] ?? null)
   })
 
-  ipcMain.handle('skip-detector:get-status', () => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_GET_STATUS, () => {
     if (!currentSkipAnalysis) return null
     return { animeId: currentSkipAnalysis.animeId, lastProgress: currentSkipAnalysis.lastProgress }
   })
 
-  ipcMain.handle('skip-detector:cancel', () => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_CANCEL, () => {
     if (currentSkipAnalysis) currentSkipAnalysis.controller.abort()
   })
 
-  ipcMain.handle('skip-detector:cache-stats', () => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_CACHE_STATS, () => {
     const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
     return { fingerprintCount: Object.keys(cache).length }
   })
 
   ipcMain.handle(
-    'skip-detector:analyze-show',
+    CHANNELS.SKIP_DETECTOR_ANALYZE_SHOW,
     (_event, animeId: number, episodes: EpisodeInput[]) => {
       return runSkipAnalysisInternal(animeId, episodes)
     }
   )
 
   ipcMain.handle(
-    'skip-detector:detect-stream',
+    CHANNELS.SKIP_DETECTOR_DETECT_STREAM,
     async (
       event,
       animeId: number,
@@ -3402,14 +3414,14 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('skip-detector:cancel-stream-detect', (event) => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_CANCEL_STREAM_DETECT, (event) => {
     cancelStreamSkipDetection(event.sender.id)
   })
 
   // One-shot backfill for shows downloaded before Phase 3 was wired in.
   // Honors the dedupe in `enqueueAutoSkipAnalysis` so a manual click doesn't
   // double-queue a show that's already running or pending.
-  ipcMain.handle('skip-detector:backfill-all', () => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_BACKFILL_ALL, () => {
     const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
     const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
     let queued = 0
@@ -3435,7 +3447,7 @@ function registerIpcHandlers(): void {
     return { queued, alreadyAnalyzed, skippedFewEpisodes, total }
   })
 
-  ipcMain.handle('skip-detector:queue-status', () => {
+  ipcMain.handle(CHANNELS.SKIP_DETECTOR_QUEUE_STATUS, () => {
     return {
       currentAnimeId: currentSkipAnalysis?.animeId ?? null,
       queueLength: autoSkipQueue.length
@@ -3443,7 +3455,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(
-    'download:inject-chapters',
+    CHANNELS.DOWNLOAD_INJECT_CHAPTERS,
     async (_event, animeId: number, allInputs: EpisodeInput[]) => {
       if (!Number.isFinite(animeId) || animeId <= 0) throw new Error('invalid animeId')
       if (!ffmpegPath || !ffprobePath) throw new Error('ffmpeg/ffprobe not available')
@@ -3561,19 +3573,22 @@ function registerIpcHandlers(): void {
   )
 
   // File management handlers
-  ipcMain.handle('file:check-episodes', (_event, animeName: string, episodeInts: string[]) => {
-    const cached = fileCheckCache.get(animeName)
-    if (cached) {
-      backgroundRescan(animeName).catch((err) => console.error('Background rescan failed:', err))
-      return filterScanResult(cached, animeName, episodeInts)
+  ipcMain.handle(
+    CHANNELS.FILE_CHECK_EPISODES,
+    (_event, animeName: string, episodeInts: string[]) => {
+      const cached = fileCheckCache.get(animeName)
+      if (cached) {
+        backgroundRescan(animeName).catch((err) => console.error('Background rescan failed:', err))
+        return filterScanResult(cached, animeName, episodeInts)
+      }
+
+      const fullResult = scanEpisodeFiles(animeName)
+      fileCheckCache.set(animeName, fullResult)
+      return filterScanResult(fullResult, animeName, episodeInts)
     }
+  )
 
-    const fullResult = scanEpisodeFiles(animeName)
-    fileCheckCache.set(animeName, fullResult)
-    return filterScanResult(fullResult, animeName, episodeInts)
-  })
-
-  ipcMain.handle('file:open', async (_event, filePath: string) => {
+  ipcMain.handle(CHANNELS.FILE_OPEN, async (_event, filePath: string) => {
     if (!fs.existsSync(filePath)) {
       const animeDirName = path.basename(path.dirname(filePath))
       for (const [key] of fileCheckCache) {
@@ -3587,12 +3602,12 @@ function registerIpcHandlers(): void {
     return shell.openPath(filePath)
   })
 
-  ipcMain.handle('file:show-in-folder', (_event, filePath: string) => {
+  ipcMain.handle(CHANNELS.FILE_SHOW_IN_FOLDER, (_event, filePath: string) => {
     shell.showItemInFolder(filePath)
   })
 
   ipcMain.handle(
-    'file:delete-episode',
+    CHANNELS.FILE_DELETE_EPISODE,
     (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
       deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
       if (animeId && animeId > 0) {
@@ -3602,7 +3617,7 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('download:pick-dir', async () => {
+  ipcMain.handle(CHANNELS.DOWNLOAD_PICK_DIR, async () => {
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
@@ -3616,7 +3631,7 @@ function registerIpcHandlers(): void {
     return dir
   })
 
-  ipcMain.handle('storage:pick-hot-dir', async () => {
+  ipcMain.handle(CHANNELS.STORAGE_PICK_HOT_DIR, async () => {
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
@@ -3630,7 +3645,7 @@ function registerIpcHandlers(): void {
     return dir
   })
 
-  ipcMain.handle('storage:pick-cold-dir', async () => {
+  ipcMain.handle(CHANNELS.STORAGE_PICK_COLD_DIR, async () => {
     const win = BrowserWindow.getFocusedWindow()
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
@@ -3643,30 +3658,30 @@ function registerIpcHandlers(): void {
     return dir
   })
 
-  ipcMain.handle('storage:move-to-cold', async () => {
+  ipcMain.handle(CHANNELS.STORAGE_MOVE_TO_COLD, async () => {
     fileCheckCache.clear()
     const result = await moveAllFilesToColdStorage((current, total, file) => {
       for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('storage:move-to-cold-progress', { current, total, file })
+        win.webContents.send(EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS, { current, total, file })
       }
     })
     return result
   })
 
-  ipcMain.handle('storage:get-usage', async () => {
+  ipcMain.handle(CHANNELS.STORAGE_GET_USAGE, async () => {
     return scanStorageUsage()
   })
 
-  ipcMain.handle('storage:run-cleanup', async (_event, opts?: { force?: boolean }) => {
+  ipcMain.handle(CHANNELS.STORAGE_RUN_CLEANUP, async (_event, opts?: { force?: boolean }) => {
     return runWatchedCleanup(!!opts?.force)
   })
 
   // Shikimori integration
-  ipcMain.handle('shikimori:get-auth-url', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => {
     return shikimori.getAuthUrl()
   })
 
-  ipcMain.handle('shikimori:exchange-code', async (_event, code: string) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_EXCHANGE_CODE, async (_event, code: string) => {
     const creds = await shikimori.exchangeCode(code)
     store.set('shikimoriCredentials', creds)
     const user = await shikimori.getUser(creds.access_token)
@@ -3674,7 +3689,7 @@ function registerIpcHandlers(): void {
     return user
   })
 
-  ipcMain.handle('shikimori:logout', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_LOGOUT, () => {
     store.set('shikimoriCredentials', null)
     store.set('shikimoriUser', null)
     store.set('shikimoriUserRates', [])
@@ -3687,11 +3702,11 @@ function registerIpcHandlers(): void {
     broadcastSyncStatus()
   })
 
-  ipcMain.handle('shikimori:get-user', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_USER, () => {
     return store.get('shikimoriUser') as shikimori.ShikiUser | null
   })
 
-  ipcMain.handle('shikimori:get-rate', async (_event, malId: number) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RATE, async (_event, malId: number) => {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) throw new Error('Not logged in to Shikimori')
@@ -3699,7 +3714,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(
-    'shikimori:update-rate',
+    CHANNELS.SHIKIMORI_UPDATE_RATE,
     async (
       _event,
       malId: number,
@@ -3825,7 +3840,7 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('shikimori:get-friends-rates', async (_event, malId: number) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, async (_event, malId: number) => {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) throw new Error('Not logged in to Shikimori')
@@ -3876,7 +3891,7 @@ function registerIpcHandlers(): void {
       .catch((err) => console.warn('[shikimori] background refresh failed:', err))
   }
 
-  ipcMain.handle('shikimori:get-anime-rates', async (_event, status?: string) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_ANIME_RATES, async (_event, status?: string) => {
     if (!status) {
       const cached = store.get('shikimoriUserRates') as unknown[]
       if (cached.length > 0) {
@@ -3889,7 +3904,7 @@ function registerIpcHandlers(): void {
     return entries
   })
 
-  ipcMain.handle('shikimori:get-anime-details', (_event, malId: number) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_ANIME_DETAILS, (_event, malId: number) => {
     const cache = store.get('shikimoriAnimeDetails') as Record<
       string,
       { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
@@ -3903,21 +3918,21 @@ function registerIpcHandlers(): void {
     return entry.details
   })
 
-  ipcMain.handle('shikimori:trigger-detail-prefetch', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_TRIGGER_DETAIL_PREFETCH, () => {
     void prefetchShikimoriDetails()
   })
 
-  ipcMain.handle('shikimori:get-offline-queue-length', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH, () => {
     return (store.get('shikimoriUpdateQueue') as unknown[]).length
   })
 
-  ipcMain.handle('shikimori:get-sync-status', () => getSyncStatus())
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_SYNC_STATUS, () => getSyncStatus())
 
-  ipcMain.handle('shikimori:trigger-sync', () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_TRIGGER_SYNC, () => {
     void syncShikimoriQueue()
   })
 
-  ipcMain.handle('shikimori:get-friends-activity', async () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS_ACTIVITY, async () => {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) throw new Error('Not logged in to Shikimori')
@@ -3932,7 +3947,7 @@ function registerIpcHandlers(): void {
     }))
   })
 
-  ipcMain.handle('shikimori:get-calendar', async (_event, force = false) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_CALENDAR, async (_event, force = false) => {
     if (!force && calendarCache && Date.now() - calendarCache.fetchedAt < CALENDAR_CACHE_TTL_MS) {
       return calendarCache.data
     }
@@ -4010,7 +4025,7 @@ function registerIpcHandlers(): void {
     return entries
   })
 
-  ipcMain.handle('shikimori:get-related', async (_event, malId: number) => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RELATED, async (_event, malId: number) => {
     const franchise = await shikimori.getFranchise(malId)
 
     const CANONICAL_RELATIONS = new Set([
@@ -4127,7 +4142,7 @@ function registerIpcHandlers(): void {
       .filter((e) => e.isCurrent || !(e.shikiAnime.kind && EXCLUDED_KINDS.has(e.shikiAnime.kind)))
   })
 
-  ipcMain.handle('shell:open-external', async (_event, url: string) => {
+  ipcMain.handle(CHANNELS.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
     try {
       await shell.openExternal(url)
       return true
@@ -4136,7 +4151,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('shell:open-external-file', async (_event, filePath: string) => {
+  ipcMain.handle(CHANNELS.SHELL_OPEN_EXTERNAL_FILE, async (_event, filePath: string) => {
     try {
       const err = await shell.openPath(filePath)
       return { ok: err === '', error: err || undefined }
@@ -4146,7 +4161,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(
-    'player:get-stream-url',
+    CHANNELS.PLAYER_GET_STREAM_URL,
     async (_event, translationId: number, maxHeight: number) => {
       try {
         const embed = await smotretApi.getEmbed(translationId)
@@ -4175,7 +4190,7 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('player:get-local-subtitles', async (_event, filePath: string) => {
+  ipcMain.handle(CHANNELS.PLAYER_GET_LOCAL_SUBTITLES, async (_event, filePath: string) => {
     const assPath = filePath.replace(/\.(mp4|mkv)$/i, '.ass')
     try {
       if (fs.existsSync(assPath)) {
@@ -4188,7 +4203,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(
-    'player:find-local-file',
+    CHANNELS.PLAYER_FIND_LOCAL_FILE,
     async (
       _event,
       animeName: string,
@@ -4283,7 +4298,7 @@ function registerIpcHandlers(): void {
   // Remux MKV to fragmented MP4 (stream copy) for progressive HTML5 playback.
   // See protocol.handle('anime-video', …) below for the streaming reader.
   ipcMain.handle(
-    'player:remux-mkv',
+    CHANNELS.PLAYER_REMUX_MKV,
     async (
       _event,
       mkvPath: string
@@ -4333,7 +4348,7 @@ function registerIpcHandlers(): void {
   // renderer can set MediaSource.duration and addSourceBuffer(mimeType) upfront.
   // Video bytes are pushed to the renderer via 'player:stream-chunk' events.
   ipcMain.handle(
-    'player:remux-mkv-stream',
+    CHANNELS.PLAYER_REMUX_MKV_STREAM,
     async (
       event,
       mkvPath: string,
@@ -4400,7 +4415,7 @@ function registerIpcHandlers(): void {
             if (!content) return
             const sender = event.sender
             if (sender && !sender.isDestroyed()) {
-              sender.send('player:stream-subtitles', { sessionId, content })
+              sender.send(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES, { sessionId, content })
             }
           })
           .catch(() => {
@@ -4424,7 +4439,7 @@ function registerIpcHandlers(): void {
   // on Linux without VA-API). Audio is copied when AAC, otherwise transcoded
   // to AAC so MSE can play it.
   ipcMain.handle(
-    'player:remux-mkv-stream-transcode',
+    CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE,
     async (
       event,
       mkvPath: string,
@@ -4500,7 +4515,7 @@ function registerIpcHandlers(): void {
             if (!content) return
             const sender = event.sender
             if (sender && !sender.isDestroyed()) {
-              sender.send('player:stream-subtitles', { sessionId, content })
+              sender.send(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES, { sessionId, content })
             }
           })
           .catch(() => {
@@ -4524,42 +4539,45 @@ function registerIpcHandlers(): void {
   // already set sourceBuffer.timestampOffset to place fragments on the correct
   // MSE timeline position. Stale chunks from the old proc are filtered out by
   // the generation counter captured in spawnFfmpegForSession.
-  ipcMain.handle('player:stream-seek', async (event, sessionId: string, seekSeconds: number) => {
-    const session = mseSessions.get(sessionId)
-    if (!session) return { error: 'session not found' }
-    const requestedSeek = Math.max(0, seekSeconds)
-    const keyframeTime =
-      requestedSeek > 0 ? await findKeyframeBefore(session.mkvPath, requestedSeek) : 0
-    session.generation++
-    try {
-      session.proc.kill('SIGKILL')
-    } catch {
-      /* ignore */
-    }
-    session.pendingBytes = 0
-    session.prelude = []
-    session.done = false
-    session.error = null
-    // Hold new chunks in the prelude until the renderer has set its
-    // SourceBuffer.timestampOffset and called player:stream-start again.
-    // Otherwise first frames of the new run race ahead of the offset change
-    // and get placed on the wrong MSE timeline.
-    session.ready = false
-    if (session.proc.stdout && session.proc.stdout.isPaused()) {
+  ipcMain.handle(
+    CHANNELS.PLAYER_STREAM_SEEK,
+    async (event, sessionId: string, seekSeconds: number) => {
+      const session = mseSessions.get(sessionId)
+      if (!session) return { error: 'session not found' }
+      const requestedSeek = Math.max(0, seekSeconds)
+      const keyframeTime =
+        requestedSeek > 0 ? await findKeyframeBefore(session.mkvPath, requestedSeek) : 0
+      session.generation++
       try {
-        session.proc.stdout.resume()
+        session.proc.kill('SIGKILL')
       } catch {
         /* ignore */
       }
+      session.pendingBytes = 0
+      session.prelude = []
+      session.done = false
+      session.error = null
+      // Hold new chunks in the prelude until the renderer has set its
+      // SourceBuffer.timestampOffset and called player:stream-start again.
+      // Otherwise first frames of the new run race ahead of the offset change
+      // and get placed on the wrong MSE timeline.
+      session.ready = false
+      if (session.proc.stdout && session.proc.stdout.isPaused()) {
+        try {
+          session.proc.stdout.resume()
+        } catch {
+          /* ignore */
+        }
+      }
+      session.proc = spawnFfmpegForSession(session, event, sessionId, keyframeTime)
+      return { ok: true, generation: session.generation, keyframeTime }
     }
-    session.proc = spawnFfmpegForSession(session, event, sessionId, keyframeTime)
-    return { ok: true, generation: session.generation, keyframeTime }
-  })
+  )
 
   // Handshake: renderer's MediaSource + SourceBuffer are ready to receive chunks.
   // Flush any buffered prelude (the MP4 moov header lives in here) and switch to
   // forwarding subsequent chunks directly.
-  ipcMain.handle('player:stream-start', (event, sessionId: string) => {
+  ipcMain.handle(CHANNELS.PLAYER_STREAM_START, (event, sessionId: string) => {
     const session = mseSessions.get(sessionId)
     if (!session) return
     if (session.ready) return
@@ -4568,7 +4586,7 @@ function registerIpcHandlers(): void {
     if (sender && !sender.isDestroyed()) {
       const gen = session.generation
       for (const chunk of session.prelude) {
-        sender.send('player:stream-chunk', { sessionId, gen, data: chunk })
+        sender.send(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, { sessionId, gen, data: chunk })
       }
     }
     session.prelude = []
@@ -4576,7 +4594,7 @@ function registerIpcHandlers(): void {
 
   // Backpressure ack: renderer reports bytes it has appended into its SourceBuffer.
   // When enough data has been consumed we resume the ffmpeg stdout pipe.
-  ipcMain.handle('player:stream-ack', (_event, sessionId: string, bytesConsumed: number) => {
+  ipcMain.handle(CHANNELS.PLAYER_STREAM_ACK, (_event, sessionId: string, bytesConsumed: number) => {
     const session = mseSessions.get(sessionId)
     if (!session) return
     session.pendingBytes = Math.max(0, session.pendingBytes - bytesConsumed)
@@ -4588,7 +4606,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('player:cleanup-remux', async () => {
+  ipcMain.handle(CHANNELS.PLAYER_CLEANUP_REMUX, async () => {
     for (const sessionId of Array.from(mseSessions.keys())) {
       cleanupMseSession(sessionId)
     }
@@ -4613,7 +4631,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('syncplay:connect', (_event, cfg: SyncplayConfig) => {
+  ipcMain.handle(CHANNELS.SYNCPLAY_CONNECT, (_event, cfg: SyncplayConfig) => {
     const persisted = store.get('syncplay')
     store.set('syncplay', {
       ...persisted,
@@ -4626,41 +4644,41 @@ function registerIpcHandlers(): void {
     syncplay.connect(cfg)
   })
 
-  ipcMain.handle('syncplay:disconnect', () => {
+  ipcMain.handle(CHANNELS.SYNCPLAY_DISCONNECT, () => {
     syncplay.disconnect()
   })
 
-  ipcMain.handle('syncplay:set-file', (_event, file: SyncplayFileInfo) => {
+  ipcMain.handle(CHANNELS.SYNCPLAY_SET_FILE, (_event, file: SyncplayFileInfo) => {
     syncplay.setFile(file)
   })
 
   ipcMain.handle(
-    'syncplay:local-state',
+    CHANNELS.SYNCPLAY_LOCAL_STATE,
     (_event, payload: { paused: boolean; position: number; cause: 'play' | 'pause' | 'seek' }) => {
       syncplay.sendLocalState(payload)
     }
   )
 
   ipcMain.handle(
-    'syncplay:local-snapshot',
+    CHANNELS.SYNCPLAY_LOCAL_SNAPSHOT,
     (_event, snap: { position: number; paused: boolean }) => {
       syncplay.updateSnapshot(snap)
     }
   )
 
-  ipcMain.handle('syncplay:set-ready', (_event, isReady: boolean) => {
+  ipcMain.handle(CHANNELS.SYNCPLAY_SET_READY, (_event, isReady: boolean) => {
     syncplay.setReady(isReady)
   })
 
-  ipcMain.handle('syncplay:get-status', () => syncplay.getStatus())
+  ipcMain.handle(CHANNELS.SYNCPLAY_GET_STATUS, () => syncplay.getStatus())
 
   // Auto-downloader
-  ipcMain.handle('auto-dl:get-subscription', (_event, animeId: number) => {
+  ipcMain.handle(CHANNELS.AUTO_DL_GET_SUBSCRIPTION, (_event, animeId: number) => {
     return autoDlGetSubscription(animeId)
   })
 
   ipcMain.handle(
-    'auto-dl:set-subscription',
+    CHANNELS.AUTO_DL_SET_SUBSCRIPTION,
     async (
       _event,
       animeId: number,
@@ -4679,17 +4697,17 @@ function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('auto-dl:list-subscriptions', () => autoDlListSubscriptions())
+  ipcMain.handle(CHANNELS.AUTO_DL_LIST_SUBSCRIPTIONS, () => autoDlListSubscriptions())
 
-  ipcMain.handle('auto-dl:trigger', async () => {
+  ipcMain.handle(CHANNELS.AUTO_DL_TRIGGER, async () => {
     return runAutoDownloadTick('manual')
   })
 
-  ipcMain.handle('auto-dl:get-status', () => getAutoDownloaderStatus())
+  ipcMain.handle(CHANNELS.AUTO_DL_GET_STATUS, () => getAutoDownloaderStatus())
 
-  ipcMain.handle('auto-dl:get-enabled', () => Boolean(store.get('autoDownloadEnabled')))
+  ipcMain.handle(CHANNELS.AUTO_DL_GET_ENABLED, () => Boolean(store.get('autoDownloadEnabled')))
 
-  ipcMain.handle('auto-dl:set-enabled', (_event, enabled: boolean) => {
+  ipcMain.handle(CHANNELS.AUTO_DL_SET_ENABLED, (_event, enabled: boolean) => {
     store.set('autoDownloadEnabled', Boolean(enabled))
     return Boolean(enabled)
   })
@@ -4799,7 +4817,7 @@ function spawnFfmpegForSession(
         parseInt(timeMatch[2], 10) * 60 +
         parseFloat(timeMatch[3])
       : null
-    sender.send('player:stream-progress', { sessionId, gen: procGen, speed, time })
+    sender.send(EVENT_CHANNELS.PLAYER_STREAM_PROGRESS, { sessionId, gen: procGen, speed, time })
   })
 
   // Coalesce small ffmpeg stdout chunks into ~256 KB IPC messages. ffmpeg
@@ -4817,7 +4835,7 @@ function spawnFfmpegForSession(
     if (session.ready) {
       const sender = event.sender
       if (sender && !sender.isDestroyed()) {
-        sender.send('player:stream-chunk', { sessionId, gen: procGen, data: out })
+        sender.send(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, { sessionId, gen: procGen, data: out })
       }
     } else {
       session.prelude.push(out)
@@ -4843,7 +4861,7 @@ function spawnFfmpegForSession(
     session.done = true
     const sender = event.sender
     if (sender && !sender.isDestroyed()) {
-      sender.send('player:stream-end', { sessionId })
+      sender.send(EVENT_CHANNELS.PLAYER_STREAM_END, { sessionId })
     }
   })
 
@@ -4855,7 +4873,7 @@ function spawnFfmpegForSession(
     console.error('[remux-stream] spawn error:', err.message)
     const sender = event.sender
     if (sender && !sender.isDestroyed()) {
-      sender.send('player:stream-error', { sessionId, error: err.message })
+      sender.send(EVENT_CHANNELS.PLAYER_STREAM_ERROR, { sessionId, error: err.message })
     }
   })
 
@@ -4869,7 +4887,7 @@ function spawnFfmpegForSession(
       console.error('[remux-stream]', msg)
       const sender = event.sender
       if (sender && !sender.isDestroyed()) {
-        sender.send('player:stream-error', { sessionId, error: msg })
+        sender.send(EVENT_CHANNELS.PLAYER_STREAM_ERROR, { sessionId, error: msg })
       }
     }
   })
@@ -5550,7 +5568,7 @@ app.whenReady().then(async () => {
 
   const broadcastUpdateStatus = (data: Record<string, unknown>): void => {
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('update:status', data)
+      win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, data)
     }
   }
 

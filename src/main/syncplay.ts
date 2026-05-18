@@ -165,7 +165,14 @@ export class SyncplayClient extends EventEmitter {
     this.snapshot = { position: payload.position, paused: payload.paused }
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
-    log('local-state', payload.cause, 'counter=', this.clientIgnoreCounter, 'pos=', payload.position)
+    log(
+      'local-state',
+      payload.cause,
+      'counter=',
+      this.clientIgnoreCounter,
+      'pos=',
+      payload.position
+    )
     this.sendStateMessage({ doSeek: payload.cause === 'seek' })
   }
 
@@ -274,7 +281,8 @@ export class SyncplayClient extends EventEmitter {
     const motd = typeof payload.motd === 'string' ? payload.motd : ''
     this.serverMotd = motd
 
-    const advertisedUsername = typeof payload.username === 'string' ? payload.username : this.config.username
+    const advertisedUsername =
+      typeof payload.username === 'string' ? payload.username : this.config.username
     if (advertisedUsername !== this.config.username) {
       this.emit('room-event', {
         level: 'info',
@@ -314,7 +322,9 @@ export class SyncplayClient extends EventEmitter {
     if (payload.startTLS === 'true' || payload.startTLS === true) {
       this.upgradeToTls()
     } else {
-      this.failHandshake('Server does not support TLS — TLS-only mode requires a TLS-capable Syncplay server (1.6.3+).')
+      this.failHandshake(
+        'Server does not support TLS — TLS-only mode requires a TLS-capable Syncplay server (1.6.3+).'
+      )
     }
   }
 
@@ -378,9 +388,8 @@ export class SyncplayClient extends EventEmitter {
           this.absorbRemoteFile(username, data.file)
         }
         if (isObject(data.isReady) || typeof data.isReady === 'boolean') {
-          const isReady = typeof data.isReady === 'boolean'
-            ? data.isReady
-            : data.isReady.isReady === true
+          const isReady =
+            typeof data.isReady === 'boolean' ? data.isReady : data.isReady.isReady === true
           let u = this.roomUsers.find((x) => x.username === username)
           if (!u) {
             u = { username, file: null }
@@ -482,7 +491,8 @@ export class SyncplayClient extends EventEmitter {
     const iotf = isObject(payload.ignoringOnTheFly) ? payload.ignoringOnTheFly : {}
 
     if (ping) {
-      const myTs = typeof ping.clientLatencyCalculation === 'number' ? ping.clientLatencyCalculation : null
+      const myTs =
+        typeof ping.clientLatencyCalculation === 'number' ? ping.clientLatencyCalculation : null
       if (myTs !== null) {
         const rtt = Date.now() / 1000 - myTs
         if (rtt > 0 && rtt < 5) this.serverRtt = rtt
@@ -667,9 +677,13 @@ export class SyncplayClient extends EventEmitter {
 
   private onSocketClose(): void {
     console.warn(
-      '[syncplay] socket closed (state=' + this.status.state +
-      ', tls=' + this.tlsUpgraded +
-      ', reconnectAttempts=' + this.reconnectAttempts + ')'
+      '[syncplay] socket closed (state=' +
+        this.status.state +
+        ', tls=' +
+        this.tlsUpgraded +
+        ', reconnectAttempts=' +
+        this.reconnectAttempts +
+        ')'
     )
     this.stopHeartbeat()
     if (this.status.state === 'idle') return
@@ -681,9 +695,10 @@ export class SyncplayClient extends EventEmitter {
       return
     }
     if (!cfg.autoReconnect || this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      const reason = this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
-        ? 'Max reconnect attempts reached'
-        : 'Auto-reconnect disabled'
+      const reason =
+        this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
+          ? 'Max reconnect attempts reached'
+          : 'Auto-reconnect disabled'
       this.setStatus({
         state: 'disconnected',
         host: cfg.host,
@@ -697,7 +712,9 @@ export class SyncplayClient extends EventEmitter {
     }
     this.reconnectAttempts += 1
     const delay = RECONNECT_BASE_MS * 2 ** (this.reconnectAttempts - 1)
-    console.warn(`[syncplay] reconnecting to ${cfg.host}:${cfg.port} in ${delay}ms (attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+    console.warn(
+      `[syncplay] reconnecting to ${cfg.host}:${cfg.port} in ${delay}ms (attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
+    )
     this.setStatus({
       state: 'reconnecting',
       host: cfg.host,

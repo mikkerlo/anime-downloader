@@ -1,55 +1,55 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
-import AnimeCard from './AnimeCard.vue'
+import { ref, reactive } from 'vue';
+import AnimeCard from './AnimeCard.vue';
 
 const emit = defineEmits<{
-  openAnime: [id: number]
-}>()
+  openAnime: [id: number];
+}>();
 
-const query = ref('')
-const searchInput = ref<HTMLInputElement | null>(null)
+const query = ref('');
+const searchInput = ref<HTMLInputElement | null>(null);
 
 function focusInput(): void {
-  searchInput.value?.focus()
-  searchInput.value?.select()
+  searchInput.value?.focus();
+  searchInput.value?.select();
 }
 
-defineExpose({ focusInput })
-const results = ref<AnimeSearchResult[]>([])
-const loading = ref(false)
-const searched = ref(false)
-const starredIds = reactive(new Set<number>())
+defineExpose({ focusInput });
+const results = ref<AnimeSearchResult[]>([]);
+const loading = ref(false);
+const searched = ref(false);
+const starredIds = reactive(new Set<number>());
 
 async function search(): Promise<void> {
-  const q = query.value.trim()
-  if (!q) return
+  const q = query.value.trim();
+  if (!q) return;
 
-  loading.value = true
-  searched.value = true
+  loading.value = true;
+  searched.value = true;
   try {
-    const response = await window.api.searchAnime(q)
-    results.value = response.data
+    const response = await window.api.searchAnime(q);
+    results.value = response.data;
     for (const anime of results.value) {
       if (await window.api.libraryHas(anime.id)) {
-        starredIds.add(anime.id)
+        starredIds.add(anime.id);
       } else {
-        starredIds.delete(anime.id)
+        starredIds.delete(anime.id);
       }
     }
   } catch (err) {
-    console.error('Search failed:', err)
-    results.value = []
+    console.error('Search failed:', err);
+    results.value = [];
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 async function toggleStar(anime: AnimeSearchResult): Promise<void> {
-  const inLibrary = await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)))
+  const inLibrary = await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
   if (inLibrary) {
-    starredIds.add(anime.id)
+    starredIds.add(anime.id);
   } else {
-    starredIds.delete(anime.id)
+    starredIds.delete(anime.id);
   }
 }
 </script>
@@ -66,8 +66,20 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
           placeholder="Search anime..."
         />
         <button type="submit" class="search-btn" :disabled="loading">
-          <svg v-if="!loading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+          <svg
+            v-if="!loading"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="18"
+            height="18"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+            />
           </svg>
           <span v-else class="spinner" />
         </button>
@@ -76,7 +88,14 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
     <div class="body">
       <div v-if="loading" class="status-text">Searching...</div>
       <div v-else-if="results.length > 0" class="results-grid">
-        <AnimeCard v-for="anime in results" :key="anime.id" :anime="anime" :starred="starredIds.has(anime.id)" @toggle-star="toggleStar" @click="emit('openAnime', anime.id)" />
+        <AnimeCard
+          v-for="anime in results"
+          :key="anime.id"
+          :anime="anime"
+          :starred="starredIds.has(anime.id)"
+          @toggle-star="toggleStar"
+          @click="emit('openAnime', anime.id)"
+        />
       </div>
       <div v-else-if="searched" class="status-text">No results found</div>
       <div v-else class="status-text">Search for anime to get started</div>
@@ -151,7 +170,9 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .body {

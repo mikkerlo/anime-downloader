@@ -136,3 +136,49 @@ jobs:
             * 🍎 [macOS Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-mac.zip)
             * 🪟 [Windows Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-win.zip)
             * 🐧 [Linux Build](https://nightly.link/${{ github.repository }}/actions/runs/${{ github.run_id }}/pr-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.run_number }}-build-linux.zip)
+
+  quality:
+    # Type-check, lint, format, unit tests, and the Electron boot smoke test.
+    # Runs on every PR regardless of which files changed (cheap, no artifacts).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm run format:check
+
+      - run: npm run test
+
+      # The Playwright smoke test drives the built app.
+      - run: npm run build
+
+      - name: Install Electron runtime + xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libgtk-3-0 libgbm1 libasound2t64 libxshmfence1 libdrm2
+
+      - name: Run Electron smoke test
+        run: xvfb-run -a npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 3

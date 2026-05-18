@@ -1,75 +1,75 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted } from 'vue';
 
 const emit = defineEmits<{
-  openAnime: [id: number]
-}>()
+  openAnime: [id: number];
+}>();
 
-const activities = ref<ShikiFriendActivityEntry[]>([])
-const loading = ref(false)
-const error = ref('')
-let lastLoadedAt = 0
+const activities = ref<ShikiFriendActivityEntry[]>([]);
+const loading = ref(false);
+const error = ref('');
+let lastLoadedAt = 0;
 
-const CACHE_MS = 5 * 60 * 1000
+const CACHE_MS = 5 * 60 * 1000;
 
 function stripHtml(html: string): string {
-  const tmp = document.createElement('div')
-  tmp.innerHTML = html
-  return (tmp.textContent || tmp.innerText || '').trim()
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return (tmp.textContent || tmp.innerText || '').trim();
 }
 
 function formatRelative(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ''
-  const diff = Math.max(0, Date.now() - then)
-  const sec = Math.floor(diff / 1000)
-  if (sec < 60) return 'just now'
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m ago`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  const day = Math.floor(hr / 24)
-  if (day < 30) return `${day}d ago`
-  const mo = Math.floor(day / 30)
-  if (mo < 12) return `${mo}mo ago`
-  const yr = Math.floor(day / 365)
-  return `${yr}y ago`
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diff = Math.max(0, Date.now() - then);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  const yr = Math.floor(day / 365);
+  return `${yr}y ago`;
 }
 
 async function load(force = false): Promise<void> {
   if (!force && activities.value.length > 0 && Date.now() - lastLoadedAt < CACHE_MS) {
-    return
+    return;
   }
-  const user = await window.api.shikimoriGetUser()
+  const user = await window.api.shikimoriGetUser();
   if (!user) {
-    activities.value = []
-    error.value = 'Connect to Shikimori in Settings to see friends activity.'
-    return
+    activities.value = [];
+    error.value = 'Connect to Shikimori in Settings to see friends activity.';
+    return;
   }
-  loading.value = true
-  error.value = ''
+  loading.value = true;
+  error.value = '';
   try {
-    activities.value = await window.api.shikimoriGetFriendsActivity()
-    lastLoadedAt = Date.now()
+    activities.value = await window.api.shikimoriGetFriendsActivity();
+    lastLoadedAt = Date.now();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load friends activity'
+    error.value = err instanceof Error ? err.message : 'Failed to load friends activity';
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function handleClick(entry: ShikiFriendActivityEntry): void {
-  if (entry.smotretAnime) emit('openAnime', entry.smotretAnime.id)
+  if (entry.smotretAnime) emit('openAnime', entry.smotretAnime.id);
 }
 
 function posterUrl(entry: ShikiFriendActivityEntry): string {
   // Prefer smotret-anime's poster — Shikimori's image URL can be a 'missing'
   // placeholder for newly-listed anime. The main process already enriches
   // smotret entries via `enrichMissingPosters`, so this is normally non-empty.
-  return entry.smotretAnime?.posterUrlSmall || entry.animeImage
+  return entry.smotretAnime?.posterUrlSmall || entry.animeImage;
 }
 
-onMounted(() => load())
+onMounted(() => load());
 </script>
 
 <template>
@@ -78,14 +78,28 @@ onMounted(() => load())
       <h2>Friends Activity</h2>
       <div class="topbar-controls">
         <button class="refresh-btn" :disabled="loading" @click="load(true)" title="Refresh feed">
-          <svg :class="{ spinning: loading }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="18" height="18">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.015 4.356v4.992" />
+          <svg
+            :class="{ spinning: loading }"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            width="18"
+            height="18"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.015 4.356v4.992"
+            />
           </svg>
         </button>
       </div>
     </header>
     <div class="body">
-      <div v-if="loading && activities.length === 0" class="status-text">Loading friends activity...</div>
+      <div v-if="loading && activities.length === 0" class="status-text">
+        Loading friends activity...
+      </div>
       <div v-else-if="error" class="status-text error-text">{{ error }}</div>
       <div v-else-if="activities.length === 0" class="status-text">
         No recent activity from your Shikimori friends.
@@ -98,7 +112,12 @@ onMounted(() => load())
           :class="{ clickable: entry.smotretAnime }"
           @click="handleClick(entry)"
         >
-          <img :src="entry.friendAvatar" :alt="entry.friendNickname" class="avatar" loading="lazy" />
+          <img
+            :src="entry.friendAvatar"
+            :alt="entry.friendNickname"
+            class="avatar"
+            loading="lazy"
+          />
           <div class="text">
             <div class="line-1">
               <span class="nickname">{{ entry.friendNickname }}</span>
@@ -171,7 +190,9 @@ onMounted(() => load())
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .body {

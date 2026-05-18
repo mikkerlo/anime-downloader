@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+coverage/
+test-results/
+playwright-report/
+package-lock.json
+*.tsbuildinfo
+resources/
+src/renderer/public/
+
+# Docs are owned by the Phase 6 split (#84); keep them out of code formatting.
+**/*.md
+.claude/
+.gemini/
+.github/

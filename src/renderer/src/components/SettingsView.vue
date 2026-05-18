@@ -1,96 +1,122 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { formatBytes } from '../utils'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
+import { formatBytes } from '../utils';
 
-const activeTab = ref<'general' | 'storage' | 'connectors' | 'merging' | 'player' | 'shortcuts' | 'watch-together' | 'debug'>('general')
+const activeTab = ref<
+  | 'general'
+  | 'storage'
+  | 'connectors'
+  | 'merging'
+  | 'player'
+  | 'shortcuts'
+  | 'watch-together'
+  | 'debug'
+>('general');
 
-const token = ref('')
-const translationType = ref('subRu')
-const downloadDir = ref('')
-const storageMode = ref<'simple' | 'advanced'>('simple')
-const hotStorageDir = ref('')
-const coldStorageDir = ref('')
-const autoMoveToCold = ref(false)
-const movingToCold = ref(false)
-const moveProgress = ref<{ current: number; total: number; file: string } | null>(null)
-const moveResult = ref<{ moved: number; failed: string[] } | null>(null)
+const token = ref('');
+const translationType = ref('subRu');
+const downloadDir = ref('');
+const storageMode = ref<'simple' | 'advanced'>('simple');
+const hotStorageDir = ref('');
+const coldStorageDir = ref('');
+const autoMoveToCold = ref(false);
+const movingToCold = ref(false);
+const moveProgress = ref<{ current: number; total: number; file: string } | null>(null);
+const moveResult = ref<{ moved: number; failed: string[] } | null>(null);
 
 // Storage usage + auto-cleanup state
-const storageUsage = ref<StorageUsage | null>(null)
-const usageScanning = ref(false)
-const usageProgress = ref<{ scanned: number; total: number } | null>(null)
-const expandedAnime = ref<Set<number>>(new Set())
-const autoCleanupDays = ref(0)
-const autoCleanupLastRun = ref<{ ranAt: number; deletedCount: number; freedBytes: number } | null>(null)
-const cleanupLog = ref<CleanupLogEntry[]>([])
-const cleanupRunning = ref(false)
-const cleanupResult = ref<CleanupResult | null>(null)
-const cleanupPending = ref<CleanupCandidate[] | null>(null)
-const cleanupLogExpanded = ref(false)
-const snoozedEntries = ref<{ animeId: number; animeName: string }[]>([])
-const snoozedLoading = ref(false)
-const loaded = ref(false)
-const savedVisible = ref(false)
-let savedTimeout: ReturnType<typeof setTimeout> | null = null
+const storageUsage = ref<StorageUsage | null>(null);
+const usageScanning = ref(false);
+const usageProgress = ref<{ scanned: number; total: number } | null>(null);
+const expandedAnime = ref<Set<number>>(new Set());
+const autoCleanupDays = ref(0);
+const autoCleanupLastRun = ref<{ ranAt: number; deletedCount: number; freedBytes: number } | null>(
+  null
+);
+const cleanupLog = ref<CleanupLogEntry[]>([]);
+const cleanupRunning = ref(false);
+const cleanupResult = ref<CleanupResult | null>(null);
+const cleanupPending = ref<CleanupCandidate[] | null>(null);
+const cleanupLogExpanded = ref(false);
+const snoozedEntries = ref<{ animeId: number; animeName: string }[]>([]);
+const snoozedLoading = ref(false);
+const loaded = ref(false);
+const savedVisible = ref(false);
+let savedTimeout: ReturnType<typeof setTimeout> | null = null;
 
-const tokenStatus = ref<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
-const tokenError = ref('')
+const tokenStatus = ref<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
+const tokenError = ref('');
 
 // Update state
-const appVersion = ref('')
-const updateStatus = ref<{ status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'; version?: string; percent?: number; error?: string }>({ status: 'idle' })
+const appVersion = ref('');
+const updateStatus = ref<{
+  status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error';
+  version?: string;
+  percent?: number;
+  error?: string;
+}>({ status: 'idle' });
 
-const notificationMode = ref('off')
-const calendarView = ref<'week' | 'month'>('week')
-const autoDownloadEnabled = ref(true)
-const autoDlSubscriptions = ref<AutoDownloadSubscription[]>([])
-const autoDlSubscriptionsExpanded = ref(false)
-const autoDlRunning = ref(false)
-const autoDlLastResult = ref<AutoDlTickResult | null>(null)
-const speedLimitPreset = ref('0')
-const customSpeedLimit = ref(1)
-const concurrentDownloads = ref(2)
-const autoMerge = ref(false)
-const enableLocalSkipDetection = ref(true)
-const skipBackfillRunning = ref(false)
-const skipBackfillResult = ref('')
-const skipQueueStatus = ref<{ currentAnimeId: number | null; queueLength: number }>({ currentAnimeId: null, queueLength: 0 })
-let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null
+const notificationMode = ref('off');
+const calendarView = ref<'week' | 'month'>('week');
+const autoDownloadEnabled = ref(true);
+const autoDlSubscriptions = ref<AutoDownloadSubscription[]>([]);
+const autoDlSubscriptionsExpanded = ref(false);
+const autoDlRunning = ref(false);
+const autoDlLastResult = ref<AutoDlTickResult | null>(null);
+const speedLimitPreset = ref('0');
+const customSpeedLimit = ref(1);
+const concurrentDownloads = ref(2);
+const autoMerge = ref(false);
+const enableLocalSkipDetection = ref(true);
+const skipBackfillRunning = ref(false);
+const skipBackfillResult = ref('');
+const skipQueueStatus = ref<{ currentAnimeId: number | null; queueLength: number }>({
+  currentAnimeId: null,
+  queueLength: 0
+});
+let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null;
 
 const skipQueueStatusLabel = computed<string>(() => {
-  const s = skipQueueStatus.value
-  if (s.currentAnimeId === null && s.queueLength === 0) return ''
-  const inFlight = s.currentAnimeId !== null ? 1 : 0
-  const remaining = s.queueLength + inFlight
-  return `Currently analyzing ${remaining} show${remaining === 1 ? '' : 's'}…`
-})
+  const s = skipQueueStatus.value;
+  if (s.currentAnimeId === null && s.queueLength === 0) return '';
+  const inFlight = s.currentAnimeId !== null ? 1 : 0;
+  const remaining = s.queueLength + inFlight;
+  return `Currently analyzing ${remaining} show${remaining === 1 ? '' : 's'}…`;
+});
 
 async function refreshSkipQueueStatus(): Promise<void> {
   try {
-    skipQueueStatus.value = await window.api.skipDetectorQueueStatus()
-  } catch { /* ignore */ }
+    skipQueueStatus.value = await window.api.skipDetectorQueueStatus();
+  } catch {
+    /* ignore */
+  }
 }
 
 async function onBackfillSkipDetection(): Promise<void> {
-  if (skipBackfillRunning.value) return
-  skipBackfillRunning.value = true
-  skipBackfillResult.value = ''
+  if (skipBackfillRunning.value) return;
+  skipBackfillRunning.value = true;
+  skipBackfillResult.value = '';
   try {
-    const r = await window.api.skipDetectorBackfillAll()
-    const parts: string[] = []
-    parts.push(`Queued ${r.queued} of ${r.total} downloaded shows.`)
-    if (r.alreadyAnalyzed > 0) parts.push(`${r.alreadyAnalyzed} already analyzed.`)
-    if (r.skippedFewEpisodes > 0) parts.push(`${r.skippedFewEpisodes} skipped (need ≥2 episodes).`)
-    skipBackfillResult.value = parts.join(' ')
-    await refreshSkipQueueStatus()
+    const r = await window.api.skipDetectorBackfillAll();
+    const parts: string[] = [];
+    parts.push(`Queued ${r.queued} of ${r.total} downloaded shows.`);
+    if (r.alreadyAnalyzed > 0) parts.push(`${r.alreadyAnalyzed} already analyzed.`);
+    if (r.skippedFewEpisodes > 0) parts.push(`${r.skippedFewEpisodes} skipped (need ≥2 episodes).`);
+    skipBackfillResult.value = parts.join(' ');
+    await refreshSkipQueueStatus();
   } catch (err) {
-    skipBackfillResult.value = `Backfill failed: ${err instanceof Error ? err.message : String(err)}`
+    skipBackfillResult.value = `Backfill failed: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
-    skipBackfillRunning.value = false
+    skipBackfillRunning.value = false;
   }
 }
-const videoCodec = ref('copy')
-const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders: string[] } | null>(null)
+const videoCodec = ref('copy');
+const ffmpeg = ref<{
+  available: boolean;
+  version: string;
+  path: string;
+  encoders: string[];
+} | null>(null);
 
 // HEVC playback decoder availability. On Linux stock Chromium builds ship no HEVC
 // decoder, so merging to H.265 produces files the built-in player can't play.
@@ -101,16 +127,16 @@ const ffmpeg = ref<{ available: boolean; version: string; path: string; encoders
 // the two support surfaces can diverge. Using canPlayType matches what the
 // built-in player will actually attempt when opening a merged file.
 const hevcPlaybackSupported = (() => {
-  if (typeof document === 'undefined') return false
-  const v = document.createElement('video')
+  if (typeof document === 'undefined') return false;
+  const v = document.createElement('video');
   const probes = [
     'video/mp4; codecs="hvc1.1.6.L120.B0"',
     'video/mp4; codecs="hvc1.2.4.L120.B0"',
     'video/mp4; codecs="hev1.1.6.L120.B0"',
     'video/mp4; codecs="hev1.2.4.L120.B0"'
-  ]
-  return probes.some((p) => v.canPlayType(p) !== '')
-})()
+  ];
+  return probes.some((p) => v.canPlayType(p) !== '');
+})();
 
 // `hevcTranscodeOnPlay` gates the MKV-via-MSE path, which negotiates codecs
 // through `MediaSource.isTypeSupported`. That surface can reject HEVC even when
@@ -118,70 +144,75 @@ const hevcPlaybackSupported = (() => {
 // through <video src> but not always through MSE). Probe MSE separately so we
 // only disable the dropdown when the fallback truly can't fire.
 const hevcMseSupported = (() => {
-  if (typeof window === 'undefined' || typeof MediaSource === 'undefined') return false
+  if (typeof window === 'undefined' || typeof MediaSource === 'undefined') return false;
   const probes = [
     'video/mp4; codecs="hvc1.1.6.L120.B0"',
     'video/mp4; codecs="hvc1.2.4.L120.B0"',
     'video/mp4; codecs="hev1.1.6.L120.B0"',
     'video/mp4; codecs="hev1.2.4.L120.B0"'
-  ]
-  return probes.some((p) => MediaSource.isTypeSupported(p))
-})()
+  ];
+  return probes.some((p) => MediaSource.isTypeSupported(p));
+})();
 
-const backgroundQualityProbe = ref(false)
+const backgroundQualityProbe = ref(false);
 
 // Debug / scan-merge state
-const scanMerging = ref(false)
-const scanProgress = ref<{ current: number; total: number; file: string; percent: number } | null>(null)
-const scanResult = ref<{ merged: number; failed: string[] } | null>(null)
+const scanMerging = ref(false);
+const scanProgress = ref<{ current: number; total: number; file: string; percent: number } | null>(
+  null
+);
+const scanResult = ref<{ merged: number; failed: string[] } | null>(null);
 
 // Fix metadata state
-const fixingMetadata = ref(false)
-const fixProgress = ref<{ current: number; total: number; file: string } | null>(null)
-const fixResult = ref<{ fixed: number; failed: string[] } | null>(null)
+const fixingMetadata = ref(false);
+const fixProgress = ref<{ current: number; total: number; file: string } | null>(null);
+const fixResult = ref<{ fixed: number; failed: string[] } | null>(null);
 
 // Quality mismatch dump
-const dumpingMismatches = ref(false)
-const dumpResult = ref<{ count: number; path: string } | null>(null)
-const mismatchCount = ref(0)
+const dumpingMismatches = ref(false);
+const dumpResult = ref<{ count: number; path: string } | null>(null);
+const mismatchCount = ref(0);
 
 // MP4 streaming-optimization (faststart) check stats
-const mp4Stats = ref<Mp4StreamingStats | null>(null)
+const mp4Stats = ref<Mp4StreamingStats | null>(null);
 const latestNonFaststart = computed<Mp4StreamingStatsSample | null>(() => {
-  const s = mp4Stats.value
-  if (!s || s.nonFaststartSamples.length === 0) return null
-  return s.nonFaststartSamples[s.nonFaststartSamples.length - 1]
-})
+  const s = mp4Stats.value;
+  if (!s || s.nonFaststartSamples.length === 0) return null;
+  return s.nonFaststartSamples[s.nonFaststartSamples.length - 1];
+});
 
 // Shikimori state
-const shikimoriUser = ref<ShikiUser | null>(null)
-const shikimoriAuthUrl = ref('')
-const shikimoriCode = ref('')
-const shikimoriConnecting = ref(false)
-const shikimoriError = ref('')
-const shikimoriShowUrl = ref(false)
+const shikimoriUser = ref<ShikiUser | null>(null);
+const shikimoriAuthUrl = ref('');
+const shikimoriCode = ref('');
+const shikimoriConnecting = ref(false);
+const shikimoriError = ref('');
+const shikimoriShowUrl = ref(false);
 
 // Watch Together (Syncplay)
-const syncplayHost = ref('syncplay.pl')
-const syncplayPort = ref(8999)
-const syncplayRoom = ref('')
-const syncplayUsername = ref('')
-const syncplayPassword = ref('')
-const syncplayAutoReconnect = ref(true)
-const syncplayTestStatus = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle')
-const syncplayTestError = ref('')
+const syncplayHost = ref('syncplay.pl');
+const syncplayPort = ref(8999);
+const syncplayRoom = ref('');
+const syncplayUsername = ref('');
+const syncplayPassword = ref('');
+const syncplayAutoReconnect = ref(true);
+const syncplayTestStatus = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle');
+const syncplayTestError = ref('');
 
 // Player settings
-const playerMode = ref<'system' | 'builtin'>('system')
-const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off')
-const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask')
-const prefetchNextEpisode = ref<'off' | 'open' | 'time-5min' | 'progress-50'>('progress-50')
-const webgpuStatus = ref<{ available: boolean; gpuName: string }>({ available: false, gpuName: '' })
+const playerMode = ref<'system' | 'builtin'>('system');
+const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off');
+const hevcTranscodeOnPlay = ref<'ask' | 'always' | 'never'>('ask');
+const prefetchNextEpisode = ref<'off' | 'open' | 'time-5min' | 'progress-50'>('progress-50');
+const webgpuStatus = ref<{ available: boolean; gpuName: string }>({
+  available: false,
+  gpuName: ''
+});
 
 // GPU benchmark state
-const benchmarking = ref(false)
-const benchmarkResult = ref<{ preset: string; fps: number; avgMs: number } | null>(null)
-const benchmarkError = ref('')
+const benchmarking = ref(false);
+const benchmarkResult = ref<{ preset: string; fps: number; avgMs: number } | null>(null);
+const benchmarkError = ref('');
 
 const DEFAULT_SHORTCUTS: Record<string, string> = {
   back: 'Escape',
@@ -193,447 +224,473 @@ const DEFAULT_SHORTCUTS: Record<string, string> = {
   shaderModeB: 'CmdOrCtrl+2',
   shaderModeC: 'CmdOrCtrl+3',
   shaderOff: 'CmdOrCtrl+Backquote'
-}
+};
 
 const SHORTCUT_LABELS: Record<string, { label: string; hint: string }> = {
   back: { label: 'Go back', hint: 'Navigate back from anime detail view' },
   focusSearch: { label: 'Focus search', hint: 'Switch to Search tab and focus the input' },
   goDownloads: { label: 'Go to downloads', hint: 'Switch to Downloads tab' },
-  playerPrevEpisode: { label: 'Previous episode', hint: 'Go to previous episode in the built-in player' },
+  playerPrevEpisode: {
+    label: 'Previous episode',
+    hint: 'Go to previous episode in the built-in player'
+  },
   playerNextEpisode: { label: 'Next episode', hint: 'Go to next episode in the built-in player' },
   shaderModeA: { label: 'Shader: Mode A', hint: 'Switch to Anime4K Mode A in player' },
   shaderModeB: { label: 'Shader: Mode B', hint: 'Switch to Anime4K Mode B in player' },
   shaderModeC: { label: 'Shader: Mode C', hint: 'Switch to Anime4K Mode C in player' },
   shaderOff: { label: 'Shader: Off', hint: 'Disable Anime4K shaders in player' }
-}
+};
 
-const shortcutBindings = ref<Record<string, string>>({})
-const recordingAction = ref<string | null>(null)
-const isMac = navigator.platform.toUpperCase().includes('MAC')
+const shortcutBindings = ref<Record<string, string>>({});
+const recordingAction = ref<string | null>(null);
+const isMac = navigator.platform.toUpperCase().includes('MAC');
 
 function formatBinding(binding: string): string {
-  if (!binding) return 'None'
-  return binding
-    .replace(/CmdOrCtrl/g, isMac ? '\u2318' : 'Ctrl')
-    .replace(/\+/g, isMac ? '' : '+')
+  if (!binding) return 'None';
+  return binding.replace(/CmdOrCtrl/g, isMac ? '\u2318' : 'Ctrl').replace(/\+/g, isMac ? '' : '+');
 }
 
 function captureKey(e: KeyboardEvent): void {
-  if (!recordingAction.value) return
-  e.preventDefault()
-  e.stopPropagation()
+  if (!recordingAction.value) return;
+  e.preventDefault();
+  e.stopPropagation();
 
   if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-    stopRecording()
-    return
+    stopRecording();
+    return;
   }
 
   // Ignore bare modifier keys
-  if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return
+  if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
 
-  const parts: string[] = []
-  if (e.ctrlKey || e.metaKey) parts.push('CmdOrCtrl')
-  if (e.shiftKey) parts.push('Shift')
-  if (e.altKey) parts.push('Alt')
+  const parts: string[] = [];
+  if (e.ctrlKey || e.metaKey) parts.push('CmdOrCtrl');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.altKey) parts.push('Alt');
 
-  const keyName = e.key.length === 1 ? e.key.toUpperCase() : e.key
-  parts.push(keyName)
+  const keyName = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  parts.push(keyName);
 
-  shortcutBindings.value[recordingAction.value] = parts.join('+')
-  stopRecording()
-  saveShortcuts()
+  shortcutBindings.value[recordingAction.value] = parts.join('+');
+  stopRecording();
+  saveShortcuts();
 }
 
 function startRecording(action: string): void {
-  recordingAction.value = action
-  window.addEventListener('keydown', captureKey, true)
+  recordingAction.value = action;
+  window.addEventListener('keydown', captureKey, true);
 }
 
 function stopRecording(): void {
-  recordingAction.value = null
-  window.removeEventListener('keydown', captureKey, true)
+  recordingAction.value = null;
+  window.removeEventListener('keydown', captureKey, true);
 }
 
 function cancelRecording(): void {
-  stopRecording()
+  stopRecording();
 }
 
 function clearBinding(action: string): void {
-  shortcutBindings.value[action] = ''
-  saveShortcuts()
+  shortcutBindings.value[action] = '';
+  saveShortcuts();
 }
 
 function resetShortcuts(): void {
-  shortcutBindings.value = { ...DEFAULT_SHORTCUTS }
-  saveShortcuts()
+  shortcutBindings.value = { ...DEFAULT_SHORTCUTS };
+  saveShortcuts();
 }
 
 function saveShortcuts(): void {
-  window.api.setSetting('keyboardShortcuts', { ...shortcutBindings.value })
-  showSaved()
+  window.api.setSetting('keyboardShortcuts', { ...shortcutBindings.value });
+  showSaved();
 }
 
 function onScanProgress(data: ScanMergeProgress): void {
-  scanProgress.value = data
+  scanProgress.value = data;
 }
 
 async function scanAndMerge(): Promise<void> {
-  scanMerging.value = true
-  scanProgress.value = null
-  scanResult.value = null
+  scanMerging.value = true;
+  scanProgress.value = null;
+  scanResult.value = null;
   try {
-    const result = await window.api.downloadScanMerge()
-    scanResult.value = result
+    const result = await window.api.downloadScanMerge();
+    scanResult.value = result;
   } catch (err) {
-    scanResult.value = { merged: 0, failed: [String(err)] }
+    scanResult.value = { merged: 0, failed: [String(err)] };
   } finally {
-    scanMerging.value = false
-    scanProgress.value = null
+    scanMerging.value = false;
+    scanProgress.value = null;
   }
 }
 
 function onFixProgress(data: { current: number; total: number; file: string }): void {
-  fixProgress.value = data
+  fixProgress.value = data;
 }
 
 async function refreshMismatchCount(): Promise<void> {
-  mismatchCount.value = await window.api.getQualityMismatchCount()
+  mismatchCount.value = await window.api.getQualityMismatchCount();
 }
 
 async function refreshMp4Stats(): Promise<void> {
   try {
-    mp4Stats.value = await window.api.debugGetMp4Stats()
-  } catch { /* ignore */ }
+    mp4Stats.value = await window.api.debugGetMp4Stats();
+  } catch {
+    /* ignore */
+  }
 }
 
 async function resetMp4Stats(): Promise<void> {
-  await window.api.debugResetMp4Stats()
-  await refreshMp4Stats()
+  await window.api.debugResetMp4Stats();
+  await refreshMp4Stats();
 }
 
 async function dumpMismatches(): Promise<void> {
-  dumpingMismatches.value = true
-  dumpResult.value = null
+  dumpingMismatches.value = true;
+  dumpResult.value = null;
   try {
-    dumpResult.value = await window.api.dumpQualityMismatches()
+    dumpResult.value = await window.api.dumpQualityMismatches();
   } catch (err) {
-    dumpResult.value = { count: -1, path: String(err) }
+    dumpResult.value = { count: -1, path: String(err) };
   } finally {
-    dumpingMismatches.value = false
+    dumpingMismatches.value = false;
   }
 }
 
 async function deleteFfmpeg(): Promise<void> {
-  await window.api.ffmpegDelete()
-  ffmpeg.value = await window.api.ffmpegCheck()
+  await window.api.ffmpegDelete();
+  ffmpeg.value = await window.api.ffmpegCheck();
 }
 
 async function runGpuBenchmark(): Promise<void> {
-  benchmarking.value = true
-  benchmarkResult.value = null
-  benchmarkError.value = ''
+  benchmarking.value = true;
+  benchmarkResult.value = null;
+  benchmarkError.value = '';
 
   try {
-    if (!navigator.gpu) throw new Error('WebGPU not available')
-    const adapter = await navigator.gpu.requestAdapter()
-    if (!adapter) throw new Error('No GPU adapter found')
-    const device = await adapter.requestDevice()
+    if (!navigator.gpu) throw new Error('WebGPU not available');
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error('No GPU adapter found');
+    const device = await adapter.requestDevice();
 
-    const { ModeA } = await import('anime4k-webgpu')
+    const { ModeA } = await import('anime4k-webgpu');
 
     // Use 720p as source, upscale to actual screen resolution
-    const SRC_WIDTH = 1280
-    const SRC_HEIGHT = 720
-    const targetWidth = window.screen.width
-    const targetHeight = window.screen.height
+    const SRC_WIDTH = 1280;
+    const SRC_HEIGHT = 720;
+    const targetWidth = window.screen.width;
+    const targetHeight = window.screen.height;
     const testTexture = device.createTexture({
       size: [SRC_WIDTH, SRC_HEIGHT, 1],
       format: 'rgba16float',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
-    })
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT
+    });
 
     const pipeline = new ModeA({
       device,
       inputTexture: testTexture,
       nativeDimensions: { width: SRC_WIDTH, height: SRC_HEIGHT },
       targetDimensions: { width: targetWidth, height: targetHeight }
-    })
+    });
 
     // Warm up (5 frames)
     for (let i = 0; i < 5; i++) {
-      const enc = device.createCommandEncoder()
-      pipeline.pass(enc)
-      device.queue.submit([enc.finish()])
+      const enc = device.createCommandEncoder();
+      pipeline.pass(enc);
+      device.queue.submit([enc.finish()]);
     }
-    await device.queue.onSubmittedWorkDone()
+    await device.queue.onSubmittedWorkDone();
 
     // Benchmark 100 frames
-    const FRAMES = 100
-    const start = performance.now()
+    const FRAMES = 100;
+    const start = performance.now();
     for (let i = 0; i < FRAMES; i++) {
-      const enc = device.createCommandEncoder()
-      pipeline.pass(enc)
-      device.queue.submit([enc.finish()])
+      const enc = device.createCommandEncoder();
+      pipeline.pass(enc);
+      device.queue.submit([enc.finish()]);
     }
-    await device.queue.onSubmittedWorkDone()
-    const elapsed = performance.now() - start
+    await device.queue.onSubmittedWorkDone();
+    const elapsed = performance.now() - start;
 
-    const avgMs = elapsed / FRAMES
-    const fps = 1000 / avgMs
+    const avgMs = elapsed / FRAMES;
+    const fps = 1000 / avgMs;
 
-    benchmarkResult.value = { preset: `Mode A (720p→${targetHeight}p)`, fps: Math.round(fps * 10) / 10, avgMs: Math.round(avgMs * 100) / 100 }
-    device.destroy()
+    benchmarkResult.value = {
+      preset: `Mode A (720p→${targetHeight}p)`,
+      fps: Math.round(fps * 10) / 10,
+      avgMs: Math.round(avgMs * 100) / 100
+    };
+    device.destroy();
   } catch (e) {
-    benchmarkError.value = String(e)
+    benchmarkError.value = String(e);
   } finally {
-    benchmarking.value = false
+    benchmarking.value = false;
   }
 }
 
 async function fixMetadata(): Promise<void> {
-  fixingMetadata.value = true
-  fixProgress.value = null
-  fixResult.value = null
+  fixingMetadata.value = true;
+  fixProgress.value = null;
+  fixResult.value = null;
   try {
-    const result = await window.api.downloadFixMetadata()
-    fixResult.value = result
+    const result = await window.api.downloadFixMetadata();
+    fixResult.value = result;
   } catch (err) {
-    fixResult.value = { fixed: 0, failed: [String(err)] }
+    fixResult.value = { fixed: 0, failed: [String(err)] };
   } finally {
-    fixingMetadata.value = false
-    fixProgress.value = null
+    fixingMetadata.value = false;
+    fixProgress.value = null;
   }
 }
 
 function onUpdateStatus(data: UpdateStatus): void {
-  updateStatus.value = data
+  updateStatus.value = data;
 }
 
 async function checkForUpdates(): Promise<void> {
-  updateStatus.value = { status: 'checking' }
+  updateStatus.value = { status: 'checking' };
   try {
-    await window.api.updateCheck()
+    await window.api.updateCheck();
   } catch {
-    updateStatus.value = { status: 'error', error: 'Failed to check for updates' }
+    updateStatus.value = { status: 'error', error: 'Failed to check for updates' };
   }
 }
 
 async function downloadUpdate(): Promise<void> {
   try {
-    await window.api.updateDownload()
+    await window.api.updateDownload();
   } catch {
-    updateStatus.value = { status: 'error', error: 'Failed to download update' }
+    updateStatus.value = { status: 'error', error: 'Failed to download update' };
   }
 }
 
 function installUpdate(): void {
-  window.api.updateInstall()
+  window.api.updateInstall();
 }
 
 function onMoveProgress(data: { current: number; total: number; file: string }): void {
-  moveProgress.value = data
+  moveProgress.value = data;
 }
 
 async function pickHotDir(): Promise<void> {
-  const dir = await window.api.storagePickHotDir()
+  const dir = await window.api.storagePickHotDir();
   if (dir) {
-    hotStorageDir.value = dir
-    showSaved()
+    hotStorageDir.value = dir;
+    showSaved();
   }
 }
 
 async function pickColdDir(): Promise<void> {
-  const dir = await window.api.storagePickColdDir()
+  const dir = await window.api.storagePickColdDir();
   if (dir) {
-    coldStorageDir.value = dir
-    showSaved()
+    coldStorageDir.value = dir;
+    showSaved();
   }
 }
 
 async function moveToCold(): Promise<void> {
-  movingToCold.value = true
-  moveProgress.value = null
-  moveResult.value = null
+  movingToCold.value = true;
+  moveProgress.value = null;
+  moveResult.value = null;
   try {
-    const result = await window.api.storageMoveToCold()
-    moveResult.value = result
+    const result = await window.api.storageMoveToCold();
+    moveResult.value = result;
   } catch (err) {
-    moveResult.value = { moved: 0, failed: [String(err)] }
+    moveResult.value = { moved: 0, failed: [String(err)] };
   } finally {
-    movingToCold.value = false
-    moveProgress.value = null
+    movingToCold.value = false;
+    moveProgress.value = null;
   }
 }
 
 async function refreshStorageUsage(): Promise<void> {
-  if (usageScanning.value) return
-  usageScanning.value = true
-  usageProgress.value = null
+  if (usageScanning.value) return;
+  usageScanning.value = true;
+  usageProgress.value = null;
   try {
-    storageUsage.value = await window.api.storageGetUsage()
+    storageUsage.value = await window.api.storageGetUsage();
   } catch (err) {
-    console.error('storage:get-usage failed', err)
+    console.error('storage:get-usage failed', err);
   } finally {
-    usageScanning.value = false
-    usageProgress.value = null
+    usageScanning.value = false;
+    usageProgress.value = null;
   }
 }
 
 function toggleAnimeExpand(animeId: number): void {
-  const next = new Set(expandedAnime.value)
-  if (next.has(animeId)) next.delete(animeId)
-  else next.add(animeId)
-  expandedAnime.value = next
+  const next = new Set(expandedAnime.value);
+  if (next.has(animeId)) next.delete(animeId);
+  else next.add(animeId);
+  expandedAnime.value = next;
 }
 
-async function deleteEpisode(animeName: string, episodeInt: string, animeId: number): Promise<void> {
-  await window.api.fileDeleteEpisode(animeName, episodeInt, animeId)
-  await refreshStorageUsage()
+async function deleteEpisode(
+  animeName: string,
+  episodeInt: string,
+  animeId: number
+): Promise<void> {
+  await window.api.fileDeleteEpisode(animeName, episodeInt, animeId);
+  await refreshStorageUsage();
 }
 
 async function runCleanupNow(): Promise<void> {
-  if (cleanupRunning.value) return
-  cleanupRunning.value = true
-  cleanupResult.value = null
+  if (cleanupRunning.value) return;
+  cleanupRunning.value = true;
+  cleanupResult.value = null;
   try {
-    const result = await window.api.storageRunCleanup()
+    const result = await window.api.storageRunCleanup();
     if (result.deletedCount > 0 || result.items.length === 0) {
-      cleanupResult.value = result
-      autoCleanupLastRun.value = { ranAt: result.ranAt, deletedCount: result.deletedCount, freedBytes: result.freedBytes }
-      await reloadCleanupLog()
-      await refreshStorageUsage()
+      cleanupResult.value = result;
+      autoCleanupLastRun.value = {
+        ranAt: result.ranAt,
+        deletedCount: result.deletedCount,
+        freedBytes: result.freedBytes
+      };
+      await reloadCleanupLog();
+      await refreshStorageUsage();
     }
     // If candidates exist + confirm gate is up, main broadcasts
     // storage:cleanup-pending instead — handled by onCleanupPending below.
   } catch (err) {
-    console.error('storage:run-cleanup failed', err)
+    console.error('storage:run-cleanup failed', err);
   } finally {
-    cleanupRunning.value = false
+    cleanupRunning.value = false;
   }
 }
 
 async function confirmCleanup(): Promise<void> {
-  if (!cleanupPending.value) return
-  await window.api.setSetting('autoCleanupConfirm', false)
-  cleanupPending.value = null
-  cleanupRunning.value = true
+  if (!cleanupPending.value) return;
+  await window.api.setSetting('autoCleanupConfirm', false);
+  cleanupPending.value = null;
+  cleanupRunning.value = true;
   try {
-    const result = await window.api.storageRunCleanup({ force: true })
-    cleanupResult.value = result
-    autoCleanupLastRun.value = { ranAt: result.ranAt, deletedCount: result.deletedCount, freedBytes: result.freedBytes }
-    await reloadCleanupLog()
-    await refreshStorageUsage()
+    const result = await window.api.storageRunCleanup({ force: true });
+    cleanupResult.value = result;
+    autoCleanupLastRun.value = {
+      ranAt: result.ranAt,
+      deletedCount: result.deletedCount,
+      freedBytes: result.freedBytes
+    };
+    await reloadCleanupLog();
+    await refreshStorageUsage();
   } finally {
-    cleanupRunning.value = false
+    cleanupRunning.value = false;
   }
 }
 
 function dismissCleanupPending(): void {
-  cleanupPending.value = null
+  cleanupPending.value = null;
 }
 
 async function reloadCleanupLog(): Promise<void> {
-  const log = (await window.api.getSetting('cleanupLog')) as CleanupLogEntry[] | null
-  cleanupLog.value = log || []
+  const log = (await window.api.getSetting('cleanupLog')) as CleanupLogEntry[] | null;
+  cleanupLog.value = log || [];
 }
 
 async function reloadSnoozedCleanups(): Promise<void> {
-  snoozedLoading.value = true
+  snoozedLoading.value = true;
   try {
-    const map = await window.api.cleanupGetSnoozed()
+    const map = await window.api.cleanupGetSnoozed();
     snoozedEntries.value = Object.entries(map)
       .map(([id, v]) => ({ animeId: Number(id), animeName: v.animeName }))
-      .sort((a, b) => a.animeName.localeCompare(b.animeName))
+      .sort((a, b) => a.animeName.localeCompare(b.animeName));
   } finally {
-    snoozedLoading.value = false
+    snoozedLoading.value = false;
   }
 }
 
 async function unsnoozeCleanup(animeId: number): Promise<void> {
-  await window.api.cleanupSetSnoozed(animeId, false)
-  await reloadSnoozedCleanups()
+  await window.api.cleanupSetSnoozed(animeId, false);
+  await reloadSnoozedCleanups();
 }
 
 async function resetAllCleanupSnoozes(): Promise<void> {
   for (const entry of snoozedEntries.value) {
-    await window.api.cleanupSetSnoozed(entry.animeId, false)
+    await window.api.cleanupSetSnoozed(entry.animeId, false);
   }
-  await reloadSnoozedCleanups()
+  await reloadSnoozedCleanups();
 }
 
 function onUsageProgress(data: { scanned: number; total: number }): void {
-  usageProgress.value = data
+  usageProgress.value = data;
 }
 
 function onCleanupPending(data: { candidates: CleanupCandidate[] }): void {
-  cleanupPending.value = data.candidates
+  cleanupPending.value = data.candidates;
 }
 
 function onCleanupFinished(data: CleanupResult): void {
-  cleanupResult.value = data
-  autoCleanupLastRun.value = { ranAt: data.ranAt, deletedCount: data.deletedCount, freedBytes: data.freedBytes }
-  reloadCleanupLog()
+  cleanupResult.value = data;
+  autoCleanupLastRun.value = {
+    ranAt: data.ranAt,
+    deletedCount: data.deletedCount,
+    freedBytes: data.freedBytes
+  };
+  reloadCleanupLog();
 }
 
 function formatRelativeTime(ts: number): string {
-  if (!ts) return ''
-  const diff = Date.now() - ts
-  if (diff < 0) return 'in the future'
-  const sec = Math.floor(diff / 1000)
-  if (sec < 60) return 'just now'
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min} min ago`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  const day = Math.floor(hr / 24)
-  if (day < 30) return `${day}d ago`
-  const mo = Math.floor(day / 30)
-  if (mo < 12) return `${mo}mo ago`
-  const yr = Math.floor(day / 365)
-  return `${yr}y ago`
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  if (diff < 0) return 'in the future';
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  const yr = Math.floor(day / 365);
+  return `${yr}y ago`;
 }
 
 onMounted(async () => {
-  window.api.onScanMergeProgress(onScanProgress)
-  window.api.onFixMetadataProgress(onFixProgress)
-  window.api.onUpdateStatus(onUpdateStatus)
-  window.api.onStorageMoveToColdProgress(onMoveProgress)
-  window.api.onStorageUsageProgress(onUsageProgress)
-  window.api.onStorageCleanupPending(onCleanupPending)
-  window.api.onStorageCleanupFinished(onCleanupFinished)
-  refreshMismatchCount()
-  refreshSkipQueueStatus()
+  window.api.onScanMergeProgress(onScanProgress);
+  window.api.onFixMetadataProgress(onFixProgress);
+  window.api.onUpdateStatus(onUpdateStatus);
+  window.api.onStorageMoveToColdProgress(onMoveProgress);
+  window.api.onStorageUsageProgress(onUsageProgress);
+  window.api.onStorageCleanupPending(onCleanupPending);
+  window.api.onStorageCleanupFinished(onCleanupFinished);
+  refreshMismatchCount();
+  refreshSkipQueueStatus();
   // Poll the skip-detector queue while the Settings page is open so the
   // status line decrements as the backfill drains. 4 s is fine — analyses
   // take 30+ s each.
-  skipQueuePollTimer = setInterval(refreshSkipQueueStatus, 4000)
+  skipQueuePollTimer = setInterval(refreshSkipQueueStatus, 4000);
 
-  appVersion.value = await window.api.appVersion()
-  await reloadSnoozedCleanups()
-})
+  appVersion.value = await window.api.appVersion();
+  await reloadSnoozedCleanups();
+});
 
 watch(activeTab, (tab) => {
-  if (tab === 'storage') reloadSnoozedCleanups()
-})
+  if (tab === 'storage') reloadSnoozedCleanups();
+});
 
 onUnmounted(() => {
-  window.api.offScanMergeProgress()
-  window.api.offFixMetadataProgress()
-  window.api.offUpdateStatus()
-  window.api.offStorageMoveToColdProgress()
-  window.api.offStorageUsageProgress()
-  window.api.offStorageCleanupPending()
-  window.api.offStorageCleanupFinished()
-  window.api.offAutoDlTickResult()
+  window.api.offScanMergeProgress();
+  window.api.offFixMetadataProgress();
+  window.api.offUpdateStatus();
+  window.api.offStorageMoveToColdProgress();
+  window.api.offStorageUsageProgress();
+  window.api.offStorageCleanupPending();
+  window.api.offStorageCleanupFinished();
+  window.api.offAutoDlTickResult();
   if (skipQueuePollTimer) {
-    clearInterval(skipQueuePollTimer)
-    skipQueuePollTimer = null
+    clearInterval(skipQueuePollTimer);
+    skipQueuePollTimer = null;
   }
   if (syncplaySaveTimer) {
-    clearTimeout(syncplaySaveTimer)
-    syncplaySaveTimer = null
+    clearTimeout(syncplaySaveTimer);
+    syncplaySaveTimer = null;
   }
-})
+});
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles' },
@@ -641,7 +698,7 @@ const TRANSLATION_TYPES = [
   { value: 'voiceRu', label: 'Russian Voice' },
   { value: 'voiceEn', label: 'English Voice' },
   { value: 'raw', label: 'RAW' }
-]
+];
 
 const CODEC_OPTIONS: { value: string; label: string; encoder?: string }[] = [
   { value: 'copy', label: 'None (copy, fastest)' },
@@ -650,337 +707,381 @@ const CODEC_OPTIONS: { value: string; label: string; encoder?: string }[] = [
   { value: 'hevc_amf', label: 'H.265 (AMD GPU)', encoder: 'hevc_amf' },
   { value: 'hevc_qsv', label: 'H.265 (Intel QSV)', encoder: 'hevc_qsv' },
   { value: 'hevc_videotoolbox', label: 'H.265 (macOS VideoToolbox)', encoder: 'hevc_videotoolbox' }
-]
+];
 
 const availableCodecs = computed(() => {
-  if (!ffmpeg.value) return [CODEC_OPTIONS[0]]
-  return CODEC_OPTIONS.filter(c => !c.encoder || ffmpeg.value!.encoders.includes(c.encoder))
-})
+  if (!ffmpeg.value) return [CODEC_OPTIONS[0]];
+  return CODEC_OPTIONS.filter((c) => !c.encoder || ffmpeg.value!.encoders.includes(c.encoder));
+});
 
 onMounted(async () => {
-  token.value = (await window.api.getSetting('token') as string) || ''
-  translationType.value = (await window.api.getSetting('translationType') as string) || 'subRu'
-  downloadDir.value = (await window.api.getSetting('downloadDir') as string) || ''
-  storageMode.value = (await window.api.getSetting('storageMode') as 'simple' | 'advanced') || 'simple'
-  hotStorageDir.value = (await window.api.getSetting('hotStorageDir') as string) || ''
-  coldStorageDir.value = (await window.api.getSetting('coldStorageDir') as string) || ''
-  autoMoveToCold.value = (await window.api.getSetting('autoMoveToCold') as boolean) || false
-  notificationMode.value = (await window.api.getSetting('notificationMode') as string) || 'off'
-  calendarView.value = ((await window.api.getSetting('calendarView')) as 'week' | 'month') || 'week'
-  concurrentDownloads.value = (await window.api.getSetting('concurrentDownloads') as number) || 2
-  const savedSpeedLimit = (await window.api.getSetting('downloadSpeedLimit') as number) || 0
-  const PRESETS = [0, 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024]
+  token.value = ((await window.api.getSetting('token')) as string) || '';
+  translationType.value = ((await window.api.getSetting('translationType')) as string) || 'subRu';
+  downloadDir.value = ((await window.api.getSetting('downloadDir')) as string) || '';
+  storageMode.value =
+    ((await window.api.getSetting('storageMode')) as 'simple' | 'advanced') || 'simple';
+  hotStorageDir.value = ((await window.api.getSetting('hotStorageDir')) as string) || '';
+  coldStorageDir.value = ((await window.api.getSetting('coldStorageDir')) as string) || '';
+  autoMoveToCold.value = ((await window.api.getSetting('autoMoveToCold')) as boolean) || false;
+  notificationMode.value = ((await window.api.getSetting('notificationMode')) as string) || 'off';
+  calendarView.value =
+    ((await window.api.getSetting('calendarView')) as 'week' | 'month') || 'week';
+  concurrentDownloads.value = ((await window.api.getSetting('concurrentDownloads')) as number) || 2;
+  const savedSpeedLimit = ((await window.api.getSetting('downloadSpeedLimit')) as number) || 0;
+  const PRESETS = [0, 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024];
   if (PRESETS.includes(savedSpeedLimit)) {
-    speedLimitPreset.value = String(savedSpeedLimit)
+    speedLimitPreset.value = String(savedSpeedLimit);
   } else {
-    speedLimitPreset.value = 'custom'
-    customSpeedLimit.value = Math.round(savedSpeedLimit / (1024 * 1024) * 10) / 10
+    speedLimitPreset.value = 'custom';
+    customSpeedLimit.value = Math.round((savedSpeedLimit / (1024 * 1024)) * 10) / 10;
   }
-  autoMerge.value = (await window.api.getSetting('autoMerge') as boolean) || false
-  const skipSetting = await window.api.getSetting('enableLocalSkipDetection')
-  enableLocalSkipDetection.value = skipSetting === undefined ? true : Boolean(skipSetting)
-  backgroundQualityProbe.value = (await window.api.getSetting('backgroundQualityProbe') as boolean) || false
-  videoCodec.value = (await window.api.getSetting('videoCodec') as string) || 'copy'
-  ffmpeg.value = await window.api.ffmpegCheck()
+  autoMerge.value = ((await window.api.getSetting('autoMerge')) as boolean) || false;
+  const skipSetting = await window.api.getSetting('enableLocalSkipDetection');
+  enableLocalSkipDetection.value = skipSetting === undefined ? true : Boolean(skipSetting);
+  backgroundQualityProbe.value =
+    ((await window.api.getSetting('backgroundQualityProbe')) as boolean) || false;
+  videoCodec.value = ((await window.api.getSetting('videoCodec')) as string) || 'copy';
+  ffmpeg.value = await window.api.ffmpegCheck();
 
   // Reset codec if no longer available
-  if (!availableCodecs.value.find(c => c.value === videoCodec.value)) {
-    videoCodec.value = 'copy'
+  if (!availableCodecs.value.find((c) => c.value === videoCodec.value)) {
+    videoCodec.value = 'copy';
   }
 
-  const saved = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string> | null
-  shortcutBindings.value = saved ? { ...DEFAULT_SHORTCUTS, ...saved } : { ...DEFAULT_SHORTCUTS }
+  const saved = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string> | null;
+  shortcutBindings.value = saved ? { ...DEFAULT_SHORTCUTS, ...saved } : { ...DEFAULT_SHORTCUTS };
 
-  shikimoriUser.value = await window.api.shikimoriGetUser()
+  shikimoriUser.value = await window.api.shikimoriGetUser();
 
   // Watch Together settings
   const sp = (await window.api.getSetting('syncplay')) as {
-    lastHost?: string
-    lastPort?: number
-    lastRoom?: string
-    username?: string
-    autoReconnect?: boolean
-  } | null
+    lastHost?: string;
+    lastPort?: number;
+    lastRoom?: string;
+    username?: string;
+    autoReconnect?: boolean;
+  } | null;
   if (sp) {
-    syncplayHost.value = sp.lastHost || 'syncplay.pl'
-    syncplayPort.value = sp.lastPort || 8999
-    syncplayRoom.value = sp.lastRoom || ''
-    syncplayUsername.value = sp.username || ''
-    syncplayAutoReconnect.value = sp.autoReconnect ?? true
+    syncplayHost.value = sp.lastHost || 'syncplay.pl';
+    syncplayPort.value = sp.lastPort || 8999;
+    syncplayRoom.value = sp.lastRoom || '';
+    syncplayUsername.value = sp.username || '';
+    syncplayAutoReconnect.value = sp.autoReconnect ?? true;
   }
   if (!syncplayUsername.value && shikimoriUser.value) {
-    syncplayUsername.value = shikimoriUser.value.nickname
+    syncplayUsername.value = shikimoriUser.value.nickname;
   }
 
   // Player settings
-  playerMode.value = ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system'
-  anime4kPreset.value = ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) || 'off'
-  hevcTranscodeOnPlay.value = ((await window.api.getSetting('hevcTranscodeOnPlay')) as string as typeof hevcTranscodeOnPlay.value) || 'ask'
-  prefetchNextEpisode.value = ((await window.api.getSetting('prefetchNextEpisode')) as string as typeof prefetchNextEpisode.value) || 'progress-50'
+  playerMode.value =
+    ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system';
+  anime4kPreset.value =
+    ((await window.api.getSetting('anime4kPreset')) as string as typeof anime4kPreset.value) ||
+    'off';
+  hevcTranscodeOnPlay.value =
+    ((await window.api.getSetting(
+      'hevcTranscodeOnPlay'
+    )) as string as typeof hevcTranscodeOnPlay.value) || 'ask';
+  prefetchNextEpisode.value =
+    ((await window.api.getSetting(
+      'prefetchNextEpisode'
+    )) as string as typeof prefetchNextEpisode.value) || 'progress-50';
 
   // Auto-download
-  autoDownloadEnabled.value = await window.api.autoDlGetEnabled()
-  await refreshAutoDlSubscriptions()
-  const autoDlStatus = await window.api.autoDlGetStatus()
-  autoDlLastResult.value = autoDlStatus.lastResult
+  autoDownloadEnabled.value = await window.api.autoDlGetEnabled();
+  await refreshAutoDlSubscriptions();
+  const autoDlStatus = await window.api.autoDlGetStatus();
+  autoDlLastResult.value = autoDlStatus.lastResult;
   window.api.onAutoDlTickResult((result) => {
-    autoDlLastResult.value = result
-    void refreshAutoDlSubscriptions()
-  })
+    autoDlLastResult.value = result;
+    void refreshAutoDlSubscriptions();
+  });
 
   // Storage cleanup settings
-  autoCleanupDays.value = ((await window.api.getSetting('autoCleanupWatchedDays')) as number) || 0
-  autoCleanupLastRun.value = (await window.api.getSetting('autoCleanupLastRun')) as { ranAt: number; deletedCount: number; freedBytes: number } | null
-  await reloadCleanupLog()
+  autoCleanupDays.value = ((await window.api.getSetting('autoCleanupWatchedDays')) as number) || 0;
+  autoCleanupLastRun.value = (await window.api.getSetting('autoCleanupLastRun')) as {
+    ranAt: number;
+    deletedCount: number;
+    freedBytes: number;
+  } | null;
+  await reloadCleanupLog();
 
   // Probe WebGPU
   try {
     if (navigator.gpu) {
-      const adapter = await navigator.gpu.requestAdapter()
+      const adapter = await navigator.gpu.requestAdapter();
       if (adapter) {
-        const info = adapter.info
+        const info = adapter.info;
         webgpuStatus.value = {
           available: true,
           gpuName: info.device || info.description || info.vendor || 'Unknown GPU'
-        }
+        };
       }
     }
-  } catch { /* WebGPU not available */ }
+  } catch {
+    /* WebGPU not available */
+  }
 
-  loaded.value = true
-})
+  loaded.value = true;
+});
 
 async function pickDir(): Promise<void> {
-  const dir = await window.api.downloadPickDir()
+  const dir = await window.api.downloadPickDir();
   if (dir) {
-    downloadDir.value = dir
-    autoSave('downloadDir', dir)
+    downloadDir.value = dir;
+    autoSave('downloadDir', dir);
   }
 }
 
 function showSaved(): void {
-  savedVisible.value = true
-  if (savedTimeout) clearTimeout(savedTimeout)
-  savedTimeout = setTimeout(() => { savedVisible.value = false }, 1500)
+  savedVisible.value = true;
+  if (savedTimeout) clearTimeout(savedTimeout);
+  savedTimeout = setTimeout(() => {
+    savedVisible.value = false;
+  }, 1500);
 }
 
 function autoSave(key: string, value: string | boolean | number): void {
-  window.api.setSetting(key, value)
-  showSaved()
+  window.api.setSetting(key, value);
+  showSaved();
 }
 
 async function testToken(): Promise<void> {
-  tokenStatus.value = 'checking'
-  tokenError.value = ''
+  tokenStatus.value = 'checking';
+  tokenError.value = '';
   try {
-    const result = await window.api.validateToken()
+    const result = await window.api.validateToken();
     if (result.valid) {
-      tokenStatus.value = 'valid'
+      tokenStatus.value = 'valid';
     } else {
-      tokenStatus.value = 'invalid'
-      tokenError.value = result.error || 'Invalid token'
+      tokenStatus.value = 'invalid';
+      tokenError.value = result.error || 'Invalid token';
     }
   } catch (err) {
-    tokenStatus.value = 'invalid'
-    tokenError.value = String(err)
+    tokenStatus.value = 'invalid';
+    tokenError.value = String(err);
   }
 }
 
 async function shikimoriConnect(): Promise<void> {
-  shikimoriAuthUrl.value = await window.api.shikimoriGetAuthUrl()
-  const opened = await window.api.shellOpenExternal(shikimoriAuthUrl.value)
-  shikimoriShowUrl.value = !opened
+  shikimoriAuthUrl.value = await window.api.shikimoriGetAuthUrl();
+  const opened = await window.api.shellOpenExternal(shikimoriAuthUrl.value);
+  shikimoriShowUrl.value = !opened;
 }
 
 function shikimoriCopyUrl(): void {
-  navigator.clipboard.writeText(shikimoriAuthUrl.value)
+  navigator.clipboard.writeText(shikimoriAuthUrl.value);
 }
 
 async function shikimoriSubmitCode(): Promise<void> {
-  const code = shikimoriCode.value.trim()
-  if (!code) return
-  shikimoriConnecting.value = true
-  shikimoriError.value = ''
+  const code = shikimoriCode.value.trim();
+  if (!code) return;
+  shikimoriConnecting.value = true;
+  shikimoriError.value = '';
   try {
-    shikimoriUser.value = await window.api.shikimoriExchangeCode(code)
-    shikimoriCode.value = ''
-    shikimoriAuthUrl.value = ''
+    shikimoriUser.value = await window.api.shikimoriExchangeCode(code);
+    shikimoriCode.value = '';
+    shikimoriAuthUrl.value = '';
   } catch (err) {
-    shikimoriError.value = String(err)
+    shikimoriError.value = String(err);
   } finally {
-    shikimoriConnecting.value = false
+    shikimoriConnecting.value = false;
   }
 }
 
 async function shikimoriDisconnect(): Promise<void> {
-  await window.api.shikimoriLogout()
-  shikimoriUser.value = null
-  shikimoriAuthUrl.value = ''
-  shikimoriCode.value = ''
-  shikimoriError.value = ''
+  await window.api.shikimoriLogout();
+  shikimoriUser.value = null;
+  shikimoriAuthUrl.value = '';
+  shikimoriCode.value = '';
+  shikimoriError.value = '';
 }
 
 // Debounced watcher for token (user typing)
-let tokenTimer: ReturnType<typeof setTimeout> | null = null
+let tokenTimer: ReturnType<typeof setTimeout> | null = null;
 watch(token, (val) => {
-  if (!loaded.value) return
-  tokenStatus.value = 'idle'
-  if (tokenTimer) clearTimeout(tokenTimer)
-  tokenTimer = setTimeout(() => autoSave('token', val.trim()), 800)
-})
+  if (!loaded.value) return;
+  tokenStatus.value = 'idle';
+  if (tokenTimer) clearTimeout(tokenTimer);
+  tokenTimer = setTimeout(() => autoSave('token', val.trim()), 800);
+});
 
 // Immediate watchers for dropdowns/toggles
-watch(translationType, (val) => { if (loaded.value) autoSave('translationType', val) })
-watch(notificationMode, (val) => { if (loaded.value) autoSave('notificationMode', val) })
+watch(translationType, (val) => {
+  if (loaded.value) autoSave('translationType', val);
+});
+watch(notificationMode, (val) => {
+  if (loaded.value) autoSave('notificationMode', val);
+});
 watch(calendarView, (val) => {
-  if (!loaded.value) return
-  autoSave('calendarView', val)
-  window.dispatchEvent(new Event('calendar-view-changed'))
-})
-watch(concurrentDownloads, (val) => { if (loaded.value) autoSave('concurrentDownloads', val) })
+  if (!loaded.value) return;
+  autoSave('calendarView', val);
+  window.dispatchEvent(new Event('calendar-view-changed'));
+});
+watch(concurrentDownloads, (val) => {
+  if (loaded.value) autoSave('concurrentDownloads', val);
+});
 watch(speedLimitPreset, (val) => {
-  if (!loaded.value) return
+  if (!loaded.value) return;
   if (val !== 'custom') {
-    window.api.setSetting('downloadSpeedLimit', Number(val))
-    showSaved()
+    window.api.setSetting('downloadSpeedLimit', Number(val));
+    showSaved();
   } else {
-    window.api.setSetting('downloadSpeedLimit', Math.round(customSpeedLimit.value * 1024 * 1024))
-    showSaved()
+    window.api.setSetting('downloadSpeedLimit', Math.round(customSpeedLimit.value * 1024 * 1024));
+    showSaved();
   }
-})
+});
 watch(customSpeedLimit, (val) => {
-  if (!loaded.value || speedLimitPreset.value !== 'custom') return
-  window.api.setSetting('downloadSpeedLimit', Math.round(val * 1024 * 1024))
-  showSaved()
-})
-watch(storageMode, (val) => { if (loaded.value) autoSave('storageMode', val) })
-watch(autoMoveToCold, (val) => { if (loaded.value) autoSave('autoMoveToCold', val) })
-watch(autoMerge, (val) => { if (loaded.value) autoSave('autoMerge', val) })
+  if (!loaded.value || speedLimitPreset.value !== 'custom') return;
+  window.api.setSetting('downloadSpeedLimit', Math.round(val * 1024 * 1024));
+  showSaved();
+});
+watch(storageMode, (val) => {
+  if (loaded.value) autoSave('storageMode', val);
+});
+watch(autoMoveToCold, (val) => {
+  if (loaded.value) autoSave('autoMoveToCold', val);
+});
+watch(autoMerge, (val) => {
+  if (loaded.value) autoSave('autoMerge', val);
+});
 watch(autoDownloadEnabled, (val) => {
   if (loaded.value) {
-    void window.api.autoDlSetEnabled(val).then(() => showSaved())
+    void window.api.autoDlSetEnabled(val).then(() => showSaved());
   }
-})
+});
 
 async function refreshAutoDlSubscriptions(): Promise<void> {
   try {
-    autoDlSubscriptions.value = await window.api.autoDlListSubscriptions()
+    autoDlSubscriptions.value = await window.api.autoDlListSubscriptions();
   } catch (err) {
-    console.warn('Failed to load auto-dl subscriptions:', err)
+    console.warn('Failed to load auto-dl subscriptions:', err);
   }
 }
 
 async function runAutoDlNow(): Promise<void> {
-  if (autoDlRunning.value) return
-  autoDlRunning.value = true
+  if (autoDlRunning.value) return;
+  autoDlRunning.value = true;
   try {
-    await window.api.autoDlTrigger()
-    await refreshAutoDlSubscriptions()
+    await window.api.autoDlTrigger();
+    await refreshAutoDlSubscriptions();
   } finally {
-    autoDlRunning.value = false
+    autoDlRunning.value = false;
   }
 }
 
 async function unsubscribeAutoDl(animeId: number): Promise<void> {
-  await window.api.autoDlSetSubscription(animeId, false)
-  await refreshAutoDlSubscriptions()
+  await window.api.autoDlSetSubscription(animeId, false);
+  await refreshAutoDlSubscriptions();
 }
 
 function autoDlLastCheckedLabel(ts: number): string {
-  if (!ts) return 'never'
-  const diff = Date.now() - ts
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`
-  return `${Math.round(diff / 86_400_000)}d ago`
+  if (!ts) return 'never';
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
 }
-watch(enableLocalSkipDetection, (val) => { if (loaded.value) autoSave('enableLocalSkipDetection', val) })
-watch(backgroundQualityProbe, (val) => { if (loaded.value) autoSave('backgroundQualityProbe', val) })
-let suppressVideoCodecSave = false
+watch(enableLocalSkipDetection, (val) => {
+  if (loaded.value) autoSave('enableLocalSkipDetection', val);
+});
+watch(backgroundQualityProbe, (val) => {
+  if (loaded.value) autoSave('backgroundQualityProbe', val);
+});
+let suppressVideoCodecSave = false;
 watch(videoCodec, (val, oldVal) => {
-  if (!loaded.value) return
+  if (!loaded.value) return;
   // Re-entrant call from reverting the value below — skip both the confirm
   // and the autoSave so we don't flash a "Saved" toast for a no-op change.
   if (suppressVideoCodecSave) {
-    suppressVideoCodecSave = false
-    return
+    suppressVideoCodecSave = false;
+    return;
   }
-  const isHevc = val.startsWith('libx265') || val.startsWith('hevc_')
-  const wasHevc = oldVal.startsWith('libx265') || oldVal.startsWith('hevc_')
+  const isHevc = val.startsWith('libx265') || val.startsWith('hevc_');
+  const wasHevc = oldVal.startsWith('libx265') || oldVal.startsWith('hevc_');
   // Only ask for confirmation on platforms without a working HEVC decoder —
   // on Windows/macOS the merged file plays back fine and the prompt is noise.
   if (isHevc && !wasHevc && !hevcPlaybackSupported) {
     const confirmed = window.confirm(
       'This platform has no HEVC (H.265) decoder available for playback.\n\n' +
         'Files merged with H.265 will save disk space, but the built-in player will not be able to ' +
-        'decode them — you\'ll get audio with a black video, and will need an external player (VLC/mpv) ' +
+        "decode them — you'll get audio with a black video, and will need an external player (VLC/mpv) " +
         'to watch them.\n\n' +
         'Continue with H.265?'
-    )
+    );
     if (!confirmed) {
-      suppressVideoCodecSave = true
-      videoCodec.value = oldVal
-      return
+      suppressVideoCodecSave = true;
+      videoCodec.value = oldVal;
+      return;
     }
   }
-  autoSave('videoCodec', val)
-})
-watch(playerMode, (val) => { if (loaded.value) autoSave('playerMode', val) })
-watch(anime4kPreset, (val) => { if (loaded.value) autoSave('anime4kPreset', val) })
-watch(hevcTranscodeOnPlay, (val) => { if (loaded.value) autoSave('hevcTranscodeOnPlay', val) })
+  autoSave('videoCodec', val);
+});
+watch(playerMode, (val) => {
+  if (loaded.value) autoSave('playerMode', val);
+});
+watch(anime4kPreset, (val) => {
+  if (loaded.value) autoSave('anime4kPreset', val);
+});
+watch(hevcTranscodeOnPlay, (val) => {
+  if (loaded.value) autoSave('hevcTranscodeOnPlay', val);
+});
 watch(prefetchNextEpisode, (val) => {
-  if (!loaded.value) return
-  autoSave('prefetchNextEpisode', val)
-  window.dispatchEvent(new CustomEvent('prefetch-setting-changed', { detail: val }))
-})
-watch(autoCleanupDays, (val) => { if (loaded.value) autoSave('autoCleanupWatchedDays', Number(val) || 0) })
+  if (!loaded.value) return;
+  autoSave('prefetchNextEpisode', val);
+  window.dispatchEvent(new CustomEvent('prefetch-setting-changed', { detail: val }));
+});
+watch(autoCleanupDays, (val) => {
+  if (loaded.value) autoSave('autoCleanupWatchedDays', Number(val) || 0);
+});
 
 function saveSyncplaySettings(): void {
-  if (!loaded.value) return
+  if (!loaded.value) return;
   window.api.setSetting('syncplay', {
     lastHost: syncplayHost.value.trim(),
     lastPort: Math.max(1, Math.min(65535, Number(syncplayPort.value) || 8999)),
     lastRoom: syncplayRoom.value.trim(),
     username: syncplayUsername.value.trim(),
     autoReconnect: syncplayAutoReconnect.value
-  })
-  showSaved()
+  });
+  showSaved();
 }
-let syncplaySaveTimer: ReturnType<typeof setTimeout> | null = null
+let syncplaySaveTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleSyncplaySave(): void {
-  if (syncplaySaveTimer) clearTimeout(syncplaySaveTimer)
-  syncplaySaveTimer = setTimeout(saveSyncplaySettings, 600)
+  if (syncplaySaveTimer) clearTimeout(syncplaySaveTimer);
+  syncplaySaveTimer = setTimeout(saveSyncplaySettings, 600);
 }
 watch([syncplayHost, syncplayPort, syncplayRoom, syncplayUsername], () => {
-  if (loaded.value) scheduleSyncplaySave()
-})
+  if (loaded.value) scheduleSyncplaySave();
+});
 watch(syncplayAutoReconnect, () => {
-  if (loaded.value) saveSyncplaySettings()
-})
+  if (loaded.value) saveSyncplaySettings();
+});
 
 async function testSyncplayConnection(): Promise<void> {
-  const host = syncplayHost.value.trim()
-  const port = Number(syncplayPort.value) || 8999
-  const room = syncplayRoom.value.trim() || 'test-room'
-  const username = syncplayUsername.value.trim() || 'anime-dl-user'
-  if (!host) return
-  syncplayTestStatus.value = 'testing'
-  syncplayTestError.value = ''
+  const host = syncplayHost.value.trim();
+  const port = Number(syncplayPort.value) || 8999;
+  const room = syncplayRoom.value.trim() || 'test-room';
+  const username = syncplayUsername.value.trim() || 'anime-dl-user';
+  if (!host) return;
+  syncplayTestStatus.value = 'testing';
+  syncplayTestError.value = '';
 
   const handler = (status: SyncplayStatus): void => {
     if (status.state === 'ready') {
-      syncplayTestStatus.value = 'ok'
-      window.api.offSyncplayConnectionStatus(handler)
-      window.api.syncplayDisconnect()
+      syncplayTestStatus.value = 'ok';
+      window.api.offSyncplayConnectionStatus(handler);
+      window.api.syncplayDisconnect();
     } else if (status.state === 'disconnected') {
       if (syncplayTestStatus.value === 'testing') {
-        syncplayTestStatus.value = 'failed'
-        syncplayTestError.value = status.error || 'Connection closed'
+        syncplayTestStatus.value = 'failed';
+        syncplayTestError.value = status.error || 'Connection closed';
       }
-      window.api.offSyncplayConnectionStatus(handler)
+      window.api.offSyncplayConnectionStatus(handler);
     }
-  }
-  window.api.onSyncplayConnectionStatus(handler)
+  };
+  window.api.onSyncplayConnectionStatus(handler);
 
   try {
     await window.api.syncplayConnect({
@@ -990,19 +1091,19 @@ async function testSyncplayConnection(): Promise<void> {
       username,
       password: syncplayPassword.value || undefined,
       autoReconnect: false
-    })
+    });
     setTimeout(() => {
       if (syncplayTestStatus.value === 'testing') {
-        syncplayTestStatus.value = 'failed'
-        syncplayTestError.value = 'Timed out after 10s'
-        window.api.offSyncplayConnectionStatus(handler)
-        window.api.syncplayDisconnect()
+        syncplayTestStatus.value = 'failed';
+        syncplayTestError.value = 'Timed out after 10s';
+        window.api.offSyncplayConnectionStatus(handler);
+        window.api.syncplayDisconnect();
       }
-    }, 10_000)
+    }, 10_000);
   } catch (err) {
-    syncplayTestStatus.value = 'failed'
-    syncplayTestError.value = String(err)
-    window.api.offSyncplayConnectionStatus(handler)
+    syncplayTestStatus.value = 'failed';
+    syncplayTestError.value = String(err);
+    window.api.offSyncplayConnectionStatus(handler);
   }
 }
 </script>
@@ -1013,17 +1114,63 @@ async function testSyncplayConnection(): Promise<void> {
       <h2>Settings</h2>
     </header>
     <div class="tabs">
-      <button class="tab" :class="{ active: activeTab === 'general' }" @click="activeTab = 'general'">General</button>
-      <button class="tab" :class="{ active: activeTab === 'storage' }" @click="activeTab = 'storage'">Storage</button>
-      <button class="tab" :class="{ active: activeTab === 'connectors' }" @click="activeTab = 'connectors'">Connectors</button>
-      <button class="tab" :class="{ active: activeTab === 'merging' }" @click="activeTab = 'merging'">Merging</button>
-      <button class="tab" :class="{ active: activeTab === 'player' }" @click="activeTab = 'player'">Player</button>
-      <button class="tab" :class="{ active: activeTab === 'shortcuts' }" @click="activeTab = 'shortcuts'">Shortcuts</button>
-      <button class="tab" :class="{ active: activeTab === 'watch-together' }" @click="activeTab = 'watch-together'">
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'general' }"
+        @click="activeTab = 'general'"
+      >
+        General
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'storage' }"
+        @click="activeTab = 'storage'"
+      >
+        Storage
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'connectors' }"
+        @click="activeTab = 'connectors'"
+      >
+        Connectors
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'merging' }"
+        @click="activeTab = 'merging'"
+      >
+        Merging
+      </button>
+      <button class="tab" :class="{ active: activeTab === 'player' }" @click="activeTab = 'player'">
+        Player
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'shortcuts' }"
+        @click="activeTab = 'shortcuts'"
+      >
+        Shortcuts
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'watch-together' }"
+        @click="activeTab = 'watch-together'"
+      >
         Watch Together
         <span class="tab-dev-badge">in development</span>
       </button>
-      <button class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'; refreshMismatchCount(); refreshMp4Stats()">Debug</button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'debug' }"
+        @click="
+          activeTab = 'debug';
+          refreshMismatchCount();
+          refreshMp4Stats();
+        "
+      >
+        Debug
+      </button>
     </div>
     <div class="body">
       <!-- General tab -->
@@ -1032,13 +1179,17 @@ async function testSyncplayConnection(): Promise<void> {
           <label class="setting-label" for="tr-type">Default Translation Type</label>
           <p class="setting-hint">Default translation type when opening an anime.</p>
           <select id="tr-type" v-model="translationType" class="setting-input setting-select">
-            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
+            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
+              {{ t.label }}
+            </option>
           </select>
         </div>
 
         <div class="setting-group">
           <label class="setting-label" for="notif-mode">Notifications</label>
-          <p class="setting-hint">Desktop notifications when downloads or merges complete (only when app is not focused).</p>
+          <p class="setting-hint">
+            Desktop notifications when downloads or merges complete (only when app is not focused).
+          </p>
           <select id="notif-mode" v-model="notificationMode" class="setting-input setting-select">
             <option value="off">Off</option>
             <option value="each">Each Episode</option>
@@ -1057,7 +1208,9 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label" for="speed-limit">Download Speed Limit</label>
-          <p class="setting-hint">Limit download bandwidth. The limit is shared across all active downloads.</p>
+          <p class="setting-hint">
+            Limit download bandwidth. The limit is shared across all active downloads.
+          </p>
           <select id="speed-limit" v-model="speedLimitPreset" class="setting-input setting-select">
             <option value="0">Unlimited</option>
             <option :value="String(1024 * 1024)">1 MB/s</option>
@@ -1080,7 +1233,11 @@ async function testSyncplayConnection(): Promise<void> {
         <div class="setting-group">
           <label class="setting-label" for="concurrent-dl">Concurrent Downloads</label>
           <p class="setting-hint">Maximum number of simultaneous downloads.</p>
-          <select id="concurrent-dl" v-model.number="concurrentDownloads" class="setting-input setting-select">
+          <select
+            id="concurrent-dl"
+            v-model.number="concurrentDownloads"
+            class="setting-input setting-select"
+          >
             <option :value="1">1</option>
             <option :value="2">2</option>
             <option :value="3">3</option>
@@ -1090,8 +1247,8 @@ async function testSyncplayConnection(): Promise<void> {
         <div class="setting-group">
           <label class="setting-label">Auto-download</label>
           <p class="setting-hint">
-            Subscribed shows queue newly-aired episodes automatically. Subscribe per show on its detail page.
-            Forward-only — already-aired episodes are never backfilled.
+            Subscribed shows queue newly-aired episodes automatically. Subscribe per show on its
+            detail page. Forward-only — already-aired episodes are never backfilled.
           </p>
           <label class="toggle-row">
             <input v-model="autoDownloadEnabled" type="checkbox" class="toggle-input" />
@@ -1099,11 +1256,16 @@ async function testSyncplayConnection(): Promise<void> {
             <span class="toggle-label">{{ autoDownloadEnabled ? 'Enabled' : 'Disabled' }}</span>
           </label>
           <div class="auto-dl-status">
-            <button class="test-token-btn" :disabled="autoDlRunning || !autoDownloadEnabled" @click="runAutoDlNow">
+            <button
+              class="test-token-btn"
+              :disabled="autoDlRunning || !autoDownloadEnabled"
+              @click="runAutoDlNow"
+            >
               {{ autoDlRunning ? 'Running...' : 'Run now' }}
             </button>
             <span v-if="autoDlLastResult" class="setting-hint" style="margin: 0 0 0 12px">
-              Last run: {{ autoDlLastResult.enqueued }} enqueued, {{ autoDlLastResult.skipped }} skipped, {{ autoDlLastResult.errors }} errors
+              Last run: {{ autoDlLastResult.enqueued }} enqueued,
+              {{ autoDlLastResult.skipped }} skipped, {{ autoDlLastResult.errors }} errors
             </span>
           </div>
           <div class="auto-dl-subs">
@@ -1112,16 +1274,23 @@ async function testSyncplayConnection(): Promise<void> {
               class="auto-dl-subs-toggle"
               @click="autoDlSubscriptionsExpanded = !autoDlSubscriptionsExpanded"
             >
-              {{ autoDlSubscriptions.length }} show{{ autoDlSubscriptions.length === 1 ? '' : 's' }} subscribed
+              {{ autoDlSubscriptions.length }} show{{ autoDlSubscriptions.length === 1 ? '' : 's' }}
+              subscribed
               <span class="caret">{{ autoDlSubscriptionsExpanded ? '▾' : '▸' }}</span>
             </button>
-            <ul v-if="autoDlSubscriptionsExpanded && autoDlSubscriptions.length > 0" class="auto-dl-sub-list">
+            <ul
+              v-if="autoDlSubscriptionsExpanded && autoDlSubscriptions.length > 0"
+              class="auto-dl-sub-list"
+            >
               <li v-for="sub in autoDlSubscriptions" :key="sub.animeId">
                 <span class="auto-dl-sub-name">{{ sub.animeName }}</span>
                 <span class="auto-dl-sub-meta">
-                  next: Ep {{ sub.lastEnqueuedEpisodeInt + 1 }} · checked {{ autoDlLastCheckedLabel(sub.lastCheckedAt) }}
+                  next: Ep {{ sub.lastEnqueuedEpisodeInt + 1 }} · checked
+                  {{ autoDlLastCheckedLabel(sub.lastCheckedAt) }}
                 </span>
-                <button class="auto-dl-unsub-btn" @click="unsubscribeAutoDl(sub.animeId)">Unsubscribe</button>
+                <button class="auto-dl-unsub-btn" @click="unsubscribeAutoDl(sub.animeId)">
+                  Unsubscribe
+                </button>
               </li>
             </ul>
           </div>
@@ -1132,14 +1301,23 @@ async function testSyncplayConnection(): Promise<void> {
           <p class="setting-hint">Version {{ appVersion }}</p>
 
           <button
-            v-if="updateStatus.status === 'idle' || updateStatus.status === 'up-to-date' || updateStatus.status === 'error'"
+            v-if="
+              updateStatus.status === 'idle' ||
+              updateStatus.status === 'up-to-date' ||
+              updateStatus.status === 'error'
+            "
             class="test-token-btn"
             @click="checkForUpdates"
           >
             Check for updates
           </button>
 
-          <span v-else-if="updateStatus.status === 'checking'" class="setting-hint" style="margin-bottom: 0">Checking...</span>
+          <span
+            v-else-if="updateStatus.status === 'checking'"
+            class="setting-hint"
+            style="margin-bottom: 0"
+            >Checking...</span
+          >
 
           <div v-else-if="updateStatus.status === 'available'">
             <div class="token-result token-valid" style="margin-bottom: 8px">
@@ -1159,37 +1337,49 @@ async function testSyncplayConnection(): Promise<void> {
           </div>
 
           <div v-else-if="updateStatus.status === 'ready'">
-            <button class="merge-all-btn" @click="installUpdate">
-              Restart to update
-            </button>
+            <button class="merge-all-btn" @click="installUpdate">Restart to update</button>
           </div>
 
-          <div v-if="updateStatus.status === 'error'" class="token-result token-invalid" style="margin-top: 6px">
+          <div
+            v-if="updateStatus.status === 'error'"
+            class="token-result token-invalid"
+            style="margin-top: 6px"
+          >
             {{ updateStatus.error }}
           </div>
-          <div v-if="updateStatus.status === 'up-to-date'" class="token-result token-valid" style="margin-top: 6px">
+          <div
+            v-if="updateStatus.status === 'up-to-date'"
+            class="token-result token-valid"
+            style="margin-top: 6px"
+          >
             Up to date
           </div>
         </div>
-
       </template>
 
       <!-- Storage tab -->
       <template v-if="activeTab === 'storage'">
         <div class="setting-group">
           <label class="setting-label">Storage Mode</label>
-          <p class="setting-hint">Simple mode uses a single directory. Advanced mode separates active downloads (hot) from finished files (cold).</p>
+          <p class="setting-hint">
+            Simple mode uses a single directory. Advanced mode separates active downloads (hot) from
+            finished files (cold).
+          </p>
           <div class="storage-mode-toggle">
             <button
               class="mode-btn"
               :class="{ active: storageMode === 'simple' }"
               @click="storageMode = 'simple'"
-            >Simple</button>
+            >
+              Simple
+            </button>
             <button
               class="mode-btn"
               :class="{ active: storageMode === 'advanced' }"
               @click="storageMode = 'advanced'"
-            >Advanced</button>
+            >
+              Advanced
+            </button>
           </div>
         </div>
 
@@ -1218,18 +1408,35 @@ async function testSyncplayConnection(): Promise<void> {
             <label class="setting-label">Cold Storage (Finished Files)</label>
             <p class="setting-hint">Where completed files are moved for long-term storage.</p>
             <div class="dir-row">
-              <span class="dir-path" :class="{ 'dir-warning': !coldStorageDir }">{{ coldStorageDir || 'Not set' }}</span>
+              <span class="dir-path" :class="{ 'dir-warning': !coldStorageDir }">{{
+                coldStorageDir || 'Not set'
+              }}</span>
               <button class="browse-btn" @click="pickColdDir">Browse</button>
             </div>
-            <div v-if="!coldStorageDir" class="token-result token-invalid">Cold storage directory must be set in advanced mode.</div>
-            <div v-if="coldStorageDir && coldStorageDir === hotStorageDir" class="token-result token-invalid">Cold storage must be different from hot storage.</div>
+            <div v-if="!coldStorageDir" class="token-result token-invalid">
+              Cold storage directory must be set in advanced mode.
+            </div>
+            <div
+              v-if="coldStorageDir && coldStorageDir === hotStorageDir"
+              class="token-result token-invalid"
+            >
+              Cold storage must be different from hot storage.
+            </div>
           </div>
 
           <div class="setting-group">
             <label class="setting-label">Auto-move to cold storage</label>
-            <p class="setting-hint">Automatically move finished files to cold storage after download (or merge, if enabled).</p>
+            <p class="setting-hint">
+              Automatically move finished files to cold storage after download (or merge, if
+              enabled).
+            </p>
             <label class="toggle-row" :class="{ disabled: !coldStorageDir }">
-              <input type="checkbox" v-model="autoMoveToCold" :disabled="!coldStorageDir" class="toggle-input" />
+              <input
+                type="checkbox"
+                v-model="autoMoveToCold"
+                :disabled="!coldStorageDir"
+                class="toggle-input"
+              />
               <span class="toggle-slider"></span>
               <span class="toggle-label">{{ autoMoveToCold ? 'Enabled' : 'Disabled' }}</span>
             </label>
@@ -1251,16 +1458,30 @@ async function testSyncplayConnection(): Promise<void> {
                 <span>{{ moveProgress.current }} / {{ moveProgress.total }}</span>
               </div>
               <div class="progress-bar-wrap">
-                <div class="progress-bar" :style="{ width: (moveProgress.total > 0 ? Math.round(moveProgress.current / moveProgress.total * 100) : 0) + '%' }"></div>
+                <div
+                  class="progress-bar"
+                  :style="{
+                    width:
+                      (moveProgress.total > 0
+                        ? Math.round((moveProgress.current / moveProgress.total) * 100)
+                        : 0) + '%'
+                  }"
+                ></div>
               </div>
               <div class="scan-progress-file">{{ moveProgress.file }}</div>
             </div>
 
-            <div v-if="moveResult" class="scan-result" :class="{ 'has-errors': moveResult.failed.length > 0 }">
+            <div
+              v-if="moveResult"
+              class="scan-result"
+              :class="{ 'has-errors': moveResult.failed.length > 0 }"
+            >
               <div class="scan-result-ok">Moved: {{ moveResult.moved }} file(s)</div>
               <div v-if="moveResult.failed.length > 0" class="scan-result-errors">
                 <div>Failed ({{ moveResult.failed.length }}):</div>
-                <div v-for="(err, i) in moveResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
+                <div v-for="(err, i) in moveResult.failed" :key="i" class="scan-error-item">
+                  {{ err }}
+                </div>
               </div>
             </div>
           </div>
@@ -1268,11 +1489,13 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Storage usage</label>
-          <p class="setting-hint">Disk space used by downloaded episodes. Click an anime to expand its episode list.</p>
+          <p class="setting-hint">
+            Disk space used by downloaded episodes. Click an anime to expand its episode list.
+          </p>
 
           <div class="usage-actions">
             <button class="merge-all-btn" :disabled="usageScanning" @click="refreshStorageUsage">
-              {{ usageScanning ? 'Scanning...' : (storageUsage ? 'Rescan' : 'Scan storage') }}
+              {{ usageScanning ? 'Scanning...' : storageUsage ? 'Rescan' : 'Scan storage' }}
             </button>
           </div>
 
@@ -1281,7 +1504,15 @@ async function testSyncplayConnection(): Promise<void> {
               <span>{{ usageProgress.scanned }} / {{ usageProgress.total }}</span>
             </div>
             <div class="progress-bar-wrap">
-              <div class="progress-bar" :style="{ width: (usageProgress.total > 0 ? Math.round(usageProgress.scanned / usageProgress.total * 100) : 0) + '%' }"></div>
+              <div
+                class="progress-bar"
+                :style="{
+                  width:
+                    (usageProgress.total > 0
+                      ? Math.round((usageProgress.scanned / usageProgress.total) * 100)
+                      : 0) + '%'
+                }"
+              ></div>
             </div>
           </div>
 
@@ -1289,11 +1520,20 @@ async function testSyncplayConnection(): Promise<void> {
             <div class="usage-total">
               <span class="usage-total-label">Total</span>
               <span class="usage-total-value">{{ formatBytes(storageUsage.totalBytes) }}</span>
-              <span class="usage-total-meta">{{ storageUsage.fileCount }} file(s) across {{ storageUsage.perAnime.length }} title(s)</span>
+              <span class="usage-total-meta"
+                >{{ storageUsage.fileCount }} file(s) across
+                {{ storageUsage.perAnime.length }} title(s)</span
+              >
             </div>
             <div v-if="storageMode === 'advanced'" class="usage-buckets">
-              <span class="usage-bucket"><span class="bucket-label">Hot</span> {{ formatBytes(storageUsage.bytesHot) }}</span>
-              <span class="usage-bucket"><span class="bucket-label">Cold</span> {{ formatBytes(storageUsage.bytesCold) }}</span>
+              <span class="usage-bucket"
+                ><span class="bucket-label">Hot</span>
+                {{ formatBytes(storageUsage.bytesHot) }}</span
+              >
+              <span class="usage-bucket"
+                ><span class="bucket-label">Cold</span>
+                {{ formatBytes(storageUsage.bytesCold) }}</span
+              >
             </div>
           </div>
 
@@ -1306,7 +1546,9 @@ async function testSyncplayConnection(): Promise<void> {
                   <span>{{ anime.fileCount }} file(s)</span>
                   <span class="usage-anime-size">{{ formatBytes(anime.bytes) }}</span>
                 </div>
-                <span class="usage-chevron" :class="{ open: expandedAnime.has(anime.animeId) }">›</span>
+                <span class="usage-chevron" :class="{ open: expandedAnime.has(anime.animeId) }"
+                  >›</span
+                >
               </div>
               <div v-if="expandedAnime.has(anime.animeId)" class="usage-episodes">
                 <div v-for="ep in anime.episodes" :key="ep.episodeInt" class="usage-episode">
@@ -1315,21 +1557,33 @@ async function testSyncplayConnection(): Promise<void> {
                     <span v-if="ep.files.mkv" class="usage-tag">MKV</span>
                     <span v-if="ep.files.mp4" class="usage-tag">MP4</span>
                     <span v-if="ep.files.ass" class="usage-tag">ASS</span>
-                    <span v-if="ep.watched" class="usage-tag usage-tag-watched">Watched{{ ep.watchedAt ? ` ${formatRelativeTime(ep.watchedAt)}` : '' }}</span>
+                    <span v-if="ep.watched" class="usage-tag usage-tag-watched"
+                      >Watched{{ ep.watchedAt ? ` ${formatRelativeTime(ep.watchedAt)}` : '' }}</span
+                    >
                   </span>
                   <span class="usage-ep-size">{{ formatBytes(ep.totalBytes) }}</span>
-                  <button class="usage-ep-delete" @click.stop="deleteEpisode(anime.animeName, ep.episodeInt, anime.animeId)">Delete</button>
+                  <button
+                    class="usage-ep-delete"
+                    @click.stop="deleteEpisode(anime.animeName, ep.episodeInt, anime.animeId)"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div v-else-if="storageUsage && !usageScanning" class="usage-empty">No downloaded files found.</div>
+          <div v-else-if="storageUsage && !usageScanning" class="usage-empty">
+            No downloaded files found.
+          </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Auto-cleanup watched episodes</label>
-          <p class="setting-hint">Delete episode files marked as watched once they've sat for the chosen number of days. Set to 0 to disable.</p>
+          <p class="setting-hint">
+            Delete episode files marked as watched once they've sat for the chosen number of days.
+            Set to 0 to disable.
+          </p>
           <div class="custom-speed-row">
             <input
               type="number"
@@ -1349,10 +1603,16 @@ async function testSyncplayConnection(): Promise<void> {
 
           <div v-if="autoCleanupLastRun" class="usage-meta-row">
             Last run: {{ formatRelativeTime(autoCleanupLastRun.ranAt) }} —
-            {{ autoCleanupLastRun.deletedCount }} file(s), {{ formatBytes(autoCleanupLastRun.freedBytes) }} freed
+            {{ autoCleanupLastRun.deletedCount }} file(s),
+            {{ formatBytes(autoCleanupLastRun.freedBytes) }} freed
           </div>
 
-          <div v-if="cleanupResult && cleanupResult.deletedCount === 0 && cleanupResult.items.length === 0" class="usage-meta-row">
+          <div
+            v-if="
+              cleanupResult && cleanupResult.deletedCount === 0 && cleanupResult.items.length === 0
+            "
+            class="usage-meta-row"
+          >
             Nothing to clean up.
           </div>
 
@@ -1373,19 +1633,29 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Cleanup prompts</label>
-          <p class="setting-hint">When a Shikimori rate is flipped to «Completed», a prompt offers to delete the show's local files. Use «Don't ask for this show» on a prompt to silence it; manage silenced shows here.</p>
+          <p class="setting-hint">
+            When a Shikimori rate is flipped to «Completed», a prompt offers to delete the show's
+            local files. Use «Don't ask for this show» on a prompt to silence it; manage silenced
+            shows here.
+          </p>
           <div v-if="snoozedLoading" class="usage-meta-row">Loading…</div>
           <template v-else>
-            <div v-if="snoozedEntries.length === 0" class="usage-meta-row">No shows are snoozed.</div>
+            <div v-if="snoozedEntries.length === 0" class="usage-meta-row">
+              No shows are snoozed.
+            </div>
             <template v-else>
               <div class="cleanup-log-list">
                 <div v-for="entry in snoozedEntries" :key="entry.animeId" class="cleanup-log-row">
                   <span class="cleanup-log-name">{{ entry.animeName }}</span>
-                  <button class="cleanup-log-toggle" @click="unsnoozeCleanup(entry.animeId)">Un-snooze</button>
+                  <button class="cleanup-log-toggle" @click="unsnoozeCleanup(entry.animeId)">
+                    Un-snooze
+                  </button>
                 </div>
               </div>
               <div class="usage-actions" style="margin-top: 12px">
-                <button class="merge-all-btn" @click="resetAllCleanupSnoozes">Reset all ({{ snoozedEntries.length }})</button>
+                <button class="merge-all-btn" @click="resetAllCleanupSnoozes">
+                  Reset all ({{ snoozedEntries.length }})
+                </button>
               </div>
             </template>
           </template>
@@ -1396,7 +1666,9 @@ async function testSyncplayConnection(): Promise<void> {
       <template v-if="activeTab === 'connectors'">
         <div class="setting-group">
           <label class="setting-label" for="token-input">smotret-anime.ru</label>
-          <p class="setting-hint">API token for smotret-anime.ru. Required for downloading episodes.</p>
+          <p class="setting-hint">
+            API token for smotret-anime.ru. Required for downloading episodes.
+          </p>
           <div class="token-row">
             <input
               id="token-input"
@@ -1405,12 +1677,18 @@ async function testSyncplayConnection(): Promise<void> {
               class="setting-input"
               placeholder="Enter your API token..."
             />
-            <button class="test-token-btn" :disabled="!token || tokenStatus === 'checking'" @click="testToken">
+            <button
+              class="test-token-btn"
+              :disabled="!token || tokenStatus === 'checking'"
+              @click="testToken"
+            >
               {{ tokenStatus === 'checking' ? 'Testing...' : 'Test' }}
             </button>
           </div>
           <div v-if="tokenStatus === 'valid'" class="token-result token-valid">Token is valid</div>
-          <div v-if="tokenStatus === 'invalid'" class="token-result token-invalid">{{ tokenError }}</div>
+          <div v-if="tokenStatus === 'invalid'" class="token-result token-invalid">
+            {{ tokenError }}
+          </div>
         </div>
 
         <div class="setting-group">
@@ -1419,7 +1697,11 @@ async function testSyncplayConnection(): Promise<void> {
 
           <template v-if="shikimoriUser">
             <div class="shikimori-user">
-              <img v-if="shikimoriUser.avatar" :src="shikimoriUser.avatar" class="shikimori-avatar" />
+              <img
+                v-if="shikimoriUser.avatar"
+                :src="shikimoriUser.avatar"
+                class="shikimori-avatar"
+              />
               <span class="shikimori-nickname">{{ shikimoriUser.nickname }}</span>
               <button class="test-token-btn" @click="shikimoriDisconnect">Disconnect</button>
             </div>
@@ -1441,7 +1723,9 @@ async function testSyncplayConnection(): Promise<void> {
               </div>
               <p v-else class="setting-hint" style="margin-bottom: 6px">
                 A browser window has opened. Authorize the app, then paste the code below.
-                <a href="#" class="shiki-show-url" @click.prevent="shikimoriShowUrl = true">Show link</a>
+                <a href="#" class="shiki-show-url" @click.prevent="shikimoriShowUrl = true"
+                  >Show link</a
+                >
               </p>
               <div class="token-row" style="margin-top: 8px">
                 <input
@@ -1451,11 +1735,17 @@ async function testSyncplayConnection(): Promise<void> {
                   placeholder="Paste authorization code..."
                   @keydown.enter="shikimoriSubmitCode"
                 />
-                <button class="test-token-btn" :disabled="!shikimoriCode.trim() || shikimoriConnecting" @click="shikimoriSubmitCode">
+                <button
+                  class="test-token-btn"
+                  :disabled="!shikimoriCode.trim() || shikimoriConnecting"
+                  @click="shikimoriSubmitCode"
+                >
                   {{ shikimoriConnecting ? 'Connecting...' : 'Submit' }}
                 </button>
               </div>
-              <div v-if="shikimoriError" class="token-result token-invalid">{{ shikimoriError }}</div>
+              <div v-if="shikimoriError" class="token-result token-invalid">
+                {{ shikimoriError }}
+              </div>
             </div>
           </template>
         </div>
@@ -1466,7 +1756,11 @@ async function testSyncplayConnection(): Promise<void> {
         <div class="setting-group">
           <label class="setting-label">FFmpeg</label>
           <p class="setting-hint">Required for merging video + subtitles into MKV.</p>
-          <div v-if="ffmpeg" class="ffmpeg-status" :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }">
+          <div
+            v-if="ffmpeg"
+            class="ffmpeg-status"
+            :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
+          >
             <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
             <span v-else class="ffmpeg-missing">Not found</span>
             <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
@@ -1476,9 +1770,16 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Auto-merge</label>
-          <p class="setting-hint">Automatically merge video + subtitles into MKV when both finish downloading.</p>
+          <p class="setting-hint">
+            Automatically merge video + subtitles into MKV when both finish downloading.
+          </p>
           <label class="toggle-row" :class="{ disabled: !ffmpeg?.available }">
-            <input type="checkbox" v-model="autoMerge" :disabled="!ffmpeg?.available" class="toggle-input" />
+            <input
+              type="checkbox"
+              v-model="autoMerge"
+              :disabled="!ffmpeg?.available"
+              class="toggle-input"
+            />
             <span class="toggle-slider"></span>
             <span class="toggle-label">{{ autoMerge ? 'Enabled' : 'Disabled' }}</span>
           </label>
@@ -1486,11 +1787,16 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Local skip detection</label>
-          <p class="setting-hint">Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the background after each download; first analysis on a show takes a minute or two of CPU.</p>
+          <p class="setting-hint">
+            Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the
+            background after each download; first analysis on a show takes a minute or two of CPU.
+          </p>
           <label class="toggle-row">
             <input type="checkbox" v-model="enableLocalSkipDetection" class="toggle-input" />
             <span class="toggle-slider"></span>
-            <span class="toggle-label">{{ enableLocalSkipDetection ? 'Enabled' : 'Disabled' }}</span>
+            <span class="toggle-label">{{
+              enableLocalSkipDetection ? 'Enabled' : 'Disabled'
+            }}</span>
           </label>
           <div class="skip-backfill">
             <button
@@ -1498,7 +1804,9 @@ async function testSyncplayConnection(): Promise<void> {
               class="browse-btn"
               :disabled="skipBackfillRunning"
               @click="onBackfillSkipDetection"
-            >{{ skipBackfillRunning ? 'Queuing…' : 'Run detection on all downloaded shows' }}</button>
+            >
+              {{ skipBackfillRunning ? 'Queuing…' : 'Run detection on all downloaded shows' }}
+            </button>
             <p v-if="skipBackfillResult" class="setting-hint">{{ skipBackfillResult }}</p>
             <p v-if="skipQueueStatusLabel" class="setting-hint">{{ skipQueueStatusLabel }}</p>
           </div>
@@ -1506,15 +1814,28 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Re-encode video</label>
-          <p class="setting-hint">Re-encode video during merge. "None" copies the stream as-is (fastest). H.265 reduces file size but takes longer.</p>
-          <select v-model="videoCodec" class="setting-input setting-select" :disabled="!ffmpeg?.available">
-            <option v-for="c in availableCodecs" :key="c.value" :value="c.value">{{ c.label }}</option>
+          <p class="setting-hint">
+            Re-encode video during merge. "None" copies the stream as-is (fastest). H.265 reduces
+            file size but takes longer.
+          </p>
+          <select
+            v-model="videoCodec"
+            class="setting-input setting-select"
+            :disabled="!ffmpeg?.available"
+          >
+            <option v-for="c in availableCodecs" :key="c.value" :value="c.value">
+              {{ c.label }}
+            </option>
           </select>
           <p
-            v-if="(videoCodec.startsWith('libx265') || videoCodec.startsWith('hevc_')) && !hevcPlaybackSupported"
+            v-if="
+              (videoCodec.startsWith('libx265') || videoCodec.startsWith('hevc_')) &&
+              !hevcPlaybackSupported
+            "
             class="setting-hint setting-hint-warn"
           >
-            H.265 merges save disk space, but this platform has no HEVC decoder — the built-in player will not play these files.
+            H.265 merges save disk space, but this platform has no HEVC decoder — the built-in
+            player will not play these files.
           </p>
         </div>
       </template>
@@ -1523,7 +1844,9 @@ async function testSyncplayConnection(): Promise<void> {
       <template v-if="activeTab === 'player'">
         <div class="setting-group">
           <label class="setting-label">Default player</label>
-          <p class="setting-hint">Choose what happens when you click "Open" on a downloaded episode.</p>
+          <p class="setting-hint">
+            Choose what happens when you click "Open" on a downloaded episode.
+          </p>
           <div class="radio-group">
             <label class="radio-label">
               <input type="radio" v-model="playerMode" value="system" />
@@ -1538,8 +1861,15 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Anime4K upscaling preset</label>
-          <p class="setting-hint">Real-time anime upscaling via WebGPU shaders. Choose a preset based on your source video resolution.</p>
-          <select v-model="anime4kPreset" class="setting-input setting-select" :disabled="!webgpuStatus.available">
+          <p class="setting-hint">
+            Real-time anime upscaling via WebGPU shaders. Choose a preset based on your source video
+            resolution.
+          </p>
+          <select
+            v-model="anime4kPreset"
+            class="setting-input setting-select"
+            :disabled="!webgpuStatus.available"
+          >
             <option value="off">Off</option>
             <option value="mode-a">Mode A (1080p source)</option>
             <option value="mode-b">Mode B (720p source)</option>
@@ -1560,25 +1890,34 @@ async function testSyncplayConnection(): Promise<void> {
         <div class="setting-group">
           <label class="setting-label">HEVC transcoding on play</label>
           <p class="setting-hint">
-            When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen.
+            When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to
+            H.264 in real time instead of leaving the viewer with a black screen.
           </p>
-          <select v-model="hevcTranscodeOnPlay" class="setting-input setting-select" :disabled="hevcMseSupported">
+          <select
+            v-model="hevcTranscodeOnPlay"
+            class="setting-input setting-select"
+            :disabled="hevcMseSupported"
+          >
             <option value="ask">Ask each time</option>
             <option value="always">Always transcode</option>
             <option value="never">Never — open in external player</option>
           </select>
           <div v-if="hevcMseSupported" class="status-line ok" style="margin-top: 0.4rem">
-            HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't fire.
+            HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback
+            won't fire.
           </div>
           <div v-else class="status-line warn" style="margin-top: 0.4rem">
-            HEVC MSE decoder: not available — this setting controls the fallback for local MKV playback.
+            HEVC MSE decoder: not available — this setting controls the fallback for local MKV
+            playback.
           </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Pre-fetch next episode</label>
           <p class="setting-hint">
-            Starts downloading the next episode in the background while you're watching the current one. Uses your active translation and quality. Subscribed shows are skipped — the auto-downloader handles them.
+            Starts downloading the next episode in the background while you're watching the current
+            one. Uses your active translation and quality. Subscribed shows are skipped — the
+            auto-downloader handles them.
           </p>
           <select v-model="prefetchNextEpisode" class="setting-input setting-select">
             <option value="off">Off</option>
@@ -1589,7 +1928,12 @@ async function testSyncplayConnection(): Promise<void> {
         </div>
 
         <div class="setting-group">
-          <p class="setting-hint">Note: the built-in player supports local MKV playback via the MSE remux pipeline. For non-downloaded episodes, MKV files are streamed from the server — a Play button will appear on those rows when player mode is "Built-in". If a local HEVC MKV can't be decoded by your platform, the fallback above decides what happens.</p>
+          <p class="setting-hint">
+            Note: the built-in player supports local MKV playback via the MSE remux pipeline. For
+            non-downloaded episodes, MKV files are streamed from the server — a Play button will
+            appear on those rows when player mode is "Built-in". If a local HEVC MKV can't be
+            decoded by your platform, the fallback above decides what happens.
+          </p>
         </div>
       </template>
 
@@ -1597,7 +1941,10 @@ async function testSyncplayConnection(): Promise<void> {
       <template v-if="activeTab === 'shortcuts'">
         <div class="setting-group">
           <label class="setting-label">Keyboard Shortcuts</label>
-          <p class="setting-hint">Click "Record" to set a new key, press Escape to cancel recording. Click "Clear" to disable a shortcut.</p>
+          <p class="setting-hint">
+            Click "Record" to set a new key, press Escape to cancel recording. Click "Clear" to
+            disable a shortcut.
+          </p>
         </div>
 
         <div
@@ -1617,9 +1964,17 @@ async function testSyncplayConnection(): Promise<void> {
             <span v-else class="shortcut-key" :class="{ empty: !shortcutBindings[action] }">
               {{ formatBinding(shortcutBindings[action]) }}
             </span>
-            <button v-if="recordingAction === action" class="shortcut-btn" @click="cancelRecording">Cancel</button>
+            <button v-if="recordingAction === action" class="shortcut-btn" @click="cancelRecording">
+              Cancel
+            </button>
             <button v-else class="shortcut-btn" @click="startRecording(action)">Record</button>
-            <button class="shortcut-btn shortcut-clear" @click="clearBinding(action)" :disabled="!shortcutBindings[action]">Clear</button>
+            <button
+              class="shortcut-btn shortcut-clear"
+              @click="clearBinding(action)"
+              :disabled="!shortcutBindings[action]"
+            >
+              Clear
+            </button>
           </div>
         </div>
 
@@ -1632,15 +1987,15 @@ async function testSyncplayConnection(): Promise<void> {
       <template v-if="activeTab === 'watch-together'">
         <div class="dev-banner">
           <strong>Feature in development.</strong>
-          Sync, attribution, and reconnect behavior may misfire — especially on
-          rapid arrow-key seeks or shaky connections. Please report quirks with
-          a screen recording or the renderer console log.
+          Sync, attribution, and reconnect behavior may misfire — especially on rapid arrow-key
+          seeks or shaky connections. Please report quirks with a screen recording or the renderer
+          console log.
         </div>
         <div class="setting-group">
           <label class="setting-label">Watch Together (Syncplay)</label>
           <p class="setting-hint">
-            Sync play/pause/seek with friends over the Internet via the Syncplay protocol.
-            Works with other Syncplay clients (mpv, VLC) in the same room.
+            Sync play/pause/seek with friends over the Internet via the Syncplay protocol. Works
+            with other Syncplay clients (mpv, VLC) in the same room.
           </p>
         </div>
 
@@ -1648,33 +2003,71 @@ async function testSyncplayConnection(): Promise<void> {
           <label class="setting-label" for="sp-host">Server</label>
           <p class="setting-hint">Default: <code>syncplay.pl</code> on port <code>8999</code>.</p>
           <div class="sp-host-row">
-            <input id="sp-host" v-model="syncplayHost" type="text" class="setting-input" placeholder="syncplay.pl" />
-            <input v-model.number="syncplayPort" type="number" min="1" max="65535" class="setting-input sp-port-input" />
+            <input
+              id="sp-host"
+              v-model="syncplayHost"
+              type="text"
+              class="setting-input"
+              placeholder="syncplay.pl"
+            />
+            <input
+              v-model.number="syncplayPort"
+              type="number"
+              min="1"
+              max="65535"
+              class="setting-input sp-port-input"
+            />
           </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label" for="sp-room">Default room</label>
-          <p class="setting-hint">Preselected room name when you open the Watch Together popover in the player. Any non-empty string is accepted; share it with friends out-of-band.</p>
-          <input id="sp-room" v-model="syncplayRoom" type="text" class="setting-input" placeholder="my-anime-room" />
+          <p class="setting-hint">
+            Preselected room name when you open the Watch Together popover in the player. Any
+            non-empty string is accepted; share it with friends out-of-band.
+          </p>
+          <input
+            id="sp-room"
+            v-model="syncplayRoom"
+            type="text"
+            class="setting-input"
+            placeholder="my-anime-room"
+          />
         </div>
 
         <div class="setting-group">
           <label class="setting-label" for="sp-user">Username</label>
-          <p class="setting-hint">Shown to other room members. Defaults to your Shikimori nickname if signed in.</p>
-          <input id="sp-user" v-model="syncplayUsername" type="text" class="setting-input" placeholder="username" />
+          <p class="setting-hint">
+            Shown to other room members. Defaults to your Shikimori nickname if signed in.
+          </p>
+          <input
+            id="sp-user"
+            v-model="syncplayUsername"
+            type="text"
+            class="setting-input"
+            placeholder="username"
+          />
         </div>
 
         <div class="setting-group">
           <label class="setting-label" for="sp-password">Password (optional)</label>
-          <p class="setting-hint">Some servers require a password to log in. Leave empty for public servers.</p>
-          <input id="sp-password" v-model="syncplayPassword" type="password" class="setting-input" placeholder="" />
+          <p class="setting-hint">
+            Some servers require a password to log in. Leave empty for public servers.
+          </p>
+          <input
+            id="sp-password"
+            v-model="syncplayPassword"
+            type="password"
+            class="setting-input"
+            placeholder=""
+          />
         </div>
 
         <div class="setting-group">
           <p class="setting-hint">
-            Connections are encrypted with TLS (required). The server must run Syncplay 1.6.3+ and present a
-            valid TLS certificate for its hostname; servers that only accept plaintext are not supported.
+            Connections are encrypted with TLS (required). The server must run Syncplay 1.6.3+ and
+            present a valid TLS certificate for its hostname; servers that only accept plaintext are
+            not supported.
           </p>
         </div>
 
@@ -1683,19 +2076,33 @@ async function testSyncplayConnection(): Promise<void> {
             <input type="checkbox" v-model="syncplayAutoReconnect" />
             <span>Auto-reconnect on disconnect</span>
           </label>
-          <p class="setting-hint">Retry with exponential backoff up to 5 times after a network drop.</p>
+          <p class="setting-hint">
+            Retry with exponential backoff up to 5 times after a network drop.
+          </p>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Test connection</label>
           <p class="setting-hint">Connects briefly with the current settings, then disconnects.</p>
-          <button class="merge-all-btn" @click="testSyncplayConnection" :disabled="syncplayTestStatus === 'testing'">
+          <button
+            class="merge-all-btn"
+            @click="testSyncplayConnection"
+            :disabled="syncplayTestStatus === 'testing'"
+          >
             {{ syncplayTestStatus === 'testing' ? 'Testing…' : 'Test connection' }}
           </button>
-          <div v-if="syncplayTestStatus === 'ok'" class="token-result token-valid" style="margin-top: 6px">
+          <div
+            v-if="syncplayTestStatus === 'ok'"
+            class="token-result token-valid"
+            style="margin-top: 6px"
+          >
             Connected successfully
           </div>
-          <div v-if="syncplayTestStatus === 'failed'" class="token-result token-invalid" style="margin-top: 6px">
+          <div
+            v-if="syncplayTestStatus === 'failed'"
+            class="token-result token-invalid"
+            style="margin-top: 6px"
+          >
             {{ syncplayTestError || 'Connection failed' }}
           </div>
         </div>
@@ -1704,19 +2111,32 @@ async function testSyncplayConnection(): Promise<void> {
       <template v-if="activeTab === 'debug'">
         <div class="setting-group">
           <label class="setting-label">FFmpeg Info</label>
-          <div v-if="ffmpeg" class="ffmpeg-status" :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }">
+          <div
+            v-if="ffmpeg"
+            class="ffmpeg-status"
+            :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
+          >
             <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
             <span v-else class="ffmpeg-missing">Not found</span>
             <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
-            <span v-if="ffmpeg.encoders.length" class="ffmpeg-path">Encoders: {{ ffmpeg.encoders.join(', ') }}</span>
+            <span v-if="ffmpeg.encoders.length" class="ffmpeg-path"
+              >Encoders: {{ ffmpeg.encoders.join(', ') }}</span
+            >
           </div>
           <div v-else class="ffmpeg-status">Checking...</div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Merge all available</label>
-          <p class="setting-hint">Scan all download folders for .mp4 files without matching .mkv and merge them with subtitles if available.</p>
-          <button class="merge-all-btn" @click="scanAndMerge" :disabled="scanMerging || !ffmpeg?.available">
+          <p class="setting-hint">
+            Scan all download folders for .mp4 files without matching .mkv and merge them with
+            subtitles if available.
+          </p>
+          <button
+            class="merge-all-btn"
+            @click="scanAndMerge"
+            :disabled="scanMerging || !ffmpeg?.available"
+          >
             {{ scanMerging ? 'Merging...' : 'Merge all available' }}
           </button>
 
@@ -1731,19 +2151,32 @@ async function testSyncplayConnection(): Promise<void> {
             <div class="scan-progress-file">{{ scanProgress.file }}</div>
           </div>
 
-          <div v-if="scanResult" class="scan-result" :class="{ 'has-errors': scanResult.failed.length > 0 }">
+          <div
+            v-if="scanResult"
+            class="scan-result"
+            :class="{ 'has-errors': scanResult.failed.length > 0 }"
+          >
             <div class="scan-result-ok">Merged: {{ scanResult.merged }} file(s)</div>
             <div v-if="scanResult.failed.length > 0" class="scan-result-errors">
               <div>Failed ({{ scanResult.failed.length }}):</div>
-              <div v-for="(err, i) in scanResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
+              <div v-for="(err, i) in scanResult.failed" :key="i" class="scan-error-item">
+                {{ err }}
+              </div>
             </div>
           </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Fix old files</label>
-          <p class="setting-hint">Re-mux existing MKV files to set subtitle language, title (translator name), and default track. Uses stored episode metadata.</p>
-          <button class="merge-all-btn" @click="fixMetadata" :disabled="fixingMetadata || !ffmpeg?.available">
+          <p class="setting-hint">
+            Re-mux existing MKV files to set subtitle language, title (translator name), and default
+            track. Uses stored episode metadata.
+          </p>
+          <button
+            class="merge-all-btn"
+            @click="fixMetadata"
+            :disabled="fixingMetadata || !ffmpeg?.available"
+          >
             {{ fixingMetadata ? 'Fixing...' : 'Fix subtitle metadata' }}
           </button>
 
@@ -1754,36 +2187,65 @@ async function testSyncplayConnection(): Promise<void> {
             <div class="scan-progress-file">{{ fixProgress.file }}</div>
           </div>
 
-          <div v-if="fixResult" class="scan-result" :class="{ 'has-errors': fixResult.failed.length > 0 }">
+          <div
+            v-if="fixResult"
+            class="scan-result"
+            :class="{ 'has-errors': fixResult.failed.length > 0 }"
+          >
             <div class="scan-result-ok">Fixed: {{ fixResult.fixed }} file(s)</div>
             <div v-if="fixResult.failed.length > 0" class="scan-result-errors">
               <div>Failed ({{ fixResult.failed.length }}):</div>
-              <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">{{ err }}</div>
+              <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">
+                {{ err }}
+              </div>
             </div>
           </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Delete ffmpeg binaries</label>
-          <p class="setting-hint">Remove downloaded ffmpeg/ffprobe binaries. They will be re-downloaded on next app launch (useful for testing the download progress indicator).</p>
-          <button class="merge-all-btn" style="background-color: #e94560;" @click="deleteFfmpeg" :disabled="!ffmpeg?.available">
+          <p class="setting-hint">
+            Remove downloaded ffmpeg/ffprobe binaries. They will be re-downloaded on next app launch
+            (useful for testing the download progress indicator).
+          </p>
+          <button
+            class="merge-all-btn"
+            style="background-color: #e94560"
+            @click="deleteFfmpeg"
+            :disabled="!ffmpeg?.available"
+          >
             Delete ffmpeg + ffprobe
           </button>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Anime4K GPU Benchmark</label>
-          <p class="setting-hint">Test how fast your GPU can run Anime4K shaders (Mode A, 720p→screen resolution, 100 frames). Requires WebGPU.</p>
+          <p class="setting-hint">
+            Test how fast your GPU can run Anime4K shaders (Mode A, 720p→screen resolution, 100
+            frames). Requires WebGPU.
+          </p>
           <button class="merge-all-btn" @click="runGpuBenchmark" :disabled="benchmarking">
             {{ benchmarking ? 'Running benchmark...' : 'Run GPU benchmark' }}
           </button>
 
           <div v-if="benchmarkResult" class="scan-result">
-            <div class="scan-result-ok" :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }">
-              {{ benchmarkResult.preset }}: {{ benchmarkResult.fps }} fps ({{ benchmarkResult.avgMs }}ms/frame)
+            <div
+              class="scan-result-ok"
+              :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }"
+            >
+              {{ benchmarkResult.preset }}: {{ benchmarkResult.fps }} fps ({{
+                benchmarkResult.avgMs
+              }}ms/frame)
             </div>
-            <div class="scan-error-item" :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }">
-              {{ benchmarkResult.fps >= 24 ? 'Your GPU can handle real-time Anime4K shaders' : 'Your GPU may struggle with real-time shaders — consider using "Off" preset' }}
+            <div
+              class="scan-error-item"
+              :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }"
+            >
+              {{
+                benchmarkResult.fps >= 24
+                  ? 'Your GPU can handle real-time Anime4K shaders'
+                  : 'Your GPU may struggle with real-time shaders — consider using "Off" preset'
+              }}
             </div>
           </div>
 
@@ -1791,17 +2253,20 @@ async function testSyncplayConnection(): Promise<void> {
             <div class="scan-result-errors">{{ benchmarkError }}</div>
           </div>
 
-          <div v-if="webgpuStatus.available" class="status-line ok" style="margin-top: 8px;">
+          <div v-if="webgpuStatus.available" class="status-line ok" style="margin-top: 8px">
             WebGPU: {{ webgpuStatus.gpuName }}
           </div>
-          <div v-else class="status-line warn" style="margin-top: 8px;">
+          <div v-else class="status-line warn" style="margin-top: 8px">
             WebGPU not detected — benchmark will attempt to initialize it
           </div>
         </div>
 
         <div class="setting-group">
           <label class="setting-label">Background quality probe</label>
-          <p class="setting-hint">Probe actual stream quality for all translations when opening an anime page (not just the selected one). Detects quality mismatches but may cause lag on slower connections.</p>
+          <p class="setting-hint">
+            Probe actual stream quality for all translations when opening an anime page (not just
+            the selected one). Detects quality mismatches but may cause lag on slower connections.
+          </p>
           <label class="toggle-row">
             <input type="checkbox" v-model="backgroundQualityProbe" />
             <span>Enable background quality probe</span>
@@ -1810,8 +2275,15 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">Dump quality mismatches</label>
-          <p class="setting-hint">Probe the embed API for all translations in your downloaded anime and save a report of cases where the reported quality differs from actual stream quality.</p>
-          <button class="merge-all-btn" @click="dumpMismatches" :disabled="dumpingMismatches || mismatchCount === 0">
+          <p class="setting-hint">
+            Probe the embed API for all translations in your downloaded anime and save a report of
+            cases where the reported quality differs from actual stream quality.
+          </p>
+          <button
+            class="merge-all-btn"
+            @click="dumpMismatches"
+            :disabled="dumpingMismatches || mismatchCount === 0"
+          >
             {{ dumpingMismatches ? 'Saving...' : `Dump ${mismatchCount} mismatch(es) to file` }}
           </button>
 
@@ -1825,26 +2297,45 @@ async function testSyncplayConnection(): Promise<void> {
 
         <div class="setting-group">
           <label class="setting-label">MP4 streaming-optimization check</label>
-          <p class="setting-hint">After every video download or when an MP4 is opened in the player, the first ~64 KB are scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before <code>mdat</code>) are required to play while still downloading. If a non-faststart file is found, an example is shown below for inspection.</p>
+          <p class="setting-hint">
+            After every video download or when an MP4 is opened in the player, the first ~64 KB are
+            scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before
+            <code>mdat</code>) are required to play while still downloading. If a non-faststart file
+            is found, an example is shown below for inspection.
+          </p>
           <button class="merge-all-btn" @click="refreshMp4Stats">Refresh</button>
-          <button class="merge-all-btn" style="margin-left: 0.5rem" @click="resetMp4Stats" :disabled="!mp4Stats || mp4Stats.totalChecked === 0">Reset</button>
+          <button
+            class="merge-all-btn"
+            style="margin-left: 0.5rem"
+            @click="resetMp4Stats"
+            :disabled="!mp4Stats || mp4Stats.totalChecked === 0"
+          >
+            Reset
+          </button>
 
-          <div v-if="mp4Stats" class="scan-result" :class="{ 'has-errors': mp4Stats.nonFaststartSamples.length > 0 }">
+          <div
+            v-if="mp4Stats"
+            class="scan-result"
+            :class="{ 'has-errors': mp4Stats.nonFaststartSamples.length > 0 }"
+          >
             <div class="scan-result-ok">
               Faststart: {{ mp4Stats.faststartCount }} / {{ mp4Stats.totalChecked }}
             </div>
             <div v-if="latestNonFaststart" class="scan-result-errors">
-              <div>Sample non-faststart MP4 (most recent of {{ mp4Stats.nonFaststartSamples.length }}):</div>
-              <div class="scan-error-item">
-                {{ latestNonFaststart.animeName }} — {{ latestNonFaststart.episodeLabel }}
-                (first non-ftyp box: {{ latestNonFaststart.firstNonFtypBox }})
+              <div>
+                Sample non-faststart MP4 (most recent of {{ mp4Stats.nonFaststartSamples.length }}):
               </div>
-              <div class="scan-error-item" style="opacity: 0.7">{{ latestNonFaststart.filePath }}</div>
+              <div class="scan-error-item">
+                {{ latestNonFaststart.animeName }} — {{ latestNonFaststart.episodeLabel }} (first
+                non-ftyp box: {{ latestNonFaststart.firstNonFtypBox }})
+              </div>
+              <div class="scan-error-item" style="opacity: 0.7">
+                {{ latestNonFaststart.filePath }}
+              </div>
             </div>
           </div>
         </div>
       </template>
-
     </div>
     <transition name="saved-fade">
       <div v-if="savedVisible" class="saved-toast">Saved</div>
@@ -1854,11 +2345,15 @@ async function testSyncplayConnection(): Promise<void> {
       <div class="cleanup-modal">
         <div class="cleanup-modal-title">Auto-cleanup ready</div>
         <p class="cleanup-modal-hint">
-          {{ cleanupPending.length }} watched episode(s) are eligible for deletion.
-          Confirming will delete them now and skip this prompt on future runs.
+          {{ cleanupPending.length }} watched episode(s) are eligible for deletion. Confirming will
+          delete them now and skip this prompt on future runs.
         </p>
         <div class="cleanup-modal-list">
-          <div v-for="c in cleanupPending" :key="`${c.animeId}:${c.episodeInt}`" class="cleanup-modal-row">
+          <div
+            v-for="c in cleanupPending"
+            :key="`${c.animeId}:${c.episodeInt}`"
+            class="cleanup-modal-row"
+          >
             <span class="cleanup-modal-name">{{ c.animeName }}</span>
             <span class="cleanup-modal-ep">Ep {{ c.episodeInt }}</span>
             <span class="cleanup-modal-size">{{ formatBytes(c.bytes) }}</span>
@@ -2224,11 +2719,25 @@ async function testSyncplayConnection(): Promise<void> {
   gap: 4px;
 }
 
-.ffmpeg-status.ok { border-color: #2d6a30; }
-.ffmpeg-status.missing { border-color: #e94560; }
-.ffmpeg-ok { color: #6ab04c; font-weight: 600; }
-.ffmpeg-missing { color: #e94560; font-weight: 600; }
-.ffmpeg-path { font-size: 0.75rem; color: #4a4a6a; word-break: break-all; }
+.ffmpeg-status.ok {
+  border-color: #2d6a30;
+}
+.ffmpeg-status.missing {
+  border-color: #e94560;
+}
+.ffmpeg-ok {
+  color: #6ab04c;
+  font-weight: 600;
+}
+.ffmpeg-missing {
+  color: #e94560;
+  font-weight: 600;
+}
+.ffmpeg-path {
+  font-size: 0.75rem;
+  color: #4a4a6a;
+  word-break: break-all;
+}
 
 .toggle-row {
   display: flex;
@@ -2468,8 +2977,13 @@ async function testSyncplayConnection(): Promise<void> {
 }
 
 @keyframes pulse-border {
-  0%, 100% { border-color: #e94560; }
-  50% { border-color: #c0374d; }
+  0%,
+  100% {
+    border-color: #e94560;
+  }
+  50% {
+    border-color: #c0374d;
+  }
 }
 
 .shortcut-btn {
@@ -2554,7 +3068,7 @@ async function testSyncplayConnection(): Promise<void> {
   cursor: pointer;
 }
 
-.radio-label input[type="radio"] {
+.radio-label input[type='radio'] {
   accent-color: #e94560;
 }
 

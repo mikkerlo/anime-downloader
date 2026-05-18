@@ -94,20 +94,24 @@ export class SmotretApi {
   }
 
   async getEmbed(translationId: number): Promise<EmbedData> {
-    const json = await this.request(`/translations/embed/${translationId}`) as { data: EmbedData }
+    const json = (await this.request(`/translations/embed/${translationId}`)) as { data: EmbedData }
     return json.data
   }
 
   getSubtitlesUrl(translationId: number): string {
     const token = this.getToken()
-    return `https://smotret-anime.ru/translations/ass/${translationId}?download=1`
-      + (token ? `&access_token=${token}` : '')
+    return (
+      `https://smotret-anime.ru/translations/ass/${translationId}?download=1` +
+      (token ? `&access_token=${token}` : '')
+    )
   }
 
   getFallbackVideoUrl(translationId: number, height: number): string {
     const token = this.getToken()
-    return `https://smotret-anime.ru/translations/mp4/${translationId}?format=mp4&height=${height}`
-      + (token ? `&access_token=${token}` : '')
+    return (
+      `https://smotret-anime.ru/translations/mp4/${translationId}?format=mp4&height=${height}` +
+      (token ? `&access_token=${token}` : '')
+    )
   }
 
   async fetchSubtitleContent(translationId: number): Promise<string | null> {
@@ -136,11 +140,13 @@ export class SmotretApi {
     const token = this.getToken()
     if (!token) return { valid: false, error: 'No token configured' }
     try {
-      const response = await fetch(
-        `${API_BASE}/translations/embed/4336179?access_token=${token}`,
-        { headers: { 'User-Agent': USER_AGENT } }
-      )
-      const json = await response.json() as { error?: { code: number; message: string }; data?: unknown }
+      const response = await fetch(`${API_BASE}/translations/embed/4336179?access_token=${token}`, {
+        headers: { 'User-Agent': USER_AGENT }
+      })
+      const json = (await response.json()) as {
+        error?: { code: number; message: string }
+        data?: unknown
+      }
       if (json.error?.code === 403) return { valid: false, error: 'Invalid token' }
       return { valid: true }
     } catch (err) {
@@ -148,13 +154,16 @@ export class SmotretApi {
     }
   }
 
-  async lookupByMalIds(malIds: number[]): Promise<(AnimeSearchResult & { myAnimeListId?: number })[]> {
+  async lookupByMalIds(
+    malIds: number[]
+  ): Promise<(AnimeSearchResult & { myAnimeListId?: number })[]> {
     const BATCH_SIZE = 50
     const results: (AnimeSearchResult & { myAnimeListId?: number })[] = []
     for (let i = 0; i < malIds.length; i += BATCH_SIZE) {
       const batch = malIds.slice(i, i + BATCH_SIZE)
       const params = batch.map((id) => `myAnimeListId[]=${id}`).join('&')
-      const fields = 'id,title,titles,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,myAnimeListId'
+      const fields =
+        'id,title,titles,posterUrlSmall,numberOfEpisodes,type,typeTitle,year,season,myAnimeListId'
       const response = (await this.request(`/series/?${params}&fields=${fields}`)) as {
         data: (AnimeSearchResult & { myAnimeListId?: number })[]
       }

@@ -19,7 +19,13 @@ export interface ShikiUser {
   avatar: string
 }
 
-export type ShikiUserRateStatus = 'planned' | 'watching' | 'rewatching' | 'completed' | 'on_hold' | 'dropped'
+export type ShikiUserRateStatus =
+  | 'planned'
+  | 'watching'
+  | 'rewatching'
+  | 'completed'
+  | 'on_hold'
+  | 'dropped'
 
 export interface ShikiUserRate {
   id: number

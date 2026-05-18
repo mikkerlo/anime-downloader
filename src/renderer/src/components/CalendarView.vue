@@ -1,204 +1,204 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 
 const emit = defineEmits<{
-  openAnime: [id: number]
-}>()
+  openAnime: [id: number];
+}>();
 
-const entries = ref<CalendarEntry[]>([])
-const loading = ref(false)
-const error = ref('')
-const weeksPerPage = ref(1)
-const subscribedAnimeIds = ref<Set<number>>(new Set())
+const entries = ref<CalendarEntry[]>([]);
+const loading = ref(false);
+const error = ref('');
+const weeksPerPage = ref(1);
+const subscribedAnimeIds = ref<Set<number>>(new Set());
 
-const DAY_LABELS_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const DAY_LABELS_SUN_FIRST = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const DAY_LABELS_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_LABELS_SUN_FIRST = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function localeFirstDay(): 1 | 7 {
   try {
     const loc = new (Intl as unknown as { Locale: new (tag: string) => unknown }).Locale(
       navigator.language
-    ) as { getWeekInfo?: () => { firstDay: number }; weekInfo?: { firstDay: number } }
-    const info = typeof loc.getWeekInfo === 'function' ? loc.getWeekInfo() : loc.weekInfo
-    if (info && info.firstDay === 7) return 7
+    ) as { getWeekInfo?: () => { firstDay: number }; weekInfo?: { firstDay: number } };
+    const info = typeof loc.getWeekInfo === 'function' ? loc.getWeekInfo() : loc.weekInfo;
+    if (info && info.firstDay === 7) return 7;
   } catch {
     /* fall through */
   }
-  return 1
+  return 1;
 }
 
-const firstDay = localeFirstDay()
-const dayLabels = firstDay === 7 ? DAY_LABELS_SUN_FIRST : DAY_LABELS_MON_FIRST
+const firstDay = localeFirstDay();
+const dayLabels = firstDay === 7 ? DAY_LABELS_SUN_FIRST : DAY_LABELS_MON_FIRST;
 
 function startOfWeek(now: Date): Date {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const day = d.getDay()
-  const offset = firstDay === 7 ? day : (day + 6) % 7
-  d.setDate(d.getDate() - offset)
-  return d
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = d.getDay();
+  const offset = firstDay === 7 ? day : (day + 6) % 7;
+  d.setDate(d.getDate() - offset);
+  return d;
 }
 
-const now = ref(new Date())
-const pageOffset = ref(0)
+const now = ref(new Date());
+const pageOffset = ref(0);
 
 const pageStart = computed(() => {
-  const base = startOfWeek(now.value)
-  base.setDate(base.getDate() + pageOffset.value * weeksPerPage.value * 7)
-  return base
-})
+  const base = startOfWeek(now.value);
+  base.setDate(base.getDate() + pageOffset.value * weeksPerPage.value * 7);
+  return base;
+});
 const pageEnd = computed(() => {
-  const d = new Date(pageStart.value)
-  d.setDate(d.getDate() + weeksPerPage.value * 7)
-  return d
-})
+  const d = new Date(pageStart.value);
+  d.setDate(d.getDate() + weeksPerPage.value * 7);
+  return d;
+});
 
 const todayPos = computed(() => {
-  const today = new Date()
-  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  const dayDiff = Math.floor((t.getTime() - pageStart.value.getTime()) / (24 * 60 * 60 * 1000))
-  if (dayDiff < 0 || dayDiff >= weeksPerPage.value * 7) return null
-  return { row: Math.floor(dayDiff / 7), col: dayDiff % 7 }
-})
+  const today = new Date();
+  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayDiff = Math.floor((t.getTime() - pageStart.value.getTime()) / (24 * 60 * 60 * 1000));
+  if (dayDiff < 0 || dayDiff >= weeksPerPage.value * 7) return null;
+  return { row: Math.floor(dayDiff / 7), col: dayDiff % 7 };
+});
 
 const rows = computed(() => {
-  const result: { weekStart: Date; columns: { date: Date; items: CalendarEntry[] }[] }[] = []
+  const result: { weekStart: Date; columns: { date: Date; items: CalendarEntry[] }[] }[] = [];
   for (let w = 0; w < weeksPerPage.value; w++) {
-    const wStart = new Date(pageStart.value)
-    wStart.setDate(wStart.getDate() + w * 7)
-    const cols: { date: Date; items: CalendarEntry[] }[] = []
+    const wStart = new Date(pageStart.value);
+    wStart.setDate(wStart.getDate() + w * 7);
+    const cols: { date: Date; items: CalendarEntry[] }[] = [];
     for (let i = 0; i < 7; i++) {
-      const d = new Date(wStart)
-      d.setDate(d.getDate() + i)
-      cols.push({ date: d, items: [] })
+      const d = new Date(wStart);
+      d.setDate(d.getDate() + i);
+      cols.push({ date: d, items: [] });
     }
-    result.push({ weekStart: wStart, columns: cols })
+    result.push({ weekStart: wStart, columns: cols });
   }
   // Forward-looking only on the current page — past episodes drop out, future
   // pages and past pages show every entry in their range.
-  const minTime = pageOffset.value === 0 ? now.value.getTime() : pageStart.value.getTime()
-  const maxTime = pageEnd.value.getTime()
+  const minTime = pageOffset.value === 0 ? now.value.getTime() : pageStart.value.getTime();
+  const maxTime = pageEnd.value.getTime();
   for (const e of entries.value) {
-    const ts = new Date(e.nextEpisodeAt).getTime()
-    if (!Number.isFinite(ts)) continue
-    if (ts < minTime || ts >= maxTime) continue
-    const dayDiff = Math.floor((ts - pageStart.value.getTime()) / (24 * 60 * 60 * 1000))
-    if (dayDiff < 0 || dayDiff >= weeksPerPage.value * 7) continue
-    const row = Math.floor(dayDiff / 7)
-    const col = dayDiff % 7
-    result[row].columns[col].items.push(e)
+    const ts = new Date(e.nextEpisodeAt).getTime();
+    if (!Number.isFinite(ts)) continue;
+    if (ts < minTime || ts >= maxTime) continue;
+    const dayDiff = Math.floor((ts - pageStart.value.getTime()) / (24 * 60 * 60 * 1000));
+    if (dayDiff < 0 || dayDiff >= weeksPerPage.value * 7) continue;
+    const row = Math.floor(dayDiff / 7);
+    const col = dayDiff % 7;
+    result[row].columns[col].items.push(e);
   }
   for (const r of result) {
     for (const c of r.columns) {
       c.items.sort(
         (a, b) => new Date(a.nextEpisodeAt).getTime() - new Date(b.nextEpisodeAt).getTime()
-      )
+      );
     }
   }
-  return result
-})
+  return result;
+});
 
 const pageRangeLabel = computed(() => {
-  const start = pageStart.value
-  const end = new Date(pageStart.value)
-  end.setDate(end.getDate() + weeksPerPage.value * 7 - 1)
-  const sameMonth = start.getMonth() === end.getMonth()
-  const sameYear = start.getFullYear() === end.getFullYear()
+  const start = pageStart.value;
+  const end = new Date(pageStart.value);
+  end.setDate(end.getDate() + weeksPerPage.value * 7 - 1);
+  const sameMonth = start.getMonth() === end.getMonth();
+  const sameYear = start.getFullYear() === end.getFullYear();
   const startStr = start.toLocaleDateString([], {
     month: 'short',
     day: 'numeric',
     ...(sameYear ? {} : { year: 'numeric' })
-  })
+  });
   const endStr = sameMonth
     ? end.toLocaleDateString([], { day: 'numeric' })
     : end.toLocaleDateString([], {
         month: 'short',
         day: 'numeric',
         ...(sameYear ? {} : { year: 'numeric' })
-      })
-  return `${startStr} – ${endStr}`
-})
+      });
+  return `${startStr} – ${endStr}`;
+});
 
-const isCurrentPage = computed(() => pageOffset.value === 0)
+const isCurrentPage = computed(() => pageOffset.value === 0);
 
 function shiftPage(delta: number): void {
-  pageOffset.value += delta
+  pageOffset.value += delta;
 }
 
 function resetPage(): void {
-  pageOffset.value = 0
+  pageOffset.value = 0;
 }
 
 const totalCount = computed(() =>
   rows.value.reduce((sum, r) => sum + r.columns.reduce((s, c) => s + c.items.length, 0), 0)
-)
+);
 
 async function loadViewSetting(): Promise<void> {
-  const v = (await window.api.getSetting('calendarView')) as 'week' | 'month' | null
-  weeksPerPage.value = v === 'month' ? 4 : 1
+  const v = (await window.api.getSetting('calendarView')) as 'week' | 'month' | null;
+  weeksPerPage.value = v === 'month' ? 4 : 1;
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatColumnDate(d: Date): string {
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 function statusLabel(s: string): string {
-  if (s === 'watching') return 'Watching'
-  if (s === 'rewatching') return 'Rewatching'
-  if (s === 'planned') return 'Planned'
-  return s
+  if (s === 'watching') return 'Watching';
+  if (s === 'rewatching') return 'Rewatching';
+  if (s === 'planned') return 'Planned';
+  return s;
 }
 
 async function load(force = false): Promise<void> {
-  await loadViewSetting()
-  const user = await window.api.shikimoriGetUser()
+  await loadViewSetting();
+  const user = await window.api.shikimoriGetUser();
   if (!user) {
-    entries.value = []
-    error.value = 'Connect to Shikimori in Settings to see the calendar.'
-    return
+    entries.value = [];
+    error.value = 'Connect to Shikimori in Settings to see the calendar.';
+    return;
   }
-  loading.value = true
-  error.value = ''
+  loading.value = true;
+  error.value = '';
   try {
-    now.value = new Date()
-    entries.value = await window.api.shikimoriGetCalendar(force)
+    now.value = new Date();
+    entries.value = await window.api.shikimoriGetCalendar(force);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load calendar'
+    error.value = err instanceof Error ? err.message : 'Failed to load calendar';
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 function handleClick(entry: CalendarEntry): void {
-  if (entry.animeId !== null) emit('openAnime', entry.animeId)
+  if (entry.animeId !== null) emit('openAnime', entry.animeId);
 }
 
 function onCalendarViewChanged(): void {
-  pageOffset.value = 0
-  void loadViewSetting()
+  pageOffset.value = 0;
+  void loadViewSetting();
 }
 
 async function loadAutoDlSubscriptions(): Promise<void> {
   try {
-    const subs = await window.api.autoDlListSubscriptions()
-    subscribedAnimeIds.value = new Set(subs.map((s) => s.animeId))
+    const subs = await window.api.autoDlListSubscriptions();
+    subscribedAnimeIds.value = new Set(subs.map((s) => s.animeId));
   } catch (err) {
-    console.warn('Failed to load auto-dl subscriptions:', err)
+    console.warn('Failed to load auto-dl subscriptions:', err);
   }
 }
 
 onMounted(() => {
-  window.addEventListener('calendar-view-changed', onCalendarViewChanged)
-  load()
-  loadAutoDlSubscriptions()
-})
+  window.addEventListener('calendar-view-changed', onCalendarViewChanged);
+  load();
+  loadAutoDlSubscriptions();
+});
 
 onBeforeUnmount(() => {
-  window.removeEventListener('calendar-view-changed', onCalendarViewChanged)
-})
+  window.removeEventListener('calendar-view-changed', onCalendarViewChanged);
+});
 </script>
 
 <template>
@@ -206,8 +206,19 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <h2>Airing Calendar</h2>
       <div class="topbar-controls">
-        <button class="nav-btn" @click="shiftPage(-1)" :title="weeksPerPage === 4 ? 'Previous 4 weeks' : 'Previous week'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <button
+          class="nav-btn"
+          @click="shiftPage(-1)"
+          :title="weeksPerPage === 4 ? 'Previous 4 weeks' : 'Previous week'"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="16"
+            height="16"
+          >
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
           </svg>
         </button>
@@ -220,12 +231,28 @@ onBeforeUnmount(() => {
         >
           {{ pageRangeLabel }}
         </button>
-        <button class="nav-btn" @click="shiftPage(1)" :title="weeksPerPage === 4 ? 'Next 4 weeks' : 'Next week'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <button
+          class="nav-btn"
+          @click="shiftPage(1)"
+          :title="weeksPerPage === 4 ? 'Next 4 weeks' : 'Next week'"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            width="16"
+            height="16"
+          >
             <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
           </svg>
         </button>
-        <button class="refresh-btn" :disabled="loading" @click="load(true)" title="Refresh calendar">
+        <button
+          class="refresh-btn"
+          :disabled="loading"
+          @click="load(true)"
+          title="Refresh calendar"
+        >
           <svg
             :class="{ spinning: loading }"
             viewBox="0 0 24 24"
@@ -279,12 +306,7 @@ onBeforeUnmount(() => {
                 :class="{ clickable: entry.animeId !== null }"
                 @click="handleClick(entry)"
               >
-                <img
-                  :src="entry.posterUrl"
-                  :alt="entry.name"
-                  class="poster"
-                  loading="lazy"
-                />
+                <img :src="entry.posterUrl" :alt="entry.name" class="poster" loading="lazy" />
                 <div class="card-text">
                   <div class="card-title" :title="entry.name">{{ entry.name }}</div>
                   <div class="card-meta">

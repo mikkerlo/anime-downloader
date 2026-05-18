@@ -7,9 +7,14 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "jsx": "preserve",
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "@shared/*": ["./src/shared/*"],
+      "@renderer/*": ["./src/renderer/src/*"]
+    }
   },
   "include": [
+    "src/shared/**/*",
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.vue",
     "src/preload/types.d.ts"

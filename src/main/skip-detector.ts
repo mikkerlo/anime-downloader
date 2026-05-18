@@ -91,7 +91,12 @@ const REFINE_BIT_THRESHOLD = 4
 // Prevents single noisy hashes from defining the boundary.
 const REFINE_SUSTAIN_HASHES = 5
 
-export function fingerprintCacheKey(animeId: number, episodeInt: string, fileSize: number, fileMtimeMs: number): string {
+export function fingerprintCacheKey(
+  animeId: number,
+  episodeInt: string,
+  fileSize: number,
+  fileMtimeMs: number
+): string {
   return `${animeId}:${episodeInt}:${fileSize}:${Math.floor(fileMtimeMs)}`
 }
 
@@ -216,9 +221,9 @@ async function getFingerprint(
 }
 
 interface MatchRun {
-  startA: number  // hash index into A's slice
-  startB: number  // hash index into B's slice
-  length: number  // hash count
+  startA: number // hash index into A's slice
+  startB: number // hash index into B's slice
+  length: number // hash count
 }
 
 interface FingerprintRegion {
@@ -240,8 +245,12 @@ interface RegionMatch {
 // `threshold`. Returns the longest qualifying run (or null) within slices
 // `a[aOffset .. aOffset+aLen)` and `b[bOffset .. bOffset+bLen)`.
 function findBestMatch(
-  a: Uint32Array, aOffset: number, aLen: number,
-  b: Uint32Array, bOffset: number, bLen: number,
+  a: Uint32Array,
+  aOffset: number,
+  aLen: number,
+  b: Uint32Array,
+  bOffset: number,
+  bLen: number,
   windowHashes: number,
   minRunHashes: number,
   threshold: number
@@ -269,7 +278,7 @@ function findBestMatch(
       if (isMatch) {
         if (runStart < 0) runStart = i
       } else if (runStart >= 0) {
-        const length = (i - runStart) + windowHashes - 1
+        const length = i - runStart + windowHashes - 1
         if (length >= minRunHashes && (!best || length > best.length)) {
           best = { startA: aOffset + runStart, startB: bOffset + runStart - d, length }
         }
@@ -288,7 +297,7 @@ function findBestMatch(
 
     // Close trailing run
     if (runStart >= 0) {
-      const length = (endI - windowHashes - runStart) + windowHashes
+      const length = endI - windowHashes - runStart + windowHashes
       if (length >= minRunHashes && (!best || length > best.length)) {
         best = { startA: aOffset + runStart, startB: bOffset + runStart - d, length }
       }
@@ -304,7 +313,8 @@ function findBestMatch(
 // `sustain` consecutive per-hash distances are all ≤ `threshold`, anchoring
 // the refined start/end to genuine same-audio runs. Never extends outward.
 function refineMatch(
-  a: Uint32Array, b: Uint32Array,
+  a: Uint32Array,
+  b: Uint32Array,
   match: MatchRun,
   threshold: number,
   sustain: number
@@ -315,7 +325,7 @@ function refineMatch(
   const isSustainedGood = (i: number): boolean => {
     if (i + sustain > coarseEnd) return false
     if (i + sustain > a.length) return false
-    if ((i - d) < 0 || (i + sustain - d) > b.length) return false
+    if (i - d < 0 || i + sustain - d > b.length) return false
     for (let k = 0; k < sustain; k++) {
       if (popcount32(a[i + k] ^ b[i + k - d]) > threshold) return false
     }
@@ -324,12 +334,18 @@ function refineMatch(
 
   let newStart = match.startA
   for (let i = match.startA; i + sustain <= coarseEnd; i++) {
-    if (isSustainedGood(i)) { newStart = i; break }
+    if (isSustainedGood(i)) {
+      newStart = i
+      break
+    }
   }
 
   let newEnd = coarseEnd
   for (let i = coarseEnd - sustain; i >= newStart; i--) {
-    if (isSustainedGood(i)) { newEnd = i + sustain; break }
+    if (isSustainedGood(i)) {
+      newEnd = i + sustain
+      break
+    }
   }
 
   return {
@@ -371,8 +387,8 @@ function matchFingerprintRegions(a: FingerprintRegion, b: FingerprintRegion): Re
     REFINE_SUSTAIN_HASHES
   )
   return {
-    startSecA: a.sourceOffsetSec + ((refined.startA - a.offsetHashes) / a.fingerprint.hashesPerSec),
-    startSecB: b.sourceOffsetSec + ((refined.startB - b.offsetHashes) / b.fingerprint.hashesPerSec),
+    startSecA: a.sourceOffsetSec + (refined.startA - a.offsetHashes) / a.fingerprint.hashesPerSec,
+    startSecB: b.sourceOffsetSec + (refined.startB - b.offsetHashes) / b.fingerprint.hashesPerSec,
     lengthSecA: refined.length / a.fingerprint.hashesPerSec,
     lengthSecB: refined.length / b.fingerprint.hashesPerSec
   }
@@ -381,7 +397,7 @@ function matchFingerprintRegions(a: FingerprintRegion, b: FingerprintRegion): Re
 interface PerEpisodeSamples {
   opStart: number[]
   opLength: number[]
-  edStart: number[]  // counted from start (not end) for consistency
+  edStart: number[] // counted from start (not end) for consistency
   edLength: number[]
 }
 
@@ -398,10 +414,20 @@ export async function analyzeShow(
   const loaded: LoadedEpisode[] = []
   for (let i = 0; i < episodes.length; i++) {
     if (opts.signal?.aborted) throw new Error('analysis cancelled')
-    opts.onProgress?.({ phase: 'fingerprinting', current: i, total: episodes.length, episodeLabel: episodes[i].episodeLabel })
+    opts.onProgress?.({
+      phase: 'fingerprinting',
+      current: i,
+      total: episodes.length,
+      episodeLabel: episodes[i].episodeLabel
+    })
     const fp = await getFingerprint(animeId, episodes[i], opts)
     loaded.push({ ...episodes[i], fingerprint: fp })
-    opts.onProgress?.({ phase: 'fingerprinting', current: i + 1, total: episodes.length, episodeLabel: episodes[i].episodeLabel })
+    opts.onProgress?.({
+      phase: 'fingerprinting',
+      current: i + 1,
+      total: episodes.length,
+      episodeLabel: episodes[i].episodeLabel
+    })
   }
 
   // Phase 2: pairwise comparison
@@ -424,11 +450,27 @@ export async function analyzeShow(
     const a = loaded[pairs[p].i]
     const b = loaded[pairs[p].j]
     // OP region: search the first 8 minutes of each episode
-    const opRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
-    const opRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
+    const opRegionHashesA = Math.min(
+      a.fingerprint.hashes.length,
+      Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
+    )
+    const opRegionHashesB = Math.min(
+      b.fingerprint.hashes.length,
+      Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
+    )
     const opMatch = matchFingerprintRegions(
-      { fingerprint: a.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesA, sourceOffsetSec: 0 },
-      { fingerprint: b.fingerprint, offsetHashes: 0, lengthHashes: opRegionHashesB, sourceOffsetSec: 0 }
+      {
+        fingerprint: a.fingerprint,
+        offsetHashes: 0,
+        lengthHashes: opRegionHashesA,
+        sourceOffsetSec: 0
+      },
+      {
+        fingerprint: b.fingerprint,
+        offsetHashes: 0,
+        lengthHashes: opRegionHashesB,
+        sourceOffsetSec: 0
+      }
     )
     if (opMatch) {
       const sA = samplesByEpisode.get(a.episodeInt)!
@@ -440,8 +482,14 @@ export async function analyzeShow(
     }
 
     // ED region: search the last 8 minutes of each episode
-    const edRegionHashesA = Math.min(a.fingerprint.hashes.length, Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
-    const edRegionHashesB = Math.min(b.fingerprint.hashes.length, Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS))
+    const edRegionHashesA = Math.min(
+      a.fingerprint.hashes.length,
+      Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
+    )
+    const edRegionHashesB = Math.min(
+      b.fingerprint.hashes.length,
+      Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
+    )
     const edStartA = a.fingerprint.hashes.length - edRegionHashesA
     const edStartB = b.fingerprint.hashes.length - edRegionHashesB
     const edMatch = matchFingerprintRegions(
@@ -474,16 +522,22 @@ export async function analyzeShow(
   const perEpisode: Record<string, EpisodeSkipDetection> = {}
   for (const ep of loaded) {
     const samples = samplesByEpisode.get(ep.episodeInt)!
-    const op: SkipRange | null = samples.opStart.length === 0 ? null : {
-      startSec: median(samples.opStart),
-      endSec: median(samples.opStart) + median(samples.opLength),
-      pairCount: samples.opStart.length
-    }
-    const ed: SkipRange | null = samples.edStart.length === 0 ? null : {
-      startSec: median(samples.edStart),
-      endSec: median(samples.edStart) + median(samples.edLength),
-      pairCount: samples.edStart.length
-    }
+    const op: SkipRange | null =
+      samples.opStart.length === 0
+        ? null
+        : {
+            startSec: median(samples.opStart),
+            endSec: median(samples.opStart) + median(samples.opLength),
+            pairCount: samples.opStart.length
+          }
+    const ed: SkipRange | null =
+      samples.edStart.length === 0
+        ? null
+        : {
+            startSec: median(samples.edStart),
+            endSec: median(samples.edStart) + median(samples.edLength),
+            pairCount: samples.edStart.length
+          }
     perEpisode[ep.episodeInt] = {
       episodeInt: ep.episodeInt,
       episodeLabel: ep.episodeLabel,
@@ -515,10 +569,18 @@ export async function analyzeShow(
 
 function killChild(proc: ChildProcess | null): void {
   if (!proc || proc.killed) return
-  try { proc.kill('SIGKILL') } catch { /* ignore */ }
+  try {
+    proc.kill('SIGKILL')
+  } catch {
+    /* ignore */
+  }
 }
 
-async function runChild(command: string, args: string[], opts?: { signal?: AbortSignal }): Promise<void> {
+async function runChild(
+  command: string,
+  args: string[],
+  opts?: { signal?: AbortSignal }
+): Promise<void> {
   let proc: ChildProcess | null = null
   if (opts?.signal?.aborted) throw new Error('operation cancelled')
   const onAbort = (): void => killChild(proc)
@@ -527,7 +589,9 @@ async function runChild(command: string, args: string[], opts?: { signal?: Abort
     await new Promise<void>((resolve, reject) => {
       proc = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] })
       let stderr = ''
-      proc.stderr?.on('data', (chunk) => { stderr += chunk.toString() })
+      proc.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString()
+      })
       proc.on('error', reject)
       proc.on('exit', (code, signal) => {
         if (signal === 'SIGKILL') {
@@ -535,7 +599,9 @@ async function runChild(command: string, args: string[], opts?: { signal?: Abort
           return
         }
         if (code !== 0) {
-          reject(new Error(`${path.basename(command)} exited ${code}: ${stderr.trim() || 'no stderr'}`))
+          reject(
+            new Error(`${path.basename(command)} exited ${code}: ${stderr.trim() || 'no stderr'}`)
+          )
           return
         }
         resolve()
@@ -547,23 +613,38 @@ async function runChild(command: string, args: string[], opts?: { signal?: Abort
   }
 }
 
-async function probeDurationSec(sourcePath: string, ffprobePath: string, signal?: AbortSignal): Promise<number | null> {
+async function probeDurationSec(
+  sourcePath: string,
+  ffprobePath: string,
+  signal?: AbortSignal
+): Promise<number | null> {
   let proc: ChildProcess | null = null
   if (signal?.aborted) throw new Error('operation cancelled')
   const onAbort = (): void => killChild(proc)
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     return await new Promise<number | null>((resolve, reject) => {
-      proc = spawn(ffprobePath, [
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        sourcePath
-      ], { stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(
+        ffprobePath,
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'format=duration',
+          '-of',
+          'default=noprint_wrappers=1:nokey=1',
+          sourcePath
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] }
+      )
       let stdout = ''
       let stderr = ''
-      proc.stdout?.on('data', (chunk) => { stdout += chunk.toString() })
-      proc.stderr?.on('data', (chunk) => { stderr += chunk.toString() })
+      proc.stdout?.on('data', (chunk) => {
+        stdout += chunk.toString()
+      })
+      proc.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString()
+      })
       proc.on('error', reject)
       proc.on('exit', (code, exitSignal) => {
         if (exitSignal === 'SIGKILL') {
@@ -608,19 +689,25 @@ async function fingerprintStreamClip(
       args.push('-sseof', `-${clipLengthSec}`)
     }
     args.push(
-      '-i', streamUrl,
+      '-i',
+      streamUrl,
       '-vn',
-      '-ac', '1',
-      '-ar', '11025',
-      '-c:a', 'pcm_s16le',
-      '-t', String(clipLengthSec),
+      '-ac',
+      '1',
+      '-ar',
+      '11025',
+      '-c:a',
+      'pcm_s16le',
+      '-t',
+      String(clipLengthSec),
       outputPath
     )
     await runChild(ffmpegPath, args, { signal })
     const fingerprint = await fingerprintFile(fpcalcPath, outputPath, { signal })
-    const offsetSec = mode === 'end' && streamDurationSec
-      ? Math.max(0, streamDurationSec - fingerprint.durationSec)
-      : 0
+    const offsetSec =
+      mode === 'end' && streamDurationSec
+        ? Math.max(0, streamDurationSec - fingerprint.durationSec)
+        : 0
     return { fingerprint, offsetSec }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true })
@@ -634,11 +721,15 @@ async function loadEpisodeFingerprint(
 ): Promise<Fingerprint | null> {
   if (!ep.filePath) return null
   try {
-    return await getFingerprint(animeId, {
-      episodeInt: ep.episodeInt,
-      episodeLabel: ep.episodeLabel,
-      filePath: ep.filePath
-    }, opts)
+    return await getFingerprint(
+      animeId,
+      {
+        episodeInt: ep.episodeInt,
+        episodeLabel: ep.episodeLabel,
+        filePath: ep.filePath
+      },
+      opts
+    )
   } catch {
     return null
   }
@@ -659,7 +750,10 @@ async function detectStreamRange(
     const localFingerprint = await loadEpisodeFingerprint(animeId, ep, opts)
     if (!localFingerprint) continue
     const startHash = Math.max(0, Math.round(range.startSec * localFingerprint.hashesPerSec))
-    const endHash = Math.min(localFingerprint.hashes.length, Math.round(range.endSec * localFingerprint.hashesPerSec))
+    const endHash = Math.min(
+      localFingerprint.hashes.length,
+      Math.round(range.endSec * localFingerprint.hashesPerSec)
+    )
     const match = matchFingerprintRegions(
       {
         fingerprint: clip.fingerprint,
@@ -707,7 +801,16 @@ export async function detectStream(
 
   if (opCandidates) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'start', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal, opts.userAgent)
+      const clip = await fingerprintStreamClip(
+        streamUrl,
+        opts.ffmpegPath,
+        opts.fpcalcPath,
+        'start',
+        SEARCH_REGION_SECONDS,
+        streamDurationSec,
+        opts.signal,
+        opts.userAgent
+      )
       opFingerprint = clip.fingerprint
       op = await detectStreamRange(animeId, 'op', clip, detections, opts)
     } catch {
@@ -717,14 +820,25 @@ export async function detectStream(
 
   if (edCandidates && streamDurationSec) {
     try {
-      const clip = await fingerprintStreamClip(streamUrl, opts.ffmpegPath, opts.fpcalcPath, 'end', SEARCH_REGION_SECONDS, streamDurationSec, opts.signal, opts.userAgent)
+      const clip = await fingerprintStreamClip(
+        streamUrl,
+        opts.ffmpegPath,
+        opts.fpcalcPath,
+        'end',
+        SEARCH_REGION_SECONDS,
+        streamDurationSec,
+        opts.signal,
+        opts.userAgent
+      )
       edFingerprint = clip.fingerprint
       ed = await detectStreamRange(animeId, 'ed', clip, detections, opts)
     } catch {
       ed = null
     }
   } else if (edCandidates && !streamDurationSec) {
-    console.warn('[skip-detector] ED detection skipped: stream duration unavailable (ffprobe missing or probe failed)')
+    console.warn(
+      '[skip-detector] ED detection skipped: stream duration unavailable (ffprobe missing or probe failed)'
+    )
   }
 
   if (!op && !ed) return null

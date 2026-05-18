@@ -15,7 +15,7 @@ Follow this workflow to perform high-quality code reviews for this project.
     - **In Chat**: Share "General Feedback" and "Specific Observations" with the user to provide context for your review.
     - **On GitHub**: Keep the review body concise and strictly limited to the final verdict. NEVER include the "General Feedback" or "Specific Observations" sections in the GitHub review body; those are exclusively for the chat. Focus on line-level suggestions for code changes.
 4.  **Direct Action**: Always prefer line-level code comments and suggestions over general comments in the review body. Prefix minor issues or suggestions with "nit:".
-5.  **Reliable Submission**: Use a JSON file to craft and submit the review (via `gh api`) to avoid errors with long shell commands and shell escaping.
+5.  **Reliable Submission**: Use a JSON file stored in the `/tmp` folder to craft and submit the review (via `gh api`) to avoid errors with long shell commands and shell escaping, and ensure you delete the file after sending.
 6.  **Verified Approval**: Use explicit approval phrases like "LGTM after testing on Windows" or "LGTM after manual testing" to indicate thorough verification ONLY if code changes that require testing were made. ONLY use these phrases when you are ready to formally approve the PR.
 ## Workflow
 
@@ -56,4 +56,4 @@ Follow this workflow to perform high-quality code reviews for this project.
 
 ### 4. Approval
 - If everything looks good (or only minor non-blocking fixes are needed), approve the PR.
-- **Mandatory Suffix for Approval**: ONLY if you are submitting a formal approval for code changes that require testing, append "LGTM after [manual/platform] testing" to the final review message. If the changes do not require testing (e.g., docs), use a standard "LGTM". DO NOT use this suffix for standard comments or if blocking issues (like conflict markers) remain.
+- **Mandatory Suffix for Approval**: ONLY if you are submitting a formal approval for code changes that require testing, append "LGTM after [manual/platform] testing" to the final review message. If the changes do not require testing (e.g., docs), use a standard "LGTM". DO NOT use this suffix for standard comments or if blocking issues (like conflict markers) remain.ments or if blocking issues (like conflict markers) remain.

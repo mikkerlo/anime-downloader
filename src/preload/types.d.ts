@@ -1,7 +1,7 @@
 // IPC surface contract: `window.api` (renderer ⇆ main) and the libass module shim.
 //
 // Domain types (AnimeDetail, ShikiUserRate, EpisodeGroup, …) were relocated to
-// `src/shared/types/*.ts` in #84 Phase 1 (slice 1a). They are still declared as
+// `src/shared/types/*.d.ts` in #84 Phase 1 (slice 1a). They are still declared as
 // ambient globals there — no import is needed here or at any call site, and the
 // `Api` shape below is byte-identical to before the split. Later Phase 1 slices
 // (1b/1c) introduce the typed channel contract and regenerate the preload from

@@ -565,30 +565,30 @@ const api = {
   syncplayGetStatus: () =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_STATUS) as Promise<SyncplayStatus>,
   onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
-    syncplayOn('syncplay:connection-status', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, callback),
   offSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
-    syncplayOff('syncplay:connection-status', callback),
+    syncplayOff(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, callback),
   onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
-    syncplayOn('syncplay:remote-state', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, callback),
   offSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
-    syncplayOff('syncplay:remote-state', callback),
+    syncplayOff(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, callback),
   onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
-    syncplayOn('syncplay:room-users', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, callback),
   offSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
-    syncplayOff('syncplay:room-users', callback),
+    syncplayOff(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, callback),
   onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
-    syncplayOn('syncplay:room-event', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, callback),
   offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
-    syncplayOff('syncplay:room-event', callback),
+    syncplayOff(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, callback),
   onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
-    syncplayOn('syncplay:remote-episode-change', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, callback),
   offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
-    syncplayOff('syncplay:remote-episode-change', callback),
+    syncplayOff(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, callback),
   onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
-    syncplayOn('syncplay:trace', callback),
+    syncplayOn(EVENT_CHANNELS.SYNCPLAY_TRACE, callback),
   offSyncplayTrace: (
     callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
-  ) => syncplayOff('syncplay:trace', callback),
+  ) => syncplayOff(EVENT_CHANNELS.SYNCPLAY_TRACE, callback),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>

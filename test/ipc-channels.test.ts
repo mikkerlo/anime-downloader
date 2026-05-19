@@ -3,27 +3,16 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { CHANNELS, EVENT_CHANNELS } from '../src/shared/ipc/channels'
 
-// Re-derive the channel literals straight from the production source so the
-// contract can't silently drift: if someone adds/renames an ipc channel in
-// main or preload without updating channels.ts, this fails.
-function scan() {
-  const read = (p: string) => readFileSync(resolve(__dirname, '..', p), 'utf8')
-  const sources = read('src/main/index.ts') + '\n' + read('src/preload/index.ts')
+const read = (p: string) => readFileSync(resolve(__dirname, '..', p), 'utf8')
+const MAIN = read('src/main/index.ts')
+const PRELOAD = read('src/preload/index.ts')
+const SOURCES = MAIN + '\n' + PRELOAD
 
-  const reqRe =
-    /(?:ipcMain\.(?:handle|on)|ipcRenderer\.(?:invoke|send))\(\s*[`'"]([a-z][\w:-]+)[`'"]/g
-  const evtRe =
-    /(?:webContents\.send|ipcRenderer\.(?:on|removeListener|removeAllListeners))\(\s*[`'"]([a-z][\w:-]+)[`'"]/g
-
-  const request = new Set<string>()
-  const event = new Set<string>()
-  let m: RegExpExecArray | null
-  while ((m = reqRe.exec(sources))) request.add(m[1])
-  while ((m = evtRe.exec(sources))) event.add(m[1])
-  // A channel that is broadcast is an event, not a request.
-  for (const c of event) request.delete(c)
-  return { request, event }
-}
+// First arg of every IPC-ish call. Post-1c every one must be a CHANNELS./
+// EVENT_CHANNELS. reference — a bare string literal here means an un-migrated
+// channel bypassing the single source of truth.
+const IPC_CALL =
+  /(?:ipcMain\.(?:handle|on)|ipcRenderer\.(?:invoke|send|on|removeListener|removeAllListeners)|[\w.]+\.webContents\.send|sender\.send|broadcastToAll)\(\s*(['"`])([a-z][\w:-]+)\1/g
 
 describe('IPC channel contract', () => {
   const requestValues = Object.values(CHANNELS)
@@ -48,9 +37,21 @@ describe('IPC channel contract', () => {
     }
   })
 
-  it('exhaustively mirrors the channels used in main + preload', () => {
-    const { request, event } = scan()
-    expect([...request].sort()).toEqual([...requestValues].sort())
-    expect([...event].sort()).toEqual([...eventValues].sort())
+  it('leaves no raw IPC channel string literals in main or preload (1c migration complete)', () => {
+    const leftovers = new Set<string>()
+    let m: RegExpExecArray | null
+    IPC_CALL.lastIndex = 0
+    while ((m = IPC_CALL.exec(SOURCES))) leftovers.add(m[2])
+    expect([...leftovers]).toEqual([])
+  })
+
+  it('has no dead contract constants — every channel is referenced by symbol', () => {
+    const unreferenced = [...Object.keys(CHANNELS), ...Object.keys(EVENT_CHANNELS)].filter(
+      (key) => {
+        const sym = (key in CHANNELS ? 'CHANNELS.' : 'EVENT_CHANNELS.') + key
+        return !SOURCES.includes(sym)
+      }
+    )
+    expect(unreferenced).toEqual([])
   })
 })

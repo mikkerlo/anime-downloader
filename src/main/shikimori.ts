@@ -1,4 +1,4 @@
-import type Store from 'electron-store'
+import type { StorageService } from './store/types'
 
 const CLIENT_ID = 'wlhQeTkDVSMFmXqvtDJqPG_ZhWEUnG8iI4YG9nadvLU'
 const CLIENT_SECRET = 'r_lIMZbmFWZmVgP9pC9-9XaS0e96lwduMOegZ3YREfM'
@@ -131,7 +131,7 @@ async function refreshToken(token: string): Promise<ShikiCredentials> {
   return response.json() as Promise<ShikiCredentials>
 }
 
-export async function ensureFreshToken(store: Store): Promise<string> {
+export async function ensureFreshToken(store: StorageService): Promise<string> {
   const creds = store.get('shikimoriCredentials') as ShikiCredentials | null
   if (!creds) throw new Error('Not logged in to Shikimori')
 

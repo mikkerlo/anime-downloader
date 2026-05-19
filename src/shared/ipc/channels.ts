@@ -226,7 +226,15 @@ export const EVENT_CHANNELS = {
   STORAGE_CLEANUP_FINISHED: 'storage:cleanup-finished',
   STORAGE_CLEANUP_PENDING: 'storage:cleanup-pending',
   STORAGE_MOVE_TO_COLD_PROGRESS: 'storage:move-to-cold-progress',
-  STORAGE_USAGE_PROGRESS: 'storage:usage-progress'
+  STORAGE_USAGE_PROGRESS: 'storage:usage-progress',
+
+  // Syncplay
+  SYNCPLAY_CONNECTION_STATUS: 'syncplay:connection-status',
+  SYNCPLAY_REMOTE_EPISODE_CHANGE: 'syncplay:remote-episode-change',
+  SYNCPLAY_REMOTE_STATE: 'syncplay:remote-state',
+  SYNCPLAY_ROOM_EVENT: 'syncplay:room-event',
+  SYNCPLAY_ROOM_USERS: 'syncplay:room-users',
+  SYNCPLAY_TRACE: 'syncplay:trace'
 } as const
 
 export type RequestChannel = (typeof CHANNELS)[keyof typeof CHANNELS]

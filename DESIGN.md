@@ -36,6 +36,10 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/fpcalc-binaries.ts` | Auto-download Chromaprint `fpcalc` binary on first launch |
 | `src/main/fingerprint.ts` | Spawns fpcalc on a media file; parses raw 32-bit fingerprint hash array |
 | `src/main/skip-detector.ts` | Per-show OP/ED detection via pairwise Hamming-distance matching |
+| `src/main/lib/errors.ts` | Pure helpers: `errorCode` (walks `cause` chain), `isNetworkError` (transport-vs-application classification) |
+| `src/main/lib/shikimori-queue.ts` | `QueuedShikimoriUpdate`/`ConsolidatedWorkItem` types + pure `consolidateQueue` (per-malId offline-queue collapse) |
+| `src/main/lib/filename.ts` | Pure `parseEpisodeFromFilename` (episodeInt + ext from sanitized download filename) |
+| `src/main/streaming/codec-strings.ts` | Pure ffprobe→codec-string mappers: `avcCodecString`, `hevcCodecString`, `aacCodecString` (MSE-compatible RFC 6381 strings) |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |

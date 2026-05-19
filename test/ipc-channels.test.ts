@@ -12,7 +12,7 @@ const SOURCES = MAIN + '\n' + PRELOAD
 // EVENT_CHANNELS. reference — a bare string literal here means an un-migrated
 // channel bypassing the single source of truth.
 const IPC_CALL =
-  /(?:ipcMain\.(?:handle|on)|ipcRenderer\.(?:invoke|send|on|removeListener|removeAllListeners)|[\w.]+\.webContents\.send|sender\.send)\(\s*(['"`])([a-z][\w:-]+)\1/g
+  /(?:ipcMain\.(?:handle|on)|ipcRenderer\.(?:invoke|send|on|removeListener|removeAllListeners)|[\w.]+\.webContents\.send|sender\.send|broadcastToAll)\(\s*(['"`])([a-z][\w:-]+)\1/g
 
 describe('IPC channel contract', () => {
   const requestValues = Object.values(CHANNELS)

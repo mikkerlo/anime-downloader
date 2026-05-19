@@ -368,7 +368,7 @@ function getSyncStatus(): ShikiSyncStatus {
 }
 
 function broadcastSyncStatus(): void {
-  broadcastToAll('shikimori:sync-status', getSyncStatus())
+  broadcastToAll(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS, getSyncStatus())
 }
 
 function startSyncTimer(): void {
@@ -414,7 +414,7 @@ function dropConsumedEntries(malId: number, consumedQueuedAts: number[]): number
     (q) => !(q.malId === malId && consumed.has(q.queuedAt))
   )
   store.set('shikimoriUpdateQueue', queue)
-  broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
+  broadcastToAll(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
   return queue.length
 }
 
@@ -451,7 +451,7 @@ function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): v
   }
   store.set('shikimoriUserRates', cached)
   invalidateCalendarCache()
-  broadcastToAll('shikimori:rate-updated', cached[idx])
+  broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
 }
 
 function shouldApplyOnDrift(
@@ -618,7 +618,7 @@ async function refreshShikimoriDetailsForMalId(
     >
     cache[String(malId)] = { details, fetchedAt: Date.now() }
     store.set('shikimoriAnimeDetails', cache)
-    broadcastToAll('shikimori:anime-details-updated', { malId, details })
+    broadcastToAll(EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED, { malId, details })
     return details
   } catch (err) {
     if (!isNetworkError(err)) {
@@ -662,7 +662,7 @@ async function prefetchShikimoriDetails(): Promise<void> {
         >
         cache[String(malId)] = { details, fetchedAt: Date.now() }
         store.set('shikimoriAnimeDetails', cache)
-        broadcastToAll('shikimori:anime-details-updated', { malId, details })
+        broadcastToAll(EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED, { malId, details })
       } catch (err) {
         if (isNetworkError(err)) {
           console.warn('[shikimori prefetch] network error, aborting loop:', err)
@@ -747,7 +747,7 @@ async function maybeBroadcastCleanupPrompt(
   if (!sa || typeof sa.id !== 'number') return
   if (!isDownloadedAnime(sa.id)) return
   if (isCleanupSnoozed(sa.id)) return
-  broadcastToAll('cleanup:prompt', {
+  broadcastToAll(EVENT_CHANNELS.CLEANUP_PROMPT, {
     animeId: sa.id,
     animeName: getDisplayName(sa),
     malId
@@ -1680,7 +1680,7 @@ async function scanStorageUsage(): Promise<StorageUsage> {
     const animeId = dirNameToId.get(folder)
     if (!animeId) {
       scanned++
-      if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
       continue
     }
     const animeRec = downloaded[animeId]
@@ -1704,7 +1704,7 @@ async function scanStorageUsage(): Promise<StorageUsage> {
       files = await fsPromises.readdir(animeDir)
     } catch {
       scanned++
-      if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
       continue
     }
 
@@ -1741,7 +1741,7 @@ async function scanStorageUsage(): Promise<StorageUsage> {
     }
 
     scanned++
-    if (reportProgress) broadcastToAll('storage:usage-progress', { scanned, total })
+    if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
   }
 
   let totalBytes = 0
@@ -1874,7 +1874,7 @@ async function runWatchedCleanup(force = false): Promise<{
 
     const requireConfirm = store.get('autoCleanupConfirm') as boolean
     if (requireConfirm && !force) {
-      broadcastToAll('storage:cleanup-pending', { candidates })
+      broadcastToAll(EVENT_CHANNELS.STORAGE_CLEANUP_PENDING, { candidates })
       return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
     }
 
@@ -1916,12 +1916,12 @@ async function runWatchedCleanup(force = false): Promise<{
     for (const animeName of affectedAnime) {
       try {
         const data = scanEpisodeFiles(animeName)
-        broadcastToAll('file:episodes-changed', animeName, data)
+        broadcastToAll(EVENT_CHANNELS.FILE_EPISODES_CHANGED, animeName, data)
       } catch {
         /* ignore */
       }
     }
-    broadcastToAll('storage:cleanup-finished', result)
+    broadcastToAll(EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED, result)
     return result
   } finally {
     cleanupRunning = false
@@ -1973,7 +1973,7 @@ function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
   if (currentSkipAnalysis && currentSkipAnalysis.animeId === animeId) {
     currentSkipAnalysis.lastProgress = p
   }
-  broadcastToAll('skip-detector:analyze-progress', { animeId, ...p })
+  broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS, { animeId, ...p })
 }
 
 function normalizeSkipDetections(detections: ShowSkipDetections | null): ShowSkipDetections | null {
@@ -2034,7 +2034,10 @@ function runSkipAnalysisInternal(
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
     all[String(animeId)] = result
     store.set('skipDetections', all)
-    broadcastToAll('skip-detector:signature-updated', { animeId, perEpisode: result.perEpisode })
+    broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, {
+      animeId,
+      perEpisode: result.perEpisode
+    })
     return result
   })()
 
@@ -2283,7 +2286,7 @@ function dropSkipDetectionsForAnime(animeId: number): boolean {
   if (!(key in detections)) return false
   delete detections[key]
   store.set('skipDetections', detections)
-  broadcastToAll('skip-detector:signature-updated', { animeId, perEpisode: {} })
+  broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, { animeId, perEpisode: {} })
   return true
 }
 
@@ -2297,7 +2300,7 @@ function dropSkipDetectionsForEpisode(animeId: number, episodeInt: string): bool
     delete detections[key]
   }
   store.set('skipDetections', detections)
-  broadcastToAll('skip-detector:signature-updated', {
+  broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, {
     animeId,
     perEpisode: detections[key]?.perEpisode ?? {}
   })
@@ -3470,7 +3473,7 @@ function registerIpcHandlers(): void {
       let detections =
         (store.get('skipDetections') as Record<string, ShowSkipDetections>)[String(animeId)] ?? null
       if (!detections) {
-        broadcastToAll('chapter-inject:progress', {
+        broadcastToAll(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
           animeId,
           phase: 'analyzing',
           current: 0,
@@ -3486,7 +3489,7 @@ function registerIpcHandlers(): void {
 
       for (let i = 0; i < episodes.length; i++) {
         const ep = episodes[i]
-        broadcastToAll('chapter-inject:progress', {
+        broadcastToAll(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
           animeId,
           phase: 'writing',
           current: i,
@@ -3562,7 +3565,7 @@ function registerIpcHandlers(): void {
         }
       }
 
-      broadcastToAll('chapter-inject:progress', {
+      broadcastToAll(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, {
         animeId,
         phase: 'done',
         current: episodes.length,
@@ -3698,7 +3701,7 @@ function registerIpcHandlers(): void {
     prefetchAbort = true
     invalidateCalendarCache()
     stopSyncTimer()
-    broadcastToAll('shikimori:offline-queue-changed', { length: 0 })
+    broadcastToAll(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: 0 })
     broadcastSyncStatus()
   })
 
@@ -3778,7 +3781,7 @@ function registerIpcHandlers(): void {
           }
           store.set('shikimoriUserRates', cached)
           invalidateCalendarCache()
-          broadcastToAll('shikimori:rate-updated', cached[idx])
+          broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
           void maybeBroadcastCleanupPrompt(
             cached[idx].smotretAnime,
             malId,
@@ -3822,8 +3825,8 @@ function registerIpcHandlers(): void {
         }
         store.set('shikimoriUserRates', cached)
         invalidateCalendarCache()
-        broadcastToAll('shikimori:rate-updated', cached[idx])
-        broadcastToAll('shikimori:offline-queue-changed', { length: queue.length })
+        broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
+        broadcastToAll(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
         startSyncTimer()
         void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
 
@@ -3881,7 +3884,7 @@ function registerIpcHandlers(): void {
     fetchAndCacheShikimoriRates()
       .then((entries) => {
         invalidateCalendarCache()
-        broadcastToAll('shikimori:rates-refreshed', entries)
+        broadcastToAll(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, entries)
         void syncShikimoriQueue()
         void prefetchShikimoriDetails()
         void runAutoDownloadTick('rates-refreshed').catch((err) =>
@@ -5539,22 +5542,22 @@ app.whenReady().then(async () => {
   }, 30_000)
 
   syncplay.on('connection-status', (status: SyncplayStatus) => {
-    broadcastToAll('syncplay:connection-status', status)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, status)
   })
   syncplay.on('remote-state', (state: SyncplayRemoteState) => {
-    broadcastToAll('syncplay:remote-state', state)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, state)
   })
   syncplay.on('room-users', (users: SyncplayRoomUser[]) => {
-    broadcastToAll('syncplay:room-users', users)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, users)
   })
   syncplay.on('room-event', (ev: SyncplayRoomEvent) => {
-    broadcastToAll('syncplay:room-event', ev)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, ev)
   })
   syncplay.on('remote-episode-change', (ep: SyncplayRemoteEpisode) => {
-    broadcastToAll('syncplay:remote-episode-change', ep)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, ep)
   })
   syncplay.on('trace', (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => {
-    broadcastToAll('syncplay:trace', entry)
+    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_TRACE, entry)
   })
 
   if (getQueueLength() > 0) {

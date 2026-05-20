@@ -44,6 +44,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/store/index.ts` | `createStorageService(defaults)` electron-store binding + `MainStorageService.migrateWatchProgressV2()` |
 | `src/main/store/keys.ts` | `PERSISTED_STORE_KEYS` frozen tuple — rename guard, compile-time-asserted against `keyof STORE_DEFAULTS` in `index.ts` |
 | `src/main/store/migrate.ts` | Pure `migrateWatchProgressV2(store)` (one-shot `watchedAt` backfill) |
+| `src/main/services/anime-cache/index.ts` | `createAnimeCacheService` — `AnimeCacheEntry` CRUD + poster file cache + `cleanupStale` orphan sweep; deps-injected (`store`, `userDataDir`, `fetchPoster`, `isCachable`) |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |

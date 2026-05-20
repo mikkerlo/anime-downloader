@@ -27,6 +27,10 @@ import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
+import { isNetworkError } from './lib/errors'
+import { consolidateQueue, type QueuedShikimoriUpdate } from './lib/shikimori-queue'
+import { parseEpisodeFromFilename } from './lib/filename'
+import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
 import type {
   AnimeSearchResult,
   AnimeDetail,
@@ -214,44 +218,6 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
   }
 }
 
-const NETWORK_ERROR_CODES = new Set([
-  'ENOTFOUND',
-  'ETIMEDOUT',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'EAI_AGAIN',
-  'ENETUNREACH',
-  'EHOSTUNREACH',
-  'EPIPE',
-  'UND_ERR_SOCKET',
-  'UND_ERR_CONNECT_TIMEOUT'
-])
-
-function errorCode(err: unknown): string | undefined {
-  if (
-    err &&
-    typeof err === 'object' &&
-    'code' in err &&
-    typeof (err as { code: unknown }).code === 'string'
-  ) {
-    return (err as { code: string }).code
-  }
-  if (err && typeof err === 'object' && 'cause' in err) {
-    return errorCode((err as { cause: unknown }).cause)
-  }
-  return undefined
-}
-
-function isNetworkError(err: unknown): boolean {
-  if (err instanceof shikimori.ShikiApiError) return false
-  if (err instanceof TypeError) return true
-  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError'))
-    return true
-  const code = errorCode(err)
-  if (code && NETWORK_ERROR_CODES.has(code)) return true
-  return false
-}
-
 // In-memory set of MP4 paths probed this session, so re-opening the same file
 // in the player doesn't double-count. Stats persist across sessions; this set
 // resets on app restart, which is fine — it's a sampling check, not an exact
@@ -296,24 +262,6 @@ async function recordMp4FaststartCheck(
   })
   mp4StatsWriteChain = next.catch(() => undefined)
   await next
-}
-
-interface QueuedShikimoriUpdate {
-  malId: number
-  rateId: number | null
-  before: {
-    episodes: number
-    status: shikimori.ShikiUserRateStatus
-    score: number
-    rewatches: number
-  }
-  after: {
-    episodes: number
-    status: shikimori.ShikiUserRateStatus
-    score: number
-    rewatches: number
-  }
-  queuedAt: number
 }
 
 type ShikiSyncState = 'idle' | 'syncing'
@@ -387,25 +335,6 @@ function stopSyncTimer(): void {
 function adjustSyncTimer(): void {
   if (getQueueLength() > 0) startSyncTimer()
   else stopSyncTimer()
-}
-
-interface ConsolidatedWorkItem extends QueuedShikimoriUpdate {
-  consumedQueuedAts: number[]
-}
-
-function consolidateQueue(queue: QueuedShikimoriUpdate[]): ConsolidatedWorkItem[] {
-  const map = new Map<number, ConsolidatedWorkItem>()
-  for (const entry of queue) {
-    const existing = map.get(entry.malId)
-    if (existing) {
-      existing.after = entry.after
-      existing.rateId = entry.rateId ?? existing.rateId
-      existing.consumedQueuedAts.push(entry.queuedAt)
-    } else {
-      map.set(entry.malId, { ...entry, consumedQueuedAts: [entry.queuedAt] })
-    }
-  }
-  return Array.from(map.values())
 }
 
 function dropConsumedEntries(malId: number, consumedQueuedAts: number[]): number {
@@ -1565,20 +1494,6 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
   }
   store.set('malIdMap', cached)
   return result
-}
-
-// Parse episodeInt from a sanitized download filename. Format produced by
-// download-manager.ts: `${name} - ${NN}[ [Author]].(mkv|mp4|ass|part)`.
-const FILENAME_EP_RE = /\s-\s(\d{1,4}(?:\.\d+)?)(?:\s\[[^\]]+\])?\.(mkv|mp4|ass)$/i
-
-function parseEpisodeFromFilename(
-  file: string
-): { episodeInt: string; ext: 'mkv' | 'mp4' | 'ass' } | null {
-  const m = FILENAME_EP_RE.exec(file)
-  if (!m) return null
-  const raw = m[1]
-  const episodeInt = raw.includes('.') ? raw : String(parseInt(raw, 10))
-  return { episodeInt, ext: m[2].toLowerCase() as 'mkv' | 'mp4' | 'ass' }
 }
 
 interface UsageEpisodeFiles {
@@ -5021,82 +4936,6 @@ async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
   }
 }
 
-function avcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
-  if (stream.codec_name !== 'h264') return null
-  const profile = (stream.profile || '').toString().toLowerCase()
-  let pp: string, cc: string
-  if (profile.includes('constrained baseline')) {
-    pp = '42'
-    cc = 'E0'
-  } else if (profile.includes('baseline')) {
-    pp = '42'
-    cc = '00'
-  } else if (profile.includes('main')) {
-    pp = '4D'
-    cc = '40'
-  } else if (profile.includes('high 10')) {
-    pp = '6E'
-    cc = '00'
-  } else if (profile.includes('high 4:2:2')) {
-    pp = '7A'
-    cc = '00'
-  } else if (profile.includes('high 4:4:4')) {
-    pp = 'F4'
-    cc = '00'
-  } else if (profile.includes('high')) {
-    pp = '64'
-    cc = '00'
-  } else return null
-  const level = typeof stream.level === 'number' ? stream.level : 0
-  if (level <= 0) return null
-  const ll = level.toString(16).padStart(2, '0').toUpperCase()
-  return `avc1.${pp}${cc}${ll}`
-}
-
-function hevcCodecString(stream: Ffmpeg.FfprobeStream): string | null {
-  if (stream.codec_name !== 'hevc') return null
-  // Format: hvc1.<profile_space><profile_idc>.<compat_flags_hex_reversed>.<tier><level_idc>.<constraint_bytes>
-  // Reference: ISO/IEC 14496-15 Annex E, Chromium spec at
-  // https://source.chromium.org/chromium/chromium/src/+/main:media/base/video_codecs.cc
-  const profile = (stream.profile || '').toString().toLowerCase()
-  let profileIdc: number
-  let compatFlags: number
-  // `compatFlags` holds the raw general_profile_compatibility_flag bitfield
-  // exactly as laid out in ISO/IEC 14496-15 §E.3 (MSB = flag[0] = Main profile,
-  // next bit = Main 10, next = Main Still Picture, …). The codec string wants
-  // the bit-reversed (LSB-first) hex form, which `reverseBits32` below produces:
-  //   Main           → raw 0x60000000 → codec hex "6"  → hvc1.1.6.Lxx.B0
-  //   Main 10        → raw 0x20000000 → codec hex "4"  → hvc1.2.4.Lxx.B0
-  //   Main Still Pic → raw 0x40000000 → codec hex "2"  → hvc1.3.2.Lxx.B0
-  if (profile.includes('main 10')) {
-    profileIdc = 2
-    compatFlags = 0x20000000
-  } else if (profile.includes('main still')) {
-    profileIdc = 3
-    compatFlags = 0x40000000
-  } else if (profile.includes('main')) {
-    // Main-profile bitstreams are also decodable by Main 10 decoders, hence two bits set.
-    profileIdc = 1
-    compatFlags = 0x60000000
-  } else {
-    return null
-  }
-  // For HEVC, ffprobe's `level` is the raw HEVC level_idc value (for example
-  // 120 → level 4.0, 150 → 5.0, 153 → 5.1, 156 → 5.2 in human-readable form).
-  // The codec string uses that raw value directly, so we emit `L<level_idc>`
-  // (for example `L120`, `L150`) rather than converting it to a decimal level.
-  const levelIdc = typeof stream.level === 'number' ? stream.level : 0
-  if (levelIdc <= 0) return null
-  // Reverse 32-bit compatibility flags and emit as hex without leading zeros.
-  const reversed = reverseBits32(compatFlags)
-  const compatHex = reversed.toString(16).toUpperCase()
-  // Tier: assume Main tier (L) — High tier (H) is rare outside 8K broadcast content.
-  const tierAndLevel = `L${levelIdc}`
-  // Constraint indicator flags: 6 bytes, typically all zero; Chromium accepts a
-  // trailing `.B0` (or even truncation). Use `.B0` as a compact default.
-  return `hvc1.${profileIdc}.${compatHex}.${tierAndLevel}.B0`
-}
-
 let cachedH264Encoder: string | null | undefined = undefined
 
 interface H264EncoderChoice {
@@ -5239,24 +5078,6 @@ async function pickH264Encoder(): Promise<H264EncoderChoice> {
   // libx264 should always work but if even that fails, still return it so the spawn surfaces a real error later.
   cachedH264Encoder = 'libx264'
   return candidates[candidates.length - 1]
-}
-
-function reverseBits32(value: number): number {
-  let v = value >>> 0
-  let result = 0
-  for (let i = 0; i < 32; i++) {
-    result = (result << 1) | (v & 1)
-    v >>>= 1
-  }
-  return result >>> 0
-}
-
-function aacCodecString(stream: Ffmpeg.FfprobeStream): string | null {
-  if (stream.codec_name !== 'aac') return null
-  const profile = (stream.profile || '').toString().toUpperCase()
-  if (profile === 'HE-AAC') return 'mp4a.40.5'
-  if (profile === 'HE-AACV2' || profile === 'HE-AAC V2') return 'mp4a.40.29'
-  return 'mp4a.40.2'
 }
 
 async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {

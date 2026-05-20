@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
-import { execFile, spawn, type ChildProcess } from 'child_process'
+import { execFile, type ChildProcess } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
 import { autoUpdater } from 'electron-updater'
@@ -32,13 +32,7 @@ import { isNetworkError } from './lib/errors'
 import { consolidateQueue, type QueuedShikimoriUpdate } from './lib/shikimori-queue'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
-import type {
-  AnimeSearchResult,
-  AnimeDetail,
-  EpisodeSummary,
-  EpisodeDetail,
-  Translation
-} from './smotret-api'
+import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import {
   analyzeShow,
@@ -82,15 +76,10 @@ protocol.registerSchemesAsPrivileged([
 process.stdout?.on('error', () => {})
 process.stderr?.on('error', () => {})
 
-interface AnimeCacheEntry {
-  animeDetail: AnimeDetail | null
-  episodes: Record<number, EpisodeDetail>
-  qualityProbes: Record<number, number>
-  cachedAt: number
-  posterCached: boolean
-  fullProbeAt?: number
-  fullProbeEpisodeCount?: number
-}
+import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
+import { createSkipAnalysisService } from './services/skip-analysis'
+import { createColdStorageService } from './services/cold-storage'
+import { createStreamingService, type MseSession, type MseOpenResult } from './streaming'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -695,7 +684,7 @@ async function sumShowFiles(animeName: string): Promise<{ bytes: number; files: 
   const animeDirName = sanitizeFilename(animeName)
   let bytes = 0
   let files = 0
-  for (const dir of storageDirsForScan()) {
+  for (const dir of coldStorageService.dirsForScan()) {
     const showDir = path.join(dir, animeDirName)
     let entries: fs.Dirent[]
     try {
@@ -740,9 +729,9 @@ const fileCheckCache = new Map<string, FileCheckResult>()
 
 function scanEpisodeFiles(animeName: string): FileCheckResult {
   const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const coldDir = getColdStorageDir()
+  const dirsToCheck = [coldStorageService.getDownloadDir()]
+  if (coldStorageService.isAdvanced()) {
+    const coldDir = coldStorageService.getColdStorageDir()
     if (coldDir) dirsToCheck.push(coldDir)
   }
 
@@ -821,9 +810,9 @@ function filterScanResult(
 
 async function backgroundRescan(animeName: string): Promise<void> {
   const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const coldDir = getColdStorageDir()
+  const dirsToCheck = [coldStorageService.getDownloadDir()]
+  if (coldStorageService.isAdvanced()) {
+    const coldDir = coldStorageService.getColdStorageDir()
     if (coldDir) dirsToCheck.push(coldDir)
   }
 
@@ -892,114 +881,50 @@ async function backgroundRescan(animeName: string): Promise<void> {
   }
 }
 
-function getCacheEntry(animeId: number): AnimeCacheEntry | null {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  return cache[String(animeId)] || null
-}
-
-function setCacheEntry(animeId: number, entry: AnimeCacheEntry): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  cache[String(animeId)] = entry
-  store.set('animeCache', cache)
-}
-
-function deleteCacheEntry(animeId: number): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  delete cache[String(animeId)]
-  store.set('animeCache', cache)
-  // Also delete cached poster
-  const posterPath = getPosterCachePath(animeId)
-  try {
-    fs.unlinkSync(posterPath)
-  } catch {
-    /* ignore */
-  }
-}
-
-function getPosterCacheDir(): string {
-  return path.join(app.getPath('userData'), 'poster-cache')
-}
-
-function getPosterCachePath(animeId: number): string {
-  return path.join(getPosterCacheDir(), `${animeId}.jpg`)
-}
-
-async function cachePosterImage(animeId: number, posterUrl: string): Promise<void> {
-  if (!posterUrl) return
-  const destPath = getPosterCachePath(animeId)
-  if (fs.existsSync(destPath)) return
-  try {
-    fs.mkdirSync(getPosterCacheDir(), { recursive: true })
-    const buffer = await smotretApi.fetchPoster(posterUrl)
-    if (!buffer) return
-    fs.writeFileSync(destPath, buffer)
-  } catch {
-    // Non-critical, ignore
-  }
-}
-
-function ensureCacheEntry(animeId: number): AnimeCacheEntry {
-  const existing = getCacheEntry(animeId)
-  if (existing) return existing
-  return { animeDetail: null, episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false }
-}
-
-function updateAnimeDetailCache(animeId: number, detail: AnimeDetail): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.animeDetail = detail
-  entry.cachedAt = Date.now()
-  setCacheEntry(animeId, entry)
-  // Cache poster in background
-  if (!entry.posterCached) {
-    cachePosterImage(animeId, detail.posterUrl || detail.posterUrlSmall)
-      .then(() => {
-        entry.posterCached = true
-        setCacheEntry(animeId, entry)
-      })
-      .catch(() => {})
-  }
-}
-
-function updateEpisodeCache(animeId: number, episodeId: number, detail: EpisodeDetail): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.episodes[episodeId] = detail
-  entry.cachedAt = Date.now()
-  setCacheEntry(animeId, entry)
-}
-
-function updateQualityProbeCache(animeId: number, translationId: number, height: number): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.qualityProbes[translationId] = height
-  setCacheEntry(animeId, entry)
-}
-
-function cleanupStaleCache(): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  const lib = store.get('library') as Record<string, AnimeSearchResult>
-  let changed = false
-  for (const key of Object.keys(cache)) {
-    if (!downloaded[key] && !lib[key]) {
-      delete cache[key]
-      const posterPath = getPosterCachePath(Number(key))
-      try {
-        fs.unlinkSync(posterPath)
-      } catch {
-        /* ignore */
-      }
-      changed = true
-    }
-  }
-  if (changed) store.set('animeCache', cache)
-}
-
 const smotretApi = new SmotretApi(() => store.get('token') as string)
+
+const animeCacheService = createAnimeCacheService({
+  store,
+  userDataDir: app.getPath('userData'),
+  fetchPoster: (url) => smotretApi.fetchPoster(url),
+  isCachable: isCachableAnime
+})
+
+const skipAnalysisService = createSkipAnalysisService({
+  store,
+  scanEpisodeFiles,
+  sanitizeFilename,
+  broadcast: broadcastToAll,
+  signatureUpdatedChannel: EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED
+})
+
+const coldStorageService = createColdStorageService({
+  store,
+  downloadsFallbackDir: app.getPath('downloads'),
+  sanitizeFilename,
+  parseEpisodeFromFilename,
+  scanEpisodeFiles,
+  invalidateFileCache: (animeName) => fileCheckCache.delete(animeName),
+  broadcast: broadcastToAll,
+  usageProgressChannel: EVENT_CHANNELS.STORAGE_USAGE_PROGRESS,
+  cleanupPendingChannel: EVENT_CHANNELS.STORAGE_CLEANUP_PENDING,
+  cleanupFinishedChannel: EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED,
+  fileEpisodesChangedChannel: EVENT_CHANNELS.FILE_EPISODES_CHANGED
+})
 let downloadManager: DownloadManager
 let ffmpegPath = ''
 let ffprobePath = ''
+
+const streamingService = createStreamingService({
+  getFfmpegPath: () => ffmpegPath,
+  getFfprobePath: () => ffprobePath,
+  channels: {
+    streamChunk: EVENT_CHANNELS.PLAYER_STREAM_CHUNK,
+    streamEnd: EVENT_CHANNELS.PLAYER_STREAM_END,
+    streamError: EVENT_CHANNELS.PLAYER_STREAM_ERROR,
+    streamProgress: EVENT_CHANNELS.PLAYER_STREAM_PROGRESS
+  }
+})
 
 function getFfmpegDir(): string {
   return path.join(app.getPath('userData'), 'ffmpeg')
@@ -1112,291 +1037,6 @@ function checkFfmpeg(): Promise<FfmpegInfo> {
   })
 }
 
-function getDownloadDir(): string {
-  const mode = store.get('storageMode') as string
-  if (mode === 'advanced') {
-    const hotDir = store.get('hotStorageDir') as string
-    if (hotDir) return hotDir
-  }
-  const dir = store.get('downloadDir') as string
-  if (dir) return dir
-  return join(app.getPath('downloads'), 'anime-dl')
-}
-
-function getColdStorageDir(): string {
-  return (store.get('coldStorageDir') as string) || ''
-}
-
-function isAdvancedStorage(): boolean {
-  return (store.get('storageMode') as string) === 'advanced'
-}
-
-function storageDirsForScan(): string[] {
-  const dirs = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const cold = getColdStorageDir()
-    if (cold) dirs.push(cold)
-  }
-  return dirs
-}
-
-function deleteEpisodeFiles(
-  animeName: string,
-  episodeInt: string,
-  animeId?: number,
-  translationId?: number
-): { bytesDeleted: number } {
-  fileCheckCache.delete(animeName)
-  const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = storageDirsForScan()
-
-  const padded = episodeInt.padStart(2, '0')
-  const base = sanitizeFilename(`${animeName} - ${padded}`)
-
-  let bytesDeleted = 0
-  const trySize = (p: string): number => {
-    try {
-      return fs.statSync(p).size
-    } catch {
-      return 0
-    }
-  }
-
-  if (translationId && animeId) {
-    // Delete specific translation's files — find by author tag from metadata
-    const episodes = store.get('downloadedEpisodes') as Record<
-      string,
-      { translationType: string; author: string; quality: number; translationId: number }
-    >
-    const metaKey = `${animeId}:${episodeInt}:${translationId}`
-    const legacyKey = `${animeId}:${episodeInt}`
-    const meta = episodes[metaKey] || episodes[legacyKey]
-    if (meta) {
-      const authorTag = sanitizeFilename(meta.author)
-      const taggedBase = `${base} [${authorTag}]`
-      for (const dir of dirsToCheck) {
-        const animeDir = path.join(dir, animeDirName)
-        for (const ext of ['.mkv', '.mp4', '.ass']) {
-          const taggedPath = path.join(animeDir, `${taggedBase}${ext}`)
-          const tSize = trySize(taggedPath)
-          try {
-            fs.unlinkSync(taggedPath)
-            bytesDeleted += tSize
-          } catch {
-            /* ignore */
-          }
-          const legacyPath = path.join(animeDir, `${base}${ext}`)
-          const lSize = trySize(legacyPath)
-          try {
-            fs.unlinkSync(legacyPath)
-            bytesDeleted += lSize
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-      delete episodes[metaKey]
-      delete episodes[legacyKey]
-      store.set('downloadedEpisodes', episodes)
-    }
-  } else {
-    for (const dir of dirsToCheck) {
-      const animeDir = path.join(dir, animeDirName)
-      try {
-        const files = fs.readdirSync(animeDir)
-        for (const file of files) {
-          if (
-            file.startsWith(base) &&
-            (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))
-          ) {
-            const fp = path.join(animeDir, file)
-            const sz = trySize(fp)
-            try {
-              fs.unlinkSync(fp)
-              bytesDeleted += sz
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      } catch {
-        /* dir doesn't exist */
-      }
-    }
-
-    if (animeId) {
-      const episodes = store.get('downloadedEpisodes') as Record<string, unknown>
-      const prefix = `${animeId}:${episodeInt}`
-      for (const key of Object.keys(episodes)) {
-        if (key === prefix || key.startsWith(prefix + ':')) {
-          delete episodes[key]
-        }
-      }
-      store.set('downloadedEpisodes', episodes)
-    }
-  }
-
-  return { bytesDeleted }
-}
-
-function episodeHasInProgressDownload(animeName: string, episodeInt: string): boolean {
-  const animeDirName = sanitizeFilename(animeName)
-  const padded = episodeInt.padStart(2, '0')
-  const base = sanitizeFilename(`${animeName} - ${padded}`)
-  for (const dir of storageDirsForScan()) {
-    const animeDir = path.join(dir, animeDirName)
-    try {
-      const files = fs.readdirSync(animeDir)
-      for (const file of files) {
-        if (file.startsWith(base) && file.endsWith('.part')) return true
-      }
-    } catch {
-      /* dir missing */
-    }
-  }
-  return false
-}
-
-// Drops `downloadedEpisodes[animeId:episodeInt:translationId]` (and the legacy
-// `animeId:episodeInt` key if it points at the same translation) when no file
-// for that translation exists on disk. Called after cancel / cancel-by-episode.
-function pruneDownloadedEpisode(
-  animeId: number,
-  episodeInt: string,
-  translationId: number,
-  animeName: string,
-  author: string
-): void {
-  if (episodeFileExists(animeName, episodeInt, author)) return
-  const episodes = store.get('downloadedEpisodes') as Record<
-    string,
-    { translationType: string; author: string; quality: number; translationId: number }
-  >
-  const key = `${animeId}:${episodeInt}:${translationId}`
-  const legacyKey = `${animeId}:${episodeInt}`
-  let changed = false
-  if (key in episodes) {
-    delete episodes[key]
-    changed = true
-  }
-  if (episodes[legacyKey]?.translationId === translationId) {
-    delete episodes[legacyKey]
-    changed = true
-  }
-  if (changed) store.set('downloadedEpisodes', episodes)
-}
-
-// Returns true iff a .mkv or .mp4 for (animeName, episodeInt, author) exists in any storage dir.
-// Used to validate `downloadedEpisodes` metadata against the filesystem.
-function episodeFileExists(animeName: string, episodeInt: string, author: string): boolean {
-  const animeDirName = sanitizeFilename(animeName)
-  const padded = episodeInt.padStart(2, '0')
-  const base = sanitizeFilename(`${animeName} - ${padded}`)
-  const authorTag = sanitizeFilename(author || '')
-  const taggedBase = authorTag ? `${base} [${authorTag}]` : base
-  for (const dir of storageDirsForScan()) {
-    const animeDir = path.join(dir, animeDirName)
-    for (const candidate of [
-      `${taggedBase}.mkv`,
-      `${taggedBase}.mp4`,
-      `${base}.mkv`,
-      `${base}.mp4`
-    ]) {
-      if (fs.existsSync(path.join(animeDir, candidate))) return true
-    }
-  }
-  return false
-}
-
-async function moveFileToCold(src: string, dest: string): Promise<void> {
-  fs.mkdirSync(path.dirname(dest), { recursive: true })
-  try {
-    fs.renameSync(src, dest)
-  } catch {
-    // Cross-filesystem: copy + delete
-    await fsPromises.copyFile(src, dest)
-    fs.unlinkSync(src)
-  }
-}
-
-async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void> {
-  const coldDir = getColdStorageDir()
-  if (!coldDir) return
-  const hotDir = getDownloadDir()
-
-  const animeDirName = sanitizeFilename(animeName)
-  const hotAnimeDir = path.join(hotDir, animeDirName)
-  const coldAnimeDir = path.join(coldDir, animeDirName)
-
-  if (!fs.existsSync(hotAnimeDir)) return
-
-  // episodeLabel is like "01", we need to find matching files
-  const padded = episodeLabel.padStart(2, '0')
-  const base = sanitizeFilename(`${animeName} - ${padded}`)
-
-  // Move all files matching this episode base (including [Author] tagged variants)
-  try {
-    const files = fs.readdirSync(hotAnimeDir)
-    for (const file of files) {
-      if (!file.startsWith(base)) continue
-      if (!['.mkv', '.mp4', '.ass'].some((ext) => file.endsWith(ext))) continue
-      // Never move .part files or files with in-progress downloads
-      if (file.endsWith('.mp4') && fs.existsSync(path.join(hotAnimeDir, file + '.part'))) continue
-      const src = path.join(hotAnimeDir, file)
-      await moveFileToCold(src, path.join(coldAnimeDir, file))
-    }
-  } catch {
-    /* dir listing failed */
-  }
-}
-
-async function moveAllFilesToColdStorage(
-  onProgress?: (current: number, total: number, file: string) => void
-): Promise<{ moved: number; failed: string[] }> {
-  const coldDir = getColdStorageDir()
-  const hotDir = getDownloadDir()
-  const result = { moved: 0, failed: [] as string[] }
-
-  if (!coldDir || !fs.existsSync(hotDir)) return result
-
-  // Collect all finished files
-  const filesToMove: { src: string; dest: string; label: string }[] = []
-  const animeDirs = fs.readdirSync(hotDir, { withFileTypes: true }).filter((d) => d.isDirectory())
-
-  for (const dir of animeDirs) {
-    const dirPath = path.join(hotDir, dir.name)
-    const files = fs.readdirSync(dirPath)
-
-    for (const file of files) {
-      // Skip .part files (in-progress downloads)
-      if (file.endsWith('.part')) continue
-      // Skip mp4 if a .part exists (download in progress)
-      if (file.endsWith('.mp4') && files.includes(file + '.part')) continue
-      // Only move media/subtitle files
-      if (!['.mkv', '.mp4', '.ass'].some((ext) => file.endsWith(ext))) continue
-
-      filesToMove.push({
-        src: path.join(dirPath, file),
-        dest: path.join(coldDir, dir.name, file),
-        label: `${dir.name}/${file}`
-      })
-    }
-  }
-
-  for (let i = 0; i < filesToMove.length; i++) {
-    const item = filesToMove[i]
-    onProgress?.(i + 1, filesToMove.length, item.label)
-    try {
-      await moveFileToCold(item.src, item.dest)
-      result.moved++
-    } catch (err) {
-      result.failed.push(`${item.label}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  return result
-}
-
 function rememberAnimeMeta(detail: AnimeDetail): void {
   if (!detail || !detail.id) return
   const meta = store.get('recentAnimeMeta') as Record<string, AnimeSearchResult>
@@ -1504,353 +1144,6 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
   return result
 }
 
-interface UsageEpisodeFiles {
-  mkv?: { path: string; size: number }
-  mp4?: { path: string; size: number }
-  ass?: { path: string; size: number }
-}
-
-interface AnimeUsageAccum {
-  animeId: number
-  animeName: string
-  posterUrlSmall: string
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  episodes: Map<string, { files: UsageEpisodeFiles; totalBytes: number }>
-}
-
-interface StorageEpisodeUsage {
-  episodeInt: string
-  files: UsageEpisodeFiles
-  totalBytes: number
-  watched: boolean
-  watchedAt?: number
-}
-
-interface StorageAnimeUsage {
-  animeId: number
-  animeName: string
-  posterUrlSmall: string
-  bytes: number
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  episodes: StorageEpisodeUsage[]
-}
-
-interface StorageUsage {
-  totalBytes: number
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  perAnime: StorageAnimeUsage[]
-}
-
-async function scanStorageUsage(): Promise<StorageUsage> {
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  const watchProgress = store.get('watchProgress') as Record<
-    string,
-    { watched?: boolean; watchedAt?: number }
-  >
-  // Downloads are written under sanitizeFilename(getAnimeName(anime)), where
-  // getAnimeName prefers titles.romaji, then titles.ru, then title. Register all
-  // three candidates so the scan finds folders regardless of which variant was
-  // current at download time. The "preferred" name (matching the live folder
-  // name) is what we surface to the renderer so delete calls round-trip cleanly.
-  const dirNameToId = new Map<string, string>()
-  const idToDisplayName = new Map<string, string>()
-  for (const id of Object.keys(downloaded)) {
-    const a = downloaded[id]
-    if (!a) continue
-    const preferred = a.titles?.romaji || a.titles?.ru || a.title
-    if (!preferred) continue
-    idToDisplayName.set(id, preferred)
-    const candidates = [preferred, a.titles?.ru, a.titles?.romaji, a.title]
-    for (const name of candidates) {
-      if (!name) continue
-      const key = sanitizeFilename(name)
-      if (!dirNameToId.has(key)) dirNameToId.set(key, id)
-    }
-  }
-
-  const accum = new Map<string, AnimeUsageAccum>()
-  const hotDir = getDownloadDir()
-  const coldDir = isAdvancedStorage() ? getColdStorageDir() : ''
-
-  const dirs: Array<{ root: string; bucket: 'hot' | 'cold' }> = []
-  if (hotDir) dirs.push({ root: hotDir, bucket: 'hot' })
-  if (coldDir && coldDir !== hotDir) dirs.push({ root: coldDir, bucket: 'cold' })
-
-  // First pass: list anime folders so we can emit progress meaningfully
-  const animeFolders: Array<{ root: string; bucket: 'hot' | 'cold'; folder: string }> = []
-  for (const { root, bucket } of dirs) {
-    try {
-      const entries = await fsPromises.readdir(root, { withFileTypes: true })
-      for (const e of entries) {
-        if (e.isDirectory()) animeFolders.push({ root, bucket, folder: e.name })
-      }
-    } catch {
-      /* dir missing */
-    }
-  }
-
-  const total = animeFolders.length
-  const reportProgress = total > 50
-  let scanned = 0
-
-  for (const { root, bucket, folder } of animeFolders) {
-    const animeId = dirNameToId.get(folder)
-    if (!animeId) {
-      scanned++
-      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-      continue
-    }
-    const animeRec = downloaded[animeId]
-    let entry = accum.get(animeId)
-    if (!entry) {
-      entry = {
-        animeId: Number(animeId),
-        animeName: idToDisplayName.get(animeId) || animeRec.title,
-        posterUrlSmall: animeRec.posterUrlSmall || '',
-        bytesHot: 0,
-        bytesCold: 0,
-        fileCount: 0,
-        episodes: new Map()
-      }
-      accum.set(animeId, entry)
-    }
-
-    const animeDir = path.join(root, folder)
-    let files: string[]
-    try {
-      files = await fsPromises.readdir(animeDir)
-    } catch {
-      scanned++
-      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-      continue
-    }
-
-    for (const file of files) {
-      const parsed = parseEpisodeFromFilename(file)
-      if (!parsed) continue
-      const fullPath = path.join(animeDir, file)
-      let size = 0
-      try {
-        size = (await fsPromises.stat(fullPath)).size
-      } catch {
-        continue
-      }
-
-      let ep = entry.episodes.get(parsed.episodeInt)
-      if (!ep) {
-        ep = { files: {}, totalBytes: 0 }
-        entry.episodes.set(parsed.episodeInt, ep)
-      }
-      // Cold storage takes priority when both buckets have the file.
-      const existing = ep.files[parsed.ext]
-      if (existing && bucket === 'hot') continue
-      ep.files[parsed.ext] = { path: fullPath, size }
-      ep.totalBytes =
-        (ep.files.mkv?.size || 0) + (ep.files.mp4?.size || 0) + (ep.files.ass?.size || 0)
-      if (existing) {
-        // Replaced hot with cold — adjust counters.
-        entry.bytesHot -= existing.size
-        entry.fileCount -= 1
-      }
-      if (bucket === 'hot') entry.bytesHot += size
-      else entry.bytesCold += size
-      entry.fileCount += 1
-    }
-
-    scanned++
-    if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-  }
-
-  let totalBytes = 0
-  let totalHot = 0
-  let totalCold = 0
-  let totalFiles = 0
-  const perAnime = [...accum.values()]
-    .map((a) => {
-      const bytes = a.bytesHot + a.bytesCold
-      totalBytes += bytes
-      totalHot += a.bytesHot
-      totalCold += a.bytesCold
-      totalFiles += a.fileCount
-      const episodes = [...a.episodes.entries()]
-        .map(([episodeInt, ep]) => {
-          const wp = watchProgress[`${a.animeId}:${episodeInt}`]
-          return {
-            episodeInt,
-            files: ep.files,
-            totalBytes: ep.totalBytes,
-            watched: !!wp?.watched,
-            watchedAt: wp?.watchedAt
-          }
-        })
-        .sort((x, y) => Number(x.episodeInt) - Number(y.episodeInt))
-      return {
-        animeId: a.animeId,
-        animeName: a.animeName,
-        posterUrlSmall: a.posterUrlSmall,
-        bytes,
-        bytesHot: a.bytesHot,
-        bytesCold: a.bytesCold,
-        fileCount: a.fileCount,
-        episodes
-      }
-    })
-    .sort((x, y) => y.bytes - x.bytes)
-
-  return { totalBytes, bytesHot: totalHot, bytesCold: totalCold, fileCount: totalFiles, perAnime }
-}
-
-interface CleanupCandidate {
-  animeId: number
-  animeName: string
-  episodeInt: string
-  bytes: number
-  watchedAt: number
-}
-
-function findCleanupCandidates(days: number): CleanupCandidate[] {
-  if (!days || days <= 0) return []
-  const watchProgress = store.get('watchProgress') as Record<
-    string,
-    { watched?: boolean; watchedAt?: number }
-  >
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  const cutoff = Date.now() - days * 86400_000
-  const candidates: CleanupCandidate[] = []
-
-  for (const [key, entry] of Object.entries(watchProgress)) {
-    if (!entry.watched || !entry.watchedAt || entry.watchedAt > cutoff) continue
-    const sep = key.indexOf(':')
-    if (sep < 0) continue
-    const animeId = key.slice(0, sep)
-    const episodeInt = key.slice(sep + 1)
-    const anime = downloaded[animeId]
-    if (!anime) continue
-    const animeName = anime.titles?.romaji || anime.titles?.ru || anime.title
-    if (!animeName) continue
-    if (episodeHasInProgressDownload(animeName, episodeInt)) continue
-
-    const animeDirName = sanitizeFilename(animeName)
-    const padded = episodeInt.padStart(2, '0')
-    const base = sanitizeFilename(`${animeName} - ${padded}`)
-    let bytes = 0
-    let hasFile = false
-    for (const dir of storageDirsForScan()) {
-      const animeDir = path.join(dir, animeDirName)
-      try {
-        const files = fs.readdirSync(animeDir)
-        for (const file of files) {
-          if (
-            file.startsWith(base) &&
-            (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))
-          ) {
-            hasFile = true
-            try {
-              bytes += fs.statSync(path.join(animeDir, file)).size
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      } catch {
-        /* dir missing */
-      }
-    }
-    if (!hasFile) continue
-    candidates.push({
-      animeId: Number(animeId),
-      animeName,
-      episodeInt,
-      bytes,
-      watchedAt: entry.watchedAt
-    })
-  }
-  return candidates
-}
-
-let cleanupRunning = false
-
-async function runWatchedCleanup(force = false): Promise<{
-  ranAt: number
-  deletedCount: number
-  freedBytes: number
-  items: CleanupCandidate[]
-}> {
-  const ranAt = Date.now()
-  if (cleanupRunning) return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
-  cleanupRunning = true
-  try {
-    const days = store.get('autoCleanupWatchedDays') as number
-    if ((!days || days <= 0) && !force) {
-      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
-    }
-    const candidates = findCleanupCandidates(days)
-    if (candidates.length === 0) {
-      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
-    }
-
-    const requireConfirm = store.get('autoCleanupConfirm') as boolean
-    if (requireConfirm && !force) {
-      broadcastToAll(EVENT_CHANNELS.STORAGE_CLEANUP_PENDING, { candidates })
-      return { ranAt, deletedCount: 0, freedBytes: 0, items: [] }
-    }
-
-    const affectedAnime = new Set<string>()
-    let freedBytes = 0
-    const log = store.get('cleanupLog') as Array<{
-      ranAt: number
-      animeId: number
-      animeName: string
-      episodeInt: string
-      bytes: number
-    }>
-    const items: CleanupCandidate[] = []
-
-    for (const c of candidates) {
-      const { bytesDeleted } = deleteEpisodeFiles(c.animeName, c.episodeInt, c.animeId)
-      freedBytes += bytesDeleted
-      affectedAnime.add(c.animeName)
-      log.unshift({
-        ranAt,
-        animeId: c.animeId,
-        animeName: c.animeName,
-        episodeInt: c.episodeInt,
-        bytes: bytesDeleted
-      })
-      items.push({ ...c, bytes: bytesDeleted })
-    }
-
-    while (log.length > 100) log.pop()
-    store.set('cleanupLog', log)
-
-    const result = { ranAt, deletedCount: items.length, freedBytes, items }
-    store.set('autoCleanupLastRun', {
-      ranAt,
-      deletedCount: result.deletedCount,
-      freedBytes: result.freedBytes
-    })
-
-    for (const animeName of affectedAnime) {
-      try {
-        const data = scanEpisodeFiles(animeName)
-        broadcastToAll(EVENT_CHANNELS.FILE_EPISODES_CHANGED, animeName, data)
-      } catch {
-        /* ignore */
-      }
-    }
-    broadcastToAll(EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED, result)
-    return result
-  } finally {
-    cleanupRunning = false
-  }
-}
-
 // Skip detection orchestration. Lifted to module scope so the auto-trigger
 // invoked from download/merge completion hooks shares the same in-flight
 // state as the manual `skip-detector:analyze-show` IPC handler.
@@ -1880,24 +1173,6 @@ function broadcastSkipProgress(animeId: number, p: AnalyzeProgress): void {
     currentSkipAnalysis.lastProgress = p
   }
   broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS, { animeId, ...p })
-}
-
-function normalizeSkipDetections(detections: ShowSkipDetections | null): ShowSkipDetections | null {
-  if (!detections) return null
-  if (detections.algorithm?.source === 'local') return detections
-  const alg = detections.algorithm
-  return {
-    ...detections,
-    algorithm: {
-      source: 'local',
-      sampleRate: alg?.sampleRate ?? 11025,
-      matchBitThreshold: alg?.matchBitThreshold ?? 6,
-      minRunSec: alg?.minRunSec ?? 18,
-      windowSec: alg?.windowSec ?? 6,
-      refineBitThreshold: alg?.refineBitThreshold ?? 4,
-      refineSustainHashes: alg?.refineSustainHashes ?? 5
-    }
-  }
 }
 
 function runSkipAnalysisInternal(
@@ -2008,29 +1283,6 @@ function runStreamSkipDetectionInternal(
   return runPromise
 }
 
-// Build EpisodeInput[] from disk for an anime folder. Mirrors the renderer's
-// skipEpisodeInputs computed: prefer .mkv (merged) over .mp4 (raw), one entry
-// per episodeInt, sorted by numeric episode.
-function buildAutoSkipEpisodes(animeName: string): EpisodeInput[] {
-  const scan = scanEpisodeFiles(animeName)
-  const sanitized = sanitizeFilename(animeName)
-  const inputs: EpisodeInput[] = []
-  for (const [base, files] of Object.entries(scan)) {
-    if (!base.startsWith(sanitized + ' - ')) continue
-    const tail = base.slice(sanitized.length + 3)
-    const m = tail.match(/^(\d+(?:\.\d+)?)/)
-    if (!m) continue
-    const episodeInt = m[1].replace(/^0+(?=\d)/, '')
-    const mkv = files.find((f) => f.type === 'mkv')
-    const pick = mkv || files[0]
-    if (!pick || !pick.filePath) continue
-    if (inputs.some((e) => e.episodeInt === episodeInt)) continue
-    inputs.push({ episodeInt, episodeLabel: `Episode ${episodeInt}`, filePath: pick.filePath })
-  }
-  inputs.sort((a, b) => parseFloat(a.episodeInt) - parseFloat(b.episodeInt))
-  return inputs
-}
-
 function scheduleAutoSkipAnalysis(animeId: number, animeName: string): void {
   if (animeId <= 0) return
   if (!(store.get('enableLocalSkipDetection') as boolean)) return
@@ -2063,7 +1315,7 @@ async function drainAutoSkipQueue(): Promise<void> {
     while (autoSkipQueue.length > 0 && !currentSkipAnalysis) {
       const next = autoSkipQueue.shift()!
       try {
-        const episodes = buildAutoSkipEpisodes(next.animeName)
+        const episodes = skipAnalysisService.buildAutoSkipEpisodes(next.animeName)
         if (episodes.length < 2) continue
         await runSkipAnalysisInternal(next.animeId, episodes)
       } catch (e) {
@@ -2084,134 +1336,6 @@ async function drainAutoSkipQueue(): Promise<void> {
 // common cases immediately; `sweepSkipFingerprintCache` runs at startup
 // as a backstop for anything we miss (external rm, file replaced,
 // in-place rename outside the app).
-
-function pruneSkipCacheForEpisode(animeId: number, episodeInt: string): number {
-  if (animeId <= 0 || !episodeInt) return 0
-  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-  const prefix = `${animeId}:${episodeInt}:`
-  let dropped = 0
-  for (const key of Object.keys(cache)) {
-    if (key.startsWith(prefix)) {
-      delete cache[key]
-      dropped++
-    }
-  }
-  if (dropped > 0) store.set('skipFingerprintCache', cache)
-  return dropped
-}
-
-function pruneSkipCacheForAnime(animeId: number): number {
-  if (animeId <= 0) return 0
-  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-  const prefix = `${animeId}:`
-  let dropped = 0
-  for (const key of Object.keys(cache)) {
-    if (key.startsWith(prefix)) {
-      delete cache[key]
-      dropped++
-    }
-  }
-  if (dropped > 0) store.set('skipFingerprintCache', cache)
-  return dropped
-}
-
-// Reconcile the cache against disk. Per anime: scan the folder, stat each
-// file, compute the (size, mtime) tuple the cache would key under, and
-// drop any cache entry for that animeId that doesn't match a live file.
-// Anime missing from `downloadedAnime` → all entries for that animeId go.
-function sweepSkipFingerprintCache(): { kept: number; dropped: number } {
-  const cache = store.get('skipFingerprintCache') as Record<string, CachedFingerprint>
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-
-  const byAnimeId = new Map<
-    string,
-    { key: string; episodeInt: string; fileSize: number; fileMtimeMs: number }[]
-  >()
-  for (const [key, val] of Object.entries(cache)) {
-    const parts = key.split(':')
-    if (parts.length < 4) continue
-    const [animeIdStr, episodeInt] = parts
-    const list = byAnimeId.get(animeIdStr) ?? []
-    list.push({ key, episodeInt, fileSize: val.fileSize, fileMtimeMs: val.fileMtimeMs })
-    byAnimeId.set(animeIdStr, list)
-  }
-
-  const next: Record<string, CachedFingerprint> = {}
-  let kept = 0
-  let dropped = 0
-
-  for (const [animeIdStr, entries] of byAnimeId) {
-    const meta = downloaded[animeIdStr]
-    if (!meta) {
-      dropped += entries.length
-      continue
-    }
-    const scan = scanEpisodeFiles(meta.title)
-    const sanitized = sanitizeFilename(meta.title)
-    const expectedByEpisode = new Map<string, { fileSize: number; fileMtimeMs: number }[]>()
-    for (const [base, files] of Object.entries(scan)) {
-      if (!base.startsWith(sanitized + ' - ')) continue
-      const tail = base.slice(sanitized.length + 3)
-      const m = tail.match(/^(\d+(?:\.\d+)?)/)
-      if (!m) continue
-      const episodeInt = m[1].replace(/^0+(?=\d)/, '')
-      for (const f of files) {
-        if (!f.filePath) continue
-        try {
-          const stat = fs.statSync(f.filePath)
-          const list = expectedByEpisode.get(episodeInt) ?? []
-          list.push({ fileSize: stat.size, fileMtimeMs: stat.mtimeMs })
-          expectedByEpisode.set(episodeInt, list)
-        } catch {
-          /* file vanished between scan and stat — skip */
-        }
-      }
-    }
-
-    for (const e of entries) {
-      const candidates = expectedByEpisode.get(e.episodeInt) ?? []
-      const match = candidates.some(
-        (c) => c.fileSize === e.fileSize && Math.floor(c.fileMtimeMs) === Math.floor(e.fileMtimeMs)
-      )
-      if (match) {
-        next[e.key] = cache[e.key]
-        kept++
-      } else {
-        dropped++
-      }
-    }
-  }
-
-  if (dropped > 0) store.set('skipFingerprintCache', next)
-  return { kept, dropped }
-}
-
-function dropSkipDetectionsForAnime(animeId: number): boolean {
-  const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
-  const key = String(animeId)
-  if (!(key in detections)) return false
-  delete detections[key]
-  store.set('skipDetections', detections)
-  broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, { animeId, perEpisode: {} })
-  return true
-}
-
-function dropSkipDetectionsForEpisode(animeId: number, episodeInt: string): boolean {
-  const detections = store.get('skipDetections') as Record<string, ShowSkipDetections>
-  const key = String(animeId)
-  const show = detections[key]
-  if (!show || !show.perEpisode[episodeInt]) return false
-  delete show.perEpisode[episodeInt]
-  if (Object.keys(show.perEpisode).length === 0) {
-    delete detections[key]
-  }
-  store.set('skipDetections', detections)
-  broadcastToAll(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, {
-    animeId,
-    perEpisode: detections[key]?.perEpisode ?? {}
-  })
-  return true
-}
 
 function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.APP_VERSION, () => app.getVersion())
@@ -2263,11 +1387,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.GET_ANIME, async (_event, id: number) => {
     try {
       const result = await smotretApi.getAnime(id)
-      updateAnimeDetailCache(id, result.data)
+      animeCacheService.updateAnimeDetail(id, result.data)
       rememberAnimeMeta(result.data)
       return { ...result, source: 'api' }
     } catch (err) {
-      const cached = getCacheEntry(id)
+      const cached = animeCacheService.getEntry(id)
       if (cached?.animeDetail) {
         return { data: cached.animeDetail, source: 'cache' }
       }
@@ -2283,11 +1407,11 @@ function registerIpcHandlers(): void {
         const streams = embed.stream || []
         if (streams.length === 0) return null
         const best = streams.reduce((a, b) => (a.height > b.height ? a : b))
-        if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
+        if (animeId) animeCacheService.updateQualityProbe(animeId, translationId, best.height)
         return best.height
       } catch {
         if (animeId) {
-          const cached = getCacheEntry(animeId)
+          const cached = animeCacheService.getEntry(animeId)
           return cached?.qualityProbes[translationId] ?? null
         }
         return null
@@ -2298,7 +1422,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.PROBE_FULL_SCAN_NEEDED,
     (_event, animeId: number, episodeCount: number) => {
-      const entry = getCacheEntry(animeId)
+      const entry = animeCacheService.getEntry(animeId)
       if (!entry?.fullProbeAt) return true
       if (entry.fullProbeEpisodeCount !== episodeCount) return true
       const weekMs = 7 * 24 * 60 * 60 * 1000
@@ -2307,11 +1431,11 @@ function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(CHANNELS.PROBE_FULL_SCAN_DONE, (_event, animeId: number, episodeCount: number) => {
-    const entry = getCacheEntry(animeId)
+    const entry = animeCacheService.getEntry(animeId)
     if (!entry) return
     entry.fullProbeAt = Date.now()
     entry.fullProbeEpisodeCount = episodeCount
-    setCacheEntry(animeId, entry)
+    animeCacheService.setEntry(animeId, entry)
   })
 
   const qualityMismatches = new Map<
@@ -2349,7 +1473,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.DUMP_QUALITY_MISMATCHES, () => {
-    const outPath = path.join(getDownloadDir(), 'quality-mismatches.json')
+    const outPath = path.join(coldStorageService.getDownloadDir(), 'quality-mismatches.json')
     const data = [...qualityMismatches.values()]
     fs.mkdirSync(path.dirname(outPath), { recursive: true })
     fs.writeFileSync(outPath, JSON.stringify(data, null, 2))
@@ -2360,11 +1484,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.GET_EPISODE, async (_event, id: number, animeId?: number) => {
     try {
       const result = await smotretApi.getEpisode(id)
-      if (animeId) updateEpisodeCache(animeId, id, result.data)
+      if (animeId) animeCacheService.updateEpisode(animeId, id, result.data)
       return { ...result, source: 'api' }
     } catch (err) {
       if (animeId) {
-        const cached = getCacheEntry(animeId)
+        const cached = animeCacheService.getEntry(animeId)
         if (cached?.episodes[id]) {
           return { data: cached.episodes[id], source: 'cache' }
         }
@@ -2395,7 +1519,7 @@ function registerIpcHandlers(): void {
     if (lib[key]) {
       delete lib[key]
       store.set('library', lib)
-      if (!isDownloadedAnime(anime.id)) deleteCacheEntry(anime.id)
+      if (!isDownloadedAnime(anime.id)) animeCacheService.deleteEntry(anime.id)
       return false
     } else {
       lib[key] = anime
@@ -2405,7 +1529,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.GET_ANIME_CACHE, (_event, id: number) => {
-    const entry = getCacheEntry(id)
+    const entry = animeCacheService.getEntry(id)
     if (!entry?.animeDetail || !entry.cachedAt) return null
     if (Date.now() - entry.cachedAt > ANIME_DETAIL_CACHE_TTL_MS) return null
     return { data: entry.animeDetail, cachedAt: entry.cachedAt }
@@ -2413,7 +1537,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(CHANNELS.SET_ANIME_CACHE, (_event, id: number, data: AnimeDetail) => {
     if (!isCachableAnime(id)) return false
-    updateAnimeDetailCache(id, data)
+    animeCacheService.updateAnimeDetail(id, data)
     return true
   })
 
@@ -2735,9 +1859,9 @@ function registerIpcHandlers(): void {
     store.set('downloadedAnime', downloaded)
     // Delete the folder from all storage dirs
     const dirName = sanitizeFilename(animeName)
-    const dirsToCheck = [getDownloadDir()]
-    if (isAdvancedStorage()) {
-      const coldDir = getColdStorageDir()
+    const dirsToCheck = [coldStorageService.getDownloadDir()]
+    if (coldStorageService.isAdvanced()) {
+      const coldDir = coldStorageService.getColdStorageDir()
       if (coldDir) dirsToCheck.push(coldDir)
     }
     for (const dir of dirsToCheck) {
@@ -2749,9 +1873,9 @@ function registerIpcHandlers(): void {
       }
     }
     // Clean cache
-    deleteCacheEntry(animeId)
-    pruneSkipCacheForAnime(animeId)
-    dropSkipDetectionsForAnime(animeId)
+    animeCacheService.deleteEntry(animeId)
+    skipAnalysisService.pruneCacheForAnime(animeId)
+    skipAnalysisService.dropDetectionsForAnime(animeId)
   })
 
   ipcMain.handle(CHANNELS.CLEANUP_GET_SIZE, async (_event, _animeId: number, animeName: string) => {
@@ -2770,7 +1894,7 @@ function registerIpcHandlers(): void {
     store.set('downloadedAnime', downloaded)
 
     const dirName = sanitizeFilename(animeName)
-    for (const dir of storageDirsForScan()) {
+    for (const dir of coldStorageService.dirsForScan()) {
       const dirPath = path.join(dir, dirName)
       try {
         fs.rmSync(dirPath, { recursive: true })
@@ -2794,9 +1918,9 @@ function registerIpcHandlers(): void {
     if (mutated) store.set('downloadedEpisodes', episodes)
 
     fileCheckCache.delete(animeName)
-    deleteCacheEntry(animeId)
-    pruneSkipCacheForAnime(animeId)
-    dropSkipDetectionsForAnime(animeId)
+    animeCacheService.deleteEntry(animeId)
+    skipAnalysisService.pruneCacheForAnime(animeId)
+    skipAnalysisService.dropDetectionsForAnime(animeId)
   })
 
   ipcMain.handle(CHANNELS.CLEANUP_GET_SNOOZED, () => {
@@ -2824,7 +1948,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.GET_SETTING, (_event, key: string) => {
-    if (key === 'downloadDir') return getDownloadDir()
+    if (key === 'downloadDir') return coldStorageService.getDownloadDir()
     return store.get(key)
   })
 
@@ -2954,7 +2078,7 @@ function registerIpcHandlers(): void {
     const item = downloadManager.getItem(id)
     downloadManager.cancel(id)
     if (item && item.animeId > 0 && item.episodeInt) {
-      pruneDownloadedEpisode(
+      coldStorageService.pruneDownloadedEpisode(
         item.animeId,
         item.episodeInt,
         item.translationId,
@@ -2987,7 +2111,13 @@ function registerIpcHandlers(): void {
       downloadManager.cancelByEpisode(animeName, episodeLabel)
 
       for (const p of toPrune) {
-        pruneDownloadedEpisode(p.animeId, p.episodeInt, p.translationId, p.animeName, p.author)
+        coldStorageService.pruneDownloadedEpisode(
+          p.animeId,
+          p.episodeInt,
+          p.translationId,
+          p.animeName,
+          p.author
+        )
       }
 
       // If no active downloads remain for this anime and no files on disk, remove from downloaded list
@@ -2995,7 +2125,7 @@ function registerIpcHandlers(): void {
       const hasActive = groups.some((g) => g.animeName === animeName)
       if (!hasActive) {
         const animeDirName = sanitizeFilename(animeName)
-        const animeDir = path.join(getDownloadDir(), animeDirName)
+        const animeDir = path.join(coldStorageService.getDownloadDir(), animeDirName)
         let hasFiles = false
         try {
           const files = fs.readdirSync(animeDir)
@@ -3015,7 +2145,7 @@ function registerIpcHandlers(): void {
           if (key) {
             delete downloaded[key]
             store.set('downloadedAnime', downloaded)
-            deleteCacheEntry(Number(key))
+            animeCacheService.deleteEntry(Number(key))
           }
         }
       }
@@ -3059,7 +2189,7 @@ function registerIpcHandlers(): void {
       if (
         animeName &&
         !activeTrIds.has(val.translationId) &&
-        !episodeFileExists(animeName, episodeInt, val.author)
+        !coldStorageService.episodeFileExists(animeName, episodeInt, val.author)
       ) {
         delete episodes[key]
         mutated = true
@@ -3121,7 +2251,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.DOWNLOAD_SCAN_MERGE, async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = (store.get('videoCodec') as string) || 'copy'
-    const extraDirs = isAdvancedStorage() && getColdStorageDir() ? [getColdStorageDir()] : undefined
+    const extraDirs =
+      coldStorageService.isAdvanced() && coldStorageService.getColdStorageDir()
+        ? [coldStorageService.getColdStorageDir()]
+        : undefined
     const result = await downloadManager.scanAndMerge(
       ffmpegPath,
       ffprobePath,
@@ -3148,7 +2281,7 @@ function registerIpcHandlers(): void {
     Ffmpeg.setFfmpegPath(ffmpegPath)
     Ffmpeg.setFfprobePath(ffprobePath)
 
-    const downloadDir = getDownloadDir()
+    const downloadDir = coldStorageService.getDownloadDir()
     if (!fs.existsSync(downloadDir)) return { fixed: 0, failed: [] as string[] }
 
     const episodeMeta = store.get('downloadedEpisodes') as Record<
@@ -3267,7 +2400,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.CACHE_GET_POSTER, (_event, animeId: number) => {
-    const posterPath = getPosterCachePath(animeId)
+    const posterPath = animeCacheService.getPosterCachePath(animeId)
     if (fs.existsSync(posterPath)) return `file://${posterPath}`
     return null
   })
@@ -3277,7 +2410,7 @@ function registerIpcHandlers(): void {
   // single-flight state as these handlers.
   ipcMain.handle(CHANNELS.SKIP_DETECTOR_GET_DETECTIONS, (_event, animeId: number) => {
     const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
-    return normalizeSkipDetections(all[String(animeId)] ?? null)
+    return skipAnalysisService.normalizeDetections(all[String(animeId)] ?? null)
   })
 
   ipcMain.handle(CHANNELS.SKIP_DETECTOR_GET_STATUS, () => {
@@ -3310,7 +2443,7 @@ function registerIpcHandlers(): void {
       streamUrl: string
     ): Promise<EpisodeSkipDetection | null> => {
       const all = store.get('skipDetections') as Record<string, ShowSkipDetections>
-      const detections = normalizeSkipDetections(all[String(animeId)] ?? null)
+      const detections = skipAnalysisService.normalizeDetections(all[String(animeId)] ?? null)
       if (!detections) return null
       if (!streamUrl) return null
       return runStreamSkipDetectionInternal(
@@ -3345,7 +2478,7 @@ function registerIpcHandlers(): void {
         alreadyAnalyzed++
         continue
       }
-      const eps = buildAutoSkipEpisodes(meta.title)
+      const eps = skipAnalysisService.buildAutoSkipEpisodes(meta.title)
       if (eps.length < 2) {
         skippedFewEpisodes++
         continue
@@ -3518,10 +2651,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.FILE_DELETE_EPISODE,
     (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
-      deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
+      coldStorageService.deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
       if (animeId && animeId > 0) {
-        pruneSkipCacheForEpisode(animeId, episodeInt)
-        dropSkipDetectionsForEpisode(animeId, episodeInt)
+        skipAnalysisService.pruneCacheForEpisode(animeId, episodeInt)
+        skipAnalysisService.dropDetectionsForEpisode(animeId, episodeInt)
       }
     }
   )
@@ -3569,7 +2702,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(CHANNELS.STORAGE_MOVE_TO_COLD, async () => {
     fileCheckCache.clear()
-    const result = await moveAllFilesToColdStorage((current, total, file) => {
+    const result = await coldStorageService.moveAllFilesToColdStorage((current, total, file) => {
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send(EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS, { current, total, file })
       }
@@ -3578,11 +2711,11 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.STORAGE_GET_USAGE, async () => {
-    return scanStorageUsage()
+    return coldStorageService.scanUsage()
   })
 
   ipcMain.handle(CHANNELS.STORAGE_RUN_CLEANUP, async (_event, opts?: { force?: boolean }) => {
-    return runWatchedCleanup(!!opts?.force)
+    return coldStorageService.runWatchedCleanup(!!opts?.force)
   })
 
   // Shikimori integration
@@ -4144,9 +3277,9 @@ function registerIpcHandlers(): void {
       const authorTag = sanitizeFilename(meta.author)
       const taggedBase = `${base} [${authorTag}]`
 
-      const dirsToCheck = [getDownloadDir()]
-      if (isAdvancedStorage()) {
-        const coldDir = getColdStorageDir()
+      const dirsToCheck = [coldStorageService.getDownloadDir()]
+      if (coldStorageService.isAdvanced()) {
+        const coldDir = coldStorageService.getColdStorageDir()
         if (coldDir) dirsToCheck.push(coldDir)
       }
 
@@ -4215,11 +3348,11 @@ function registerIpcHandlers(): void {
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
       if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
-      fs.mkdirSync(remuxTmpDir, { recursive: true })
+      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
 
       const stamp = Date.now()
       const baseName = path.basename(mkvPath, path.extname(mkvPath))
-      const mp4Path = path.join(remuxTmpDir, `${baseName}-${stamp}.mp4`)
+      const mp4Path = path.join(streamingService.tmpDir, `${baseName}-${stamp}.mp4`)
 
       Ffmpeg.setFfmpegPath(ffmpegPath)
 
@@ -4240,7 +3373,7 @@ function registerIpcHandlers(): void {
 
       const subtitlePromise = extractFirstSubtitle(
         mkvPath,
-        path.join(remuxTmpDir, `${baseName}-${stamp}.ass`)
+        path.join(streamingService.tmpDir, `${baseName}-${stamp}.ass`)
       )
 
       try {
@@ -4266,11 +3399,11 @@ function registerIpcHandlers(): void {
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
       if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
-      const probe = await probeMkvForMse(mkvPath)
+      const probe = await streamingService.probeMkvForMse(mkvPath)
       if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
       const streamCopyMime = probe.streamCopyMimeType
 
-      fs.mkdirSync(remuxTmpDir, { recursive: true })
+      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
 
       const sessionId = randomUUID()
       const baseName = path.basename(mkvPath, path.extname(mkvPath))
@@ -4291,19 +3424,20 @@ function registerIpcHandlers(): void {
         audioStrategy: 'copy',
         h264Encoder: null
       }
-      mseSessions.set(sessionId, session)
+      streamingService.registerSession(sessionId, session)
       const requestedSeek =
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
           : 0
-      const startSeek = requestedSeek > 0 ? await findKeyframeBefore(mkvPath, requestedSeek) : 0
+      const startSeek =
+        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
       console.log(
         `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
       )
-      session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
+      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
 
       // Kick off subtitle extraction in parallel; push to renderer when ready.
-      const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
+      const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
       let hasSubtitlesPending = false
       try {
         if (ffprobePath) {
@@ -4357,12 +3491,12 @@ function registerIpcHandlers(): void {
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
       if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
 
-      const probe = await probeMkvForMse(mkvPath)
+      const probe = await streamingService.probeMkvForMse(mkvPath)
       if (!probe) return { error: 'Probe failed' }
 
-      fs.mkdirSync(remuxTmpDir, { recursive: true })
+      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
 
-      const encoder = await pickH264Encoder()
+      const encoder = await streamingService.pickH264Encoder()
       // When the audio is being stream-copied, reflect its actual AAC object type
       // (mp4a.40.2 / .5 / .29) in the mime — otherwise MediaSource.isTypeSupported
       // will reject a perfectly valid HE-AAC stream. When we transcode audio we
@@ -4392,18 +3526,19 @@ function registerIpcHandlers(): void {
         audioStrategy: probe.audioStrategy,
         h264Encoder: encoder.name
       }
-      mseSessions.set(sessionId, session)
+      streamingService.registerSession(sessionId, session)
       const requestedSeek =
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
           : 0
-      const startSeek = requestedSeek > 0 ? await findKeyframeBefore(mkvPath, requestedSeek) : 0
+      const startSeek =
+        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
       console.log(
         `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
       )
-      session.proc = spawnFfmpegForSession(session, event, sessionId, startSeek)
+      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
 
-      const assPath = path.join(remuxTmpDir, `${baseName}-${sessionId}.ass`)
+      const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
       let hasSubtitlesPending = false
       try {
         if (ffprobePath) {
@@ -4451,11 +3586,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.PLAYER_STREAM_SEEK,
     async (event, sessionId: string, seekSeconds: number) => {
-      const session = mseSessions.get(sessionId)
+      const session = streamingService.getSession(sessionId)
       if (!session) return { error: 'session not found' }
       const requestedSeek = Math.max(0, seekSeconds)
       const keyframeTime =
-        requestedSeek > 0 ? await findKeyframeBefore(session.mkvPath, requestedSeek) : 0
+        requestedSeek > 0
+          ? await streamingService.findKeyframeBefore(session.mkvPath, requestedSeek)
+          : 0
       session.generation++
       try {
         session.proc.kill('SIGKILL')
@@ -4478,7 +3615,7 @@ function registerIpcHandlers(): void {
           /* ignore */
         }
       }
-      session.proc = spawnFfmpegForSession(session, event, sessionId, keyframeTime)
+      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, keyframeTime)
       return { ok: true, generation: session.generation, keyframeTime }
     }
   )
@@ -4487,7 +3624,7 @@ function registerIpcHandlers(): void {
   // Flush any buffered prelude (the MP4 moov header lives in here) and switch to
   // forwarding subsequent chunks directly.
   ipcMain.handle(CHANNELS.PLAYER_STREAM_START, (event, sessionId: string) => {
-    const session = mseSessions.get(sessionId)
+    const session = streamingService.getSession(sessionId)
     if (!session) return
     if (session.ready) return
     session.ready = true
@@ -4504,33 +3641,30 @@ function registerIpcHandlers(): void {
   // Backpressure ack: renderer reports bytes it has appended into its SourceBuffer.
   // When enough data has been consumed we resume the ffmpeg stdout pipe.
   ipcMain.handle(CHANNELS.PLAYER_STREAM_ACK, (_event, sessionId: string, bytesConsumed: number) => {
-    const session = mseSessions.get(sessionId)
+    const session = streamingService.getSession(sessionId)
     if (!session) return
     session.pendingBytes = Math.max(0, session.pendingBytes - bytesConsumed)
-    if (
-      session.pendingBytes < STREAM_BACKPRESSURE_LOW_WATERMARK &&
-      session.proc.stdout?.isPaused()
-    ) {
+    if (session.pendingBytes < streamingService.lowWatermark && session.proc.stdout?.isPaused()) {
       session.proc.stdout.resume()
     }
   })
 
   ipcMain.handle(CHANNELS.PLAYER_CLEANUP_REMUX, async () => {
-    for (const sessionId of Array.from(mseSessions.keys())) {
-      cleanupMseSession(sessionId)
+    for (const sessionId of streamingService.allSessionIds()) {
+      streamingService.cleanupSession(sessionId)
     }
     try {
-      if (fs.existsSync(remuxTmpDir)) {
-        const files = fs.readdirSync(remuxTmpDir)
+      if (fs.existsSync(streamingService.tmpDir)) {
+        const files = fs.readdirSync(streamingService.tmpDir)
         for (const file of files) {
           try {
-            fs.unlinkSync(path.join(remuxTmpDir, file))
+            fs.unlinkSync(path.join(streamingService.tmpDir, file))
           } catch {
             /* ignore */
           }
         }
         try {
-          fs.rmdirSync(remuxTmpDir)
+          fs.rmdirSync(streamingService.tmpDir)
         } catch {
           /* ignore */
         }
@@ -4620,455 +3754,6 @@ function registerIpcHandlers(): void {
     store.set('autoDownloadEnabled', Boolean(enabled))
     return Boolean(enabled)
   })
-}
-
-interface MseOpenResult {
-  sessionId: string
-  generation: number
-  duration: number
-  mimeType: string
-  hasSubtitlesPending: boolean
-  initialSeek: number
-}
-
-interface MseSession {
-  proc: ChildProcess
-  pendingBytes: number
-  stderrTail: string[]
-  done: boolean
-  error: string | null
-  senderId: number
-  ready: boolean
-  prelude: Buffer[]
-  mkvPath: string
-  generation: number
-  videoCodec: 'h264' | 'hevc'
-  transcode: boolean
-  audioStrategy: 'copy' | 'transcode'
-  h264Encoder: string | null
-}
-
-function spawnFfmpegForSession(
-  session: MseSession,
-  event: Electron.IpcMainInvokeEvent,
-  sessionId: string,
-  seekSeconds: number
-): ChildProcess {
-  const args: string[] = ['-fflags', '+genpts']
-  if (session.transcode) {
-    const choice =
-      h264EncoderCandidates().find((c) => c.name === session.h264Encoder) ||
-      h264EncoderCandidates().slice(-1)[0]
-    if (choice.extraInputArgs) args.push(...choice.extraInputArgs)
-    if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
-    args.push('-i', session.mkvPath, '-map', '0:v:0', '-map', '0:a:0?')
-    args.push(...choice.videoArgs)
-    if (session.audioStrategy === 'copy') args.push('-c:a', 'copy')
-    else args.push('-c:a', 'aac', '-b:a', '192k')
-    args.push('-avoid_negative_ts', 'make_zero', '-muxpreload', '0', '-muxdelay', '0')
-  } else {
-    if (seekSeconds > 0) args.push('-ss', String(seekSeconds))
-    args.push(
-      '-i',
-      session.mkvPath,
-      '-map',
-      '0:v:0',
-      '-map',
-      '0:a:0?',
-      '-c',
-      'copy',
-      '-avoid_negative_ts',
-      'make_zero',
-      '-muxpreload',
-      '0',
-      '-muxdelay',
-      '0'
-    )
-    // HEVC tracks in fMP4 must be tagged `hvc1` (parameter sets in sample entry)
-    // so Chromium's MSE decoder accepts them. ffmpeg defaults to `hev1`
-    // (parameter sets in-band), which many browsers reject for MSE.
-    if (session.videoCodec === 'hevc') args.push('-tag:v', 'hvc1')
-  }
-  args.push(
-    '-movflags',
-    '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
-    '-frag_duration',
-    '1000000',
-    '-f',
-    'mp4',
-    'pipe:1'
-  )
-  const proc = spawn(ffmpegPath!, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-  const procGen = session.generation
-
-  // Throttle transcode progress IPC: ffmpeg emits progress lines ~4x/sec which
-  // is too noisy for a UI label, so we coalesce to at most one send per 500 ms.
-  let lastProgressSentAt = 0
-  proc.stderr?.on('data', (data: Buffer) => {
-    if (procGen !== session.generation) return
-    const line = data.toString()
-    session.stderrTail.push(line)
-    if (session.stderrTail.length > 40) session.stderrTail.shift()
-    if (!session.transcode) return
-    // Lines look like:
-    //   frame= 1234 fps= 60 q=-1.0 size=... time=00:01:23.45 bitrate=... speed=2.5x
-    const speedMatch = /speed=\s*([\d.]+)x/.exec(line)
-    const timeMatch = /time=\s*(\d+):(\d+):([\d.]+)/.exec(line)
-    if (!speedMatch && !timeMatch) return
-    const now = Date.now()
-    if (now - lastProgressSentAt < 500) return
-    lastProgressSentAt = now
-    const sender = event.sender
-    if (!sender || sender.isDestroyed()) return
-    const speed = speedMatch ? parseFloat(speedMatch[1]) : null
-    const time = timeMatch
-      ? parseInt(timeMatch[1], 10) * 3600 +
-        parseInt(timeMatch[2], 10) * 60 +
-        parseFloat(timeMatch[3])
-      : null
-    sender.send(EVENT_CHANNELS.PLAYER_STREAM_PROGRESS, { sessionId, gen: procGen, speed, time })
-  })
-
-  // Coalesce small ffmpeg stdout chunks into ~256 KB IPC messages. ffmpeg
-  // emits 50–60 KB writes; at transcode speed that floods the renderer main
-  // thread with hundreds of IPC events per second and starves the video
-  // compositor, showing up as playback stutter.
-  const BATCH_FLUSH_BYTES = 256 * 1024
-  let batchBuf: Buffer[] = []
-  let batchLen = 0
-  const flushBatch = (): void => {
-    if (batchLen === 0) return
-    const out = batchBuf.length === 1 ? batchBuf[0] : Buffer.concat(batchBuf, batchLen)
-    batchBuf = []
-    batchLen = 0
-    if (session.ready) {
-      const sender = event.sender
-      if (sender && !sender.isDestroyed()) {
-        sender.send(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, { sessionId, gen: procGen, data: out })
-      }
-    } else {
-      session.prelude.push(out)
-    }
-  }
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    if (procGen !== session.generation) return
-    session.pendingBytes += chunk.length
-    batchBuf.push(chunk)
-    batchLen += chunk.length
-    if (batchLen >= BATCH_FLUSH_BYTES) flushBatch()
-    if (session.pendingBytes > STREAM_BACKPRESSURE_HIGH_WATERMARK) {
-      proc.stdout?.pause()
-    }
-  })
-
-  proc.stdout?.on('pause', flushBatch)
-
-  proc.stdout?.on('end', () => {
-    if (procGen !== session.generation) return
-    if (session.done) return
-    flushBatch()
-    session.done = true
-    const sender = event.sender
-    if (sender && !sender.isDestroyed()) {
-      sender.send(EVENT_CHANNELS.PLAYER_STREAM_END, { sessionId })
-    }
-  })
-
-  proc.on('error', (err) => {
-    if (procGen !== session.generation) return
-    if (session.done) return
-    session.done = true
-    session.error = err.message
-    console.error('[remux-stream] spawn error:', err.message)
-    const sender = event.sender
-    if (sender && !sender.isDestroyed()) {
-      sender.send(EVENT_CHANNELS.PLAYER_STREAM_ERROR, { sessionId, error: err.message })
-    }
-  })
-
-  proc.on('exit', (code, signal) => {
-    if (procGen !== session.generation) return
-    if (signal === 'SIGKILL') return
-    if (code !== 0 && !session.done) {
-      const msg = `ffmpeg exited with code ${code}: ${session.stderrTail.slice(-3).join('').trim()}`
-      session.error = msg
-      session.done = true
-      console.error('[remux-stream]', msg)
-      const sender = event.sender
-      if (sender && !sender.isDestroyed()) {
-        sender.send(EVENT_CHANNELS.PLAYER_STREAM_ERROR, { sessionId, error: msg })
-      }
-    }
-  })
-
-  return proc
-}
-
-const remuxTmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
-const mseSessions = new Map<string, MseSession>()
-const STREAM_BACKPRESSURE_HIGH_WATERMARK = 64 * 1024 * 1024
-const STREAM_BACKPRESSURE_LOW_WATERMARK = 16 * 1024 * 1024
-
-function cleanupMseSession(sessionId: string): void {
-  const session = mseSessions.get(sessionId)
-  if (!session) return
-  session.done = true
-  try {
-    session.proc.kill('SIGKILL')
-  } catch {
-    /* ignore */
-  }
-  mseSessions.delete(sessionId)
-}
-
-interface MkvProbeResult {
-  duration: number
-  videoCodec: 'h264' | 'hevc'
-  audioCodecName: string
-  audioStrategy: 'copy' | 'transcode'
-  streamCopyMimeType: string | null
-  // Set when the source audio is AAC — carries the precise AAC object-type
-  // codec string (e.g. mp4a.40.2, mp4a.40.5) for HE-AAC/HE-AACv2 variants.
-  audioCodecString: string | null
-}
-
-// Find the latest video keyframe at-or-before `time` (in seconds) by scanning a
-// short window of frames with ffprobe. The fmp4 muxer normalizes per-output
-// `tfdt` to start at 0 regardless of `-copyts`, so we cannot ask ffmpeg to emit
-// absolute timestamps in its fragmented MP4 output. Instead we tell ffmpeg to
-// `-ss <keyframeTime>` exactly, then let the renderer set
-// `sourceBuffer.timestampOffset = keyframeTime` so the video element's timeline
-// aligns with the original file. Without this, seeking lands on the keyframe
-// PTS rather than the user's target (off by up to one GOP).
-async function findKeyframeBefore(filePath: string, time: number): Promise<number> {
-  if (!ffprobePath || time <= 0) return Math.max(0, time)
-  const start = Math.max(0, time - 15)
-  return new Promise<number>((resolve) => {
-    const proc = spawn(
-      ffprobePath!,
-      [
-        '-v',
-        'error',
-        '-skip_frame',
-        'nokey',
-        '-read_intervals',
-        `${start.toFixed(3)}%${time.toFixed(3)}`,
-        '-select_streams',
-        'v:0',
-        '-show_entries',
-        'frame=pts_time,key_frame',
-        '-of',
-        'csv=print_section=0',
-        filePath
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'] }
-    )
-    let buf = ''
-    proc.stdout.on('data', (data: Buffer) => {
-      buf += data.toString()
-    })
-    proc.on('error', () => resolve(Math.max(0, time)))
-    proc.on('exit', () => {
-      let latest = 0
-      for (const line of buf.split('\n')) {
-        const parts = line.trim().split(',')
-        if (parts.length < 2) continue
-        const isKey = parts[0] === '1'
-        const pts = parseFloat(parts[1])
-        if (!isKey || !isFinite(pts)) continue
-        if (pts <= time && pts > latest) latest = pts
-      }
-      resolve(latest > 0 ? latest : Math.max(0, time))
-    })
-  })
-}
-
-async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
-  if (!ffprobePath) return null
-  try {
-    Ffmpeg.setFfprobePath(ffprobePath)
-    const metadata = await new Promise<Ffmpeg.FfprobeData>((res, rej) => {
-      Ffmpeg.ffprobe(mkvPath, (err, m) => (err ? rej(err) : res(m)))
-    })
-    const durationStr = metadata.format?.duration
-    const duration = typeof durationStr === 'number' ? durationStr : parseFloat(String(durationStr))
-    if (!isFinite(duration) || duration <= 0) return null
-    const video = metadata.streams?.find((s) => s.codec_type === 'video')
-    const audio = metadata.streams?.find((s) => s.codec_type === 'audio')
-    if (!video || !audio) return null
-    let videoCodec: 'h264' | 'hevc'
-    let videoCodecStr: string | null = null
-    const avc = avcCodecString(video)
-    if (avc) {
-      videoCodec = 'h264'
-      videoCodecStr = avc
-    } else {
-      const hevc = hevcCodecString(video)
-      if (hevc) {
-        videoCodec = 'hevc'
-        videoCodecStr = hevc
-      } else return null
-    }
-    const audioCodecName = (audio.codec_name || '').toString()
-    const aStr = aacCodecString(audio)
-    const audioStrategy: 'copy' | 'transcode' = aStr ? 'copy' : 'transcode'
-    const streamCopyMimeType =
-      aStr && videoCodecStr ? `video/mp4; codecs="${videoCodecStr}, ${aStr}"` : null
-    return {
-      duration,
-      videoCodec,
-      audioCodecName,
-      audioStrategy,
-      streamCopyMimeType,
-      audioCodecString: aStr
-    }
-  } catch {
-    return null
-  }
-}
-
-let cachedH264Encoder: string | null | undefined = undefined
-
-interface H264EncoderChoice {
-  name: string
-  videoArgs: string[]
-  extraInputArgs?: string[]
-}
-
-function listVaapiRenderNodes(): string[] {
-  // Common default is /dev/dri/renderD128, but multi-GPU systems expose
-  // renderD129, renderD130, ... The right one for hardware H.264 encode isn't
-  // knowable without probing, so enumerate all of them and let pickH264Encoder
-  // dry-run each in order.
-  try {
-    const entries = fs.readdirSync('/dev/dri')
-    return entries
-      .filter((n) => /^renderD\d+$/.test(n))
-      .sort()
-      .map((n) => `/dev/dri/${n}`)
-  } catch {
-    return []
-  }
-}
-
-function h264EncoderCandidates(): H264EncoderChoice[] {
-  // Force a keyframe every second via a time-based expression so fragments
-  // emitted with `+frag_keyframe` land every ~1 s instead of waiting for the
-  // encoder's default ~10 s GOP. Without this, the first post-seek fragment
-  // takes many seconds to appear and the MSE buffer stays empty.
-  const keyframeEverySecond = ['-force_key_frames', 'expr:gte(t,n_forced*1)']
-  const candidates: H264EncoderChoice[] = []
-  if (process.platform === 'linux') {
-    for (const node of listVaapiRenderNodes()) {
-      candidates.push({
-        name: `h264_vaapi(${node})`,
-        extraInputArgs: ['-init_hw_device', `vaapi=va:${node}`, '-filter_hw_device', 'va'],
-        videoArgs: [
-          '-vf',
-          'format=nv12,hwupload',
-          '-c:v',
-          'h264_vaapi',
-          '-profile:v',
-          'high',
-          '-level',
-          '40',
-          ...keyframeEverySecond
-        ]
-      })
-    }
-  }
-  candidates.push({
-    name: 'h264_nvenc',
-    videoArgs: [
-      '-c:v',
-      'h264_nvenc',
-      '-preset',
-      'p1',
-      '-tune',
-      'll',
-      '-pix_fmt',
-      'yuv420p',
-      '-profile:v',
-      'high',
-      '-level',
-      '4.0',
-      ...keyframeEverySecond
-    ]
-  })
-  if (process.platform === 'win32' || process.platform === 'linux') {
-    candidates.push({
-      name: 'h264_qsv',
-      videoArgs: [
-        '-c:v',
-        'h264_qsv',
-        '-preset',
-        'veryfast',
-        '-pix_fmt',
-        'nv12',
-        '-profile:v',
-        'high',
-        '-level',
-        '4.0',
-        ...keyframeEverySecond
-      ]
-    })
-  }
-  candidates.push({
-    // No `-tune zerolatency`: it forces slice-threads only and disables frame-threading,
-    // which roughly halves libx264's throughput. `-threads 0` lets x264 auto-pick.
-    name: 'libx264',
-    videoArgs: [
-      '-c:v',
-      'libx264',
-      '-preset',
-      'ultrafast',
-      '-threads',
-      '0',
-      '-pix_fmt',
-      'yuv420p',
-      '-profile:v',
-      'high',
-      '-level',
-      '4.0',
-      ...keyframeEverySecond
-    ]
-  })
-  return candidates
-}
-
-function dryRunEncoder(choice: H264EncoderChoice): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (!ffmpegPath) return resolve(false)
-    const args: string[] = []
-    if (choice.extraInputArgs) args.push(...choice.extraInputArgs)
-    args.push('-f', 'lavfi', '-i', 'testsrc=duration=0.1:size=320x240:rate=30', '-frames:v', '1')
-    args.push(...choice.videoArgs)
-    args.push('-an', '-f', 'null', '-')
-    try {
-      execFile(ffmpegPath, args, { timeout: 5000 }, (err) => resolve(!err))
-    } catch {
-      resolve(false)
-    }
-  })
-}
-
-async function pickH264Encoder(): Promise<H264EncoderChoice> {
-  const candidates = h264EncoderCandidates()
-  if (cachedH264Encoder !== undefined) {
-    const hit = candidates.find((c) => c.name === cachedH264Encoder)
-    if (hit) return hit
-  }
-  for (const c of candidates) {
-    const ok = await dryRunEncoder(c)
-    if (ok) {
-      cachedH264Encoder = c.name
-      console.log(`[remux-stream] picked H.264 encoder: ${c.name}`)
-      return c
-    }
-  }
-  // libx264 should always work but if even that fails, still return it so the spawn surfaces a real error later.
-  cachedH264Encoder = 'libx264'
-  return candidates[candidates.length - 1]
 }
 
 async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {
@@ -5198,7 +3883,7 @@ app.whenReady().then(async () => {
     })
   })
 
-  cleanupStaleCache()
+  animeCacheService.cleanupStale()
   createWindow()
   const mainWin = BrowserWindow.getAllWindows()[0]
 
@@ -5211,7 +3896,7 @@ app.whenReady().then(async () => {
   ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
   const ffmpegInfo = await checkFfmpeg()
   downloadManager = new DownloadManager(
-    getDownloadDir(),
+    coldStorageService.getDownloadDir(),
     smotretApi,
     app.getPath('userData'),
     () => (store.get('downloadSpeedLimit') as number) || 0,
@@ -5259,8 +3944,8 @@ app.whenReady().then(async () => {
       await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
     } else {
       // Auto-move to cold if merge is disabled
-      if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
-        await moveEpisodeToColdStorage(animeName, episodeLabel)
+      if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
+        await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
       }
       const mode = store.get('notificationMode') as string
       if (mode === 'each') {
@@ -5276,8 +3961,8 @@ app.whenReady().then(async () => {
   downloadManager.onMergeComplete(async ({ animeName, animeId, episodeLabel }) => {
     fileCheckCache.delete(animeName)
     // Auto-move to cold after merge
-    if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
-      await moveEpisodeToColdStorage(animeName, episodeLabel)
+    if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
+      await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
     }
     const mode = store.get('notificationMode') as string
     if (mode === 'each') {
@@ -5327,11 +4012,11 @@ app.whenReady().then(async () => {
   // `autoCleanupConfirm` is still true emits `storage:cleanup-pending` instead
   // of deleting; the renderer's confirm modal then calls back with force=true.
   setTimeout(() => {
-    void runWatchedCleanup()
+    void coldStorageService.runWatchedCleanup()
   }, 60_000)
   setInterval(
     () => {
-      void runWatchedCleanup()
+      void coldStorageService.runWatchedCleanup()
     },
     24 * 60 * 60 * 1000
   )
@@ -5342,7 +4027,7 @@ app.whenReady().then(async () => {
   // file replaced outside the app, leftover .mp4 cache after merge, etc.).
   setTimeout(() => {
     try {
-      const r = sweepSkipFingerprintCache()
+      const r = skipAnalysisService.sweepFingerprintCache()
       if (r.dropped > 0) {
         console.log(
           `[skip-detector] cache sweep: kept ${r.kept}, dropped ${r.dropped} stale entries`

@@ -32,13 +32,7 @@ import { isNetworkError } from './lib/errors'
 import { consolidateQueue, type QueuedShikimoriUpdate } from './lib/shikimori-queue'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
-import type {
-  AnimeSearchResult,
-  AnimeDetail,
-  EpisodeSummary,
-  EpisodeDetail,
-  Translation
-} from './smotret-api'
+import type { AnimeSearchResult, AnimeDetail, EpisodeSummary, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import {
   analyzeShow,
@@ -82,15 +76,7 @@ protocol.registerSchemesAsPrivileged([
 process.stdout?.on('error', () => {})
 process.stderr?.on('error', () => {})
 
-interface AnimeCacheEntry {
-  animeDetail: AnimeDetail | null
-  episodes: Record<number, EpisodeDetail>
-  qualityProbes: Record<number, number>
-  cachedAt: number
-  posterCached: boolean
-  fullProbeAt?: number
-  fullProbeEpisodeCount?: number
-}
+import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -892,111 +878,14 @@ async function backgroundRescan(animeName: string): Promise<void> {
   }
 }
 
-function getCacheEntry(animeId: number): AnimeCacheEntry | null {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  return cache[String(animeId)] || null
-}
-
-function setCacheEntry(animeId: number, entry: AnimeCacheEntry): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  cache[String(animeId)] = entry
-  store.set('animeCache', cache)
-}
-
-function deleteCacheEntry(animeId: number): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  delete cache[String(animeId)]
-  store.set('animeCache', cache)
-  // Also delete cached poster
-  const posterPath = getPosterCachePath(animeId)
-  try {
-    fs.unlinkSync(posterPath)
-  } catch {
-    /* ignore */
-  }
-}
-
-function getPosterCacheDir(): string {
-  return path.join(app.getPath('userData'), 'poster-cache')
-}
-
-function getPosterCachePath(animeId: number): string {
-  return path.join(getPosterCacheDir(), `${animeId}.jpg`)
-}
-
-async function cachePosterImage(animeId: number, posterUrl: string): Promise<void> {
-  if (!posterUrl) return
-  const destPath = getPosterCachePath(animeId)
-  if (fs.existsSync(destPath)) return
-  try {
-    fs.mkdirSync(getPosterCacheDir(), { recursive: true })
-    const buffer = await smotretApi.fetchPoster(posterUrl)
-    if (!buffer) return
-    fs.writeFileSync(destPath, buffer)
-  } catch {
-    // Non-critical, ignore
-  }
-}
-
-function ensureCacheEntry(animeId: number): AnimeCacheEntry {
-  const existing = getCacheEntry(animeId)
-  if (existing) return existing
-  return { animeDetail: null, episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false }
-}
-
-function updateAnimeDetailCache(animeId: number, detail: AnimeDetail): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.animeDetail = detail
-  entry.cachedAt = Date.now()
-  setCacheEntry(animeId, entry)
-  // Cache poster in background
-  if (!entry.posterCached) {
-    cachePosterImage(animeId, detail.posterUrl || detail.posterUrlSmall)
-      .then(() => {
-        entry.posterCached = true
-        setCacheEntry(animeId, entry)
-      })
-      .catch(() => {})
-  }
-}
-
-function updateEpisodeCache(animeId: number, episodeId: number, detail: EpisodeDetail): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.episodes[episodeId] = detail
-  entry.cachedAt = Date.now()
-  setCacheEntry(animeId, entry)
-}
-
-function updateQualityProbeCache(animeId: number, translationId: number, height: number): void {
-  if (!isCachableAnime(animeId)) return
-  const entry = ensureCacheEntry(animeId)
-  entry.qualityProbes[translationId] = height
-  setCacheEntry(animeId, entry)
-}
-
-function cleanupStaleCache(): void {
-  const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  const lib = store.get('library') as Record<string, AnimeSearchResult>
-  let changed = false
-  for (const key of Object.keys(cache)) {
-    if (!downloaded[key] && !lib[key]) {
-      delete cache[key]
-      const posterPath = getPosterCachePath(Number(key))
-      try {
-        fs.unlinkSync(posterPath)
-      } catch {
-        /* ignore */
-      }
-      changed = true
-    }
-  }
-  if (changed) store.set('animeCache', cache)
-}
-
 const smotretApi = new SmotretApi(() => store.get('token') as string)
+
+const animeCacheService = createAnimeCacheService({
+  store,
+  userDataDir: app.getPath('userData'),
+  fetchPoster: (url) => smotretApi.fetchPoster(url),
+  isCachable: isCachableAnime
+})
 let downloadManager: DownloadManager
 let ffmpegPath = ''
 let ffprobePath = ''
@@ -2263,11 +2152,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.GET_ANIME, async (_event, id: number) => {
     try {
       const result = await smotretApi.getAnime(id)
-      updateAnimeDetailCache(id, result.data)
+      animeCacheService.updateAnimeDetail(id, result.data)
       rememberAnimeMeta(result.data)
       return { ...result, source: 'api' }
     } catch (err) {
-      const cached = getCacheEntry(id)
+      const cached = animeCacheService.getEntry(id)
       if (cached?.animeDetail) {
         return { data: cached.animeDetail, source: 'cache' }
       }
@@ -2283,11 +2172,11 @@ function registerIpcHandlers(): void {
         const streams = embed.stream || []
         if (streams.length === 0) return null
         const best = streams.reduce((a, b) => (a.height > b.height ? a : b))
-        if (animeId) updateQualityProbeCache(animeId, translationId, best.height)
+        if (animeId) animeCacheService.updateQualityProbe(animeId, translationId, best.height)
         return best.height
       } catch {
         if (animeId) {
-          const cached = getCacheEntry(animeId)
+          const cached = animeCacheService.getEntry(animeId)
           return cached?.qualityProbes[translationId] ?? null
         }
         return null
@@ -2298,7 +2187,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.PROBE_FULL_SCAN_NEEDED,
     (_event, animeId: number, episodeCount: number) => {
-      const entry = getCacheEntry(animeId)
+      const entry = animeCacheService.getEntry(animeId)
       if (!entry?.fullProbeAt) return true
       if (entry.fullProbeEpisodeCount !== episodeCount) return true
       const weekMs = 7 * 24 * 60 * 60 * 1000
@@ -2307,11 +2196,11 @@ function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(CHANNELS.PROBE_FULL_SCAN_DONE, (_event, animeId: number, episodeCount: number) => {
-    const entry = getCacheEntry(animeId)
+    const entry = animeCacheService.getEntry(animeId)
     if (!entry) return
     entry.fullProbeAt = Date.now()
     entry.fullProbeEpisodeCount = episodeCount
-    setCacheEntry(animeId, entry)
+    animeCacheService.setEntry(animeId, entry)
   })
 
   const qualityMismatches = new Map<
@@ -2360,11 +2249,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.GET_EPISODE, async (_event, id: number, animeId?: number) => {
     try {
       const result = await smotretApi.getEpisode(id)
-      if (animeId) updateEpisodeCache(animeId, id, result.data)
+      if (animeId) animeCacheService.updateEpisode(animeId, id, result.data)
       return { ...result, source: 'api' }
     } catch (err) {
       if (animeId) {
-        const cached = getCacheEntry(animeId)
+        const cached = animeCacheService.getEntry(animeId)
         if (cached?.episodes[id]) {
           return { data: cached.episodes[id], source: 'cache' }
         }
@@ -2395,7 +2284,7 @@ function registerIpcHandlers(): void {
     if (lib[key]) {
       delete lib[key]
       store.set('library', lib)
-      if (!isDownloadedAnime(anime.id)) deleteCacheEntry(anime.id)
+      if (!isDownloadedAnime(anime.id)) animeCacheService.deleteEntry(anime.id)
       return false
     } else {
       lib[key] = anime
@@ -2405,7 +2294,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.GET_ANIME_CACHE, (_event, id: number) => {
-    const entry = getCacheEntry(id)
+    const entry = animeCacheService.getEntry(id)
     if (!entry?.animeDetail || !entry.cachedAt) return null
     if (Date.now() - entry.cachedAt > ANIME_DETAIL_CACHE_TTL_MS) return null
     return { data: entry.animeDetail, cachedAt: entry.cachedAt }
@@ -2413,7 +2302,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(CHANNELS.SET_ANIME_CACHE, (_event, id: number, data: AnimeDetail) => {
     if (!isCachableAnime(id)) return false
-    updateAnimeDetailCache(id, data)
+    animeCacheService.updateAnimeDetail(id, data)
     return true
   })
 
@@ -2749,7 +2638,7 @@ function registerIpcHandlers(): void {
       }
     }
     // Clean cache
-    deleteCacheEntry(animeId)
+    animeCacheService.deleteEntry(animeId)
     pruneSkipCacheForAnime(animeId)
     dropSkipDetectionsForAnime(animeId)
   })
@@ -2794,7 +2683,7 @@ function registerIpcHandlers(): void {
     if (mutated) store.set('downloadedEpisodes', episodes)
 
     fileCheckCache.delete(animeName)
-    deleteCacheEntry(animeId)
+    animeCacheService.deleteEntry(animeId)
     pruneSkipCacheForAnime(animeId)
     dropSkipDetectionsForAnime(animeId)
   })
@@ -3015,7 +2904,7 @@ function registerIpcHandlers(): void {
           if (key) {
             delete downloaded[key]
             store.set('downloadedAnime', downloaded)
-            deleteCacheEntry(Number(key))
+            animeCacheService.deleteEntry(Number(key))
           }
         }
       }
@@ -3267,7 +3156,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.CACHE_GET_POSTER, (_event, animeId: number) => {
-    const posterPath = getPosterCachePath(animeId)
+    const posterPath = animeCacheService.getPosterCachePath(animeId)
     if (fs.existsSync(posterPath)) return `file://${posterPath}`
     return null
   })
@@ -5198,7 +5087,7 @@ app.whenReady().then(async () => {
     })
   })
 
-  cleanupStaleCache()
+  animeCacheService.cleanupStale()
   createWindow()
   const mainWin = BrowserWindow.getAllWindows()[0]
 

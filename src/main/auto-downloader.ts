@@ -1,4 +1,4 @@
-import type Store from 'electron-store'
+import type { StorageService } from './store/types'
 import type { SmotretApi, EpisodeDetail, Translation } from './smotret-api'
 import type { DownloadManager, DownloadRequest } from './download-manager'
 import type { AutoDownloadSubscription } from './index'
@@ -45,7 +45,7 @@ interface ShikiAnimeDetailsCacheEntry {
 }
 
 interface AutoDownloaderDeps {
-  store: Store<Record<string, unknown>>
+  store: StorageService
   smotretApi: SmotretApi
   downloadManager: DownloadManager
   broadcast: (channel: string, ...args: unknown[]) => void
@@ -191,7 +191,7 @@ function pickTranslation(
 }
 
 function mostRecentDownloadedTranslation(
-  store: Store<Record<string, unknown>>,
+  store: StorageService,
   animeId: number
 ): { type: string; author: string } | null {
   const all = store.get('downloadedEpisodes') as Record<string, DownloadedEpisodeMeta>
@@ -204,11 +204,7 @@ function mostRecentDownloadedTranslation(
   return null
 }
 
-function isAlreadyDownloaded(
-  store: Store<Record<string, unknown>>,
-  animeId: number,
-  episodeInt: string
-): boolean {
+function isAlreadyDownloaded(store: StorageService, animeId: number, episodeInt: string): boolean {
   const all = store.get('downloadedEpisodes') as Record<string, DownloadedEpisodeMeta>
   const newPrefix = `${animeId}:${episodeInt}:`
   const legacyKey = `${animeId}:${episodeInt}`

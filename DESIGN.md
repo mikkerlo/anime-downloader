@@ -40,6 +40,10 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/lib/shikimori-queue.ts` | `QueuedShikimoriUpdate`/`ConsolidatedWorkItem` types + pure `consolidateQueue` (per-malId offline-queue collapse) |
 | `src/main/lib/filename.ts` | Pure `parseEpisodeFromFilename` (episodeInt + ext from sanitized download filename) |
 | `src/main/streaming/codec-strings.ts` | Pure ffprobe→codec-string mappers: `avcCodecString`, `hevcCodecString`, `aacCodecString` (MSE-compatible RFC 6381 strings) |
+| `src/main/store/types.ts` | Injected `StorageService<S>` persistence interface (schema-typed get/set/has/delete); decouples services from `electron-store` |
+| `src/main/store/index.ts` | `createStorageService(defaults)` electron-store binding + `MainStorageService.migrateWatchProgressV2()` |
+| `src/main/store/keys.ts` | `PERSISTED_STORE_KEYS` frozen tuple — rename guard, compile-time-asserted against `keyof STORE_DEFAULTS` in `index.ts` |
+| `src/main/store/migrate.ts` | Pure `migrateWatchProgressV2(store)` (one-shot `watchedAt` backfill) |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |

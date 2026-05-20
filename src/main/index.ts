@@ -78,6 +78,7 @@ process.stderr?.on('error', () => {})
 
 import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
 import { createSkipAnalysisService } from './services/skip-analysis'
+import { createColdStorageService } from './services/cold-storage'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -682,7 +683,7 @@ async function sumShowFiles(animeName: string): Promise<{ bytes: number; files: 
   const animeDirName = sanitizeFilename(animeName)
   let bytes = 0
   let files = 0
-  for (const dir of storageDirsForScan()) {
+  for (const dir of coldStorageService.dirsForScan()) {
     const showDir = path.join(dir, animeDirName)
     let entries: fs.Dirent[]
     try {
@@ -727,9 +728,9 @@ const fileCheckCache = new Map<string, FileCheckResult>()
 
 function scanEpisodeFiles(animeName: string): FileCheckResult {
   const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const coldDir = getColdStorageDir()
+  const dirsToCheck = [coldStorageService.getDownloadDir()]
+  if (coldStorageService.isAdvanced()) {
+    const coldDir = coldStorageService.getColdStorageDir()
     if (coldDir) dirsToCheck.push(coldDir)
   }
 
@@ -808,9 +809,9 @@ function filterScanResult(
 
 async function backgroundRescan(animeName: string): Promise<void> {
   const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const coldDir = getColdStorageDir()
+  const dirsToCheck = [coldStorageService.getDownloadDir()]
+  if (coldStorageService.isAdvanced()) {
+    const coldDir = coldStorageService.getColdStorageDir()
     if (coldDir) dirsToCheck.push(coldDir)
   }
 
@@ -894,6 +895,15 @@ const skipAnalysisService = createSkipAnalysisService({
   sanitizeFilename,
   broadcast: broadcastToAll,
   signatureUpdatedChannel: EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED
+})
+
+const coldStorageService = createColdStorageService({
+  store,
+  downloadsFallbackDir: app.getPath('downloads'),
+  sanitizeFilename,
+  parseEpisodeFromFilename,
+  broadcast: broadcastToAll,
+  usageProgressChannel: EVENT_CHANNELS.STORAGE_USAGE_PROGRESS
 })
 let downloadManager: DownloadManager
 let ffmpegPath = ''
@@ -1010,34 +1020,6 @@ function checkFfmpeg(): Promise<FfmpegInfo> {
   })
 }
 
-function getDownloadDir(): string {
-  const mode = store.get('storageMode') as string
-  if (mode === 'advanced') {
-    const hotDir = store.get('hotStorageDir') as string
-    if (hotDir) return hotDir
-  }
-  const dir = store.get('downloadDir') as string
-  if (dir) return dir
-  return join(app.getPath('downloads'), 'anime-dl')
-}
-
-function getColdStorageDir(): string {
-  return (store.get('coldStorageDir') as string) || ''
-}
-
-function isAdvancedStorage(): boolean {
-  return (store.get('storageMode') as string) === 'advanced'
-}
-
-function storageDirsForScan(): string[] {
-  const dirs = [getDownloadDir()]
-  if (isAdvancedStorage()) {
-    const cold = getColdStorageDir()
-    if (cold) dirs.push(cold)
-  }
-  return dirs
-}
-
 function deleteEpisodeFiles(
   animeName: string,
   episodeInt: string,
@@ -1046,7 +1028,7 @@ function deleteEpisodeFiles(
 ): { bytesDeleted: number } {
   fileCheckCache.delete(animeName)
   const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = storageDirsForScan()
+  const dirsToCheck = coldStorageService.dirsForScan()
 
   const padded = episodeInt.padStart(2, '0')
   const base = sanitizeFilename(`${animeName} - ${padded}`)
@@ -1141,7 +1123,7 @@ function episodeHasInProgressDownload(animeName: string, episodeInt: string): bo
   const animeDirName = sanitizeFilename(animeName)
   const padded = episodeInt.padStart(2, '0')
   const base = sanitizeFilename(`${animeName} - ${padded}`)
-  for (const dir of storageDirsForScan()) {
+  for (const dir of coldStorageService.dirsForScan()) {
     const animeDir = path.join(dir, animeDirName)
     try {
       const files = fs.readdirSync(animeDir)
@@ -1192,7 +1174,7 @@ function episodeFileExists(animeName: string, episodeInt: string, author: string
   const base = sanitizeFilename(`${animeName} - ${padded}`)
   const authorTag = sanitizeFilename(author || '')
   const taggedBase = authorTag ? `${base} [${authorTag}]` : base
-  for (const dir of storageDirsForScan()) {
+  for (const dir of coldStorageService.dirsForScan()) {
     const animeDir = path.join(dir, animeDirName)
     for (const candidate of [
       `${taggedBase}.mkv`,
@@ -1218,9 +1200,9 @@ async function moveFileToCold(src: string, dest: string): Promise<void> {
 }
 
 async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void> {
-  const coldDir = getColdStorageDir()
+  const coldDir = coldStorageService.getColdStorageDir()
   if (!coldDir) return
-  const hotDir = getDownloadDir()
+  const hotDir = coldStorageService.getDownloadDir()
 
   const animeDirName = sanitizeFilename(animeName)
   const hotAnimeDir = path.join(hotDir, animeDirName)
@@ -1251,8 +1233,8 @@ async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string)
 async function moveAllFilesToColdStorage(
   onProgress?: (current: number, total: number, file: string) => void
 ): Promise<{ moved: number; failed: string[] }> {
-  const coldDir = getColdStorageDir()
-  const hotDir = getDownloadDir()
+  const coldDir = coldStorageService.getColdStorageDir()
+  const hotDir = coldStorageService.getDownloadDir()
   const result = { moved: 0, failed: [] as string[] }
 
   if (!coldDir || !fs.existsSync(hotDir)) return result
@@ -1402,208 +1384,6 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
   return result
 }
 
-interface UsageEpisodeFiles {
-  mkv?: { path: string; size: number }
-  mp4?: { path: string; size: number }
-  ass?: { path: string; size: number }
-}
-
-interface AnimeUsageAccum {
-  animeId: number
-  animeName: string
-  posterUrlSmall: string
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  episodes: Map<string, { files: UsageEpisodeFiles; totalBytes: number }>
-}
-
-interface StorageEpisodeUsage {
-  episodeInt: string
-  files: UsageEpisodeFiles
-  totalBytes: number
-  watched: boolean
-  watchedAt?: number
-}
-
-interface StorageAnimeUsage {
-  animeId: number
-  animeName: string
-  posterUrlSmall: string
-  bytes: number
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  episodes: StorageEpisodeUsage[]
-}
-
-interface StorageUsage {
-  totalBytes: number
-  bytesHot: number
-  bytesCold: number
-  fileCount: number
-  perAnime: StorageAnimeUsage[]
-}
-
-async function scanStorageUsage(): Promise<StorageUsage> {
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  const watchProgress = store.get('watchProgress') as Record<
-    string,
-    { watched?: boolean; watchedAt?: number }
-  >
-  // Downloads are written under sanitizeFilename(getAnimeName(anime)), where
-  // getAnimeName prefers titles.romaji, then titles.ru, then title. Register all
-  // three candidates so the scan finds folders regardless of which variant was
-  // current at download time. The "preferred" name (matching the live folder
-  // name) is what we surface to the renderer so delete calls round-trip cleanly.
-  const dirNameToId = new Map<string, string>()
-  const idToDisplayName = new Map<string, string>()
-  for (const id of Object.keys(downloaded)) {
-    const a = downloaded[id]
-    if (!a) continue
-    const preferred = a.titles?.romaji || a.titles?.ru || a.title
-    if (!preferred) continue
-    idToDisplayName.set(id, preferred)
-    const candidates = [preferred, a.titles?.ru, a.titles?.romaji, a.title]
-    for (const name of candidates) {
-      if (!name) continue
-      const key = sanitizeFilename(name)
-      if (!dirNameToId.has(key)) dirNameToId.set(key, id)
-    }
-  }
-
-  const accum = new Map<string, AnimeUsageAccum>()
-  const hotDir = getDownloadDir()
-  const coldDir = isAdvancedStorage() ? getColdStorageDir() : ''
-
-  const dirs: Array<{ root: string; bucket: 'hot' | 'cold' }> = []
-  if (hotDir) dirs.push({ root: hotDir, bucket: 'hot' })
-  if (coldDir && coldDir !== hotDir) dirs.push({ root: coldDir, bucket: 'cold' })
-
-  // First pass: list anime folders so we can emit progress meaningfully
-  const animeFolders: Array<{ root: string; bucket: 'hot' | 'cold'; folder: string }> = []
-  for (const { root, bucket } of dirs) {
-    try {
-      const entries = await fsPromises.readdir(root, { withFileTypes: true })
-      for (const e of entries) {
-        if (e.isDirectory()) animeFolders.push({ root, bucket, folder: e.name })
-      }
-    } catch {
-      /* dir missing */
-    }
-  }
-
-  const total = animeFolders.length
-  const reportProgress = total > 50
-  let scanned = 0
-
-  for (const { root, bucket, folder } of animeFolders) {
-    const animeId = dirNameToId.get(folder)
-    if (!animeId) {
-      scanned++
-      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-      continue
-    }
-    const animeRec = downloaded[animeId]
-    let entry = accum.get(animeId)
-    if (!entry) {
-      entry = {
-        animeId: Number(animeId),
-        animeName: idToDisplayName.get(animeId) || animeRec.title,
-        posterUrlSmall: animeRec.posterUrlSmall || '',
-        bytesHot: 0,
-        bytesCold: 0,
-        fileCount: 0,
-        episodes: new Map()
-      }
-      accum.set(animeId, entry)
-    }
-
-    const animeDir = path.join(root, folder)
-    let files: string[]
-    try {
-      files = await fsPromises.readdir(animeDir)
-    } catch {
-      scanned++
-      if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-      continue
-    }
-
-    for (const file of files) {
-      const parsed = parseEpisodeFromFilename(file)
-      if (!parsed) continue
-      const fullPath = path.join(animeDir, file)
-      let size = 0
-      try {
-        size = (await fsPromises.stat(fullPath)).size
-      } catch {
-        continue
-      }
-
-      let ep = entry.episodes.get(parsed.episodeInt)
-      if (!ep) {
-        ep = { files: {}, totalBytes: 0 }
-        entry.episodes.set(parsed.episodeInt, ep)
-      }
-      // Cold storage takes priority when both buckets have the file.
-      const existing = ep.files[parsed.ext]
-      if (existing && bucket === 'hot') continue
-      ep.files[parsed.ext] = { path: fullPath, size }
-      ep.totalBytes =
-        (ep.files.mkv?.size || 0) + (ep.files.mp4?.size || 0) + (ep.files.ass?.size || 0)
-      if (existing) {
-        // Replaced hot with cold — adjust counters.
-        entry.bytesHot -= existing.size
-        entry.fileCount -= 1
-      }
-      if (bucket === 'hot') entry.bytesHot += size
-      else entry.bytesCold += size
-      entry.fileCount += 1
-    }
-
-    scanned++
-    if (reportProgress) broadcastToAll(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, { scanned, total })
-  }
-
-  let totalBytes = 0
-  let totalHot = 0
-  let totalCold = 0
-  let totalFiles = 0
-  const perAnime = [...accum.values()]
-    .map((a) => {
-      const bytes = a.bytesHot + a.bytesCold
-      totalBytes += bytes
-      totalHot += a.bytesHot
-      totalCold += a.bytesCold
-      totalFiles += a.fileCount
-      const episodes = [...a.episodes.entries()]
-        .map(([episodeInt, ep]) => {
-          const wp = watchProgress[`${a.animeId}:${episodeInt}`]
-          return {
-            episodeInt,
-            files: ep.files,
-            totalBytes: ep.totalBytes,
-            watched: !!wp?.watched,
-            watchedAt: wp?.watchedAt
-          }
-        })
-        .sort((x, y) => Number(x.episodeInt) - Number(y.episodeInt))
-      return {
-        animeId: a.animeId,
-        animeName: a.animeName,
-        posterUrlSmall: a.posterUrlSmall,
-        bytes,
-        bytesHot: a.bytesHot,
-        bytesCold: a.bytesCold,
-        fileCount: a.fileCount,
-        episodes
-      }
-    })
-    .sort((x, y) => y.bytes - x.bytes)
-
-  return { totalBytes, bytesHot: totalHot, bytesCold: totalCold, fileCount: totalFiles, perAnime }
-}
-
 interface CleanupCandidate {
   animeId: number
   animeName: string
@@ -1639,7 +1419,7 @@ function findCleanupCandidates(days: number): CleanupCandidate[] {
     const base = sanitizeFilename(`${animeName} - ${padded}`)
     let bytes = 0
     let hasFile = false
-    for (const dir of storageDirsForScan()) {
+    for (const dir of coldStorageService.dirsForScan()) {
       const animeDir = path.join(dir, animeDirName)
       try {
         const files = fs.readdirSync(animeDir)
@@ -2078,7 +1858,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.DUMP_QUALITY_MISMATCHES, () => {
-    const outPath = path.join(getDownloadDir(), 'quality-mismatches.json')
+    const outPath = path.join(coldStorageService.getDownloadDir(), 'quality-mismatches.json')
     const data = [...qualityMismatches.values()]
     fs.mkdirSync(path.dirname(outPath), { recursive: true })
     fs.writeFileSync(outPath, JSON.stringify(data, null, 2))
@@ -2464,9 +2244,9 @@ function registerIpcHandlers(): void {
     store.set('downloadedAnime', downloaded)
     // Delete the folder from all storage dirs
     const dirName = sanitizeFilename(animeName)
-    const dirsToCheck = [getDownloadDir()]
-    if (isAdvancedStorage()) {
-      const coldDir = getColdStorageDir()
+    const dirsToCheck = [coldStorageService.getDownloadDir()]
+    if (coldStorageService.isAdvanced()) {
+      const coldDir = coldStorageService.getColdStorageDir()
       if (coldDir) dirsToCheck.push(coldDir)
     }
     for (const dir of dirsToCheck) {
@@ -2499,7 +2279,7 @@ function registerIpcHandlers(): void {
     store.set('downloadedAnime', downloaded)
 
     const dirName = sanitizeFilename(animeName)
-    for (const dir of storageDirsForScan()) {
+    for (const dir of coldStorageService.dirsForScan()) {
       const dirPath = path.join(dir, dirName)
       try {
         fs.rmSync(dirPath, { recursive: true })
@@ -2553,7 +2333,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.GET_SETTING, (_event, key: string) => {
-    if (key === 'downloadDir') return getDownloadDir()
+    if (key === 'downloadDir') return coldStorageService.getDownloadDir()
     return store.get(key)
   })
 
@@ -2724,7 +2504,7 @@ function registerIpcHandlers(): void {
       const hasActive = groups.some((g) => g.animeName === animeName)
       if (!hasActive) {
         const animeDirName = sanitizeFilename(animeName)
-        const animeDir = path.join(getDownloadDir(), animeDirName)
+        const animeDir = path.join(coldStorageService.getDownloadDir(), animeDirName)
         let hasFiles = false
         try {
           const files = fs.readdirSync(animeDir)
@@ -2850,7 +2630,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.DOWNLOAD_SCAN_MERGE, async () => {
     if (!ffmpegPath) throw new Error('ffmpeg binary not found')
     const codec = (store.get('videoCodec') as string) || 'copy'
-    const extraDirs = isAdvancedStorage() && getColdStorageDir() ? [getColdStorageDir()] : undefined
+    const extraDirs =
+      coldStorageService.isAdvanced() && coldStorageService.getColdStorageDir()
+        ? [coldStorageService.getColdStorageDir()]
+        : undefined
     const result = await downloadManager.scanAndMerge(
       ffmpegPath,
       ffprobePath,
@@ -2877,7 +2660,7 @@ function registerIpcHandlers(): void {
     Ffmpeg.setFfmpegPath(ffmpegPath)
     Ffmpeg.setFfprobePath(ffprobePath)
 
-    const downloadDir = getDownloadDir()
+    const downloadDir = coldStorageService.getDownloadDir()
     if (!fs.existsSync(downloadDir)) return { fixed: 0, failed: [] as string[] }
 
     const episodeMeta = store.get('downloadedEpisodes') as Record<
@@ -3307,7 +3090,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.STORAGE_GET_USAGE, async () => {
-    return scanStorageUsage()
+    return coldStorageService.scanUsage()
   })
 
   ipcMain.handle(CHANNELS.STORAGE_RUN_CLEANUP, async (_event, opts?: { force?: boolean }) => {
@@ -3873,9 +3656,9 @@ function registerIpcHandlers(): void {
       const authorTag = sanitizeFilename(meta.author)
       const taggedBase = `${base} [${authorTag}]`
 
-      const dirsToCheck = [getDownloadDir()]
-      if (isAdvancedStorage()) {
-        const coldDir = getColdStorageDir()
+      const dirsToCheck = [coldStorageService.getDownloadDir()]
+      if (coldStorageService.isAdvanced()) {
+        const coldDir = coldStorageService.getColdStorageDir()
         if (coldDir) dirsToCheck.push(coldDir)
       }
 
@@ -4940,7 +4723,7 @@ app.whenReady().then(async () => {
   ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
   const ffmpegInfo = await checkFfmpeg()
   downloadManager = new DownloadManager(
-    getDownloadDir(),
+    coldStorageService.getDownloadDir(),
     smotretApi,
     app.getPath('userData'),
     () => (store.get('downloadSpeedLimit') as number) || 0,
@@ -4988,7 +4771,7 @@ app.whenReady().then(async () => {
       await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
     } else {
       // Auto-move to cold if merge is disabled
-      if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
+      if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
         await moveEpisodeToColdStorage(animeName, episodeLabel)
       }
       const mode = store.get('notificationMode') as string
@@ -5005,7 +4788,7 @@ app.whenReady().then(async () => {
   downloadManager.onMergeComplete(async ({ animeName, animeId, episodeLabel }) => {
     fileCheckCache.delete(animeName)
     // Auto-move to cold after merge
-    if (isAdvancedStorage() && (store.get('autoMoveToCold') as boolean)) {
+    if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
       await moveEpisodeToColdStorage(animeName, episodeLabel)
     }
     const mode = store.get('notificationMode') as string

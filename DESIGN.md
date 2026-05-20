@@ -45,6 +45,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/main/store/keys.ts` | `PERSISTED_STORE_KEYS` frozen tuple — rename guard, compile-time-asserted against `keyof STORE_DEFAULTS` in `index.ts` |
 | `src/main/store/migrate.ts` | Pure `migrateWatchProgressV2(store)` (one-shot `watchedAt` backfill) |
 | `src/main/services/anime-cache/index.ts` | `createAnimeCacheService` — `AnimeCacheEntry` CRUD + poster file cache + `cleanupStale` orphan sweep; deps-injected (`store`, `userDataDir`, `fetchPoster`, `isCachable`) |
+| `src/main/services/skip-analysis/index.ts` | `createSkipAnalysisService` — `normalizeDetections`, fingerprint cache `pruneCacheFor{Episode,Anime}` + `sweepFingerprintCache`, `dropDetectionsFor{Anime,Episode}`, `buildAutoSkipEpisodes`; deps-injected (`store`, `scanEpisodeFiles`, `sanitizeFilename`, `broadcast`). Auto-skip queue/drain machinery still lives in `index.ts` (deferred — entangled with stream-skip state). |
 | `src/preload/index.ts` | contextBridge API exposure to renderer |
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |

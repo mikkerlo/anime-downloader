@@ -3,7 +3,10 @@ import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
 import type { ColdStorageService } from '../services/cold-storage'
 import type { SkipAnalysisService } from '../services/skip-analysis'
+import type { ShikimoriSyncService } from '../services/shikimori-sync'
 import type { DownloadManager } from '../download-manager'
+import type { ShikiUserRateStatus } from '../shikimori'
+import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -13,6 +16,7 @@ import * as downloadsRouter from './downloads.ipc'
 import * as ffmpegRouter from './ffmpeg.ipc'
 import * as cleanupRouter from './cleanup.ipc'
 import * as downloadedAnimeRouter from './downloaded-anime.ipc'
+import * as shikimoriRouter from './shikimori.ipc'
 
 export interface FfmpegInfo {
   available: boolean
@@ -54,6 +58,19 @@ export interface AppDeps {
   sumShowFiles: (animeName: string) => Promise<{ bytes: number; files: number }>
   checkFfmpeg: () => Promise<FfmpegInfo>
   getDisplayName: (anime: AnimeSearchResult) => string
+  shikimoriSyncService: ShikimoriSyncService
+  /** Resolves smotret-anime entries for a batch of MAL ids (poster-enriched). */
+  lookupByMalIds: (malIds: number[]) => Promise<Record<number, AnimeSearchResult>>
+  /** Emits `cleanup:prompt` when a downloaded show transitions to `completed`. */
+  maybeBroadcastCleanupPrompt: (
+    smotretAnime: unknown,
+    malId: number,
+    status: ShikiUserRateStatus,
+    prevStatus?: ShikiUserRateStatus
+  ) => Promise<void>
+  runAutoDownloadTick: (reason: AutoDlReason) => Promise<AutoDlTickResult>
+  /** Fan-out broadcaster to every renderer window (the index.ts `broadcastToAll`). */
+  broadcast: (channel: string, ...args: unknown[]) => void
 }
 
 /**
@@ -71,4 +88,5 @@ export function registerIpcRouters(deps: AppDeps): void {
   ffmpegRouter.register(deps)
   cleanupRouter.register(deps)
   downloadedAnimeRouter.register(deps)
+  shikimoriRouter.register(deps)
 }

@@ -22,7 +22,6 @@ import ffbinaries from 'ffbinaries'
 import { execFile, type ChildProcess } from 'child_process'
 import * as os from 'os'
 import Ffmpeg from 'fluent-ffmpeg'
-import { autoUpdater } from 'electron-updater'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
@@ -60,26 +59,12 @@ import type {
 import { probeMp4Faststart } from './mp4-faststart'
 import type { Mp4StreamingStats } from './mp4-faststart'
 
-// Enable WebGPU (Anime4K shaders) and platform HEVC decoding (HEVC MKV via MSE).
-// PlatformHEVCDecoderSupport gates Chromium's HEVC path in <video> and MSE;
-// without it, MediaSource.isTypeSupported('…hvc1…') returns false even on
-// systems that have a hardware decoder available.
-app.commandLine.appendSwitch('enable-unsafe-webgpu')
-app.commandLine.appendSwitch('enable-features', 'Vulkan,PlatformHEVCDecoderSupport')
-
-// Register anime-video:// protocol for serving local video files to <video> elements
-protocol.registerSchemesAsPrivileged([
-  { scheme: 'anime-video', privileges: { stream: true, bypassCSP: true, supportFetchAPI: true } }
-])
-
-// Suppress EPIPE errors from broken stdout/stderr pipes (common on WSL2)
-process.stdout?.on('error', () => {})
-process.stderr?.on('error', () => {})
-
 import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
 import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createStreamingService, type MseSession, type MseOpenResult } from './streaming'
+import { App } from './app/core'
+import { registerIpcRouters } from './ipc'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -1338,45 +1323,7 @@ async function drainAutoSkipQueue(): Promise<void> {
 // in-place rename outside the app).
 
 function registerIpcHandlers(): void {
-  ipcMain.handle(CHANNELS.APP_VERSION, () => app.getVersion())
-
-  ipcMain.handle(CHANNELS.UPDATE_CHECK, async () => {
-    try {
-      const result = await autoUpdater.checkForUpdates()
-      if (!result) {
-        for (const win of BrowserWindow.getAllWindows()) {
-          win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
-            status: 'error',
-            error: 'Update check not available in development mode'
-          })
-        }
-      }
-    } catch (err) {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
-          status: 'error',
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
-  })
-
-  ipcMain.handle(CHANNELS.UPDATE_DOWNLOAD, async () => {
-    try {
-      await autoUpdater.downloadUpdate()
-    } catch (err) {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, {
-          status: 'error',
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
-  })
-
-  ipcMain.handle(CHANNELS.UPDATE_INSTALL, () => {
-    autoUpdater.quitAndInstall()
-  })
+  registerIpcRouters({ store })
 
   ipcMain.handle(CHANNELS.VALIDATE_TOKEN, () => smotretApi.validateToken())
 
@@ -3827,7 +3774,7 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(async () => {
+async function bootstrap(): Promise<void> {
   // Handle anime-video:// protocol for local video playback with Range request support.
   // Only one URL shape: anime-video://{absolute-path}. MKV streaming now uses MSE via IPC.
   protocol.handle('anime-video', async (request) => {
@@ -4062,55 +4009,20 @@ app.whenReady().then(async () => {
     void syncShikimoriQueue()
   }
 
-  // Auto-updater setup
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-
-  const broadcastUpdateStatus = (data: Record<string, unknown>): void => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(EVENT_CHANNELS.UPDATE_STATUS, data)
-    }
-  }
-
-  autoUpdater.on('update-available', (info) => {
-    broadcastUpdateStatus({ status: 'available', version: info.version })
-  })
-
-  autoUpdater.on('update-not-available', () => {
-    store.set('lastUpdateCheck', Date.now())
-    broadcastUpdateStatus({ status: 'up-to-date' })
-  })
-
-  autoUpdater.on('download-progress', (progress) => {
-    broadcastUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent) })
-  })
-
-  autoUpdater.on('update-downloaded', () => {
-    broadcastUpdateStatus({ status: 'ready' })
-  })
-
-  autoUpdater.on('error', (err) => {
-    broadcastUpdateStatus({ status: 'error', error: err.message })
-  })
-
-  // Auto-check on launch if last check was >24h ago
-  const lastCheck = store.get('lastUpdateCheck') as number
-  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
-    autoUpdater.checkForUpdates().catch(() => {})
-  }
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
-})
+}
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-app.on('before-quit', () => {
-  downloadManager?.destroy()
-  syncplay.disconnect()
-})
+new App()
+  .start({
+    onReady: bootstrap,
+    onBeforeQuit: () => {
+      downloadManager?.destroy()
+      syncplay.disconnect()
+    }
+  })
+  .catch((err) => {
+    console.error('[app] startup failed:', err)
+    app.exit(1)
+  })

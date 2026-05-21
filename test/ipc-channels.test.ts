@@ -1,12 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { resolve } from 'path'
 import { CHANNELS, EVENT_CHANNELS } from '../src/shared/ipc/channels'
 
 const read = (p: string) => readFileSync(resolve(__dirname, '..', p), 'utf8')
 const MAIN = read('src/main/index.ts')
 const PRELOAD = read('src/preload/index.ts')
-const SOURCES = MAIN + '\n' + PRELOAD
+// Phase 3 splits `registerIpcHandlers()` into per-domain `src/main/ipc/*.ipc.ts`
+// routers. Include every router so channels referenced from them count as
+// referenced for the drift-guard checks below.
+const IPC_DIR = resolve(__dirname, '..', 'src/main/ipc')
+const ROUTERS = readdirSync(IPC_DIR)
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => readFileSync(resolve(IPC_DIR, f), 'utf8'))
+  .join('\n')
+const SOURCES = MAIN + '\n' + PRELOAD + '\n' + ROUTERS
 
 // First arg of every IPC-ish call. Post-1c every one must be a CHANNELS./
 // EVENT_CHANNELS. reference — a bare string literal here means an un-migrated

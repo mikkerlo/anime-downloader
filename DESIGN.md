@@ -27,7 +27,10 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 
 | File | Role |
 |------|------|
-| `src/main/index.ts` | App lifecycle, IPC handlers, ffmpeg auto-download, settings |
+| `src/main/index.ts` | Bootstrap: services + downloadManager construction, `bootstrap()` (called via `App.start({ onReady })`), legacy `registerIpcHandlers()` for the un-migrated handlers, ffmpeg auto-download, settings |
+| `src/main/app/core.ts` | `App` class owning Electron lifecycle (refactor epic #84, Phase 3 slice 3a): early command-line switches, `anime-video://` scheme registration, EPIPE silencing in the constructor; `start({ onReady, onBeforeQuit })` awaits `app.whenReady()` and wires `window-all-closed` / `before-quit` |
+| `src/main/ipc/index.ts` | `registerIpcRouters(deps)` orchestrator — invokes every per-domain `*.ipc.ts` router; `AppDeps` grows as Phase 3 slices migrate handlers out of `registerIpcHandlers()` |
+| `src/main/ipc/app.ipc.ts` | App + auto-updater router: `CHANNELS.APP_VERSION`, `CHANNELS.UPDATE_{CHECK,DOWNLOAD,INSTALL}`, `autoUpdater` event subscriptions broadcasting `EVENT_CHANNELS.UPDATE_STATUS`, and the 24h auto-check-on-launch trigger (gated by `store.get('lastUpdateCheck')`) |
 | `src/main/smotret-api.ts` | Smotret-Anime API client: search, anime/episode details, embed, subtitles, token validation |
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |

@@ -2,10 +2,15 @@
 //
 // Domain types (AnimeDetail, ShikiUserRate, EpisodeGroup, …) were relocated to
 // `src/shared/types/*.d.ts` in #84 Phase 1 (slice 1a). They are still declared as
-// ambient globals there — no import is needed here or at any call site, and the
-// `Api` shape below is byte-identical to before the split. Later Phase 1 slices
-// (1b/1c) introduce the typed channel contract and regenerate the preload from
-// it; until then this hand-written surface stays authoritative.
+// ambient globals there — no import is needed here or at any call site.
+//
+// Phase 4 slice 4a (#111) replaced the `on*`/`off*` subscription pairs with
+// `EventSubscriber<T>`-shaped subscribers that return an `Unsubscribe` disposer.
+// `Unsubscribe` is mirrored locally as an ambient alias so this file can stay
+// declaration-only (importing from `@shared/ipc/channels` would convert it into
+// a module and force renderer callers to import `Api`/`Window`).
+
+type Unsubscribe = () => void
 
 declare module 'libass-wasm/dist/js/subtitles-octopus.js' {
   export default class SubtitlesOctopus {
@@ -54,8 +59,7 @@ interface Api {
   cleanupSetSnoozed: (animeId: number, snoozed: boolean) => Promise<void>
   onCleanupPrompt: (
     callback: (data: { animeId: number; animeName: string; malId: number }) => void
-  ) => void
-  offCleanupPrompt: () => void
+  ) => Unsubscribe
   getSetting: (key: string) => Promise<unknown>
   setSetting: (key: string, value: unknown) => Promise<void>
 
@@ -92,8 +96,7 @@ interface Api {
   downloadFixMetadata: () => Promise<{ fixed: number; failed: string[] }>
   onFixMetadataProgress: (
     callback: (data: { current: number; total: number; file: string }) => void
-  ) => void
-  offFixMetadataProgress: () => void
+  ) => Unsubscribe
   ffmpegCheck: () => Promise<{
     available: boolean
     version: string
@@ -108,16 +111,16 @@ interface Api {
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>
   onStorageMoveToColdProgress: (
     callback: (data: { current: number; total: number; file: string }) => void
-  ) => void
-  offStorageMoveToColdProgress: () => void
+  ) => Unsubscribe
   storageGetUsage: () => Promise<StorageUsage>
   storageRunCleanup: (opts?: { force?: boolean }) => Promise<CleanupResult>
-  onStorageUsageProgress: (callback: (data: { scanned: number; total: number }) => void) => void
-  offStorageUsageProgress: () => void
-  onStorageCleanupPending: (callback: (data: { candidates: CleanupCandidate[] }) => void) => void
-  offStorageCleanupPending: () => void
-  onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => void
-  offStorageCleanupFinished: () => void
+  onStorageUsageProgress: (
+    callback: (data: { scanned: number; total: number }) => void
+  ) => Unsubscribe
+  onStorageCleanupPending: (
+    callback: (data: { candidates: CleanupCandidate[] }) => void
+  ) => Unsubscribe
+  onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => Unsubscribe
   // File management
   fileCheckEpisodes: (
     animeName: string,
@@ -144,21 +147,16 @@ interface Api {
         { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
       >
     ) => void
-  ) => void
-  offFileEpisodesChanged: () => void
+  ) => Unsubscribe
 
-  onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => void
-  offDownloadProgress: () => void
-  onScanMergeProgress: (callback: (data: ScanMergeProgress) => void) => void
-  offScanMergeProgress: () => void
+  onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => Unsubscribe
+  onScanMergeProgress: (callback: (data: ScanMergeProgress) => void) => Unsubscribe
   onFfmpegDownloadProgress: (
     callback: (data: { status: string; progress?: number }) => void
-  ) => void
-  offFfmpegDownloadProgress: () => void
+  ) => Unsubscribe
   onFpcalcDownloadProgress: (
     callback: (data: { status: string; progress?: number }) => void
-  ) => void
-  offFpcalcDownloadProgress: () => void
+  ) => Unsubscribe
 
   // Skip detection (Chromaprint)
   skipDetectorAnalyzeShow: (
@@ -185,19 +183,16 @@ interface Api {
     total: number
   }>
   skipDetectorQueueStatus: () => Promise<{ currentAnimeId: number | null; queueLength: number }>
-  onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => void
-  offSkipDetectorProgress: () => void
+  onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => Unsubscribe
   onSkipDetectorSignatureUpdated: (
     callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void
-  ) => void
-  offSkipDetectorSignatureUpdated: () => void
+  ) => Unsubscribe
 
   injectChapters: (
     animeId: number,
     episodes: { episodeInt: string; episodeLabel: string; filePath: string }[]
   ) => Promise<{ written: number; skipped: number; failed: number; total: number }>
-  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => void
-  offChapterInjectProgress: () => void
+  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => Unsubscribe
 
   shellOpenExternal: (url: string) => Promise<boolean>
   shellOpenExternalFile: (filePath: string) => Promise<{ ok: boolean; error?: string }>
@@ -258,16 +253,14 @@ interface Api {
   playerCleanupRemux: () => Promise<void>
   onPlayerStreamSubtitles: (
     callback: (data: { sessionId: string; content: string }) => void
-  ) => void
-  offPlayerStreamSubtitles: () => void
+  ) => Unsubscribe
   onPlayerStreamChunk: (
     callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
-  ) => void
-  offPlayerStreamChunk: () => void
-  onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => void
-  offPlayerStreamEnd: () => void
-  onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => void
-  offPlayerStreamError: () => void
+  ) => Unsubscribe
+  onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => Unsubscribe
+  onPlayerStreamError: (
+    callback: (data: { sessionId: string; error: string }) => void
+  ) => Unsubscribe
   onPlayerStreamProgress: (
     callback: (data: {
       sessionId: string
@@ -275,8 +268,7 @@ interface Api {
       speed: number | null
       time: number | null
     }) => void
-  ) => void
-  offPlayerStreamProgress: () => void
+  ) => Unsubscribe
 
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>
@@ -296,13 +288,10 @@ interface Api {
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>
   shikimoriGetCalendar: (force?: boolean) => Promise<CalendarEntry[]>
   shikimoriGetRelated: (malId: number) => Promise<ShikiRelatedEntry[]>
-  onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => void
-  offShikimoriRateUpdated: () => void
-  onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => void
-  offShikimoriRatesRefreshed: () => void
+  onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => Unsubscribe
+  onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => Unsubscribe
   shikimoriGetOfflineQueueLength: () => Promise<number>
-  onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => void
-  offShikimoriOfflineQueueChanged: () => void
+  onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => Unsubscribe
   shikimoriGetSyncStatus: () => Promise<{
     state: 'idle' | 'syncing'
     queueLength: number
@@ -317,14 +306,12 @@ interface Api {
       lastSyncAt: number
       lastSyncError: string | null
     }) => void
-  ) => void
-  offShikimoriSyncStatus: () => void
+  ) => Unsubscribe
   shikimoriGetAnimeDetails: (malId: number) => Promise<ShikiAnimeDetails | null>
   shikimoriTriggerDetailPrefetch: () => Promise<void>
   onShikimoriAnimeDetailsUpdated: (
     callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
-  ) => void
-  offShikimoriAnimeDetailsUpdated: () => void
+  ) => Unsubscribe
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>
@@ -338,22 +325,14 @@ interface Api {
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
-  onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => void
-  offSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => void
-  onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => void
-  offSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => void
-  onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => void
-  offSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => void
-  onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => void
-  offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => void
-  onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
-  offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => void
+  onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => Unsubscribe
+  onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => Unsubscribe
+  onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => Unsubscribe
+  onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) => Unsubscribe
+  onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) => Unsubscribe
   onSyncplayTrace: (
     callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
-  ) => void
-  offSyncplayTrace: (
-    callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
-  ) => void
+  ) => Unsubscribe
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>
@@ -371,20 +350,17 @@ interface Api {
   }>
   autoDlGetEnabled: () => Promise<boolean>
   autoDlSetEnabled: (enabled: boolean) => Promise<boolean>
-  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => void
-  offAutoDlTickResult: () => void
+  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => Unsubscribe
   onAutoDlEnqueued: (
     callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void
-  ) => void
-  offAutoDlEnqueued: () => void
+  ) => Unsubscribe
 
   // Updates
   appVersion: () => Promise<string>
   updateCheck: () => Promise<void>
   updateDownload: () => Promise<void>
   updateInstall: () => void
-  onUpdateStatus: (callback: (data: UpdateStatus) => void) => void
-  offUpdateStatus: () => void
+  onUpdateStatus: (callback: (data: UpdateStatus) => void) => Unsubscribe
 }
 
 interface Window {

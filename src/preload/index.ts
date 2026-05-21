@@ -1,34 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
-
-// Per-channel map of {original-callback → wrapped-handler} so the matching
-// off* helper can call ipcRenderer.removeListener with the actual wrapped
-// function (the one we registered on ipcRenderer.on). Without this map,
-// the only way to remove a listener is removeAllListeners — which would
-// also rip out listeners installed by other components in the same view.
-type SyncplayHandler<T> = (data: T) => void
-type SyncplayWrapped = (event: IpcRendererEvent, data: unknown) => void
-const syncplayWrappers = new Map<string, Map<SyncplayHandler<unknown>, SyncplayWrapped>>()
-
-function syncplayOn<T>(channel: string, cb: SyncplayHandler<T>): void {
-  const wrapped: SyncplayWrapped = (_event, data) => cb(data as T)
-  let bucket = syncplayWrappers.get(channel)
-  if (!bucket) {
-    bucket = new Map()
-    syncplayWrappers.set(channel, bucket)
-  }
-  bucket.set(cb as SyncplayHandler<unknown>, wrapped)
-  ipcRenderer.on(channel, wrapped)
-}
-
-function syncplayOff<T>(channel: string, cb: SyncplayHandler<T>): void {
-  const bucket = syncplayWrappers.get(channel)
-  if (!bucket) return
-  const wrapped = bucket.get(cb as SyncplayHandler<unknown>)
-  if (!wrapped) return
-  ipcRenderer.removeListener(channel, wrapped)
-  bucket.delete(cb as SyncplayHandler<unknown>)
-}
+import { CHANNELS, EVENT_CHANNELS, type Unsubscribe } from '@shared/ipc/channels'
+import { subscribe } from './subscribe'
 
 const api = {
   validateToken: () => ipcRenderer.invoke(CHANNELS.VALIDATE_TOKEN),
@@ -98,14 +70,9 @@ const api = {
     >,
   cleanupSetSnoozed: (animeId: number, snoozed: boolean) =>
     ipcRenderer.invoke(CHANNELS.CLEANUP_SET_SNOOZED, animeId, snoozed) as Promise<void>,
-  onCleanupPrompt: (
-    callback: (data: { animeId: number; animeName: string; malId: number }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.CLEANUP_PROMPT, (_event, data) => callback(data))
-  },
-  offCleanupPrompt: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.CLEANUP_PROMPT)
-  },
+  onCleanupPrompt: subscribe<{ animeId: number; animeName: string; malId: number }>(
+    EVENT_CHANNELS.CLEANUP_PROMPT
+  ),
   getSetting: (key: string) => ipcRenderer.invoke(CHANNELS.GET_SETTING, key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke(CHANNELS.SET_SETTING, key, value),
 
@@ -185,7 +152,21 @@ const api = {
     translationId?: number
   ) =>
     ipcRenderer.invoke(CHANNELS.FILE_DELETE_EPISODE, animeName, episodeInt, animeId, translationId),
-  onFileEpisodesChanged: (
+  // FILE_EPISODES_CHANGED is broadcast with two positional args (animeName + map),
+  // unlike every other channel which sends a single payload. Inlined rather than
+  // shoehorning the helper to support multi-arg events.
+  onFileEpisodesChanged: ((callback) => {
+    type Episodes = Record<
+      string,
+      { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+    >
+    const wrapped = (_event: IpcRendererEvent, animeName: string, data: Episodes): void =>
+      callback(animeName, data)
+    ipcRenderer.on(EVENT_CHANNELS.FILE_EPISODES_CHANGED, wrapped)
+    return (): void => {
+      ipcRenderer.removeListener(EVENT_CHANNELS.FILE_EPISODES_CHANGED, wrapped)
+    }
+  }) as (
     callback: (
       animeName: string,
       data: Record<
@@ -193,82 +174,38 @@ const api = {
         { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
       >
     ) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.FILE_EPISODES_CHANGED, (_event, animeName, data) =>
-      callback(animeName, data)
-    )
-  },
-  offFileEpisodesChanged: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.FILE_EPISODES_CHANGED)
-  },
+  ) => Unsubscribe,
 
   // Storage
   storagePickHotDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_HOT_DIR),
   storagePickColdDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_COLD_DIR),
   storageMoveToCold: () => ipcRenderer.invoke(CHANNELS.STORAGE_MOVE_TO_COLD),
-  onStorageMoveToColdProgress: (
-    callback: (data: { current: number; total: number; file: string }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS, (_event, data) => callback(data))
-  },
-  offStorageMoveToColdProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS)
-  },
+  onStorageMoveToColdProgress: subscribe<{ current: number; total: number; file: string }>(
+    EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS
+  ),
   storageGetUsage: () => ipcRenderer.invoke(CHANNELS.STORAGE_GET_USAGE) as Promise<StorageUsage>,
   storageRunCleanup: (opts?: { force?: boolean }) =>
     ipcRenderer.invoke(CHANNELS.STORAGE_RUN_CLEANUP, opts) as Promise<CleanupResult>,
-  onStorageUsageProgress: (callback: (data: { scanned: number; total: number }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS, (_event, data) => callback(data))
-  },
-  offStorageUsageProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.STORAGE_USAGE_PROGRESS)
-  },
-  onStorageCleanupPending: (callback: (data: { candidates: CleanupCandidate[] }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.STORAGE_CLEANUP_PENDING, (_event, data) => callback(data))
-  },
-  offStorageCleanupPending: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.STORAGE_CLEANUP_PENDING)
-  },
-  onStorageCleanupFinished: (callback: (data: CleanupResult) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED, (_event, data) => callback(data))
-  },
-  offStorageCleanupFinished: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED)
-  },
+  onStorageUsageProgress: subscribe<{ scanned: number; total: number }>(
+    EVENT_CHANNELS.STORAGE_USAGE_PROGRESS
+  ),
+  onStorageCleanupPending: subscribe<{ candidates: CleanupCandidate[] }>(
+    EVENT_CHANNELS.STORAGE_CLEANUP_PENDING
+  ),
+  onStorageCleanupFinished: subscribe<CleanupResult>(EVENT_CHANNELS.STORAGE_CLEANUP_FINISHED),
 
   downloadScanMerge: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_SCAN_MERGE),
   downloadFixMetadata: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_FIX_METADATA),
-  onFixMetadataProgress: (callback: (data: unknown) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.FIX_METADATA_PROGRESS, (_event, data) => callback(data))
-  },
-  offFixMetadataProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.FIX_METADATA_PROGRESS)
-  },
+  onFixMetadataProgress: subscribe<unknown>(EVENT_CHANNELS.FIX_METADATA_PROGRESS),
 
-  onDownloadProgress: (callback: (data: unknown) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.DOWNLOAD_PROGRESS, (_event, data) => callback(data))
-  },
-  offDownloadProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.DOWNLOAD_PROGRESS)
-  },
-  onScanMergeProgress: (callback: (data: unknown) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.SCAN_MERGE_PROGRESS, (_event, data) => callback(data))
-  },
-  offScanMergeProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SCAN_MERGE_PROGRESS)
-  },
-  onFfmpegDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS, (_event, data) => callback(data))
-  },
-  offFfmpegDownloadProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS)
-  },
-  onFpcalcDownloadProgress: (callback: (data: { status: string; progress?: number }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.FPCALC_DOWNLOAD_PROGRESS, (_event, data) => callback(data))
-  },
-  offFpcalcDownloadProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.FPCALC_DOWNLOAD_PROGRESS)
-  },
+  onDownloadProgress: subscribe<unknown>(EVENT_CHANNELS.DOWNLOAD_PROGRESS),
+  onScanMergeProgress: subscribe<unknown>(EVENT_CHANNELS.SCAN_MERGE_PROGRESS),
+  onFfmpegDownloadProgress: subscribe<{ status: string; progress?: number }>(
+    EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS
+  ),
+  onFpcalcDownloadProgress: subscribe<{ status: string; progress?: number }>(
+    EVENT_CHANNELS.FPCALC_DOWNLOAD_PROGRESS
+  ),
 
   // Skip detection (Phase 1: debug panel only)
   skipDetectorAnalyzeShow: (
@@ -314,20 +251,13 @@ const api = {
       currentAnimeId: number | null
       queueLength: number
     }>,
-  onSkipDetectorProgress: (callback: (data: SkipDetectorProgress) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS, (_event, data) => callback(data))
-  },
-  offSkipDetectorProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS)
-  },
-  onSkipDetectorSignatureUpdated: (
-    callback: (data: { animeId: number; perEpisode: Record<string, EpisodeSkipDetection> }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED, (_event, data) => callback(data))
-  },
-  offSkipDetectorSignatureUpdated: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED)
-  },
+  onSkipDetectorProgress: subscribe<SkipDetectorProgress>(
+    EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS
+  ),
+  onSkipDetectorSignatureUpdated: subscribe<{
+    animeId: number
+    perEpisode: Record<string, EpisodeSkipDetection>
+  }>(EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED),
 
   injectChapters: (
     animeId: number,
@@ -339,12 +269,7 @@ const api = {
       failed: number
       total: number
     }>,
-  onChapterInjectProgress: (callback: (data: ChapterInjectProgress) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS, (_event, data) => callback(data))
-  },
-  offChapterInjectProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS)
-  },
+  onChapterInjectProgress: subscribe<ChapterInjectProgress>(EVENT_CHANNELS.CHAPTER_INJECT_PROGRESS),
 
   shellOpenExternal: (url: string) =>
     ipcRenderer.invoke(CHANNELS.SHELL_OPEN_EXTERNAL, url) as Promise<boolean>,
@@ -409,45 +334,22 @@ const api = {
       { ok: true; generation: number; keyframeTime: number } | { error: string }
     >,
   playerCleanupRemux: () => ipcRenderer.invoke(CHANNELS.PLAYER_CLEANUP_REMUX) as Promise<void>,
-  onPlayerStreamSubtitles: (callback: (data: { sessionId: string; content: string }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES, (_event, data) => callback(data))
-  },
-  offPlayerStreamSubtitles: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES)
-  },
-  onPlayerStreamChunk: (
-    callback: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, (_event, data) => callback(data))
-  },
-  offPlayerStreamChunk: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.PLAYER_STREAM_CHUNK)
-  },
-  onPlayerStreamEnd: (callback: (data: { sessionId: string }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.PLAYER_STREAM_END, (_event, data) => callback(data))
-  },
-  offPlayerStreamEnd: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.PLAYER_STREAM_END)
-  },
-  onPlayerStreamError: (callback: (data: { sessionId: string; error: string }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.PLAYER_STREAM_ERROR, (_event, data) => callback(data))
-  },
-  offPlayerStreamError: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.PLAYER_STREAM_ERROR)
-  },
-  onPlayerStreamProgress: (
-    callback: (data: {
-      sessionId: string
-      gen: number
-      speed: number | null
-      time: number | null
-    }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.PLAYER_STREAM_PROGRESS, (_event, data) => callback(data))
-  },
-  offPlayerStreamProgress: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.PLAYER_STREAM_PROGRESS)
-  },
+  onPlayerStreamSubtitles: subscribe<{ sessionId: string; content: string }>(
+    EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES
+  ),
+  onPlayerStreamChunk: subscribe<{ sessionId: string; gen: number; data: Uint8Array }>(
+    EVENT_CHANNELS.PLAYER_STREAM_CHUNK
+  ),
+  onPlayerStreamEnd: subscribe<{ sessionId: string }>(EVENT_CHANNELS.PLAYER_STREAM_END),
+  onPlayerStreamError: subscribe<{ sessionId: string; error: string }>(
+    EVENT_CHANNELS.PLAYER_STREAM_ERROR
+  ),
+  onPlayerStreamProgress: subscribe<{
+    sessionId: string
+    gen: number
+    speed: number | null
+    time: number | null
+  }>(EVENT_CHANNELS.PLAYER_STREAM_PROGRESS),
 
   // Shikimori
   shikimoriGetAuthUrl: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_AUTH_URL) as Promise<string>,
@@ -478,26 +380,15 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_CALENDAR, force) as Promise<CalendarEntry[]>,
   shikimoriGetRelated: (malId: number) =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_RELATED, malId) as Promise<ShikiRelatedEntry[]>,
-  onShikimoriRateUpdated: (callback: (entry: ShikiAnimeRateEntry) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, (_event, entry) => callback(entry))
-  },
-  offShikimoriRateUpdated: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED)
-  },
-  onShikimoriRatesRefreshed: (callback: (entries: ShikiAnimeRateEntry[]) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, (_event, entries) => callback(entries))
-  },
-  offShikimoriRatesRefreshed: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED)
-  },
+  onShikimoriRateUpdated: subscribe<ShikiAnimeRateEntry>(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED),
+  onShikimoriRatesRefreshed: subscribe<ShikiAnimeRateEntry[]>(
+    EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED
+  ),
   shikimoriGetOfflineQueueLength: () =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH) as Promise<number>,
-  onShikimoriOfflineQueueChanged: (callback: (data: { length: number }) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, (_event, data) => callback(data))
-  },
-  offShikimoriOfflineQueueChanged: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED)
-  },
+  onShikimoriOfflineQueueChanged: subscribe<{ length: number }>(
+    EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED
+  ),
   shikimoriGetSyncStatus: () =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_SYNC_STATUS) as Promise<{
       state: 'idle' | 'syncing'
@@ -506,19 +397,12 @@ const api = {
       lastSyncError: string | null
     }>,
   shikimoriTriggerSync: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_TRIGGER_SYNC) as Promise<void>,
-  onShikimoriSyncStatus: (
-    callback: (data: {
-      state: 'idle' | 'syncing'
-      queueLength: number
-      lastSyncAt: number
-      lastSyncError: string | null
-    }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS, (_event, data) => callback(data))
-  },
-  offShikimoriSyncStatus: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS)
-  },
+  onShikimoriSyncStatus: subscribe<{
+    state: 'idle' | 'syncing'
+    queueLength: number
+    lastSyncAt: number
+    lastSyncError: string | null
+  }>(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS),
   shikimoriGetAnimeDetails: (malId: number) =>
     ipcRenderer.invoke(
       CHANNELS.SHIKIMORI_GET_ANIME_DETAILS,
@@ -526,14 +410,9 @@ const api = {
     ) as Promise<ShikiAnimeDetails | null>,
   shikimoriTriggerDetailPrefetch: () =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_TRIGGER_DETAIL_PREFETCH) as Promise<void>,
-  onShikimoriAnimeDetailsUpdated: (
-    callback: (data: { malId: number; details: ShikiAnimeDetails }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED, (_event, data) => callback(data))
-  },
-  offShikimoriAnimeDetailsUpdated: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED)
-  },
+  onShikimoriAnimeDetailsUpdated: subscribe<{ malId: number; details: ShikiAnimeDetails }>(
+    EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
+  ),
 
   // Syncplay (Watch Together)
   syncplayConnect: (cfg: {
@@ -564,31 +443,16 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_READY, isReady) as Promise<void>,
   syncplayGetStatus: () =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_STATUS) as Promise<SyncplayStatus>,
-  onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, callback),
-  offSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) =>
-    syncplayOff(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, callback),
-  onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, callback),
-  offSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) =>
-    syncplayOff(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, callback),
-  onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, callback),
-  offSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) =>
-    syncplayOff(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, callback),
-  onSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, callback),
-  offSyncplayRoomEvent: (callback: (ev: SyncplayRoomEvent) => void) =>
-    syncplayOff(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, callback),
-  onSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, callback),
-  offSyncplayRemoteEpisodeChange: (callback: (ep: SyncplayRemoteEpisode) => void) =>
-    syncplayOff(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, callback),
-  onSyncplayTrace: (callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void) =>
-    syncplayOn(EVENT_CHANNELS.SYNCPLAY_TRACE, callback),
-  offSyncplayTrace: (
-    callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
-  ) => syncplayOff(EVENT_CHANNELS.SYNCPLAY_TRACE, callback),
+  onSyncplayConnectionStatus: subscribe<SyncplayStatus>(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS),
+  onSyncplayRemoteState: subscribe<SyncplayRemoteState>(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE),
+  onSyncplayRoomUsers: subscribe<SyncplayRoomUser[]>(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS),
+  onSyncplayRoomEvent: subscribe<SyncplayRoomEvent>(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT),
+  onSyncplayRemoteEpisodeChange: subscribe<SyncplayRemoteEpisode>(
+    EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE
+  ),
+  onSyncplayTrace: subscribe<{ dir: 'in' | 'out'; keys: string; msg: unknown }>(
+    EVENT_CHANNELS.SYNCPLAY_TRACE
+  ),
 
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>
@@ -619,32 +483,17 @@ const api = {
   autoDlGetEnabled: () => ipcRenderer.invoke(CHANNELS.AUTO_DL_GET_ENABLED) as Promise<boolean>,
   autoDlSetEnabled: (enabled: boolean) =>
     ipcRenderer.invoke(CHANNELS.AUTO_DL_SET_ENABLED, enabled) as Promise<boolean>,
-  onAutoDlTickResult: (callback: (result: AutoDlTickResult) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, (_event, result) => callback(result))
-  },
-  offAutoDlTickResult: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.AUTO_DL_TICK_RESULT)
-  },
-  onAutoDlEnqueued: (
-    callback: (data: { animeId: number; episodeInt: string; animeName: string }) => void
-  ) => {
-    ipcRenderer.on(EVENT_CHANNELS.AUTO_DL_ENQUEUED, (_event, data) => callback(data))
-  },
-  offAutoDlEnqueued: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.AUTO_DL_ENQUEUED)
-  },
+  onAutoDlTickResult: subscribe<AutoDlTickResult>(EVENT_CHANNELS.AUTO_DL_TICK_RESULT),
+  onAutoDlEnqueued: subscribe<{ animeId: number; episodeInt: string; animeName: string }>(
+    EVENT_CHANNELS.AUTO_DL_ENQUEUED
+  ),
 
   // Updates
   appVersion: () => ipcRenderer.invoke(CHANNELS.APP_VERSION),
   updateCheck: () => ipcRenderer.invoke(CHANNELS.UPDATE_CHECK),
   updateDownload: () => ipcRenderer.invoke(CHANNELS.UPDATE_DOWNLOAD),
   updateInstall: () => ipcRenderer.invoke(CHANNELS.UPDATE_INSTALL),
-  onUpdateStatus: (callback: (data: unknown) => void) => {
-    ipcRenderer.on(EVENT_CHANNELS.UPDATE_STATUS, (_event, data) => callback(data))
-  },
-  offUpdateStatus: () => {
-    ipcRenderer.removeAllListeners(EVENT_CHANNELS.UPDATE_STATUS)
-  }
+  onUpdateStatus: subscribe<unknown>(EVENT_CHANNELS.UPDATE_STATUS)
 }
 
 if (process.contextIsolated) {

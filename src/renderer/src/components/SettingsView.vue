@@ -76,6 +76,15 @@ const skipQueueStatus = ref<{ currentAnimeId: number | null; queueLength: number
 });
 let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null;
 
+let unsubScanMerge: Unsubscribe | null = null;
+let unsubFixMetadata: Unsubscribe | null = null;
+let unsubUpdateStatus: Unsubscribe | null = null;
+let unsubMoveToCold: Unsubscribe | null = null;
+let unsubUsageProgress: Unsubscribe | null = null;
+let unsubCleanupPending: Unsubscribe | null = null;
+let unsubCleanupFinished: Unsubscribe | null = null;
+let unsubAutoDlTickResult: Unsubscribe | null = null;
+
 const skipQueueStatusLabel = computed<string>(() => {
   const s = skipQueueStatus.value;
   if (s.currentAnimeId === null && s.queueLength === 0) return '';
@@ -651,13 +660,13 @@ function formatRelativeTime(ts: number): string {
 }
 
 onMounted(async () => {
-  window.api.onScanMergeProgress(onScanProgress);
-  window.api.onFixMetadataProgress(onFixProgress);
-  window.api.onUpdateStatus(onUpdateStatus);
-  window.api.onStorageMoveToColdProgress(onMoveProgress);
-  window.api.onStorageUsageProgress(onUsageProgress);
-  window.api.onStorageCleanupPending(onCleanupPending);
-  window.api.onStorageCleanupFinished(onCleanupFinished);
+  unsubScanMerge = window.api.onScanMergeProgress(onScanProgress);
+  unsubFixMetadata = window.api.onFixMetadataProgress(onFixProgress);
+  unsubUpdateStatus = window.api.onUpdateStatus(onUpdateStatus);
+  unsubMoveToCold = window.api.onStorageMoveToColdProgress(onMoveProgress);
+  unsubUsageProgress = window.api.onStorageUsageProgress(onUsageProgress);
+  unsubCleanupPending = window.api.onStorageCleanupPending(onCleanupPending);
+  unsubCleanupFinished = window.api.onStorageCleanupFinished(onCleanupFinished);
   refreshMismatchCount();
   refreshSkipQueueStatus();
   // Poll the skip-detector queue while the Settings page is open so the
@@ -674,14 +683,14 @@ watch(activeTab, (tab) => {
 });
 
 onUnmounted(() => {
-  window.api.offScanMergeProgress();
-  window.api.offFixMetadataProgress();
-  window.api.offUpdateStatus();
-  window.api.offStorageMoveToColdProgress();
-  window.api.offStorageUsageProgress();
-  window.api.offStorageCleanupPending();
-  window.api.offStorageCleanupFinished();
-  window.api.offAutoDlTickResult();
+  unsubScanMerge?.();
+  unsubFixMetadata?.();
+  unsubUpdateStatus?.();
+  unsubMoveToCold?.();
+  unsubUsageProgress?.();
+  unsubCleanupPending?.();
+  unsubCleanupFinished?.();
+  unsubAutoDlTickResult?.();
   if (skipQueuePollTimer) {
     clearInterval(skipQueuePollTimer);
     skipQueuePollTimer = null;
@@ -792,7 +801,7 @@ onMounted(async () => {
   await refreshAutoDlSubscriptions();
   const autoDlStatus = await window.api.autoDlGetStatus();
   autoDlLastResult.value = autoDlStatus.lastResult;
-  window.api.onAutoDlTickResult((result) => {
+  unsubAutoDlTickResult = window.api.onAutoDlTickResult((result) => {
     autoDlLastResult.value = result;
     void refreshAutoDlSubscriptions();
   });
@@ -1068,20 +1077,24 @@ async function testSyncplayConnection(): Promise<void> {
   syncplayTestStatus.value = 'testing';
   syncplayTestError.value = '';
 
-  const handler = (status: SyncplayStatus): void => {
+  let unsub: Unsubscribe | null = null;
+  const dispose = (): void => {
+    unsub?.();
+    unsub = null;
+  };
+  unsub = window.api.onSyncplayConnectionStatus((status) => {
     if (status.state === 'ready') {
       syncplayTestStatus.value = 'ok';
-      window.api.offSyncplayConnectionStatus(handler);
+      dispose();
       window.api.syncplayDisconnect();
     } else if (status.state === 'disconnected') {
       if (syncplayTestStatus.value === 'testing') {
         syncplayTestStatus.value = 'failed';
         syncplayTestError.value = status.error || 'Connection closed';
       }
-      window.api.offSyncplayConnectionStatus(handler);
+      dispose();
     }
-  };
-  window.api.onSyncplayConnectionStatus(handler);
+  });
 
   try {
     await window.api.syncplayConnect({
@@ -1096,14 +1109,14 @@ async function testSyncplayConnection(): Promise<void> {
       if (syncplayTestStatus.value === 'testing') {
         syncplayTestStatus.value = 'failed';
         syncplayTestError.value = 'Timed out after 10s';
-        window.api.offSyncplayConnectionStatus(handler);
+        dispose();
         window.api.syncplayDisconnect();
       }
     }, 10_000);
   } catch (err) {
     syncplayTestStatus.value = 'failed';
     syncplayTestError.value = String(err);
-    window.api.offSyncplayConnectionStatus(handler);
+    dispose();
   }
 }
 </script>

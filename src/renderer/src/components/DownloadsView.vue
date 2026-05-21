@@ -8,13 +8,15 @@ function onProgress(data: EpisodeGroup[]): void {
   groups.value = data;
 }
 
+let unsubProgress: Unsubscribe | null = null;
+
 onMounted(async () => {
   groups.value = await window.api.downloadGetQueue();
-  window.api.onDownloadProgress(onProgress);
+  unsubProgress = window.api.onDownloadProgress(onProgress);
 });
 
 onUnmounted(() => {
-  window.api.offDownloadProgress();
+  unsubProgress?.();
 });
 
 function progress(item: DownloadProgressItem): number {

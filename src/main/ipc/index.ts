@@ -7,6 +7,8 @@ import type { ShikimoriSyncService } from '../services/shikimori-sync'
 import type { DownloadManager } from '../download-manager'
 import type { ShikiUserRateStatus } from '../shikimori'
 import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
+import type { StreamingService } from '../streaming'
+import type { Mp4StatsService } from '../services/mp4-stats'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -24,6 +26,9 @@ import * as shellRouter from './shell.ipc'
 import * as settingsRouter from './settings.ipc'
 import * as watchProgressRouter from './watch-progress.ipc'
 import * as autoDownloadRouter from './auto-download.ipc'
+import * as playerRouter from './player.ipc'
+import * as syncplayRouter from './syncplay.ipc'
+import * as debugRouter from './debug.ipc'
 
 export interface FfmpegInfo {
   available: boolean
@@ -98,12 +103,16 @@ export interface AppDeps {
   invalidateFileCacheByDirName: (dirName: string) => void
   /** Clears the entire file-scan cache (used before a bulk move-to-cold). */
   clearFileCache: () => void
+  /** MSE remux/transcode session manager backing the `player:*` channels. */
+  streamingService: StreamingService
+  /** mp4-faststart sampling service backing `player:find-local-file` + the mp4 debug channels. */
+  mp4StatsService: Mp4StatsService
 }
 
 /**
- * Wires every per-domain `*.ipc.ts` router in order. Phase 3 lands these in
- * slices; the legacy `registerIpcHandlers()` in `src/main/index.ts` keeps the
- * un-migrated handlers until 3d–3g finish.
+ * Wires every per-domain `*.ipc.ts` router in order. As of Phase 3 slice 3g
+ * this is the single IPC entry point — `src/main/index.ts` no longer carries
+ * any `ipcMain.handle` calls of its own.
  */
 export function registerIpcRouters(deps: AppDeps): void {
   appRouter.register(deps)
@@ -123,4 +132,7 @@ export function registerIpcRouters(deps: AppDeps): void {
   settingsRouter.register(deps)
   watchProgressRouter.register(deps)
   autoDownloadRouter.register(deps)
+  playerRouter.register(deps)
+  syncplayRouter.register(deps)
+  debugRouter.register(deps)
 }

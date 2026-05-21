@@ -1,5 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain, Notification, protocol, net } from 'electron'
-import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
+import { app, shell, BrowserWindow, Notification, protocol, net } from 'electron'
+import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { createStorageService } from './store'
@@ -14,12 +14,10 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import ffbinaries from 'ffbinaries'
-import { execFile, type ChildProcess } from 'child_process'
-import Ffmpeg from 'fluent-ffmpeg'
+import { execFile } from 'child_process'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
-import { randomUUID } from 'crypto'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
@@ -28,22 +26,20 @@ import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
 import type {
-  SyncplayConfig,
-  SyncplayFileInfo,
   SyncplayRemoteState,
   SyncplayRoomUser,
   SyncplayRoomEvent,
   SyncplayRemoteEpisode,
   SyncplayStatus
 } from './syncplay'
-import { probeMp4Faststart } from './mp4-faststart'
 import type { Mp4StreamingStats } from './mp4-faststart'
 
 import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
 import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
-import { createStreamingService, type MseSession, type MseOpenResult } from './streaming'
+import { createStreamingService } from './streaming'
+import { createMp4StatsService } from './services/mp4-stats'
 import { App } from './app/core'
 import { registerIpcRouters, type FileCheckResult } from './ipc'
 
@@ -181,51 +177,9 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
   }
 }
 
-// In-memory set of MP4 paths probed this session, so re-opening the same file
-// in the player doesn't double-count. Stats persist across sessions; this set
-// resets on app restart, which is fine — it's a sampling check, not an exact
-// per-file ledger.
-const mp4FaststartChecked = new Set<string>()
-
-// Serialize stats read-modify-write so concurrent download finishes can't
-// clobber each other's increments.
-let mp4StatsWriteChain: Promise<void> = Promise.resolve()
-
-async function recordMp4FaststartCheck(
-  filePath: string,
-  context: { animeId: number; animeName: string; episodeInt: string; episodeLabel: string }
-): Promise<void> {
-  if (mp4FaststartChecked.has(filePath)) return
-  mp4FaststartChecked.add(filePath)
-  const probe = await probeMp4Faststart(filePath)
-  if (!probe) return
-  const next = mp4StatsWriteChain.then(() => {
-    const stats = store.get('mp4StreamingStats') as Mp4StreamingStats
-    stats.totalChecked += 1
-    if (probe.faststart) {
-      stats.faststartCount += 1
-    } else {
-      stats.nonFaststartSamples.push({
-        animeId: context.animeId,
-        animeName: context.animeName,
-        episodeInt: context.episodeInt,
-        episodeLabel: context.episodeLabel,
-        filePath,
-        firstNonFtypBox: probe.firstNonFtypBox,
-        checkedAt: Date.now()
-      })
-      if (stats.nonFaststartSamples.length > 10) {
-        stats.nonFaststartSamples = stats.nonFaststartSamples.slice(-10)
-      }
-      console.warn(
-        `[mp4-faststart] non-faststart MP4 detected: ${context.animeName} — ${context.episodeLabel} (first non-ftyp box: ${probe.firstNonFtypBox}) at ${filePath}`
-      )
-    }
-    store.set('mp4StreamingStats', stats)
-  })
-  mp4StatsWriteChain = next.catch(() => undefined)
-  await next
-}
+// Owns the mp4-faststart sampling state (Phase 3 slice 3g): the per-session
+// probed-paths set + the write-serialization chain now live in the service.
+const mp4StatsService = createMp4StatsService({ store })
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
@@ -791,15 +745,8 @@ async function lookupByMalIds(malIds: number[]): Promise<Record<number, AnimeSea
   return result
 }
 
-// Phase 4 — cache GC. The fingerprint cache is keyed by
-// `animeId:episodeInt:fileSize:mtime` and grows unbounded otherwise:
-// every successful merge produces a new key (mkv vs the source mp4),
-// every re-download produces a new key (mtime differs), and deletes
-// orphan their entries. The event-driven helpers below catch the
-// common cases immediately; `sweepSkipFingerprintCache` runs at startup
-// as a backstop for anything we miss (external rm, file replaced,
-// in-place rename outside the app).
-
+// Wires every per-domain IPC router. As of Phase 3 slice 3g this is the whole
+// of `index.ts`'s IPC surface — no `ipcMain.handle` calls remain here.
 function registerIpcHandlers(): void {
   registerIpcRouters({
     store,
@@ -827,597 +774,10 @@ function registerIpcHandlers(): void {
     broadcast: broadcastToAll,
     checkEpisodeFiles,
     invalidateFileCacheByDirName,
-    clearFileCache: () => fileCheckCache.clear()
+    clearFileCache: () => fileCheckCache.clear(),
+    streamingService,
+    mp4StatsService
   })
-
-  const qualityMismatches = new Map<
-    number,
-    { translationId: number; author: string; type: string; reported: number; actual: number }
-  >()
-
-  ipcMain.handle(
-    CHANNELS.REPORT_QUALITY_MISMATCH,
-    (
-      _event,
-      data: {
-        translationId: number
-        author: string
-        type: string
-        reported: number
-        actual: number
-      }
-    ) => {
-      qualityMismatches.set(data.translationId, data)
-    }
-  )
-
-  ipcMain.handle(CHANNELS.GET_QUALITY_MISMATCH_COUNT, () => {
-    return qualityMismatches.size
-  })
-
-  ipcMain.handle(CHANNELS.DEBUG_GET_MP4_STATS, () => {
-    return store.get('mp4StreamingStats') as Mp4StreamingStats
-  })
-
-  ipcMain.handle(CHANNELS.DEBUG_RESET_MP4_STATS, () => {
-    store.set('mp4StreamingStats', { totalChecked: 0, faststartCount: 0, nonFaststartSamples: [] })
-    mp4FaststartChecked.clear()
-  })
-
-  ipcMain.handle(CHANNELS.DUMP_QUALITY_MISMATCHES, () => {
-    const outPath = path.join(coldStorageService.getDownloadDir(), 'quality-mismatches.json')
-    const data = [...qualityMismatches.values()]
-    fs.mkdirSync(path.dirname(outPath), { recursive: true })
-    fs.writeFileSync(outPath, JSON.stringify(data, null, 2))
-    console.log(`[debug] Wrote ${data.length} quality mismatches to ${outPath}`)
-    return { count: data.length, path: outPath }
-  })
-
-  ipcMain.handle(
-    CHANNELS.PLAYER_GET_STREAM_URL,
-    async (_event, translationId: number, maxHeight: number) => {
-      try {
-        const embed = await smotretApi.getEmbed(translationId)
-        const streams = embed.stream || []
-        if (streams.length === 0) return null
-        const sorted = [...streams].sort((a, b) => b.height - a.height)
-        const best = sorted.find((s) => s.height <= maxHeight) || sorted[0]
-        const streamUrl = best && best.urls.length > 0 ? best.urls[0] : null
-        if (!streamUrl) return null
-
-        // Build list of all available streams for quality selector
-        const availableStreams = sorted
-          .filter((s) => s.urls.length > 0)
-          .map((s) => ({ height: s.height, url: s.urls[0] }))
-
-        // Fetch raw ASS subtitle content if available (rendered natively by JASSUB in the player)
-        let subtitleContent: string | null = null
-        if (embed.subtitlesUrl) {
-          subtitleContent = await smotretApi.fetchSubtitleContent(translationId)
-        }
-
-        return { streamUrl, subtitleContent, availableStreams }
-      } catch {
-        return null
-      }
-    }
-  )
-
-  ipcMain.handle(CHANNELS.PLAYER_GET_LOCAL_SUBTITLES, async (_event, filePath: string) => {
-    const assPath = filePath.replace(/\.(mp4|mkv)$/i, '.ass')
-    try {
-      if (fs.existsSync(assPath)) {
-        return fs.readFileSync(assPath, 'utf-8')
-      }
-    } catch {
-      /* ignore */
-    }
-    return null
-  })
-
-  ipcMain.handle(
-    CHANNELS.PLAYER_FIND_LOCAL_FILE,
-    async (
-      _event,
-      animeName: string,
-      episodeInt: string,
-      translationId: number,
-      episodeLabel: string
-    ) => {
-      const episodes = store.get('downloadedEpisodes') as Record<
-        string,
-        { translationType: string; author: string; quality: number; translationId: number }
-      >
-      // Find meta for this translation — try new key format, then scan for legacy
-      let meta: { author: string } | null = null
-      for (const [key, val] of Object.entries(episodes)) {
-        if (val.translationId === translationId) {
-          // Verify key belongs to right anime episode (starts with some animeId:episodeInt)
-          const parts = key.split(':')
-          if (parts.length >= 2 && parts[1] === episodeInt) {
-            meta = val
-            break
-          }
-        }
-      }
-      if (!meta) return null
-
-      const animeDirName = sanitizeFilename(animeName)
-      const padded = episodeInt.padStart(2, '0')
-      const base = sanitizeFilename(`${animeName} - ${padded}`)
-      const authorTag = sanitizeFilename(meta.author)
-      const taggedBase = `${base} [${authorTag}]`
-
-      const dirsToCheck = [coldStorageService.getDownloadDir()]
-      if (coldStorageService.isAdvanced()) {
-        const coldDir = coldStorageService.getColdStorageDir()
-        if (coldDir) dirsToCheck.push(coldDir)
-      }
-
-      const onResolved = (fp: string): void => {
-        if (fp.toLowerCase().endsWith('.mp4')) {
-          // animeId is 0 here because this handler only receives animeName; resolving
-          // back to an id would require scanning recentAnimeMeta. The stats sample is
-          // for human inspection (anime title + episode + filepath), so the missing
-          // id is acceptable.
-          void recordMp4FaststartCheck(fp, {
-            animeId: 0,
-            animeName,
-            episodeInt,
-            episodeLabel
-          })
-        }
-      }
-
-      for (const dir of dirsToCheck) {
-        const animeDir = path.join(dir, animeDirName)
-        // Try tagged filename first
-        for (const ext of ['.mkv', '.mp4']) {
-          const fp = path.join(animeDir, `${taggedBase}${ext}`)
-          if (fs.existsSync(fp)) {
-            const subtitleContent = await (async () => {
-              const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
-              try {
-                return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
-              } catch {
-                return null
-              }
-            })()
-            onResolved(fp)
-            return { filePath: fp, subtitleContent }
-          }
-        }
-        // Try legacy filename
-        for (const ext of ['.mkv', '.mp4']) {
-          const fp = path.join(animeDir, `${base}${ext}`)
-          if (fs.existsSync(fp)) {
-            const subtitleContent = await (async () => {
-              const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
-              try {
-                return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
-              } catch {
-                return null
-              }
-            })()
-            onResolved(fp)
-            return { filePath: fp, subtitleContent }
-          }
-        }
-      }
-      return null
-    }
-  )
-
-  // Remux MKV to fragmented MP4 (stream copy) for progressive HTML5 playback.
-  // See protocol.handle('anime-video', …) below for the streaming reader.
-  ipcMain.handle(
-    CHANNELS.PLAYER_REMUX_MKV,
-    async (
-      _event,
-      mkvPath: string
-    ): Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }> => {
-      if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
-
-      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
-
-      const stamp = Date.now()
-      const baseName = path.basename(mkvPath, path.extname(mkvPath))
-      const mp4Path = path.join(streamingService.tmpDir, `${baseName}-${stamp}.mp4`)
-
-      Ffmpeg.setFfmpegPath(ffmpegPath)
-
-      const remuxPromise = new Promise<void>((resolve, reject) => {
-        Ffmpeg(mkvPath)
-          .outputOptions(['-c', 'copy', '-movflags', '+faststart'])
-          .output(mp4Path)
-          .on('error', (err) => {
-            console.error('[remux] FFmpeg error:', err.message)
-            reject(err)
-          })
-          .on('end', () => {
-            console.log('[remux] Completed:', mp4Path)
-            resolve()
-          })
-          .run()
-      })
-
-      const subtitlePromise = extractFirstSubtitle(
-        mkvPath,
-        path.join(streamingService.tmpDir, `${baseName}-${stamp}.ass`)
-      )
-
-      try {
-        const [, subtitleContent] = await Promise.all([remuxPromise, subtitlePromise])
-        return { mp4Path, ...(subtitleContent ? { subtitleContent } : {}) }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return { error: msg }
-      }
-    }
-  )
-
-  // Start an MSE-friendly fragmented MP4 pipe. Returns duration + codecs MIME so the
-  // renderer can set MediaSource.duration and addSourceBuffer(mimeType) upfront.
-  // Video bytes are pushed to the renderer via 'player:stream-chunk' events.
-  ipcMain.handle(
-    CHANNELS.PLAYER_REMUX_MKV_STREAM,
-    async (
-      event,
-      mkvPath: string,
-      initialSeek?: number
-    ): Promise<MseOpenResult | { error: string }> => {
-      if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
-
-      const probe = await streamingService.probeMkvForMse(mkvPath)
-      if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
-      const streamCopyMime = probe.streamCopyMimeType
-
-      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
-
-      const sessionId = randomUUID()
-      const baseName = path.basename(mkvPath, path.extname(mkvPath))
-
-      const session: MseSession = {
-        proc: null as unknown as ChildProcess,
-        pendingBytes: 0,
-        stderrTail: [],
-        done: false,
-        error: null,
-        senderId: event.sender.id,
-        ready: false,
-        prelude: [],
-        mkvPath,
-        generation: 0,
-        videoCodec: probe.videoCodec,
-        transcode: false,
-        audioStrategy: 'copy',
-        h264Encoder: null
-      }
-      streamingService.registerSession(sessionId, session)
-      const requestedSeek =
-        typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
-          ? initialSeek
-          : 0
-      const startSeek =
-        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
-      console.log(
-        `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
-      )
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
-
-      // Kick off subtitle extraction in parallel; push to renderer when ready.
-      const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
-      let hasSubtitlesPending = false
-      try {
-        if (ffprobePath) {
-          Ffmpeg.setFfprobePath(ffprobePath)
-          hasSubtitlesPending = await new Promise<boolean>((res) => {
-            Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
-              res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
-            })
-          })
-        }
-      } catch {
-        /* ignore probe failures */
-      }
-
-      if (hasSubtitlesPending) {
-        extractFirstSubtitle(mkvPath, assPath)
-          .then((content) => {
-            if (!content) return
-            const sender = event.sender
-            if (sender && !sender.isDestroyed()) {
-              sender.send(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES, { sessionId, content })
-            }
-          })
-          .catch(() => {
-            /* already logged */
-          })
-      }
-
-      return {
-        sessionId,
-        generation: session.generation,
-        duration: probe.duration,
-        mimeType: streamCopyMime,
-        hasSubtitlesPending,
-        initialSeek: startSeek
-      }
-    }
-  )
-
-  // Same as `player:remux-mkv-stream` but re-encodes video to H.264 on the fly.
-  // Used when the platform has no decoder for the source codec (typically HEVC
-  // on Linux without VA-API). Audio is copied when AAC, otherwise transcoded
-  // to AAC so MSE can play it.
-  ipcMain.handle(
-    CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE,
-    async (
-      event,
-      mkvPath: string,
-      initialSeek?: number
-    ): Promise<MseOpenResult | { error: string }> => {
-      if (!ffmpegPath) return { error: 'ffmpeg not available' }
-      if (!fs.existsSync(mkvPath)) return { error: 'File not found' }
-
-      const probe = await streamingService.probeMkvForMse(mkvPath)
-      if (!probe) return { error: 'Probe failed' }
-
-      fs.mkdirSync(streamingService.tmpDir, { recursive: true })
-
-      const encoder = await streamingService.pickH264Encoder()
-      // When the audio is being stream-copied, reflect its actual AAC object type
-      // (mp4a.40.2 / .5 / .29) in the mime — otherwise MediaSource.isTypeSupported
-      // will reject a perfectly valid HE-AAC stream. When we transcode audio we
-      // force LC AAC, so mp4a.40.2 is always correct on that branch.
-      const audioCodecForMime =
-        probe.audioStrategy === 'copy' && probe.audioCodecString
-          ? probe.audioCodecString
-          : 'mp4a.40.2'
-      const mimeType = `video/mp4; codecs="avc1.640028, ${audioCodecForMime}"`
-
-      const sessionId = randomUUID()
-      const baseName = path.basename(mkvPath, path.extname(mkvPath))
-
-      const session: MseSession = {
-        proc: null as unknown as ChildProcess,
-        pendingBytes: 0,
-        stderrTail: [],
-        done: false,
-        error: null,
-        senderId: event.sender.id,
-        ready: false,
-        prelude: [],
-        mkvPath,
-        generation: 0,
-        videoCodec: probe.videoCodec,
-        transcode: true,
-        audioStrategy: probe.audioStrategy,
-        h264Encoder: encoder.name
-      }
-      streamingService.registerSession(sessionId, session)
-      const requestedSeek =
-        typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
-          ? initialSeek
-          : 0
-      const startSeek =
-        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
-      console.log(
-        `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
-      )
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
-
-      const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
-      let hasSubtitlesPending = false
-      try {
-        if (ffprobePath) {
-          Ffmpeg.setFfprobePath(ffprobePath)
-          hasSubtitlesPending = await new Promise<boolean>((res) => {
-            Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
-              res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
-            })
-          })
-        }
-      } catch {
-        /* ignore */
-      }
-
-      if (hasSubtitlesPending) {
-        extractFirstSubtitle(mkvPath, assPath)
-          .then((content) => {
-            if (!content) return
-            const sender = event.sender
-            if (sender && !sender.isDestroyed()) {
-              sender.send(EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES, { sessionId, content })
-            }
-          })
-          .catch(() => {
-            /* already logged */
-          })
-      }
-
-      return {
-        sessionId,
-        generation: session.generation,
-        duration: probe.duration,
-        mimeType,
-        hasSubtitlesPending,
-        initialSeek: startSeek
-      }
-    }
-  )
-
-  // Forward seek past the buffered region: respawn ffmpeg with `-ss` so output
-  // starts at (or just before) the requested timestamp. The renderer will have
-  // already set sourceBuffer.timestampOffset to place fragments on the correct
-  // MSE timeline position. Stale chunks from the old proc are filtered out by
-  // the generation counter captured in spawnFfmpegForSession.
-  ipcMain.handle(
-    CHANNELS.PLAYER_STREAM_SEEK,
-    async (event, sessionId: string, seekSeconds: number) => {
-      const session = streamingService.getSession(sessionId)
-      if (!session) return { error: 'session not found' }
-      const requestedSeek = Math.max(0, seekSeconds)
-      const keyframeTime =
-        requestedSeek > 0
-          ? await streamingService.findKeyframeBefore(session.mkvPath, requestedSeek)
-          : 0
-      session.generation++
-      try {
-        session.proc.kill('SIGKILL')
-      } catch {
-        /* ignore */
-      }
-      session.pendingBytes = 0
-      session.prelude = []
-      session.done = false
-      session.error = null
-      // Hold new chunks in the prelude until the renderer has set its
-      // SourceBuffer.timestampOffset and called player:stream-start again.
-      // Otherwise first frames of the new run race ahead of the offset change
-      // and get placed on the wrong MSE timeline.
-      session.ready = false
-      if (session.proc.stdout && session.proc.stdout.isPaused()) {
-        try {
-          session.proc.stdout.resume()
-        } catch {
-          /* ignore */
-        }
-      }
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, keyframeTime)
-      return { ok: true, generation: session.generation, keyframeTime }
-    }
-  )
-
-  // Handshake: renderer's MediaSource + SourceBuffer are ready to receive chunks.
-  // Flush any buffered prelude (the MP4 moov header lives in here) and switch to
-  // forwarding subsequent chunks directly.
-  ipcMain.handle(CHANNELS.PLAYER_STREAM_START, (event, sessionId: string) => {
-    const session = streamingService.getSession(sessionId)
-    if (!session) return
-    if (session.ready) return
-    session.ready = true
-    const sender = event.sender
-    if (sender && !sender.isDestroyed()) {
-      const gen = session.generation
-      for (const chunk of session.prelude) {
-        sender.send(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, { sessionId, gen, data: chunk })
-      }
-    }
-    session.prelude = []
-  })
-
-  // Backpressure ack: renderer reports bytes it has appended into its SourceBuffer.
-  // When enough data has been consumed we resume the ffmpeg stdout pipe.
-  ipcMain.handle(CHANNELS.PLAYER_STREAM_ACK, (_event, sessionId: string, bytesConsumed: number) => {
-    const session = streamingService.getSession(sessionId)
-    if (!session) return
-    session.pendingBytes = Math.max(0, session.pendingBytes - bytesConsumed)
-    if (session.pendingBytes < streamingService.lowWatermark && session.proc.stdout?.isPaused()) {
-      session.proc.stdout.resume()
-    }
-  })
-
-  ipcMain.handle(CHANNELS.PLAYER_CLEANUP_REMUX, async () => {
-    for (const sessionId of streamingService.allSessionIds()) {
-      streamingService.cleanupSession(sessionId)
-    }
-    try {
-      if (fs.existsSync(streamingService.tmpDir)) {
-        const files = fs.readdirSync(streamingService.tmpDir)
-        for (const file of files) {
-          try {
-            fs.unlinkSync(path.join(streamingService.tmpDir, file))
-          } catch {
-            /* ignore */
-          }
-        }
-        try {
-          fs.rmdirSync(streamingService.tmpDir)
-        } catch {
-          /* ignore */
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  })
-
-  ipcMain.handle(CHANNELS.SYNCPLAY_CONNECT, (_event, cfg: SyncplayConfig) => {
-    const persisted = store.get('syncplay')
-    store.set('syncplay', {
-      ...persisted,
-      lastHost: cfg.host,
-      lastPort: cfg.port,
-      lastRoom: cfg.room,
-      username: cfg.username,
-      autoReconnect: Boolean(cfg.autoReconnect)
-    })
-    syncplay.connect(cfg)
-  })
-
-  ipcMain.handle(CHANNELS.SYNCPLAY_DISCONNECT, () => {
-    syncplay.disconnect()
-  })
-
-  ipcMain.handle(CHANNELS.SYNCPLAY_SET_FILE, (_event, file: SyncplayFileInfo) => {
-    syncplay.setFile(file)
-  })
-
-  ipcMain.handle(
-    CHANNELS.SYNCPLAY_LOCAL_STATE,
-    (_event, payload: { paused: boolean; position: number; cause: 'play' | 'pause' | 'seek' }) => {
-      syncplay.sendLocalState(payload)
-    }
-  )
-
-  ipcMain.handle(
-    CHANNELS.SYNCPLAY_LOCAL_SNAPSHOT,
-    (_event, snap: { position: number; paused: boolean }) => {
-      syncplay.updateSnapshot(snap)
-    }
-  )
-
-  ipcMain.handle(CHANNELS.SYNCPLAY_SET_READY, (_event, isReady: boolean) => {
-    syncplay.setReady(isReady)
-  })
-
-  ipcMain.handle(CHANNELS.SYNCPLAY_GET_STATUS, () => syncplay.getStatus())
-}
-
-async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {
-  try {
-    if (!ffmpegPath || !ffprobePath) return undefined
-    // fluent-ffmpeg resolves the ffmpeg binary from PATH unless setFfmpegPath
-    // was called. On Windows the ffbinaries-downloaded ffmpeg is not on PATH,
-    // so this must be set explicitly here even if setFfprobePath was called.
-    Ffmpeg.setFfmpegPath(ffmpegPath)
-    Ffmpeg.setFfprobePath(ffprobePath)
-    const hasSubStream = await new Promise<boolean>((res) => {
-      Ffmpeg.ffprobe(mkvPath, (err, metadata) => {
-        res(err ? false : !!metadata.streams?.find((s) => s.codec_type === 'subtitle'))
-      })
-    })
-    if (!hasSubStream) return undefined
-    await new Promise<void>((res, rej) => {
-      Ffmpeg(mkvPath)
-        .outputOptions(['-map', '0:s:0', '-c:s', 'ass'])
-        .output(assPath)
-        .on('error', (err) => {
-          console.error('[remux] Subtitle extraction error:', err.message)
-          rej(err)
-        })
-        .on('end', () => res())
-        .run()
-    })
-    const content = fs.readFileSync(assPath, 'utf-8')
-    console.log('[remux] Subtitle extracted:', assPath)
-    return content
-  } catch {
-    return undefined
-  }
 }
 
 function createWindow(): void {
@@ -1611,7 +971,7 @@ async function bootstrap(): Promise<void> {
 
   downloadManager.onVideoDownloaded((filePath, item) => {
     if (!filePath.toLowerCase().endsWith('.mp4')) return
-    void recordMp4FaststartCheck(filePath, {
+    void mp4StatsService.recordCheck(filePath, {
       animeId: item.animeId,
       animeName: item.animeName,
       episodeInt: item.episodeInt,

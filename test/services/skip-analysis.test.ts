@@ -33,7 +33,11 @@ describe('SkipAnalysisService', () => {
       scanEpisodeFiles: () => scanResult,
       sanitizeFilename: (s) => s,
       broadcast: (channel, ...args) => broadcasts.push({ channel, args }),
-      signatureUpdatedChannel: 'sig-updated'
+      signatureUpdatedChannel: 'sig-updated',
+      analyzeProgressChannel: 'analyze-progress',
+      getFpcalcPath: () => '',
+      getFfmpegPath: () => '',
+      getFfprobePath: () => ''
     })
   })
 

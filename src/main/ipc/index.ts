@@ -17,6 +17,7 @@ import * as ffmpegRouter from './ffmpeg.ipc'
 import * as cleanupRouter from './cleanup.ipc'
 import * as downloadedAnimeRouter from './downloaded-anime.ipc'
 import * as shikimoriRouter from './shikimori.ipc'
+import * as skipDetectorRouter from './skip-detector.ipc'
 
 export interface FfmpegInfo {
   available: boolean
@@ -89,4 +90,5 @@ export function registerIpcRouters(deps: AppDeps): void {
   cleanupRouter.register(deps)
   downloadedAnimeRouter.register(deps)
   shikimoriRouter.register(deps)
+  skipDetectorRouter.register(deps)
 }

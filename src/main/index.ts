@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, Notification, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Notification, protocol, net } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -8,11 +8,7 @@ import { DownloadManager, sanitizeFilename } from './download-manager'
 import {
   initAutoDownloader,
   startAutoDownloaderTimer,
-  runAutoDownloadTick,
-  getAutoDownloaderStatus,
-  listSubscriptions as autoDlListSubscriptions,
-  getSubscription as autoDlGetSubscription,
-  setSubscription as autoDlSetSubscription
+  runAutoDownloadTick
 } from './auto-downloader'
 import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
@@ -49,7 +45,7 @@ import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createStreamingService, type MseSession, type MseOpenResult } from './streaming'
 import { App } from './app/core'
-import { registerIpcRouters } from './ipc'
+import { registerIpcRouters, type FileCheckResult } from './ipc'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -337,10 +333,6 @@ async function sumShowFiles(animeName: string): Promise<{ bytes: number; files: 
   return { bytes, files }
 }
 
-type FileCheckResult = Record<
-  string,
-  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
->
 const fileCheckCache = new Map<string, FileCheckResult>()
 
 function scanEpisodeFiles(animeName: string): FileCheckResult {
@@ -493,6 +485,32 @@ async function backgroundRescan(animeName: string): Promise<void> {
     fileCheckCache.set(animeName, result)
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send(EVENT_CHANNELS.FILE_EPISODES_CHANGED, animeName, result)
+    }
+  }
+}
+
+// Episode-file scan backing `CHANNELS.FILE_CHECK_EPISODES` (Phase 3 slice 3f):
+// a cache hit is served immediately and refreshed by a background rescan; a
+// miss scans synchronously and primes the cache. Kept here — not in
+// `file.ipc.ts` — because `coldStorageService` also feeds off
+// `scanEpisodeFiles` / `fileCheckCache`.
+function checkEpisodeFiles(animeName: string, episodeInts: string[]): FileCheckResult {
+  const cached = fileCheckCache.get(animeName)
+  if (cached) {
+    backgroundRescan(animeName).catch((err) => console.error('Background rescan failed:', err))
+    return filterScanResult(cached, animeName, episodeInts)
+  }
+
+  const fullResult = scanEpisodeFiles(animeName)
+  fileCheckCache.set(animeName, fullResult)
+  return filterScanResult(fullResult, animeName, episodeInts)
+}
+
+function invalidateFileCacheByDirName(animeDirName: string): void {
+  for (const [key] of fileCheckCache) {
+    if (sanitizeFilename(key) === animeDirName) {
+      fileCheckCache.delete(key)
+      break
     }
   }
 }
@@ -806,7 +824,10 @@ function registerIpcHandlers(): void {
     lookupByMalIds,
     maybeBroadcastCleanupPrompt,
     runAutoDownloadTick,
-    broadcast: broadcastToAll
+    broadcast: broadcastToAll,
+    checkEpisodeFiles,
+    invalidateFileCacheByDirName,
+    clearFileCache: () => fileCheckCache.clear()
   })
 
   const qualityMismatches = new Map<
@@ -850,209 +871,6 @@ function registerIpcHandlers(): void {
     fs.writeFileSync(outPath, JSON.stringify(data, null, 2))
     console.log(`[debug] Wrote ${data.length} quality mismatches to ${outPath}`)
     return { count: data.length, path: outPath }
-  })
-
-  ipcMain.handle(CHANNELS.GET_SETTING, (_event, key: string) => {
-    if (key === 'downloadDir') return coldStorageService.getDownloadDir()
-    return store.get(key)
-  })
-
-  ipcMain.handle(CHANNELS.SET_SETTING, (_event, key: string, value: unknown) => {
-    store.set(key, value)
-  })
-
-  // Watch progress tracking
-  ipcMain.handle(
-    CHANNELS.WATCH_PROGRESS_SAVE,
-    (
-      _event,
-      animeId: number,
-      episodeInt: string,
-      position: number,
-      duration: number,
-      watched?: boolean,
-      translationId?: number
-    ) => {
-      const all = store.get('watchProgress') as Record<
-        string,
-        {
-          position: number
-          duration: number
-          updatedAt: number
-          watched?: boolean
-          watchedAt?: number
-          translationId?: number
-        }
-      >
-      const key = `${animeId}:${episodeInt}`
-      const prev = all[key]
-      const nowWatched = watched || prev?.watched || false
-      const justWatched = nowWatched && !prev?.watched
-      all[key] = {
-        position,
-        duration,
-        updatedAt: Date.now(),
-        watched: nowWatched,
-        watchedAt: justWatched ? Date.now() : prev?.watchedAt,
-        translationId: translationId !== undefined ? translationId : prev?.translationId
-      }
-      store.set('watchProgress', all)
-    }
-  )
-
-  ipcMain.handle(CHANNELS.WATCH_PROGRESS_GET, (_event, animeId: number, episodeInt: string) => {
-    const all = store.get('watchProgress') as Record<
-      string,
-      {
-        position: number
-        duration: number
-        updatedAt: number
-        watched?: boolean
-        watchedAt?: number
-        translationId?: number
-      }
-    >
-    return all[`${animeId}:${episodeInt}`] || null
-  })
-
-  ipcMain.handle(CHANNELS.WATCH_PROGRESS_GET_ALL, (_event, animeId: number) => {
-    const all = store.get('watchProgress') as Record<
-      string,
-      {
-        position: number
-        duration: number
-        updatedAt: number
-        watched?: boolean
-        watchedAt?: number
-        translationId?: number
-      }
-    >
-    const prefix = `${animeId}:`
-    const out: Record<
-      string,
-      {
-        position: number
-        duration: number
-        updatedAt: number
-        watched?: boolean
-        watchedAt?: number
-        translationId?: number
-      }
-    > = {}
-    for (const [key, val] of Object.entries(all)) {
-      if (key.startsWith(prefix)) {
-        out[key.slice(prefix.length)] = val
-      }
-    }
-    return out
-  })
-
-  // File management handlers
-  ipcMain.handle(
-    CHANNELS.FILE_CHECK_EPISODES,
-    (_event, animeName: string, episodeInts: string[]) => {
-      const cached = fileCheckCache.get(animeName)
-      if (cached) {
-        backgroundRescan(animeName).catch((err) => console.error('Background rescan failed:', err))
-        return filterScanResult(cached, animeName, episodeInts)
-      }
-
-      const fullResult = scanEpisodeFiles(animeName)
-      fileCheckCache.set(animeName, fullResult)
-      return filterScanResult(fullResult, animeName, episodeInts)
-    }
-  )
-
-  ipcMain.handle(CHANNELS.FILE_OPEN, async (_event, filePath: string) => {
-    if (!fs.existsSync(filePath)) {
-      const animeDirName = path.basename(path.dirname(filePath))
-      for (const [key] of fileCheckCache) {
-        if (sanitizeFilename(key) === animeDirName) {
-          fileCheckCache.delete(key)
-          break
-        }
-      }
-      return 'File not found'
-    }
-    return shell.openPath(filePath)
-  })
-
-  ipcMain.handle(CHANNELS.FILE_SHOW_IN_FOLDER, (_event, filePath: string) => {
-    shell.showItemInFolder(filePath)
-  })
-
-  ipcMain.handle(
-    CHANNELS.FILE_DELETE_EPISODE,
-    (_event, animeName: string, episodeInt: string, animeId?: number, translationId?: number) => {
-      coldStorageService.deleteEpisodeFiles(animeName, episodeInt, animeId, translationId)
-      if (animeId && animeId > 0) {
-        skipAnalysisService.pruneCacheForEpisode(animeId, episodeInt)
-        skipAnalysisService.dropDetectionsForEpisode(animeId, episodeInt)
-      }
-    }
-  )
-
-  ipcMain.handle(CHANNELS.STORAGE_PICK_HOT_DIR, async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    if (!win) return null
-    const result = await dialog.showOpenDialog(win, {
-      properties: ['openDirectory'],
-      title: 'Select hot storage directory (active downloads)'
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    const dir = result.filePaths[0]
-    store.set('hotStorageDir', dir)
-    downloadManager.setDownloadDir(dir)
-    return dir
-  })
-
-  ipcMain.handle(CHANNELS.STORAGE_PICK_COLD_DIR, async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    if (!win) return null
-    const result = await dialog.showOpenDialog(win, {
-      properties: ['openDirectory'],
-      title: 'Select cold storage directory (finished files)'
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    const dir = result.filePaths[0]
-    store.set('coldStorageDir', dir)
-    return dir
-  })
-
-  ipcMain.handle(CHANNELS.STORAGE_MOVE_TO_COLD, async () => {
-    fileCheckCache.clear()
-    const result = await coldStorageService.moveAllFilesToColdStorage((current, total, file) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send(EVENT_CHANNELS.STORAGE_MOVE_TO_COLD_PROGRESS, { current, total, file })
-      }
-    })
-    return result
-  })
-
-  ipcMain.handle(CHANNELS.STORAGE_GET_USAGE, async () => {
-    return coldStorageService.scanUsage()
-  })
-
-  ipcMain.handle(CHANNELS.STORAGE_RUN_CLEANUP, async (_event, opts?: { force?: boolean }) => {
-    return coldStorageService.runWatchedCleanup(!!opts?.force)
-  })
-
-  ipcMain.handle(CHANNELS.SHELL_OPEN_EXTERNAL, async (_event, url: string) => {
-    try {
-      await shell.openExternal(url)
-      return true
-    } catch {
-      return false
-    }
-  })
-
-  ipcMain.handle(CHANNELS.SHELL_OPEN_EXTERNAL_FILE, async (_event, filePath: string) => {
-    try {
-      const err = await shell.openPath(filePath)
-      return { ok: err === '', error: err || undefined }
-    } catch (e) {
-      return { ok: false, error: (e as Error).message }
-    }
   })
 
   ipcMain.handle(
@@ -1567,46 +1385,6 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(CHANNELS.SYNCPLAY_GET_STATUS, () => syncplay.getStatus())
-
-  // Auto-downloader
-  ipcMain.handle(CHANNELS.AUTO_DL_GET_SUBSCRIPTION, (_event, animeId: number) => {
-    return autoDlGetSubscription(animeId)
-  })
-
-  ipcMain.handle(
-    CHANNELS.AUTO_DL_SET_SUBSCRIPTION,
-    async (
-      _event,
-      animeId: number,
-      enabled: boolean,
-      meta?: { malId: number; animeName: string }
-    ) => {
-      const sub = await autoDlSetSubscription(animeId, enabled, meta)
-      if (enabled && sub) {
-        // Fire a tick shortly after subscribing so the user sees the system catch up
-        // (forward-only stamp ensures nothing backfills, this just exercises the path).
-        setTimeout(() => {
-          void runAutoDownloadTick('manual')
-        }, 1000)
-      }
-      return sub
-    }
-  )
-
-  ipcMain.handle(CHANNELS.AUTO_DL_LIST_SUBSCRIPTIONS, () => autoDlListSubscriptions())
-
-  ipcMain.handle(CHANNELS.AUTO_DL_TRIGGER, async () => {
-    return runAutoDownloadTick('manual')
-  })
-
-  ipcMain.handle(CHANNELS.AUTO_DL_GET_STATUS, () => getAutoDownloaderStatus())
-
-  ipcMain.handle(CHANNELS.AUTO_DL_GET_ENABLED, () => Boolean(store.get('autoDownloadEnabled')))
-
-  ipcMain.handle(CHANNELS.AUTO_DL_SET_ENABLED, (_event, enabled: boolean) => {
-    store.set('autoDownloadEnabled', Boolean(enabled))
-    return Boolean(enabled)
-  })
 }
 
 async function extractFirstSubtitle(mkvPath: string, assPath: string): Promise<string | undefined> {

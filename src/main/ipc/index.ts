@@ -18,6 +18,12 @@ import * as cleanupRouter from './cleanup.ipc'
 import * as downloadedAnimeRouter from './downloaded-anime.ipc'
 import * as shikimoriRouter from './shikimori.ipc'
 import * as skipDetectorRouter from './skip-detector.ipc'
+import * as storageRouter from './storage.ipc'
+import * as fileRouter from './file.ipc'
+import * as shellRouter from './shell.ipc'
+import * as settingsRouter from './settings.ipc'
+import * as watchProgressRouter from './watch-progress.ipc'
+import * as autoDownloadRouter from './auto-download.ipc'
 
 export interface FfmpegInfo {
   available: boolean
@@ -25,6 +31,16 @@ export interface FfmpegInfo {
   path: string
   encoders: string[]
 }
+
+/**
+ * Map of episode-int → matched files on disk, keyed without the leading-zero
+ * pad. Produced by the `index.ts` episode-file scanner and returned verbatim
+ * by `CHANNELS.FILE_CHECK_EPISODES`.
+ */
+export type FileCheckResult = Record<
+  string,
+  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+>
 
 /**
  * Dependencies passed to every per-domain IPC router (refactor epic #84,
@@ -72,6 +88,16 @@ export interface AppDeps {
   runAutoDownloadTick: (reason: AutoDlReason) => Promise<AutoDlTickResult>
   /** Fan-out broadcaster to every renderer window (the index.ts `broadcastToAll`). */
   broadcast: (channel: string, ...args: unknown[]) => void
+  /**
+   * Episode-file scanner for `CHANNELS.FILE_CHECK_EPISODES` — cache-first, with
+   * a background rescan kicked off when a cache hit is served. The scan cache +
+   * helpers stay in `index.ts` because `coldStorageService` also feeds off them.
+   */
+  checkEpisodeFiles: (animeName: string, episodeInts: string[]) => FileCheckResult
+  /** Drops the file-scan cache entry whose key sanitizes to `dirName`. */
+  invalidateFileCacheByDirName: (dirName: string) => void
+  /** Clears the entire file-scan cache (used before a bulk move-to-cold). */
+  clearFileCache: () => void
 }
 
 /**
@@ -91,4 +117,10 @@ export function registerIpcRouters(deps: AppDeps): void {
   downloadedAnimeRouter.register(deps)
   shikimoriRouter.register(deps)
   skipDetectorRouter.register(deps)
+  storageRouter.register(deps)
+  fileRouter.register(deps)
+  shellRouter.register(deps)
+  settingsRouter.register(deps)
+  watchProgressRouter.register(deps)
+  autoDownloadRouter.register(deps)
 }

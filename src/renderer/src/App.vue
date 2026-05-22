@@ -5,6 +5,7 @@ import { useLibraryStore } from './stores/library';
 import { usePlayerStore } from './stores/player';
 import { useSettingsStore } from './stores/settings';
 import { useShikimoriStore } from './stores/shikimori';
+import { useKeyboardShortcuts, type ShortcutAction } from './composables/keyboard-shortcuts';
 import Sidebar from './components/Sidebar.vue';
 import SearchView from './components/SearchView.vue';
 import LibraryView from './components/LibraryView.vue';
@@ -35,63 +36,25 @@ watch(currentView, (next, prev) => {
   if (prev === 'settings' && next !== 'settings') void settingsStore.loadShortcuts();
 });
 
-const isMac = navigator.platform.toUpperCase().includes('MAC');
-
-function matchesBinding(e: KeyboardEvent, binding: string): boolean {
-  const parts = binding.split('+');
-  const key = parts[parts.length - 1];
-  const mods = parts.slice(0, -1).map((m) => m.toLowerCase());
-
-  const needCtrl = mods.includes('ctrl');
-  const needMeta = mods.includes('meta');
-  const needCmdOrCtrl = mods.includes('cmdorctrl');
-  const needShift = mods.includes('shift');
-  const needAlt = mods.includes('alt');
-
-  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac);
-  const wantMeta = needMeta || (needCmdOrCtrl && isMac);
-
-  if (e.ctrlKey !== wantCtrl) return false;
-  if (e.metaKey !== wantMeta) return false;
-  if (e.shiftKey !== needShift) return false;
-  if (e.altKey !== needAlt) return false;
-
-  return e.key.toLowerCase() === key.toLowerCase();
-}
-
-function executeAction(action: string): void {
-  switch (action) {
-    case 'back':
-      if (activeAnimeId.value) libraryStore.closeAnime();
-      break;
-    case 'focusSearch':
-      libraryStore.navigate('search');
-      libraryStore.animeByView.search = null;
-      nextTick(() => searchViewRef.value?.focusInput());
-      break;
-    case 'goDownloads':
-      libraryStore.navigate('downloads');
-      break;
-  }
-}
-
-function handleKeydown(e: KeyboardEvent): void {
-  // Don't intercept shortcuts when the player overlay is active
-  if (playerState.value) return;
-
-  const tag = (e.target as HTMLElement).tagName;
-  const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-
-  for (const [action, binding] of Object.entries(shortcuts.value)) {
-    if (!binding) continue;
-    if (matchesBinding(e, binding)) {
-      if (action === 'back' && isInput) continue;
-      e.preventDefault();
-      executeAction(action);
-      return;
+useKeyboardShortcuts({
+  bindings: shortcuts,
+  suppressWhen: playerState,
+  onAction: (action: ShortcutAction) => {
+    switch (action) {
+      case 'back':
+        if (activeAnimeId.value) libraryStore.closeAnime();
+        break;
+      case 'focusSearch':
+        libraryStore.navigate('search');
+        libraryStore.animeByView.search = null;
+        nextTick(() => searchViewRef.value?.focusInput());
+        break;
+      case 'goDownloads':
+        libraryStore.navigate('downloads');
+        break;
     }
   }
-}
+});
 
 // Cleanup prompt (Shikimori "completed" transition)
 const cleanupToast = ref<{
@@ -169,7 +132,6 @@ let unsubCleanupPrompt: Unsubscribe | null = null;
 onMounted(async () => {
   await settingsStore.loadShortcuts();
   await shikimoriStore.refreshUser();
-  window.addEventListener('keydown', handleKeydown);
   unsubCleanupPrompt = window.api.onCleanupPrompt(handleCleanupPrompt);
   // Expose test hook for Playwright screenshot script
   (window as any).__openTestPlayer = (payload: Parameters<typeof playerStore.openPlayer>[0]) =>
@@ -177,7 +139,6 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleKeydown);
   unsubCleanupPrompt?.();
   if (cleanupToastTimer) clearTimeout(cleanupToastTimer);
 });

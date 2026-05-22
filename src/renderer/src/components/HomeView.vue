@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useLibraryStore } from '../stores/library';
+import { useShikimoriStore } from '../stores/shikimori';
 
 const libraryStore = useLibraryStore();
+const shikimoriStore = useShikimoriStore();
 
 const entries = ref<ContinueWatchingEntry[]>([]);
 const loading = ref(true);
@@ -78,14 +80,17 @@ function onClick(entry: ContinueWatchingEntry): void {
   libraryStore.openAnime(entry.animeId, entry.episodeInt);
 }
 
-let unsubShikiRatesRefreshed: Unsubscribe | null = null;
-let unsubShikiRateUpdated: Unsubscribe | null = null;
+// Rate changes from the Shikimori store (broadcast-driven) re-fetch the
+// continue-watching list since it merges main-process Shikimori state.
+watch(
+  () => shikimoriStore.rates,
+  () => void refresh(),
+  { deep: true }
+);
 
 onMounted(async () => {
   await refresh();
   window.addEventListener('watch-progress-updated', debouncedRefresh);
-  unsubShikiRatesRefreshed = window.api.onShikimoriRatesRefreshed(refresh);
-  unsubShikiRateUpdated = window.api.onShikimoriRateUpdated(refresh);
 });
 
 onUnmounted(() => {
@@ -94,8 +99,6 @@ onUnmounted(() => {
     refreshTimer = null;
   }
   window.removeEventListener('watch-progress-updated', debouncedRefresh);
-  unsubShikiRatesRefreshed?.();
-  unsubShikiRateUpdated?.();
 });
 </script>
 

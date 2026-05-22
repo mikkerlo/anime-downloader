@@ -2,10 +2,14 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
+import { useDownloadsStore } from '../stores/downloads';
 import { formatBytes } from '../utils';
 
 const settingsStore = useSettingsStore();
+const downloadsStore = useDownloadsStore();
 const { updateStatus } = storeToRefs(settingsStore);
+const { scanMergeProgress: scanProgress, fixMetadataProgress: fixProgress } =
+  storeToRefs(downloadsStore);
 
 const activeTab = ref<
   | 'general'
@@ -76,8 +80,6 @@ const skipQueueStatus = ref<{ currentAnimeId: number | null; queueLength: number
 });
 let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null;
 
-let unsubScanMerge: Unsubscribe | null = null;
-let unsubFixMetadata: Unsubscribe | null = null;
 let unsubMoveToCold: Unsubscribe | null = null;
 let unsubUsageProgress: Unsubscribe | null = null;
 let unsubCleanupPending: Unsubscribe | null = null;
@@ -164,16 +166,12 @@ const hevcMseSupported = (() => {
 
 const backgroundQualityProbe = ref(false);
 
-// Debug / scan-merge state
+// Debug / scan-merge state (scanProgress mirrored from downloadsStore above)
 const scanMerging = ref(false);
-const scanProgress = ref<{ current: number; total: number; file: string; percent: number } | null>(
-  null
-);
 const scanResult = ref<{ merged: number; failed: string[] } | null>(null);
 
-// Fix metadata state
+// Fix metadata state (fixProgress mirrored from downloadsStore above)
 const fixingMetadata = ref(false);
-const fixProgress = ref<{ current: number; total: number; file: string } | null>(null);
 const fixResult = ref<{ fixed: number; failed: string[] } | null>(null);
 
 // Quality mismatch dump
@@ -313,10 +311,6 @@ function saveShortcuts(): void {
   showSaved();
 }
 
-function onScanProgress(data: ScanMergeProgress): void {
-  scanProgress.value = data;
-}
-
 async function scanAndMerge(): Promise<void> {
   scanMerging.value = true;
   scanProgress.value = null;
@@ -330,10 +324,6 @@ async function scanAndMerge(): Promise<void> {
     scanMerging.value = false;
     scanProgress.value = null;
   }
-}
-
-function onFixProgress(data: { current: number; total: number; file: string }): void {
-  fixProgress.value = data;
 }
 
 async function refreshMismatchCount(): Promise<void> {
@@ -655,8 +645,6 @@ function formatRelativeTime(ts: number): string {
 }
 
 onMounted(async () => {
-  unsubScanMerge = window.api.onScanMergeProgress(onScanProgress);
-  unsubFixMetadata = window.api.onFixMetadataProgress(onFixProgress);
   unsubMoveToCold = window.api.onStorageMoveToColdProgress(onMoveProgress);
   unsubUsageProgress = window.api.onStorageUsageProgress(onUsageProgress);
   unsubCleanupPending = window.api.onStorageCleanupPending(onCleanupPending);
@@ -677,8 +665,6 @@ watch(activeTab, (tab) => {
 });
 
 onUnmounted(() => {
-  unsubScanMerge?.();
-  unsubFixMetadata?.();
   unsubMoveToCold?.();
   unsubUsageProgress?.();
   unsubCleanupPending?.();

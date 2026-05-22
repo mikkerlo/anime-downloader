@@ -1,22 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, computed } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useDownloadsStore } from '../stores/downloads';
 import { formatBytes, formatSpeed, formatEta } from '../utils';
 
-const groups = ref<EpisodeGroup[]>([]);
+const downloadsStore = useDownloadsStore();
+const { groups } = storeToRefs(downloadsStore);
 
-function onProgress(data: EpisodeGroup[]): void {
-  groups.value = data;
-}
-
-let unsubProgress: Unsubscribe | null = null;
-
-onMounted(async () => {
-  groups.value = await window.api.downloadGetQueue();
-  unsubProgress = window.api.onDownloadProgress(onProgress);
-});
-
-onUnmounted(() => {
-  unsubProgress?.();
+onMounted(() => {
+  void downloadsStore.refreshQueue();
 });
 
 function progress(item: DownloadProgressItem): number {

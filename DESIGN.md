@@ -135,10 +135,19 @@ Each stacked view (home, search, library, shikimori, friends, calendar)
 tracks its own selected-anime stack. Components call store actions
 directly — there is no @open-anime / @navigate emit chain through App.vue.
 
-App.vue still holds `animePrefs = { [animeId]: { translationType, author } }`
-until slice 4c, where it moves into `usePlayerStore`. AnimeDetailView
-receives initialPrefs and emits prefsChanged to persist translation type
-and author selections across re-mounts.
+Slice 4c adds two more stores:
+  usePlayerStore   — playerState (PlayerPayload | null), animePrefs.
+                     Actions: openPlayer(payload), closePlayer,
+                     saveAnimePrefs. AnimeDetailView calls openPlayer
+                     directly with a typed payload; the old playFile
+                     emit chain through App.vue is gone.
+  useSettingsStore — shortcuts (resolved keyboard bindings),
+                     ffmpegDownloading/Progress, fpcalcDownloading/Progress,
+                     updateStatus (auto-updater banner). Owns three
+                     lifetime-scoped IPC subscriptions
+                     (onFfmpegDownloadProgress, onFpcalcDownloadProgress,
+                     onUpdateStatus) — Pinia singleton, never disposed.
+                     Action: loadShortcuts.
 ```
 
 ### Episode Loading & Translation Selection

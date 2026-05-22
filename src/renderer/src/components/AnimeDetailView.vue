@@ -9,6 +9,7 @@ import {
 } from '../utils';
 import CleanupModal from './CleanupModal.vue';
 import { useLibraryStore } from '../stores/library';
+import { usePlayerStore } from '../stores/player';
 
 const props = defineProps<{
   animeId: number;
@@ -16,31 +17,8 @@ const props = defineProps<{
   focusEpisodeInt?: string;
 }>();
 
-const emit = defineEmits<{
-  prefsChanged: [animeId: number, translationType: string, author: string];
-  playFile: [
-    filePath: string,
-    streamUrl: string,
-    subtitleContent: string,
-    animeName: string,
-    episodeLabel: string,
-    availableStreams: { height: number; url: string }[],
-    translationId: number,
-    translations: { id: number; label: string; type: string; height: number }[],
-    downloadedTrIds: number[],
-    allEpisodes: {
-      episodeInt: string;
-      episodeFull: string;
-      translations: { id: number; label: string; type: string; height: number }[];
-      downloadedTrIds: number[];
-    }[],
-    episodeIndex: number,
-    animeId: number,
-    malId: number
-  ];
-}>();
-
 const libraryStore = useLibraryStore();
+const playerStore = usePlayerStore();
 
 const anime = ref<AnimeDetail | null>(null);
 const episodes = ref<Map<number, EpisodeDetail>>(new Map());
@@ -1380,7 +1358,7 @@ function getGroup(episodeFull: string): EpisodeGroup | undefined {
 
 watch([translationType, selectedAuthor], () => {
   episodeOverrides.value = new Map();
-  emit('prefsChanged', props.animeId, translationType.value, selectedAuthor.value);
+  playerStore.saveAnimePrefs(props.animeId, translationType.value, selectedAuthor.value);
   probeSelectedQualities();
 });
 
@@ -1499,22 +1477,21 @@ async function openFile(row: EpisodeRow): Promise<void> {
     const localSubs = await window.api.playerGetLocalSubtitles(info.filePath);
     const allEps = buildAllEpisodes();
     const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
-    emit(
-      'playFile',
-      info.filePath,
-      '',
-      localSubs || '',
-      name,
-      row.episode.episodeInt,
-      [],
-      row.selectedTr.id,
-      buildTranslationList(row),
-      [...row.downloadedTrIds],
-      allEps,
-      epIdx,
-      props.animeId,
-      anime.value?.myAnimeListId ?? 0
-    );
+    playerStore.openPlayer({
+      filePath: info.filePath,
+      streamUrl: '',
+      subtitleContent: localSubs || '',
+      animeName: name,
+      episodeLabel: row.episode.episodeInt,
+      availableStreams: [],
+      translationId: row.selectedTr.id,
+      translations: buildTranslationList(row),
+      downloadedTrIds: [...row.downloadedTrIds],
+      allEpisodes: allEps,
+      episodeIndex: epIdx,
+      animeId: props.animeId,
+      malId: anime.value?.myAnimeListId ?? 0
+    });
   } else {
     const result = await window.api.fileOpen(info.filePath);
     if (result) {
@@ -1534,22 +1511,21 @@ async function playStream(row: EpisodeRow): Promise<void> {
   if (result) {
     const allEps = buildAllEpisodes();
     const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
-    emit(
-      'playFile',
-      '',
-      result.streamUrl,
-      result.subtitleContent || '',
-      name,
-      row.episode.episodeInt,
-      result.availableStreams,
-      row.selectedTr.id,
-      buildTranslationList(row),
-      [...row.downloadedTrIds],
-      allEps,
-      epIdx,
-      props.animeId,
-      anime.value?.myAnimeListId ?? 0
-    );
+    playerStore.openPlayer({
+      filePath: '',
+      streamUrl: result.streamUrl,
+      subtitleContent: result.subtitleContent || '',
+      animeName: name,
+      episodeLabel: row.episode.episodeInt,
+      availableStreams: result.availableStreams,
+      translationId: row.selectedTr.id,
+      translations: buildTranslationList(row),
+      downloadedTrIds: [...row.downloadedTrIds],
+      allEpisodes: allEps,
+      episodeIndex: epIdx,
+      animeId: props.animeId,
+      malId: anime.value?.myAnimeListId ?? 0
+    });
   }
 }
 

@@ -1,0 +1,353 @@
+/* Shared utility classes for components/settings/*.vue
+ *
+ * Phase 5 slice 5a (#118) — each tab includes this via
+ * `<style scoped src="@renderer/assets/settings-tabs.css">` so every component
+ * gets its own scoped copy of the cascade. Tab-specific styles live in each
+ * tab's own `<style scoped>` block. Shell-only styles
+ * (.settings-view/.topbar/.tabs/.tab/.body/.saved-toast) live in
+ * SettingsShell.vue. */
+
+.setting-group {
+  margin-bottom: 20px;
+}
+
+.setting-label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+}
+
+.setting-hint {
+  font-size: 0.8rem;
+  color: #6a6a8a;
+  margin-bottom: 10px;
+}
+
+.setting-hint-warn {
+  color: #e0b36a;
+  margin-top: 6px;
+}
+
+.setting-input {
+  width: 100%;
+  padding: 10px 14px;
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.setting-input:focus {
+  border-color: #e94560;
+}
+
+.setting-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.setting-select {
+  cursor: pointer;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.token-row .setting-input {
+  flex: 1;
+}
+
+.test-token-btn {
+  padding: 10px 16px;
+  background-color: #0f3460;
+  border: none;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.test-token-btn:hover {
+  background-color: #1a4a7a;
+}
+
+.test-token-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.token-result {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.token-valid {
+  color: #6ab04c;
+}
+
+.token-invalid {
+  color: #e94560;
+}
+
+.custom-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.speed-input {
+  width: 100px !important;
+}
+
+.speed-unit {
+  color: #a0a0b8;
+  font-size: 0.85rem;
+}
+
+.dir-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dir-path {
+  flex: 1;
+  padding: 10px 14px;
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  color: #a0a0b8;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-path.dir-warning {
+  border-color: #e94560;
+  color: #6a6a8a;
+}
+
+.browse-btn {
+  padding: 10px 16px;
+  background-color: #0f3460;
+  border: none;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.browse-btn:hover {
+  background-color: #1a4a7a;
+}
+
+.ffmpeg-status {
+  padding: 10px 14px;
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #6a6a8a;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ffmpeg-status.ok {
+  border-color: #2d6a30;
+}
+
+.ffmpeg-status.missing {
+  border-color: #e94560;
+}
+
+.ffmpeg-ok {
+  color: #6ab04c;
+  font-weight: 600;
+}
+
+.ffmpeg-missing {
+  color: #e94560;
+  font-weight: 600;
+}
+
+.ffmpeg-path {
+  font-size: 0.75rem;
+  color: #4a4a6a;
+  word-break: break-all;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-row.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toggle-input {
+  display: none;
+}
+
+.toggle-slider {
+  width: 40px;
+  height: 22px;
+  background-color: #0f3460;
+  border-radius: 11px;
+  position: relative;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #6a6a8a;
+  top: 3px;
+  left: 3px;
+  transition: all 0.2s;
+}
+
+.toggle-input:checked + .toggle-slider {
+  background-color: #2d6a30;
+}
+
+.toggle-input:checked + .toggle-slider::after {
+  background-color: #6ab04c;
+  transform: translateX(18px);
+}
+
+.toggle-label {
+  font-size: 0.85rem;
+  color: #a0a0b8;
+}
+
+.merge-all-btn {
+  padding: 10px 20px;
+  background-color: #6ab04c;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.merge-all-btn:hover {
+  background-color: #5a9a3c;
+}
+
+.merge-all-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scan-progress {
+  margin-top: 12px;
+  padding: 12px;
+  background-color: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+}
+
+.scan-progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: #a0a0b8;
+  margin-bottom: 6px;
+}
+
+.scan-progress .progress-bar-wrap {
+  height: 6px;
+  background-color: #0f3460;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.scan-progress .progress-bar {
+  height: 100%;
+  background-color: #9b59b6;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.scan-progress-file {
+  font-size: 0.75rem;
+  color: #6a6a8a;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-result {
+  margin-top: 12px;
+  padding: 12px;
+  background-color: #16213e;
+  border: 1px solid #2d6a30;
+  border-radius: 8px;
+}
+
+.scan-result.has-errors {
+  border-color: #e94560;
+}
+
+.scan-result-ok {
+  font-size: 0.85rem;
+  color: #6ab04c;
+  font-weight: 600;
+}
+
+.scan-result-errors {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: #e94560;
+}
+
+.scan-error-item {
+  font-size: 0.75rem;
+  color: #a0a0b8;
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.status-line {
+  font-size: 0.85rem;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+
+.status-line.ok {
+  color: #6ab04c;
+  background: rgba(106, 176, 76, 0.1);
+}
+
+.status-line.warn {
+  color: #f0932b;
+  background: rgba(240, 147, 43, 0.1);
+}

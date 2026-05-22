@@ -374,9 +374,29 @@ LibraryView shows both with indicators:
 `EventSubscriber<T> = (listener) => Unsubscribe` (see `src/shared/ipc/channels.ts`).
 Each call registers a dedicated listener and returns a disposer that removes only
 that listener — never `ipcRenderer.removeAllListeners`, which would clobber every
-other subscriber on the channel. Renderer callers capture the returned `Unsubscribe`
-and invoke it in `onBeforeUnmount`/`onUnmounted` (or store disposal in Phase 4b+).
-There are no `off*` methods on `window.api`.
+other subscriber on the channel. There are no `off*` methods on `window.api`.
+
+**Ownership rule (Phase 4 slices 4b–4d):**
+
+| Subscription kind | Owner | Disposal |
+|---|---|---|
+| Cross-view (download/scan-merge/fix-metadata progress, Shikimori rate/refresh/sync/details/offline-queue, ffmpeg/fpcalc/update status) | Pinia store (`useDownloadsStore`, `useShikimoriStore`, `useSettingsStore`) | Lifetime-scoped — singleton, never disposed |
+| Anime-specific (file-episodes-changed, skip-detector progress/signature, chapter-inject progress, cleanup-prompt toast) | The consuming component | `onBeforeUnmount` / `onUnmounted` |
+| Player-instance (player-stream chunks/end/error/progress/subtitles, syncplay session) | `PlayerView.vue` | `onBeforeUnmount` |
+
+The CI step `npm run check:subscription-contract` greps `src/preload/` and
+`src/renderer/` for `removeAllListeners(` or `window.api.off*(` calls and fails
+the build if any survive (Phase 4 slice 4e).
+
+**Composables (Phase 4 slice 4e):**
+
+Global app glue that doesn't belong on a Pinia store goes into
+`src/renderer/src/composables/`. The first inhabitant is
+`useKeyboardShortcuts({ bindings, suppressWhen, onAction })`, which binds a
+window-level keydown listener against the settings store's resolved bindings
+and dispatches the small set of app-wide actions (`back` / `focusSearch` /
+`goDownloads`). App.vue invokes it once at setup; the composable owns the
+event-listener lifecycle.
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|

@@ -158,6 +158,8 @@ jobs:
 
       - run: npm run format:check
 
+      - run: npm run check:subscription-contract
+
       - run: npm run test
 
       # The Playwright smoke test drives the built app.

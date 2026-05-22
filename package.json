@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "check:subscription-contract": "bash scripts/check-subscription-contract.sh",
     "screenshot": "node scripts/screenshot.js"
   },
   "build": {

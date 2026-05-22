@@ -80,11 +80,14 @@ function onClick(entry: ContinueWatchingEntry): void {
   emit('openAnime', entry.animeId, entry.episodeInt);
 }
 
+let unsubShikiRatesRefreshed: Unsubscribe | null = null;
+let unsubShikiRateUpdated: Unsubscribe | null = null;
+
 onMounted(async () => {
   await refresh();
   window.addEventListener('watch-progress-updated', debouncedRefresh);
-  window.api.onShikimoriRatesRefreshed(refresh);
-  window.api.onShikimoriRateUpdated(refresh);
+  unsubShikiRatesRefreshed = window.api.onShikimoriRatesRefreshed(refresh);
+  unsubShikiRateUpdated = window.api.onShikimoriRateUpdated(refresh);
 });
 
 onUnmounted(() => {
@@ -93,8 +96,8 @@ onUnmounted(() => {
     refreshTimer = null;
   }
   window.removeEventListener('watch-progress-updated', debouncedRefresh);
-  window.api.offShikimoriRatesRefreshed();
-  window.api.offShikimoriRateUpdated();
+  unsubShikiRatesRefreshed?.();
+  unsubShikiRateUpdated?.();
 });
 </script>
 

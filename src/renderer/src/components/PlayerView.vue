@@ -428,18 +428,22 @@ let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null;
 const WAITING_DEBOUNCE_MS = 600;
 const syncplayPausedBy = ref<string | null>(null);
 
-// Listener functions captured at register-time so onBeforeUnmount can call
-// the matching off* with the same reference — avoids removeAllListeners
-// ripping out listeners installed by other views (e.g. SettingsView's
-// "Test connection" handler).
-let syncplayConnectionStatusHandler: ((status: SyncplayStatus) => void) | null = null;
-let syncplayRemoteStateHandler: ((state: SyncplayRemoteState) => void) | null = null;
-let syncplayRoomUsersHandler: ((users: SyncplayRoomUser[]) => void) | null = null;
-let syncplayRoomEventHandler: ((ev: SyncplayRoomEvent) => void) | null = null;
-let syncplayTraceHandler:
-  | ((entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void)
-  | null = null;
-let syncplayRemoteEpisodeChangeHandler: ((ep: SyncplayRemoteEpisode) => void) | null = null;
+// Disposers returned by each broadcast subscription. Each `on*` registers a
+// dedicated listener and returns an Unsubscribe that removes only that one,
+// so independent subscribers on the same channel (e.g. SettingsView's
+// "Test connection") don't clobber each other.
+let unsubSkipDetectorSignatureUpdated: Unsubscribe | null = null;
+let unsubPlayerStreamSubtitles: Unsubscribe | null = null;
+let unsubPlayerStreamChunk: Unsubscribe | null = null;
+let unsubPlayerStreamEnd: Unsubscribe | null = null;
+let unsubPlayerStreamError: Unsubscribe | null = null;
+let unsubPlayerStreamProgress: Unsubscribe | null = null;
+let unsubSyncplayConnectionStatus: Unsubscribe | null = null;
+let unsubSyncplayRemoteState: Unsubscribe | null = null;
+let unsubSyncplayRoomUsers: Unsubscribe | null = null;
+let unsubSyncplayRoomEvent: Unsubscribe | null = null;
+let unsubSyncplayTrace: Unsubscribe | null = null;
+let unsubSyncplayRemoteEpisodeChange: Unsubscribe | null = null;
 
 function showSyncplayToast(text: string, ms = 3500): void {
   syncplayToast.value = text;
@@ -2557,13 +2561,13 @@ onMounted(async () => {
   }
 
   loadSkipDetections();
-  window.api.onSkipDetectorSignatureUpdated((data) => {
+  unsubSkipDetectorSignatureUpdated = window.api.onSkipDetectorSignatureUpdated((data) => {
     if (data.animeId !== props.animeId) return;
     loadSkipDetections();
   });
 
   // Subtitles extracted from MKV streams arrive asynchronously via IPC.
-  window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
+  unsubPlayerStreamSubtitles = window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
     if (sessionId !== streamSessionId.value) return;
     if (activeSubtitleContent.value) return;
     activeSubtitleContent.value = content;
@@ -2575,12 +2579,16 @@ onMounted(async () => {
   });
 
   // MSE fragmented MP4 chunks / end / error events.
-  window.api.onPlayerStreamChunk(({ sessionId, gen, data }) =>
+  unsubPlayerStreamChunk = window.api.onPlayerStreamChunk(({ sessionId, gen, data }) =>
     handleStreamChunk(sessionId, gen, data)
   );
-  window.api.onPlayerStreamEnd(({ sessionId }) => handleStreamEnd(sessionId));
-  window.api.onPlayerStreamError(({ sessionId, error }) => handleStreamError(sessionId, error));
-  window.api.onPlayerStreamProgress(({ sessionId, gen, speed }) => {
+  unsubPlayerStreamEnd = window.api.onPlayerStreamEnd(({ sessionId }) =>
+    handleStreamEnd(sessionId)
+  );
+  unsubPlayerStreamError = window.api.onPlayerStreamError(({ sessionId, error }) =>
+    handleStreamError(sessionId, error)
+  );
+  unsubPlayerStreamProgress = window.api.onPlayerStreamProgress(({ sessionId, gen, speed }) => {
     if (sessionId !== streamSessionId.value) return;
     if (gen !== currentStreamGen) return;
     if (typeof speed === 'number' && isFinite(speed)) transcodeSpeed.value = speed;
@@ -2595,7 +2603,7 @@ onMounted(async () => {
   const cfg = (await window.api.getSetting('syncplay')) as { lastRoom?: string } | null;
   if (cfg?.lastRoom) syncplayRoomInput.value = cfg.lastRoom;
 
-  syncplayConnectionStatusHandler = (status): void => {
+  unsubSyncplayConnectionStatus = window.api.onSyncplayConnectionStatus((status) => {
     const wasReady = syncplayStatus.value.state === 'ready';
     console.log('[syncplay] status:', status.state, status.error ? `error=${status.error}` : '');
     syncplayStatus.value = status;
@@ -2620,15 +2628,15 @@ onMounted(async () => {
         8000
       );
     }
-  };
-  syncplayRemoteStateHandler = (state): void => {
+  });
+  unsubSyncplayRemoteState = window.api.onSyncplayRemoteState((state) => {
     applyRemoteState(state);
-  };
-  syncplayRoomUsersHandler = (users): void => {
+  });
+  unsubSyncplayRoomUsers = window.api.onSyncplayRoomUsers((users) => {
     syncplayRoomUsers.value = users;
     applySyncplayReadyGate();
-  };
-  syncplayRoomEventHandler = (ev): void => {
+  });
+  unsubSyncplayRoomEvent = window.api.onSyncplayRoomEvent((ev) => {
     if (ev.level === 'warn' || ev.level === 'error') {
       console.warn('[syncplay]', ev.text);
     } else {
@@ -2636,8 +2644,8 @@ onMounted(async () => {
     }
     const ms = ev.level === 'warn' || ev.level === 'error' ? 8000 : 3500;
     showSyncplayToast(ev.text, ms);
-  };
-  syncplayTraceHandler = (entry): void => {
+  });
+  unsubSyncplayTrace = window.api.onSyncplayTrace((entry) => {
     const arrow = entry.dir === 'in' ? '<<' : '>>';
     let flat: string;
     try {
@@ -2646,8 +2654,8 @@ onMounted(async () => {
       flat = String(entry.msg);
     }
     console.log(`[syncplay] ${arrow} ${entry.keys} ${flat}`);
-  };
-  syncplayRemoteEpisodeChangeHandler = (ep): void => {
+  });
+  unsubSyncplayRemoteEpisodeChange = window.api.onSyncplayRemoteEpisodeChange((ep) => {
     if (ep.animeId !== props.animeId) {
       showSyncplayToast(`${ep.fromUser} switched to a different anime — not loaded here`);
       return;
@@ -2667,14 +2675,7 @@ onMounted(async () => {
       }
     };
     stepTowards();
-  };
-
-  window.api.onSyncplayConnectionStatus(syncplayConnectionStatusHandler);
-  window.api.onSyncplayRemoteState(syncplayRemoteStateHandler);
-  window.api.onSyncplayRoomUsers(syncplayRoomUsersHandler);
-  window.api.onSyncplayRoomEvent(syncplayRoomEventHandler);
-  window.api.onSyncplayTrace(syncplayTraceHandler);
-  window.api.onSyncplayRemoteEpisodeChange(syncplayRemoteEpisodeChangeHandler);
+  });
 
   // 1-second snapshot push so main's heartbeat has fresh position.
   syncplaySnapshotTimer = setInterval(() => {
@@ -2828,7 +2829,8 @@ onBeforeUnmount(() => {
     clearTimeout(skipButtonGraceTimer);
     skipButtonGraceTimer = null;
   }
-  window.api.offSkipDetectorSignatureUpdated();
+  unsubSkipDetectorSignatureUpdated?.();
+  unsubSkipDetectorSignatureUpdated = null;
   // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
   if (hevcPromptResolver) {
     const fn = hevcPromptResolver;
@@ -2851,35 +2853,28 @@ onBeforeUnmount(() => {
     gpuDevice = null;
   }
   // Stop listening for stream events
-  window.api.offPlayerStreamSubtitles();
-  window.api.offPlayerStreamChunk();
-  window.api.offPlayerStreamEnd();
-  window.api.offPlayerStreamError();
-  window.api.offPlayerStreamProgress();
-  if (syncplayConnectionStatusHandler) {
-    window.api.offSyncplayConnectionStatus(syncplayConnectionStatusHandler);
-    syncplayConnectionStatusHandler = null;
-  }
-  if (syncplayRemoteStateHandler) {
-    window.api.offSyncplayRemoteState(syncplayRemoteStateHandler);
-    syncplayRemoteStateHandler = null;
-  }
-  if (syncplayRoomUsersHandler) {
-    window.api.offSyncplayRoomUsers(syncplayRoomUsersHandler);
-    syncplayRoomUsersHandler = null;
-  }
-  if (syncplayRoomEventHandler) {
-    window.api.offSyncplayRoomEvent(syncplayRoomEventHandler);
-    syncplayRoomEventHandler = null;
-  }
-  if (syncplayRemoteEpisodeChangeHandler) {
-    window.api.offSyncplayRemoteEpisodeChange(syncplayRemoteEpisodeChangeHandler);
-    syncplayRemoteEpisodeChangeHandler = null;
-  }
-  if (syncplayTraceHandler) {
-    window.api.offSyncplayTrace(syncplayTraceHandler);
-    syncplayTraceHandler = null;
-  }
+  unsubPlayerStreamSubtitles?.();
+  unsubPlayerStreamSubtitles = null;
+  unsubPlayerStreamChunk?.();
+  unsubPlayerStreamChunk = null;
+  unsubPlayerStreamEnd?.();
+  unsubPlayerStreamEnd = null;
+  unsubPlayerStreamError?.();
+  unsubPlayerStreamError = null;
+  unsubPlayerStreamProgress?.();
+  unsubPlayerStreamProgress = null;
+  unsubSyncplayConnectionStatus?.();
+  unsubSyncplayConnectionStatus = null;
+  unsubSyncplayRemoteState?.();
+  unsubSyncplayRemoteState = null;
+  unsubSyncplayRoomUsers?.();
+  unsubSyncplayRoomUsers = null;
+  unsubSyncplayRoomEvent?.();
+  unsubSyncplayRoomEvent = null;
+  unsubSyncplayRemoteEpisodeChange?.();
+  unsubSyncplayRemoteEpisodeChange = null;
+  unsubSyncplayTrace?.();
+  unsubSyncplayTrace = null;
   if (syncplaySnapshotTimer) {
     clearInterval(syncplaySnapshotTimer);
     syncplaySnapshotTimer = null;

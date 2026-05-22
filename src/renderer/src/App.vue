@@ -274,12 +274,15 @@ function closeCleanupModal(): void {
   cleanupModal.value = null;
 }
 
+let unsubFfmpegProgress: Unsubscribe | null = null;
+let unsubCleanupPrompt: Unsubscribe | null = null;
+
 onMounted(async () => {
   await loadShortcuts();
   const shikiUser = await window.api.shikimoriGetUser();
   shikimoriLoggedIn.value = !!shikiUser;
   window.addEventListener('keydown', handleKeydown);
-  window.api.onFfmpegDownloadProgress((data) => {
+  unsubFfmpegProgress = window.api.onFfmpegDownloadProgress((data) => {
     if (data.status === 'downloading') {
       ffmpegDownloading.value = true;
       ffmpegProgress.value = data.progress ?? 0;
@@ -287,15 +290,15 @@ onMounted(async () => {
       ffmpegDownloading.value = false;
     }
   });
-  window.api.onCleanupPrompt(handleCleanupPrompt);
+  unsubCleanupPrompt = window.api.onCleanupPrompt(handleCleanupPrompt);
   // Expose test hook for Playwright screenshot script
   (window as any).__openTestPlayer = openPlayer;
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
-  window.api.offFfmpegDownloadProgress();
-  window.api.offCleanupPrompt();
+  unsubFfmpegProgress?.();
+  unsubCleanupPrompt?.();
   if (cleanupToastTimer) clearTimeout(cleanupToastTimer);
 });
 </script>

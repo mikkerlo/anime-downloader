@@ -327,6 +327,16 @@ LibraryView shows both with indicators:
 
 ## IPC Handlers
 
+### Broadcast subscription contract (Phase 4 slice 4a, #111)
+
+`send`-direction event channels expose `on*` subscribers on `window.api` of shape
+`EventSubscriber<T> = (listener) => Unsubscribe` (see `src/shared/ipc/channels.ts`).
+Each call registers a dedicated listener and returns a disposer that removes only
+that listener — never `ipcRenderer.removeAllListeners`, which would clobber every
+other subscriber on the channel. Renderer callers capture the returned `Unsubscribe`
+and invoke it in `onBeforeUnmount`/`onUnmounted` (or store disposal in Phase 4b+).
+There are no `off*` methods on `window.api`.
+
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
 | `validate-token` | invoke | Validate API token against smotret-anime.ru |

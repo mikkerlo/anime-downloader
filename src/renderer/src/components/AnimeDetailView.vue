@@ -55,6 +55,17 @@ const isOffline = computed(() => dataSource.value === 'cache');
 let loadGeneration = 0;
 let disposed = false;
 
+let unsubDownloadProgress: Unsubscribe | null = null;
+let unsubFileEpisodesChanged: Unsubscribe | null = null;
+let unsubShikimoriRateUpdated: Unsubscribe | null = null;
+let unsubShikimoriRatesRefreshed: Unsubscribe | null = null;
+let unsubShikimoriAnimeDetailsUpdated: Unsubscribe | null = null;
+let unsubShikimoriOfflineQueueChanged: Unsubscribe | null = null;
+let unsubShikimoriSyncStatus: Unsubscribe | null = null;
+let unsubSkipDetectorProgress: Unsubscribe | null = null;
+let unsubSkipDetectorSignatureUpdated: Unsubscribe | null = null;
+let unsubChapterInjectProgress: Unsubscribe | null = null;
+
 const isStarred = ref(false);
 const autoDlSubscription = ref<AutoDownloadSubscription | null>(null);
 const autoDlSaving = ref(false);
@@ -684,10 +695,10 @@ onMounted(async () => {
   // Subscribe to download progress
   const queue = await window.api.downloadGetQueue();
   updateDownloadGroups(queue);
-  window.api.onDownloadProgress(updateDownloadGroups);
+  unsubDownloadProgress = window.api.onDownloadProgress(updateDownloadGroups);
 
   // Subscribe to background file rescan updates
-  window.api.onFileEpisodesChanged((animeName, data) => {
+  unsubFileEpisodesChanged = window.api.onFileEpisodesChanged((animeName, data) => {
     if (anime.value && animeName === getAnimeName()) {
       const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
       const baseMap = new Map<string, string>();
@@ -712,7 +723,7 @@ onMounted(async () => {
   loadWatchProgress();
   window.addEventListener('watch-progress-updated', loadWatchProgress);
 
-  window.api.onShikimoriRateUpdated((entry) => {
+  unsubShikimoriRateUpdated = window.api.onShikimoriRateUpdated((entry) => {
     if (anime.value?.myAnimeListId && entry.rate.target_id === anime.value.myAnimeListId) {
       shikiRate.value = {
         id: entry.rate.id,
@@ -730,13 +741,15 @@ onMounted(async () => {
     }
   });
 
-  window.api.onShikimoriAnimeDetailsUpdated(({ malId, details }) => {
-    if (anime.value?.myAnimeListId === malId) {
-      shikiDetails.value = details;
+  unsubShikimoriAnimeDetailsUpdated = window.api.onShikimoriAnimeDetailsUpdated(
+    ({ malId, details }) => {
+      if (anime.value?.myAnimeListId === malId) {
+        shikiDetails.value = details;
+      }
     }
-  });
+  );
 
-  window.api.onShikimoriRatesRefreshed((entries) => {
+  unsubShikimoriRatesRefreshed = window.api.onShikimoriRatesRefreshed((entries) => {
     if (!anime.value?.myAnimeListId) return;
     const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId);
     if (match) {
@@ -759,7 +772,7 @@ onMounted(async () => {
   window.api.shikimoriGetOfflineQueueLength().then((n) => {
     offlineQueueLength.value = n;
   });
-  window.api.onShikimoriOfflineQueueChanged((data) => {
+  unsubShikimoriOfflineQueueChanged = window.api.onShikimoriOfflineQueueChanged((data) => {
     offlineQueueLength.value = data.length;
   });
   window.api.shikimoriGetSyncStatus().then((s) => {
@@ -767,16 +780,16 @@ onMounted(async () => {
     offlineQueueLength.value = s.queueLength;
     lastSyncError.value = s.lastSyncError;
   });
-  window.api.onSkipDetectorProgress((data) => {
+  unsubSkipDetectorProgress = window.api.onSkipDetectorProgress((data) => {
     if (data.animeId !== props.animeId) return;
     skipProgress.value = data;
     skipAnalyzing.value = data.phase !== 'done';
   });
-  window.api.onSkipDetectorSignatureUpdated((data) => {
+  unsubSkipDetectorSignatureUpdated = window.api.onSkipDetectorSignatureUpdated((data) => {
     if (data.animeId !== props.animeId) return;
     loadSkipDetections();
   });
-  window.api.onChapterInjectProgress((data) => {
+  unsubChapterInjectProgress = window.api.onChapterInjectProgress((data) => {
     if (data.animeId !== props.animeId) return;
     chapterInjectProgress.value = data;
     chapterInjecting.value = data.phase !== 'done';
@@ -784,7 +797,7 @@ onMounted(async () => {
   loadSkipDetections();
   hydrateSkipStatus();
 
-  window.api.onShikimoriSyncStatus((data) => {
+  unsubShikimoriSyncStatus = window.api.onShikimoriSyncStatus((data) => {
     syncState.value = data.state;
     offlineQueueLength.value = data.queueLength;
     lastSyncError.value = data.lastSyncError;
@@ -796,16 +809,16 @@ onUnmounted(() => {
   loadGeneration++;
   window.removeEventListener('mouseup', onMouseBack);
   window.removeEventListener('watch-progress-updated', loadWatchProgress);
-  window.api.offDownloadProgress();
-  window.api.offFileEpisodesChanged();
-  window.api.offShikimoriRateUpdated();
-  window.api.offShikimoriRatesRefreshed();
-  window.api.offShikimoriAnimeDetailsUpdated();
-  window.api.offShikimoriOfflineQueueChanged();
-  window.api.offShikimoriSyncStatus();
-  window.api.offSkipDetectorProgress();
-  window.api.offSkipDetectorSignatureUpdated();
-  window.api.offChapterInjectProgress();
+  unsubDownloadProgress?.();
+  unsubFileEpisodesChanged?.();
+  unsubShikimoriRateUpdated?.();
+  unsubShikimoriRatesRefreshed?.();
+  unsubShikimoriAnimeDetailsUpdated?.();
+  unsubShikimoriOfflineQueueChanged?.();
+  unsubShikimoriSyncStatus?.();
+  unsubSkipDetectorProgress?.();
+  unsubSkipDetectorSignatureUpdated?.();
+  unsubChapterInjectProgress?.();
 });
 
 async function triggerSyncNow(): Promise<void> {

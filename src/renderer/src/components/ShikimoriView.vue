@@ -104,10 +104,13 @@ function shikiTitle(entry: ShikiAnimeRateEntry): string {
   return entry.shikiAnime.russian || entry.shikiAnime.name;
 }
 
+let unsubRateUpdated: Unsubscribe | null = null;
+let unsubRatesRefreshed: Unsubscribe | null = null;
+
 onMounted(() => {
   loadRates();
 
-  window.api.onShikimoriRateUpdated((entry) => {
+  unsubRateUpdated = window.api.onShikimoriRateUpdated((entry) => {
     const idx = entries.value.findIndex((e) => e.rate.target_id === entry.rate.target_id);
     if (idx !== -1) {
       entries.value[idx] = entry;
@@ -115,7 +118,7 @@ onMounted(() => {
     }
   });
 
-  window.api.onShikimoriRatesRefreshed(async (newEntries) => {
+  unsubRatesRefreshed = window.api.onShikimoriRatesRefreshed(async (newEntries) => {
     entries.value = newEntries;
     refreshing.value = false;
     const ids = newEntries.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
@@ -131,8 +134,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.api.offShikimoriRateUpdated();
-  window.api.offShikimoriRatesRefreshed();
+  unsubRateUpdated?.();
+  unsubRatesRefreshed?.();
 });
 </script>
 

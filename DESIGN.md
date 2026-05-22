@@ -148,6 +148,30 @@ Slice 4c adds two more stores:
                      (onFfmpegDownloadProgress, onFpcalcDownloadProgress,
                      onUpdateStatus) — Pinia singleton, never disposed.
                      Action: loadShortcuts.
+
+Slice 4d adds the last two stores:
+  useShikimoriStore — user, loggedIn (computed), rates list,
+                      animeDetails cache, syncStatus, offlineQueueLength.
+                      Owns 5 lifetime-scoped IPC subscriptions:
+                      onShikimoriRateUpdated (upserts into `rates`),
+                      onShikimoriRatesRefreshed (replaces `rates`),
+                      onShikimoriAnimeDetailsUpdated (upserts into
+                      `animeDetails`), onShikimoriOfflineQueueChanged,
+                      onShikimoriSyncStatus. Actions: refreshUser,
+                      refreshRates, refreshSyncStatus,
+                      refreshOfflineQueueLength, triggerSync. App.vue's
+                      ad-hoc shikimoriGetUser probe + ShikimoriView's,
+                      HomeView's, and AnimeDetailView's per-component
+                      subscriptions are gone — consumers read the store
+                      and (where they need side effects on rate changes)
+                      watch its reactive state.
+  useDownloadsStore — groups (current download queue snapshot),
+                      scanMergeProgress, fixMetadataProgress. Owns
+                      onDownloadProgress, onScanMergeProgress,
+                      onFixMetadataProgress. Action: refreshQueue.
+                      DownloadsView reads from store; AnimeDetailView
+                      watches groups; SettingsView reads
+                      scan/fix progress for its banners.
 ```
 
 ### Episode Loading & Translation Selection

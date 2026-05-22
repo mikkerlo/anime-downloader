@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useLibraryStore } from './stores/library';
 import { usePlayerStore } from './stores/player';
 import { useSettingsStore } from './stores/settings';
+import { useShikimoriStore } from './stores/shikimori';
 import Sidebar from './components/Sidebar.vue';
 import SearchView from './components/SearchView.vue';
 import LibraryView from './components/LibraryView.vue';
@@ -21,13 +22,13 @@ import { formatBytes } from './utils';
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const settingsStore = useSettingsStore();
+const shikimoriStore = useShikimoriStore();
 const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
 const { playerState, animePrefs } = storeToRefs(playerStore);
 const { shortcuts, ffmpegDownloading, ffmpegProgress } = storeToRefs(settingsStore);
+const { loggedIn: shikimoriLoggedIn } = storeToRefs(shikimoriStore);
 
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
-
-const shikimoriLoggedIn = ref(false);
 
 // Reload shortcuts when leaving the settings view in case the user rebound any.
 watch(currentView, (next, prev) => {
@@ -167,8 +168,7 @@ let unsubCleanupPrompt: Unsubscribe | null = null;
 
 onMounted(async () => {
   await settingsStore.loadShortcuts();
-  const shikiUser = await window.api.shikimoriGetUser();
-  shikimoriLoggedIn.value = !!shikiUser;
+  await shikimoriStore.refreshUser();
   window.addEventListener('keydown', handleKeydown);
   unsubCleanupPrompt = window.api.onCleanupPrompt(handleCleanupPrompt);
   // Expose test hook for Playwright screenshot script

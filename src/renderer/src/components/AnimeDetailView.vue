@@ -10,6 +10,9 @@ import {
 import CleanupModal from './CleanupModal.vue';
 import { useLibraryStore } from '../stores/library';
 import { usePlayerStore } from '../stores/player';
+import { useShikimoriStore } from '../stores/shikimori';
+import { useDownloadsStore } from '../stores/downloads';
+import { storeToRefs } from 'pinia';
 
 const props = defineProps<{
   animeId: number;
@@ -19,6 +22,9 @@ const props = defineProps<{
 
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
+const shikimoriStore = useShikimoriStore();
+const downloadsStore = useDownloadsStore();
+const { syncStatus, offlineQueueLength } = storeToRefs(shikimoriStore);
 
 const anime = ref<AnimeDetail | null>(null);
 const episodes = ref<Map<number, EpisodeDetail>>(new Map());
@@ -33,13 +39,7 @@ const isOffline = computed(() => dataSource.value === 'cache');
 let loadGeneration = 0;
 let disposed = false;
 
-let unsubDownloadProgress: Unsubscribe | null = null;
 let unsubFileEpisodesChanged: Unsubscribe | null = null;
-let unsubShikimoriRateUpdated: Unsubscribe | null = null;
-let unsubShikimoriRatesRefreshed: Unsubscribe | null = null;
-let unsubShikimoriAnimeDetailsUpdated: Unsubscribe | null = null;
-let unsubShikimoriOfflineQueueChanged: Unsubscribe | null = null;
-let unsubShikimoriSyncStatus: Unsubscribe | null = null;
 let unsubSkipDetectorProgress: Unsubscribe | null = null;
 let unsubSkipDetectorSignatureUpdated: Unsubscribe | null = null;
 let unsubChapterInjectProgress: Unsubscribe | null = null;
@@ -63,9 +63,9 @@ const shikiRewatches = ref(0);
 const shikiLoading = ref(false);
 const shikiSaving = ref(false);
 const shikiError = ref('');
-const offlineQueueLength = ref(0);
-const syncState = ref<'idle' | 'syncing'>('idle');
-const lastSyncError = ref<string | null>(null);
+// syncState + lastSyncError are projections of `shikimoriStore.syncStatus`.
+const syncState = computed(() => syncStatus.value.state);
+const lastSyncError = computed(() => syncStatus.value.lastSyncError);
 
 // Friends state
 const friendsRates = ref<ShikiFriendRate[]>([]);
@@ -670,12 +670,12 @@ onMounted(async () => {
     if (!disposed && gen === loadGeneration) loading.value = false;
   }
 
-  // Subscribe to download progress
-  const queue = await window.api.downloadGetQueue();
-  updateDownloadGroups(queue);
-  unsubDownloadProgress = window.api.onDownloadProgress(updateDownloadGroups);
+  // Render the queue snapshot the store already holds, then watch for any
+  // future updates — the store owns the onDownloadProgress subscription.
+  updateDownloadGroups(downloadsStore.groups);
 
-  // Subscribe to background file rescan updates
+  // Subscribe to background file rescan updates (component-local — keyed off
+  // the currently displayed anime name).
   unsubFileEpisodesChanged = window.api.onFileEpisodesChanged((animeName, data) => {
     if (anime.value && animeName === getAnimeName()) {
       const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
@@ -701,63 +701,13 @@ onMounted(async () => {
   loadWatchProgress();
   window.addEventListener('watch-progress-updated', loadWatchProgress);
 
-  unsubShikimoriRateUpdated = window.api.onShikimoriRateUpdated((entry) => {
-    if (anime.value?.myAnimeListId && entry.rate.target_id === anime.value.myAnimeListId) {
-      shikiRate.value = {
-        id: entry.rate.id,
-        score: entry.rate.score,
-        status: entry.rate.status,
-        episodes: entry.rate.episodes,
-        rewatches: entry.rate.rewatches ?? 0,
-        target_id: entry.rate.target_id,
-        target_type: 'Anime'
-      };
-      shikiStatus.value = entry.rate.status;
-      shikiEpisodes.value = entry.rate.episodes;
-      shikiScore.value = entry.rate.score;
-      shikiRewatches.value = entry.rate.rewatches ?? 0;
-    }
-  });
+  // Hydrate the store-owned sync-status + offline-queue length on mount; later
+  // updates arrive via the store's broadcasts.
+  void shikimoriStore.refreshOfflineQueueLength();
+  void shikimoriStore.refreshSyncStatus();
 
-  unsubShikimoriAnimeDetailsUpdated = window.api.onShikimoriAnimeDetailsUpdated(
-    ({ malId, details }) => {
-      if (anime.value?.myAnimeListId === malId) {
-        shikiDetails.value = details;
-      }
-    }
-  );
-
-  unsubShikimoriRatesRefreshed = window.api.onShikimoriRatesRefreshed((entries) => {
-    if (!anime.value?.myAnimeListId) return;
-    const match = entries.find((e) => e.rate.target_id === anime.value!.myAnimeListId);
-    if (match) {
-      shikiRate.value = {
-        id: match.rate.id,
-        score: match.rate.score,
-        status: match.rate.status,
-        episodes: match.rate.episodes,
-        rewatches: match.rate.rewatches ?? 0,
-        target_id: match.rate.target_id,
-        target_type: 'Anime'
-      };
-      shikiStatus.value = match.rate.status;
-      shikiEpisodes.value = match.rate.episodes;
-      shikiScore.value = match.rate.score;
-      shikiRewatches.value = match.rate.rewatches ?? 0;
-    }
-  });
-
-  window.api.shikimoriGetOfflineQueueLength().then((n) => {
-    offlineQueueLength.value = n;
-  });
-  unsubShikimoriOfflineQueueChanged = window.api.onShikimoriOfflineQueueChanged((data) => {
-    offlineQueueLength.value = data.length;
-  });
-  window.api.shikimoriGetSyncStatus().then((s) => {
-    syncState.value = s.state;
-    offlineQueueLength.value = s.queueLength;
-    lastSyncError.value = s.lastSyncError;
-  });
+  // Skip-detector + chapter-inject progress are anime-specific, so they stay
+  // as component-local subscriptions (filtered by props.animeId).
   unsubSkipDetectorProgress = window.api.onSkipDetectorProgress((data) => {
     if (data.animeId !== props.animeId) return;
     skipProgress.value = data;
@@ -774,33 +724,61 @@ onMounted(async () => {
   });
   loadSkipDetections();
   hydrateSkipStatus();
-
-  unsubShikimoriSyncStatus = window.api.onShikimoriSyncStatus((data) => {
-    syncState.value = data.state;
-    offlineQueueLength.value = data.queueLength;
-    lastSyncError.value = data.lastSyncError;
-  });
 });
+
+// Sync the editable shiki* refs whenever the store's rate cache for this
+// anime's malId changes (broadcast-driven by the store).
+watch(
+  () => (anime.value?.myAnimeListId ? shikimoriStore.rateByMalId(anime.value.myAnimeListId) : null),
+  (entry) => {
+    if (!entry) return;
+    shikiRate.value = {
+      id: entry.rate.id,
+      score: entry.rate.score,
+      status: entry.rate.status,
+      episodes: entry.rate.episodes,
+      rewatches: entry.rate.rewatches ?? 0,
+      target_id: entry.rate.target_id,
+      target_type: 'Anime'
+    };
+    shikiStatus.value = entry.rate.status;
+    shikiEpisodes.value = entry.rate.episodes;
+    shikiScore.value = entry.rate.score;
+    shikiRewatches.value = entry.rate.rewatches ?? 0;
+  }
+);
+
+// Sync shikiDetails from the store's per-malId cache.
+watch(
+  () =>
+    anime.value?.myAnimeListId
+      ? shikimoriStore.animeDetailsByMalId(anime.value.myAnimeListId)
+      : null,
+  (details) => {
+    if (details) shikiDetails.value = details;
+  }
+);
+
+// Mirror store-owned download progress into the local episode-row projection.
+watch(
+  () => downloadsStore.groups,
+  (groups) => updateDownloadGroups(groups),
+  { deep: false }
+);
 
 onUnmounted(() => {
   disposed = true;
   loadGeneration++;
   window.removeEventListener('mouseup', onMouseBack);
   window.removeEventListener('watch-progress-updated', loadWatchProgress);
-  unsubDownloadProgress?.();
   unsubFileEpisodesChanged?.();
-  unsubShikimoriRateUpdated?.();
-  unsubShikimoriRatesRefreshed?.();
-  unsubShikimoriAnimeDetailsUpdated?.();
-  unsubShikimoriOfflineQueueChanged?.();
-  unsubShikimoriSyncStatus?.();
   unsubSkipDetectorProgress?.();
   unsubSkipDetectorSignatureUpdated?.();
   unsubChapterInjectProgress?.();
 });
 
 async function triggerSyncNow(): Promise<void> {
-  await window.api.shikimoriTriggerSync();
+  await shikimoriStore.triggerSync();
 }
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [

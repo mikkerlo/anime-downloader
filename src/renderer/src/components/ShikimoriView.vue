@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import AnimeCard from './AnimeCard.vue';
 import { useLibraryStore } from '../stores/library';
+import { useShikimoriStore } from '../stores/shikimori';
 
 const libraryStore = useLibraryStore();
+const shikimoriStore = useShikimoriStore();
+const { rates: entries } = storeToRefs(shikimoriStore);
 
-const entries = ref<ShikiAnimeRateEntry[]>([]);
 const loading = ref(false);
 const error = ref('');
 const statusFilter = ref<string>('to_watch');
@@ -46,22 +49,26 @@ const statusCounts = computed(() => {
   return counts;
 });
 
+async function refreshStarredFromEntries(list: ShikiAnimeRateEntry[]): Promise<void> {
+  const ids = list.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
+  if (ids.length === 0) return;
+  const statuses = await window.api.libraryGetStatus(ids);
+  const starred = new Set<number>();
+  for (const [id, s] of Object.entries(statuses)) {
+    if (s.starred) starred.add(Number(id));
+  }
+  starredIds.value = starred;
+}
+
 async function loadRates(): Promise<void> {
-  const user = await window.api.shikimoriGetUser();
-  if (!user) return;
+  if (!shikimoriStore.loggedIn && !(await shikimoriStore.refreshUser(), shikimoriStore.loggedIn)) {
+    return;
+  }
   loading.value = true;
   error.value = '';
   try {
-    entries.value = await window.api.shikimoriGetAnimeRates();
-    const ids = entries.value.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
-    if (ids.length > 0) {
-      const statuses = await window.api.libraryGetStatus(ids);
-      const starred = new Set<number>();
-      for (const [id, s] of Object.entries(statuses)) {
-        if (s.starred) starred.add(Number(id));
-      }
-      starredIds.value = starred;
-    }
+    await shikimoriStore.refreshRates();
+    await refreshStarredFromEntries(entries.value);
     if (entries.value.length > 0) refreshing.value = true;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load anime list';
@@ -103,38 +110,19 @@ function shikiTitle(entry: ShikiAnimeRateEntry): string {
   return entry.shikiAnime.russian || entry.shikiAnime.name;
 }
 
-let unsubRateUpdated: Unsubscribe | null = null;
-let unsubRatesRefreshed: Unsubscribe | null = null;
+// When the store-owned rates broadcast updates, refresh the local
+// starred-anime overlay (re-check libraryGetStatus for newly-added entries).
+watch(
+  () => entries.value,
+  (newEntries) => {
+    refreshing.value = false;
+    void refreshStarredFromEntries(newEntries);
+  },
+  { deep: false }
+);
 
 onMounted(() => {
   loadRates();
-
-  unsubRateUpdated = window.api.onShikimoriRateUpdated((entry) => {
-    const idx = entries.value.findIndex((e) => e.rate.target_id === entry.rate.target_id);
-    if (idx !== -1) {
-      entries.value[idx] = entry;
-      entries.value = [...entries.value];
-    }
-  });
-
-  unsubRatesRefreshed = window.api.onShikimoriRatesRefreshed(async (newEntries) => {
-    entries.value = newEntries;
-    refreshing.value = false;
-    const ids = newEntries.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
-    if (ids.length > 0) {
-      const statuses = await window.api.libraryGetStatus(ids);
-      const starred = new Set<number>();
-      for (const [id, s] of Object.entries(statuses)) {
-        if (s.starred) starred.add(Number(id));
-      }
-      starredIds.value = starred;
-    }
-  });
-});
-
-onUnmounted(() => {
-  unsubRateUpdated?.();
-  unsubRatesRefreshed?.();
 });
 </script>
 

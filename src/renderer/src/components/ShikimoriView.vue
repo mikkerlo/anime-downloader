@@ -61,8 +61,9 @@ async function refreshStarredFromEntries(list: ShikiAnimeRateEntry[]): Promise<v
 }
 
 async function loadRates(): Promise<void> {
-  if (!shikimoriStore.loggedIn && !(await shikimoriStore.refreshUser(), shikimoriStore.loggedIn)) {
-    return;
+  if (!shikimoriStore.loggedIn) {
+    await shikimoriStore.refreshUser();
+    if (!shikimoriStore.loggedIn) return;
   }
   loading.value = true;
   error.value = '';

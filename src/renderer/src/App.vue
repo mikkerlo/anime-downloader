@@ -2,6 +2,8 @@
 import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useLibraryStore } from './stores/library';
+import { usePlayerStore } from './stores/player';
+import { useSettingsStore } from './stores/settings';
 import Sidebar from './components/Sidebar.vue';
 import SearchView from './components/SearchView.vue';
 import LibraryView from './components/LibraryView.vue';
@@ -17,87 +19,20 @@ import CleanupModal from './components/CleanupModal.vue';
 import { formatBytes } from './utils';
 
 const libraryStore = useLibraryStore();
+const playerStore = usePlayerStore();
+const settingsStore = useSettingsStore();
 const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
+const { playerState, animePrefs } = storeToRefs(playerStore);
+const { shortcuts, ffmpegDownloading, ffmpegProgress } = storeToRefs(settingsStore);
 
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
-const shortcuts = ref<Record<string, string>>({});
 
 const shikimoriLoggedIn = ref(false);
 
 // Reload shortcuts when leaving the settings view in case the user rebound any.
 watch(currentView, (next, prev) => {
-  if (prev === 'settings' && next !== 'settings') loadShortcuts();
+  if (prev === 'settings' && next !== 'settings') void settingsStore.loadShortcuts();
 });
-
-// Player overlay state
-const playerState = ref<{
-  filePath: string;
-  streamUrl: string;
-  subtitleContent: string;
-  animeName: string;
-  episodeLabel: string;
-  availableStreams: { height: number; url: string }[];
-  translationId: number;
-  translations: { id: number; label: string; type: string; height: number }[];
-  downloadedTrIds: number[];
-  allEpisodes: {
-    episodeInt: string;
-    episodeFull: string;
-    translations: { id: number; label: string; type: string; height: number }[];
-    downloadedTrIds: number[];
-  }[];
-  episodeIndex: number;
-  animeId: number;
-  malId: number;
-} | null>(null);
-
-function openPlayer(
-  filePath: string,
-  streamUrl: string,
-  subtitleContent: string,
-  animeName: string,
-  episodeLabel: string,
-  availableStreams: { height: number; url: string }[],
-  translationId: number,
-  translations: { id: number; label: string; type: string; height: number }[] = [],
-  downloadedTrIds: number[] = [],
-  allEpisodes: {
-    episodeInt: string;
-    episodeFull: string;
-    translations: { id: number; label: string; type: string; height: number }[];
-    downloadedTrIds: number[];
-  }[] = [],
-  episodeIndex: number = 0,
-  animeId = 0,
-  malId = 0
-): void {
-  playerState.value = {
-    filePath,
-    streamUrl,
-    subtitleContent,
-    animeName,
-    episodeLabel,
-    availableStreams,
-    translationId,
-    translations,
-    downloadedTrIds,
-    allEpisodes,
-    episodeIndex,
-    animeId,
-    malId
-  };
-}
-
-function closePlayer(): void {
-  playerState.value = null;
-}
-
-// Persist translation type and author selections per anime across re-mounts
-const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({});
-
-function saveAnimePrefs(animeId: number, translationType: string, author: string): void {
-  animePrefs.value[animeId] = { translationType, author };
-}
 
 const isMac = navigator.platform.toUpperCase().includes('MAC');
 
@@ -156,13 +91,6 @@ function handleKeydown(e: KeyboardEvent): void {
     }
   }
 }
-
-async function loadShortcuts(): Promise<void> {
-  shortcuts.value = (await window.api.getSetting('keyboardShortcuts')) as Record<string, string>;
-}
-
-const ffmpegDownloading = ref(false);
-const ffmpegProgress = ref(0);
 
 // Cleanup prompt (Shikimori "completed" transition)
 const cleanupToast = ref<{
@@ -235,30 +163,21 @@ function closeCleanupModal(): void {
   cleanupModal.value = null;
 }
 
-let unsubFfmpegProgress: Unsubscribe | null = null;
 let unsubCleanupPrompt: Unsubscribe | null = null;
 
 onMounted(async () => {
-  await loadShortcuts();
+  await settingsStore.loadShortcuts();
   const shikiUser = await window.api.shikimoriGetUser();
   shikimoriLoggedIn.value = !!shikiUser;
   window.addEventListener('keydown', handleKeydown);
-  unsubFfmpegProgress = window.api.onFfmpegDownloadProgress((data) => {
-    if (data.status === 'downloading') {
-      ffmpegDownloading.value = true;
-      ffmpegProgress.value = data.progress ?? 0;
-    } else {
-      ffmpegDownloading.value = false;
-    }
-  });
   unsubCleanupPrompt = window.api.onCleanupPrompt(handleCleanupPrompt);
   // Expose test hook for Playwright screenshot script
-  (window as any).__openTestPlayer = openPlayer;
+  (window as any).__openTestPlayer = (payload: Parameters<typeof playerStore.openPlayer>[0]) =>
+    playerStore.openPlayer(payload);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
-  unsubFfmpegProgress?.();
   unsubCleanupPrompt?.();
   if (cleanupToastTimer) clearTimeout(cleanupToastTimer);
 });
@@ -273,8 +192,6 @@ onBeforeUnmount(() => {
       :anime-id="activeAnimeId"
       :initial-prefs="animePrefs[activeAnimeId]"
       :focus-episode-int="activeFocusEpisodeInt"
-      @prefs-changed="saveAnimePrefs"
-      @play-file="openPlayer"
     />
     <HomeView v-show="currentView === 'home' && !activeAnimeId" />
     <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" />
@@ -299,7 +216,7 @@ onBeforeUnmount(() => {
       :episode-index="playerState.episodeIndex"
       :anime-id="playerState.animeId"
       :mal-id="playerState.malId"
-      @close="closePlayer"
+      @close="playerStore.closePlayer()"
     />
     <CleanupModal
       v-if="cleanupModal"

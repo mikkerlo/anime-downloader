@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useSettingsStore } from '../stores/settings';
 import { formatBytes } from '../utils';
+
+const settingsStore = useSettingsStore();
+const { updateStatus } = storeToRefs(settingsStore);
 
 const activeTab = ref<
   | 'general'
@@ -47,14 +52,9 @@ let savedTimeout: ReturnType<typeof setTimeout> | null = null;
 const tokenStatus = ref<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
 const tokenError = ref('');
 
-// Update state
+// Update state — broadcast subscription owned by `useSettingsStore`; the local
+// "checking" / "error" UI states are written through the same ref.
 const appVersion = ref('');
-const updateStatus = ref<{
-  status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error';
-  version?: string;
-  percent?: number;
-  error?: string;
-}>({ status: 'idle' });
 
 const notificationMode = ref('off');
 const calendarView = ref<'week' | 'month'>('week');
@@ -78,7 +78,6 @@ let skipQueuePollTimer: ReturnType<typeof setInterval> | null = null;
 
 let unsubScanMerge: Unsubscribe | null = null;
 let unsubFixMetadata: Unsubscribe | null = null;
-let unsubUpdateStatus: Unsubscribe | null = null;
 let unsubMoveToCold: Unsubscribe | null = null;
 let unsubUsageProgress: Unsubscribe | null = null;
 let unsubCleanupPending: Unsubscribe | null = null;
@@ -455,10 +454,6 @@ async function fixMetadata(): Promise<void> {
   }
 }
 
-function onUpdateStatus(data: UpdateStatus): void {
-  updateStatus.value = data;
-}
-
 async function checkForUpdates(): Promise<void> {
   updateStatus.value = { status: 'checking' };
   try {
@@ -662,7 +657,6 @@ function formatRelativeTime(ts: number): string {
 onMounted(async () => {
   unsubScanMerge = window.api.onScanMergeProgress(onScanProgress);
   unsubFixMetadata = window.api.onFixMetadataProgress(onFixProgress);
-  unsubUpdateStatus = window.api.onUpdateStatus(onUpdateStatus);
   unsubMoveToCold = window.api.onStorageMoveToColdProgress(onMoveProgress);
   unsubUsageProgress = window.api.onStorageUsageProgress(onUsageProgress);
   unsubCleanupPending = window.api.onStorageCleanupPending(onCleanupPending);
@@ -685,7 +679,6 @@ watch(activeTab, (tab) => {
 onUnmounted(() => {
   unsubScanMerge?.();
   unsubFixMetadata?.();
-  unsubUpdateStatus?.();
   unsubMoveToCold?.();
   unsubUsageProgress?.();
   unsubCleanupPending?.();

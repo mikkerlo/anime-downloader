@@ -83,7 +83,9 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
 | `src/renderer/src/components/AnimeCard.vue` | Reusable anime poster card |
 | `src/renderer/src/components/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
-| `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress |
+| `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress. Consumes `useAnimeDetailPrefs` + `useChronology` + `useEpisodeList` + `useEpisodeDownloads`. Renders `detail/ChronologyPanel.vue` + `detail/FriendsPanel.vue` for the Shikimori-driven sidebar panels |
+| `src/renderer/src/components/detail/ChronologyPanel.vue` | Related-anime list (Shikimori chronology). Props: `shikiRelated`, `relatedLoading`; v-model: `collapsed`. Calls `useLibraryStore().openAnime()` directly to navigate. Includes its own KIND_LABELS + STATUS_LABELS + scoped CSS |
+| `src/renderer/src/components/detail/FriendsPanel.vue` | Friends' Shikimori watch status. Props: `friendsRates`, `friendsLoading`, `numberOfEpisodes`; v-model: `collapsed`. Owns the `friendsSummary` computed (status counts) |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
 | `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |

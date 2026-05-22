@@ -11,6 +11,8 @@ import { useAnimeDetailPrefs } from '../composables/use-anime-detail-prefs';
 import { useChronology } from '../composables/use-chronology';
 import { useEpisodeList, PAGE_SIZE } from '../composables/use-episode-list';
 import { useEpisodeDownloads } from '../composables/use-episode-downloads';
+import ChronologyPanel from './detail/ChronologyPanel.vue';
+import FriendsPanel from './detail/FriendsPanel.vue';
 
 const props = defineProps<{
   animeId: number;
@@ -135,30 +137,6 @@ const chapterInjectResult = ref<{
   total: number;
 } | null>(null);
 
-const KIND_LABELS: Record<string, string> = {
-  tv: 'TV',
-  tv_13: 'TV',
-  tv_24: 'TV',
-  tv_48: 'TV',
-  movie: 'Movie',
-  ova: 'OVA',
-  ona: 'ONA',
-  special: 'Special',
-  music: 'Music',
-  tv_special: 'TV Special',
-  pv: 'PV',
-  cm: 'CM'
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  planned: 'Planned',
-  watching: 'Watching',
-  rewatching: 'Rewatching',
-  completed: 'Watched',
-  on_hold: 'On Hold',
-  dropped: 'Dropped'
-};
-
 const shikiDetailsDescription = computed<string>(() => {
   if (!shikiDetails.value) return '';
   const src = shikiDetails.value.description;
@@ -188,24 +166,6 @@ const shikiDetailsDescription = computed<string>(() => {
     .replace(/&(?:amp|nbsp|lt|gt|quot|#39);/gi, (m) => entities[m.toLowerCase()] ?? m)
     .replace(/\s+/g, ' ')
     .trim();
-});
-
-const friendsSummary = computed(() => {
-  const counts = new Map<string, number>();
-  for (const r of friendsRates.value) {
-    counts.set(r.status, (counts.get(r.status) || 0) + 1);
-  }
-  const labels: Record<string, string> = {
-    watching: 'watching',
-    completed: 'completed',
-    planned: 'planned',
-    on_hold: 'on hold',
-    dropped: 'dropped',
-    rewatching: 'rewatching'
-  };
-  return [...counts.entries()]
-    .map(([status, count]) => `${count} ${labels[status] || status}`)
-    .join(' \u00b7 ');
 });
 
 const playerMode = ref<'system' | 'builtin'>('system');
@@ -1064,96 +1024,12 @@ function typeChip(type: string): { short: string; color: string } {
         <div v-else class="shiki-loading">Loading...</div>
       </div>
 
-      <div
+      <ChronologyPanel
         v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
-        class="related-panel"
-      >
-        <div class="related-header" @click="relatedCollapsed = !relatedCollapsed">
-          <div class="related-header-left">
-            <svg
-              class="related-chevron"
-              :class="{ collapsed: relatedCollapsed }"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              width="14"
-              height="14"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-            </svg>
-            <span class="related-label">Chronology</span>
-          </div>
-          <span v-if="relatedLoading" class="related-summary">Loading...</span>
-          <span v-else-if="shikiRelated.length > 0" class="related-summary"
-            >{{ shikiRelated.length }} {{ shikiRelated.length === 1 ? 'entry' : 'entries' }}</span
-          >
-        </div>
-        <div v-if="!relatedCollapsed" class="related-body">
-          <div v-if="relatedLoading" class="related-loading">Loading chronology...</div>
-          <div v-else class="related-list">
-            <div
-              v-for="entry in shikiRelated"
-              :key="entry.shikiAnime.id"
-              class="related-row"
-              :class="{
-                clickable: entry.smotretAnime && !entry.isCurrent,
-                unavailable: !entry.smotretAnime,
-                current: entry.isCurrent
-              }"
-              :role="entry.smotretAnime && !entry.isCurrent ? 'button' : undefined"
-              :tabindex="entry.smotretAnime && !entry.isCurrent ? 0 : undefined"
-              @click="
-                entry.smotretAnime &&
-                !entry.isCurrent &&
-                libraryStore.openAnime(entry.smotretAnime.id)
-              "
-              @keydown.enter.prevent="
-                entry.smotretAnime &&
-                !entry.isCurrent &&
-                libraryStore.openAnime(entry.smotretAnime.id)
-              "
-              @keydown.space.prevent="
-                entry.smotretAnime &&
-                !entry.isCurrent &&
-                libraryStore.openAnime(entry.smotretAnime.id)
-              "
-            >
-              <img
-                :src="entry.smotretAnime?.posterUrlSmall || entry.shikiAnime.image_url || ''"
-                :alt="entry.shikiAnime.name"
-                class="related-thumb"
-                loading="lazy"
-              />
-              <div class="related-info">
-                <div class="related-title">{{ entry.shikiAnime.name }}</div>
-                <div class="related-meta">
-                  <span v-if="entry.shikiAnime.kind" class="related-kind">{{
-                    KIND_LABELS[entry.shikiAnime.kind] || entry.shikiAnime.kind.toUpperCase()
-                  }}</span>
-                  <span v-if="entry.shikiAnime.year" class="related-year">{{
-                    entry.shikiAnime.year
-                  }}</span>
-                  <span v-if="entry.relation" class="related-relation">{{ entry.relation }}</span>
-                  <span v-if="entry.isCurrent" class="related-current-badge">Current</span>
-                  <span
-                    v-if="entry.watchStatus"
-                    class="related-status-badge"
-                    :class="'status-' + entry.watchStatus"
-                  >
-                    {{ STATUS_LABELS[entry.watchStatus] }}
-                  </span>
-                  <span
-                    v-if="!entry.smotretAnime && !entry.isCurrent"
-                    class="related-unavailable-badge"
-                    >Not available</span
-                  >
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+        v-model:collapsed="relatedCollapsed"
+        :shiki-related="shikiRelated"
+        :related-loading="relatedLoading"
+      />
 
       <div class="skip-panel">
         <div class="skip-header" @click="skipPanelCollapsed = !skipPanelCollapsed">
@@ -1280,61 +1156,13 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
       </div>
 
-      <div v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)" class="friends-panel">
-        <div class="friends-header" @click="friendsCollapsed = !friendsCollapsed">
-          <div class="friends-header-left">
-            <svg
-              class="friends-chevron"
-              :class="{ collapsed: friendsCollapsed }"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              width="14"
-              height="14"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-            </svg>
-            <span class="friends-label">Friends</span>
-          </div>
-          <span v-if="!friendsLoading && friendsRates.length > 0" class="friends-summary">{{
-            friendsSummary
-          }}</span>
-          <span v-if="friendsLoading" class="friends-summary">Loading...</span>
-        </div>
-        <div v-if="!friendsCollapsed" class="friends-body">
-          <div v-if="friendsLoading" class="friends-loading">Loading friends...</div>
-          <div v-else-if="friendsRates.length === 0" class="friends-empty">
-            None of your friends have watched this anime
-          </div>
-          <div v-else class="friends-list">
-            <div v-for="friend in friendsRates" :key="friend.nickname" class="friend-row">
-              <img :src="friend.avatar" class="friend-avatar" />
-              <span class="friend-name">{{ friend.nickname }}</span>
-              <span class="friend-status-badge" :class="'status-' + friend.status">
-                {{
-                  {
-                    planned: 'Planned',
-                    watching: 'Watching',
-                    rewatching: 'Rewatching',
-                    completed: 'Completed',
-                    on_hold: 'On Hold',
-                    dropped: 'Dropped'
-                  }[friend.status]
-                }}
-              </span>
-              <span class="friend-score">{{ friend.score > 0 ? friend.score + '/10' : '—' }}</span>
-              <span class="friend-episodes">{{
-                friend.episodes > 0
-                  ? 'ep ' +
-                    friend.episodes +
-                    (anime.numberOfEpisodes ? '/' + anime.numberOfEpisodes : '')
-                  : ''
-              }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <FriendsPanel
+        v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+        v-model:collapsed="friendsCollapsed"
+        :friends-rates="friendsRates"
+        :friends-loading="friendsLoading"
+        :number-of-episodes="anime.numberOfEpisodes"
+      />
 
       <div class="controls">
         <div class="control-group">
@@ -2477,14 +2305,6 @@ function typeChip(type: string): { short: string; color: string } {
   text-decoration: underline;
 }
 
-.related-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
-}
-
 .skip-panel {
   background-color: #16213e;
   border: 1px solid #0f3460;
@@ -2617,282 +2437,5 @@ function typeChip(type: string): { short: string; color: string } {
 
 .skip-empty {
   color: #4a4a6a;
-}
-
-.related-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  user-select: none;
-}
-
-.related-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.related-chevron {
-  color: #a0a0b8;
-  transition: transform 0.15s;
-}
-
-.related-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.related-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
-}
-
-.related-summary {
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.related-body {
-  margin-top: 10px;
-}
-
-.related-loading {
-  font-size: 0.85rem;
-  color: #6a6a8a;
-}
-
-.related-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.related-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  transition: background-color 0.1s;
-}
-
-.related-row.clickable {
-  cursor: pointer;
-}
-
-.related-row.clickable:hover,
-.related-row.clickable:focus-visible {
-  background-color: #1a2a4d;
-  outline: none;
-}
-
-.related-row.unavailable {
-  opacity: 0.55;
-}
-
-.related-row.current {
-  background-color: #0f3460;
-}
-
-.related-thumb {
-  width: 40px;
-  height: 56px;
-  object-fit: cover;
-  border-radius: 4px;
-  flex-shrink: 0;
-  background-color: #0f3460;
-}
-
-.related-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.related-title {
-  color: #e0e0e0;
-  font-size: 0.9rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.related-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 3px;
-  flex-wrap: wrap;
-}
-
-.related-kind {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #6a6a8a;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.related-year {
-  font-size: 0.72rem;
-  color: #6a6a8a;
-}
-
-.related-relation {
-  font-size: 0.78rem;
-  color: #a0a0b8;
-}
-
-.related-current-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background-color: #e9456033;
-  color: #e94560;
-  white-space: nowrap;
-}
-
-.related-status-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.related-unavailable-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background-color: #6a6a8a1a;
-  color: #6a6a8a;
-  white-space: nowrap;
-}
-
-.friends-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
-}
-
-.friends-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  user-select: none;
-}
-
-.friends-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.friends-chevron {
-  color: #a0a0b8;
-  transition: transform 0.15s;
-}
-
-.friends-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.friends-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
-}
-
-.friends-summary {
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.friends-body {
-  margin-top: 10px;
-}
-
-.friends-loading,
-.friends-empty {
-  font-size: 0.85rem;
-  color: #6a6a8a;
-}
-
-.friends-list {
-  display: grid;
-  grid-template-columns: 24px minmax(80px, auto) auto auto auto;
-  gap: 8px 12px;
-  align-items: center;
-  font-size: 0.85rem;
-}
-
-.friend-row {
-  display: contents;
-}
-
-.friend-avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-.friend-name {
-  color: #e0e0e0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.friend-status-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.status-watching {
-  background-color: #27ae601a;
-  color: #6ab04c;
-}
-.status-completed {
-  background-color: #3498db1a;
-  color: #3498db;
-}
-.status-planned {
-  background-color: #9b59b61a;
-  color: #9b59b6;
-}
-.status-on_hold {
-  background-color: #f39c121a;
-  color: #f39c12;
-}
-.status-dropped {
-  background-color: #e945601a;
-  color: #e94560;
-}
-.status-rewatching {
-  background-color: #1abc9c1a;
-  color: #1abc9c;
-}
-
-.friend-score {
-  color: #f39c12;
-  font-size: 0.8rem;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.friend-episodes {
-  color: #6a6a8a;
-  font-size: 0.8rem;
-  white-space: nowrap;
 }
 </style>

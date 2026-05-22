@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
 import AnimeCard from './AnimeCard.vue';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number];
-}>();
+const libraryStore = useLibraryStore();
 
 const query = ref('');
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -94,7 +93,7 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
           :anime="anime"
           :starred="starredIds.has(anime.id)"
           @toggle-star="toggleStar"
-          @click="emit('openAnime', anime.id)"
+          @click="libraryStore.openAnime(anime.id)"
         />
       </div>
       <div v-else-if="searched" class="status-text">No results found</div>

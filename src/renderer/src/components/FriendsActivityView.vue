@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number];
-}>();
+const libraryStore = useLibraryStore();
 
 const activities = ref<ShikiFriendActivityEntry[]>([]);
 const loading = ref(false);
@@ -59,7 +58,7 @@ async function load(force = false): Promise<void> {
 }
 
 function handleClick(entry: ShikiFriendActivityEntry): void {
-  if (entry.smotretAnime) emit('openAnime', entry.smotretAnime.id);
+  if (entry.smotretAnime) libraryStore.openAnime(entry.smotretAnime.id);
 }
 
 function posterUrl(entry: ShikiFriendActivityEntry): string {

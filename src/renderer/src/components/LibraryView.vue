@@ -2,10 +2,9 @@
 import { ref, onMounted } from 'vue';
 import AnimeCard from './AnimeCard.vue';
 import { getAnimeName } from '../utils';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number];
-}>();
+const libraryStore = useLibraryStore();
 
 const library = ref<AnimeSearchResult[]>([]);
 const starredIds = ref(new Set<number>());
@@ -51,7 +50,7 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             :anime="anime"
             :starred="starredIds.has(anime.id)"
             @toggle-star="toggleStar"
-            @click="emit('openAnime', anime.id)"
+            @click="libraryStore.openAnime(anime.id)"
           />
           <button
             v-if="downloadedIds.has(anime.id)"

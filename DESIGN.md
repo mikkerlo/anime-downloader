@@ -124,13 +124,21 @@ SearchView uses `v-show` (never destroyed) so search state persists across tab s
 ### Navigation State
 
 ```
-App.vue manages per-view anime selection:
-  animeByView = { search: null | animeId, library: null | animeId }
-  animePrefs  = { [animeId]: { translationType, author } }
+Pinia store `useLibraryStore` (src/renderer/src/stores/library.ts) owns:
+  currentView                — active top-level view ('home' | 'search' | ...)
+  animeByView[view]          — currently-opened anime per stacked view
+  animeHistoryByView[view]   — back-stack per stacked view
+  focusEpisodeIntForAnime    — episode to scroll to on AnimeDetailView mount
+  actions: navigate, openAnime, closeAnime, clearFocusEpisode
 
-Each view (search, library) tracks its own selected anime independently.
-AnimeDetailView receives initialPrefs and emits prefsChanged to persist
-translation type and author selections across re-mounts.
+Each stacked view (home, search, library, shikimori, friends, calendar)
+tracks its own selected-anime stack. Components call store actions
+directly — there is no @open-anime / @navigate emit chain through App.vue.
+
+App.vue still holds `animePrefs = { [animeId]: { translationType, author } }`
+until slice 4c, where it moves into `usePlayerStore`. AnimeDetailView
+receives initialPrefs and emits prefsChanged to persist translation type
+and author selections across re-mounts.
 ```
 
 ### Episode Loading & Translation Selection

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import AnimeCard from './AnimeCard.vue';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number];
-}>();
+const libraryStore = useLibraryStore();
 
 const entries = ref<ShikiAnimeRateEntry[]>([]);
 const loading = ref(false);
@@ -184,7 +183,7 @@ onUnmounted(() => {
               :anime="entry.smotretAnime"
               :starred="starredIds.has(entry.smotretAnime.id)"
               @toggle-star="toggleStar"
-              @click="emit('openAnime', entry.smotretAnime.id)"
+              @click="libraryStore.openAnime(entry.smotretAnime.id)"
             />
           </template>
           <template v-else>

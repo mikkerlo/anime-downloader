@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number, focusEpisodeInt?: string];
-  navigate: [view: string];
-}>();
+const libraryStore = useLibraryStore();
 
 const entries = ref<ContinueWatchingEntry[]>([]);
 const loading = ref(true);
@@ -77,7 +75,7 @@ function progressPercent(entry: ContinueWatchingEntry): number {
 
 function onClick(entry: ContinueWatchingEntry): void {
   if (!entry.animeId) return;
-  emit('openAnime', entry.animeId, entry.episodeInt);
+  libraryStore.openAnime(entry.animeId, entry.episodeInt);
 }
 
 let unsubShikiRatesRefreshed: Unsubscribe | null = null;
@@ -111,7 +109,7 @@ onUnmounted(() => {
       <div v-if="loading && entries.length === 0" class="status-text">Loading...</div>
       <div v-else-if="entries.length === 0" class="empty">
         <p>Nothing to resume yet.</p>
-        <button class="cta-btn" @click="emit('navigate', 'search')">Browse Search</button>
+        <button class="cta-btn" @click="libraryStore.navigate('search')">Browse Search</button>
       </div>
       <div v-else class="grid">
         <button

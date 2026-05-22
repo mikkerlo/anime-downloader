@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useLibraryStore } from './stores/library';
 import Sidebar from './components/Sidebar.vue';
 import SearchView from './components/SearchView.vue';
 import LibraryView from './components/LibraryView.vue';
@@ -14,28 +16,18 @@ import PlayerView from './components/PlayerView.vue';
 import CleanupModal from './components/CleanupModal.vue';
 import { formatBytes } from './utils';
 
-const currentView = ref('home');
+const libraryStore = useLibraryStore();
+const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
+
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
 const shortcuts = ref<Record<string, string>>({});
-const animeByView = ref<Record<string, number | null>>({
-  home: null,
-  search: null,
-  library: null,
-  shikimori: null,
-  friends: null,
-  calendar: null
-});
-const animeHistoryByView = ref<Record<string, number[]>>({
-  home: [],
-  search: [],
-  library: [],
-  shikimori: [],
-  friends: [],
-  calendar: []
-});
-const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({});
 
 const shikimoriLoggedIn = ref(false);
+
+// Reload shortcuts when leaving the settings view in case the user rebound any.
+watch(currentView, (next, prev) => {
+  if (prev === 'settings' && next !== 'settings') loadShortcuts();
+});
 
 // Player overlay state
 const playerState = ref<{
@@ -103,39 +95,8 @@ function closePlayer(): void {
 // Persist translation type and author selections per anime across re-mounts
 const animePrefs = ref<Record<number, { translationType?: string; author?: string }>>({});
 
-const activeAnimeId = computed(() => animeByView.value[currentView.value] ?? null);
-
-function openAnime(id: number, focusEpisodeInt?: string): void {
-  const view = currentView.value;
-  const current = animeByView.value[view];
-  if (current != null && current !== id) {
-    animeHistoryByView.value[view].push(current);
-  }
-  if (focusEpisodeInt) {
-    focusEpisodeIntForAnime.value[id] = focusEpisodeInt;
-  }
-  animeByView.value[view] = id;
-}
-
-function clearFocusEpisode(id: number): void {
-  if (focusEpisodeIntForAnime.value[id] !== undefined) {
-    delete focusEpisodeIntForAnime.value[id];
-  }
-}
-
-function closeAnime(): void {
-  const view = currentView.value;
-  const stack = animeHistoryByView.value[view];
-  animeByView.value[view] = stack.length > 0 ? stack.pop()! : null;
-}
-
 function saveAnimePrefs(animeId: number, translationType: string, author: string): void {
   animePrefs.value[animeId] = { translationType, author };
-}
-
-function navigate(view: string): void {
-  if (currentView.value === 'settings' && view !== 'settings') loadShortcuts();
-  currentView.value = view;
 }
 
 const isMac = navigator.platform.toUpperCase().includes('MAC');
@@ -165,15 +126,15 @@ function matchesBinding(e: KeyboardEvent, binding: string): boolean {
 function executeAction(action: string): void {
   switch (action) {
     case 'back':
-      if (activeAnimeId.value) closeAnime();
+      if (activeAnimeId.value) libraryStore.closeAnime();
       break;
     case 'focusSearch':
-      navigate('search');
-      animeByView.value.search = null;
+      libraryStore.navigate('search');
+      libraryStore.animeByView.search = null;
       nextTick(() => searchViewRef.value?.focusInput());
       break;
     case 'goDownloads':
-      navigate('downloads');
+      libraryStore.navigate('downloads');
       break;
   }
 }
@@ -305,40 +266,22 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app">
-    <Sidebar
-      :current-view="currentView"
-      :shikimori-logged-in="shikimoriLoggedIn"
-      @navigate="navigate"
-    />
+    <Sidebar :shikimori-logged-in="shikimoriLoggedIn" />
     <AnimeDetailView
       v-if="activeAnimeId"
       :key="activeAnimeId"
       :anime-id="activeAnimeId"
       :initial-prefs="animePrefs[activeAnimeId]"
-      :focus-episode-int="focusEpisodeIntForAnime[activeAnimeId]"
-      @back="closeAnime"
+      :focus-episode-int="activeFocusEpisodeInt"
       @prefs-changed="saveAnimePrefs"
       @play-file="openPlayer"
-      @open-anime="openAnime"
-      @focus-applied="clearFocusEpisode"
     />
-    <HomeView
-      v-show="currentView === 'home' && !activeAnimeId"
-      @open-anime="openAnime"
-      @navigate="navigate"
-    />
-    <SearchView
-      ref="searchViewRef"
-      v-show="currentView === 'search' && !activeAnimeId"
-      @open-anime="openAnime"
-    />
-    <LibraryView v-if="currentView === 'library' && !activeAnimeId" @open-anime="openAnime" />
-    <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" @open-anime="openAnime" />
-    <FriendsActivityView
-      v-show="currentView === 'friends' && !activeAnimeId"
-      @open-anime="openAnime"
-    />
-    <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" @open-anime="openAnime" />
+    <HomeView v-show="currentView === 'home' && !activeAnimeId" />
+    <SearchView ref="searchViewRef" v-show="currentView === 'search' && !activeAnimeId" />
+    <LibraryView v-if="currentView === 'library' && !activeAnimeId" />
+    <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" />
+    <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" />
+    <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView

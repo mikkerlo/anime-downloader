@@ -8,6 +8,7 @@ import {
   sanitizeFilename
 } from '../utils';
 import CleanupModal from './CleanupModal.vue';
+import { useLibraryStore } from '../stores/library';
 
 const props = defineProps<{
   animeId: number;
@@ -16,7 +17,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  back: [];
   prefsChanged: [animeId: number, translationType: string, author: string];
   playFile: [
     filePath: string,
@@ -38,9 +38,9 @@ const emit = defineEmits<{
     animeId: number,
     malId: number
   ];
-  openAnime: [animeId: number, focusEpisodeInt?: string];
-  focusApplied: [animeId: number];
 }>();
+
+const libraryStore = useLibraryStore();
 
 const anime = ref<AnimeDetail | null>(null);
 const episodes = ref<Map<number, EpisodeDetail>>(new Map());
@@ -403,7 +403,7 @@ function onEpisodeTranslationChange(
 function onMouseBack(e: MouseEvent): void {
   if (e.button === 3) {
     e.preventDefault();
-    emit('back');
+    libraryStore.closeAnime();
   }
 }
 
@@ -1230,7 +1230,7 @@ async function applyFocusEpisode(target: string): Promise<void> {
   const targetIdx = eps.findIndex((e) => e.episodeInt === target);
   if (targetIdx < 0) {
     focusApplied.value = true;
-    emit('focusApplied', props.animeId);
+    libraryStore.clearFocusEpisode(props.animeId);
     return;
   }
   const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0;
@@ -1243,7 +1243,7 @@ async function applyFocusEpisode(target: string): Promise<void> {
   ) as HTMLElement | null;
   if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   focusApplied.value = true;
-  emit('focusApplied', props.animeId);
+  libraryStore.clearFocusEpisode(props.animeId);
 }
 
 watch(
@@ -1597,7 +1597,7 @@ function typeChip(type: string): { short: string; color: string } {
 <template>
   <main class="detail-view">
     <header class="topbar">
-      <button class="back-btn" @click="emit('back')">
+      <button class="back-btn" @click="libraryStore.closeAnime()">
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -1876,13 +1876,19 @@ function typeChip(type: string): { short: string; color: string } {
               :role="entry.smotretAnime && !entry.isCurrent ? 'button' : undefined"
               :tabindex="entry.smotretAnime && !entry.isCurrent ? 0 : undefined"
               @click="
-                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+                entry.smotretAnime &&
+                !entry.isCurrent &&
+                libraryStore.openAnime(entry.smotretAnime.id)
               "
               @keydown.enter.prevent="
-                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+                entry.smotretAnime &&
+                !entry.isCurrent &&
+                libraryStore.openAnime(entry.smotretAnime.id)
               "
               @keydown.space.prevent="
-                entry.smotretAnime && !entry.isCurrent && emit('openAnime', entry.smotretAnime.id)
+                entry.smotretAnime &&
+                !entry.isCurrent &&
+                libraryStore.openAnime(entry.smotretAnime.id)
               "
             >
               <img

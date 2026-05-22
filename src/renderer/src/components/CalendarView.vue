@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useLibraryStore } from '../stores/library';
 
-const emit = defineEmits<{
-  openAnime: [id: number];
-}>();
+const libraryStore = useLibraryStore();
 
 const entries = ref<CalendarEntry[]>([]);
 const loading = ref(false);
@@ -173,7 +172,7 @@ async function load(force = false): Promise<void> {
 }
 
 function handleClick(entry: CalendarEntry): void {
-  if (entry.animeId !== null) emit('openAnime', entry.animeId);
+  if (entry.animeId !== null) libraryStore.openAnime(entry.animeId);
 }
 
 function onCalendarViewChanged(): void {

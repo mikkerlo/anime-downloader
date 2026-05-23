@@ -6,13 +6,18 @@ import { useLibraryStore } from '../stores/library';
 import { usePlayerStore } from '../stores/player';
 import { useShikimoriStore } from '../stores/shikimori';
 import { useDownloadsStore } from '../stores/downloads';
-import { storeToRefs } from 'pinia';
 import { useAnimeDetailPrefs } from '../composables/use-anime-detail-prefs';
 import { useChronology } from '../composables/use-chronology';
+import { provide } from 'vue';
 import { useEpisodeList, PAGE_SIZE } from '../composables/use-episode-list';
 import { useEpisodeDownloads } from '../composables/use-episode-downloads';
+import { useShikimori } from '../composables/use-shikimori';
+import { useSkipDetection } from '../composables/use-skip-detection';
 import ChronologyPanel from './detail/ChronologyPanel.vue';
 import FriendsPanel from './detail/FriendsPanel.vue';
+import ShikimoriPanel from './detail/ShikimoriPanel.vue';
+import SkipDetectionPanel from './detail/SkipDetectionPanel.vue';
+import { ShikimoriKey, SkipDetectionKey } from './detail/keys';
 
 const props = defineProps<{
   animeId: number;
@@ -24,7 +29,8 @@ const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const shikimoriStore = useShikimoriStore();
 const downloadsStore = useDownloadsStore();
-const { syncStatus, offlineQueueLength } = storeToRefs(shikimoriStore);
+// syncStatus + offlineQueueLength are consumed by ShikimoriPanel directly from
+// the store; the composable handles syncState/lastSyncError projections.
 
 const anime = ref<AnimeDetail | null>(null);
 const loading = ref(true);
@@ -97,76 +103,32 @@ const {
   resetEpisodeOverrides
 } = episodeList;
 
-// Shikimori state
-const shikiUser = ref<ShikiUser | null>(null);
-const shikiRate = ref<ShikiUserRate | null>(null);
-const shikiStatus = ref<ShikiUserRateStatus>('planned');
-const shikiEpisodes = ref(0);
-const shikiScore = ref(0);
-const shikiRewatches = ref(0);
-const shikiLoading = ref(false);
-const shikiSaving = ref(false);
-const shikiError = ref('');
-// syncState + lastSyncError are projections of `shikimoriStore.syncStatus`.
-const syncState = computed(() => syncStatus.value.state);
-const lastSyncError = computed(() => syncStatus.value.lastSyncError);
+const shikimori = useShikimori({ anime, shikimoriStore });
+provide(ShikimoriKey, shikimori);
+const {
+  shikiUser,
+  shikiRate,
+  shikiEpisodes,
+  shikiUserChecked,
+  shikiLoading,
+  friendsRates,
+  friendsLoading,
+  friendsCollapsed
+} = shikimori;
 
-// Friends state
-const friendsRates = ref<ShikiFriendRate[]>([]);
-const friendsLoading = ref(false);
-const friendsCollapsed = ref(false);
-const shikiUserChecked = ref(false);
-
-// Shikimori detailed info (description / genres) — cached in main process
-const shikiDetails = ref<ShikiAnimeDetails | null>(null);
-const descExpanded = ref(false);
-
-// Skip detection (Chromaprint local fingerprinting — debug panel only for now)
-const skipPanelCollapsed = ref(true);
-const skipDetections = ref<ShowSkipDetections | null>(null);
-const skipAnalyzing = ref(false);
-const skipProgress = ref<SkipDetectorProgress | null>(null);
-const skipError = ref<string>('');
-const chapterInjecting = ref(false);
-const chapterInjectProgress = ref<ChapterInjectProgress | null>(null);
-const chapterInjectError = ref<string>('');
-const chapterInjectResult = ref<{
-  written: number;
-  skipped: number;
-  failed: number;
-  total: number;
-} | null>(null);
-
-const shikiDetailsDescription = computed<string>(() => {
-  if (!shikiDetails.value) return '';
-  const src = shikiDetails.value.description;
-  if (src) {
-    return src
-      .replace(/\[\/?[a-zA-Z][^\]]*\]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-  const html = shikiDetails.value.description_html;
-  if (!html) return '';
-  let stripped = html.replace(/<br\s*\/?>/gi, ' ');
-  let prev: string;
-  do {
-    prev = stripped;
-    stripped = stripped.replace(/<[^>]*>/g, '');
-  } while (stripped !== prev);
-  const entities: Record<string, string> = {
-    '&amp;': '&',
-    '&nbsp;': ' ',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'"
-  };
-  return stripped
-    .replace(/&(?:amp|nbsp|lt|gt|quot|#39);/gi, (m) => entities[m.toLowerCase()] ?? m)
-    .replace(/\s+/g, ' ')
-    .trim();
+const skipDetection = useSkipDetection({
+  getAnimeId: () => props.animeId,
+  filteredEpisodes,
+  fileStatus
 });
+provide(SkipDetectionKey, skipDetection);
+const {
+  subscribeSkipDetectorProgress,
+  subscribeSkipDetectorSignatureUpdated,
+  subscribeChapterInjectProgress,
+  loadSkipDetections,
+  hydrateSkipStatus
+} = skipDetection;
 
 const playerMode = ref<'system' | 'builtin'>('system');
 
@@ -237,215 +199,6 @@ function onMouseBack(e: MouseEvent): void {
   if (e.button === 3) {
     e.preventDefault();
     libraryStore.closeAnime();
-  }
-}
-
-async function loadShikimoriData(): Promise<void> {
-  try {
-    shikiUser.value = await window.api.shikimoriGetUser();
-  } catch (err) {
-    console.error('Failed to load Shikimori user:', err);
-  } finally {
-    shikiUserChecked.value = true;
-  }
-  if (!anime.value?.myAnimeListId) return;
-
-  const relatedPromise = chronology.loadRelated(anime.value.myAnimeListId);
-
-  if (!shikiUser.value) {
-    await relatedPromise;
-    return;
-  }
-
-  shikiLoading.value = true;
-  friendsLoading.value = true;
-
-  // Load rate and friends in parallel, neither blocks the other
-  const ratePromise = window.api
-    .shikimoriGetRate(anime.value.myAnimeListId)
-    .then((rate) => {
-      shikiRate.value = rate;
-      if (rate) {
-        shikiStatus.value = rate.status;
-        shikiEpisodes.value = rate.episodes;
-        shikiScore.value = rate.score;
-        shikiRewatches.value = rate.rewatches ?? 0;
-      }
-    })
-    .catch((err) => console.error('Failed to load Shikimori rate:', err))
-    .finally(() => {
-      shikiLoading.value = false;
-    });
-
-  const friendsPromise = window.api
-    .shikimoriGetFriendsRates(anime.value.myAnimeListId)
-    .then((rates) => {
-      friendsRates.value = rates;
-    })
-    .catch((err) => console.error('Failed to load friends rates:', err))
-    .finally(() => {
-      friendsLoading.value = false;
-    });
-
-  const detailsPromise = window.api
-    .shikimoriGetAnimeDetails(anime.value.myAnimeListId)
-    .then((details) => {
-      shikiDetails.value = details;
-    })
-    .catch((err) => console.error('Failed to load Shikimori details:', err));
-
-  await Promise.all([ratePromise, friendsPromise, detailsPromise, relatedPromise]);
-}
-
-// --- Skip Detection (debug) -------------------------------------------------
-
-interface SkipEpisodeInput {
-  episodeInt: string;
-  episodeLabel: string;
-  filePath: string;
-}
-
-const skipEpisodeInputs = computed<SkipEpisodeInput[]>(() => {
-  const inputs: SkipEpisodeInput[] = [];
-  const seen = new Set<string>();
-  // Walk filteredEpisodes to keep an ordered, label-aware list. fileStatus is keyed by episodeInt.
-  for (const ep of filteredEpisodes.value) {
-    const files = fileStatus.value[ep.episodeInt];
-    if (!files || files.length === 0) continue;
-    // Prefer .mkv (merged) over .mp4 (raw); first match wins.
-    const mkv = files.find((f) => f.type === 'mkv');
-    const pick = mkv || files[0];
-    if (!pick || !pick.filePath) continue;
-    if (seen.has(ep.episodeInt)) continue;
-    seen.add(ep.episodeInt);
-    inputs.push({
-      episodeInt: ep.episodeInt,
-      episodeLabel: ep.episodeFull || `Episode ${ep.episodeInt}`,
-      filePath: pick.filePath
-    });
-  }
-  return inputs;
-});
-
-function formatSkipTime(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) return '—';
-  const total = Math.round(sec);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-const skipProgressLabel = computed<string>(() => {
-  const p = skipProgress.value;
-  if (!p) return '';
-  if (p.phase === 'fingerprinting') {
-    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : '';
-    return `Fingerprinting ${p.current}/${p.total}${label}`;
-  }
-  if (p.phase === 'comparing') {
-    return `Comparing pairs ${p.current}/${p.total}`;
-  }
-  return 'Done';
-});
-
-async function loadSkipDetections(): Promise<void> {
-  try {
-    const res = await window.api.skipDetectorGetDetections(props.animeId);
-    skipDetections.value = res;
-  } catch (err) {
-    console.error('Failed to load skip detections:', err);
-  }
-}
-
-// Recover the analyzing state if the user navigated away mid-analysis and
-// came back. Without this, the panel would show idle even though main is
-// still chewing on fingerprints — and a fresh "Analyze" click for this
-// same animeId would dedupe onto the in-flight promise (good), while a
-// click on a different anime's panel would now reject (also good).
-async function hydrateSkipStatus(): Promise<void> {
-  try {
-    const status = await window.api.skipDetectorGetStatus();
-    if (status && status.animeId === props.animeId) {
-      skipAnalyzing.value = true;
-      skipProgress.value = status.lastProgress;
-    }
-  } catch (err) {
-    console.error('Failed to hydrate skip status:', err);
-  }
-}
-
-async function runSkipAnalysis(): Promise<void> {
-  if (skipAnalyzing.value) return;
-  const inputs = skipEpisodeInputs.value;
-  if (inputs.length < 2) {
-    skipError.value = 'Need at least 2 downloaded episodes';
-    return;
-  }
-  skipError.value = '';
-  skipAnalyzing.value = true;
-  skipProgress.value = {
-    animeId: props.animeId,
-    phase: 'fingerprinting',
-    current: 0,
-    total: inputs.length
-  };
-  try {
-    const result = await window.api.skipDetectorAnalyzeShow(props.animeId, inputs);
-    skipDetections.value = result;
-  } catch (err) {
-    skipError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    skipAnalyzing.value = false;
-    skipProgress.value = null;
-  }
-}
-
-async function cancelSkipAnalysis(): Promise<void> {
-  try {
-    await window.api.skipDetectorCancel();
-  } catch (err) {
-    console.error('Failed to cancel skip analysis:', err);
-  }
-}
-
-const skipMkvEpisodeCount = computed<number>(
-  () => skipEpisodeInputs.value.filter((e) => e.filePath.toLowerCase().endsWith('.mkv')).length
-);
-
-const chapterInjectProgressLabel = computed<string>(() => {
-  const p = chapterInjectProgress.value;
-  if (!p) return '';
-  if (p.phase === 'analyzing') return 'Analyzing fingerprints…';
-  if (p.phase === 'writing') {
-    const label = p.episodeLabel ? ` — ${p.episodeLabel}` : '';
-    return `Writing chapters ${p.current + 1}/${p.total}${label}`;
-  }
-  return 'Done';
-});
-
-async function injectChaptersToMkv(): Promise<void> {
-  if (chapterInjecting.value) return;
-  if (skipMkvEpisodeCount.value < 3) {
-    chapterInjectError.value = 'Need at least 3 downloaded MKV episodes';
-    return;
-  }
-  chapterInjectError.value = '';
-  chapterInjectResult.value = null;
-  chapterInjecting.value = true;
-  chapterInjectProgress.value = {
-    animeId: props.animeId,
-    phase: 'writing',
-    current: 0,
-    total: skipMkvEpisodeCount.value
-  };
-  try {
-    const res = await window.api.injectChapters(props.animeId, skipEpisodeInputs.value);
-    chapterInjectResult.value = res;
-  } catch (err) {
-    chapterInjectError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    chapterInjecting.value = false;
-    chapterInjectProgress.value = null;
   }
 }
 
@@ -521,7 +274,7 @@ onMounted(async () => {
   unsubFileEpisodesChanged = subscribeFileEpisodesChanged();
 
   // Load Shikimori data (non-blocking — don't hold up the episode list)
-  loadShikimoriData();
+  void shikimori.loadShikimoriData(chronology.loadRelated);
 
   // Load watch progress for episode indicators
   loadWatchProgress();
@@ -534,56 +287,12 @@ onMounted(async () => {
 
   // Skip-detector + chapter-inject progress are anime-specific, so they stay
   // as component-local subscriptions (filtered by props.animeId).
-  unsubSkipDetectorProgress = window.api.onSkipDetectorProgress((data) => {
-    if (data.animeId !== props.animeId) return;
-    skipProgress.value = data;
-    skipAnalyzing.value = data.phase !== 'done';
-  });
-  unsubSkipDetectorSignatureUpdated = window.api.onSkipDetectorSignatureUpdated((data) => {
-    if (data.animeId !== props.animeId) return;
-    loadSkipDetections();
-  });
-  unsubChapterInjectProgress = window.api.onChapterInjectProgress((data) => {
-    if (data.animeId !== props.animeId) return;
-    chapterInjectProgress.value = data;
-    chapterInjecting.value = data.phase !== 'done';
-  });
-  loadSkipDetections();
-  hydrateSkipStatus();
+  unsubSkipDetectorProgress = subscribeSkipDetectorProgress();
+  unsubSkipDetectorSignatureUpdated = subscribeSkipDetectorSignatureUpdated();
+  unsubChapterInjectProgress = subscribeChapterInjectProgress();
+  void loadSkipDetections();
+  void hydrateSkipStatus();
 });
-
-// Sync the editable shiki* refs whenever the store's rate cache for this
-// anime's malId changes (broadcast-driven by the store).
-watch(
-  () => (anime.value?.myAnimeListId ? shikimoriStore.rateByMalId(anime.value.myAnimeListId) : null),
-  (entry) => {
-    if (!entry) return;
-    shikiRate.value = {
-      id: entry.rate.id,
-      score: entry.rate.score,
-      status: entry.rate.status,
-      episodes: entry.rate.episodes,
-      rewatches: entry.rate.rewatches ?? 0,
-      target_id: entry.rate.target_id,
-      target_type: 'Anime'
-    };
-    shikiStatus.value = entry.rate.status;
-    shikiEpisodes.value = entry.rate.episodes;
-    shikiScore.value = entry.rate.score;
-    shikiRewatches.value = entry.rate.rewatches ?? 0;
-  }
-);
-
-// Sync shikiDetails from the store's per-malId cache.
-watch(
-  () =>
-    anime.value?.myAnimeListId
-      ? shikimoriStore.animeDetailsByMalId(anime.value.myAnimeListId)
-      : null,
-  (details) => {
-    if (details) shikiDetails.value = details;
-  }
-);
 
 // Mirror store-owned download progress into the local episode-row projection.
 watch(
@@ -602,52 +311,6 @@ onUnmounted(() => {
   unsubSkipDetectorSignatureUpdated?.();
   unsubChapterInjectProgress?.();
 });
-
-async function triggerSyncNow(): Promise<void> {
-  await shikimoriStore.triggerSync();
-}
-
-const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
-  { value: 'planned', label: 'Planned' },
-  { value: 'watching', label: 'Watching' },
-  { value: 'rewatching', label: 'Rewatching' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'on_hold', label: 'On Hold' },
-  { value: 'dropped', label: 'Dropped' }
-];
-
-watch(shikiEpisodes, (eps) => {
-  if (anime.value?.numberOfEpisodes && eps >= anime.value.numberOfEpisodes) {
-    shikiStatus.value = 'completed';
-  } else if (eps > 0) {
-    if (shikiStatus.value === 'completed') {
-      shikiStatus.value = 'rewatching';
-    } else if (shikiStatus.value === 'planned') {
-      shikiStatus.value = 'watching';
-    }
-  }
-});
-
-async function shikiSave(): Promise<void> {
-  if (!anime.value?.myAnimeListId) return;
-  shikiSaving.value = true;
-  shikiError.value = '';
-  try {
-    const rate = await window.api.shikimoriUpdateRate(
-      anime.value.myAnimeListId,
-      shikiEpisodes.value,
-      shikiStatus.value,
-      shikiScore.value,
-      shikiRewatches.value
-    );
-    shikiRate.value = rate;
-    shikiRewatches.value = rate.rewatches ?? shikiRewatches.value;
-  } catch (err) {
-    shikiError.value = String(err);
-  } finally {
-    shikiSaving.value = false;
-  }
-}
 
 // Wraps the prefs composable's helper so call sites stay terse.
 function applyDownloadedTranslationDefault(): void {
@@ -674,7 +337,7 @@ async function toggleStar(): Promise<void> {
 }
 
 const isShowFinished = computed<boolean>(() => {
-  const status = shikiDetails.value?.status;
+  const status = shikimori.shikiDetails.value?.status;
   return status === 'released';
 });
 
@@ -899,130 +562,10 @@ function typeChip(type: string): { short: string; color: string } {
         </div>
       </div>
 
-      <div v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)" class="shiki-panel">
-        <template v-if="shikiUser">
-          <div class="shiki-header">
-            <span class="shiki-label">Shikimori</span>
-            <a
-              :href="`https://shikimori.one/animes/${anime.myAnimeListId}`"
-              target="_blank"
-              class="shiki-link"
-            >
-              Open on Shikimori
-            </a>
-          </div>
-          <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
-          <div v-else class="shiki-controls">
-            <select v-model="shikiStatus" class="select shiki-select">
-              <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">
-                {{ s.label }}
-              </option>
-            </select>
-            <div class="shiki-episodes">
-              <span>Episodes:</span>
-              <input
-                v-model.number="shikiEpisodes"
-                type="number"
-                min="0"
-                :max="anime.numberOfEpisodes || undefined"
-                class="shiki-ep-input"
-              />
-              <span v-if="anime.numberOfEpisodes" class="shiki-ep-total"
-                >/ {{ anime.numberOfEpisodes }}</span
-              >
-            </div>
-            <div class="shiki-episodes">
-              <span>Score:</span>
-              <select v-model.number="shikiScore" class="select shiki-score-select">
-                <option :value="0">—</option>
-                <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
-              </select>
-            </div>
-            <div class="shiki-episodes" title="Number of times you've rewatched this anime">
-              <span>Rewatches:</span>
-              <input v-model.number="shikiRewatches" type="number" min="0" class="shiki-ep-input" />
-            </div>
-            <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
-              {{ shikiSaving ? 'Saving...' : 'Save' }}
-            </button>
-          </div>
-          <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
-          <div
-            v-if="offlineQueueLength > 0"
-            class="shiki-offline"
-            :class="{ 'shiki-syncing': syncState === 'syncing' }"
-            :title="lastSyncError || ''"
-          >
-            <svg
-              v-if="syncState === 'syncing'"
-              class="shiki-offline-spin"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              width="14"
-              height="14"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-6.219-8.56" />
-            </svg>
-            <svg
-              v-else
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              width="14"
-              height="14"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M3 3l18 18M12 5a7 7 0 016.95 6.155A4 4 0 0118 19H9m-3-2a4 4 0 01-1.9-7.516"
-              />
-            </svg>
-            <span v-if="syncState === 'syncing'">
-              Syncing {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }}…
-            </span>
-            <span v-else>
-              Working offline — {{ offlineQueueLength }} change{{
-                offlineQueueLength > 1 ? 's' : ''
-              }}
-              queued
-            </span>
-            <button
-              v-if="syncState === 'idle'"
-              type="button"
-              class="shiki-offline-retry"
-              @click="triggerSyncNow"
-            >
-              Retry now
-            </button>
-          </div>
-          <div v-if="shikiDetails" class="shiki-details">
-            <div v-if="shikiDetails.genres?.length" class="shiki-genres">
-              <span v-for="g in shikiDetails.genres" :key="g.id" class="shiki-genre-tag">
-                {{ g.russian || g.name }}
-              </span>
-            </div>
-            <p
-              v-if="shikiDetailsDescription"
-              class="shiki-description"
-              :class="{ collapsed: !descExpanded }"
-            >
-              {{ shikiDetailsDescription }}
-            </p>
-            <button
-              v-if="shikiDetailsDescription && shikiDetailsDescription.length > 320"
-              type="button"
-              class="shiki-desc-toggle"
-              @click="descExpanded = !descExpanded"
-            >
-              {{ descExpanded ? 'Show less' : 'Show more' }}
-            </button>
-          </div>
-        </template>
-        <div v-else class="shiki-loading">Loading...</div>
-      </div>
+      <ShikimoriPanel
+        v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+        :anime="anime"
+      />
 
       <ChronologyPanel
         v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
@@ -1031,130 +574,7 @@ function typeChip(type: string): { short: string; color: string } {
         :related-loading="relatedLoading"
       />
 
-      <div class="skip-panel">
-        <div class="skip-header" @click="skipPanelCollapsed = !skipPanelCollapsed">
-          <div class="skip-header-left">
-            <svg
-              class="skip-chevron"
-              :class="{ collapsed: skipPanelCollapsed }"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              width="14"
-              height="14"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-            </svg>
-            <span class="skip-label">Skip Detection (experimental)</span>
-          </div>
-          <span v-if="skipAnalyzing" class="skip-summary">{{ skipProgressLabel }}</span>
-          <span v-else-if="skipDetections" class="skip-summary">
-            {{ Object.keys(skipDetections.perEpisode).length }} episodes analyzed
-          </span>
-          <span v-else class="skip-summary">{{ skipEpisodeInputs.length }} downloaded</span>
-        </div>
-        <div v-if="!skipPanelCollapsed" class="skip-body">
-          <div v-if="skipEpisodeInputs.length < 2" class="skip-disabled">
-            Need at least 2 downloaded episodes to analyze. Currently downloaded:
-            {{ skipEpisodeInputs.length }}.
-          </div>
-          <template v-else>
-            <div class="skip-actions">
-              <button v-if="!skipAnalyzing" class="skip-button" @click="runSkipAnalysis">
-                {{ skipDetections ? 'Re-analyze' : `Analyze ${skipEpisodeInputs.length} episodes` }}
-              </button>
-              <button v-else class="skip-button skip-button-cancel" @click="cancelSkipAnalysis">
-                Cancel
-              </button>
-              <span v-if="skipAnalyzing" class="skip-progress-text">{{ skipProgressLabel }}</span>
-              <button
-                v-if="skipMkvEpisodeCount >= 3"
-                class="skip-button"
-                :disabled="chapterInjecting || skipAnalyzing"
-                @click="injectChaptersToMkv"
-              >
-                {{ chapterInjecting ? 'Saving chapters…' : 'Save chapters to MKV' }}
-              </button>
-              <span v-if="chapterInjecting" class="skip-progress-text">{{
-                chapterInjectProgressLabel
-              }}</span>
-            </div>
-            <div v-if="skipError" class="skip-error">{{ skipError }}</div>
-            <div v-if="chapterInjectError" class="skip-error">{{ chapterInjectError }}</div>
-            <div v-if="chapterInjectResult" class="skip-results-meta">
-              Wrote chapters to {{ chapterInjectResult.written }}/{{ chapterInjectResult.total }}
-              episodes
-              <template v-if="chapterInjectResult.skipped">
-                · {{ chapterInjectResult.skipped }} skipped (no detection)
-              </template>
-              <template v-if="chapterInjectResult.failed">
-                · {{ chapterInjectResult.failed }} failed
-              </template>
-            </div>
-            <div v-if="skipDetections" class="skip-results">
-              <div class="skip-results-meta">
-                Analyzed {{ new Date(skipDetections.analyzedAt).toLocaleString() }} · window
-                {{ skipDetections.algorithm.windowSec }}s · min run
-                {{ skipDetections.algorithm.minRunSec }}s · threshold
-                {{ skipDetections.algorithm.matchBitThreshold }}/32 bits
-              </div>
-              <table class="skip-table">
-                <thead>
-                  <tr>
-                    <th>Episode</th>
-                    <th>OP</th>
-                    <th>ED</th>
-                    <th>Duration</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="ep in filteredEpisodes" :key="ep.episodeInt">
-                    <template v-if="skipDetections.perEpisode[ep.episodeInt]">
-                      <td>{{ ep.episodeFull || `Episode ${ep.episodeInt}` }}</td>
-                      <td>
-                        <template v-if="skipDetections.perEpisode[ep.episodeInt].op">
-                          {{
-                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.startSec)
-                          }}–{{
-                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].op!.endSec)
-                          }}
-                          <span class="skip-pair-count"
-                            >({{
-                              skipDetections.perEpisode[ep.episodeInt].op!.pairCount
-                            }}
-                            pairs)</span
-                          >
-                        </template>
-                        <span v-else class="skip-empty">—</span>
-                      </td>
-                      <td>
-                        <template v-if="skipDetections.perEpisode[ep.episodeInt].ed">
-                          {{
-                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.startSec)
-                          }}–{{
-                            formatSkipTime(skipDetections.perEpisode[ep.episodeInt].ed!.endSec)
-                          }}
-                          <span class="skip-pair-count"
-                            >({{
-                              skipDetections.perEpisode[ep.episodeInt].ed!.pairCount
-                            }}
-                            pairs)</span
-                          >
-                        </template>
-                        <span v-else class="skip-empty">—</span>
-                      </td>
-                      <td>
-                        {{ formatSkipTime(skipDetections.perEpisode[ep.episodeInt].durationSec) }}
-                      </td>
-                    </template>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-        </div>
-      </div>
+      <SkipDetectionPanel :filtered-episodes="filteredEpisodes" />
 
       <FriendsPanel
         v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
@@ -2101,341 +1521,5 @@ function typeChip(type: string): { short: string; color: string } {
   color: #4a4a6a;
   font-size: 1.1rem;
   padding-top: 100px;
-}
-
-.shiki-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
-}
-
-.shiki-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.shiki-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
-}
-
-.shiki-link {
-  font-size: 0.8rem;
-  color: #3498db;
-  text-decoration: none;
-}
-
-.shiki-link:hover {
-  text-decoration: underline;
-}
-
-.shiki-loading {
-  font-size: 0.85rem;
-  color: #6a6a8a;
-}
-
-.shiki-controls {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.shiki-select {
-  min-width: 130px;
-}
-
-.shiki-episodes {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  color: #a0a0b8;
-}
-
-.shiki-ep-input {
-  width: 60px;
-  padding: 6px 8px;
-  background-color: #1a1a2e;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #e0e0e0;
-  font-size: 0.85rem;
-  text-align: center;
-}
-
-.shiki-ep-input:focus {
-  outline: none;
-  border-color: #e94560;
-}
-
-.shiki-ep-total {
-  color: #6a6a8a;
-}
-
-.shiki-score-select {
-  width: 60px;
-}
-
-.shiki-save-btn {
-  padding: 6px 16px;
-  background-color: #0f3460;
-  border: none;
-  border-radius: 6px;
-  color: #e0e0e0;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.shiki-save-btn:hover {
-  background-color: #1a4a7a;
-}
-
-.shiki-save-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.shiki-error {
-  margin-top: 8px;
-  font-size: 0.8rem;
-  color: #e94560;
-}
-
-.shiki-offline {
-  margin-top: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 0.78rem;
-  color: #f0a75f;
-  background: rgba(240, 167, 95, 0.12);
-  border: 1px solid rgba(240, 167, 95, 0.3);
-  border-radius: 4px;
-}
-
-.shiki-offline.shiki-syncing {
-  color: #5e9cd8;
-  background: rgba(94, 156, 216, 0.12);
-  border-color: rgba(94, 156, 216, 0.3);
-}
-
-.shiki-offline-spin {
-  animation: shiki-offline-rotate 0.9s linear infinite;
-}
-
-@keyframes shiki-offline-rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.shiki-offline-retry {
-  margin-left: 4px;
-  padding: 2px 8px;
-  font-size: 0.72rem;
-  color: #f0a75f;
-  background: transparent;
-  border: 1px solid rgba(240, 167, 95, 0.5);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.shiki-offline-retry:hover {
-  background: rgba(240, 167, 95, 0.15);
-}
-
-.shiki-details {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(15, 52, 96, 0.6);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.shiki-genres {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.shiki-genre-tag {
-  font-size: 0.72rem;
-  color: #cdd6e4;
-  background: rgba(15, 52, 96, 0.5);
-  border: 1px solid rgba(94, 156, 216, 0.25);
-  border-radius: 10px;
-  padding: 2px 8px;
-}
-
-.shiki-description {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #b8c2d4;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.shiki-description.collapsed {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.shiki-desc-toggle {
-  align-self: flex-start;
-  font-size: 0.75rem;
-  color: #5e9cd8;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-.shiki-desc-toggle:hover {
-  text-decoration: underline;
-}
-
-.skip-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
-}
-
-.skip-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  user-select: none;
-}
-
-.skip-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.skip-chevron {
-  color: #a0a0b8;
-  transition: transform 0.15s;
-}
-
-.skip-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.skip-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
-}
-
-.skip-summary {
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.skip-body {
-  margin-top: 10px;
-}
-
-.skip-disabled {
-  font-size: 0.85rem;
-  color: #6a6a8a;
-  font-style: italic;
-}
-
-.skip-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.skip-button {
-  background-color: #0f3460;
-  color: #e0e0e0;
-  border: 1px solid #1f4980;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.1s;
-}
-
-.skip-button:hover {
-  background-color: #1a4880;
-}
-
-.skip-button-cancel {
-  background-color: #5a2222;
-  border-color: #803030;
-}
-
-.skip-button-cancel:hover {
-  background-color: #803030;
-}
-
-.skip-progress-text {
-  font-size: 0.8rem;
-  color: #a0a0b8;
-}
-
-.skip-error {
-  font-size: 0.8rem;
-  color: #ff6a6a;
-  margin-bottom: 10px;
-}
-
-.skip-results-meta {
-  font-size: 0.75rem;
-  color: #6a6a8a;
-  margin-bottom: 8px;
-}
-
-.skip-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.82rem;
-}
-
-.skip-table th {
-  text-align: left;
-  padding: 4px 8px;
-  color: #a0a0b8;
-  font-weight: 600;
-  border-bottom: 1px solid #0f3460;
-}
-
-.skip-table td {
-  padding: 4px 8px;
-  color: #d0d0e0;
-  border-bottom: 1px solid #1a2a4d;
-}
-
-.skip-table tr:last-child td {
-  border-bottom: none;
-}
-
-.skip-pair-count {
-  color: #6a6a8a;
-  font-size: 0.7rem;
-  margin-left: 4px;
-}
-
-.skip-empty {
-  color: #4a4a6a;
 }
 </style>

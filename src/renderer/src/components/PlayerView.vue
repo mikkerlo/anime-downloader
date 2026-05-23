@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import SubtitlesOctopus from 'libass-wasm/dist/js/subtitles-octopus.js';
 import { formatSpeed } from '../utils';
 import { useMsePlayer } from '../composables/use-mse-player';
 import { useAnime4K } from '../composables/use-anime4k';
 import { usePlayerKeyboard, type PlayerAction } from '../composables/use-player-keyboard';
+import { useSubtitles } from '../composables/use-subtitles';
+import { useRemux } from '../composables/use-remux';
 
 const props = defineProps<{
   filePath: string;
@@ -68,8 +69,8 @@ const activeFilePath = ref(props.filePath);
 const isMkv = computed(
   () => !!activeFilePath.value && activeFilePath.value.toLowerCase().endsWith('.mkv')
 );
-const remuxing = ref(false);
-const remuxedPath = ref(''); // used by legacy full-remux fallback
+// Legacy MKV full-remux fallback (only used when MSE rejects the codecs).
+const { remuxing, remuxedPath, runLegacyRemux: runLegacyRemuxIpc, clear: clearRemux } = useRemux();
 const hevcPromptOpen = ref(false); // consent modal when MSE rejects HEVC and setting is 'ask'
 type HevcPromptChoice = 'transcode' | 'always-transcode' | 'external' | 'cancel';
 let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null;
@@ -119,10 +120,19 @@ watch(
   { immediate: true }
 );
 
+// ASS subtitle rendering — useSubtitles owns the SubtitlesOctopus instance,
+// the fullscreen redraw workaround, and the stream-subtitle IPC sub. Seed
+// the ref from props for the initial mount.
+const subs = useSubtitles({
+  getVideoEl: () => videoRef.value,
+  getStreamSessionId: () => streamSessionId.value
+});
+const { activeSubtitleContent, initSubtitles, destroySubtitles } = subs;
+activeSubtitleContent.value = props.subtitleContent;
+
 // Translation selector state
 const showTranslationMenu = ref(false);
 const activeTranslationId = ref(props.translationId);
-const activeSubtitleContent = ref(props.subtitleContent);
 const switchingTranslation = ref(false);
 const hasTranslations = computed(() => activeTranslations.value.length > 1);
 const translationMenuLevel = ref<'types' | 'items'>('types');
@@ -958,9 +968,6 @@ function maybeMarkPendingPrevWatched(): void {
   markEpisodeWatched(prev);
 }
 
-// ASS subtitle state (SubtitlesOctopus renderer)
-let octopusInstance: InstanceType<typeof SubtitlesOctopus> | null = null;
-
 const videoSrc = computed(() => {
   if (activeFilePath.value) {
     // For MKV files, prefer the MSE stream URL; fall back to legacy full remux.
@@ -978,7 +985,7 @@ async function prepareMkvForPlayback(
   filePath: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   msePlayer.resetMseState();
-  remuxedPath.value = '';
+  clearRemux();
   remuxError.value = '';
 
   let initialSeek = 0;
@@ -1062,18 +1069,12 @@ async function prepareMkvForPlayback(
     );
   }
 
-  remuxing.value = true;
-  try {
-    const legacy = await window.api.playerRemuxMkv(filePath);
-    if ('error' in legacy) return { ok: false, error: legacy.error };
-    remuxedPath.value = legacy.mp4Path;
-    if (!activeSubtitleContent.value && legacy.subtitleContent) {
-      activeSubtitleContent.value = legacy.subtitleContent;
-    }
-    return { ok: true };
-  } finally {
-    remuxing.value = false;
+  const legacy = await runLegacyRemuxIpc(filePath);
+  if (!legacy.ok) return legacy;
+  if (!activeSubtitleContent.value && legacy.subtitleContent) {
+    activeSubtitleContent.value = legacy.subtitleContent;
   }
+  return { ok: true };
 }
 
 function askHevcChoice(): Promise<HevcPromptChoice> {
@@ -1205,20 +1206,7 @@ function toggleFullscreen(): void {
 
 function onFullscreenChange(): void {
   isFullscreen.value = !!document.fullscreenElement;
-  // libass's internal fullscreenchange listener resizes the canvas but does
-  // not force a redraw, so a paused frame loses its subtitles. setTrack makes
-  // the worker rebuild the track and emit a fresh bitmap at the new canvas
-  // size. Delay past the library's own 100ms resize so we hit final geometry.
-  setTimeout(() => {
-    const content = activeSubtitleContent.value;
-    if (octopusInstance && content) {
-      try {
-        octopusInstance.setTrack(content);
-      } catch {
-        /* ignore */
-      }
-    }
-  }, 200);
+  subs.redrawAfterFullscreen();
 }
 
 // Controls visibility
@@ -1603,7 +1591,7 @@ async function selectTranslation(tr: {
         // Clean up previous remux / stream session if any
         if (remuxedPath.value || streamSessionId.value) {
           await window.api.playerCleanupRemux();
-          remuxedPath.value = '';
+          clearRemux();
           msePlayer.resetMseState();
         }
 
@@ -1651,7 +1639,7 @@ async function selectTranslation(tr: {
     // Clean up previous remux / MSE stream if switching from local to stream
     if (remuxedPath.value || streamSessionId.value) {
       await window.api.playerCleanupRemux();
-      remuxedPath.value = '';
+      clearRemux();
       msePlayer.resetMseState();
     }
 
@@ -1754,7 +1742,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     // Clean up previous remux / MSE stream
     if (remuxedPath.value || streamSessionId.value) {
       await window.api.playerCleanupRemux();
-      remuxedPath.value = '';
+      clearRemux();
       msePlayer.resetMseState();
     }
 
@@ -1783,7 +1771,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           if (remuxedPath.value || streamSessionId.value) {
             await window.api.playerCleanupRemux();
-            remuxedPath.value = '';
+            clearRemux();
             msePlayer.resetMseState();
           }
           const prep = await prepareMkvForPlayback(localResult.filePath);
@@ -1864,39 +1852,6 @@ function onVideoEnded(): void {
   }, 1000);
 }
 
-function initSubtitles(video: HTMLVideoElement): void {
-  const content = activeSubtitleContent.value;
-  if (!content) return;
-  destroySubtitles();
-
-  try {
-    const libassBase = new URL('./libass/', document.baseURI).href;
-    octopusInstance = new SubtitlesOctopus({
-      video,
-      subContent: content,
-      workerUrl: libassBase + 'subtitles-octopus-worker.js',
-      legacyWorkerUrl: libassBase + 'subtitles-octopus-worker-legacy.js',
-      fallbackFont: libassBase + 'default.woff2',
-      lossyRender: true,
-      prescaleFactor: 0.8,
-      maxRenderHeight: 0
-    });
-  } catch (e) {
-    console.error('Failed to initialize subtitle renderer:', e);
-  }
-}
-
-function destroySubtitles(): void {
-  if (octopusInstance) {
-    try {
-      octopusInstance.dispose();
-    } catch {
-      /* ignore cleanup errors */
-    }
-    octopusInstance = null;
-  }
-}
-
 function onPrefetchSettingChanged(ev: Event): void {
   const value = (ev as CustomEvent).detail as PrefetchSetting | undefined;
   if (value === 'off' || value === 'open' || value === 'time-5min' || value === 'progress-50') {
@@ -1935,17 +1890,9 @@ onMounted(async () => {
     loadSkipDetections();
   });
 
-  // Subtitles extracted from MKV streams arrive asynchronously via IPC.
-  unsubPlayerStreamSubtitles = window.api.onPlayerStreamSubtitles(({ sessionId, content }) => {
-    if (sessionId !== streamSessionId.value) return;
-    if (activeSubtitleContent.value) return;
-    activeSubtitleContent.value = content;
-    const v = videoRef.value;
-    if (v) {
-      destroySubtitles();
-      initSubtitles(v);
-    }
-  });
+  // Subtitles extracted from MKV streams arrive asynchronously via IPC —
+  // useSubtitles owns the filter + apply logic.
+  unsubPlayerStreamSubtitles = subs.subscribeStreamSubtitles();
 
   // MSE fragmented MP4 chunks / end / error / progress events — routed
   // into the composable's headless state machine.

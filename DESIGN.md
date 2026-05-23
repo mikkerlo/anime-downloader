@@ -392,15 +392,39 @@ The CI step `npm run check:subscription-contract` greps `src/preload/` and
 `src/renderer/` for `removeAllListeners(` or `window.api.off*(` calls and fails
 the build if any survive (Phase 4 slice 4e).
 
-**Composables (Phase 4 slice 4e):**
+**Composables (Phase 4 slice 4e + Phase 5 slice 5b.1):**
 
 Global app glue that doesn't belong on a Pinia store goes into
-`src/renderer/src/composables/`. The first inhabitant is
-`useKeyboardShortcuts({ bindings, suppressWhen, onAction })`, which binds a
-window-level keydown listener against the settings store's resolved bindings
-and dispatches the small set of app-wide actions (`back` / `focusSearch` /
-`goDownloads`). App.vue invokes it once at setup; the composable owns the
-event-listener lifecycle.
+`src/renderer/src/composables/`.
+
+- `useKeyboardShortcuts({ bindings, suppressWhen, onAction })` — binds a
+  window-level keydown listener against the settings store's resolved bindings
+  and dispatches the small set of app-wide actions (`back` / `focusSearch` /
+  `goDownloads`). App.vue invokes it once at setup; the composable owns the
+  event-listener lifecycle. (Phase 4 slice 4e)
+- `useChronology()` — Shikimori chronology panel state (related list, loading,
+  collapsed) + `loadRelated(malId)` IPC action for the AnimeDetailView
+  chronology section. (Phase 5 slice 5b.1)
+- `useAnimeDetailPrefs()` — per-anime translation type + selected author refs
+  plus `applyDownloadedTranslationDefault(snapshot)` (picks the most-frequent
+  downloaded type+author combo) and `loadInitialTranslationType(initialPrefs)`.
+  The component wires a `watch` that persists changes to
+  `usePlayerStore.saveAnimePrefs`. (Phase 5 slice 5b.1)
+- `useEpisodeList({ anime, episodeMeta, fileStatus, downloadGroups, watchProgress, … })`
+  — the heart of AnimeDetailView's reactivity surface. Owns the episodes Map,
+  current page, probed `realQuality` cache, episodeOverrides, and focusApplied.
+  Exposes `filteredEpisodes`, `pagedEpisodes`, `episodeRows` (the 5-priority
+  selection: queued ↦ override ↦ remembered ↦ downloaded ↦ default), helper
+  computeds (`translationTypeCounts`, `availableAuthors`), helpers
+  (`bestPerAuthor`, `getRealHeight`, `qualityLabel`), and actions
+  (`loadPageEpisodes`, `goToPage`, `probeSelectedQualities`,
+  `onEpisodeTranslationChange`, `applyFocusEpisode`, `resetEpisodeOverrides`).
+  Lifecycle hooks are *not* registered here — the consumer wires `onMounted` /
+  watchers — which keeps the composable callable from Vitest. (Phase 5 slice 5b.1)
+
+Composables that own broadcast subscriptions or DOM listeners (like
+`useKeyboardShortcuts`) bind those inside themselves; pure-logic composables
+(the three 5b.1 additions) defer lifecycle to the caller.
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|

@@ -13,6 +13,9 @@ import { usePlayerStore } from '../stores/player';
 import { useShikimoriStore } from '../stores/shikimori';
 import { useDownloadsStore } from '../stores/downloads';
 import { storeToRefs } from 'pinia';
+import { useAnimeDetailPrefs } from '../composables/use-anime-detail-prefs';
+import { useChronology } from '../composables/use-chronology';
+import { useEpisodeList, PAGE_SIZE, type EpisodeRow } from '../composables/use-episode-list';
 
 const props = defineProps<{
   animeId: number;
@@ -27,11 +30,13 @@ const downloadsStore = useDownloadsStore();
 const { syncStatus, offlineQueueLength } = storeToRefs(shikimoriStore);
 
 const anime = ref<AnimeDetail | null>(null);
-const episodes = ref<Map<number, EpisodeDetail>>(new Map());
 const loading = ref(true);
-const loadingEpisodes = ref(false);
-const translationType = ref('subRu');
-const selectedAuthor = ref('');
+
+const prefs = useAnimeDetailPrefs();
+const { translationType, selectedAuthor } = prefs;
+
+const chronology = useChronology();
+const { shikiRelated, relatedLoading, relatedCollapsed } = chronology;
 
 const dataSource = ref<'api' | 'cache' | null>(null);
 const isOffline = computed(() => dataSource.value === 'cache');
@@ -50,8 +55,50 @@ const autoDlSaving = ref(false);
 const isDownloaded = ref(false);
 const cleanupModalOpen = ref(false);
 
-const episodeOverrides = ref<Map<number, number>>(new Map()); // episodeId -> translationId
-const realQuality = ref<Map<number, number>>(new Map()); // translationId -> actual height from embed
+const episodeMeta = ref<Record<string, EpisodeMeta[]>>({});
+const fileStatus = ref<
+  Record<
+    string,
+    { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
+  >
+>({});
+const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map());
+const watchProgress = ref<Record<string, WatchProgressEntry>>({});
+
+const episodeList = useEpisodeList({
+  anime,
+  getAnimeId: () => props.animeId,
+  getInitialAuthor: () => props.initialPrefs?.author,
+  translationType,
+  selectedAuthor,
+  episodeMeta,
+  fileStatus,
+  downloadGroups,
+  watchProgress,
+  libraryStore,
+  checkFileStatus: () => checkFileStatus()
+});
+
+const {
+  episodes,
+  currentPage,
+  focusApplied,
+  loadingEpisodes,
+  filteredEpisodes,
+  episodeRows,
+  totalPages,
+  isPaginated,
+  translationTypeCounts,
+  availableAuthors,
+  getRealHeight,
+  qualityLabel,
+  goToPage,
+  loadPageEpisodes,
+  probeSelectedQualities,
+  onEpisodeTranslationChange,
+  applyFocusEpisode,
+  resetEpisodeOverrides
+} = episodeList;
 
 // Shikimori state
 const shikiUser = ref<ShikiUser | null>(null);
@@ -76,11 +123,6 @@ const shikiUserChecked = ref(false);
 // Shikimori detailed info (description / genres) — cached in main process
 const shikiDetails = ref<ShikiAnimeDetails | null>(null);
 const descExpanded = ref(false);
-
-// Shikimori chronology (related anime in the franchise)
-const shikiRelated = ref<ShikiRelatedEntry[]>([]);
-const relatedLoading = ref(false);
-const relatedCollapsed = ref(true);
 
 // Skip detection (Chromaprint local fingerprinting — debug panel only for now)
 const skipPanelCollapsed = ref(true);
@@ -181,203 +223,6 @@ const TRANSLATION_TYPES = [
   { value: 'raw', label: 'RAW', short: 'RAW', color: '#6a6a8a' }
 ];
 
-const filteredEpisodes = computed(() => {
-  if (!anime.value) return [];
-
-  const allActive = anime.value.episodes.filter(
-    (ep) => ep.isActive === 1 && ep.episodeType !== 'preview'
-  );
-
-  if (!anime.value.type) return allActive;
-
-  const matchedEpisodes = anime.value.episodes.filter(
-    (ep) => ep.isActive === 1 && ep.episodeType === anime.value!.type
-  );
-
-  if (matchedEpisodes.length === 0) return allActive;
-  if (anime.value.numberOfEpisodes && matchedEpisodes.length !== anime.value.numberOfEpisodes)
-    return allActive;
-
-  return matchedEpisodes;
-});
-
-const PAGE_SIZE = 30;
-const currentPage = ref(0);
-const totalPages = computed(() =>
-  Math.max(1, Math.ceil(filteredEpisodes.value.length / PAGE_SIZE))
-);
-const isPaginated = computed(() => filteredEpisodes.value.length > PAGE_SIZE);
-const pagedEpisodes = computed(() => {
-  if (!isPaginated.value) return filteredEpisodes.value;
-  const start = currentPage.value * PAGE_SIZE;
-  return filteredEpisodes.value.slice(start, start + PAGE_SIZE);
-});
-
-// Count unique episodes per translation type
-const translationTypeCounts = computed(() => {
-  const counts = new Map<string, number>();
-  for (const ep of episodes.value.values()) {
-    const typesInEp = new Set<string>();
-    for (const tr of ep.translations) {
-      if (tr.isActive === 1) typesInEp.add(tr.type);
-    }
-    for (const t of typesInEp) {
-      counts.set(t, (counts.get(t) || 0) + 1);
-    }
-  }
-  return counts;
-});
-
-const availableAuthors = computed(() => {
-  const counts = new Map<string, number>();
-  for (const ep of episodes.value.values()) {
-    // Track unique authors per episode (count each author once per episode)
-    const seen = new Set<string>();
-    for (const tr of ep.translations) {
-      if (tr.type === translationType.value && tr.isActive === 1 && !seen.has(tr.authorsSummary)) {
-        seen.add(tr.authorsSummary);
-        counts.set(tr.authorsSummary, (counts.get(tr.authorsSummary) || 0) + 1);
-      }
-    }
-  }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-});
-
-interface EpisodeRow {
-  episode: EpisodeSummary;
-  allTranslations: Translation[];
-  selectedTr: Translation | null;
-  isLocked: boolean;
-  lockSource: 'downloaded' | 'queued' | null;
-  downloadedTrIds: Set<number>;
-}
-
-// For each author+type combo, keep only the best quality translation
-function bestPerAuthor(translations: Translation[]): Translation[] {
-  const best = new Map<string, Translation>();
-  for (const tr of translations) {
-    const key = `${tr.type}:${tr.authorsSummary}`;
-    const existing = best.get(key);
-    if (!existing || getRealHeight(tr) > getRealHeight(existing)) {
-      best.set(key, tr);
-    }
-  }
-  return [...best.values()];
-}
-
-const episodeRows = computed((): EpisodeRow[] => {
-  return pagedEpisodes.value.map((ep) => {
-    const detail = episodes.value.get(ep.id);
-    const rawTranslations = detail ? detail.translations.filter((tr) => tr.isActive === 1) : [];
-    const allTranslations = bestPerAuthor(rawTranslations);
-
-    // Sort: global type first, then by quality desc, then by type order
-    const sorted = [...allTranslations].sort((a, b) => {
-      const aMatch = a.type === translationType.value ? 0 : 1;
-      const bMatch = b.type === translationType.value ? 0 : 1;
-      if (aMatch !== bMatch) return aMatch - bMatch;
-      const aH = getRealHeight(a),
-        bH = getRealHeight(b);
-      if (aH !== bH) return bH - aH;
-      const typeOrder = TRANSLATION_TYPES.map((t) => t.value);
-      return typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type);
-    });
-
-    const metas = episodeMeta.value[ep.episodeInt] || [];
-    const group = downloadGroups.value.get(ep.episodeFull);
-
-    // Build set of downloaded translation IDs from metadata + files on disk
-    const downloadedTrIds = new Set<number>();
-    for (const m of metas) {
-      if (m.translationId) downloadedTrIds.add(m.translationId);
-    }
-
-    let selectedTr: Translation | null = null;
-    let isLocked = false;
-    let lockSource: 'downloaded' | 'queued' | null = null;
-
-    // Priority 1: In download queue (active) — lock the row
-    if (
-      group &&
-      group.video &&
-      !['completed', 'cancelled', 'failed'].includes(group.video.status)
-    ) {
-      selectedTr = sorted.find((tr) => tr.id === group.translationId) || null;
-      if (selectedTr) {
-        isLocked = true;
-        lockSource = 'queued';
-      }
-    }
-
-    // Priority 2: User per-episode override (in-session, sync; gives instant feedback
-    // after a dropdown click before the persisted watchProgress update lands)
-    if (!isLocked && episodeOverrides.value.has(ep.id)) {
-      selectedTr = sorted.find((tr) => tr.id === episodeOverrides.value.get(ep.id)) || null;
-    }
-
-    // Priority 3: Last-used translation for this episode (persisted in watchProgress).
-    // Sits ABOVE downloaded so an explicit user choice — even a stream — wins over
-    // a downloaded file. Falls through if the remembered id is no longer available.
-    if (!isLocked && !selectedTr) {
-      const remembered = watchProgress.value[ep.episodeInt]?.translationId;
-      if (remembered != null) {
-        selectedTr = sorted.find((tr) => tr.id === remembered) || null;
-      }
-    }
-
-    // Priority 4: Prefer any downloaded translation on this episode — avoids silent fallback to
-    // streaming when the global default (type+author) doesn't match what's on disk.
-    // Within same-type downloads, honor the user's author preference before picking highest quality.
-    if (!isLocked && !selectedTr && downloadedTrIds.size > 0) {
-      const downloaded = sorted.filter((tr) => downloadedTrIds.has(tr.id));
-      const sameType = downloaded.filter((tr) => tr.type === translationType.value);
-      const sameAuthor = sameType.find((tr) => tr.authorsSummary === selectedAuthor.value);
-      const bestSameType = [...sameType].sort((a, b) => getRealHeight(b) - getRealHeight(a))[0];
-      selectedTr = sameAuthor || bestSameType || downloaded[0] || null;
-    }
-
-    // Priority 5: Global default (same type + author)
-    if (!isLocked && !selectedTr) {
-      const typeFiltered = sorted.filter((tr) => tr.type === translationType.value);
-      selectedTr =
-        typeFiltered.find((tr) => tr.authorsSummary === selectedAuthor.value) ||
-        typeFiltered[0] ||
-        null;
-    }
-
-    return {
-      episode: ep,
-      allTranslations: sorted,
-      selectedTr,
-      isLocked,
-      lockSource,
-      downloadedTrIds
-    };
-  });
-});
-
-function onEpisodeTranslationChange(
-  episodeId: number,
-  episodeInt: string,
-  translationId: number
-): void {
-  episodeOverrides.value = new Map(episodeOverrides.value.set(episodeId, translationId));
-  // Persist so the choice survives page reloads and feeds back into Priority 3
-  // resolution. Reuse any existing playback position/duration so we don't clobber
-  // partial-watch progress when the user just changes translation.
-  const prev = watchProgress.value[episodeInt];
-  window.api
-    .watchProgressSave(
-      props.animeId,
-      episodeInt,
-      prev?.position ?? 0,
-      prev?.duration ?? 0,
-      prev?.watched,
-      translationId
-    )
-    .catch((err) => console.warn('[anime-detail] failed to persist translation choice:', err));
-}
-
 function onMouseBack(e: MouseEvent): void {
   if (e.button === 3) {
     e.preventDefault();
@@ -395,16 +240,7 @@ async function loadShikimoriData(): Promise<void> {
   }
   if (!anime.value?.myAnimeListId) return;
 
-  relatedLoading.value = true;
-  const relatedPromise = window.api
-    .shikimoriGetRelated(anime.value.myAnimeListId)
-    .then((related) => {
-      shikiRelated.value = related;
-    })
-    .catch((err) => console.error('Failed to load Shikimori related:', err))
-    .finally(() => {
-      relatedLoading.value = false;
-    });
+  const relatedPromise = chronology.loadRelated(anime.value.myAnimeListId);
 
   if (!shikiUser.value) {
     await relatedPromise;
@@ -607,11 +443,7 @@ onMounted(async () => {
   window.addEventListener('mouseup', onMouseBack);
   playerMode.value =
     ((await window.api.getSetting('playerMode')) as string as typeof playerMode.value) || 'system';
-  if (props.initialPrefs?.translationType) {
-    translationType.value = props.initialPrefs.translationType;
-  } else {
-    translationType.value = ((await window.api.getSetting('translationType')) as string) || 'subRu';
-  }
+  await prefs.loadInitialTranslationType(props.initialPrefs?.translationType);
 
   window.api
     .libraryHas(props.animeId)
@@ -823,183 +655,13 @@ async function shikiSave(): Promise<void> {
   }
 }
 
+// Wraps the prefs composable's helper so call sites stay terse.
 function applyDownloadedTranslationDefault(): void {
-  const counts = new Map<string, { type: string; author: string; count: number }>();
-  for (const metaArr of Object.values(episodeMeta.value)) {
-    for (const m of metaArr) {
-      const key = `${m.translationType}|${m.author}`;
-      const existing = counts.get(key);
-      if (existing) existing.count++;
-      else counts.set(key, { type: m.translationType, author: m.author, count: 1 });
-    }
-  }
-  if (counts.size === 0) return;
-  let best: { type: string; author: string; count: number } | null = null;
-  for (const entry of counts.values()) {
-    if (!best || entry.count > best.count) best = entry;
-  }
-  if (!best) return;
-  translationType.value = best.type;
-  if (best.author && availableAuthors.value.some(([a]) => a === best!.author)) {
-    selectedAuthor.value = best.author;
-  }
+  prefs.applyDownloadedTranslationDefault({
+    episodeMeta: episodeMeta.value,
+    availableAuthors: availableAuthors.value
+  });
 }
-
-async function loadPageEpisodes(): Promise<void> {
-  if (!anime.value || pagedEpisodes.value.length === 0) return;
-  loadingEpisodes.value = true;
-
-  const batch = 5;
-  const toLoad = pagedEpisodes.value.filter((ep) => !episodes.value.has(ep.id));
-
-  for (let i = 0; i < toLoad.length; i += batch) {
-    const chunk = toLoad.slice(i, i + batch);
-    const fetched = await Promise.all(
-      chunk.map((ep) => window.api.getEpisode(ep.id, props.animeId).then((r) => r.data))
-    );
-    const updated = new Map(episodes.value);
-    for (const ep of fetched) {
-      updated.set(ep.id, ep);
-    }
-    episodes.value = updated;
-  }
-
-  if (availableAuthors.value.length > 0 && !selectedAuthor.value) {
-    if (
-      props.initialPrefs?.author &&
-      availableAuthors.value.some(([a]) => a === props.initialPrefs!.author)
-    ) {
-      selectedAuthor.value = props.initialPrefs.author;
-    } else {
-      selectedAuthor.value = availableAuthors.value[0][0];
-    }
-  }
-
-  loadingEpisodes.value = false;
-  probeSelectedQualities();
-}
-
-async function goToPage(page: number): Promise<void> {
-  currentPage.value = page;
-  await loadPageEpisodes();
-  await checkFileStatus();
-}
-
-let probeGeneration = 0;
-
-async function probeSelectedQualities(): Promise<void> {
-  const gen = ++probeGeneration;
-
-  // Build translation metadata lookup
-  const trMeta = new Map<number, Translation>();
-  for (const row of episodeRows.value) {
-    for (const tr of row.allTranslations) {
-      trMeta.set(tr.id, tr);
-    }
-  }
-
-  // Phase 1: probe only currently selected translations
-  const selectedIds: number[] = [];
-  for (const row of episodeRows.value) {
-    if (row.selectedTr && !realQuality.value.has(row.selectedTr.id)) {
-      selectedIds.push(row.selectedTr.id);
-    }
-  }
-
-  if (selectedIds.length > 0) {
-    const updated = await probeIds(selectedIds, trMeta, gen);
-    if (updated) realQuality.value = updated;
-  }
-
-  if (gen !== probeGeneration) return;
-
-  // Phase 2: full scan only if enabled in settings and needed
-  const bgProbeEnabled = (await window.api.getSetting('backgroundQualityProbe')) as boolean;
-  if (!bgProbeEnabled) return;
-
-  const episodeCount = filteredEpisodes.value.length;
-  const needsFullScan = await window.api.probeFullScanNeeded(props.animeId, episodeCount);
-  if (!needsFullScan || gen !== probeGeneration) return;
-
-  const remainingIds: number[] = [];
-  for (const id of trMeta.keys()) {
-    if (!realQuality.value.has(id)) {
-      remainingIds.push(id);
-    }
-  }
-
-  if (remainingIds.length > 0) {
-    const updated = await probeIds(remainingIds, trMeta, gen, true);
-    if (updated) realQuality.value = updated;
-  }
-
-  if (gen === probeGeneration) {
-    window.api.probeFullScanDone(props.animeId, episodeCount);
-  }
-}
-
-async function probeIds(
-  ids: number[],
-  trMeta: Map<number, Translation>,
-  gen: number,
-  throttle = false
-): Promise<Map<number, number> | null> {
-  const batchSize = throttle ? 2 : 5;
-  const collected = new Map<number, number>();
-  for (let i = 0; i < ids.length; i += batchSize) {
-    if (gen !== probeGeneration) return null;
-    if (throttle) await new Promise((r) => setTimeout(r, 100));
-    const batch = ids.slice(i, i + batchSize);
-    const results = await Promise.all(
-      batch.map((id) =>
-        window.api.probeEmbedQuality(id, props.animeId).then((h) => ({ id, height: h }))
-      )
-    );
-    for (const r of results) {
-      if (r.height !== null) {
-        collected.set(r.id, r.height);
-        const tr = trMeta.get(r.id);
-        if (tr && tr.height !== r.height) {
-          console.warn(
-            `[quality-mismatch] Translation ${r.id} (${tr.authorsSummary}, ${tr.type}): reported=${tr.height}p, actual=${r.height}p`
-          );
-          window.api.reportQualityMismatch({
-            translationId: r.id,
-            author: tr.authorsSummary,
-            type: tr.type,
-            reported: tr.height,
-            actual: r.height
-          });
-        }
-      }
-    }
-  }
-  if (gen !== probeGeneration) return null;
-  const merged = new Map(realQuality.value);
-  for (const [id, h] of collected) {
-    merged.set(id, h);
-  }
-  return merged;
-}
-
-function getRealHeight(tr: Translation): number {
-  return realQuality.value.get(tr.id) ?? tr.height;
-}
-
-function qualityLabel(height: number): string {
-  if (height >= 1080) return '1080p';
-  if (height >= 720) return '720p';
-  if (height >= 480) return '480p';
-  return `${height}p`;
-}
-
-const fileStatus = ref<
-  Record<
-    string,
-    { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-  >
->({});
-const watchProgress = ref<Record<string, WatchProgressEntry>>({});
 
 async function loadWatchProgress(): Promise<void> {
   try {
@@ -1173,34 +835,8 @@ async function onCleanupDeleted(): Promise<void> {
   await checkFileStatus();
 }
 
-const episodeMeta = ref<Record<string, EpisodeMeta[]>>({});
-const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map());
 const downloading = ref(false);
 const errorMessage = ref('');
-
-const focusApplied = ref(false);
-async function applyFocusEpisode(target: string): Promise<void> {
-  if (focusApplied.value) return;
-  const eps = filteredEpisodes.value;
-  if (eps.length === 0) return;
-  const targetIdx = eps.findIndex((e) => e.episodeInt === target);
-  if (targetIdx < 0) {
-    focusApplied.value = true;
-    libraryStore.clearFocusEpisode(props.animeId);
-    return;
-  }
-  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0;
-  if (targetPage !== currentPage.value) {
-    await goToPage(targetPage);
-  }
-  await nextTick();
-  const el = document.querySelector(
-    `.episode-row[data-ep-int="${CSS.escape(target)}"]`
-  ) as HTMLElement | null;
-  if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  focusApplied.value = true;
-  libraryStore.clearFocusEpisode(props.animeId);
-}
 
 watch(
   [() => props.focusEpisodeInt, filteredEpisodes, loadingEpisodes],
@@ -1335,9 +971,9 @@ function getGroup(episodeFull: string): EpisodeGroup | undefined {
 }
 
 watch([translationType, selectedAuthor], () => {
-  episodeOverrides.value = new Map();
+  resetEpisodeOverrides();
   playerStore.saveAnimePrefs(props.animeId, translationType.value, selectedAuthor.value);
-  probeSelectedQualities();
+  void probeSelectedQualities();
 });
 
 const posterSrc = ref('');

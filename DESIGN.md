@@ -463,6 +463,30 @@ Global app glue that doesn't belong on a Pinia store goes into
   Actions: `loadSkipDetections`, `hydrateSkipStatus`, `runSkipAnalysis`,
   `cancelSkipAnalysis`, `injectChaptersToMkv`. Three `subscribe*` init
   functions for the per-animeId-filtered broadcasts. (Phase 5 slice 5b.4)
+- `useMsePlayer({ getVideoEl, setSyncplayLocalReady })` — headless MSE / MKV
+  streaming state machine extracted from `PlayerView.vue`. Owns the
+  MediaSource + SourceBuffer lifecycle, the append queue + ack backpressure
+  (`STREAM_ACK_THRESHOLD = 1 MB`), the buffer-ahead throttle
+  (`MAX_BUFFER_AHEAD = 60s`), the debounced (`RESPAWN_DEBOUNCE_MS = 250`)
+  unbuffered-seek → ffmpeg respawn flow with `currentStreamGen` gating to
+  drop chunks from a stale ffmpeg run, the HEVC transcode-on-stream flag
+  (`transcodingHevc` + `transcodeSpeed`/`transcodeLabel`), and a buffer-ahead
+  gate that pauses playback for ~3s of lead time post-respawn on the
+  transcode path. Returns reactive state (`mseSrcUrl`, `mkvBuffering`,
+  `transcodingHevc`, `transcodeSpeed`, `transcodeLabel`, `streamSessionId`,
+  `remuxError`, `mseInitialSeek`, `hasActiveSession`) + actions
+  (`startMseSession`, `setTranscoding`, `resetMseState`,
+  `maybeRespawnForUnbufferedPosition`, `pumpAppendQueue`,
+  `isPlayheadBuffered`, `subscribeStreamEvents`). Does NOT own the
+  orchestration around it (HEVC-consent prompt, legacy full-remux fallback,
+  watch-progress resume) — that stays in `PlayerView` because it crosses
+  multiple subsystems. Lifecycle hooks are not registered inside the
+  composable; the consumer calls `subscribeStreamEvents()` from `onMounted`
+  and `resetMseState()` from `onBeforeUnmount`. **Status:** unit-tested
+  groundwork only — `PlayerView` still ships the inline MSE machine; a
+  follow-up slice will integrate the composable once the rapid-seek
+  regression observed during 5d.1 smoke testing is diagnosed. (Phase 5
+  slice 5d.1)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

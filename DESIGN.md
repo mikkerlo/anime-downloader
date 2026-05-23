@@ -89,7 +89,11 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
 | `src/renderer/src/components/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
 | `src/renderer/src/components/PlayerView.vue` | Built-in video player with Anime4K WebGPU shaders, JASSUB ASS subtitles, MKV remux, keyboard controls |
-| `src/renderer/src/components/SettingsView.vue` | General + Connectors + Merging + Player + Debug settings tabs |
+| `src/renderer/src/components/SettingsView.vue` | Thin wrapper around `components/settings/SettingsShell.vue` (kept so `App.vue`'s route map stays stable across Phase 5 slices) |
+| `src/renderer/src/components/settings/SettingsShell.vue` | Tab nav + active-tab routing via `<keep-alive><component :is>` + the "Saved" toast container. Owns the tabs/topbar/saved-toast styles |
+| `src/renderer/src/components/settings/{General,Storage,Connectors,Merging,Player,Shortcuts,WatchTogether,Debug}Tab.vue` | One component per tab. Each tab hydrates its own settings on first activation, owns its tab-local broadcast subscriptions (`onStorageMoveToColdProgress`/`onStorageUsageProgress`/`onStorageCleanupPending`/`onStorageCleanupFinished` in `StorageTab`; `onAutoDlTickResult` in `GeneralTab`; `onSyncplayConnectionStatus` per-test in `WatchTogetherTab`), and disposes them on `onUnmounted` |
+| `src/renderer/src/composables/use-settings-autosave.ts` | Module-level singleton holding `savedVisible` + `showSaved` + `autoSave(key, value)`. Every tab calls `autoSave(...)` in its watchers; the shell renders the toast |
+| `src/renderer/src/assets/settings-tabs.css` | Shared utility classes (`.setting-group`, `.setting-label`, `.setting-input`, `.toggle-row`, `.test-token-btn`, `.merge-all-btn`, `.scan-progress`, …) imported by each tab via `<style scoped src="@renderer/assets/settings-tabs.css">` so each component gets its own scoped copy |
 
 ## Data Flow
 

@@ -482,11 +482,13 @@ Global app glue that doesn't belong on a Pinia store goes into
   watch-progress resume) — that stays in `PlayerView` because it crosses
   multiple subsystems. Lifecycle hooks are not registered inside the
   composable; the consumer calls `subscribeStreamEvents()` from `onMounted`
-  and `resetMseState()` from `onBeforeUnmount`. **Status:** unit-tested
-  groundwork only — `PlayerView` still ships the inline MSE machine; a
-  follow-up slice will integrate the composable once the rapid-seek
-  regression observed during 5d.1 smoke testing is diagnosed. (Phase 5
-  slice 5d.1)
+  and `resetMseState()` from `onBeforeUnmount`. The `await sb.remove()`
+  step polls `sb.updating` rather than waiting for a single `updateend`,
+  because `sb.abort()` queues its own async `updateend` that would
+  otherwise resolve the wait prematurely and let the next
+  `sb.timestampOffset` assignment throw `InvalidStateError` — the root
+  cause of the rapid-back-to-back-seek stutter pattern. (Phase 5 slice
+  5d.1)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

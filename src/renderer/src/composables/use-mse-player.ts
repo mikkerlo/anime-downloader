@@ -340,7 +340,13 @@ export function useMsePlayer(deps: {
       // new ones as soon as the seek IPC below bumps the session generation.
       appendQueue.length = 0
       pendingAckBytes = 0
-      const result = await window.api.playerStreamSeek(streamSessionId.value, seekAt)
+      // Capture sessionId before awaiting — if resetMseState fires during
+      // the IPC round-trip (e.g. unmount or episode switch), streamSessionId
+      // changes underneath us and we'd otherwise stamp the OLD session's
+      // generation onto the NEW session, polluting its state.
+      const sessionId = streamSessionId.value
+      const result = await window.api.playerStreamSeek(sessionId, seekAt)
+      if (streamSessionId.value !== sessionId) return
       if ('error' in result) {
         console.error('[player] stream-seek failed:', result.error)
         return
@@ -362,13 +368,26 @@ export function useMsePlayer(deps: {
         console.warn('[player] sb.abort failed:', e)
       }
       // Drop old buffered data so the previous audio ahead of us doesn't
-      // keep playing while the new fragments arrive and decode.
+      // keep playing while the new fragments arrive and decode. Wait until
+      // `sb.updating` is genuinely false before continuing — `sb.abort()`
+      // above queues its own async `updateend` event, and a naïve
+      // `{ once: true }` listener can grab the abort's updateend *while*
+      // `sb.remove()` is still running. Resolving the Promise early would
+      // let the next `sb.timestampOffset = …` assignment throw
+      // InvalidStateError, leaving fragments on the wrong timeline and
+      // starving the playhead — the rapid-seek stutter pattern.
       try {
         if (sb.buffered.length > 0) {
           sb.remove(sb.buffered.start(0), sb.buffered.end(sb.buffered.length - 1))
-          await new Promise<void>((res) =>
-            sb.addEventListener('updateend', () => res(), { once: true })
-          )
+          await new Promise<void>((res) => {
+            const listener = (): void => {
+              if (!sb.updating) {
+                sb.removeEventListener('updateend', listener)
+                res()
+              }
+            }
+            sb.addEventListener('updateend', listener)
+          })
         }
       } catch (e) {
         console.warn('[player] buffer clear failed:', e)
@@ -450,6 +469,15 @@ export function useMsePlayer(deps: {
   }
 
   function resetMseState(): void {
+    // Drop the pending respawn debounce — without this, the timer can fire
+    // after a teardown and call into `handleUnbufferedSeek` on a disposed
+    // session, ack the old generation, or mutate a SourceBuffer that's
+    // already been removed.
+    if (respawnDebounceTimer) {
+      clearTimeout(respawnDebounceTimer)
+      respawnDebounceTimer = null
+    }
+    unbufferedSeekInFlight = false
     streamEnded = false
     pendingAckBytes = 0
     appendQueue.length = 0

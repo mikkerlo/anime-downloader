@@ -1,0 +1,75 @@
+/* Shared player menu styles — used by PlayerView's controls-bar dropdown
+ * menus + their extracted sub-components (TranslationMenu, QualityMenu,
+ * Anime4KMenu, SyncplayMenu). Imported via `<style scoped src="...">` so
+ * each component gets its own scoped copy of the rules — same cascade
+ * order as the original single scoped block in PlayerView.
+ *
+ * Phase 5 slice 5e (#118).
+ */
+
+.preset-wrapper {
+  position: relative;
+}
+
+.preset-btn {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.preset-btn.active {
+  border-color: #e94560;
+  color: #e94560;
+}
+
+.preset-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  background: rgba(20, 20, 30, 0.95);
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 200px;
+}
+
+.preset-option {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: #ccc;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.preset-option:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.preset-option.selected {
+  color: #e94560;
+  background: rgba(233, 69, 96, 0.1);
+}
+
+.ctrl-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.ctrl-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}

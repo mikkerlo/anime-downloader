@@ -1,12 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
-import {
-  formatBytes,
-  formatSpeed,
-  formatEta,
-  getAnimeName as _getAnimeName,
-  sanitizeFilename
-} from '../utils';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
+import { formatSpeed, formatEta, getAnimeName as _getAnimeName } from '../utils';
 import CleanupModal from './CleanupModal.vue';
 import { useLibraryStore } from '../stores/library';
 import { usePlayerStore } from '../stores/player';
@@ -15,7 +9,8 @@ import { useDownloadsStore } from '../stores/downloads';
 import { storeToRefs } from 'pinia';
 import { useAnimeDetailPrefs } from '../composables/use-anime-detail-prefs';
 import { useChronology } from '../composables/use-chronology';
-import { useEpisodeList, PAGE_SIZE, type EpisodeRow } from '../composables/use-episode-list';
+import { useEpisodeList, PAGE_SIZE } from '../composables/use-episode-list';
+import { useEpisodeDownloads } from '../composables/use-episode-downloads';
 
 const props = defineProps<{
   animeId: number;
@@ -214,6 +209,61 @@ const friendsSummary = computed(() => {
 });
 
 const playerMode = ref<'system' | 'builtin'>('system');
+
+const downloads = useEpisodeDownloads({
+  anime,
+  getAnimeId: () => props.animeId,
+  getAnimeName: () => getAnimeName(),
+  episodeMeta,
+  fileStatus,
+  downloadGroups,
+  watchProgress,
+  filteredEpisodes,
+  episodes,
+  episodeRows,
+  getRealHeight,
+  currentPage,
+  isPaginated,
+  goToPage,
+  loadingEpisodes,
+  shikiRate,
+  shikiUser,
+  shikiEpisodes,
+  shikiUserChecked,
+  shikiLoading,
+  downloadsStore,
+  playerStore,
+  playerMode,
+  pageSize: PAGE_SIZE
+});
+
+const {
+  downloading,
+  errorMessage,
+  continueReady,
+  continueLabel,
+  hasActiveDownloads,
+  episodeProgressPercent,
+  isEpisodeWatched,
+  getFileForTranslation,
+  hasAnyFile,
+  selectedTrHasFile,
+  dlProgress,
+  getGroup,
+  loadWatchProgress,
+  checkFileStatus,
+  updateDownloadGroups,
+  downloadAll,
+  downloadEpisode,
+  cancelEpisodeDownload,
+  cancelAllDownloads,
+  openFile,
+  playStream,
+  showInFolder,
+  deleteFile,
+  continueWatching,
+  subscribeFileEpisodesChanged
+} = downloads;
 
 const TRANSLATION_TYPES = [
   { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
@@ -508,23 +558,7 @@ onMounted(async () => {
 
   // Subscribe to background file rescan updates (component-local — keyed off
   // the currently displayed anime name).
-  unsubFileEpisodesChanged = window.api.onFileEpisodesChanged((animeName, data) => {
-    if (anime.value && animeName === getAnimeName()) {
-      const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
-      const baseMap = new Map<string, string>();
-      for (const epInt of episodeInts) {
-        const padded = epInt.padStart(2, '0');
-        const base = sanitizeFilename(`${animeName} - ${padded}`);
-        baseMap.set(base, epInt);
-      }
-      const filtered: typeof fileStatus.value = {};
-      for (const [base, files] of Object.entries(data)) {
-        const epInt = baseMap.get(base);
-        if (epInt) filtered[epInt] = files;
-      }
-      fileStatus.value = filtered;
-    }
-  });
+  unsubFileEpisodesChanged = subscribeFileEpisodesChanged();
 
   // Load Shikimori data (non-blocking — don't hold up the episode list)
   loadShikimoriData();
@@ -663,108 +697,6 @@ function applyDownloadedTranslationDefault(): void {
   });
 }
 
-async function loadWatchProgress(): Promise<void> {
-  try {
-    watchProgress.value = await window.api.watchProgressGetAll(props.animeId);
-  } catch (err) {
-    console.error('Failed to load watch progress:', err);
-  }
-}
-
-function episodeProgressPercent(episodeInt: string): number {
-  const entry = watchProgress.value[episodeInt];
-  if (!entry || !entry.duration) return 0;
-  const pct = Math.min(100, Math.round((entry.position / entry.duration) * 100));
-  return pct < 2 ? 0 : pct;
-}
-
-function isEpisodeWatched(episodeInt: string): boolean {
-  if (shikiRate.value?.status === 'completed') return true;
-  return !!watchProgress.value[episodeInt]?.watched;
-}
-
-const continueTarget = computed((): EpisodeSummary | null => {
-  const eps = filteredEpisodes.value;
-  if (eps.length === 0) return null;
-
-  // Completed → "Continue" means "start rewatching from ep 1". Without this the
-  // shikiEpisodes >= eps.length branch below would land on the last episode.
-  if (shikiRate.value?.status === 'completed') {
-    return eps[0];
-  }
-
-  // 1) If Shikimori reports N completed episodes, jump to episode N+1.
-  // Shikimori is authoritative — ignore local saved positions for earlier episodes.
-  if (shikiUser.value && shikiEpisodes.value > 0 && shikiEpisodes.value < eps.length) {
-    return eps[shikiEpisodes.value];
-  }
-
-  // 2) Prefer an episode with an unfinished saved position (most recent).
-  let bestResume: EpisodeSummary | null = null;
-  let bestUpdatedAt = 0;
-  for (const ep of eps) {
-    const entry = watchProgress.value[ep.episodeInt];
-    if (!entry || entry.watched) continue;
-    if (!entry.position || !entry.duration) continue;
-    if (entry.updatedAt > bestUpdatedAt) {
-      bestUpdatedAt = entry.updatedAt;
-      bestResume = ep;
-    }
-  }
-  if (bestResume) return bestResume;
-
-  // 3) First episode after the last locally-watched one.
-  let lastWatchedIdx = -1;
-  for (let i = 0; i < eps.length; i++) {
-    if (isEpisodeWatched(eps[i].episodeInt)) lastWatchedIdx = i;
-  }
-  const nextIdx = lastWatchedIdx + 1;
-  if (nextIdx < eps.length) return eps[nextIdx];
-
-  // 4) Everything watched — fall back to the last episode.
-  return eps[eps.length - 1];
-});
-
-const continueReady = computed((): boolean => {
-  if (!anime.value || filteredEpisodes.value.length === 0) return false;
-  if (loadingEpisodes.value) return false;
-  if (anime.value.myAnimeListId && !shikiUserChecked.value) return false;
-  if (shikiUser.value && shikiLoading.value) return false;
-  return continueTarget.value !== null;
-});
-
-const continueLabel = computed((): string => {
-  const target = continueTarget.value;
-  if (!target) return 'Continue';
-  const entry = watchProgress.value[target.episodeInt];
-  const verb = entry && entry.position > 0 && !entry.watched ? 'Resume' : 'Continue';
-  return `${verb} · Ep ${target.episodeInt}`;
-});
-
-async function continueWatching(): Promise<void> {
-  const target = continueTarget.value;
-  if (!target) return;
-
-  const eps = filteredEpisodes.value;
-  const targetIdx = eps.findIndex((e) => e.episodeInt === target.episodeInt);
-  if (targetIdx < 0) return;
-
-  const targetPage = isPaginated.value ? Math.floor(targetIdx / PAGE_SIZE) : 0;
-  if (targetPage !== currentPage.value) {
-    await goToPage(targetPage);
-  }
-  await nextTick();
-
-  const row = episodeRows.value.find((r) => r.episode.episodeInt === target.episodeInt);
-  if (!row || !row.selectedTr) return;
-
-  if (selectedTrHasFile(row)) {
-    await openFile(row);
-  } else {
-    await playStream(row);
-  }
-}
-
 async function toggleStar(): Promise<void> {
   if (!anime.value) return;
   const stripped: AnimeSearchResult = {
@@ -835,9 +767,6 @@ async function onCleanupDeleted(): Promise<void> {
   await checkFileStatus();
 }
 
-const downloading = ref(false);
-const errorMessage = ref('');
-
 watch(
   [() => props.focusEpisodeInt, filteredEpisodes, loadingEpisodes],
   async () => {
@@ -853,121 +782,6 @@ watch(
 function getAnimeName(): string {
   if (!anime.value) return '';
   return _getAnimeName(anime.value);
-}
-
-async function checkToken(): Promise<boolean> {
-  const token = (await window.api.getSetting('token')) as string;
-  if (!token) {
-    errorMessage.value = 'API token is required for downloads. Set it in Settings.';
-    setTimeout(() => {
-      errorMessage.value = '';
-    }, 5000);
-    return false;
-  }
-  return true;
-}
-
-async function downloadAll(): Promise<void> {
-  if (!anime.value) return;
-  if (!(await checkToken())) return;
-
-  const name = getAnimeName();
-  const requests: DownloadRequest[] = [];
-
-  for (const row of episodeRows.value) {
-    if (row.selectedTr && !row.isLocked && !selectedTrHasFile(row)) {
-      requests.push({
-        translationId: row.selectedTr.id,
-        height: getRealHeight(row.selectedTr),
-        animeName: name,
-        episodeLabel: row.episode.episodeFull,
-        episodeInt: row.episode.episodeInt,
-        animeId: anime.value!.id,
-        translationType: row.selectedTr.type,
-        author: row.selectedTr.authorsSummary
-      });
-    }
-  }
-
-  if (requests.length === 0) return;
-  downloading.value = true;
-  try {
-    await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)));
-    await window.api.downloadEnqueue(requests);
-  } finally {
-    downloading.value = false;
-  }
-}
-
-async function downloadEpisode(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr || !anime.value) return;
-  if (!(await checkToken())) return;
-
-  await window.api.downloadedAnimeAdd(JSON.parse(JSON.stringify(anime.value)));
-  await window.api.downloadEnqueue([
-    {
-      translationId: row.selectedTr.id,
-      height: getRealHeight(row.selectedTr),
-      animeName: getAnimeName(),
-      episodeLabel: row.episode.episodeFull,
-      episodeInt: row.episode.episodeInt,
-      animeId: anime.value!.id,
-      translationType: row.selectedTr.type,
-      author: row.selectedTr.authorsSummary
-    }
-  ]);
-}
-
-function downloadGroupChanged(a: EpisodeGroup | undefined, b: EpisodeGroup | undefined): boolean {
-  if (!a && !b) return false;
-  if (!a || !b) return true;
-  if (a.mergeStatus !== b.mergeStatus || a.mergePercent !== b.mergePercent) return true;
-  const av = a.video,
-    bv = b.video;
-  if (!av && !bv) return false;
-  if (!av || !bv) return true;
-  return (
-    av.status !== bv.status ||
-    av.bytesReceived !== bv.bytesReceived ||
-    av.totalBytes !== bv.totalBytes ||
-    av.speed !== bv.speed
-  );
-}
-
-function updateDownloadGroups(groups: EpisodeGroup[]): void {
-  const prev = downloadGroups.value;
-  const map = new Map<string, EpisodeGroup>();
-  let newlyCompleted = false;
-  let changed = false;
-  for (const g of groups) {
-    if (g.animeName === getAnimeName()) {
-      map.set(g.episodeLabel, g);
-      const old = prev.get(g.episodeLabel);
-      if (downloadGroupChanged(old, g)) changed = true;
-      if (g.mergeStatus === 'completed' && old?.mergeStatus !== 'completed') {
-        newlyCompleted = true;
-      }
-      if (g.video?.status === 'completed' && old?.video?.status !== 'completed') {
-        newlyCompleted = true;
-      }
-    }
-  }
-  // Also detect removals (prev had entries that new map doesn't)
-  if (prev.size !== map.size) changed = true;
-  if (!changed) return;
-  downloadGroups.value = map;
-  if (newlyCompleted) {
-    checkFileStatus();
-  }
-}
-
-function dlProgress(item: DownloadProgressItem | null): number {
-  if (!item || item.totalBytes <= 0) return 0;
-  return (item.bytesReceived / item.totalBytes) * 100;
-}
-
-function getGroup(episodeFull: string): EpisodeGroup | undefined {
-  return downloadGroups.value.get(episodeFull);
 }
 
 watch([translationType, selectedAuthor], () => {
@@ -995,182 +809,6 @@ async function onPosterError(): Promise<void> {
   posterFallbackAttempted.value = true;
   const cached = await window.api.getCachedPoster(props.animeId);
   if (cached) posterSrc.value = cached;
-}
-
-async function checkFileStatus(): Promise<void> {
-  if (!anime.value || filteredEpisodes.value.length === 0) return;
-  const name = getAnimeName();
-  const episodeInts = filteredEpisodes.value.map((ep) => ep.episodeInt);
-  fileStatus.value = await window.api.fileCheckEpisodes(name, episodeInts);
-  episodeMeta.value = await window.api.downloadedEpisodesGet(props.animeId);
-}
-
-function buildTranslationList(
-  row: EpisodeRow | undefined
-): { id: number; label: string; type: string; height: number }[] {
-  if (!row) return [];
-  return row.allTranslations.map((tr) => ({
-    id: tr.id,
-    label: tr.authorsSummary,
-    type: tr.type,
-    height: getRealHeight(tr)
-  }));
-}
-
-function buildAllEpisodes(): {
-  episodeInt: string;
-  episodeFull: string;
-  translations: { id: number; label: string; type: string; height: number }[];
-  downloadedTrIds: number[];
-}[] {
-  return filteredEpisodes.value.map((ep) => {
-    const detail = episodes.value.get(ep.id);
-    const translations = detail
-      ? detail.translations
-          .filter((t) => t.isActive === 1)
-          .map((t) => ({
-            id: t.id,
-            label: t.authorsSummary,
-            type: t.type,
-            height: getRealHeight(t)
-          }))
-      : [];
-    const metas = episodeMeta.value[ep.episodeInt] || [];
-    const downloadedTrIds = metas.map((m) => m.translationId);
-    return {
-      episodeInt: ep.episodeInt,
-      episodeFull: ep.episodeFull,
-      translations,
-      downloadedTrIds
-    };
-  });
-}
-
-function getFileForTranslation(
-  episodeInt: string,
-  translationId: number | undefined
-): { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string } | null {
-  const files = fileStatus.value[episodeInt];
-  if (!files || files.length === 0) return null;
-  // Find file matching the translation's author via metadata
-  if (translationId) {
-    const metas = episodeMeta.value[episodeInt] || [];
-    const meta = metas.find((m) => m.translationId === translationId);
-    if (meta) {
-      // Match by author tag
-      const authorTag = sanitizeFilename(meta.author);
-      const match = files.find((f) => f.author === authorTag);
-      if (match) return match;
-      // Legacy file (no author tag) — only match if it's the sole metadata entry
-      if (metas.length === 1 && files.length === 1 && !files[0].author) {
-        return files[0];
-      }
-    }
-  }
-  // No specific match found
-  return null;
-}
-
-function hasAnyFile(episodeInt: string): boolean {
-  const files = fileStatus.value[episodeInt];
-  return !!files && files.length > 0;
-}
-
-function selectedTrHasFile(row: EpisodeRow): boolean {
-  if (!row.selectedTr) return false;
-  return !!getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
-}
-
-async function openFile(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return;
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
-  if (!info) return;
-
-  if (playerMode.value === 'builtin') {
-    const name = anime.value ? getAnimeName() : '';
-    const localSubs = await window.api.playerGetLocalSubtitles(info.filePath);
-    const allEps = buildAllEpisodes();
-    const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
-    playerStore.openPlayer({
-      filePath: info.filePath,
-      streamUrl: '',
-      subtitleContent: localSubs || '',
-      animeName: name,
-      episodeLabel: row.episode.episodeInt,
-      availableStreams: [],
-      translationId: row.selectedTr.id,
-      translations: buildTranslationList(row),
-      downloadedTrIds: [...row.downloadedTrIds],
-      allEpisodes: allEps,
-      episodeIndex: epIdx,
-      animeId: props.animeId,
-      malId: anime.value?.myAnimeListId ?? 0
-    });
-  } else {
-    const result = await window.api.fileOpen(info.filePath);
-    if (result) {
-      errorMessage.value = result;
-      await checkFileStatus();
-    }
-  }
-}
-
-async function playStream(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return;
-  const name = anime.value ? getAnimeName() : '';
-  const result = await window.api.playerGetStreamUrl(
-    row.selectedTr.id,
-    getRealHeight(row.selectedTr)
-  );
-  if (result) {
-    const allEps = buildAllEpisodes();
-    const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt);
-    playerStore.openPlayer({
-      filePath: '',
-      streamUrl: result.streamUrl,
-      subtitleContent: result.subtitleContent || '',
-      animeName: name,
-      episodeLabel: row.episode.episodeInt,
-      availableStreams: result.availableStreams,
-      translationId: row.selectedTr.id,
-      translations: buildTranslationList(row),
-      downloadedTrIds: [...row.downloadedTrIds],
-      allEpisodes: allEps,
-      episodeIndex: epIdx,
-      animeId: props.animeId,
-      malId: anime.value?.myAnimeListId ?? 0
-    });
-  }
-}
-
-function showInFolder(row: EpisodeRow): void {
-  if (!row.selectedTr) return;
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
-  if (!info) return;
-  window.api.fileShowInFolder(info.filePath);
-}
-
-async function deleteFile(row: EpisodeRow): Promise<void> {
-  if (!row.selectedTr) return;
-  const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id);
-  if (!info) return;
-  await window.api.fileDeleteEpisode(
-    getAnimeName(),
-    row.episode.episodeInt,
-    props.animeId,
-    row.selectedTr.id
-  );
-  await checkFileStatus();
-}
-
-async function cancelEpisodeDownload(episodeLabel: string): Promise<void> {
-  await window.api.downloadCancelByEpisode(getAnimeName(), episodeLabel);
-}
-
-const hasActiveDownloads = computed(() => downloadGroups.value.size > 0);
-
-async function cancelAllDownloads(): Promise<void> {
-  await window.api.downloadCancelByEpisode(getAnimeName());
 }
 
 function translationTypeLabel(type: string): string {

@@ -421,6 +421,26 @@ Global app glue that doesn't belong on a Pinia store goes into
   `onEpisodeTranslationChange`, `applyFocusEpisode`, `resetEpisodeOverrides`).
   Lifecycle hooks are *not* registered here — the consumer wires `onMounted` /
   watchers — which keeps the composable callable from Vitest. (Phase 5 slice 5b.1)
+- `useEpisodeDownloads({ anime, episodeMeta, fileStatus, downloadGroups, watchProgress, …, shiki*, downloadsStore, playerStore, playerMode, … })`
+  — file-on-disk helpers, download orchestration, watch progress, and
+  continue-watching. Owns only the transient flags `downloading` +
+  `errorMessage`; the data refs live at the component level so both this
+  composable and `useEpisodeList` can read them without circular construction.
+  Exposes:
+  helpers (`episodeProgressPercent`, `isEpisodeWatched`, `getFileForTranslation`,
+  `hasAnyFile`, `selectedTrHasFile`, `buildTranslationList`, `buildAllEpisodes`,
+  `dlProgress`, `getGroup`, `downloadGroupChanged`);
+  computeds (`continueTarget`, `continueReady`, `continueLabel`,
+  `hasActiveDownloads`);
+  actions (`loadWatchProgress`, `checkFileStatus`, `updateDownloadGroups`,
+  `downloadAll`, `downloadEpisode`, `cancelEpisodeDownload`,
+  `cancelAllDownloads`, `openFile`, `playStream`, `showInFolder`, `deleteFile`,
+  `continueWatching`);
+  subscription (`subscribeFileEpisodesChanged`).
+  `continueTarget` implements the 4-priority continue-watching algorithm
+  (Shikimori-completed → eps[0] rewatch; Shikimori reports N → eps[N+1]; most
+  recent unfinished saved position; first ep after last watched; else last ep).
+  (Phase 5 slice 5b.2)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

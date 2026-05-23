@@ -196,7 +196,9 @@ function mostRecentDownloadedTranslation(
 ): { type: string; author: string } | null {
   const all = store.get('downloadedEpisodes') as Record<string, DownloadedEpisodeMeta>
   const prefix = `${animeId}:`
-  for (const [key, meta] of Object.entries(all)) {
+  const entries = Object.entries(all)
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const [key, meta] = entries[i]
     if (!key.startsWith(prefix)) continue
     if (!meta?.translationType) continue
     return { type: meta.translationType, author: meta.author ?? '' }

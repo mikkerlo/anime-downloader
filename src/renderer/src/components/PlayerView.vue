@@ -6,6 +6,7 @@ import { useAnime4K } from '../composables/use-anime4k';
 import { usePlayerKeyboard, type PlayerAction } from '../composables/use-player-keyboard';
 import { useSubtitles } from '../composables/use-subtitles';
 import { useRemux } from '../composables/use-remux';
+import { useSkipMarkers } from '../composables/use-skip-markers';
 
 const props = defineProps<{
   filePath: string;
@@ -163,143 +164,34 @@ const currentEpisodeInt = computed(
   () => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || ''
 );
 
-// Skip Detection: local playback uses stored per-episode boundaries from
-// `skipDetectorGetDetections(animeId)`. Streamed playback asks main to fingerprint
-// the current stream and only surfaces ranges when it confidently matches the
-// locally-derived show signatures.
-const showSkipDetections = ref<ShowSkipDetections | null>(null);
-const streamSkipDetection = ref<EpisodeSkipDetection | null>(null);
-const streamSkipDetecting = ref(false);
-const skippedRanges = ref<Set<string>>(new Set());
-const skipButtonVisible = ref(false);
-let skipButtonGraceTimer: ReturnType<typeof setTimeout> | null = null;
-const SKIP_GRACE_MS = 250;
-const SKIP_LEAD_IN_SEC = 0.25;
-let streamSkipRequestId = 0;
-
-const currentEpisodeSkip = computed<EpisodeSkipDetection | null>(() => {
-  if (isStreaming.value) {
-    return streamSkipDetection.value;
-  }
-  const det = showSkipDetections.value;
-  const epInt = currentEpisodeInt.value;
-  if (!det || !epInt) return null;
-  return det.perEpisode[epInt] ?? null;
+// Skip Detection — useSkipMarkers owns the dual-mode detection (local
+// playback uses stored per-episode boundaries; streamed playback asks
+// main to fingerprint + match the live stream), the skip-button grace
+// timer, the per-session "already-skipped" guard, and the
+// `skip-detector:signature-updated` IPC subscription.
+const skipMarkers = useSkipMarkers({
+  getAnimeId: () => props.animeId,
+  getCurrentEpisodeInt: () => currentEpisodeInt.value,
+  getCurrentTime: () => currentTime.value,
+  isStreaming,
+  activeStreamUrl,
+  onSeek: (t) => seek(t)
 });
-
-// Returns 'op' | 'ed' | null based on current playback time. The lead-in
-// tolerance handles the case where the seek bar lands a few hundred ms before
-// the band edge.
-const activeSkipRange = computed<'op' | 'ed' | null>(() => {
-  const ep = currentEpisodeSkip.value;
-  if (!ep) return null;
-  const t = currentTime.value;
-  if (ep.op && t >= ep.op.startSec - SKIP_LEAD_IN_SEC && t < ep.op.endSec) return 'op';
-  if (ep.ed && t >= ep.ed.startSec - SKIP_LEAD_IN_SEC && t < ep.ed.endSec) return 'ed';
-  return null;
-});
-
-function skipRangeKey(kind: 'op' | 'ed'): string {
-  return `${props.animeId}:${currentEpisodeInt.value}:${kind}`;
-}
-
-function activeSkipBounds(): { startSec: number; endSec: number; kind: 'op' | 'ed' } | null {
-  const kind = activeSkipRange.value;
-  const ep = currentEpisodeSkip.value;
-  if (!ep || !kind) return null;
-  const range = kind === 'op' ? ep.op : ep.ed;
-  if (!range) return null;
-  return { startSec: range.startSec, endSec: range.endSec, kind };
-}
-
-function onSkipClick(): void {
-  const bounds = activeSkipBounds();
-  if (!bounds) return;
-  skippedRanges.value.add(skipRangeKey(bounds.kind));
-  skipButtonVisible.value = false;
-  if (skipButtonGraceTimer) {
-    clearTimeout(skipButtonGraceTimer);
-    skipButtonGraceTimer = null;
-  }
-  seek(bounds.endSec);
-}
-
-watch(activeSkipRange, (kind) => {
-  if (skipButtonGraceTimer) {
-    clearTimeout(skipButtonGraceTimer);
-    skipButtonGraceTimer = null;
-  }
-  if (!kind) {
-    skipButtonVisible.value = false;
-    return;
-  }
-  if (skippedRanges.value.has(skipRangeKey(kind))) {
-    // User already skipped this range this session; don't re-show on rewind.
-    skipButtonVisible.value = false;
-    return;
-  }
-  // Brief grace timer prevents flicker when scrubbing through the range.
-  skipButtonGraceTimer = setTimeout(() => {
-    skipButtonVisible.value = true;
-    skipButtonGraceTimer = null;
-  }, SKIP_GRACE_MS);
-});
-
-async function loadSkipDetections(): Promise<void> {
-  if (!props.animeId) {
-    showSkipDetections.value = null;
-    return;
-  }
-  try {
-    showSkipDetections.value = await window.api.skipDetectorGetDetections(props.animeId);
-  } catch (err) {
-    console.error('Failed to load skip detections:', err);
-    showSkipDetections.value = null;
-  }
-}
-
-function resetSkipUiState(): void {
-  skippedRanges.value = new Set();
-  if (skipButtonGraceTimer) {
-    clearTimeout(skipButtonGraceTimer);
-    skipButtonGraceTimer = null;
-  }
-  skipButtonVisible.value = false;
-}
-
-async function refreshStreamSkipDetection(): Promise<void> {
-  const requestId = ++streamSkipRequestId;
-  streamSkipDetection.value = null;
-  streamSkipDetecting.value = false;
-  if (!isStreaming.value || !props.animeId || !currentEpisodeInt.value || !activeStreamUrl.value)
-    return;
-  if (!showSkipDetections.value) return;
-  const source = showSkipDetections.value.algorithm?.source ?? 'local';
-  if (source !== 'local') return;
-  try {
-    await window.api.skipDetectorCancelStreamDetect();
-  } catch {
-    // ignore best-effort cancel races before starting a fresh request
-  }
-  streamSkipDetecting.value = true;
-  try {
-    const result = await window.api.skipDetectorDetectStream(
-      props.animeId,
-      currentEpisodeInt.value,
-      activeStreamUrl.value
-    );
-    if (requestId !== streamSkipRequestId) return;
-    streamSkipDetection.value = result;
-  } catch (err) {
-    if (requestId !== streamSkipRequestId) return;
-    console.error('Failed to detect streamed skip ranges:', err);
-    streamSkipDetection.value = null;
-  } finally {
-    if (requestId === streamSkipRequestId) {
-      streamSkipDetecting.value = false;
-    }
-  }
-}
+const {
+  showSkipDetections,
+  streamSkipDetection,
+  streamSkipDetecting,
+  skipButtonVisible,
+  currentEpisodeSkip,
+  activeSkipRange,
+  loadSkipDetections,
+  onSkipClick,
+  resetSkipUiState
+} = skipMarkers;
+// Suppress "value referenced but never read" warning for unused destructured
+// fields (kept for template/use-site consumers).
+void showSkipDetections;
+void streamSkipDetection;
 
 // Reset the per-range "already skipped" guard when the episode changes so the
 // button appears for the new episode's OP/ED. Detections themselves come from
@@ -311,31 +203,6 @@ watch(currentEpisodeInt, (epInt) => {
     stopPrefetchPolling();
   }
 });
-
-const streamSkipSignatureVersion = computed(() => {
-  if (!isStreaming.value) return 0;
-  return showSkipDetections.value?.analyzedAt ?? 0;
-});
-
-const streamSkipSource = computed(() => {
-  if (!isStreaming.value) return '';
-  return showSkipDetections.value?.algorithm?.source ?? '';
-});
-
-watch(
-  [isStreaming, activeStreamUrl, currentEpisodeInt, streamSkipSignatureVersion, streamSkipSource],
-  () => {
-    if (!isStreaming.value) {
-      streamSkipRequestId++;
-      streamSkipDetection.value = null;
-      streamSkipDetecting.value = false;
-      void window.api.skipDetectorCancelStreamDetect();
-      return;
-    }
-    resetSkipUiState();
-    void refreshStreamSkipDetection();
-  }
-);
 let cumulativePlayTime = 0;
 let lastTimeUpdateAt = 0;
 let lastSaveAt = 0;
@@ -431,7 +298,6 @@ const syncplayPausedBy = ref<string | null>(null);
 // dedicated listener and returns an Unsubscribe that removes only that one,
 // so independent subscribers on the same channel (e.g. SettingsView's
 // "Test connection") don't clobber each other.
-let unsubSkipDetectorSignatureUpdated: Unsubscribe | null = null;
 let unsubPlayerStreamSubtitles: Unsubscribe | null = null;
 let unsubPlayerStream: Unsubscribe | null = null;
 let unsubSyncplayConnectionStatus: Unsubscribe | null = null;
@@ -1884,11 +1750,9 @@ onMounted(async () => {
     prefetchSetting.value = savedPrefetch;
   }
 
+  // useSkipMarkers already wires the signature-updated subscription via its
+  // own onMounted hook — we just need to kick off the initial load.
   loadSkipDetections();
-  unsubSkipDetectorSignatureUpdated = window.api.onSkipDetectorSignatureUpdated((data) => {
-    if (data.animeId !== props.animeId) return;
-    loadSkipDetections();
-  });
 
   // Subtitles extracted from MKV streams arrive asynchronously via IPC —
   // useSubtitles owns the filter + apply logic.
@@ -2099,9 +1963,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  streamSkipRequestId++;
-  streamSkipDetecting.value = false;
-  void window.api.skipDetectorCancelStreamDetect();
+  // Stream-skip detection cancel + signature-updated unsub + grace timer
+  // cleanup all live inside useSkipMarkers' onBeforeUnmount.
   saveProgress(true);
   stopPrefetchPolling();
   if (prefetchSeekResumeTimer) clearTimeout(prefetchSeekResumeTimer);
@@ -2130,12 +1993,6 @@ onBeforeUnmount(() => {
     clearTimeout(persistVolumeTimer);
     persistVolumeTimer = null;
   }
-  if (skipButtonGraceTimer) {
-    clearTimeout(skipButtonGraceTimer);
-    skipButtonGraceTimer = null;
-  }
-  unsubSkipDetectorSignatureUpdated?.();
-  unsubSkipDetectorSignatureUpdated = null;
   // Unblock any awaiter of askHevcChoice() so prepareMkvForPlayback unwinds.
   if (hevcPromptResolver) {
     const fn = hevcPromptResolver;

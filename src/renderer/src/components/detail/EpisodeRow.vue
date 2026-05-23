@@ -55,12 +55,15 @@ const {
           )
         "
       >
-        <!-- Show selected type first, then the rest -->
+        <!-- Show selected type first, then the rest. Filter the leading
+             `find` result to handle a corrupted/stale translationType
+             setting — `!` would bypass TypeScript but crash at runtime
+             once Vue read `.value` on undefined. -->
         <template
           v-for="type in [
-            TRANSLATION_TYPES.find((t) => t.value === props.translationType)!,
+            TRANSLATION_TYPES.find((t) => t.value === props.translationType),
             ...TRANSLATION_TYPES.filter((t) => t.value !== props.translationType)
-          ]"
+          ].filter(Boolean) as typeof TRANSLATION_TYPES"
           :key="type.value"
         >
           <optgroup

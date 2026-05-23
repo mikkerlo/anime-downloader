@@ -377,8 +377,9 @@ watch(backgroundQualityProbe, (val) => {
         selected one). Detects quality mismatches but may cause lag on slower connections.
       </p>
       <label class="toggle-row">
-        <input type="checkbox" v-model="backgroundQualityProbe" />
-        <span>Enable background quality probe</span>
+        <input type="checkbox" v-model="backgroundQualityProbe" class="toggle-input" />
+        <span class="toggle-slider"></span>
+        <span class="toggle-label">Enable background quality probe</span>
       </label>
     </div>
 

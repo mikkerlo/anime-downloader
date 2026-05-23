@@ -213,8 +213,9 @@ watch(syncplayAutoReconnect, () => {
 
     <div class="setting-group">
       <label class="toggle-row">
-        <input type="checkbox" v-model="syncplayAutoReconnect" />
-        <span>Auto-reconnect on disconnect</span>
+        <input type="checkbox" v-model="syncplayAutoReconnect" class="toggle-input" />
+        <span class="toggle-slider"></span>
+        <span class="toggle-label">Auto-reconnect on disconnect</span>
       </label>
       <p class="setting-hint">Retry with exponential backoff up to 5 times after a network drop.</p>
     </div>

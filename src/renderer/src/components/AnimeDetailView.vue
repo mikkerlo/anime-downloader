@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
-import { formatSpeed, formatEta, getAnimeName as _getAnimeName } from '../utils';
+import { getAnimeName as _getAnimeName } from '../utils';
 import CleanupModal from './CleanupModal.vue';
 import { useLibraryStore } from '../stores/library';
 import { usePlayerStore } from '../stores/player';
@@ -17,7 +17,9 @@ import ChronologyPanel from './detail/ChronologyPanel.vue';
 import FriendsPanel from './detail/FriendsPanel.vue';
 import ShikimoriPanel from './detail/ShikimoriPanel.vue';
 import SkipDetectionPanel from './detail/SkipDetectionPanel.vue';
-import { ShikimoriKey, SkipDetectionKey } from './detail/keys';
+import EpisodeList from './detail/EpisodeList.vue';
+import { ShikimoriKey, SkipDetectionKey, EpisodeListKey, EpisodeDownloadsKey } from './detail/keys';
+import { TRANSLATION_TYPES } from './detail/translation-types';
 
 const props = defineProps<{
   animeId: number;
@@ -81,6 +83,7 @@ const episodeList = useEpisodeList({
   libraryStore,
   checkFileStatus: () => checkFileStatus()
 });
+provide(EpisodeListKey, episodeList);
 
 const {
   episodes,
@@ -89,16 +92,13 @@ const {
   loadingEpisodes,
   filteredEpisodes,
   episodeRows,
-  totalPages,
   isPaginated,
   translationTypeCounts,
   availableAuthors,
   getRealHeight,
-  qualityLabel,
   goToPage,
   loadPageEpisodes,
   probeSelectedQualities,
-  onEpisodeTranslationChange,
   applyFocusEpisode,
   resetEpisodeOverrides
 } = episodeList;
@@ -158,6 +158,7 @@ const downloads = useEpisodeDownloads({
   playerMode,
   pageSize: PAGE_SIZE
 });
+provide(EpisodeDownloadsKey, downloads);
 
 const {
   downloading,
@@ -165,35 +166,14 @@ const {
   continueReady,
   continueLabel,
   hasActiveDownloads,
-  episodeProgressPercent,
-  isEpisodeWatched,
-  getFileForTranslation,
-  hasAnyFile,
-  selectedTrHasFile,
-  dlProgress,
-  getGroup,
   loadWatchProgress,
   checkFileStatus,
   updateDownloadGroups,
   downloadAll,
-  downloadEpisode,
-  cancelEpisodeDownload,
   cancelAllDownloads,
-  openFile,
-  playStream,
-  showInFolder,
-  deleteFile,
   continueWatching,
   subscribeFileEpisodesChanged
 } = downloads;
-
-const TRANSLATION_TYPES = [
-  { value: 'subRu', label: 'Russian Subtitles', short: 'RU SUB', color: '#6ab04c' },
-  { value: 'subEn', label: 'English Subtitles', short: 'EN SUB', color: '#3498db' },
-  { value: 'voiceRu', label: 'Russian Voice', short: 'RU DUB', color: '#e94560' },
-  { value: 'voiceEn', label: 'English Voice', short: 'EN DUB', color: '#9b59b6' },
-  { value: 'raw', label: 'RAW', short: 'RAW', color: '#6a6a8a' }
-];
 
 function onMouseBack(e: MouseEvent): void {
   if (e.button === 3) {
@@ -433,16 +413,6 @@ async function onPosterError(): Promise<void> {
   const cached = await window.api.getCachedPoster(props.animeId);
   if (cached) posterSrc.value = cached;
 }
-
-function translationTypeLabel(type: string): string {
-  const t = TRANSLATION_TYPES.find((tt) => tt.value === type);
-  return t ? t.label : type;
-}
-
-function typeChip(type: string): { short: string; color: string } {
-  const t = TRANSLATION_TYPES.find((tt) => tt.value === type);
-  return t ? { short: t.short, color: t.color } : { short: type, color: '#6a6a8a' };
-}
 </script>
 
 <template>
@@ -623,290 +593,7 @@ function typeChip(type: string): { short: string; color: string } {
 
       <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
 
-      <div v-if="loadingEpisodes" class="status-text">Loading episodes...</div>
-
-      <div v-if="isPaginated" class="pagination">
-        <button class="page-btn" :disabled="currentPage === 0" @click="goToPage(currentPage - 1)">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            width="14"
-            height="14"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <button
-          v-for="p in totalPages"
-          :key="p - 1"
-          class="page-btn"
-          :class="{ active: currentPage === p - 1 }"
-          @click="goToPage(p - 1)"
-        >
-          {{ p }}
-        </button>
-        <button
-          class="page-btn"
-          :disabled="currentPage === totalPages - 1"
-          @click="goToPage(currentPage + 1)"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            width="14"
-            height="14"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-        <span class="page-info">{{ filteredEpisodes.length }} episodes</span>
-      </div>
-
-      <div class="episode-list">
-        <div
-          v-for="row in episodeRows"
-          :key="row.episode.id"
-          :data-ep-int="row.episode.episodeInt"
-          class="episode-row"
-        >
-          <span class="ep-name">{{ row.episode.episodeFull }}</span>
-          <template v-if="row.isLocked">
-            <span class="ep-author locked">
-              {{ row.selectedTr?.authorsSummary || 'Unknown' }}
-              <span class="lock-label">Queued</span>
-            </span>
-          </template>
-          <template v-else-if="row.allTranslations.length > 0">
-            <select
-              class="ep-select"
-              :value="row.selectedTr?.id || ''"
-              @change="
-                onEpisodeTranslationChange(
-                  row.episode.id,
-                  row.episode.episodeInt,
-                  Number(($event.target as HTMLSelectElement).value)
-                )
-              "
-            >
-              <!-- Show selected type first, then the rest -->
-              <template
-                v-for="type in [
-                  TRANSLATION_TYPES.find((t) => t.value === translationType)!,
-                  ...TRANSLATION_TYPES.filter((t) => t.value !== translationType)
-                ]"
-                :key="type.value"
-              >
-                <optgroup
-                  v-if="row.allTranslations.some((tr) => tr.type === type.value)"
-                  :label="type.label"
-                >
-                  <option
-                    v-for="tr in row.allTranslations
-                      .filter((t) => t.type === type.value)
-                      .sort((a, b) => getRealHeight(b) - getRealHeight(a))"
-                    :key="tr.id"
-                    :value="tr.id"
-                  >
-                    {{ row.downloadedTrIds.has(tr.id) ? '⬇ ' : '' }}{{ tr.authorsSummary }} ({{
-                      qualityLabel(getRealHeight(tr))
-                    }})
-                  </option>
-                </optgroup>
-              </template>
-            </select>
-          </template>
-          <span v-else class="ep-missing">No translation</span>
-          <!-- Download / merge status -->
-          <div
-            v-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'merging'"
-            class="ep-dl-status merging"
-          >
-            Merging
-            {{
-              getGroup(row.episode.episodeFull)?.mergePercent != null
-                ? getGroup(row.episode.episodeFull)?.mergePercent + '%'
-                : '...'
-            }}
-          </div>
-          <div
-            v-else-if="getGroup(row.episode.episodeFull)?.mergeStatus === 'failed'"
-            class="ep-dl-status merge-failed"
-          >
-            Merge failed
-          </div>
-          <div
-            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'downloading'"
-            class="ep-dl-status"
-          >
-            <div class="ep-progress-wrap">
-              <div
-                class="ep-progress-bar"
-                :style="{ width: dlProgress(getGroup(row.episode.episodeFull)!.video) + '%' }"
-              ></div>
-            </div>
-            <span class="ep-dl-text">{{
-              formatSpeed(getGroup(row.episode.episodeFull)!.video!.speed)
-            }}</span>
-            <span class="ep-dl-text"
-              >ETA {{ formatEta(getGroup(row.episode.episodeFull)!.video!) }}</span
-            >
-          </div>
-          <div
-            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'queued'"
-            class="ep-dl-status queued"
-          >
-            Queued
-          </div>
-          <div
-            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'paused'"
-            class="ep-dl-status paused"
-          >
-            Paused ({{ Math.round(dlProgress(getGroup(row.episode.episodeFull)!.video)) }}%)
-          </div>
-          <div
-            v-else-if="getGroup(row.episode.episodeFull)?.video?.status === 'failed'"
-            class="ep-dl-status failed"
-          >
-            Failed
-          </div>
-          <div class="ep-right">
-            <span
-              v-if="isEpisodeWatched(row.episode.episodeInt)"
-              class="watched-badge"
-              title="Watched"
-              >✓</span
-            >
-            <span
-              v-else-if="episodeProgressPercent(row.episode.episodeInt) > 0"
-              class="watch-progress-badge"
-              :title="`Watched ${episodeProgressPercent(row.episode.episodeInt)}%`"
-            >
-              {{ episodeProgressPercent(row.episode.episodeInt) }}%
-            </span>
-            <span
-              v-if="row.selectedTr"
-              class="type-chip"
-              :style="{
-                backgroundColor: typeChip(row.selectedTr.type).color + '22',
-                color: typeChip(row.selectedTr.type).color
-              }"
-              >{{ typeChip(row.selectedTr.type).short }}</span
-            >
-            <span
-              v-if="row.selectedTr"
-              class="quality-badge"
-              :class="{ hd: getRealHeight(row.selectedTr) >= 1080 }"
-              >{{ qualityLabel(getRealHeight(row.selectedTr)) }}</span
-            >
-            <template v-if="selectedTrHasFile(row)">
-              <span class="file-type-badge">{{
-                getFileForTranslation(
-                  row.episode.episodeInt,
-                  row.selectedTr?.id
-                )?.type.toUpperCase()
-              }}</span>
-            </template>
-            <template v-else-if="hasAnyFile(row.episode.episodeInt)">
-              <span class="file-type-badge other-dl">⬇</span>
-            </template>
-          </div>
-          <div class="ep-links">
-            <template v-if="selectedTrHasFile(row)">
-              <button class="link-btn open" @click="openFile(row)" title="Open file">Open</button>
-              <button class="link-btn folder" @click="showInFolder(row)" title="Show in folder">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M2 7.5V18a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-6.5l-2-2.5H4a2 2 0 00-2 2z"
-                  />
-                </svg>
-              </button>
-              <button class="link-btn delete" @click="deleteFile(row)" title="Delete file">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-              </button>
-            </template>
-            <button
-              v-if="
-                getGroup(row.episode.episodeFull) &&
-                (!['completed', 'cancelled'].includes(
-                  getGroup(row.episode.episodeFull)?.video?.status || ''
-                ) ||
-                  getGroup(row.episode.episodeFull)?.mergeStatus === 'merging')
-              "
-              class="link-btn cancel"
-              @click="cancelEpisodeDownload(row.episode.episodeFull)"
-              title="Cancel"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                width="14"
-                height="14"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-            <button
-              v-if="playerMode === 'builtin' && row.selectedTr && !selectedTrHasFile(row)"
-              class="link-btn play"
-              @click="playStream(row)"
-              title="Play (stream)"
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
-            <button
-              v-if="row.selectedTr && !row.isLocked && !selectedTrHasFile(row)"
-              class="link-btn dl"
-              @click="downloadEpisode(row)"
-              title="Download this episode"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                width="14"
-                height="14"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M2 19.5h20M12 2v14m0 0l-4-4m4 4l4-4"
-                />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
+      <EpisodeList :player-mode="playerMode" :translation-type="translationType" />
     </div>
     <CleanupModal
       v-if="cleanupModalOpen && anime"
@@ -1169,51 +856,6 @@ function typeChip(type: string): { short: string; color: string } {
   cursor: not-allowed;
 }
 
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 12px;
-}
-
-.page-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 8px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #a0a0b8;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.page-btn:hover:not(:disabled) {
-  border-color: #e94560;
-  color: #e0e0e0;
-}
-
-.page-btn.active {
-  background-color: #e94560;
-  border-color: #e94560;
-  color: white;
-}
-
-.page-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.page-info {
-  margin-left: 8px;
-  color: #6a6a8a;
-  font-size: 0.8rem;
-}
-
 .cancel-all-btn {
   padding: 8px 20px;
   background-color: #e94560;
@@ -1237,283 +879,6 @@ function typeChip(type: string): { short: string; color: string } {
   color: #e94560;
   font-size: 0.85rem;
   margin-bottom: 16px;
-}
-
-.episode-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.episode-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 14px;
-  background-color: #16213e;
-  border-radius: 6px;
-}
-
-.ep-name {
-  font-size: 0.9rem;
-  color: #e0e0e0;
-  min-width: 100px;
-}
-
-.ep-author {
-  flex: 1;
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.ep-author.locked {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.lock-label {
-  font-size: 0.65rem;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background-color: #0f3460;
-  color: #3498db;
-  flex-shrink: 0;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.ep-select {
-  padding: 4px 8px;
-  background-color: #1a1a2e;
-  border: 1px solid #0f3460;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
-  outline: none;
-  min-width: 150px;
-  max-width: 300px;
-  flex: 1;
-}
-
-.ep-select:focus {
-  border-color: #e94560;
-}
-
-.ep-missing {
-  flex: 1;
-  font-size: 0.8rem;
-  color: #e94560;
-  opacity: 0.6;
-}
-
-.ep-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.type-chip,
-.quality-badge,
-.file-type-badge {
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  flex-shrink: 0;
-  line-height: 1;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.type-chip {
-  letter-spacing: 0.3px;
-}
-
-.watched-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  background-color: rgba(106, 176, 76, 0.2);
-  color: #6ab04c;
-  font-size: 0.75rem;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.watch-progress-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background-color: rgba(233, 69, 96, 0.15);
-  color: #e94560;
-  font-size: 0.65rem;
-  font-weight: 700;
-  line-height: 1;
-  height: 20px;
-  flex-shrink: 0;
-}
-
-.quality-badge {
-  background-color: #0f3460;
-  color: #6a6a8a;
-}
-
-.quality-badge.hd {
-  background-color: #1a4a2e;
-  color: #6ab04c;
-}
-
-.ep-links {
-  display: flex;
-  gap: 6px;
-}
-
-.link-btn {
-  padding: 4px 12px;
-  background-color: #0f3460;
-  border-radius: 4px;
-  color: #e94560;
-  font-size: 0.75rem;
-  text-decoration: none;
-  font-weight: 600;
-  transition: background-color 0.15s;
-}
-
-.link-btn:hover {
-  background-color: #1a4a7a;
-}
-
-.link-btn.play {
-  color: #e94560;
-  cursor: pointer;
-  border: none;
-  font-weight: 600;
-  font-size: 0.75rem;
-}
-
-.link-btn.dl {
-  color: #3498db;
-  cursor: pointer;
-  border: none;
-  font-weight: 600;
-  font-size: 0.75rem;
-}
-
-.link-btn.open {
-  color: #6ab04c;
-  cursor: pointer;
-  border: none;
-  font-weight: 600;
-  font-size: 0.75rem;
-}
-
-.link-btn.folder {
-  color: #f0932b;
-  cursor: pointer;
-  border: none;
-  display: flex;
-  align-items: center;
-}
-
-.link-btn.delete {
-  color: #e94560;
-  cursor: pointer;
-  border: none;
-  display: flex;
-  align-items: center;
-}
-
-.link-btn.cancel {
-  color: #f39c12;
-  cursor: pointer;
-  border: none;
-  display: flex;
-  align-items: center;
-}
-
-.meta-badge {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  background-color: #0f3460;
-  color: #6a6a8a;
-  flex-shrink: 0;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ep-dl-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.7rem;
-  color: #3498db;
-  min-width: 120px;
-  flex-shrink: 0;
-}
-
-.ep-dl-status.queued {
-  color: #6a6a8a;
-}
-.ep-dl-status.paused {
-  color: #f39c12;
-}
-.ep-dl-status.failed {
-  color: #e94560;
-}
-.ep-dl-status.merging {
-  color: #f39c12;
-  font-weight: 600;
-}
-.ep-dl-status.merge-failed {
-  color: #e94560;
-}
-
-.ep-progress-wrap {
-  flex: 1;
-  height: 4px;
-  background-color: #0f3460;
-  border-radius: 2px;
-  overflow: hidden;
-  min-width: 50px;
-}
-
-.ep-progress-bar {
-  height: 100%;
-  background-color: #3498db;
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-
-.ep-dl-text {
-  font-size: 0.65rem;
-  color: #6a6a8a;
-  white-space: nowrap;
-}
-
-.file-type-badge {
-  background-color: #1a4a2e;
-  color: #6ab04c;
-}
-
-.file-type-badge.other-dl {
-  background-color: #0f3460;
-  color: #3498db;
-  font-size: 0.7rem;
 }
 
 .status-text {

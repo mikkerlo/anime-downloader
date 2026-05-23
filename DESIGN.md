@@ -86,6 +86,9 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress. Consumes `useAnimeDetailPrefs` + `useChronology` + `useEpisodeList` + `useEpisodeDownloads`. Renders `detail/ChronologyPanel.vue` + `detail/FriendsPanel.vue` for the Shikimori-driven sidebar panels |
 | `src/renderer/src/components/detail/ChronologyPanel.vue` | Related-anime list (Shikimori chronology). Props: `shikiRelated`, `relatedLoading`; v-model: `collapsed`. Calls `useLibraryStore().openAnime()` directly to navigate. Includes its own KIND_LABELS + STATUS_LABELS + scoped CSS |
 | `src/renderer/src/components/detail/FriendsPanel.vue` | Friends' Shikimori watch status. Props: `friendsRates`, `friendsLoading`, `numberOfEpisodes`; v-model: `collapsed`. Owns the `friendsSummary` computed (status counts) |
+| `src/renderer/src/components/detail/ShikimoriPanel.vue` | Shikimori rate edit form + offline indicator + sync state + details (genres + description with collapse). Props: `anime`. Injects the `useShikimori` composable instance via `ShikimoriKey` for state + actions; reads `offlineQueueLength` directly from `useShikimoriStore` |
+| `src/renderer/src/components/detail/SkipDetectionPanel.vue` | Local skip-detection + chapter-inject panel with collapse, run/cancel buttons, chapter-inject button, results table. Props: `filteredEpisodes`. Injects the `useSkipDetection` composable instance via `SkipDetectionKey` |
+| `src/renderer/src/components/detail/keys.ts` | Typed `InjectionKey` symbols (`ShikimoriKey`, `SkipDetectionKey`) the parent uses to `provide` composable instances to deeply-nested detail panels |
 | `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
 | `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
 | `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
@@ -443,6 +446,20 @@ Global app glue that doesn't belong on a Pinia store goes into
   (Shikimori-completed → eps[0] rewatch; Shikimori reports N → eps[N+1]; most
   recent unfinished saved position; first ep after last watched; else last ep).
   (Phase 5 slice 5b.2)
+- `useShikimori({ anime, shikimoriStore })` — Shikimori panel state: rate
+  edit form refs (status/episodes/score/rewatches), shikiUser + shikiUserChecked,
+  shikiLoading/Saving/Error, shikiDetails + descExpanded, friendsRates +
+  friendsLoading + friendsCollapsed, syncState + lastSyncError. Actions:
+  `loadShikimoriData(loadRelated)`, `shikiSave`, `triggerSyncNow`. Owns the
+  auto-status nudge watcher on shikiEpisodes plus the two store-cache mirror
+  watchers (rateByMalId, animeDetailsByMalId). (Phase 5 slice 5b.4)
+- `useSkipDetection({ getAnimeId, filteredEpisodes, fileStatus })` — local
+  skip-detection state: detections, analyzing flags, progress, errors, chapter
+  inject lifecycle. Computeds: `skipEpisodeInputs` (filtered/prefers-mkv),
+  `skipMkvEpisodeCount`, `skipProgressLabel`, `chapterInjectProgressLabel`.
+  Actions: `loadSkipDetections`, `hydrateSkipStatus`, `runSkipAnalysis`,
+  `cancelSkipAnalysis`, `injectChaptersToMkv`. Three `subscribe*` init
+  functions for the per-animeId-filtered broadcasts. (Phase 5 slice 5b.4)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

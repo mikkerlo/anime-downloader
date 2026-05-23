@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import SubtitlesOctopus from 'libass-wasm/dist/js/subtitles-octopus.js';
 import { formatSpeed } from '../utils';
 import { useMsePlayer } from '../composables/use-mse-player';
+import { useAnime4K } from '../composables/use-anime4k';
+import { usePlayerKeyboard, type PlayerAction } from '../composables/use-player-keyboard';
 
 const props = defineProps<{
   filePath: string;
@@ -47,11 +49,13 @@ const seekTooltipVisible = ref(false);
 const seekTooltipLeft = ref(0);
 const seekTooltipTime = ref('0:00');
 
-// Anime4K state
-const anime4kPreset = ref<'off' | 'mode-a' | 'mode-b' | 'mode-c'>('off');
-const webgpuAvailable = ref(false);
-const gpuName = ref('');
-const anime4kActive = computed(() => webgpuAvailable.value && anime4kPreset.value !== 'off');
+// Anime4K state — owned by useAnime4K composable, destructured here for
+// template bindings + the watcher below.
+const a4k = useAnime4K({
+  getVideoEl: () => videoRef.value,
+  getCanvasEl: () => canvasRef.value
+});
+const { anime4kPreset, webgpuAvailable, gpuName, anime4kActive, presetLabel } = a4k;
 
 // UI state
 const showControls = ref(true);
@@ -954,37 +958,8 @@ function maybeMarkPendingPrevWatched(): void {
   markEpisodeWatched(prev);
 }
 
-// WebGPU pipeline state
-let gpuDevice: GPUDevice | null = null;
-let pipelineActive = false;
-
 // ASS subtitle state (SubtitlesOctopus renderer)
 let octopusInstance: InstanceType<typeof SubtitlesOctopus> | null = null;
-
-// Fullscreen quad WGSL shaders for rendering pipeline output to canvas
-const FULLSCREEN_QUAD_VERT = `
-@vertex
-fn vert_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4f {
-  var pos = array<vec2f, 6>(
-    vec2f(-1, -1), vec2f(1, -1), vec2f(-1, 1),
-    vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1)
-  );
-  return vec4f(pos[idx], 0, 1);
-}
-`;
-
-const FULLSCREEN_QUAD_FRAG = `
-@group(0) @binding(0) var mySampler: sampler;
-@group(0) @binding(1) var myTexture: texture_2d<f32>;
-
-@fragment
-fn main(@builtin(position) coord: vec4f) -> @location(0) vec4f {
-  let dims = vec2f(textureDimensions(myTexture));
-  let tc = coord.xy / dims;
-  // Flip Y so video isn't upside down
-  return textureSample(myTexture, mySampler, vec2f(tc.x, tc.y));
-}
-`;
 
 const videoSrc = computed(() => {
   if (activeFilePath.value) {
@@ -1411,272 +1386,79 @@ function onAuxMouseDown(e: MouseEvent): void {
 }
 
 // Keyboard shortcuts
-const isMac = navigator.platform.toUpperCase().includes('MAC');
-
-function matchesBinding(e: KeyboardEvent, binding: string): boolean {
-  const parts = binding.split('+');
-  const key = parts[parts.length - 1];
-  const mods = parts.slice(0, -1).map((m) => m.toLowerCase());
-  const needCtrl = mods.includes('ctrl');
-  const needMeta = mods.includes('meta');
-  const needCmdOrCtrl = mods.includes('cmdorctrl');
-  const needShift = mods.includes('shift');
-  const needAlt = mods.includes('alt');
-  const wantCtrl = needCtrl || (needCmdOrCtrl && !isMac);
-  const wantMeta = needMeta || (needCmdOrCtrl && isMac);
-  if (e.ctrlKey !== wantCtrl) return false;
-  if (e.metaKey !== wantMeta) return false;
-  if (e.shiftKey !== needShift) return false;
-  if (e.altKey !== needAlt) return false;
-  return e.key.toLowerCase() === key.toLowerCase();
-}
-
-function onKeyDown(event: KeyboardEvent): void {
-  event.stopPropagation();
-  const target = event.target as HTMLElement | null;
-  const tag = target?.tagName;
-  if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable)
-    return;
-
-  const prevBinding = playerShortcuts.value.playerPrevEpisode || 'Shift+ArrowLeft';
-  const nextBinding = playerShortcuts.value.playerNextEpisode || 'Shift+ArrowRight';
-  if (matchesBinding(event, prevBinding)) {
-    event.preventDefault();
-    if (canPrev.value) goToEpisode('prev');
-    return;
-  }
-  if (matchesBinding(event, nextBinding)) {
-    event.preventDefault();
-    if (canNext.value) goToEpisode('next');
-    return;
-  }
-
-  if (webgpuAvailable.value) {
-    const shaderBindings: [string, 'mode-a' | 'mode-b' | 'mode-c' | 'off'][] = [
-      [playerShortcuts.value.shaderModeA || 'CmdOrCtrl+1', 'mode-a'],
-      [playerShortcuts.value.shaderModeB || 'CmdOrCtrl+2', 'mode-b'],
-      [playerShortcuts.value.shaderModeC || 'CmdOrCtrl+3', 'mode-c'],
-      [playerShortcuts.value.shaderOff || 'CmdOrCtrl+Backquote', 'off']
-    ];
-    for (const [binding, preset] of shaderBindings) {
-      if (matchesBinding(event, binding)) {
-        event.preventDefault();
-        selectPreset(preset);
-        showControlsBriefly();
-        return;
-      }
-    }
-  }
-
-  switch (event.key) {
-    case ' ':
-    case 'k':
-    case 'K':
-      event.preventDefault();
+// Keyboard handling — usePlayerKeyboard owns the document-level keydown
+// listener + binding matching; we map dispatched actions back to the
+// component-local helpers below.
+function onPlayerAction(action: PlayerAction): void {
+  switch (action) {
+    case 'prev-episode':
+      if (canPrev.value) goToEpisode('prev');
+      break;
+    case 'next-episode':
+      if (canNext.value) goToEpisode('next');
+      break;
+    case 'shader-mode-a':
+      selectPreset('mode-a');
+      showControlsBriefly();
+      break;
+    case 'shader-mode-b':
+      selectPreset('mode-b');
+      showControlsBriefly();
+      break;
+    case 'shader-mode-c':
+      selectPreset('mode-c');
+      showControlsBriefly();
+      break;
+    case 'shader-off':
+      selectPreset('off');
+      showControlsBriefly();
+      break;
+    case 'play-toggle':
       togglePlay();
       break;
-    case 'ArrowLeft':
-      event.preventDefault();
+    case 'seek-back':
       seekRelative(-5);
       showControlsBriefly();
       break;
-    case 'ArrowRight':
-      event.preventDefault();
+    case 'seek-forward':
       seekRelative(5);
       showControlsBriefly();
       break;
-    case 'ArrowUp':
-      event.preventDefault();
+    case 'volume-up':
       setVolume(volume.value + 0.05);
       showControlsBriefly();
       break;
-    case 'ArrowDown':
-      event.preventDefault();
+    case 'volume-down':
       setVolume(volume.value - 0.05);
       showControlsBriefly();
       break;
-    case 'f':
-    case 'F':
-      event.preventDefault();
+    case 'fullscreen':
       toggleFullscreen();
       break;
-    case 'm':
-    case 'M':
-      event.preventDefault();
+    case 'mute-toggle':
       toggleMute();
       showControlsBriefly();
       break;
-    case 'Escape':
-      event.preventDefault();
+    case 'close':
       handleClose();
       break;
   }
 }
+usePlayerKeyboard({
+  shortcuts: playerShortcuts,
+  webgpuAvailable,
+  onAction: onPlayerAction
+});
 
-// Anime4K WebGPU setup
-async function initWebGPU(): Promise<void> {
-  try {
-    if (!navigator.gpu) return;
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) return;
-    const info = adapter.info;
-    gpuName.value = info.device || info.description || info.vendor || 'Unknown GPU';
-    gpuDevice = await adapter.requestDevice();
-    webgpuAvailable.value = true;
-  } catch (e) {
-    console.warn('[player] WebGPU init failed:', e);
-  }
-}
-
-async function startAnime4KPipeline(): Promise<void> {
-  stopAnime4KPipeline();
-
-  const video = videoRef.value;
-  const canvas = canvasRef.value;
-  if (!video || !canvas || !gpuDevice || anime4kPreset.value === 'off') return;
-  if (!video.videoWidth || !video.videoHeight) return;
-
-  try {
-    const { ModeA, ModeB, ModeC } = await import('anime4k-webgpu');
-    const device = gpuDevice;
-
-    const PresetClass = {
-      'mode-a': ModeA,
-      'mode-b': ModeB,
-      'mode-c': ModeC
-    }[anime4kPreset.value];
-    if (!PresetClass) return;
-
-    const WIDTH = video.videoWidth;
-    const HEIGHT = video.videoHeight;
-
-    // Create input texture for video frames
-    const videoFrameTexture = device.createTexture({
-      size: [WIDTH, HEIGHT, 1],
-      format: 'rgba16float',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT
-    });
-
-    // Target dimensions: use screen size (capped to avoid excessive GPU load)
-    const screenW = Math.round(window.screen.width * window.devicePixelRatio);
-    const screenH = Math.round(window.screen.height * window.devicePixelRatio);
-    // Don't upscale beyond screen resolution
-    const targetW = Math.min(screenW, WIDTH * 2);
-    const targetH = Math.min(screenH, HEIGHT * 2);
-
-    // Create the Anime4K pipeline
-    const pipeline = new PresetClass({
-      device,
-      inputTexture: videoFrameTexture,
-      nativeDimensions: { width: WIDTH, height: HEIGHT },
-      targetDimensions: { width: targetW, height: targetH }
-    });
-
-    // Set canvas size to pipeline output
-    const outputTex = pipeline.getOutputTexture();
-    canvas.width = outputTex.width;
-    canvas.height = outputTex.height;
-
-    // Configure canvas WebGPU context
-    const context = canvas.getContext('webgpu') as GPUCanvasContext;
-    const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device, format: presentationFormat, alphaMode: 'premultiplied' });
-
-    // Create render pipeline (fullscreen quad to display output texture)
-    const bindGroupLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} }
-      ]
-    });
-
-    const renderPipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-      vertex: {
-        module: device.createShaderModule({ code: FULLSCREEN_QUAD_VERT }),
-        entryPoint: 'vert_main'
-      },
-      fragment: {
-        module: device.createShaderModule({ code: FULLSCREEN_QUAD_FRAG }),
-        entryPoint: 'main',
-        targets: [{ format: presentationFormat }]
-      },
-      primitive: { topology: 'triangle-list' }
-    });
-
-    const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    const bindGroup = device.createBindGroup({
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: sampler },
-        { binding: 1, resource: outputTex.createView() }
-      ]
-    });
-
-    pipelineActive = true;
-
-    function frame(): void {
-      if (!pipelineActive) return;
-
-      try {
-        // Copy current video frame to input texture
-        device.queue.copyExternalImageToTexture(
-          { source: video! },
-          { texture: videoFrameTexture },
-          [WIDTH, HEIGHT]
-        );
-
-        const commandEncoder = device.createCommandEncoder();
-
-        // Run Anime4K compute shaders
-        pipeline.pass(commandEncoder);
-
-        // Render output to canvas
-        const passEncoder = commandEncoder.beginRenderPass({
-          colorAttachments: [
-            {
-              view: context.getCurrentTexture().createView(),
-              clearValue: { r: 0, g: 0, b: 0, a: 1 },
-              loadOp: 'clear',
-              storeOp: 'store'
-            }
-          ]
-        });
-        passEncoder.setPipeline(renderPipeline);
-        passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.draw(6);
-        passEncoder.end();
-
-        device.queue.submit([commandEncoder.finish()]);
-      } catch (e) {
-        console.warn('[player] Anime4K frame error:', e);
-        pipelineActive = false;
-        return;
-      }
-
-      video!.requestVideoFrameCallback(frame);
-    }
-
-    video.requestVideoFrameCallback(frame);
-  } catch (e) {
-    console.error('[player] Anime4K pipeline error:', e);
-  }
-}
-
-function stopAnime4KPipeline(): void {
-  pipelineActive = false;
-}
-
-// Watch preset changes
+// Anime4K WebGPU pipeline is owned by `a4k` (useAnime4K composable) above.
+// Persist the preset change + drive the pipeline lifecycle from here, since
+// only the component knows about IPC + the loadedmetadata-gated start.
 watch(anime4kPreset, async (newPreset) => {
   await window.api.setSetting('anime4kPreset', newPreset);
   if (newPreset === 'off') {
-    stopAnime4KPipeline();
+    a4k.stopPipeline();
   } else if (webgpuAvailable.value && videoRef.value?.videoWidth) {
-    await startAnime4KPipeline();
+    await a4k.startPipeline();
   }
 });
 
@@ -1684,16 +1466,6 @@ function selectPreset(preset: 'off' | 'mode-a' | 'mode-b' | 'mode-c'): void {
   anime4kPreset.value = preset;
   showPresetMenu.value = false;
 }
-
-const presetLabel = computed(() => {
-  const labels: Record<string, string> = {
-    off: 'A4K Off',
-    'mode-a': 'A4K: A',
-    'mode-b': 'A4K: B',
-    'mode-c': 'A4K: C'
-  };
-  return labels[anime4kPreset.value] || 'A4K';
-});
 
 function qualityLabel(height: number): string {
   return height + 'p';
@@ -2133,7 +1905,8 @@ function onPrefetchSettingChanged(ev: Event): void {
 }
 
 onMounted(async () => {
-  document.addEventListener('keydown', onKeyDown);
+  // The document-level keydown listener is owned by usePlayerKeyboard
+  // (lifecycle wired inside the composable).
   document.addEventListener('fullscreenchange', onFullscreenChange);
   window.addEventListener('mouseup', onAuxMouseUp, true);
   window.addEventListener('mousedown', onAuxMouseDown, true);
@@ -2346,7 +2119,7 @@ onMounted(async () => {
   await nextTick();
   suppressVolumePersist = false;
 
-  await initWebGPU();
+  await a4k.initWebGPU();
 
   // Wait for video to be ready, then start pipeline if needed
   await nextTick();
@@ -2356,7 +2129,7 @@ onMounted(async () => {
     video.muted = muted.value;
     const onVideoReady = async (): Promise<void> => {
       if (anime4kPreset.value !== 'off' && webgpuAvailable.value) {
-        await startAnime4KPipeline();
+        await a4k.startPipeline();
       }
       if (activeSubtitleContent.value) {
         initSubtitles(video);
@@ -2395,7 +2168,8 @@ onBeforeUnmount(() => {
   }
   if (prefetchToastTimer) clearTimeout(prefetchToastTimer);
   if (resumeToastTimer) clearTimeout(resumeToastTimer);
-  document.removeEventListener('keydown', onKeyDown);
+  // The document keydown listener is removed by usePlayerKeyboard's
+  // onBeforeUnmount hook.
   document.removeEventListener('fullscreenchange', onFullscreenChange);
   window.removeEventListener('mouseup', onAuxMouseUp, true);
   window.removeEventListener('mousedown', onAuxMouseDown, true);
@@ -2423,7 +2197,7 @@ onBeforeUnmount(() => {
     fn('cancel');
   }
   cancelAutoAdvance();
-  stopAnime4KPipeline();
+  a4k.destroy();
   destroySubtitles();
   // Pause and release video
   const video = videoRef.value;
@@ -2431,10 +2205,6 @@ onBeforeUnmount(() => {
     video.pause();
     video.src = '';
     video.load();
-  }
-  if (gpuDevice) {
-    gpuDevice.destroy();
-    gpuDevice = null;
   }
   // Stop listening for stream events
   unsubPlayerStreamSubtitles?.();

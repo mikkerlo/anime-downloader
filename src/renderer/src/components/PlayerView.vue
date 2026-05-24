@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { formatSpeed } from '../utils';
 import { useMsePlayer } from '../composables/use-mse-player';
 import { useAnime4K } from '../composables/use-anime4k';
 import { usePlayerKeyboard, type PlayerAction } from '../composables/use-player-keyboard';
@@ -8,6 +7,11 @@ import { useSubtitles } from '../composables/use-subtitles';
 import { useRemux } from '../composables/use-remux';
 import { useSkipMarkers } from '../composables/use-skip-markers';
 import { useSyncplayClient } from '../composables/use-syncplay-client';
+import PlayerTitleBar from './player/PlayerTitleBar.vue';
+import TranslationMenu from './player/TranslationMenu.vue';
+import QualityMenu from './player/QualityMenu.vue';
+import Anime4KMenu from './player/Anime4KMenu.vue';
+import SyncplayMenu from './player/SyncplayMenu.vue';
 
 const props = defineProps<{
   filePath: string;
@@ -1173,15 +1177,6 @@ function selectPreset(preset: 'off' | 'mode-a' | 'mode-b' | 'mode-c'): void {
   showPresetMenu.value = false;
 }
 
-function qualityLabel(height: number): string {
-  return height + 'p';
-}
-
-const currentQualityLabel = computed(() => {
-  if (!selectedHeight.value) return '';
-  return qualityLabel(selectedHeight.value);
-});
-
 function selectQuality(stream: { height: number; url: string }): void {
   if (stream.height === selectedHeight.value) {
     showQualityMenu.value = false;
@@ -1927,68 +1922,19 @@ const bufferedProgress = computed(() => {
 
     <!-- Title bar -->
     <transition name="fade">
-      <div v-show="showControls" class="title-bar">
-        <button class="close-btn" @click="emit('close')" title="Close player">
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <button
-          v-if="props.allEpisodes.length > 1"
-          class="ep-nav-btn"
-          :disabled="!canPrev || navigating"
-          @click="goToEpisode('prev')"
-          title="Previous episode (Shift+←)"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <span class="title-text">{{ animeName }} — {{ activeEpisodeLabel }}</span>
-        <span
-          v-if="prefetchInFlight"
-          class="prefetch-indicator"
-          :title="`Pre-fetching episode ${prefetchInFlight.episodeInt}`"
-        >
-          ↓ Ep {{ prefetchInFlight.episodeInt }} · {{ prefetchInFlight.progress }}%<template
-            v-if="prefetchInFlight.speed > 0"
-          >
-            · {{ formatSpeed(prefetchInFlight.speed) }}</template
-          >
-        </span>
-        <button
-          v-if="props.allEpisodes.length > 1"
-          class="ep-nav-btn"
-          :disabled="!canNext || navigating"
-          @click="goToEpisode('next')"
-          title="Next episode (Shift+→)"
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </div>
+      <PlayerTitleBar
+        v-show="showControls"
+        :anime-name="animeName"
+        :episode-label="activeEpisodeLabel"
+        :multi-episode="props.allEpisodes.length > 1"
+        :can-prev="canPrev"
+        :can-next="canNext"
+        :navigating="navigating"
+        :prefetch-in-flight="prefetchInFlight"
+        @close="emit('close')"
+        @go-prev="goToEpisode('prev')"
+        @go-next="goToEpisode('next')"
+      />
     </transition>
 
     <!-- Skip OP/ED overlay button. Anchored bottom-right above the controls
@@ -2112,163 +2058,57 @@ const bufferedProgress = computed(() => {
           <div class="controls-spacer" />
 
           <!-- Translation selector -->
-          <div class="preset-wrapper" v-if="hasTranslations">
-            <button
-              class="ctrl-btn preset-btn translation-btn"
-              :class="{ loading: switchingTranslation }"
-              @click="toggleTranslationMenu()"
-              title="Translation"
-            >
-              {{ switchingTranslation ? '...' : currentTranslationLabel }}
-            </button>
-            <div v-if="showTranslationMenu" class="preset-menu translation-menu">
-              <!-- Level 1: type groups -->
-              <template v-if="translationMenuLevel === 'types'">
-                <button
-                  v-for="group in translationTypeGroups"
-                  :key="group.type"
-                  class="preset-option group-option"
-                  @click="openTypeGroup(group.type)"
-                >
-                  <span class="tr-label">{{ group.label }}</span>
-                  <span class="tr-arrow">›</span>
-                </button>
-              </template>
-              <!-- Level 2: translations in selected type -->
-              <template v-else>
-                <button
-                  v-if="translationTypeGroups.length > 1"
-                  class="preset-option back-option"
-                  @click="backToTypes()"
-                >
-                  <span class="tr-arrow back-arrow">‹</span>
-                  <span class="tr-label">{{ translationTypeLabel(selectedTypeGroup) }}</span>
-                </button>
-                <button
-                  v-for="tr in selectedGroupItems"
-                  :key="tr.id"
-                  class="preset-option"
-                  :class="{
-                    selected: activeTranslationId === tr.id,
-                    downloaded: activeDownloadedTrIds.includes(tr.id)
-                  }"
-                  @click="selectTranslation(tr)"
-                >
-                  <span v-if="activeDownloadedTrIds.includes(tr.id)" class="tr-dl-icon">⬇</span>
-                  <span class="tr-label">{{ tr.label }}</span>
-                  <span class="tr-meta">{{ qualityLabel(tr.height) }}</span>
-                </button>
-              </template>
-            </div>
-          </div>
+          <TranslationMenu
+            v-if="hasTranslations"
+            :open="showTranslationMenu"
+            :loading="switchingTranslation"
+            :level="translationMenuLevel"
+            :selected-type-group="selectedTypeGroup"
+            :groups="translationTypeGroups"
+            :selected-items="selectedGroupItems"
+            :active-translation-id="activeTranslationId"
+            :active-downloaded-tr-ids="activeDownloadedTrIds"
+            :current-label="currentTranslationLabel"
+            @toggle-menu="toggleTranslationMenu()"
+            @open-group="openTypeGroup($event)"
+            @back-to-types="backToTypes()"
+            @select="selectTranslation($event)"
+          />
 
           <!-- Quality selector -->
-          <div class="preset-wrapper" v-if="hasQualities && isStreaming">
-            <button
-              class="ctrl-btn preset-btn"
-              @click="showQualityMenu = !showQualityMenu"
-              title="Video quality"
-            >
-              {{ currentQualityLabel }}
-            </button>
-            <div v-if="showQualityMenu" class="preset-menu">
-              <button
-                v-for="s in availableStreams"
-                :key="s.height"
-                class="preset-option"
-                :class="{ selected: selectedHeight === s.height }"
-                @click="selectQuality(s)"
-              >
-                {{ qualityLabel(s.height) }}
-              </button>
-            </div>
-          </div>
+          <QualityMenu
+            v-if="hasQualities && isStreaming"
+            :open="showQualityMenu"
+            :available-streams="availableStreams"
+            :selected-height="selectedHeight"
+            @toggle-menu="showQualityMenu = !showQualityMenu"
+            @select="selectQuality($event)"
+          />
 
           <!-- Anime4K preset -->
-          <div class="preset-wrapper" v-if="webgpuAvailable">
-            <button
-              class="ctrl-btn preset-btn"
-              :class="{ active: anime4kPreset !== 'off' }"
-              @click="showPresetMenu = !showPresetMenu"
-              title="Anime4K shaders"
-            >
-              {{ presetLabel }}
-            </button>
-            <div v-if="showPresetMenu" class="preset-menu">
-              <button
-                v-for="p in [
-                  { key: 'off', label: 'Off' },
-                  { key: 'mode-a', label: 'Mode A (1080p source)' },
-                  { key: 'mode-b', label: 'Mode B (720p source)' },
-                  { key: 'mode-c', label: 'Mode C (480p source)' }
-                ]"
-                :key="p.key"
-                class="preset-option"
-                :class="{ selected: anime4kPreset === p.key }"
-                @click="selectPreset(p.key as any)"
-              >
-                {{ p.label }}
-              </button>
-              <div class="preset-gpu-info">GPU: {{ gpuName }}</div>
-            </div>
-          </div>
+          <Anime4KMenu
+            v-if="webgpuAvailable"
+            :open="showPresetMenu"
+            :preset="anime4kPreset"
+            :preset-label="presetLabel"
+            :gpu-name="gpuName"
+            @toggle-menu="showPresetMenu = !showPresetMenu"
+            @select="selectPreset($event)"
+          />
           <div v-else class="no-gpu-hint" title="WebGPU not available — Anime4K shaders disabled">
             No GPU
           </div>
 
           <!-- Watch Together (Syncplay) -->
-          <div class="preset-wrapper">
-            <button
-              class="ctrl-btn preset-btn syncplay-btn"
-              :class="{ active: syncplayStatus.state === 'ready' }"
-              @click="syncplayMenuOpen = !syncplayMenuOpen"
-              title="Watch Together"
-            >
-              <span class="sp-dot" :class="'sp-' + syncplayStatus.state"></span>
-              <span class="sp-label">Sync</span>
-            </button>
-            <div v-if="syncplayMenuOpen" class="preset-menu syncplay-menu" @click.stop>
-              <div class="sp-status-line">
-                Status: <strong>{{ syncplayStatus.state }}</strong>
-                <span v-if="syncplayStatus.tls" class="sp-tls-badge">TLS</span>
-              </div>
-              <div v-if="syncplayStatus.error" class="sp-error-line">
-                {{ syncplayStatus.error }}
-              </div>
-              <label class="sp-label-row" for="sp-room-input">Room</label>
-              <input
-                id="sp-room-input"
-                v-model="syncplayRoomInput"
-                type="text"
-                class="sp-input"
-                placeholder="room name"
-                :disabled="
-                  syncplayStatus.state !== 'idle' && syncplayStatus.state !== 'disconnected'
-                "
-              />
-              <button class="sp-action-btn" @click="toggleSyncplayConnection()">
-                {{
-                  syncplayStatus.state === 'idle' || syncplayStatus.state === 'disconnected'
-                    ? 'Connect'
-                    : 'Disconnect'
-                }}
-              </button>
-              <div v-if="syncplayRoomUsers.length > 0" class="sp-users-list">
-                <div class="sp-users-title">In room</div>
-                <div v-for="u in syncplayRoomUsers" :key="u.username" class="sp-user-row">
-                  <span
-                    class="sp-user-dot"
-                    :class="u.isReady === false ? 'sp-user-dot-buffering' : 'sp-user-dot-ready'"
-                    :title="u.isReady === false ? 'Buffering' : 'Ready'"
-                  ></span>
-                  <span class="sp-user-name">{{ u.username }}</span>
-                  <span v-if="u.file" class="sp-user-file" :title="u.file.name">{{
-                    u.file.name
-                  }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <SyncplayMenu
+            :open="syncplayMenuOpen"
+            :status="syncplayStatus"
+            :room-input="syncplayRoomInput"
+            :room-users="syncplayRoomUsers"
+            @toggle-menu="syncplayMenuOpen = !syncplayMenuOpen"
+            @update:room-input="syncplayRoomInput = $event"
+            @toggle="toggleSyncplayConnection()"
+          />
 
           <!-- Fullscreen -->
           <button
@@ -2458,148 +2298,7 @@ const bufferedProgress = computed(() => {
   line-height: 1;
 }
 
-.syncplay-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sp-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #6a6a8a;
-}
-
-.sp-dot.sp-idle,
-.sp-dot.sp-disconnected {
-  background: #6a6a8a;
-}
-
-.sp-dot.sp-connecting,
-.sp-dot.sp-tls-probing,
-.sp-dot.sp-tls-handshake,
-.sp-dot.sp-hello-sent,
-.sp-dot.sp-reconnecting {
-  background: #f0932b;
-}
-
-.sp-dot.sp-ready {
-  background: #6ab04c;
-}
-
-.sp-label {
-  font-size: 0.8rem;
-}
-
-.syncplay-menu {
-  min-width: 240px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.sp-status-line {
-  font-size: 0.8rem;
-  color: #a0a0b8;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sp-tls-badge {
-  font-size: 0.65rem;
-  background: #0f3460;
-  color: #e0e0e0;
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-
-.sp-error-line {
-  color: #e94560;
-  font-size: 0.75rem;
-}
-
-.sp-label-row {
-  font-size: 0.75rem;
-  color: #a0a0b8;
-  margin-top: 4px;
-}
-
-.sp-input {
-  width: 100%;
-  padding: 6px 8px;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 4px;
-  color: #e0e0e0;
-  font-size: 0.8rem;
-}
-
-.sp-input:disabled {
-  opacity: 0.55;
-}
-
-.sp-action-btn {
-  padding: 6px 12px;
-  background: #e94560;
-  border: none;
-  border-radius: 4px;
-  color: #fff;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.sp-action-btn:hover {
-  background: #d13b53;
-}
-
-.sp-users-list {
-  border-top: 1px solid #0f3460;
-  padding-top: 6px;
-  margin-top: 4px;
-}
-
-.sp-users-title {
-  font-size: 0.75rem;
-  color: #a0a0b8;
-  margin-bottom: 4px;
-}
-
-.sp-user-row {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 6px;
-  font-size: 0.8rem;
-  padding: 2px 0;
-  align-items: center;
-}
-
-.sp-user-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  grid-row: 1 / span 2;
-}
-
-.sp-user-dot-ready {
-  background: #4ade80;
-}
-
-.sp-user-dot-buffering {
-  background: #f59e0b;
-}
-
-.sp-user-file {
-  grid-column: 2;
-  font-size: 0.7rem;
-  color: #6a6a8a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Syncplay button + menu styles moved to player/SyncplayMenu.vue. */
 
 /* Remux overlay */
 .remux-overlay {
@@ -2686,75 +2385,7 @@ const bufferedProgress = computed(() => {
   background: #d63050;
 }
 
-/* Title bar */
-.title-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
-  z-index: 5;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-}
-
-.close-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.title-text {
-  color: #fff;
-  font-size: 0.9rem;
-  font-weight: 500;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-}
-
-.prefetch-indicator {
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 0.78rem;
-  font-weight: 500;
-  padding: 2px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.25);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  white-space: nowrap;
-}
-
-.ep-nav-btn {
-  background: none;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  opacity: 0.8;
-}
-
-.ep-nav-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  opacity: 1;
-}
-
-.ep-nav-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
+/* Title-bar styles moved to player/PlayerTitleBar.vue. */
 
 .auto-advance-overlay {
   position: absolute;
@@ -2994,150 +2625,17 @@ const bufferedProgress = computed(() => {
   flex: 1;
 }
 
-/* Anime4K preset controls */
-.preset-wrapper {
-  position: relative;
-}
-
-.preset-btn {
-  font-size: 0.75rem;
-  padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
-}
-
-.preset-btn.active {
-  border-color: #e94560;
-  color: #e94560;
-}
-
-.preset-menu {
-  position: absolute;
-  bottom: 100%;
-  right: 0;
-  margin-bottom: 8px;
-  background: rgba(20, 20, 30, 0.95);
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  padding: 4px;
-  min-width: 200px;
-}
-
-.preset-option {
-  display: block;
-  width: 100%;
-  padding: 8px 12px;
-  background: none;
-  border: none;
-  color: #ccc;
-  font-size: 0.8rem;
-  text-align: left;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.preset-option:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.preset-option.selected {
-  color: #e94560;
-  background: rgba(233, 69, 96, 0.1);
-}
-
-.preset-gpu-info {
-  padding: 6px 12px;
-  color: #6a6a8a;
-  font-size: 0.7rem;
-  border-top: 1px solid #0f3460;
-  margin-top: 4px;
-}
-
+/* Anime4K + Translation + Syncplay menu styles moved to
+ * player/Anime4KMenu.vue, player/TranslationMenu.vue,
+ * player/SyncplayMenu.vue. Shared `.preset-*` and `.ctrl-btn` base rules
+ * live in assets/player-menus.css, imported via `<style scoped src>` by
+ * each child component. The PlayerView controls bar still uses `.ctrl-btn`
+ * directly on the play/pause/volume/fullscreen buttons — keep the rule
+ * here as well so the parent's scoped scope sees it. */
 .no-gpu-hint {
   color: #6a6a8a;
   font-size: 0.7rem;
   padding: 0 4px;
-}
-
-/* Translation selector */
-.translation-btn {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.translation-btn.loading {
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.translation-menu {
-  min-width: 220px;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.translation-menu .preset-option {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.group-option {
-  justify-content: space-between;
-}
-
-.tr-arrow {
-  font-size: 1rem;
-  color: #8a8aaa;
-  flex-shrink: 0;
-}
-
-.back-option {
-  border-bottom: 1px solid #0f3460;
-  margin-bottom: 4px;
-  padding-bottom: 8px;
-  gap: 6px;
-}
-
-.back-option .tr-label {
-  color: #8a8aaa;
-  font-size: 0.75rem;
-}
-
-.back-arrow {
-  font-size: 1.1rem;
-}
-
-.tr-label {
-  font-size: 0.8rem;
-  color: #ddd;
-}
-
-.tr-meta {
-  font-size: 0.65rem;
-  color: #8a8aaa;
-  margin-left: auto;
-}
-
-.preset-option.selected .tr-label {
-  color: #e94560;
-}
-
-.preset-option.selected .tr-meta {
-  color: #e94560;
-  opacity: 0.7;
-}
-
-.tr-dl-icon {
-  font-size: 0.7rem;
-  color: #6ab04c;
-  flex-shrink: 0;
-}
-
-.preset-option.downloaded .tr-label {
-  color: #6ab04c;
 }
 
 /* Transitions */

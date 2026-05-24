@@ -25,6 +25,10 @@ export function getAnimeName(anime: {
   return anime.titles?.romaji || anime.titles?.ru || anime.title
 }
 
+export function qualityLabel(height: number): string {
+  return height + 'p'
+}
+
 export function sanitizeFilename(name: string): string {
   return name
     .replace(/[<>:"/\\|?*]/g, '_')

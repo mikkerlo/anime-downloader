@@ -521,6 +521,25 @@ Global app glue that doesn't belong on a Pinia store goes into
   `player:remux-mkv` IPC + `clear()` for resets between sessions. Only
   used when MSE rejects the codecs and `prepareMkvForPlayback` falls back
   to a one-shot ffmpeg stream-copy to MP4. (Phase 5 slice 5d.2.b)
+- `useSkipMarkers({ getAnimeId, getCurrentEpisodeInt, getCurrentTime, isStreaming, activeStreamUrl, onSeek })`
+  — OP/ED skip-marker detection + skip button visibility for PlayerView.
+  Owns the dual-mode detection (local playback reads stored per-episode
+  boundaries via `skipDetectorGetDetections`; streamed playback runs
+  `skipDetectorDetectStream` to fingerprint the live stream and match it
+  against the locally-derived show signatures), the skip-button grace
+  timer (debounces flicker when scrubbing through a band), the
+  per-session "already-skipped" guard (so rewinding doesn't re-show the
+  button), the request-id race guard on stream detection, the streaming
+  reactivity watch (5-source: `isStreaming` / `activeStreamUrl` /
+  episode-int / signature analyzedAt / source), and the
+  `skip-detector:signature-updated` IPC subscription. `onMounted` +
+  `onBeforeUnmount` are registered inside the composable (handles signature
+  sub + cancel-in-flight on teardown). Exposes `loadSkipDetections`,
+  `refreshStreamSkipDetection`, `cancelStreamDetection`, `onSkipClick`,
+  `resetSkipUiState`. The consumer (PlayerView) only wires the
+  episode-change reset because that path also touches prefetch state.
+  Constants: `SKIP_GRACE_MS = 250`, `SKIP_LEAD_IN_SEC = 0.25`. (Phase 5
+  slice 5d.2.c)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

@@ -12,6 +12,7 @@ import TranslationMenu from '../player/TranslationMenu.vue';
 import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
+import { previewSeek, commitSeek } from '../../utils';
 
 const props = defineProps<{
   filePath: string;
@@ -1026,16 +1027,18 @@ function onSeekStart(): void {
 }
 
 function onSeekInput(event: Event): void {
-  const target = event.target as HTMLInputElement;
-  const time = parseFloat(target.value);
-  currentTime.value = time;
-  // Apply seek immediately during drag for responsive feedback
-  const video = videoRef.value;
-  if (video) video.currentTime = time;
+  // Preview only: update the displayed time, do NOT touch video.currentTime
+  // mid-drag. Each currentTime assignment fires `seeking` on the video
+  // element, which churns the MSE pipeline (one ffmpeg respawn per debounce
+  // window plus repeated SourceBuffer parser resets). On Linux/WSL that's
+  // observed to produce repeated `readyState=1` stalls and audio dropout
+  // (#127). Commit the seek once on @change (mouseup) in onSeekEnd instead.
+  previewSeek((event.target as HTMLInputElement).value, currentTime);
 }
 
 function onSeekEnd(): void {
   seeking.value = false;
+  commitSeek(currentTime.value, videoRef.value);
 }
 
 function onSeekMouseMove(e: MouseEvent): void {

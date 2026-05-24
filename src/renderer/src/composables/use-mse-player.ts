@@ -58,6 +58,7 @@ export function useMsePlayer(deps: {
     handleStreamChunk: (sessionId: string, gen: number, data: Uint8Array) => void
     handleStreamEnd: (sessionId: string) => void
     handleStreamError: (sessionId: string, error: string) => void
+    handleUnbufferedSeek: () => Promise<void>
     getAppendQueueLength: () => number
     getSourceBuffer: () => SourceBuffer | null
   }
@@ -417,17 +418,21 @@ export function useMsePlayer(deps: {
       unbufferedSeekInFlight = false
       pumpAppendQueue()
 
-      // On the transcode path ffmpeg runs at ~real-time with almost no
-      // headroom, so the fresh buffer stays razor-thin and any encoder
-      // hiccup stalls the video. Pause playback until we have a few seconds
-      // buffered ahead, then let the element resume. Stream-copy doesn't
-      // need this — muxing is much faster than real-time and the buffer
-      // fills instantly.
-      if (transcodingHevc.value) {
-        mkvBuffering.value = true
-        await waitForBufferAhead(v, sb, 3.0, 15000)
-        mkvBuffering.value = false
-      }
+      // Pause playback until a margin of fresh data is buffered ahead, then
+      // let the element resume. The transcode path needs a deep margin because
+      // ffmpeg runs at ~real-time with almost no headroom, so the buffer stays
+      // razor-thin and any encoder hiccup stalls the video. Stream-copy fills
+      // far faster than real-time, but it still benefits from a short gate:
+      // resuming the instant the first fragment lands lets the video element
+      // try to render before the SourceBuffer parser has settled the new
+      // segment, which on Linux/WSL produces repeated `readyState=1` stalls
+      // and audio dropout after a respawn (#127). A 1.5 s margin is met almost
+      // immediately on stream-copy yet still lets the decoder bed in.
+      mkvBuffering.value = true
+      const aheadSeconds = transcodingHevc.value ? 3.0 : 1.5
+      const aheadTimeoutMs = transcodingHevc.value ? 15000 : 5000
+      await waitForBufferAhead(v, sb, aheadSeconds, aheadTimeoutMs)
+      mkvBuffering.value = false
     } finally {
       unbufferedSeekInFlight = false
       // If the user kept seeking while the respawn was in flight, the
@@ -572,6 +577,7 @@ export function useMsePlayer(deps: {
       handleStreamChunk,
       handleStreamEnd,
       handleStreamError,
+      handleUnbufferedSeek,
       getAppendQueueLength: () => appendQueue.length,
       getSourceBuffer: () => sourceBuffer
     }

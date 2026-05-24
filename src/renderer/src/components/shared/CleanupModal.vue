@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { formatBytes } from '../utils';
+import { formatBytes } from '../../utils';
 
 const props = defineProps<{
   animeId: number;

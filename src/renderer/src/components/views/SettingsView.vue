@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import SettingsShell from './settings/SettingsShell.vue';
+import SettingsShell from '../settings/SettingsShell.vue';
 </script>
 
 <template>

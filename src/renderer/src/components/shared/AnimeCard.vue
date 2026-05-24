@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getAnimeName } from '../utils';
+import { getAnimeName } from '../../utils';
 
 defineProps<{
   anime: AnimeSearchResult;

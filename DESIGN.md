@@ -78,12 +78,13 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
 | `src/renderer/src/main.ts` | Vue app entry point |
 | `src/renderer/src/App.vue` | Root component, per-view navigation state, anime prefs persistence (default view: `home`) |
-| `src/renderer/src/components/Sidebar.vue` | Navigation menu |
-| `src/renderer/src/components/HomeView.vue` | Continue Watching landing view: Resume + Next-up entries |
-| `src/renderer/src/components/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
-| `src/renderer/src/components/AnimeCard.vue` | Reusable anime poster card |
-| `src/renderer/src/components/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
-| `src/renderer/src/components/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress. Consumes `useAnimeDetailPrefs` + `useChronology` + `useEpisodeList` + `useEpisodeDownloads`. Renders `detail/ChronologyPanel.vue` + `detail/FriendsPanel.vue` for the Shikimori-driven sidebar panels |
+| `src/renderer/src/components/shared/Sidebar.vue` | Navigation menu |
+| `src/renderer/src/components/shared/AnimeCard.vue` | Reusable anime poster card |
+| `src/renderer/src/components/shared/CleanupModal.vue` | Disk-cleanup confirmation modal — used by AnimeDetailView + DownloadsView storage cleanups |
+| `src/renderer/src/components/views/HomeView.vue` | Continue Watching landing view: Resume + Next-up entries |
+| `src/renderer/src/components/views/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
+| `src/renderer/src/components/views/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
+| `src/renderer/src/components/views/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress. Consumes `useAnimeDetailPrefs` + `useChronology` + `useEpisodeList` + `useEpisodeDownloads`. Renders `detail/ChronologyPanel.vue` + `detail/FriendsPanel.vue` for the Shikimori-driven sidebar panels |
 | `src/renderer/src/components/detail/ChronologyPanel.vue` | Related-anime list (Shikimori chronology). Props: `shikiRelated`, `relatedLoading`; v-model: `collapsed`. Calls `useLibraryStore().openAnime()` directly to navigate. Includes its own KIND_LABELS + STATUS_LABELS + scoped CSS |
 | `src/renderer/src/components/detail/FriendsPanel.vue` | Friends' Shikimori watch status. Props: `friendsRates`, `friendsLoading`, `numberOfEpisodes`; v-model: `collapsed`. Owns the `friendsSummary` computed (status counts) |
 | `src/renderer/src/components/detail/ShikimoriPanel.vue` | Shikimori rate edit form + offline indicator + sync state + details (genres + description with collapse). Props: `anime`. Injects the `useShikimori` composable instance via `ShikimoriKey` for state + actions; reads `offlineQueueLength` directly from `useShikimoriStore` |
@@ -92,18 +93,18 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
 | `src/renderer/src/components/detail/EpisodeRow.vue` | Single episode row: translation picker (multi-type optgroups), download/merge status with progress bar + ETA, watched/progress/type/quality/file badges, action buttons (Open/Folder/Delete/Cancel/Play/Download). Props: `row`, `playerMode`, `translationType`. Injects `useEpisodeList` + `useEpisodeDownloads` via their keys |
 | `src/renderer/src/components/detail/keys.ts` | Typed `InjectionKey` symbols (`ShikimoriKey`, `SkipDetectionKey`, `EpisodeListKey`, `EpisodeDownloadsKey`) the parent uses to `provide` composable instances to deeply-nested detail panels |
 | `src/renderer/src/components/detail/translation-types.ts` | Shared `TRANSLATION_TYPES` array (5 types: subRu/subEn/voiceRu/voiceEn/raw, each with `label`/`short`/`color`) + `typeChip(type)` helper. Used by the parent controls bar + EpisodeRow |
-| `src/renderer/src/components/DownloadsView.vue` | Real-time download queue with progress, merge controls |
-| `src/renderer/src/components/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
-| `src/renderer/src/components/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
-| `src/renderer/src/components/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
-| `src/renderer/src/components/PlayerView.vue` | Built-in video player coordinator. After Phase 5 slice 5e the template is a thin shell: `PlayerTitleBar` (top bar) + the controls bar's bottom dropdowns (`TranslationMenu`, `QualityMenu`, `Anime4KMenu`, `SyncplayMenu`) live as child components in `components/player/` |
+| `src/renderer/src/components/views/DownloadsView.vue` | Real-time download queue with progress, merge controls |
+| `src/renderer/src/components/views/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
+| `src/renderer/src/components/views/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
+| `src/renderer/src/components/views/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
+| `src/renderer/src/components/views/PlayerView.vue` | Built-in video player coordinator. After Phase 5 slice 5e the template is a thin shell: `PlayerTitleBar` (top bar) + the controls bar's bottom dropdowns (`TranslationMenu`, `QualityMenu`, `Anime4KMenu`, `SyncplayMenu`) live as child components in `components/player/` |
 | `src/renderer/src/components/player/PlayerTitleBar.vue` | Title bar — close button, prev/next episode nav, anime title + episode label, prefetch indicator. Emits `close` / `go-prev` / `go-next` |
 | `src/renderer/src/components/player/TranslationMenu.vue` | Two-level translation picker (type group → translation item). Presentation-only; parent owns the menu level + selectedTypeGroup state so the menu can auto-jump levels on open |
 | `src/renderer/src/components/player/QualityMenu.vue` | Simple list of available stream heights (streaming only) |
 | `src/renderer/src/components/player/Anime4KMenu.vue` | Anime4K WebGPU shader preset dropdown (off / Mode A / B / C) + GPU info footer. Only rendered when `webgpuAvailable` |
 | `src/renderer/src/components/player/SyncplayMenu.vue` | Watch Together (Syncplay) dropdown — status dot, room input (v-model via `update:room-input`), connect/disconnect button, room user list |
 | `src/renderer/src/assets/player-menus.css` | Shared menu styles (`.preset-wrapper`, `.preset-btn`, `.preset-menu`, `.preset-option`, base `.ctrl-btn`) imported by each `components/player/*Menu.vue` via `<style scoped src="@renderer/assets/player-menus.css">` so every child component gets its own scoped copy. Mirrors the `assets/settings-tabs.css` pattern from slice 5a |
-| `src/renderer/src/components/SettingsView.vue` | Thin wrapper around `components/settings/SettingsShell.vue` (kept so `App.vue`'s route map stays stable across Phase 5 slices) |
+| `src/renderer/src/components/views/SettingsView.vue` | Thin wrapper around `components/settings/SettingsShell.vue` (kept so `App.vue`'s route map stays stable across Phase 5 slices) |
 | `src/renderer/src/components/settings/SettingsShell.vue` | Tab nav + active-tab routing via `<keep-alive><component :is>` + the "Saved" toast container. Owns the tabs/topbar/saved-toast styles |
 | `src/renderer/src/components/settings/{General,Storage,Connectors,Merging,Player,Shortcuts,WatchTogether,Debug}Tab.vue` | One component per tab. Each tab hydrates its own settings on first activation, owns its tab-local broadcast subscriptions (`onStorageMoveToColdProgress`/`onStorageUsageProgress`/`onStorageCleanupPending`/`onStorageCleanupFinished` in `StorageTab`; `onAutoDlTickResult` in `GeneralTab`; `onSyncplayConnectionStatus` per-test in `WatchTogetherTab`), and disposes them on `onUnmounted` |
 | `src/renderer/src/composables/use-settings-autosave.ts` | Module-level singleton holding `savedVisible` + `showSaved` + `autoSave(key, value)`. Every tab calls `autoSave(...)` in its watchers; the shell renders the toast |

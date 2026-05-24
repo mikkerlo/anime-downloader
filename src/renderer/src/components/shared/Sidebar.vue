@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useLibraryStore, type LibraryView } from '../stores/library';
+import { useLibraryStore, type LibraryView } from '../../stores/library';
 
 const props = defineProps<{
   shikimoriLoggedIn?: boolean;

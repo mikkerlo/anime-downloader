@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useDownloadsStore } from '../stores/downloads';
-import { formatBytes, formatSpeed, formatEta } from '../utils';
+import { useDownloadsStore } from '../../stores/downloads';
+import { formatBytes, formatSpeed, formatEta } from '../../utils';
 
 const downloadsStore = useDownloadsStore();
 const { groups } = storeToRefs(downloadsStore);

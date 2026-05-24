@@ -1,25 +1,30 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
-import { getAnimeName as _getAnimeName } from '../utils';
-import CleanupModal from './CleanupModal.vue';
-import { useLibraryStore } from '../stores/library';
-import { usePlayerStore } from '../stores/player';
-import { useShikimoriStore } from '../stores/shikimori';
-import { useDownloadsStore } from '../stores/downloads';
-import { useAnimeDetailPrefs } from '../composables/use-anime-detail-prefs';
-import { useChronology } from '../composables/use-chronology';
+import { getAnimeName as _getAnimeName } from '../../utils';
+import CleanupModal from '../shared/CleanupModal.vue';
+import { useLibraryStore } from '../../stores/library';
+import { usePlayerStore } from '../../stores/player';
+import { useShikimoriStore } from '../../stores/shikimori';
+import { useDownloadsStore } from '../../stores/downloads';
+import { useAnimeDetailPrefs } from '../../composables/use-anime-detail-prefs';
+import { useChronology } from '../../composables/use-chronology';
 import { provide } from 'vue';
-import { useEpisodeList, PAGE_SIZE } from '../composables/use-episode-list';
-import { useEpisodeDownloads } from '../composables/use-episode-downloads';
-import { useShikimori } from '../composables/use-shikimori';
-import { useSkipDetection } from '../composables/use-skip-detection';
-import ChronologyPanel from './detail/ChronologyPanel.vue';
-import FriendsPanel from './detail/FriendsPanel.vue';
-import ShikimoriPanel from './detail/ShikimoriPanel.vue';
-import SkipDetectionPanel from './detail/SkipDetectionPanel.vue';
-import EpisodeList from './detail/EpisodeList.vue';
-import { ShikimoriKey, SkipDetectionKey, EpisodeListKey, EpisodeDownloadsKey } from './detail/keys';
-import { TRANSLATION_TYPES } from './detail/translation-types';
+import { useEpisodeList, PAGE_SIZE } from '../../composables/use-episode-list';
+import { useEpisodeDownloads } from '../../composables/use-episode-downloads';
+import { useShikimori } from '../../composables/use-shikimori';
+import { useSkipDetection } from '../../composables/use-skip-detection';
+import ChronologyPanel from '../detail/ChronologyPanel.vue';
+import FriendsPanel from '../detail/FriendsPanel.vue';
+import ShikimoriPanel from '../detail/ShikimoriPanel.vue';
+import SkipDetectionPanel from '../detail/SkipDetectionPanel.vue';
+import EpisodeList from '../detail/EpisodeList.vue';
+import {
+  ShikimoriKey,
+  SkipDetectionKey,
+  EpisodeListKey,
+  EpisodeDownloadsKey
+} from '../detail/keys';
+import { TRANSLATION_TYPES } from '../detail/translation-types';
 
 const props = defineProps<{
   animeId: number;

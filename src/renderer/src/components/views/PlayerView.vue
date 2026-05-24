@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
-import { useMsePlayer } from '../composables/use-mse-player';
-import { useAnime4K } from '../composables/use-anime4k';
-import { usePlayerKeyboard, type PlayerAction } from '../composables/use-player-keyboard';
-import { useSubtitles } from '../composables/use-subtitles';
-import { useRemux } from '../composables/use-remux';
-import { useSkipMarkers } from '../composables/use-skip-markers';
-import { useSyncplayClient } from '../composables/use-syncplay-client';
-import PlayerTitleBar from './player/PlayerTitleBar.vue';
-import TranslationMenu from './player/TranslationMenu.vue';
-import QualityMenu from './player/QualityMenu.vue';
-import Anime4KMenu from './player/Anime4KMenu.vue';
-import SyncplayMenu from './player/SyncplayMenu.vue';
+import { useMsePlayer } from '../../composables/use-mse-player';
+import { useAnime4K } from '../../composables/use-anime4k';
+import { usePlayerKeyboard, type PlayerAction } from '../../composables/use-player-keyboard';
+import { useSubtitles } from '../../composables/use-subtitles';
+import { useRemux } from '../../composables/use-remux';
+import { useSkipMarkers } from '../../composables/use-skip-markers';
+import { useSyncplayClient } from '../../composables/use-syncplay-client';
+import PlayerTitleBar from '../player/PlayerTitleBar.vue';
+import TranslationMenu from '../player/TranslationMenu.vue';
+import QualityMenu from '../player/QualityMenu.vue';
+import Anime4KMenu from '../player/Anime4KMenu.vue';
+import SyncplayMenu from '../player/SyncplayMenu.vue';
 
 const props = defineProps<{
   filePath: string;

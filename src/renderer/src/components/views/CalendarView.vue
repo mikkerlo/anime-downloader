@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { useLibraryStore } from '../stores/library';
+import { useLibraryStore } from '../../stores/library';
 
 const libraryStore = useLibraryStore();
 

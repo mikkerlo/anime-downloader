@@ -1,0 +1,109 @@
+# Architecture
+
+```
+src/
+  main/           Electron main process (Node.js)
+  preload/        IPC bridge (contextBridge)
+  renderer/       Vue 3 frontend
+  shared/         Shared IPC contract + ambient types (imported by all three)
+```
+
+## Process Model
+
+```
+Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  Main (Node)
+                <--webContents.send----                                          |
+                                                                                 |
+                                                              DownloadManager    |
+                                                              electron-store     |
+                                                              ffbinaries/ffmpeg  |
+                                                              smotret-anime API  |
+```
+
+For the per-domain IPC router split and the disposable subscription contract, see [IPC](./ipc.md). For the renderer-side architecture (Pinia stores, composables, components folder layout), see [Renderer](./renderer.md).
+
+## File Map
+
+| File | Role |
+|------|------|
+| `src/main/index.ts` | Bootstrap: services + downloadManager construction, `bootstrap()` (called via `App.start({ onReady })`), ffmpeg auto-download, the `anime-video://` protocol streaming reader, file-scan cache + helpers, and a thin `registerIpcHandlers()` wrapper that wires deps into `registerIpcRouters(deps)` — Phase 3 finished migrating every `ipcMain.handle` call out into `src/main/ipc/*.ipc.ts` routers |
+| `src/main/app/core.ts` | `App` class owning Electron lifecycle (refactor epic #84, Phase 3 slice 3a): early command-line switches, `anime-video://` scheme registration, EPIPE silencing in the constructor; `start({ onReady, onBeforeQuit })` awaits `app.whenReady()` and wires `window-all-closed` / `before-quit` |
+| `src/main/ipc/index.ts` | `registerIpcRouters(deps)` orchestrator — invokes every per-domain `*.ipc.ts` router (Phase 3 slices 3a–3g landed all of them); `AppDeps` is the closed dependency contract every router consumes |
+| `src/main/ipc/app.ipc.ts` | App + auto-updater router: `CHANNELS.APP_VERSION`, `CHANNELS.UPDATE_{CHECK,DOWNLOAD,INSTALL}`, `autoUpdater` event subscriptions broadcasting `EVENT_CHANNELS.UPDATE_STATUS`, and the 24h auto-check-on-launch trigger (gated by `store.get('lastUpdateCheck')`) |
+| `src/main/ipc/anime.ipc.ts` | Smotret-anime + cache router (Phase 3 slice 3b): `CHANNELS.{VALIDATE_TOKEN, SEARCH_ANIME, GET_ANIME, PROBE_EMBED_QUALITY, PROBE_FULL_SCAN_NEEDED, PROBE_FULL_SCAN_DONE, GET_EPISODE}` — wraps `SmotretApi` + `AnimeCacheService` with cache-first fallbacks |
+| `src/main/ipc/library.ipc.ts` | Library router: `CHANNELS.{LIBRARY_GET, LIBRARY_IS_DOWNLOADED, LIBRARY_TOGGLE, LIBRARY_HAS, LIBRARY_GET_STATUS}` — reads `library` + `downloadedAnime` maps; toggle drops the anime-cache entry when un-starring a non-downloaded show |
+| `src/main/ipc/cache.ipc.ts` | Anime-detail cache router: `CHANNELS.{GET_ANIME_CACHE (24h TTL), SET_ANIME_CACHE (gated by library ∪ downloadedAnime), CACHE_GET_POSTER}` |
+| `src/main/ipc/home.ipc.ts` | `CHANNELS.HOME_GET_CONTINUE_WATCHING` — thin shell wrapping the pure helpers in `lib/continue-watching.ts`, plus the bounded-concurrency smotret fetch loop for rows that are still nameless / posterless |
+| `src/main/lib/continue-watching.ts` | Pure helpers `buildContinueWatchingEntries(inputs)` + `finalizeContinueWatchingEntries(draft, fetched)` — collapse `watchProgress` + `shikimoriUserRates` into resume + next-episode rows, apply the Shikimori `rate.updated_at` override, hide completed shows, generate the `unresolvedIds` fetch list, finalize ordering and the 24-row cap. Lifted out of `HOME_GET_CONTINUE_WATCHING` (Phase 2 deferral) for unit-testable logic |
+| `src/main/ipc/downloads.ipc.ts` | Downloads router (Phase 3 slice 3c): `CHANNELS.{DOWNLOAD_ENQUEUE, DOWNLOAD_{PAUSE, RESUME, RESTART, RESTART_ALL_FAILED, PAUSE_ALL, RESUME_ALL, CANCEL, CANCEL_BY_EPISODE, GET_QUEUE, CANCEL_MERGE, CLEAR_COMPLETED, MERGE, SCAN_MERGE, FIX_METADATA, PICK_DIR}, DOWNLOADED_EPISODES_GET}` — wraps `DownloadManager`, the `coldStorageService.pruneDownloadedEpisode` prune-on-cancel, and the `fluent-ffmpeg`-driven fix-metadata pass. Reads ffmpeg/ffprobe paths through `getFfmpegPath()`/`getFfprobePath()` live getters so `FFMPEG_DELETE` clearing the paths is observed without re-registration |
+| `src/main/ipc/ffmpeg.ipc.ts` | Ffmpeg router: `CHANNELS.{FFMPEG_CHECK, FFMPEG_DELETE}` — checks via the injected `checkFfmpeg`, deletes binaries + `ffbinaries-cache` zip cache, and clears the mutable `ffmpegPath`/`ffprobePath` module variables via `clearFfmpegPaths()` |
+| `src/main/ipc/cleanup.ipc.ts` | Cleanup router: `CHANNELS.{CLEANUP_GET_SIZE, CLEANUP_GET_ACTIVE_DOWNLOADS, CLEANUP_EXECUTE, CLEANUP_GET_SNOOZED, CLEANUP_SET_SNOOZED}` — uses `coldStorageService.dirsForScan()` to delete the show across hot+cold dirs, prunes `downloadedEpisodes` keys, drops anime/skip-detection cache entries, snoozes per anime id |
+| `src/main/ipc/downloaded-anime.ipc.ts` | Downloaded-anime router: `CHANNELS.{DOWNLOADED_ANIME_ADD, DOWNLOADED_ANIME_DELETE}` — delete cascades to all storage dirs, anime-cache entry, skip-detection cache + detections |
+| `src/main/ipc/shikimori.ipc.ts` | Shikimori router (Phase 3 slice 3d): all 16 `CHANNELS.SHIKIMORI_*` handlers — OAuth (`GET_AUTH_URL`/`EXCHANGE_CODE`/`LOGOUT`/`GET_USER`), rate read/write (`GET_RATE`/`UPDATE_RATE` with offline-queue fallback on network error), `GET_FRIENDS_RATES`/`GET_ANIME_RATES` (cache-first + background refresh)/`GET_ANIME_DETAILS`/`TRIGGER_DETAIL_PREFETCH`, sync surface (`GET_OFFLINE_QUEUE_LENGTH`/`GET_SYNC_STATUS`/`TRIGGER_SYNC`), `GET_FRIENDS_ACTIVITY`/`GET_CALENDAR`/`GET_RELATED`. Holds the `fetchAndCacheShikimoriRates`/`refreshShikimoriRatesInBackground` orchestration locally |
+| `src/main/services/shikimori-sync/index.ts` | `createShikimoriSyncService` — owns the Shikimori sync timer + offline-queue drain worker (`syncShikimoriQueue`, consolidate → drift-resolve → reconcile), the anime-details prefetcher (`prefetchShikimoriDetails`/`refreshShikimoriDetailsForMalId`), and the 5-minute calendar cache. All sync/prefetch/calendar module state (formerly free vars in `index.ts`) now lives in the service closure. Deps-injected (`store`, `broadcast` + 4 channel names) |
+| `src/main/ipc/skip-detector.ipc.ts` | Skip-detector router (Phase 3 slice 3e): `CHANNELS.SKIP_DETECTOR_{GET_DETECTIONS, GET_STATUS, CANCEL, CACHE_STATS, ANALYZE_SHOW, DETECT_STREAM, CANCEL_STREAM_DETECT, BACKFILL_ALL, QUEUE_STATUS}` + `DOWNLOAD_INJECT_CHAPTERS` (deferred from 3c — `fluent-ffmpeg` `-map_chapters` write over each downloaded MKV, with a fingerprint-cache key rewrite to survive the size/mtime change) |
+| `src/main/ipc/storage.ipc.ts` | Storage router (Phase 3 slice 3f): `CHANNELS.{STORAGE_PICK_HOT_DIR, STORAGE_PICK_COLD_DIR, STORAGE_MOVE_TO_COLD, STORAGE_GET_USAGE, STORAGE_RUN_CLEANUP}` — hot/cold directory pickers (persist to `store`, retarget `downloadManager`) and the `coldStorageService` move/usage/cleanup passes; clears the file-scan cache via `clearFileCache()` before a bulk move |
+| `src/main/ipc/file.ipc.ts` | File router (Phase 3 slice 3f): `CHANNELS.{FILE_CHECK_EPISODES, FILE_OPEN, FILE_SHOW_IN_FOLDER, FILE_DELETE_EPISODE}` — episode-file scan via the injected `checkEpisodeFiles`, open/reveal via `shell`, delete cascading to `coldStorageService` + the skip-detector caches |
+| `src/main/ipc/shell.ipc.ts` | Shell router (Phase 3 slice 3f): `CHANNELS.{SHELL_OPEN_EXTERNAL, SHELL_OPEN_EXTERNAL_FILE}` — `shell.openExternal` / `shell.openPath` wrappers |
+| `src/main/ipc/settings.ipc.ts` | Settings router (Phase 3 slice 3f): `CHANNELS.{GET_SETTING, SET_SETTING}` — generic `store` get/set, with `downloadDir` resolved through `coldStorageService` |
+| `src/main/ipc/watch-progress.ipc.ts` | Watch-progress router (Phase 3 slice 3f): `CHANNELS.{WATCH_PROGRESS_SAVE, WATCH_PROGRESS_GET, WATCH_PROGRESS_GET_ALL}` — per-`animeId:episodeInt` position/duration/watched tracking in `store.watchProgress` |
+| `src/main/ipc/auto-download.ipc.ts` | Auto-download router (Phase 3 slice 3f): `CHANNELS.AUTO_DL_{GET_SUBSCRIPTION, SET_SUBSCRIPTION, LIST_SUBSCRIPTIONS, TRIGGER, GET_STATUS, GET_ENABLED, SET_ENABLED}` — subscription CRUD + tick triggers, delegating to the `auto-downloader` module |
+| `src/main/ipc/player.ipc.ts` | Player router (Phase 3 slice 3g): `CHANNELS.PLAYER_{GET_STREAM_URL, GET_LOCAL_SUBTITLES, FIND_LOCAL_FILE, REMUX_MKV, REMUX_MKV_STREAM, REMUX_MKV_STREAM_TRANSCODE, STREAM_SEEK, STREAM_START, STREAM_ACK, CLEANUP_REMUX}` — streaming URL + ASS resolution, local-file lookup with mp4-faststart sampling, MKV remux/MSE transcode session orchestration on top of `streamingService`. Owns the module-local `extractFirstSubtitle` helper (`fluent-ffmpeg` + injected ffmpeg/ffprobe path getters) |
+| `src/main/ipc/syncplay.ipc.ts` | Syncplay router (Phase 3 slice 3g): `CHANNELS.SYNCPLAY_{CONNECT, DISCONNECT, SET_FILE, LOCAL_STATE, LOCAL_SNAPSHOT, SET_READY, GET_STATUS}` — thin wrappers over the `./syncplay` singleton; `SYNCPLAY_CONNECT` persists the last-used host/port/room/username/auto-reconnect to `store.syncplay` before connecting |
+| `src/main/ipc/debug.ipc.ts` | Debug router (Phase 3 slice 3g): `CHANNELS.{REPORT_QUALITY_MISMATCH, GET_QUALITY_MISMATCH_COUNT, DUMP_QUALITY_MISMATCHES, DEBUG_GET_MP4_STATS, DEBUG_RESET_MP4_STATS}` — session-scoped quality-mismatch ledger (closure-held `Map`), `mp4StatsService`-backed mp4-faststart stats read/reset |
+| `src/main/smotret-api.ts` | Smotret-Anime API client: search, anime/episode details, embed, subtitles, token validation |
+| `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
+| `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
+| `src/main/syncplay.ts` | Syncplay (Watch Together) TCP/TLS client: handshake, STARTTLS upgrade, `ignoringOnTheFly` bookkeeping, 1 s heartbeat, RTT compensation, auto-reconnect |
+| `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
+| `src/main/fpcalc-binaries.ts` | Auto-download Chromaprint `fpcalc` binary on first launch |
+| `src/main/fingerprint.ts` | Spawns fpcalc on a media file; parses raw 32-bit fingerprint hash array |
+| `src/main/skip-detector.ts` | Per-show OP/ED detection via pairwise Hamming-distance matching |
+| `src/main/lib/errors.ts` | Pure helpers: `errorCode` (walks `cause` chain), `isNetworkError` (transport-vs-application classification) |
+| `src/main/lib/shikimori-queue.ts` | `QueuedShikimoriUpdate`/`ConsolidatedWorkItem` types + pure `consolidateQueue` (per-malId offline-queue collapse) |
+| `src/main/lib/filename.ts` | Pure `parseEpisodeFromFilename` (episodeInt + ext from sanitized download filename) |
+| `src/main/streaming/codec-strings.ts` | Pure ffprobe→codec-string mappers: `avcCodecString`, `hevcCodecString`, `aacCodecString` (MSE-compatible RFC 6381 strings) |
+| `src/main/store/types.ts` | Injected `StorageService<S>` persistence interface (schema-typed get/set/has/delete); decouples services from `electron-store` |
+| `src/main/store/index.ts` | `createStorageService(defaults)` electron-store binding + `MainStorageService.migrateWatchProgressV2()` |
+| `src/main/store/keys.ts` | `PERSISTED_STORE_KEYS` frozen tuple — rename guard, compile-time-asserted against `keyof STORE_DEFAULTS` in `index.ts` |
+| `src/main/store/migrate.ts` | Pure `migrateWatchProgressV2(store)` (one-shot `watchedAt` backfill) |
+| `src/main/services/anime-cache/index.ts` | `createAnimeCacheService` — `AnimeCacheEntry` CRUD + poster file cache + `cleanupStale` orphan sweep; deps-injected (`store`, `userDataDir`, `fetchPoster`, `isCachable`) |
+| `src/main/services/skip-analysis/index.ts` | `createSkipAnalysisService` — leaf surface (`normalizeDetections`, fingerprint cache `pruneCacheFor{Episode,Anime}` + `sweepFingerprintCache`, `dropDetectionsFor{Anime,Episode}`, `buildAutoSkipEpisodes`) **plus** the orchestration folded in by Phase 3 slice 3e: full-show analysis single-flight (`runSkipAnalysis`/`getCurrentAnalysis`/`cancelCurrentAnalysis`), per-renderer stream detection (`runStreamSkipDetection`/`cancelStreamSkipDetection`), and the debounced auto-skip queue (`scheduleAutoSkipAnalysis`/`enqueueAutoSkipAnalysis`/`getAutoSkipQueueStatus`). All in-flight state (`currentSkipAnalysis`, the stream-detection map, the debounce map + queue) lives in the service closure. Deps-injected (`store`, `scanEpisodeFiles`, `sanitizeFilename`, `broadcast`, 2 channel names, `getFpcalcPath`/`getFfmpegPath`/`getFfprobePath`). |
+| `src/main/services/cold-storage/index.ts` | `createColdStorageService` — full hot/cold storage surface: path helpers (`getDownloadDir`, `getColdStorageDir`, `isAdvanced`, `dirsForScan`), `scanUsage` (hot/cold bucket walk → `StorageUsage`), disk mutators (`deleteEpisodeFiles`, `moveEpisodeToColdStorage`, `moveAllFilesToColdStorage`, `pruneDownloadedEpisode`), read-only checks (`episodeFileExists`, `episodeHasInProgressDownload`), and watched-cleanup orchestrator (`findCleanupCandidates`, `runWatchedCleanup` with confirm/force gating + per-run lock). Deps-injected (`store`, `userDataDir`, `sanitizeFilename`, `parseEpisodeFromFilename`, `scanEpisodeFiles`, `invalidateFileCache`, `broadcast` + 4 channel names). |
+| `src/main/streaming/index.ts` | `createStreamingService` — MSE session machinery: `probeMkvForMse`, `findKeyframeBefore`, `pickH264Encoder` (cached, vaapi → nvenc → qsv → libx264 dry-run-gated), `h264EncoderCandidates`, `spawnFfmpegForSession` (fragmented-MP4 pipe + backpressure-managed IPC chunks + ffmpeg stderr-throttled progress + HEVC `hvc1` tagging for MSE), session map (`registerSession`/`getSession`/`cleanupSession`/`cleanupAllSessions`), `tmpDir`, watermark constants. Deps-injected (`getFfmpegPath`/`getFfprobePath` live getters + 4 stream IPC channels). The `player.ipc.ts` router consumes the service primitives; subtitle extraction lives in the router as a local `extractFirstSubtitle` helper. |
+| `src/main/services/mp4-stats/index.ts` | `createMp4StatsService` (Phase 3 slice 3g) — owns the mp4-faststart sampling state lifted out of `index.ts`: the per-session probed-paths `Set` + the read-modify-write serialization chain. Exposes `recordCheck(filePath, context)` (called from the `download-manager.onVideoDownloaded` hook + `player:find-local-file`), `getStats()` / `resetStats()` (backing the mp4 debug channels). Deps-injected (`store`). |
+| `src/preload/index.ts` | contextBridge API exposure to renderer |
+| `src/preload/index.d.ts` | Shared TypeScript interfaces for IPC communication |
+| `src/renderer/src/main.ts` | Vue app entry point |
+| `src/renderer/src/App.vue` | Root component, per-view navigation state, anime prefs persistence (default view: `home`) |
+| `src/renderer/src/components/shared/Sidebar.vue` | Navigation menu |
+| `src/renderer/src/components/shared/AnimeCard.vue` | Reusable anime poster card |
+| `src/renderer/src/components/shared/CleanupModal.vue` | Disk-cleanup confirmation modal — used by AnimeDetailView + DownloadsView storage cleanups |
+| `src/renderer/src/components/views/HomeView.vue` | Continue Watching landing view: Resume + Next-up entries |
+| `src/renderer/src/components/views/SearchView.vue` | Anime search + results grid (persistent across tab switches) |
+| `src/renderer/src/components/views/LibraryView.vue` | Starred + downloaded anime collection, folder deletion |
+| `src/renderer/src/components/views/AnimeDetailView.vue` | Episode list, translations, download/open/delete per episode, dequeue, download progress. Consumes `useAnimeDetailPrefs` + `useChronology` + `useEpisodeList` + `useEpisodeDownloads`. Renders `detail/ChronologyPanel.vue` + `detail/FriendsPanel.vue` for the Shikimori-driven sidebar panels |
+| `src/renderer/src/components/detail/ChronologyPanel.vue` | Related-anime list (Shikimori chronology). Props: `shikiRelated`, `relatedLoading`; v-model: `collapsed`. Calls `useLibraryStore().openAnime()` directly to navigate. Includes its own KIND_LABELS + STATUS_LABELS + scoped CSS |
+| `src/renderer/src/components/detail/FriendsPanel.vue` | Friends' Shikimori watch status. Props: `friendsRates`, `friendsLoading`, `numberOfEpisodes`; v-model: `collapsed`. Owns the `friendsSummary` computed (status counts) |
+| `src/renderer/src/components/detail/ShikimoriPanel.vue` | Shikimori rate edit form + offline indicator + sync state + details (genres + description with collapse). Props: `anime`. Injects the `useShikimori` composable instance via `ShikimoriKey` for state + actions; reads `offlineQueueLength` directly from `useShikimoriStore` |
+| `src/renderer/src/components/detail/SkipDetectionPanel.vue` | Local skip-detection + chapter-inject panel with collapse, run/cancel buttons, chapter-inject button, results table. Props: `filteredEpisodes`. Injects the `useSkipDetection` composable instance via `SkipDetectionKey` |
+| `src/renderer/src/components/detail/EpisodeList.vue` | Pagination row + `v-for` of `EpisodeRow` + the "Loading episodes…" status. Props: `playerMode`, `translationType`. Injects `useEpisodeList` via `EpisodeListKey` (for `filteredEpisodes`/`episodeRows`/pagination state) |
+| `src/renderer/src/components/detail/EpisodeRow.vue` | Single episode row: translation picker (multi-type optgroups), download/merge status with progress bar + ETA, watched/progress/type/quality/file badges, action buttons (Open/Folder/Delete/Cancel/Play/Download). Props: `row`, `playerMode`, `translationType`. Injects `useEpisodeList` + `useEpisodeDownloads` via their keys |
+| `src/renderer/src/components/detail/keys.ts` | Typed `InjectionKey` symbols (`ShikimoriKey`, `SkipDetectionKey`, `EpisodeListKey`, `EpisodeDownloadsKey`) the parent uses to `provide` composable instances to deeply-nested detail panels |
+| `src/renderer/src/components/detail/translation-types.ts` | Shared `TRANSLATION_TYPES` array (5 types: subRu/subEn/voiceRu/voiceEn/raw, each with `label`/`short`/`color`) + `typeChip(type)` helper. Used by the parent controls bar + EpisodeRow |
+| `src/renderer/src/components/views/DownloadsView.vue` | Real-time download queue with progress, merge controls |
+| `src/renderer/src/components/views/ShikimoriView.vue` | Shikimori anime list: browse watchlist, status filter, MAL ID resolution |
+| `src/renderer/src/components/views/FriendsActivityView.vue` | Chronological feed of recent anime activity from Shikimori friends |
+| `src/renderer/src/components/views/CalendarView.vue` | Mon–Sun grid of upcoming episodes for tracked airing shows (Watching/Rewatching/Planned); week/month modes |
+| `src/renderer/src/components/views/PlayerView.vue` | Built-in video player coordinator. After Phase 5 slice 5e the template is a thin shell: `PlayerTitleBar` (top bar) + the controls bar's bottom dropdowns (`TranslationMenu`, `QualityMenu`, `Anime4KMenu`, `SyncplayMenu`) live as child components in `components/player/` |
+| `src/renderer/src/components/player/PlayerTitleBar.vue` | Title bar — close button, prev/next episode nav, anime title + episode label, prefetch indicator. Emits `close` / `go-prev` / `go-next` |
+| `src/renderer/src/components/player/TranslationMenu.vue` | Two-level translation picker (type group → translation item). Presentation-only; parent owns the menu level + selectedTypeGroup state so the menu can auto-jump levels on open |
+| `src/renderer/src/components/player/QualityMenu.vue` | Simple list of available stream heights (streaming only) |
+| `src/renderer/src/components/player/Anime4KMenu.vue` | Anime4K WebGPU shader preset dropdown (off / Mode A / B / C) + GPU info footer. Only rendered when `webgpuAvailable` |
+| `src/renderer/src/components/player/SyncplayMenu.vue` | Watch Together (Syncplay) dropdown — status dot, room input (v-model via `update:room-input`), connect/disconnect button, room user list |
+| `src/renderer/src/assets/player-menus.css` | Shared menu styles (`.preset-wrapper`, `.preset-btn`, `.preset-menu`, `.preset-option`, base `.ctrl-btn`) imported by each `components/player/*Menu.vue` via `<style scoped src="@renderer/assets/player-menus.css">` so every child component gets its own scoped copy. Mirrors the `assets/settings-tabs.css` pattern from slice 5a |
+| `src/renderer/src/components/views/SettingsView.vue` | Thin wrapper around `components/settings/SettingsShell.vue` (kept so `App.vue`'s route map stays stable across Phase 5 slices) |
+| `src/renderer/src/components/settings/SettingsShell.vue` | Tab nav + active-tab routing via `<keep-alive><component :is>` + the "Saved" toast container. Owns the tabs/topbar/saved-toast styles |
+| `src/renderer/src/components/settings/{General,Storage,Connectors,Merging,Player,Shortcuts,WatchTogether,Debug}Tab.vue` | One component per tab. Each tab hydrates its own settings on first activation, owns its tab-local broadcast subscriptions (`onStorageMoveToColdProgress`/`onStorageUsageProgress`/`onStorageCleanupPending`/`onStorageCleanupFinished` in `StorageTab`; `onAutoDlTickResult` in `GeneralTab`; `onSyncplayConnectionStatus` per-test in `WatchTogetherTab`), and disposes them on `onUnmounted` |
+| `src/renderer/src/composables/use-settings-autosave.ts` | Module-level singleton holding `savedVisible` + `showSaved` + `autoSave(key, value)`. Every tab calls `autoSave(...)` in its watchers; the shell renders the toast |
+| `src/renderer/src/assets/settings-tabs.css` | Shared utility classes (`.setting-group`, `.setting-label`, `.setting-input`, `.toggle-row`, `.test-token-btn`, `.merge-all-btn`, `.scan-progress`, …) imported by each tab via `<style scoped src="@renderer/assets/settings-tabs.css">` so each component gets its own scoped copy |

@@ -62,6 +62,16 @@ CI auto-creates a GitHub release when `package.json` version changes on main.
 - Keep `docs/<subsystem>.md` up to date when adding IPC handlers, settings, or changing architecture — the relevant page lives under `docs/` (e.g. `docs/ipc.md` for new channels, `docs/settings.md` for new electron-store keys). `DESIGN.md` itself is just the index
 - Don't add unnecessary comments, docstrings, or type annotations to unchanged code
 
+## Testing
+
+Tests are required, not optional. The suite (Vitest unit + integration, Playwright e2e) plus a per-seam coverage gate run in CI's `quality` job on every PR — see `docs/testing.md` for the layers, layout, and thresholds.
+
+- **Every new feature ships with tests that exercise it.** A feature PR with no test for the new behavior is incomplete.
+- **Every change updates its tests in the same PR.** If you change behavior, update (or add) the tests that cover it — never leave them asserting the old behavior.
+- **Prefer a test that captures the behavior difference.** Ideally add a case that fails on the old behavior and passes on the new one (a regression/characterization test), so the diff is self-documenting and the change can't silently revert. Bug fixes get a regression test that fails without the fix.
+- Put tests next to their seam: main services/`lib` + API-client fixture replay + the IPC contract guard under `test/`; integration flows under `test/integration/` (via `test/helpers/app-harness.ts`); renderer stores/composables under `test/renderer/`; end-to-end flows under `e2e/`.
+- Run `npm run test` (or `npm run test:coverage`) and `npm run test:e2e` locally before pushing. CI runs the full quality gate; a coverage-threshold regression (`vitest.config.ts`) fails the build.
+
 ## Issue / Plan Template
 
 When writing plans for issues, use the following standardized structure:
@@ -95,7 +105,7 @@ When writing plans for issues, use the following standardized structure:
 - **Documentation:** the relevant `docs/<subsystem>.md` *(Required if IPC channels, settings, or architecture changed — `DESIGN.md` is just the index)*
 
 ## Testing Strategy
-*How will we verify this change works? What specific scenarios, platforms (Windows/Mac/Linux), or edge cases need manual testing?*
+*Automated tests are required — list the unit / integration / e2e tests you will add or change to cover this work, ideally one that shows the behavior difference (fails on the old behavior, passes on the new). Then how it's verified manually: scenarios, platforms (Windows/Mac/Linux), edge cases.*
 
 ## Risks & Edge Cases
 *Potential pitfalls, race conditions, performance impacts, or regressions to watch out for.*

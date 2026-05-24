@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
@@ -131,7 +132,7 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
 
   const sendProgress = (status: string, progress?: number): void => {
     if (win && !win.isDestroyed()) {
-      win.webContents.send('fpcalc:download-progress', { status, progress })
+      win.webContents.send(EVENT_CHANNELS.FPCALC_DOWNLOAD_PROGRESS, { status, progress })
     }
   }
 

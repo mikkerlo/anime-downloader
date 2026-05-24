@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import * as fs from 'fs'
 import * as path from 'path'
 import { Readable } from 'stream'
@@ -1082,7 +1083,7 @@ export class DownloadManager {
     if (windows.length === 0) return
     const data = this.getEpisodeGroups()
     for (const win of windows) {
-      win.webContents.send('download:progress', data)
+      win.webContents.send(EVENT_CHANNELS.DOWNLOAD_PROGRESS, data)
     }
     // Periodic persist every 10 ticks (5s) while downloads are active
     this.broadcastTick++

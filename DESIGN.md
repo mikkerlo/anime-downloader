@@ -540,6 +540,25 @@ Global app glue that doesn't belong on a Pinia store goes into
   episode-change reset because that path also touches prefetch state.
   Constants: `SKIP_GRACE_MS = 250`, `SKIP_LEAD_IN_SEC = 0.25`. (Phase 5
   slice 5d.2.c)
+- `useSyncplayClient({ getVideoEl, getDuration, getAnimeId, getMalId, getAnimeName, getCurrentEpisodeInt, getActiveEpisodeLabel, activeTranslationId, activeEpisodeIndex, formatTime, onRemoteEpisodeChange })`
+  — Syncplay (Watch Together) client for PlayerView. Owns the connection
+  state (`syncplayStatus`), room state (`syncplayRoomUsers`,
+  `syncplayRoomInput`, `syncplayMenuOpen`), toast state (`syncplayToast`,
+  `syncplayPausedBy`), internal local-ready/last-remote-playing flags,
+  the suppress-window for echo-back prevention, the 1s snapshot heartbeat
+  timer, all 6 IPC subscriptions (connection-status, remote-state,
+  room-users, room-event, trace, remote-episode-change), the
+  `applyRemoteState` apply pipeline (with seek + play-pause diff +
+  suppress-window), the `applyReadyGate` (`shouldPlay = lastRemotePlaying
+  && allUsersReady`), and the file-push + connection toggle helpers.
+  Exposes `onLocalPlay` / `onLocalPause` / `onLocalCanPlay` so PlayerView's
+  own video handlers can delegate the syncplay bookkeeping. The
+  `onRemoteEpisodeChange` callback hands episode-change events back to
+  PlayerView's navigator because the step-toward loop also touches
+  `goToEpisode` + `activeEpisodeIndex`. `onMounted` loads status + saved
+  room + installs the subs + starts the snapshot timer;
+  `onBeforeUnmount` unsubs all 6 + clears 3 timers. Constant:
+  `WAITING_DEBOUNCE_MS = 600`. (Phase 5 slice 5d.2.d)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

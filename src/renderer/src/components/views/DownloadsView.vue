@@ -40,7 +40,7 @@ const hasFailed = computed(() =>
 const hasFinished = computed(() =>
   groups.value.some((g) => {
     const s = groupStatus(g);
-    return s === 'merged' || s === 'failed';
+    return s === 'merged' || s === 'failed' || s === 'ready-for-merge';
   })
 );
 
@@ -125,7 +125,7 @@ async function mergeFinished(): Promise<void> {
         <button v-if="hasMergeable" class="merge-btn" @click="mergeFinished" :disabled="merging">
           {{ merging ? 'Merging...' : 'Merge finished' }}
         </button>
-        <button v-if="hasFinished" class="clear-btn" @click="clearCompleted">Clear finished</button>
+        <button v-if="hasFinished" class="clear-btn" @click="clearCompleted">Clear done</button>
       </div>
     </header>
     <div class="body">

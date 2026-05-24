@@ -66,7 +66,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `download:cancel-by-episode` | invoke | Cancel downloads for anime/episode |
 | `download:cancel-merge` | invoke | Cancel active ffmpeg merge process |
 | `download:get-queue` | invoke | Get episode groups |
-| `download:clear-completed` | invoke | Remove finished items (skips unmerged) |
+| `download:clear-completed` | invoke | Remove cancelled/failed/merged/merge-failed/ready-for-merge groups; keeps mid-merge + crash-recovered |
 | `download:merge` | invoke | Trigger ffmpeg merge for completed downloads |
 | `download:scan-merge` | invoke | Scan folders and merge all unmerged files |
 | `download:fix-metadata` | invoke | Re-mux MKVs to fix subtitle metadata |

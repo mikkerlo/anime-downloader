@@ -47,6 +47,12 @@ interface EpisodeGroup {
   video: DownloadProgressItem | null
   subtitle: DownloadProgressItem | null
   mergeStatus: 'pending' | 'merging' | 'completed' | 'failed'
+  // True when there is a real `mergeStatuses` entry (merge was started, even
+  // if it crashed and was restored as `pending` on the next boot). False when
+  // the group has never been merged — UI uses this to distinguish "ready for
+  // merge" (clearable) from crash-recovered "pending" (preserve so the user
+  // can retry via Merge finished).
+  hasMergeEntry: boolean
   mergePercent?: number
   mergeError?: string
 }

@@ -93,6 +93,23 @@ describe('DownloadManager.clearCompleted', () => {
     expect(dm.getEpisodeGroups()).toHaveLength(1)
   })
 
+  it('exposes hasMergeEntry so renderer can tell never-merged from crash-recovered', () => {
+    seed(
+      dm,
+      [
+        makeItem({ translationId: 1, id: 'video-1', status: 'completed' }),
+        makeItem({ translationId: 2, id: 'video-2', status: 'completed' })
+      ],
+      [[2, { status: 'pending' }]]
+    )
+
+    const groupsById = new Map(dm.getEpisodeGroups().map((g) => [g.translationId, g]))
+    expect(groupsById.get(1)?.hasMergeEntry).toBe(false)
+    expect(groupsById.get(1)?.mergeStatus).toBe('pending')
+    expect(groupsById.get(2)?.hasMergeEntry).toBe(true)
+    expect(groupsById.get(2)?.mergeStatus).toBe('pending')
+  })
+
   it('removes merged groups (regression — existing behavior preserved)', () => {
     seed(
       dm,

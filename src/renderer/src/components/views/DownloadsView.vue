@@ -22,6 +22,9 @@ function groupStatus(g: EpisodeGroup): string {
     if (g.mergeStatus === 'completed') return 'merged';
     if (g.mergeStatus === 'merging') return 'merging';
     if (g.mergeStatus === 'failed') return 'merge-failed';
+    // Crash-recovered merge: loadQueue() reset a mid-merge entry to 'pending'.
+    // Backend refuses to clear these so the user can retry via Merge finished.
+    if (g.hasMergeEntry && g.mergeStatus === 'pending') return 'pending-merge';
     return 'ready-for-merge';
   }
   if (items.some((i) => i.status === 'failed')) return 'failed';
@@ -40,7 +43,7 @@ const hasFailed = computed(() =>
 const hasFinished = computed(() =>
   groups.value.some((g) => {
     const s = groupStatus(g);
-    return s === 'merged' || s === 'failed' || s === 'ready-for-merge';
+    return s === 'merged' || s === 'failed' || s === 'merge-failed' || s === 'ready-for-merge';
   })
 );
 
@@ -147,6 +150,7 @@ async function mergeFinished(): Promise<void> {
                 >merging {{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</template
               >
               <template v-else-if="groupStatus(g) === 'ready-for-merge'">ready for merge</template>
+              <template v-else-if="groupStatus(g) === 'pending-merge'">merge interrupted</template>
               <template v-else-if="groupStatus(g) === 'merge-failed'">merge failed</template>
               <template v-else>{{ groupStatus(g) }}</template>
             </span>
@@ -469,6 +473,9 @@ async function mergeFinished(): Promise<void> {
 .episode-group.merging {
   border-left-color: #f39c12;
 }
+.episode-group.pending-merge {
+  border-left-color: #f39c12;
+}
 .episode-group.failed {
   border-left-color: #e94560;
 }
@@ -531,6 +538,9 @@ async function mergeFinished(): Promise<void> {
   color: #9b59b6;
 }
 .group-status.merging {
+  color: #f39c12;
+}
+.group-status.pending-merge {
   color: #f39c12;
 }
 .group-status.failed {

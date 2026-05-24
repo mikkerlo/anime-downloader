@@ -59,6 +59,7 @@ export interface EpisodeGroup {
   video: DownloadItem | null
   subtitle: DownloadItem | null
   mergeStatus: MergeStatus
+  hasMergeEntry: boolean
   mergePercent?: number
   mergeError?: string
 }
@@ -282,6 +283,7 @@ export class DownloadManager {
           video: null,
           subtitle: null,
           mergeStatus: merge?.status || 'pending',
+          hasMergeEntry: merge !== undefined,
           mergePercent: merge?.percent,
           mergeError: merge?.error
         })

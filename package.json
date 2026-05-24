@@ -1,8 +1,11 @@
 {
   "name": "anime-dl-app",
-  "version": "3.25.1",
+  "version": "4.0.0",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

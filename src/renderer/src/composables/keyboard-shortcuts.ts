@@ -12,9 +12,13 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import type { Ref } from 'vue'
 
-const isMac = navigator.platform.toUpperCase().includes('MAC')
+// Module is imported transitively by composable tests under
+// `environment: 'node'`, where `navigator` may be undefined — guard the
+// platform probe rather than crashing at import time.
+export const isMac =
+  typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC')
 
-function matchesBinding(e: KeyboardEvent, binding: string): boolean {
+export function matchesBinding(e: KeyboardEvent, binding: string): boolean {
   const parts = binding.split('+')
   const key = parts[parts.length - 1]
   const mods = parts.slice(0, -1).map((m) => m.toLowerCase())

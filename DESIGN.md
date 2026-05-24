@@ -489,6 +489,23 @@ Global app glue that doesn't belong on a Pinia store goes into
   `sb.timestampOffset` assignment throw `InvalidStateError` — the root
   cause of the rapid-back-to-back-seek stutter pattern. (Phase 5 slice
   5d.1)
+- `useAnime4K({ getVideoEl, getCanvasEl })` — Anime4K WebGPU upscaling
+  pipeline. Owns the GPU device + render-loop lifecycle, exposes
+  `anime4kPreset`/`webgpuAvailable`/`gpuName` refs, `anime4kActive` and
+  `presetLabel` computeds, plus `initWebGPU`, `startPipeline`,
+  `stopPipeline`, and `destroy` actions. The consumer wires the
+  preset-changed `watch` (persisting to settings + driving start/stop) and
+  the loadedmetadata-gated initial start. Lifecycle is caller-managed for
+  testability. (Phase 5 slice 5d.2.a)
+- `usePlayerKeyboard({ shortcuts, webgpuAvailable, onAction })` — owns the
+  PlayerView's document-level `keydown` listener and the binding-matching
+  logic (Space/k/Arrows/f/m/Escape + configurable prev/next episode +
+  shader presets). Dispatches `PlayerAction` strings via the `onAction`
+  callback so the consumer holds the component-local actions
+  (`togglePlay`, `seekRelative`, etc.). Registers `onMounted` /
+  `onBeforeUnmount` internally — like `keyboard-shortcuts.ts` for the App
+  shell. Shares `matchesBinding` + `isMac` with the App composable.
+  (Phase 5 slice 5d.2.a)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

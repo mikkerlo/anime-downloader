@@ -18,7 +18,7 @@ The feature is rolling out in stages so each one can be validated against real u
 
 ## Binary distribution
 
-`fpcalc` (Chromaprint v1.5.1) is auto-downloaded on app launch via `src/main/fpcalc-binaries.ts`, mirroring the ffbinaries pattern. The archive (`tar.gz` on Linux/macOS, `zip` on Windows) is fetched from `github.com/acoustid/chromaprint/releases`, extracted with the system `tar` (Windows 10 1803+ ships tar in PATH), and the `fpcalc` binary is `chmod 0o755`'d into `app.getPath('userData')/fpcalc/`. Best-effort: a failed download logs to console, and the skip-detector IPC surfaces a clear error if the binary is missing.
+`fpcalc` (Chromaprint v1.5.1) is auto-downloaded on app launch via `src/main/fpcalc-binaries.ts`, mirroring the same hand-rolled fetch pattern as `src/main/ffmpeg-binaries.ts`. The archive (`tar.gz` on Linux/macOS, `zip` on Windows) is fetched from `github.com/acoustid/chromaprint/releases`, extracted with the system `tar` (Windows 10 1803+ ships tar in PATH), and the `fpcalc` binary is `chmod 0o755`'d into `app.getPath('userData')/fpcalc/`. Best-effort: a failed download logs to console, and the skip-detector IPC surfaces a clear error if the binary is missing.
 
 ## Fingerprinting (`src/main/fingerprint.ts`)
 

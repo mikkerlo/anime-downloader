@@ -7,7 +7,7 @@ Electron + Vue 3 + TypeScript desktop app for downloading anime. `DESIGN.md` is 
 ## Stack
 
 - Electron 41, electron-vite 5, Vue 3 (Composition API, `<script setup>`), TypeScript 6
-- electron-store for persistence, fluent-ffmpeg for merging, ffbinaries for ffmpeg auto-download
+- electron-store for persistence, fluent-ffmpeg for merging, hand-rolled fetch (`src/main/ffmpeg-binaries.ts`) for ffmpeg auto-download
 - Dark theme UI, no component library
 
 ## Dev commands

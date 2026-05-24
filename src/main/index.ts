@@ -13,8 +13,14 @@ import {
 import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
-import ffbinaries from 'ffbinaries'
 import { execFile } from 'child_process'
+import {
+  ensureFfmpeg,
+  getFfmpegPath,
+  getFfprobePath,
+  clearFfmpegPaths,
+  getFfmpegDir
+} from './ffmpeg-binaries'
 import * as shikimori from './shikimori'
 import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
@@ -501,8 +507,6 @@ const shikimoriSyncService = createShikimoriSyncService({
   animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
 })
 let downloadManager: DownloadManager
-let ffmpegPath = ''
-let ffprobePath = ''
 
 const skipAnalysisService = createSkipAnalysisService({
   store,
@@ -512,13 +516,13 @@ const skipAnalysisService = createSkipAnalysisService({
   signatureUpdatedChannel: EVENT_CHANNELS.SKIP_DETECTOR_SIGNATURE_UPDATED,
   analyzeProgressChannel: EVENT_CHANNELS.SKIP_DETECTOR_ANALYZE_PROGRESS,
   getFpcalcPath,
-  getFfmpegPath: () => ffmpegPath,
-  getFfprobePath: () => ffprobePath
+  getFfmpegPath,
+  getFfprobePath
 })
 
 const streamingService = createStreamingService({
-  getFfmpegPath: () => ffmpegPath,
-  getFfprobePath: () => ffprobePath,
+  getFfmpegPath,
+  getFfprobePath,
   channels: {
     streamChunk: EVENT_CHANNELS.PLAYER_STREAM_CHUNK,
     streamEnd: EVENT_CHANNELS.PLAYER_STREAM_END,
@@ -526,75 +530,6 @@ const streamingService = createStreamingService({
     streamProgress: EVENT_CHANNELS.PLAYER_STREAM_PROGRESS
   }
 })
-
-function getFfmpegDir(): string {
-  return path.join(app.getPath('userData'), 'ffmpeg')
-}
-
-function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
-  const dest = getFfmpegDir()
-  const ext = process.platform === 'win32' ? '.exe' : ''
-  const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
-  const ffprobeBin = path.join(dest, `ffprobe${ext}`)
-
-  if (fs.existsSync(ffmpegBin) && fs.existsSync(ffprobeBin)) {
-    ffmpegPath = ffmpegBin
-    ffprobePath = ffprobeBin
-    return Promise.resolve(ffmpegBin)
-  }
-
-  fs.mkdirSync(dest, { recursive: true })
-
-  const sendProgress = (status: string, progress?: number): void => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS, { status, progress })
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    console.log('[ffmpeg] Downloading ffmpeg + ffprobe binaries via ffbinaries...')
-    sendProgress('downloading', 0)
-    ffbinaries.downloadBinaries(
-      ['ffmpeg', 'ffprobe'],
-      {
-        platform: ffbinaries.detectPlatform(),
-        quiet: false,
-        destination: dest,
-        version: '6.1',
-        tickerFn: (data) => {
-          sendProgress('downloading', Math.round(data.progress * 100))
-        },
-        tickerInterval: 500
-      },
-      (err, results) => {
-        if (err) {
-          console.error('[ffmpeg] Download failed:', err)
-          sendProgress('failed')
-          reject(err)
-          return
-        }
-        console.log('[ffmpeg] Download results:', results)
-        // Make binaries executable on unix
-        if (process.platform !== 'win32') {
-          try {
-            fs.chmodSync(ffmpegBin, 0o755)
-          } catch {
-            /* ignore */
-          }
-          try {
-            fs.chmodSync(ffprobeBin, 0o755)
-          } catch {
-            /* ignore */
-          }
-        }
-        ffmpegPath = ffmpegBin
-        ffprobePath = ffprobeBin
-        sendProgress('done', 100)
-        resolve(ffmpegBin)
-      }
-    )
-  })
-}
 
 interface FfmpegInfo {
   available: boolean
@@ -604,6 +539,7 @@ interface FfmpegInfo {
 }
 
 function checkFfmpeg(): Promise<FfmpegInfo> {
+  const ffmpegPath = getFfmpegPath()
   const result: FfmpegInfo = { available: false, version: '', path: ffmpegPath, encoders: [] }
   if (!ffmpegPath || !fs.existsSync(ffmpegPath)) return Promise.resolve(result)
 
@@ -756,12 +692,9 @@ function registerIpcHandlers(): void {
     skipAnalysisService,
     downloadManager,
     rememberAnimeMeta,
-    getFfmpegPath: () => ffmpegPath,
-    getFfprobePath: () => ffprobePath,
-    clearFfmpegPaths: () => {
-      ffmpegPath = ''
-      ffprobePath = ''
-    },
+    getFfmpegPath,
+    getFfprobePath,
+    clearFfmpegPaths,
     invalidateFileCache: (animeName) => fileCheckCache.delete(animeName),
     getFfmpegDir,
     sumShowFiles,
@@ -930,9 +863,10 @@ async function bootstrap(): Promise<void> {
     }
 
     const autoMerge = store.get('autoMerge') as boolean
+    const ffmpegPath = getFfmpegPath()
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {
       const codec = (store.get('videoCodec') as string) || 'copy'
-      await downloadManager.mergeCompleted(ffmpegPath, ffprobePath, codec)
+      await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
     } else {
       // Auto-move to cold if merge is disabled
       if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {

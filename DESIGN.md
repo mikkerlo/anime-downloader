@@ -23,6 +23,7 @@ This document is an index. Each subsystem lives in its own page under [`docs/`](
 | Local OP/ED skip detection (Chromaprint) | [docs/skip-detection.md](./docs/skip-detection.md) |
 | smotret-anime.ru API endpoints | [docs/smotret-api.md](./docs/smotret-api.md) |
 | Build + packaging | [docs/build.md](./docs/build.md) |
+| Testing: runners, layers, IPC contract guard, coverage thresholds | [docs/testing.md](./docs/testing.md) |
 | Renderer architecture — component layout, Pinia stores, composables, path aliases | [docs/renderer.md](./docs/renderer.md) |
 
 For project conventions (jj workflow, commit/release flow, IPC pattern, plan template), see [CLAUDE.md](./CLAUDE.md).

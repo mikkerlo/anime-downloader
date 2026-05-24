@@ -1,5 +1,4 @@
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
@@ -20,15 +19,6 @@ export function register({ checkFfmpeg, getFfmpegDir, clearFfmpegPaths }: AppDep
     }
     try {
       fs.unlinkSync(ffprobeBin)
-    } catch {
-      /* ignore */
-    }
-    // Also clear ffbinaries zip cache so next download is a real network fetch.
-    const cacheDir = path.join(os.tmpdir(), 'ffbinaries-cache')
-    try {
-      for (const f of fs.readdirSync(cacheDir)) {
-        fs.unlinkSync(path.join(cacheDir, f))
-      }
     } catch {
       /* ignore */
     }

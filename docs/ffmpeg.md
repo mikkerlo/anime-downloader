@@ -1,6 +1,6 @@
 # FFmpeg
 
-Both `ffmpeg` and `ffprobe` are auto-downloaded on first app launch via `ffbinaries` (v6.1) to the app's userData directory. Platform is auto-detected. ffprobe is required for duration probing (used in merge progress calculation).
+Both `ffmpeg` and `ffprobe` are auto-downloaded on first app launch via `src/main/ffmpeg-binaries.ts` to the app's userData directory. Platform is auto-detected. The two `.zip` archives are fetched (via node's built-in `fetch`) from `github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/`, extracted with the system `tar` (Windows 10 1803+ ships tar in PATH), and `chmod 0o755`'d into `app.getPath('userData')/ffmpeg/`. ffprobe is required for duration probing (used in merge progress calculation).
 
 Available video codecs for merge (filtered by what ffmpeg reports):
 - `copy` — no re-encode, fastest

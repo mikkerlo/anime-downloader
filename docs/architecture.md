@@ -16,7 +16,7 @@ Renderer (Vue)  --ipcRenderer.invoke-->  Preload (bridge)  --ipcMain.handle-->  
                                                                                  |
                                                               DownloadManager    |
                                                               electron-store     |
-                                                              ffbinaries/ffmpeg  |
+                                                              ffmpeg-binaries    |
                                                               smotret-anime API  |
 ```
 
@@ -36,7 +36,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | `src/main/ipc/home.ipc.ts` | `CHANNELS.HOME_GET_CONTINUE_WATCHING` — thin shell wrapping the pure helpers in `lib/continue-watching.ts`, plus the bounded-concurrency smotret fetch loop for rows that are still nameless / posterless |
 | `src/main/lib/continue-watching.ts` | Pure helpers `buildContinueWatchingEntries(inputs)` + `finalizeContinueWatchingEntries(draft, fetched)` — collapse `watchProgress` + `shikimoriUserRates` into resume + next-episode rows, apply the Shikimori `rate.updated_at` override, hide completed shows, generate the `unresolvedIds` fetch list, finalize ordering and the 24-row cap. Lifted out of `HOME_GET_CONTINUE_WATCHING` (Phase 2 deferral) for unit-testable logic |
 | `src/main/ipc/downloads.ipc.ts` | Downloads router (Phase 3 slice 3c): `CHANNELS.{DOWNLOAD_ENQUEUE, DOWNLOAD_{PAUSE, RESUME, RESTART, RESTART_ALL_FAILED, PAUSE_ALL, RESUME_ALL, CANCEL, CANCEL_BY_EPISODE, GET_QUEUE, CANCEL_MERGE, CLEAR_COMPLETED, MERGE, SCAN_MERGE, FIX_METADATA, PICK_DIR}, DOWNLOADED_EPISODES_GET}` — wraps `DownloadManager`, the `coldStorageService.pruneDownloadedEpisode` prune-on-cancel, and the `fluent-ffmpeg`-driven fix-metadata pass. Reads ffmpeg/ffprobe paths through `getFfmpegPath()`/`getFfprobePath()` live getters so `FFMPEG_DELETE` clearing the paths is observed without re-registration |
-| `src/main/ipc/ffmpeg.ipc.ts` | Ffmpeg router: `CHANNELS.{FFMPEG_CHECK, FFMPEG_DELETE}` — checks via the injected `checkFfmpeg`, deletes binaries + `ffbinaries-cache` zip cache, and clears the mutable `ffmpegPath`/`ffprobePath` module variables via `clearFfmpegPaths()` |
+| `src/main/ipc/ffmpeg.ipc.ts` | Ffmpeg router: `CHANNELS.{FFMPEG_CHECK, FFMPEG_DELETE}` — checks via the injected `checkFfmpeg`, deletes the ffmpeg + ffprobe binaries, and clears the `ffmpeg-binaries` module's path state via `clearFfmpegPaths()` |
 | `src/main/ipc/cleanup.ipc.ts` | Cleanup router: `CHANNELS.{CLEANUP_GET_SIZE, CLEANUP_GET_ACTIVE_DOWNLOADS, CLEANUP_EXECUTE, CLEANUP_GET_SNOOZED, CLEANUP_SET_SNOOZED}` — uses `coldStorageService.dirsForScan()` to delete the show across hot+cold dirs, prunes `downloadedEpisodes` keys, drops anime/skip-detection cache entries, snoozes per anime id |
 | `src/main/ipc/downloaded-anime.ipc.ts` | Downloaded-anime router: `CHANNELS.{DOWNLOADED_ANIME_ADD, DOWNLOADED_ANIME_DELETE}` — delete cascades to all storage dirs, anime-cache entry, skip-detection cache + detections |
 | `src/main/ipc/shikimori.ipc.ts` | Shikimori router (Phase 3 slice 3d): all 16 `CHANNELS.SHIKIMORI_*` handlers — OAuth (`GET_AUTH_URL`/`EXCHANGE_CODE`/`LOGOUT`/`GET_USER`), rate read/write (`GET_RATE`/`UPDATE_RATE` with offline-queue fallback on network error), `GET_FRIENDS_RATES`/`GET_ANIME_RATES` (cache-first + background refresh)/`GET_ANIME_DETAILS`/`TRIGGER_DETAIL_PREFETCH`, sync surface (`GET_OFFLINE_QUEUE_LENGTH`/`GET_SYNC_STATUS`/`TRIGGER_SYNC`), `GET_FRIENDS_ACTIVITY`/`GET_CALENDAR`/`GET_RELATED`. Holds the `fetchAndCacheShikimoriRates`/`refreshShikimoriRatesInBackground` orchestration locally |
@@ -55,7 +55,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | `src/main/download-manager.ts` | Download queue, concurrent downloads, progress, ffmpeg merge, scan-merge |
 | `src/main/shikimori.ts` | Shikimori API client: OAuth, token refresh, user rates, anime list |
 | `src/main/syncplay.ts` | Syncplay (Watch Together) TCP/TLS client: handshake, STARTTLS upgrade, `ignoringOnTheFly` bookkeeping, 1 s heartbeat, RTT compensation, auto-reconnect |
-| `src/main/ffmpeg-static.d.ts` | Type declaration for ffbinaries module |
+| `src/main/ffmpeg-binaries.ts` | First-launch downloader for ffmpeg + ffprobe v6.1 — native `fetch` against `ffbinaries-prebuilt` GitHub releases, `tar -xf` extraction, paths exposed via `getFfmpegPath`/`getFfprobePath` accessors with `clearFfmpegPaths` invalidator. Mirrors the `fpcalc-binaries.ts` pattern; emits `EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS` |
 | `src/main/fpcalc-binaries.ts` | Auto-download Chromaprint `fpcalc` binary on first launch |
 | `src/main/fingerprint.ts` | Spawns fpcalc on a media file; parses raw 32-bit fingerprint hash array |
 | `src/main/skip-detector.ts` | Per-show OP/ED detection via pairwise Hamming-distance matching |

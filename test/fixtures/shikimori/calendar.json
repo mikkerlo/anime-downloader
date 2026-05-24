@@ -1,0 +1,26 @@
+[
+  {
+    "next_episode": 7,
+    "next_episode_at": "2026-05-24T17:30:00.000+03:00",
+    "duration": 24,
+    "anime": {
+      "id": 99999,
+      "name": "Some Airing Show",
+      "russian": "Какое-то Аниме",
+      "image": {
+        "original": "/system/animes/original/99999.jpg",
+        "preview": "/system/animes/preview/99999.jpg",
+        "x96": "/system/animes/x96/99999.jpg",
+        "x48": "/system/animes/x48/99999.jpg"
+      },
+      "url": "/animes/99999",
+      "kind": "tv",
+      "score": "7.50",
+      "status": "ongoing",
+      "episodes": 12,
+      "episodes_aired": 6,
+      "aired_on": "2026-04-05",
+      "released_on": null
+    }
+  }
+]

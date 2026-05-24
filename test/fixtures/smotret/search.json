@@ -1,0 +1,26 @@
+{
+  "data": [
+    {
+      "id": 7,
+      "title": "Steins;Gate",
+      "titles": { "ru": "Врата Штейна", "romaji": "Steins;Gate", "ja": "シュタインズ・ゲート" },
+      "posterUrlSmall": "https://smotret-anime.ru/img/7.jpg",
+      "numberOfEpisodes": 24,
+      "type": "tv",
+      "typeTitle": "ТВ",
+      "year": 2011,
+      "season": "spring"
+    },
+    {
+      "id": 8,
+      "title": "Steins;Gate 0",
+      "titles": { "ru": "Врата Штейна 0" },
+      "posterUrlSmall": "https://smotret-anime.ru/img/8.jpg",
+      "numberOfEpisodes": 23,
+      "type": "tv",
+      "typeTitle": "ТВ",
+      "year": 2018,
+      "season": "spring"
+    }
+  ]
+}

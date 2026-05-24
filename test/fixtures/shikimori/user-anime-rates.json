@@ -1,0 +1,54 @@
+[
+  {
+    "id": 100001,
+    "score": 8,
+    "status": "watching",
+    "episodes": 5,
+    "rewatches": 0,
+    "updated_at": "2026-05-01T12:00:00.000+03:00",
+    "target_id": 5114,
+    "target_type": "Anime",
+    "anime": {
+      "id": 5114,
+      "name": "Fullmetal Alchemist: Brotherhood",
+      "russian": "Стальной алхимик: Братство",
+      "image": {
+        "original": "/system/animes/original/5114.jpg",
+        "preview": "/system/animes/preview/5114.jpg",
+        "x96": "/system/animes/x96/5114.jpg",
+        "x48": "/system/animes/x48/5114.jpg"
+      },
+      "episodes": 64,
+      "episodes_aired": 64,
+      "kind": "tv",
+      "score": "9.10",
+      "status": "released"
+    }
+  },
+  {
+    "id": 100002,
+    "score": 0,
+    "status": "planned",
+    "episodes": 0,
+    "rewatches": 0,
+    "updated_at": "2026-05-02T08:00:00.000+03:00",
+    "target_id": 9253,
+    "target_type": "Anime",
+    "anime": {
+      "id": 9253,
+      "name": "Steins;Gate",
+      "russian": "Врата Штейна",
+      "image": {
+        "original": "/system/animes/original/9253.jpg",
+        "preview": "/system/animes/preview/9253.jpg",
+        "x96": "/system/animes/x96/9253.jpg",
+        "x48": "/system/animes/x48/9253.jpg"
+      },
+      "episodes": 24,
+      "episodes_aired": 24,
+      "kind": "tv",
+      "score": "9.10",
+      "status": "released"
+    }
+  }
+]

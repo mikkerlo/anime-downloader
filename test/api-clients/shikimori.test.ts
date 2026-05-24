@@ -1,0 +1,253 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+import * as shikimori from '../../src/main/shikimori'
+import { InMemoryStorage } from '../helpers/in-memory-storage'
+
+function fixture(name: string): unknown {
+  return JSON.parse(readFileSync(resolve(__dirname, '../fixtures/shikimori', name), 'utf8'))
+}
+
+function mockFetchOnce(body: unknown, status = 200): void {
+  global.fetch = vi.fn(
+    async () =>
+      ({
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: status === 200 ? 'OK' : 'Error',
+        headers: new Headers(),
+        json: async () => body,
+        text: async () => JSON.stringify(body)
+      }) as unknown as Response
+  )
+}
+
+function lastFetchUrl(): string {
+  const calls = (global.fetch as ReturnType<typeof vi.fn>).mock.calls
+  return calls[calls.length - 1][0] as string
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('shikimori client — fixture replay', () => {
+  describe('getUser', () => {
+    it('parses /api/users/whoami into ShikiUser', async () => {
+      mockFetchOnce(fixture('whoami.json'))
+      const user = await shikimori.getUser('access-token')
+      expect(user).toEqual({
+        id: 1,
+        nickname: 'testuser',
+        avatar: 'https://shikimori.one/system/users/x48/1.png'
+      })
+    })
+
+    it('sends Bearer auth + User-Agent', async () => {
+      mockFetchOnce(fixture('whoami.json'))
+      await shikimori.getUser('access-token')
+      const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
+      expect(init.headers).toMatchObject({
+        Authorization: 'Bearer access-token',
+        'User-Agent': 'anime-dl'
+      })
+    })
+  })
+
+  describe('getUserRate', () => {
+    it('returns the single hit when the array is non-empty', async () => {
+      mockFetchOnce(fixture('user-rates-found.json'))
+      const rate = await shikimori.getUserRate('tok', 1, 5114)
+      expect(rate).toMatchObject({
+        id: 12345,
+        episodes: 5,
+        status: 'watching',
+        target_id: 5114
+      })
+    })
+
+    it('returns null when the API returns an empty array', async () => {
+      mockFetchOnce(fixture('user-rates-empty.json'))
+      const rate = await shikimori.getUserRate('tok', 1, 5114)
+      expect(rate).toBeNull()
+    })
+
+    it('encodes user_id + target_id + target_type=Anime in the URL', async () => {
+      mockFetchOnce(fixture('user-rates-empty.json'))
+      await shikimori.getUserRate('tok', 42, 9253)
+      expect(lastFetchUrl()).toContain('user_id=42')
+      expect(lastFetchUrl()).toContain('target_id=9253')
+      expect(lastFetchUrl()).toContain('target_type=Anime')
+    })
+  })
+
+  describe('createUserRate', () => {
+    it('POSTs the user_rate envelope and parses the response', async () => {
+      mockFetchOnce(fixture('user-rate-created.json'))
+      const rate = await shikimori.createUserRate('tok', 1, 5114, 0, 'watching', 0, 0)
+      expect(rate).toMatchObject({ id: 99001, status: 'watching', target_id: 5114 })
+      const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
+      expect(init.method).toBe('POST')
+      const body = JSON.parse(init.body as string)
+      expect(body).toEqual({
+        user_rate: {
+          user_id: 1,
+          target_id: 5114,
+          target_type: 'Anime',
+          episodes: 0,
+          status: 'watching',
+          score: 0,
+          rewatches: 0
+        }
+      })
+    })
+  })
+
+  describe('updateUserRate', () => {
+    it('PATCHes the rate-id endpoint with the user_rate delta', async () => {
+      mockFetchOnce(fixture('user-rate-updated.json'))
+      const rate = await shikimori.updateUserRate('tok', 12345, 64, 'completed', 9, 1)
+      expect(rate).toMatchObject({ id: 12345, episodes: 64, status: 'completed' })
+      const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
+      expect(init.method).toBe('PATCH')
+      expect(lastFetchUrl()).toContain('/api/v2/user_rates/12345')
+      const body = JSON.parse(init.body as string)
+      expect(body).toEqual({
+        user_rate: { episodes: 64, status: 'completed', score: 9, rewatches: 1 }
+      })
+    })
+  })
+
+  describe('getUserAnimeRates', () => {
+    it('parses the array of ShikiAnimeRateEntry preserving the nested anime object', async () => {
+      mockFetchOnce(fixture('user-anime-rates.json'))
+      const rates = await shikimori.getUserAnimeRates('tok', 1)
+      expect(rates.length).toBe(2)
+      expect(rates[0]).toMatchObject({
+        id: 100001,
+        status: 'watching',
+        episodes: 5,
+        anime: {
+          id: 5114,
+          name: 'Fullmetal Alchemist: Brotherhood',
+          episodes: 64
+        }
+      })
+      expect(rates[0].anime.image.x96).toMatch(/x96/)
+    })
+
+    it('passes a status filter via the URL when provided', async () => {
+      mockFetchOnce(fixture('user-anime-rates.json'))
+      await shikimori.getUserAnimeRates('tok', 1, 'watching')
+      expect(lastFetchUrl()).toContain('status=watching')
+    })
+
+    it('omits the status filter when not provided', async () => {
+      mockFetchOnce(fixture('user-anime-rates.json'))
+      await shikimori.getUserAnimeRates('tok', 1)
+      expect(lastFetchUrl()).not.toContain('status=')
+    })
+  })
+
+  describe('getAnimeDetails', () => {
+    it('parses genres + studios + score + image-free top-level fields', async () => {
+      mockFetchOnce(fixture('anime-details.json'))
+      const d = await shikimori.getAnimeDetails('tok', 5114)
+      expect(d.id).toBe(5114)
+      expect(d.genres.length).toBe(2)
+      expect(d.genres[0]).toEqual({ id: 1, name: 'Action', russian: 'Экшен', kind: 'genre' })
+      expect(d.studios[0].name).toBe('Bones')
+      expect(d.score).toBe('9.10')
+      expect(d.description_html).toContain('<p>')
+    })
+  })
+
+  describe('getFriends', () => {
+    it('parses the friends array', async () => {
+      mockFetchOnce(fixture('friends.json'))
+      const friends = await shikimori.getFriends('tok', 1)
+      expect(friends.length).toBe(2)
+      expect(friends[0]).toEqual({
+        id: 11,
+        nickname: 'alice',
+        avatar: 'https://shikimori.one/system/users/x48/11.png'
+      })
+    })
+  })
+
+  describe('getFranchise', () => {
+    it('parses nodes + links + current_id', async () => {
+      mockFetchOnce(fixture('franchise.json'))
+      const fr = await shikimori.getFranchise(5114)
+      expect(fr.current_id).toBe(5114)
+      expect(fr.nodes.length).toBe(2)
+      expect(fr.links[0].relation).toBe('sequel')
+    })
+  })
+
+  describe('getCalendar', () => {
+    it('parses next_episode + nested anime image map', async () => {
+      mockFetchOnce(fixture('calendar.json'))
+      const cal = await shikimori.getCalendar()
+      expect(cal.length).toBe(1)
+      expect(cal[0].next_episode).toBe(7)
+      expect(cal[0].anime.episodes_aired).toBe(6)
+    })
+  })
+
+  describe('ensureFreshToken', () => {
+    it('returns the cached access token when it is still fresh', async () => {
+      const future = Math.floor(Date.now() / 1000) - 1000 // created_at in the past
+      const store = new InMemoryStorage({
+        shikimoriCredentials: {
+          access_token: 'cached',
+          refresh_token: 'r',
+          created_at: future,
+          expires_in: 86400
+        }
+      })
+      const token = await shikimori.ensureFreshToken(
+        store as unknown as Parameters<typeof shikimori.ensureFreshToken>[0]
+      )
+      expect(token).toBe('cached')
+    })
+
+    it('hits /oauth/token and stores the refreshed credentials when expired', async () => {
+      mockFetchOnce(fixture('token-refresh.json'))
+      const past = Math.floor(Date.now() / 1000) - 100_000 // long ago
+      const store = new InMemoryStorage({
+        shikimoriCredentials: {
+          access_token: 'old',
+          refresh_token: 'r',
+          created_at: past,
+          expires_in: 1
+        }
+      })
+      const token = await shikimori.ensureFreshToken(
+        store as unknown as Parameters<typeof shikimori.ensureFreshToken>[0]
+      )
+      expect(token).toBe('fake-access-token-replaced')
+      const stored = store.get('shikimoriCredentials') as { access_token: string }
+      expect(stored.access_token).toBe('fake-access-token-replaced')
+    })
+
+    it('throws if not logged in', async () => {
+      const store = new InMemoryStorage({ shikimoriCredentials: null })
+      await expect(
+        shikimori.ensureFreshToken(
+          store as unknown as Parameters<typeof shikimori.ensureFreshToken>[0]
+        )
+      ).rejects.toThrow(/Not logged in/)
+    })
+  })
+
+  describe('error handling', () => {
+    it('throws ShikiApiError on non-2xx, attaching the status code', async () => {
+      mockFetchOnce({ error: 'not found' }, 404)
+      await expect(shikimori.getUser('tok')).rejects.toMatchObject({
+        name: 'ShikiApiError',
+        status: 404
+      })
+    })
+  })
+})

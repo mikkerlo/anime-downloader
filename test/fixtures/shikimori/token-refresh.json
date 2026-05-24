@@ -1,0 +1,6 @@
+{
+  "access_token": "fake-access-token-replaced",
+  "refresh_token": "fake-refresh-token-replaced",
+  "created_at": 1716552000,
+  "expires_in": 86400
+}

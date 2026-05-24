@@ -1,0 +1,36 @@
+{
+  "links": [
+    {
+      "id": 1,
+      "source_id": 121,
+      "target_id": 5114,
+      "source": 121,
+      "target": 5114,
+      "weight": 1,
+      "relation": "sequel"
+    }
+  ],
+  "nodes": [
+    {
+      "id": 121,
+      "date": 1097010000,
+      "name": "Fullmetal Alchemist",
+      "image_url": "https://shikimori.one/system/animes/original/121.jpg",
+      "url": "https://shikimori.one/animes/121",
+      "year": 2003,
+      "kind": "tv",
+      "weight": 1
+    },
+    {
+      "id": 5114,
+      "date": 1238792400,
+      "name": "Fullmetal Alchemist: Brotherhood",
+      "image_url": "https://shikimori.one/system/animes/original/5114.jpg",
+      "url": "https://shikimori.one/animes/5114",
+      "year": 2009,
+      "kind": "tv",
+      "weight": 2
+    }
+  ],
+  "current_id": 5114
+}

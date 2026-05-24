@@ -1,0 +1,11 @@
+[
+  {
+    "id": 12345,
+    "score": 8,
+    "status": "watching",
+    "episodes": 5,
+    "rewatches": 0,
+    "target_id": 5114,
+    "target_type": "Anime"
+  }
+]

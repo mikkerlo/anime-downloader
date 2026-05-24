@@ -1,0 +1,32 @@
+{
+  "data": {
+    "id": 100,
+    "episodeFull": "1",
+    "episodeInt": "1",
+    "episodeType": "tv",
+    "translations": [
+      {
+        "id": 1001,
+        "type": "subtitles",
+        "typeKind": "sub",
+        "typeLang": "ru",
+        "authorsSummary": "AniDub",
+        "isActive": 1,
+        "width": 1920,
+        "height": 1080,
+        "duration": "24:00"
+      },
+      {
+        "id": 1002,
+        "type": "voice",
+        "typeKind": "voice",
+        "typeLang": "ru",
+        "authorsSummary": "AniLibria",
+        "isActive": 1,
+        "width": 1920,
+        "height": 1080,
+        "duration": "24:00"
+      }
+    ]
+  }
+}

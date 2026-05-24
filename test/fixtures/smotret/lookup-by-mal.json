@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "id": 7,
+      "title": "Steins;Gate",
+      "titles": { "ru": "Врата Штейна" },
+      "posterUrlSmall": "https://smotret-anime.ru/img/7.jpg",
+      "numberOfEpisodes": 24,
+      "type": "tv",
+      "typeTitle": "ТВ",
+      "year": 2011,
+      "season": "spring",
+      "myAnimeListId": 9253
+    }
+  ]
+}

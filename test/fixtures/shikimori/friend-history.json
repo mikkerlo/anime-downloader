@@ -1,0 +1,24 @@
+[
+  {
+    "id": 5000001,
+    "created_at": "2026-05-20T14:00:00.000+03:00",
+    "description": "Episode 5 watched",
+    "target": {
+      "id": 5114,
+      "name": "Fullmetal Alchemist: Brotherhood",
+      "russian": "Стальной алхимик: Братство",
+      "image": {
+        "original": "/system/animes/original/5114.jpg",
+        "preview": "/system/animes/preview/5114.jpg",
+        "x96": "/system/animes/x96/5114.jpg",
+        "x48": "/system/animes/x48/5114.jpg"
+      }
+    }
+  },
+  {
+    "id": 5000002,
+    "created_at": "2026-05-19T08:00:00.000+03:00",
+    "description": "Anime is being watched",
+    "target": null
+  }
+]

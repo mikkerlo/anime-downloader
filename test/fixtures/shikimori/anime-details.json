@@ -1,0 +1,29 @@
+{
+  "id": 5114,
+  "name": "Fullmetal Alchemist: Brotherhood",
+  "russian": "Стальной алхимик: Братство",
+  "kind": "tv",
+  "description": "[b]Test[/b] description",
+  "description_html": "<p>Test description</p>",
+  "rating": "r",
+  "duration": 24,
+  "aired_on": "2009-04-05",
+  "released_on": "2010-07-04",
+  "genres": [
+    { "id": 1, "name": "Action", "russian": "Экшен", "kind": "genre" },
+    { "id": 2, "name": "Adventure", "russian": "Приключения", "kind": "genre" }
+  ],
+  "studios": [
+    {
+      "id": 1,
+      "name": "Bones",
+      "filtered_name": "Bones",
+      "real": true,
+      "image": "/system/studios/x48/1.png"
+    }
+  ],
+  "score": "9.10",
+  "status": "released",
+  "episodes": 64,
+  "episodes_aired": 64
+}

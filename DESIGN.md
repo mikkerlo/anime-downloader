@@ -506,6 +506,21 @@ Global app glue that doesn't belong on a Pinia store goes into
   `onBeforeUnmount` internally — like `keyboard-shortcuts.ts` for the App
   shell. Shares `matchesBinding` + `isMac` with the App composable.
   (Phase 5 slice 5d.2.a)
+- `useSubtitles({ getVideoEl, getStreamSessionId })` — ASS/SSA subtitle
+  rendering for PlayerView. Owns the `SubtitlesOctopus` (libass-wasm)
+  instance, the `activeSubtitleContent` ref, `initSubtitles(video)` /
+  `destroySubtitles()`, a `redrawAfterFullscreen()` workaround for libass's
+  resize-without-redraw bug, and `subscribeStreamSubtitles()` for the
+  `player:stream-subtitles` IPC broadcast (gated by the caller-supplied
+  session id). The consumer seeds `activeSubtitleContent` from props on
+  mount and wires `onMounted` / `onBeforeUnmount` for the IPC sub +
+  cleanup. (Phase 5 slice 5d.2.b)
+- `useRemux()` — legacy MKV full-remux fallback state. Tiny composable
+  (`remuxing` flag drives the loading overlay, `remuxedPath` feeds the
+  `videoSrc` computed) + `runLegacyRemux(filePath)` that wraps the
+  `player:remux-mkv` IPC + `clear()` for resets between sessions. Only
+  used when MSE rejects the codecs and `prepareMkvForPlayback` falls back
+  to a one-shot ffmpeg stream-copy to MP4. (Phase 5 slice 5d.2.b)
 
 Composables that own broadcast subscriptions or DOM listeners (like
 `useKeyboardShortcuts`) bind those inside themselves; pure-logic composables

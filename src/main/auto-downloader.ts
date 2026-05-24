@@ -1,3 +1,4 @@
+import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import type { StorageService } from './store/types'
 import type { SmotretApi, EpisodeDetail, Translation } from './smotret-api'
 import type { DownloadManager, DownloadRequest } from './download-manager'
@@ -261,7 +262,7 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
   try {
     if (!deps.store.get('autoDownloadEnabled')) {
       lastTickResult = result
-      deps.broadcast('auto-dl:tick-result', result)
+      deps.broadcast(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
       return result
     }
 
@@ -271,13 +272,13 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
     const subscriptions = Object.values(map)
     if (subscriptions.length === 0) {
       lastTickResult = result
-      deps.broadcast('auto-dl:tick-result', result)
+      deps.broadcast(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
       return result
     }
 
     if (!deps.isShikimoriLoggedIn()) {
       lastTickResult = result
-      deps.broadcast('auto-dl:tick-result', result)
+      deps.broadcast(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
       return result
     }
 
@@ -408,7 +409,7 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
             episodeInt,
             outcome: 'enqueued'
           })
-          deps.broadcast('auto-dl:enqueued', {
+          deps.broadcast(EVENT_CHANNELS.AUTO_DL_ENQUEUED, {
             animeId: sub.animeId,
             episodeInt,
             animeName: sub.animeName
@@ -436,7 +437,7 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
     }
 
     lastTickResult = result
-    deps.broadcast('auto-dl:tick-result', result)
+    deps.broadcast(EVENT_CHANNELS.AUTO_DL_TICK_RESULT, result)
     return result
   } finally {
     tickRunning = false

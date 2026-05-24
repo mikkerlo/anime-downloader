@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import AnimeCard from './AnimeCard.vue';
-import { useLibraryStore } from '../stores/library';
-import { useShikimoriStore } from '../stores/shikimori';
+import AnimeCard from '../shared/AnimeCard.vue';
+import { useLibraryStore } from '../../stores/library';
+import { useShikimoriStore } from '../../stores/shikimori';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();

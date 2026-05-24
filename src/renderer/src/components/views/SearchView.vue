@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
-import AnimeCard from './AnimeCard.vue';
-import { useLibraryStore } from '../stores/library';
+import AnimeCard from '../shared/AnimeCard.vue';
+import { useLibraryStore } from '../../stores/library';
 
 const libraryStore = useLibraryStore();
 

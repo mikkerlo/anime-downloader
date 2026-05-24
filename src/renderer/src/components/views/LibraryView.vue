@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import AnimeCard from './AnimeCard.vue';
-import { getAnimeName } from '../utils';
-import { useLibraryStore } from '../stores/library';
+import AnimeCard from '../shared/AnimeCard.vue';
+import { getAnimeName } from '../../utils';
+import { useLibraryStore } from '../../stores/library';
 
 const libraryStore = useLibraryStore();
 

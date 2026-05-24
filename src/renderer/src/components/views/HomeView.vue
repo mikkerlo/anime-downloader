@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { useLibraryStore } from '../stores/library';
-import { useShikimoriStore } from '../stores/shikimori';
+import { useLibraryStore } from '../../stores/library';
+import { useShikimoriStore } from '../../stores/shikimori';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();

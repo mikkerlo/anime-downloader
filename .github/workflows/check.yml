@@ -160,9 +160,12 @@ jobs:
 
       - run: npm run check:subscription-contract
 
-      - run: npm run test
+      # Runs the full unit + integration suite with coverage instrumentation;
+      # per-seam thresholds in vitest.config.ts fail the build on regression
+      # (Phase 7, #140).
+      - run: npm run test:coverage
 
-      # The Playwright smoke test drives the built app.
+      # The Playwright smoke + flow tests drive the built app.
       - run: npm run build
 
       - name: Install Electron runtime + xvfb

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useMsePlayer } from '../../../src/renderer/src/composables/use-mse-player'
 
 type Api = {
@@ -283,5 +283,133 @@ describe('useMsePlayer — maybeRespawnForUnbufferedPosition (no-op without acti
   it('is a no-op when no active session', () => {
     const m = useMsePlayer(makeDeps({ getVideoEl: () => ({}) as HTMLVideoElement }))
     expect(() => m.maybeRespawnForUnbufferedPosition()).not.toThrow()
+  })
+})
+
+// Regression coverage for #127. Before the fix the post-respawn buffer-ahead
+// pause (mkvBuffering + waitForBufferAhead) ran ONLY on the HEVC transcode
+// path. On the stream-copy path the element resumed the instant the first
+// fragment landed — before the SourceBuffer parser had settled — which on
+// Linux/WSL produced repeated readyState=1 stalls and audio dropout. The gate
+// now runs on both paths; waitForBufferAhead calls setSyncplayLocalReady(false)
+// only when it actually executes, so that call is the behavior differentiator:
+// it never fired on a stream-copy respawn under the old code.
+describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    onAbort: (() => void) | null = null
+    appendBuffer(): void {}
+    remove(): void {
+      // The composable adds its `updateend` listener synchronously right after
+      // calling remove(); a microtask fires after that listener is attached.
+      queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
+    }
+    abort(): void {
+      this.onAbort?.()
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: FakeSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): FakeSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {}
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+  })
+
+  it('runs the buffer-ahead pause on the stream-copy path (not just transcode)', async () => {
+    const fakeSb = new FakeSourceBuffer()
+    // Initial buffered range does NOT contain the seek target (100), so the
+    // respawn path is taken rather than the "already buffered" early return.
+    fakeSb.buffered.ranges = [[0, 5]]
+    // After abort() the fresh ffmpeg run's fragments cover the target with
+    // ample lead, so waitForBufferAhead returns on its first poll.
+    fakeSb.onAbort = () => {
+      fakeSb.buffered.ranges = [[99, 105]]
+    }
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 100,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    const setSyncplayLocalReady = vi.fn()
+    const seekSpy = vi.fn(async () => ({ generation: 1, keyframeTime: 99 }))
+    setApi({
+      playerStreamSeek: seekSpy,
+      playerStreamStart: vi.fn(async () => {}),
+      playerStreamAck: vi.fn(async () => {})
+    })
+
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        setSyncplayLocalReady
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 200,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      keyframeTime: 0
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+    expect(m._internal.getSourceBuffer()).not.toBeNull()
+    expect(m.transcodingHevc.value).toBe(false)
+
+    await m._internal.handleUnbufferedSeek()
+
+    // Respawn happened…
+    expect(seekSpy).toHaveBeenCalledWith('s1', 99)
+    // …and the buffer-ahead gate executed on this stream-copy session.
+    expect(setSyncplayLocalReady).toHaveBeenCalledWith(false)
+    expect(setSyncplayLocalReady).toHaveBeenCalledWith(true)
+    // Gate cleared once enough lead buffered; no lingering buffering state.
+    expect(m.mkvBuffering.value).toBe(false)
+
+    m.resetMseState()
   })
 })

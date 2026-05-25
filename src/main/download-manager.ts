@@ -59,6 +59,7 @@ export interface EpisodeGroup {
   video: DownloadItem | null
   subtitle: DownloadItem | null
   mergeStatus: MergeStatus
+  hasMergeEntry: boolean
   mergePercent?: number
   mergeError?: string
 }
@@ -282,6 +283,7 @@ export class DownloadManager {
           video: null,
           subtitle: null,
           mergeStatus: merge?.status || 'pending',
+          hasMergeEntry: merge !== undefined,
           mergePercent: merge?.percent,
           mergeError: merge?.error
         })
@@ -568,9 +570,12 @@ export class DownloadManager {
       if (item.status === 'cancelled' || item.status === 'failed') {
         removedTrIds.add(item.translationId)
       } else if (item.status === 'completed') {
-        // Only clear completed items if merge is done (or no merge needed)
+        // Clear when merge is done/failed, or when no merge has ever started
+        // (ready-for-merge: user opted out, or files deleted from disk).
+        // Mid-merge ('merging') and crash-recovered ('pending') stay — user
+        // may want to resume them with "Merge finished".
         const merge = this.mergeStatuses.get(item.translationId)
-        if (merge?.status === 'completed' || merge?.status === 'failed') {
+        if (!merge || merge.status === 'completed' || merge.status === 'failed') {
           removedTrIds.add(item.translationId)
         }
       }

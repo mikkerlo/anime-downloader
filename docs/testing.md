@@ -3,10 +3,11 @@
 Two runners, split by what they touch (refactor epic #84, Phase 7):
 
 ```bash
-npm run test            # Vitest: unit + integration (no Electron)
+npm run test            # Vitest: unit + integration (no Electron, no network)
 npm run test:watch      # Vitest in watch mode
 npm run test:coverage   # Vitest + v8 coverage; enforces per-seam thresholds
 npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run build` first)
+npm run test:contract   # Vitest: live API contract check (hits shikimori.one + smotret-anime.ru)
 ```
 
 ## Layers
@@ -36,6 +37,21 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   player seek, live Shikimori sync) are deliberately excluded to keep CI
   deterministic; their underlying logic is covered at the unit + integration
   layers.
+
+- **Live API contract** (`test/contract/`, separate `vitest.contract.config.ts`)
+  — weekly probe against the real `shikimori.one` + `smotret-anime.ru` APIs,
+  asserting our parsers' required fields are still present and the right
+  primitive type. Excluded from `npm run test` so PRs stay offline; runs only
+  via `npm run test:contract` or the `Live API contract check` GitHub workflow
+  (`.github/workflows/contract-check.yml`, Mondays 06:00 UTC + manual dispatch).
+  Anonymous endpoints only — no OAuth tokens in CI. Assertions are
+  intentionally **loose** (parse succeeds, required fields non-null) so
+  upstream adding new optional fields doesn't trip us. On failure the workflow
+  opens or comments on a sticky issue tagged `contract-drift`; investigate by
+  re-recording the affected fixture under `test/fixtures/` and updating the
+  matching TypeScript interface in `src/main/shikimori.ts` or
+  `src/main/smotret-api.ts`, then verify `npm run test:contract` passes
+  locally before closing the issue. (#141)
 
 ## IPC contract guard
 

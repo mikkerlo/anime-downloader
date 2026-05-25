@@ -12,7 +12,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
-    exclude: ['node_modules/**', 'out/**', 'dist/**', 'e2e/**'],
+    // `test/contract/**` is the live-API contract check (#141): real network
+    // calls to shikimori.one + smotret-anime.ru, run weekly by
+    // `.github/workflows/contract-check.yml` via `npm run test:contract`, not
+    // here. Keeping it out of the default suite means PR runs stay offline.
+    exclude: ['node_modules/**', 'out/**', 'dist/**', 'e2e/**', 'test/contract/**'],
     setupFiles: ['./test/setup/electron-mock.ts'],
     coverage: {
       provider: 'v8',

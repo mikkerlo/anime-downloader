@@ -1,0 +1,81 @@
+name: Live API contract check
+
+# Weekly probe against the real shikimori.one + smotret-anime.ru APIs. The
+# fixture-replay tests under test/api-clients/ catch parser drift given the
+# response shape we recorded; this job catches the response shape changing
+# upstream — silent regressions that would otherwise reach a user before us.
+# (#141; complements the fixture suite under test/api-clients/)
+
+on:
+  # Mondays at 06:00 UTC — gentle cadence per the issue review (APIs move
+  # slowly; nightly trains us to ignore the alert).
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - id: run
+        run: npm run test:contract
+        continue-on-error: true
+
+      - name: Open or update sticky contract-drift issue on failure
+        if: steps.run.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Find an existing open contract-drift issue (sticky).
+          EXISTING=$(gh issue list --label contract-drift --state open --json number \
+            --jq '.[0].number' || echo "")
+
+          BODY=$(cat <<EOF
+          The weekly live API contract check (\`.github/workflows/contract-check.yml\`)
+          failed on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+
+          Run: $RUN_URL
+
+          Likely cause: a response shape change at \`shikimori.one\` or
+          \`smotret-anime.ru\` made one of our parsers' required fields
+          missing or wrong-typed. Update the affected fixture(s) under
+          \`test/fixtures/\` and the corresponding TypeScript interface(s) in
+          \`src/main/shikimori.ts\` or \`src/main/smotret-api.ts\`, then verify
+          \`npm run test:contract\` is green locally before closing this issue.
+          EOF
+          )
+
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing contract-drift issue #$EXISTING"
+            echo "$BODY" | gh issue comment "$EXISTING" --body-file -
+          else
+            echo "Creating new contract-drift issue"
+            echo "$BODY" | gh issue create \
+              --title "Live API contract check failed" \
+              --label contract-drift \
+              --body-file -
+          fi
+
+      # Surface the failure on the workflow page itself too. The notify step
+      # above creates an issue; this re-fails the job so the green-checkmark
+      # heuristic in the Actions UI doesn't lie about the contract state.
+      - name: Re-fail on contract-test failure
+        if: steps.run.outcome == 'failure'
+        run: |
+          echo "Contract tests failed — see issue created above." >&2
+          exit 1

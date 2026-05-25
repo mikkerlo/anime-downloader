@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "4.0.6",
+  "version": "4.0.7",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "engines": {
@@ -24,6 +24,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:contract": "vitest run --config vitest.contract.config.ts",
     "check:subscription-contract": "bash scripts/check-subscription-contract.sh",
     "screenshot": "node scripts/screenshot.js"
   },

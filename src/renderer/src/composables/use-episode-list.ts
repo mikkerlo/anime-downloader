@@ -277,17 +277,29 @@ export function useEpisodeList(deps: {
     if (!deps.anime.value || pagedEpisodes.value.length === 0) return
     loadingEpisodes.value = true
 
-    const batch = 5
     const toLoad = pagedEpisodes.value.filter((ep) => !episodes.value.has(ep.id))
 
-    for (let i = 0; i < toLoad.length; i += batch) {
-      const chunk = toLoad.slice(i, i + batch)
-      const fetched = await Promise.all(
-        chunk.map((ep) => window.api.getEpisode(ep.id, deps.getAnimeId()).then((r) => r.data))
+    if (toLoad.length > 0) {
+      const res = await window.api.getEpisodesBatch(
+        toLoad.map((ep) => ep.id),
+        deps.getAnimeId()
       )
+      const byId = new Map(res.data.map((d) => [d.id, d]))
       const updated = new Map(episodes.value)
-      for (const ep of fetched) {
-        updated.set(ep.id, ep)
+      for (const ep of toLoad) {
+        // Episodes with no translations are absent from the bulk response —
+        // synthesize an empty detail so the map stays complete and they aren't
+        // re-fetched on every page revisit.
+        updated.set(
+          ep.id,
+          byId.get(ep.id) ?? {
+            id: ep.id,
+            episodeFull: ep.episodeFull,
+            episodeInt: ep.episodeInt,
+            episodeType: ep.episodeType,
+            translations: []
+          }
+        )
       }
       episodes.value = updated
     }

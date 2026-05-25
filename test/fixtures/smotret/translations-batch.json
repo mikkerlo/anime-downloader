@@ -1,0 +1,61 @@
+{
+  "data": [
+    {
+      "id": 1001,
+      "episodeId": 100,
+      "type": "subtitles",
+      "typeKind": "sub",
+      "typeLang": "ru",
+      "authorsSummary": "AniDub",
+      "isActive": 1,
+      "width": 1920,
+      "height": 1080,
+      "duration": "24:00",
+      "episode": {
+        "id": 100,
+        "episodeFull": "1 серия",
+        "episodeInt": "1",
+        "episodeType": "tv",
+        "isActive": 1
+      }
+    },
+    {
+      "id": 1002,
+      "episodeId": 100,
+      "type": "voice",
+      "typeKind": "voice",
+      "typeLang": "ru",
+      "authorsSummary": "AniLibria",
+      "isActive": 1,
+      "width": 1920,
+      "height": 1080,
+      "duration": "24:00",
+      "episode": {
+        "id": 100,
+        "episodeFull": "1 серия",
+        "episodeInt": "1",
+        "episodeType": "tv",
+        "isActive": 1
+      }
+    },
+    {
+      "id": 2001,
+      "episodeId": 101,
+      "type": "subtitles",
+      "typeKind": "sub",
+      "typeLang": "en",
+      "authorsSummary": "HorribleSubs",
+      "isActive": 1,
+      "width": 1280,
+      "height": 720,
+      "duration": "24:00",
+      "episode": {
+        "id": 101,
+        "episodeFull": "2 серия",
+        "episodeInt": "2",
+        "episodeType": "tv",
+        "isActive": 1
+      }
+    }
+  ]
+}

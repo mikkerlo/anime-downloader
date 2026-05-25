@@ -33,7 +33,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `get-anime` | invoke | Fetch anime details by ID |
 | `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
 | `set-anime-cache` | invoke | Write AnimeDetail to cache (no-op if anime is neither starred nor downloaded) |
-| `get-episode` | invoke | Fetch episode translations |
+| `get-episode` | invoke | Fetch episode translations (single episode) |
+| `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure |
 | `probe-embed-quality` | invoke | Probe embed API for actual stream height |
 | `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |
 | `get-quality-mismatch-count` | invoke | Get number of collected mismatches |

@@ -96,6 +96,53 @@ describe('SmotretApi — fixture replay', () => {
     })
   })
 
+  describe('getEpisodesBatch', () => {
+    it('groups the flat translations list into one EpisodeDetail per episode', async () => {
+      mockFetchOnce(fixture('translations-batch.json'))
+      const result = await makeApi().getEpisodesBatch([100, 101])
+      expect(result.data.length).toBe(2)
+      const ep100 = result.data.find((e) => e.id === 100)!
+      expect(ep100.episodeInt).toBe('1')
+      expect(ep100.episodeFull).toBe('1 серия')
+      expect(ep100.episodeType).toBe('tv')
+      expect(ep100.translations.map((t) => t.id).sort()).toEqual([1001, 1002])
+      expect(ep100.translations[0]).toMatchObject({
+        id: 1001,
+        type: 'subtitles',
+        typeKind: 'sub',
+        height: 1080,
+        authorsSummary: 'AniDub'
+      })
+      const ep101 = result.data.find((e) => e.id === 101)!
+      expect(ep101.translations.length).toBe(1)
+      expect(ep101.translations[0].id).toBe(2001)
+    })
+
+    it('returns episodes in the requested order and skips ids with no translations', async () => {
+      mockFetchOnce(fixture('translations-batch.json'))
+      // 999 has no translations in the fixture → absent from the result
+      const result = await makeApi().getEpisodesBatch([101, 999, 100])
+      expect(result.data.map((e) => e.id)).toEqual([101, 100])
+    })
+
+    it('requests episodeId[] for each id and a fields list', async () => {
+      mockFetchOnce(fixture('translations-batch.json'))
+      await makeApi().getEpisodesBatch([100, 101])
+      const url = lastFetchUrl()
+      expect(url).toContain('/translations?')
+      expect(url).toContain('episodeId[]=100')
+      expect(url).toContain('episodeId[]=101')
+      expect(url).toContain('fields=')
+    })
+
+    it('chunks requests at 30 episode ids', async () => {
+      mockFetchOnce(fixture('translations-batch.json'))
+      const ids = Array.from({ length: 31 }, (_, i) => i + 1)
+      await makeApi().getEpisodesBatch(ids)
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2)
+    })
+  })
+
   describe('getEmbed', () => {
     it('unwraps the data envelope and returns EmbedData directly', async () => {
       mockFetchOnce(fixture('embed.json'))

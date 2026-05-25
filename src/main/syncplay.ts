@@ -695,19 +695,26 @@ export class SyncplayClient extends EventEmitter {
       return
     }
     if (!cfg.autoReconnect || this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      const reason =
-        this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
-          ? 'Max reconnect attempts reached'
-          : 'Auto-reconnect disabled'
+      const maxedOut = this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
+      // status.error surfaces in the UI (test-connection button, player
+      // popover). 'Auto-reconnect disabled' is *why we're not retrying*, not
+      // *why we disconnected* — showing it as the error confuses users (#119).
+      // Use a neutral 'Connection closed' for the user-initiated-off case;
+      // the room-event log still carries the retry-state for diagnostics.
+      const errorReason = maxedOut ? 'Max reconnect attempts reached' : 'Connection closed'
+      const eventReason = maxedOut ? 'Max reconnect attempts reached' : 'auto-reconnect disabled'
       this.setStatus({
         state: 'disconnected',
         host: cfg.host,
         port: cfg.port,
         room: cfg.room,
         username: cfg.username,
-        error: reason
+        error: errorReason
       })
-      this.emit('room-event', { level: 'warn', text: `Disconnected from Syncplay room: ${reason}` })
+      this.emit('room-event', {
+        level: 'warn',
+        text: `Disconnected from Syncplay room: ${eventReason}`
+      })
       return
     }
     this.reconnectAttempts += 1

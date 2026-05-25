@@ -93,6 +93,59 @@ export class SmotretApi {
     return this.request(`/episodes/${id}`) as Promise<{ data: EpisodeDetail }>
   }
 
+  /**
+   * Bulk-fetch translations for many episodes in a single request via the
+   * `/translations?episodeId[]=…` endpoint, collapsing the per-episode
+   * `/episodes/{id}` waterfall into one round-trip per chunk (issue #155).
+   * Returns one `EpisodeDetail` per episode that has at least one translation,
+   * in the order the ids were requested.
+   */
+  async getEpisodesBatch(episodeIds: number[]): Promise<{ data: EpisodeDetail[] }> {
+    const CHUNK = 30
+    const fields =
+      'id,episodeId,type,typeKind,typeLang,authorsSummary,isActive,width,height,duration,episode'
+    const byEpisode = new Map<number, EpisodeDetail>()
+
+    for (let i = 0; i < episodeIds.length; i += CHUNK) {
+      const chunk = episodeIds.slice(i, i + CHUNK)
+      const params = chunk.map((id) => `episodeId[]=${id}`).join('&')
+      const json = (await this.request(`/translations?${params}&limit=5000&fields=${fields}`)) as {
+        data: (Translation & { episodeId: number; episode?: EpisodeSummary })[]
+      }
+
+      for (const tr of json.data) {
+        let detail = byEpisode.get(tr.episodeId)
+        if (!detail) {
+          const ep = tr.episode
+          detail = {
+            id: tr.episodeId,
+            episodeFull: ep?.episodeFull ?? '',
+            episodeInt: ep?.episodeInt ?? '',
+            episodeType: ep?.episodeType ?? '',
+            translations: []
+          }
+          byEpisode.set(tr.episodeId, detail)
+        }
+        detail.translations.push({
+          id: tr.id,
+          type: tr.type,
+          typeKind: tr.typeKind,
+          typeLang: tr.typeLang,
+          authorsSummary: tr.authorsSummary,
+          isActive: tr.isActive,
+          width: tr.width,
+          height: tr.height,
+          duration: tr.duration
+        })
+      }
+    }
+
+    const data = episodeIds
+      .map((id) => byEpisode.get(id))
+      .filter((d): d is EpisodeDetail => d !== undefined)
+    return { data }
+  }
+
   async getEmbed(translationId: number): Promise<EmbedData> {
     const json = (await this.request(`/translations/embed/${translationId}`)) as { data: EmbedData }
     return json.data

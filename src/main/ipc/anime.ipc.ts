@@ -78,4 +78,28 @@ export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: A
       throw err
     }
   })
+
+  ipcMain.handle(
+    CHANNELS.GET_EPISODES_BATCH,
+    async (_event, episodeIds: number[], animeId?: number) => {
+      try {
+        const result = await smotretApi.getEpisodesBatch(episodeIds)
+        if (animeId) {
+          for (const ep of result.data) animeCacheService.updateEpisode(animeId, ep.id, ep)
+        }
+        return { ...result, source: 'api' }
+      } catch (err) {
+        if (animeId) {
+          const cached = animeCacheService.getEntry(animeId)
+          if (cached) {
+            const data = episodeIds
+              .map((id) => cached.episodes[id])
+              .filter((d): d is NonNullable<typeof d> => d !== undefined)
+            if (data.length > 0) return { data, source: 'cache' }
+          }
+        }
+        throw err
+      }
+    }
+  )
 }

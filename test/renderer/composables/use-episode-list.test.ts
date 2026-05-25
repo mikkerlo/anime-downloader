@@ -6,6 +6,7 @@ import { useEpisodeList } from '../../../src/renderer/src/composables/use-episod
 
 type Api = {
   getEpisode: (id: number, animeId: number) => Promise<{ data: EpisodeDetail }>
+  getEpisodesBatch: (episodeIds: number[], animeId: number) => Promise<{ data: EpisodeDetail[] }>
   watchProgressSave: (...args: unknown[]) => Promise<void>
   probeEmbedQuality: (id: number, animeId: number) => Promise<number | null>
   getSetting: (key: string) => Promise<unknown>
@@ -143,6 +144,65 @@ describe('useEpisodeList — filtering & paging', () => {
     expect(list.pagedEpisodes.value.length).toBe(30)
     list.currentPage.value = 1
     expect(list.pagedEpisodes.value.length).toBe(20)
+  })
+})
+
+describe('useEpisodeList — loadPageEpisodes', () => {
+  it('fetches a whole page in a single bulk getEpisodesBatch call (not per-episode)', async () => {
+    const eps: EpisodeSummary[] = []
+    for (let i = 1; i <= 30; i++) eps.push(mkEpisode(i, String(i)))
+    const getEpisodesBatch = vi.fn(async (ids: number[]) => ({
+      data: ids.map((id) => ({
+        id,
+        episodeFull: `Episode ${id}`,
+        episodeInt: String(id),
+        episodeType: 'tv',
+        translations: [mkTr(1000 + id, 'subRu', 'A')]
+      })) as unknown as EpisodeDetail[]
+    }))
+    const getEpisode = vi.fn()
+    setApi({
+      getEpisodesBatch,
+      getEpisode,
+      probeEmbedQuality: vi.fn().mockResolvedValue(null),
+      getSetting: vi.fn().mockResolvedValue(false)
+    })
+    const anime = ref<AnimeDetail | null>(mkAnime({ episodes: eps }))
+    const list = useEpisodeList(makeDeps({ anime }))
+
+    await list.loadPageEpisodes()
+
+    expect(getEpisode).not.toHaveBeenCalled()
+    expect(getEpisodesBatch).toHaveBeenCalledTimes(1)
+    expect(getEpisodesBatch.mock.calls[0][0]).toEqual(eps.map((e) => e.id))
+    expect(list.episodes.value.size).toBe(30)
+  })
+
+  it('synthesizes an empty-translation entry for episodes absent from the response', async () => {
+    const eps = [mkEpisode(1, '1'), mkEpisode(2, '2')]
+    setApi({
+      // Only episode 1 comes back with translations; episode 2 is absent.
+      getEpisodesBatch: vi.fn(async () => ({
+        data: [
+          {
+            id: 1,
+            episodeFull: 'Episode 1',
+            episodeInt: '1',
+            episodeType: 'tv',
+            translations: [mkTr(101, 'subRu', 'A')]
+          }
+        ] as unknown as EpisodeDetail[]
+      })),
+      probeEmbedQuality: vi.fn().mockResolvedValue(null),
+      getSetting: vi.fn().mockResolvedValue(false)
+    })
+    const anime = ref<AnimeDetail | null>(mkAnime({ episodes: eps }))
+    const list = useEpisodeList(makeDeps({ anime }))
+
+    await list.loadPageEpisodes()
+
+    expect(list.episodes.value.size).toBe(2)
+    expect(list.episodes.value.get(2)?.translations).toEqual([])
   })
 })
 
@@ -316,11 +376,11 @@ describe('useEpisodeList — applyFocusEpisode', () => {
 
   it('marks focus applied even if DOM lookup fails', async () => {
     setApi({
-      getEpisode: vi
-        .fn()
-        .mockImplementation((id: number) =>
-          Promise.resolve({ data: { id, translations: [] } as unknown as EpisodeDetail })
-        ),
+      getEpisodesBatch: vi.fn().mockImplementation((ids: number[]) =>
+        Promise.resolve({
+          data: ids.map((id) => ({ id, translations: [] }) as unknown as EpisodeDetail)
+        })
+      ),
       getSetting: vi.fn().mockResolvedValue(false)
     })
     const eps: EpisodeSummary[] = []

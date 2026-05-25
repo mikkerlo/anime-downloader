@@ -151,6 +151,7 @@ export const CHANNELS = {
   GET_ANIME: 'get-anime',
   GET_ANIME_CACHE: 'get-anime-cache',
   GET_EPISODE: 'get-episode',
+  GET_EPISODES_BATCH: 'get-episodes-batch',
   GET_QUALITY_MISMATCH_COUNT: 'get-quality-mismatch-count',
   GET_SETTING: 'get-setting',
   LIBRARY_GET: 'library-get',

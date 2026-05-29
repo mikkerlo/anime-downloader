@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import AnimeCard from '../shared/AnimeCard.vue';
 import { useLibraryStore } from '../../stores/library';
 
@@ -19,12 +19,26 @@ const loading = ref(false);
 const searched = ref(false);
 const starredIds = reactive(new Set<number>());
 
+// Client-side type filter over the current result set (distinct typeTitles).
+const typeFilter = ref('all');
+const availableTypes = computed(() => {
+  const set = new Set<string>();
+  for (const a of results.value) if (a.typeTitle) set.add(a.typeTitle);
+  return Array.from(set);
+});
+const filteredResults = computed(() =>
+  typeFilter.value === 'all'
+    ? results.value
+    : results.value.filter((a) => a.typeTitle === typeFilter.value)
+);
+
 async function search(): Promise<void> {
   const q = query.value.trim();
   if (!q) return;
 
   loading.value = true;
   searched.value = true;
+  typeFilter.value = 'all';
   try {
     const response = await window.api.searchAnime(q);
     results.value = response.data;
@@ -56,39 +70,58 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
 <template>
   <main class="search-view">
     <header class="topbar">
-      <form class="search-form" @submit.prevent="search">
+      <h2>Search</h2>
+      <span v-if="searched && !loading" class="sub">· {{ results.length }} titles</span>
+    </header>
+    <div class="body">
+      <form class="search-wrap" @submit.prevent="search">
+        <svg
+          class="search-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+          />
+        </svg>
         <input
           ref="searchInput"
           v-model="query"
           type="text"
           class="search-input"
-          placeholder="Search anime..."
+          placeholder="Search anime by title…"
         />
-        <button type="submit" class="search-btn" :disabled="loading">
-          <svg
-            v-if="!loading"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            width="18"
-            height="18"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-            />
-          </svg>
-          <span v-else class="spinner" />
-        </button>
       </form>
-    </header>
-    <div class="body">
-      <div v-if="loading" class="status-text">Searching...</div>
-      <div v-else-if="results.length > 0" class="results-grid">
+
+      <div v-if="availableTypes.length > 1" class="filter-row">
+        <div class="pill-tabs">
+          <button
+            class="pill-tab"
+            :class="{ active: typeFilter === 'all' }"
+            @click="typeFilter = 'all'"
+          >
+            All
+          </button>
+          <button
+            v-for="t in availableTypes"
+            :key="t"
+            class="pill-tab"
+            :class="{ active: typeFilter === t }"
+            @click="typeFilter = t"
+          >
+            {{ t }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="loading" class="status-text">Searching…</div>
+      <div v-else-if="filteredResults.length > 0" class="poster-grid">
         <AnimeCard
-          v-for="anime in results"
+          v-for="anime in filteredResults"
           :key="anime.id"
           :anime="anime"
           :starred="starredIds.has(anime.id)"
@@ -96,8 +129,19 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
           @click="libraryStore.openAnime(anime.id)"
         />
       </div>
-      <div v-else-if="searched" class="status-text">No results found</div>
-      <div v-else class="status-text">Search for anime to get started</div>
+      <div v-else-if="searched" class="empty-state">
+        <div class="es-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+            />
+          </svg>
+        </div>
+        <p>No titles match your search.</p>
+      </div>
+      <div v-else class="status-text">Search for anime to get started.</div>
     </div>
   </main>
 </template>
@@ -108,88 +152,94 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .topbar {
-  padding: 16px 24px;
-  border-bottom: 1px solid #0f3460;
-}
-
-.search-form {
-  display: flex;
-  gap: 8px;
-  max-width: 500px;
-}
-
-.search-input {
-  flex: 1;
-  padding: 10px 16px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  color: #e0e0e0;
-  font-size: 0.9rem;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.search-input:focus {
-  border-color: #e94560;
-}
-
-.search-btn {
-  padding: 10px 14px;
-  background-color: #e94560;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: background-color 0.15s;
+  gap: 12px;
+  padding: 0 var(--pad-x);
+  height: 64px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
-.search-btn:hover {
-  background-color: #d63851;
+.topbar h2 {
+  font-family: var(--font-display);
+  font-size: 1.32rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 
-.search-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.topbar .sub {
+  color: var(--text-3);
+  font-size: 0.85rem;
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: var(--pad-y) var(--pad-x) 48px;
 }
 
-.results-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
+.search-wrap {
+  position: relative;
+  max-width: 560px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 19px;
+  height: 19px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 16px 12px 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.15s;
+}
+
+.search-input::placeholder {
+  color: var(--text-faint);
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.filter-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.poster-grid {
+  margin-top: 22px;
 }
 
 .status-text {
   text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
-  padding-top: 100px;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  padding-top: 80px;
 }
 </style>

@@ -50,8 +50,9 @@ src/renderer/src/
       DebugTab.vue
   composables/                 Reactive logic (15 modules — see below)
   stores/                      Pinia stores (5 stores — see below)
-  assets/                      Shared CSS imported scoped into each component
-    player-menus.css
+  assets/                      Shared CSS
+    theme.css                  Global design tokens + base + shared primitives (imported once in main.ts)
+    player-menus.css           Imported scoped into each component
     settings-tabs.css
 ```
 
@@ -101,6 +102,15 @@ Global reactive logic that doesn't belong on a Pinia store goes into `src/render
 ### Settings
 
 - **`useSettingsAutosave`** (`use-settings-autosave.ts`) — module-level singleton holding `savedVisible` + `showSaved` + `autoSave(key, value)`. Every tab calls `autoSave(...)` in its watchers; `SettingsShell` renders the toast. (Phase 5 slice 5a)
+
+## Design system (Refined Dark)
+
+`assets/theme.css` is the global styling foundation, imported once in `main.ts` (before `App.vue`). It defines the **Refined Dark** design language — the locked output of the [redesign epic #160](https://github.com/mikkerlo/anime-downloader/issues/160) (foundation: #161):
+
+- **Tokens on `:root`** — surfaces (`--bg`, `--surface`, `--surface-2/3`), borders, text (`--text`, `--text-2/3`, `--text-faint`), accent (`--accent: #ef4d67` + `color-mix`-derived `--accent-hover/-soft/-line/-ink`), a status palette (`--st-blue/green/orange/purple/red`, `--star`), radii, regular-density spacing (`--gap`, `--pad-x/y`, `--row-pad`, `--poster-grid`), and font vars. Re-theming is a one-file edit; the multi-direction / density / Tweaks machinery from the design prototype was intentionally dropped.
+- **Fonts are bundled, not CDN** — `main.ts` imports the needed weights of **Manrope** (`--font-ui`/`--font-display`) and **JetBrains Mono** (`--font-data`, used for speeds/sizes/ETAs/episode numbers) from `@fontsource/*`. The per-weight CSS ships every subset incl. **Cyrillic** (Russian titles). No network dependency, so the app's offline modes render correctly. A guard test (`test/renderer/theme-tokens.test.ts`) fails the build on any remote `url()` / `@import` / Google Fonts reference in renderer source.
+- **Base + scrollbar** — the reset, `body`, `.app`, and themed scrollbar live here (moved out of `App.vue`).
+- **Shared primitives** — global classes the redesigned chrome uses: the `.sidebar` family (logo mark, `.nav-group`/`.nav-item` + count pill, `.user-chip`), the `.acard` poster-grid card (with its `.poster-wrap`/`.star-btn`/`.score-badge`/`.watch-bar` nested **under `.acard`** so they don't leak onto the bare `.poster`/`.score-badge` classes other not-yet-restyled components still own), `.pbar`, `.pill-tabs`, `.select-wrap`, `.empty-state`, `.poster-grid`. Generic colliding primitives (`.btn`, `.chip`, bare `.poster`, `.topbar`) are deliberately **not** globalized yet — they're added by the per-screen redesign issues that adopt them, to avoid changing screens that haven't been restyled.
 
 ## Path aliases
 

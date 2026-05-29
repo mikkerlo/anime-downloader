@@ -1,7 +1,10 @@
 import { resolve } from 'path'
 import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
+  // Vue plugin lets the renderer component tests (happy-dom) mount .vue SFCs.
+  plugins: [vue()],
   resolve: {
     alias: {
       '@shared': resolve('src/shared'),

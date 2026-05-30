@@ -88,7 +88,8 @@ const friendsSummary = computed(() => {
                 STATUS_LABELS[friend.status] || friend.status
               }}</span>
               <span v-if="friend.episodes > 0"
-                >· ep {{ friend.episodes }}{{ numberOfEpisodes ? '/' + numberOfEpisodes : '' }}</span
+                >· ep {{ friend.episodes
+                }}{{ numberOfEpisodes ? '/' + numberOfEpisodes : '' }}</span
               >
               <span v-if="friend.score > 0">· ★ {{ friend.score }}</span>
             </div>

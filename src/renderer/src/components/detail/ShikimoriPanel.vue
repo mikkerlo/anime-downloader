@@ -118,8 +118,10 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
               <span
                 :style="{
                   width:
-                    Math.min(100, Math.round(((shikiEpisodes || 0) / props.anime.numberOfEpisodes) * 100)) +
-                    '%'
+                    Math.min(
+                      100,
+                      Math.round(((shikiEpisodes || 0) / props.anime.numberOfEpisodes) * 100)
+                    ) + '%'
                 }"
               ></span>
             </div>

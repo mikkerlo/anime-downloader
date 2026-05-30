@@ -489,9 +489,7 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
               </div>
               <div v-if="anime.season" class="fact">
                 <span class="f-label">Season</span
-                ><span class="f-value" style="font-family: var(--font-ui)">{{
-                  anime.season
-                }}</span>
+                ><span class="f-value" style="font-family: var(--font-ui)">{{ anime.season }}</span>
               </div>
             </div>
             <template v-if="synopsisText">
@@ -603,7 +601,13 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                     }})
                   </option>
                 </select>
-                <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg
+                  class="caret"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
                 </svg>
               </div>
@@ -616,7 +620,13 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                     {{ author }} ({{ count }}/{{ filteredEpisodes.length }})
                   </option>
                 </select>
-                <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg
+                  class="caret"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
                 </svg>
               </div>
@@ -635,7 +645,11 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                     : 'Download all'
               }}
             </button>
-            <button v-if="hasActiveDownloads" class="btn btn-outline danger" @click="cancelAllDownloads">
+            <button
+              v-if="hasActiveDownloads"
+              class="btn btn-outline danger"
+              @click="cancelAllDownloads"
+            >
               Cancel all
             </button>
           </div>

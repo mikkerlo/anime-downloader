@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
       <h2>Airing Calendar</h2>
       <div class="topbar-controls">
         <button
-          class="nav-btn"
+          class="icon-btn"
           @click="shiftPage(-1)"
           :title="weeksPerPage === 4 ? 'Previous 4 weeks' : 'Previous week'"
         >
@@ -231,7 +231,7 @@ onBeforeUnmount(() => {
           {{ pageRangeLabel }}
         </button>
         <button
-          class="nav-btn"
+          class="icon-btn"
           @click="shiftPage(1)"
           :title="weeksPerPage === 4 ? 'Next 4 weeks' : 'Next week'"
         >
@@ -246,12 +246,7 @@ onBeforeUnmount(() => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
           </svg>
         </button>
-        <button
-          class="refresh-btn"
-          :disabled="loading"
-          @click="load(true)"
-          title="Refresh calendar"
-        >
+        <button class="icon-btn" :disabled="loading" @click="load(true)" title="Refresh calendar">
           <svg
             :class="{ spinning: loading }"
             viewBox="0 0 24 24"
@@ -271,64 +266,93 @@ onBeforeUnmount(() => {
       </div>
     </header>
     <div class="body">
-      <div v-if="loading && entries.length === 0" class="status-text">Loading calendar...</div>
-      <div v-else-if="error" class="status-text error-text">{{ error }}</div>
-      <div v-else-if="totalCount === 0" class="status-text">
-        {{
-          isCurrentPage
-            ? weeksPerPage === 4
-              ? 'No new episodes in the next 4 weeks — your watching list is up to date.'
-              : 'No new episodes this week — your watching list is up to date.'
-            : weeksPerPage === 4
-              ? 'No tracked episodes air during these 4 weeks.'
-              : 'No tracked episodes air during this week.'
-        }}
+      <div v-if="loading && entries.length === 0" class="empty-state">
+        <p>Loading calendar…</p>
+      </div>
+      <div v-else-if="error" class="empty-state">
+        <div class="es-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+            />
+          </svg>
+        </div>
+        <p>{{ error }}</p>
+      </div>
+      <div v-else-if="totalCount === 0" class="empty-state">
+        <div class="es-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+            />
+          </svg>
+        </div>
+        <p>
+          {{
+            isCurrentPage
+              ? weeksPerPage === 4
+                ? 'Nothing airing in the next 4 weeks — your watching list is up to date.'
+                : 'Nothing airing this week — your watching list is up to date.'
+              : weeksPerPage === 4
+                ? 'Nothing airing during these 4 weeks.'
+                : 'Nothing airing during this week.'
+          }}
+        </p>
       </div>
       <div v-else class="page">
-        <div v-for="(row, rIdx) in rows" :key="rIdx" class="grid">
+        <div v-for="(row, rIdx) in rows" :key="rIdx" class="cal-grid">
           <div
             v-for="(col, idx) in row.columns"
             :key="idx"
-            class="column"
+            class="cal-col"
             :class="{ today: todayPos && todayPos.row === rIdx && todayPos.col === idx }"
           >
-            <div class="column-head">
-              <span class="day-label">{{ dayLabels[idx] }}</span>
-              <span class="day-date">{{ formatColumnDate(col.date) }}</span>
+            <div class="cal-day">
+              <span class="cal-dayname">{{ dayLabels[idx] }}</span>
+              <span
+                v-if="todayPos && todayPos.row === rIdx && todayPos.col === idx"
+                class="today-tag"
+                >Today</span
+              >
+              <span v-else class="cal-date">{{ formatColumnDate(col.date) }}</span>
+              <span v-if="col.items.length > 0" class="cal-count">{{ col.items.length }}</span>
             </div>
-            <ul class="column-items">
-              <li v-if="col.items.length === 0" class="empty">—</li>
-              <li
+            <div v-if="col.items.length === 0" class="cal-empty">Nothing airing</div>
+            <div v-else class="cal-entries">
+              <div
                 v-for="(entry, i) in col.items"
                 :key="entry.malId + '-' + i"
-                class="card"
+                class="ce"
                 :class="{ clickable: entry.animeId !== null }"
                 @click="handleClick(entry)"
               >
-                <img :src="entry.posterUrl" :alt="entry.name" class="poster" loading="lazy" />
-                <div class="card-text">
-                  <div class="card-title" :title="entry.name">{{ entry.name }}</div>
-                  <div class="card-meta">
-                    <span class="ep">Ep {{ entry.episodeInt }}</span>
-                    <span class="time">{{ formatTime(entry.nextEpisodeAt) }}</span>
+                <img :src="entry.posterUrl" :alt="entry.name" class="cal-poster" loading="lazy" />
+                <div class="ce-text">
+                  <div class="ce-title" :title="entry.name">{{ entry.name }}</div>
+                  <div class="ce-meta">
+                    Ep {{ entry.episodeInt }} · {{ formatTime(entry.nextEpisodeAt) }}
                   </div>
-                  <div class="card-chips">
-                    <span class="chip" :class="'chip-' + entry.userStatus">{{
+                  <div class="ce-chips">
+                    <span class="ce-chip" :class="'st-' + entry.userStatus">{{
                       statusLabel(entry.userStatus)
                     }}</span>
-                    <span v-if="entry.animeId === null" class="chip chip-na"
+                    <span v-if="entry.animeId === null" class="ce-chip st-na"
                       >Not on smotret-anime</span
                     >
                     <span
                       v-if="entry.animeId !== null && subscribedAnimeIds.has(entry.animeId)"
-                      class="chip chip-auto-dl"
+                      class="ce-chip st-auto"
                       title="Auto-download is on for this show"
                       >↻ Auto-DL</span
                     >
                   </div>
                 </div>
-              </li>
-            </ul>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -342,35 +366,41 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .topbar {
-  padding: 16px 24px;
-  border-bottom: 1px solid #0f3460;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  padding: 0 var(--pad-x);
+  height: 64px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .topbar h2 {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-family: var(--font-display);
+  font-size: 1.32rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 
 .topbar-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-.refresh-btn,
-.nav-btn {
-  background: none;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #6a6a8a;
-  padding: 5px;
+.icon-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-3);
+  padding: 7px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -378,40 +408,38 @@ onBeforeUnmount(() => {
   transition: all 0.15s;
 }
 
-.refresh-btn:hover,
-.nav-btn:hover {
-  color: #e0e0e0;
-  border-color: #e94560;
+.icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
-.refresh-btn:disabled,
-.nav-btn:disabled {
+.icon-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 .week-label {
-  background: none;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #c0c0d8;
-  padding: 4px 12px;
-  font-size: 0.85rem;
-  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-2);
+  padding: 7px 14px;
+  font-size: 0.84rem;
+  font-weight: 600;
   cursor: pointer;
-  min-width: 130px;
+  min-width: 138px;
   text-align: center;
   transition: all 0.15s;
 }
 
 .week-label:hover:not(:disabled) {
-  color: #e0e0e0;
-  border-color: #e94560;
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .week-label.today {
-  color: #e94560;
-  border-color: #e94560;
+  color: var(--accent);
+  border-color: var(--accent-line);
   cursor: default;
 }
 
@@ -427,182 +455,180 @@ onBeforeUnmount(() => {
 
 .body {
   flex: 1;
-  overflow: auto;
-  padding: 20px 24px;
+  overflow-y: auto;
+  padding: var(--pad-y) var(--pad-x) 48px;
 }
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--gap);
 }
 
-.grid {
+.cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(150px, 1fr));
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--gap);
+}
+
+@media (max-width: 1000px) {
+  .cal-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.cal-col {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 120px;
+}
+
+.cal-col.today {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+
+.cal-day {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  min-width: 1050px;
 }
 
-.column {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  min-height: 200px;
+.cal-dayname {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
 }
 
-.column.today {
-  border-color: #e94560;
-  box-shadow: 0 0 0 1px rgba(233, 69, 96, 0.25);
+.cal-date {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-faint);
 }
 
-.column-head {
-  display: flex;
-  flex-direction: column;
-  padding: 8px 10px;
-  border-bottom: 1px solid #0f3460;
+.today-tag {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: var(--radius-chip);
 }
 
-.day-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #e0e0e0;
+.cal-count {
+  margin-left: auto;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-faint);
 }
 
-.column.today .day-label {
-  color: #e94560;
-}
-
-.day-date {
-  font-size: 0.7rem;
-  color: #6a6a8a;
-  margin-top: 2px;
-}
-
-.column-items {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-}
-
-.empty {
-  color: #4a4a6a;
-  font-size: 0.85rem;
+.cal-empty {
   text-align: center;
-  padding: 12px 0;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  padding: 14px 0;
 }
 
-.card {
+.cal-entries {
   display: flex;
-  gap: 8px;
-  padding: 6px;
-  background: #1a1a2e;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  transition: all 0.15s;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.card.clickable {
+.ce {
+  display: flex;
+  gap: 10px;
+  border-radius: var(--radius-btn);
+}
+
+.ce.clickable {
   cursor: pointer;
 }
 
-.card.clickable:hover {
-  border-color: #e94560;
-  background: #1a2747;
-}
-
-.poster {
-  width: 40px;
-  height: 56px;
+.cal-poster {
+  width: 46px;
+  aspect-ratio: 2 / 3;
   object-fit: cover;
-  border-radius: 3px;
-  background: #0f3460;
+  border-radius: 6px;
+  background: var(--surface-2);
   flex-shrink: 0;
+  transition: transform 0.15s var(--ease);
 }
 
-.card-text {
+.ce.clickable:hover .cal-poster {
+  transform: scale(1.06);
+}
+
+.ce-text {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.card-title {
+.ce-title {
   font-size: 0.8rem;
-  color: #e0e0e0;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  line-height: 1.2;
+  transition: color 0.15s;
 }
 
-.card-meta {
-  display: flex;
-  gap: 8px;
-  font-size: 0.7rem;
-  color: #8a8aa8;
+.ce.clickable:hover .ce-title {
+  color: var(--accent);
 }
 
-.ep {
-  color: #c0c0d8;
-  font-weight: 500;
+.ce-meta {
+  font-family: var(--font-data);
+  font-size: 0.68rem;
+  color: var(--text-3);
 }
 
-.time {
-  color: #6a6a8a;
-}
-
-.card-chips {
+.ce-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 2px;
 }
 
-.chip {
-  font-size: 0.65rem;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(15, 52, 96, 0.8);
-  color: #c0c0d8;
+.ce-chip {
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-3);
+  color: var(--text-2);
 }
 
-.chip-watching,
-.chip-rewatching {
-  background: rgba(233, 69, 96, 0.2);
-  color: #ff7090;
+.ce-chip.st-watching,
+.ce-chip.st-rewatching {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-.chip-planned {
-  background: rgba(15, 52, 96, 0.8);
-  color: #8aa8d0;
+.ce-chip.st-planned {
+  background: color-mix(in srgb, var(--st-blue) 16%, transparent);
+  color: var(--st-blue);
 }
 
-.chip-na {
-  background: rgba(80, 80, 100, 0.4);
-  color: #8a8aa8;
+.ce-chip.st-na {
+  background: var(--surface-2);
+  color: var(--text-3);
 }
 
-.chip-auto-dl {
-  background: rgba(40, 90, 60, 0.7);
-  color: #8fd6a8;
-}
-
-.status-text {
-  text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
-  padding-top: 100px;
-}
-
-.error-text {
-  color: #e94560;
+.ce-chip.st-auto {
+  background: color-mix(in srgb, var(--st-green) 16%, transparent);
+  color: var(--st-green);
 }
 </style>

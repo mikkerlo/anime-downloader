@@ -11,6 +11,32 @@ const entries = ref<ContinueWatchingEntry[]>([]);
 const loading = ref(true);
 const failedPosters = ref(new Set<string>());
 
+// Dismissed continue-watching shows, persisted across restarts in electron-store
+// under `dismissedContinueWatching`. Keyed on `animeId:episodeInt` (NOT animeId
+// alone) so a dismissed show stays hidden across restarts for the *same* unwatched
+// episode, but resurfaces once progress advances the entry to a newer episode whose
+// key was never dismissed.
+const DISMISSED_KEY = 'dismissedContinueWatching';
+const dismissed = ref(new Set<string>());
+
+function dismissKey(e: ContinueWatchingEntry): string {
+  return `${e.animeId}:${e.episodeInt}`;
+}
+
+const visibleEntries = computed(() =>
+  entries.value.filter((e) => !dismissed.value.has(dismissKey(e)))
+);
+
+async function dismiss(e: ContinueWatchingEntry): Promise<void> {
+  if (!e.animeId) return;
+  dismissed.value = new Set(dismissed.value).add(dismissKey(e));
+  try {
+    await window.api.setSetting(DISMISSED_KEY, [...dismissed.value]);
+  } catch (err) {
+    console.error('Failed to persist dismissed continue-watching:', err);
+  }
+}
+
 // "Recently added to your list" — the most recently updated Watching /
 // Rewatching / Planned entries from the Shikimori list (already in the store),
 // mapped to the resolved smotret-anime entry so they render as AnimeCards.
@@ -129,6 +155,12 @@ watch(
 );
 
 onMounted(async () => {
+  try {
+    const saved = (await window.api.getSetting(DISMISSED_KEY)) as string[] | null;
+    if (Array.isArray(saved)) dismissed.value = new Set(saved);
+  } catch (err) {
+    console.error('Failed to load dismissed continue-watching:', err);
+  }
   await refresh();
   window.addEventListener('watch-progress-updated', debouncedRefresh);
 });
@@ -162,7 +194,7 @@ onUnmounted(() => {
     <div class="body">
       <div v-if="loading && entries.length === 0" class="status-text">Loading…</div>
       <template v-else>
-        <div v-if="entries.length === 0" class="empty-state">
+        <div v-if="visibleEntries.length === 0" class="empty-state">
           <div class="es-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
@@ -172,52 +204,61 @@ onUnmounted(() => {
           <button class="cta-btn" @click="libraryStore.navigate('search')">Browse Search</button>
         </div>
         <div v-else class="cw-grid">
-          <button
-            v-for="e in entries"
-            :key="entryKey(e)"
-            class="cw-card"
-            :class="{ disabled: !e.animeId }"
-            :disabled="!e.animeId"
-            @click="onClick(e)"
-          >
-            <div class="cw-poster">
-              <img
-                v-if="showPoster(e)"
-                :src="e.posterUrl"
-                :alt="e.animeName"
-                @error="onPosterError(e)"
-                @load="onPosterLoad(e, $event)"
-              />
-              <div v-else class="cw-poster-fallback"></div>
-            </div>
-            <div class="cw-body">
-              <div class="cw-title">{{ e.animeName || 'Unknown anime' }}</div>
-              <div class="cw-ep">
-                <span class="chip" :class="e.kind === 'resume' ? 'accent' : 'blue'">{{
-                  e.kind === 'resume' ? 'Resume' : 'Up next'
-                }}</span>
-                <span class="cw-ep-label">{{ e.episodeLabel }}</span>
+          <div v-for="e in visibleEntries" :key="entryKey(e)" class="cw-card-wrap">
+            <button
+              class="cw-card"
+              :class="{ disabled: !e.animeId }"
+              :disabled="!e.animeId"
+              @click="onClick(e)"
+            >
+              <div class="cw-poster">
+                <img
+                  v-if="showPoster(e)"
+                  :src="e.posterUrl"
+                  :alt="e.animeName"
+                  @error="onPosterError(e)"
+                  @load="onPosterLoad(e, $event)"
+                />
+                <div v-else class="cw-poster-fallback"></div>
               </div>
-              <div class="cw-foot">
-                <div class="cw-play">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"
-                    />
-                  </svg>
+              <div class="cw-body">
+                <div class="cw-title">{{ e.animeName || 'Unknown anime' }}</div>
+                <div class="cw-ep">
+                  <span class="chip" :class="e.kind === 'resume' ? 'accent' : 'blue'">{{
+                    e.kind === 'resume' ? 'Resume' : 'Up next'
+                  }}</span>
+                  <span class="cw-ep-label">{{ e.episodeLabel }}</span>
                 </div>
-                <template v-if="e.kind === 'resume'">
-                  <div class="pbar">
-                    <span :style="{ width: progressPercent(e) + '%' }"></span>
+                <div class="cw-foot">
+                  <div class="cw-play">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"
+                      />
+                    </svg>
                   </div>
-                  <span class="ptext">{{ progressPercent(e) }}%</span>
-                </template>
-                <span v-else class="ptext grow">Not started</span>
+                  <template v-if="e.kind === 'resume'">
+                    <div class="pbar">
+                      <span :style="{ width: progressPercent(e) + '%' }"></span>
+                    </div>
+                    <span class="ptext">{{ progressPercent(e) }}%</span>
+                  </template>
+                  <span v-else class="ptext grow">Not started</span>
+                </div>
               </div>
-            </div>
-          </button>
+            </button>
+            <button
+              class="cw-dismiss"
+              :aria-label="`Dismiss ${e.animeName || 'this show'}`"
+              @click.stop="dismiss(e)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <template v-if="recentlyAdded.length > 0">
@@ -343,7 +384,51 @@ onUnmounted(() => {
   gap: var(--gap);
 }
 
+.cw-card-wrap {
+  position: relative;
+  display: flex;
+}
+
+.cw-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: all 0.15s var(--ease);
+}
+
+.cw-dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cw-card-wrap:hover .cw-dismiss,
+.cw-dismiss:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.cw-dismiss:hover {
+  background: color-mix(in srgb, var(--st-red) 16%, var(--surface-2));
+  border-color: var(--st-red);
+  color: var(--st-red);
+}
+
 .cw-card {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: stretch;
   background: var(--surface);

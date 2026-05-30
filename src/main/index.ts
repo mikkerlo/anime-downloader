@@ -165,7 +165,8 @@ const STORE_DEFAULTS = {
       checkedAt: number
     }[]
   } as Mp4StreamingStats,
-  autoCleanupSnoozedAnimeIds: {} as Record<string, true>
+  autoCleanupSnoozedAnimeIds: {} as Record<string, true>,
+  dismissedContinueWatching: [] as string[]
 }
 
 const store = createStorageService(STORE_DEFAULTS)

@@ -65,7 +65,11 @@ describe('Anime4KMenu', () => {
 describe('TranslationMenu', () => {
   const groups = [
     { type: 'subRu', label: 'RU SUB', items: [{ id: 1, label: 'A', type: 'subRu', height: 720 }] },
-    { type: 'voiceRu', label: 'RU DUB', items: [{ id: 2, label: 'B', type: 'voiceRu', height: 1080 }] }
+    {
+      type: 'voiceRu',
+      label: 'RU DUB',
+      items: [{ id: 2, label: 'B', type: 'voiceRu', height: 1080 }]
+    }
   ]
 
   it('emits open-group when a type group is clicked (types level)', async () => {

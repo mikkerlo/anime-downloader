@@ -1,16 +1,59 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
+import { storeToRefs } from 'pinia';
 import AnimeCard from '../shared/AnimeCard.vue';
 import { getAnimeName } from '../../utils';
 import { useLibraryStore } from '../../stores/library';
+import { useShikimoriStore } from '../../stores/shikimori';
 
 const libraryStore = useLibraryStore();
+const shikimoriStore = useShikimoriStore();
+const { rates } = storeToRefs(shikimoriStore);
 
 const library = ref<AnimeSearchResult[]>([]);
 const starredIds = ref(new Set<number>());
 const downloadedIds = ref(new Set<number>());
 
-onMounted(loadLibrary);
+// Join Shikimori rates onto library entries by smotret-anime id, so the
+// status tabs can filter the saved library by watch status.
+const statusBySmotretId = computed(() => {
+  const map = new Map<number, ShikiUserRateStatus>();
+  for (const e of rates.value) {
+    if (e.smotretAnime) map.set(e.smotretAnime.id, e.rate.status);
+  }
+  return map;
+});
+// Only show the status tabs when at least one *library* entry has a resolved
+// Shikimori status — not merely when the user has any tracked rates (which
+// would surface tabs whose non-"All" options are all empty).
+const hasStatuses = computed(() => library.value.some((a) => statusBySmotretId.value.has(a.id)));
+
+const statusTabs: { id: string; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'watching', label: 'Watching' },
+  { id: 'planned', label: 'Planned' },
+  { id: 'completed', label: 'Completed' }
+];
+const statusFilter = ref('all');
+
+function matchesFilter(anime: AnimeSearchResult): boolean {
+  if (statusFilter.value === 'all') return true;
+  const status = statusBySmotretId.value.get(anime.id);
+  if (statusFilter.value === 'watching') return status === 'watching' || status === 'rewatching';
+  return status === statusFilter.value;
+}
+
+const filteredLibrary = computed(() => library.value.filter(matchesFilter));
+
+onMounted(async () => {
+  await loadLibrary();
+  // Hydrate Shikimori rates (cache-first) so the status tabs have data.
+  if (shikimoriStore.loggedIn && rates.value.length === 0) {
+    shikimoriStore
+      .refreshRates()
+      .catch((err) => console.error('Failed to hydrate Shikimori rates for Library:', err));
+  }
+});
 
 async function loadLibrary(): Promise<void> {
   library.value = await window.api.libraryGet();
@@ -42,10 +85,25 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   <main class="library-view">
     <header class="topbar">
       <h2>Library</h2>
+      <span v-if="library.length > 0" class="sub">· {{ library.length }} shows</span>
     </header>
     <div class="body">
-      <div v-if="library.length > 0" class="results-grid">
-        <div v-for="anime in library" :key="anime.id" class="card-wrap">
+      <div v-if="hasStatuses && library.length > 0" class="filter-row">
+        <div class="pill-tabs">
+          <button
+            v-for="tab in statusTabs"
+            :key="tab.id"
+            class="pill-tab"
+            :class="{ active: statusFilter === tab.id }"
+            @click="statusFilter = tab.id"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="filteredLibrary.length > 0" class="poster-grid">
+        <div v-for="anime in filteredLibrary" :key="anime.id" class="card-wrap">
           <AnimeCard
             :anime="anime"
             :starred="starredIds.has(anime.id)"
@@ -55,8 +113,8 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
           <button
             v-if="downloadedIds.has(anime.id)"
             class="delete-folder-btn"
-            @click.stop="deleteAnime(anime)"
             title="Delete downloaded files"
+            @click.stop="deleteAnime(anime)"
           >
             <svg
               viewBox="0 0 24 24"
@@ -76,6 +134,7 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
           </button>
         </div>
       </div>
+      <div v-else-if="library.length > 0" class="status-text">No anime with this status.</div>
       <div v-else class="status-text">
         No saved anime yet. Use the star button on search results to add anime here.
       </div>
@@ -89,29 +148,45 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .topbar {
-  padding: 16px 24px;
-  border-bottom: 1px solid #0f3460;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 var(--pad-x);
+  height: 64px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .topbar h2 {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-family: var(--font-display);
+  font-size: 1.32rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.topbar .sub {
+  color: var(--text-3);
+  font-size: 0.85rem;
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: var(--pad-y) var(--pad-x) 48px;
 }
 
-.results-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
+.filter-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
 }
 
 .card-wrap {
@@ -125,27 +200,27 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  margin-top: 4px;
-  padding: 5px 8px;
-  background-color: rgba(233, 69, 96, 0.1);
-  border: 1px solid rgba(233, 69, 96, 0.3);
-  border-radius: 6px;
-  color: #e94560;
-  font-size: 0.7rem;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--st-red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-red) 32%, transparent);
+  border-radius: var(--radius-btn);
+  color: var(--st-red);
+  font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .delete-folder-btn:hover {
-  background-color: rgba(233, 69, 96, 0.2);
-  border-color: #e94560;
+  background: color-mix(in srgb, var(--st-red) 22%, transparent);
+  border-color: var(--st-red);
 }
 
 .status-text {
   text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
-  padding-top: 100px;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  padding-top: 80px;
 }
 </style>

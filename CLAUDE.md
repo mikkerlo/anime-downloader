@@ -23,12 +23,14 @@ npm run typecheck    # Type check
 This project uses **jj (Jujutsu)**, not git directly. The workflow for committing and pushing:
 
 ```bash
+npm run format        # ALWAYS run before pushing — CI's quality gate fails on format:check
 jj describe -m "Commit message here"
 jj bookmark create <branch-name> -r @
 jj git push -b <branch-name>
 gh pr create --fill
 ```
 
+- **Always run `npm run format` before any push** — the CI `quality` job runs `npm run format:check` (Prettier) and fails the build on any unformatted file. This is the single most common avoidable PR blocker.
 - Never use `git commit` / `git push` — always use jj commands
 - Always create a PR using `gh pr create` — do not push directly to main unless the user specifically asks you to.
 
@@ -38,8 +40,9 @@ When asked to "make a commit" or "make a cl":
 1. `jj describe -m "message"` — describe the working copy
 2. Bump version in `package.json` if asked (ask which bump if unclear)
 3. Strike completed items in `TODO.md` if applicable
-4. Create a branch, push, and open a PR:
+4. Run `npm run format` (required — CI fails on unformatted files), then create a branch, push, and open a PR:
    ```bash
+   npm run format
    jj bookmark create <branch-name> -r @
    jj git push -b <branch-name>
    gh pr create --fill

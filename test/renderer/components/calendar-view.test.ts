@@ -42,10 +42,12 @@ describe('CalendarView — today column detection (JS-driven todayPos)', () => {
       shikimoriGetUser: vi.fn().mockResolvedValue({ id: 1, nickname: 'me' }),
       getSetting: vi.fn().mockResolvedValue('week'),
       autoDlListSubscriptions: vi.fn().mockResolvedValue([]),
-      shikimoriGetCalendar: vi.fn().mockResolvedValue([
-        entry(new Date(2026, 2, 18, 20, 0, 0), 'Airs today'),
-        entry(new Date(2026, 2, 25, 20, 0, 0), 'Airs next week')
-      ])
+      shikimoriGetCalendar: vi
+        .fn()
+        .mockResolvedValue([
+          entry(new Date(2026, 2, 18, 20, 0, 0), 'Airs today'),
+          entry(new Date(2026, 2, 25, 20, 0, 0), 'Airs next week')
+        ])
     })
 
     const wrapper = mount(CalendarView)

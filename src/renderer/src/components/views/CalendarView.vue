@@ -333,12 +333,16 @@ onBeforeUnmount(() => {
                 <img :src="entry.posterUrl" :alt="entry.name" class="cal-poster" loading="lazy" />
                 <div class="ce-text">
                   <div class="ce-title" :title="entry.name">{{ entry.name }}</div>
-                  <div class="ce-meta">Ep {{ entry.episodeInt }} · {{ formatTime(entry.nextEpisodeAt) }}</div>
+                  <div class="ce-meta">
+                    Ep {{ entry.episodeInt }} · {{ formatTime(entry.nextEpisodeAt) }}
+                  </div>
                   <div class="ce-chips">
                     <span class="ce-chip" :class="'st-' + entry.userStatus">{{
                       statusLabel(entry.userStatus)
                     }}</span>
-                    <span v-if="entry.animeId === null" class="ce-chip st-na">Not on smotret-anime</span>
+                    <span v-if="entry.animeId === null" class="ce-chip st-na"
+                      >Not on smotret-anime</span
+                    >
                     <span
                       v-if="entry.animeId !== null && subscribedAnimeIds.has(entry.animeId)"
                       class="ce-chip st-auto"

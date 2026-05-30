@@ -2,6 +2,9 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
+import SettingsSwitch from './SettingsSwitch.vue';
 
 const shikimoriStore = useShikimoriStore();
 const { showSaved } = useSettingsAutosave();
@@ -131,120 +134,97 @@ watch(syncplayAutoReconnect, () => {
       Sync, attribution, and reconnect behavior may misfire — especially on rapid arrow-key seeks or
       shaky connections. Please report quirks with a screen recording or the renderer console log.
     </div>
-    <div class="setting-group">
-      <label class="setting-label">Watch Together (Syncplay)</label>
-      <p class="setting-hint">
-        Sync play/pause/seek with friends over the Internet via the Syncplay protocol. Works with
-        other Syncplay clients (mpv, VLC) in the same room.
-      </p>
-    </div>
 
-    <div class="setting-group">
-      <label class="setting-label" for="sp-host">Server</label>
-      <p class="setting-hint">Default: <code>syncplay.pl</code> on port <code>8999</code>.</p>
-      <div class="sp-host-row">
+    <SettingsGroup
+      title="Watch Together (Syncplay)"
+      desc="Sync play/pause/seek with friends over the Internet via the Syncplay protocol. Works with other Syncplay clients (mpv, VLC) in the same room."
+    >
+      <SettingsRow
+        label="Server"
+        desc="Address and port of the relay server. Default: syncplay.pl:8999."
+      >
+        <div class="sp-host-row">
+          <input
+            id="sp-host"
+            v-model="syncplayHost"
+            type="text"
+            class="field-input sp-host-input"
+            placeholder="syncplay.pl"
+          />
+          <input
+            v-model.number="syncplayPort"
+            type="number"
+            min="1"
+            max="65535"
+            class="field-input sp-port-input"
+          />
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Default room"
+        desc="Preselected room name when you open the Watch Together popover in the player. Any non-empty string is accepted; share it with friends out-of-band."
+      >
         <input
-          id="sp-host"
-          v-model="syncplayHost"
+          id="sp-room"
+          v-model="syncplayRoom"
           type="text"
-          class="setting-input"
-          placeholder="syncplay.pl"
+          class="field-input"
+          placeholder="my-anime-room"
         />
+      </SettingsRow>
+      <SettingsRow
+        label="Username"
+        desc="Shown to other room members. Defaults to your Shikimori nickname if signed in."
+      >
         <input
-          v-model.number="syncplayPort"
-          type="number"
-          min="1"
-          max="65535"
-          class="setting-input sp-port-input"
+          id="sp-user"
+          v-model="syncplayUsername"
+          type="text"
+          class="field-input"
+          placeholder="username"
         />
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="sp-room">Default room</label>
-      <p class="setting-hint">
-        Preselected room name when you open the Watch Together popover in the player. Any non-empty
-        string is accepted; share it with friends out-of-band.
-      </p>
-      <input
-        id="sp-room"
-        v-model="syncplayRoom"
-        type="text"
-        class="setting-input"
-        placeholder="my-anime-room"
-      />
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="sp-user">Username</label>
-      <p class="setting-hint">
-        Shown to other room members. Defaults to your Shikimori nickname if signed in.
-      </p>
-      <input
-        id="sp-user"
-        v-model="syncplayUsername"
-        type="text"
-        class="setting-input"
-        placeholder="username"
-      />
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="sp-password">Password (optional)</label>
-      <p class="setting-hint">
-        Some servers require a password to log in. Leave empty for public servers.
-      </p>
-      <input
-        id="sp-password"
-        v-model="syncplayPassword"
-        type="password"
-        class="setting-input"
-        placeholder=""
-      />
-    </div>
-
-    <div class="setting-group">
-      <p class="setting-hint">
-        Connections are encrypted with TLS (required). The server must run Syncplay 1.6.3+ and
-        present a valid TLS certificate for its hostname; servers that only accept plaintext are not
-        supported.
-      </p>
-    </div>
-
-    <div class="setting-group">
-      <label class="toggle-row">
-        <input type="checkbox" v-model="syncplayAutoReconnect" class="toggle-input" />
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">Auto-reconnect on disconnect</span>
-      </label>
-      <p class="setting-hint">Retry with exponential backoff up to 5 times after a network drop.</p>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Test connection</label>
-      <p class="setting-hint">Connects briefly with the current settings, then disconnects.</p>
-      <button
-        class="merge-all-btn"
-        @click="testSyncplayConnection"
-        :disabled="syncplayTestStatus === 'testing'"
+      </SettingsRow>
+      <SettingsRow
+        label="Password (optional)"
+        desc="Some servers require a password to log in. Leave empty for public servers."
       >
-        {{ syncplayTestStatus === 'testing' ? 'Testing…' : 'Test connection' }}
-      </button>
-      <div
-        v-if="syncplayTestStatus === 'ok'"
-        class="token-result token-valid"
-        style="margin-top: 6px"
+        <input id="sp-password" v-model="syncplayPassword" type="password" class="field-input" />
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Connection">
+      <SettingsRow
+        label="Auto-reconnect on disconnect"
+        desc="Retry with exponential backoff up to 5 times after a network drop."
       >
-        Connected successfully
-      </div>
-      <div
-        v-if="syncplayTestStatus === 'failed'"
-        class="token-result token-invalid"
-        style="margin-top: 6px"
+        <SettingsSwitch v-model="syncplayAutoReconnect" />
+      </SettingsRow>
+      <SettingsRow
+        label="Test connection"
+        desc="Connects briefly with the current settings, then disconnects."
       >
-        {{ syncplayTestError || 'Connection failed' }}
-      </div>
-    </div>
+        <button
+          class="btn btn-sm"
+          :disabled="syncplayTestStatus === 'testing'"
+          @click="testSyncplayConnection"
+        >
+          {{ syncplayTestStatus === 'testing' ? 'Testing…' : 'Test connection' }}
+        </button>
+      </SettingsRow>
+      <SettingsRow v-if="syncplayTestStatus === 'ok' || syncplayTestStatus === 'failed'" stack>
+        <div v-if="syncplayTestStatus === 'ok'" class="inline-result ok">
+          Connected successfully
+        </div>
+        <div v-else class="inline-result bad">{{ syncplayTestError || 'Connection failed' }}</div>
+      </SettingsRow>
+      <SettingsRow stack>
+        <p class="sr-desc">
+          Connections are encrypted with TLS (required). The server must run Syncplay 1.6.3+ and
+          present a valid TLS certificate for its hostname; servers that only accept plaintext are
+          not supported.
+        </p>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
@@ -254,16 +234,15 @@ watch(syncplayAutoReconnect, () => {
 .dev-banner {
   margin-bottom: 18px;
   padding: 10px 14px;
-  border-radius: 6px;
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  background: rgba(245, 158, 11, 0.08);
-  color: #e0c382;
+  border-radius: var(--radius-input);
+  border: 1px solid color-mix(in srgb, var(--st-orange) 35%, transparent);
+  background: color-mix(in srgb, var(--st-orange) 8%, transparent);
+  color: var(--st-orange);
   font-size: 0.8rem;
   line-height: 1.45;
 }
 
 .dev-banner strong {
-  color: #f59e0b;
   margin-right: 4px;
 }
 
@@ -273,7 +252,11 @@ watch(syncplayAutoReconnect, () => {
   align-items: center;
 }
 
+.sp-host-input {
+  width: 200px;
+}
+
 .sp-port-input {
-  max-width: 100px;
+  width: 90px;
 }
 </style>

@@ -3,6 +3,9 @@ import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSettingsStore } from '../../stores/settings';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
+import SettingsSwitch from './SettingsSwitch.vue';
 
 const settingsStore = useSettingsStore();
 const { updateStatus } = storeToRefs(settingsStore);
@@ -161,212 +164,266 @@ watch(autoDownloadEnabled, (val) => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label" for="tr-type">Default Translation Type</label>
-      <p class="setting-hint">Default translation type when opening an anime.</p>
-      <select id="tr-type" v-model="translationType" class="setting-input setting-select">
-        <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
-          {{ t.label }}
-        </option>
-      </select>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="notif-mode">Notifications</label>
-      <p class="setting-hint">
-        Desktop notifications when downloads or merges complete (only when app is not focused).
-      </p>
-      <select id="notif-mode" v-model="notificationMode" class="setting-input setting-select">
-        <option value="off">Off</option>
-        <option value="each">Each Episode</option>
-        <option value="queue">Queue Complete</option>
-      </select>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="calendar-view">Calendar View</label>
-      <p class="setting-hint">Default time range shown in the Airing Calendar tab.</p>
-      <select id="calendar-view" v-model="calendarView" class="setting-input setting-select">
-        <option value="week">Week (7 days)</option>
-        <option value="month">Month (4 weeks)</option>
-      </select>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="speed-limit">Download Speed Limit</label>
-      <p class="setting-hint">
-        Limit download bandwidth. The limit is shared across all active downloads.
-      </p>
-      <select id="speed-limit" v-model="speedLimitPreset" class="setting-input setting-select">
-        <option value="0">Unlimited</option>
-        <option :value="String(1024 * 1024)">1 MB/s</option>
-        <option :value="String(5 * 1024 * 1024)">5 MB/s</option>
-        <option :value="String(10 * 1024 * 1024)">10 MB/s</option>
-        <option value="custom">Custom</option>
-      </select>
-      <div v-if="speedLimitPreset === 'custom'" class="custom-speed-row">
-        <input
-          v-model.number="customSpeedLimit"
-          type="number"
-          min="0.1"
-          step="0.1"
-          class="setting-input speed-input"
-        />
-        <span class="speed-unit">MB/s</span>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label" for="concurrent-dl">Concurrent Downloads</label>
-      <p class="setting-hint">Maximum number of simultaneous downloads.</p>
-      <select
-        id="concurrent-dl"
-        v-model.number="concurrentDownloads"
-        class="setting-input setting-select"
-      >
-        <option :value="1">1</option>
-        <option :value="2">2</option>
-        <option :value="3">3</option>
-      </select>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Auto-download</label>
-      <p class="setting-hint">
-        Subscribed shows queue newly-aired episodes automatically. Subscribe per show on its detail
-        page. Forward-only — already-aired episodes are never backfilled.
-      </p>
-      <label class="toggle-row">
-        <input v-model="autoDownloadEnabled" type="checkbox" class="toggle-input" />
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">{{ autoDownloadEnabled ? 'Enabled' : 'Disabled' }}</span>
-      </label>
-      <div class="auto-dl-status">
-        <button
-          class="test-token-btn"
-          :disabled="autoDlRunning || !autoDownloadEnabled"
-          @click="runAutoDlNow"
-        >
-          {{ autoDlRunning ? 'Running...' : 'Run now' }}
-        </button>
-        <span v-if="autoDlLastResult" class="setting-hint" style="margin: 0 0 0 12px">
-          Last run: {{ autoDlLastResult.enqueued }} enqueued,
-          {{ autoDlLastResult.skipped }} skipped, {{ autoDlLastResult.errors }} errors
-        </span>
-      </div>
-      <div class="auto-dl-subs">
-        <button
-          type="button"
-          class="auto-dl-subs-toggle"
-          @click="autoDlSubscriptionsExpanded = !autoDlSubscriptionsExpanded"
-        >
-          {{ autoDlSubscriptions.length }} show{{ autoDlSubscriptions.length === 1 ? '' : 's' }}
-          subscribed
-          <span class="caret">{{ autoDlSubscriptionsExpanded ? '▾' : '▸' }}</span>
-        </button>
-        <ul
-          v-if="autoDlSubscriptionsExpanded && autoDlSubscriptions.length > 0"
-          class="auto-dl-sub-list"
-        >
-          <li v-for="sub in autoDlSubscriptions" :key="sub.animeId">
-            <span class="auto-dl-sub-name">{{ sub.animeName }}</span>
-            <span class="auto-dl-sub-meta">
-              next: Ep {{ sub.lastEnqueuedEpisodeInt + 1 }} · checked
-              {{ autoDlLastCheckedLabel(sub.lastCheckedAt) }}
-            </span>
-            <button class="auto-dl-unsub-btn" @click="unsubscribeAutoDl(sub.animeId)">
-              Unsubscribe
-            </button>
-          </li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Updates</label>
-      <p class="setting-hint">Version {{ appVersion }}</p>
-
-      <button
-        v-if="
-          updateStatus.status === 'idle' ||
-          updateStatus.status === 'up-to-date' ||
-          updateStatus.status === 'error'
-        "
-        class="test-token-btn"
-        @click="checkForUpdates"
-      >
-        Check for updates
-      </button>
-
-      <span
-        v-else-if="updateStatus.status === 'checking'"
-        class="setting-hint"
-        style="margin-bottom: 0"
-        >Checking...</span
-      >
-
-      <div v-else-if="updateStatus.status === 'available'">
-        <div class="token-result token-valid" style="margin-bottom: 8px">
-          v{{ updateStatus.version }} available
+    <SettingsGroup title="Defaults">
+      <SettingsRow label="Default translation type" desc="Translation type when opening an anime.">
+        <div class="select-wrap">
+          <select id="tr-type" v-model="translationType">
+            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
+              {{ t.label }}
+            </option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
         </div>
-        <button class="browse-btn" @click="downloadUpdate">Download update</button>
-      </div>
-
-      <div v-else-if="updateStatus.status === 'downloading'" class="scan-progress">
-        <div class="scan-progress-header">
-          <span>Downloading update...</span>
-          <span>{{ updateStatus.percent }}%</span>
-        </div>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" :style="{ width: (updateStatus.percent || 0) + '%' }"></div>
-        </div>
-      </div>
-
-      <div v-else-if="updateStatus.status === 'ready'">
-        <button class="merge-all-btn" @click="installUpdate">Restart to update</button>
-      </div>
-
-      <div
-        v-if="updateStatus.status === 'error'"
-        class="token-result token-invalid"
-        style="margin-top: 6px"
+      </SettingsRow>
+      <SettingsRow
+        label="Notifications"
+        desc="Desktop notifications when downloads or merges complete (only when app is not focused)."
       >
-        {{ updateStatus.error }}
-      </div>
-      <div
-        v-if="updateStatus.status === 'up-to-date'"
-        class="token-result token-valid"
-        style="margin-top: 6px"
+        <div class="select-wrap">
+          <select id="notif-mode" v-model="notificationMode">
+            <option value="off">Off</option>
+            <option value="each">Each Episode</option>
+            <option value="queue">Queue Complete</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Calendar view"
+        desc="Default time range shown in the Airing Calendar tab."
       >
-        Up to date
-      </div>
-    </div>
+        <div class="select-wrap">
+          <select id="calendar-view" v-model="calendarView">
+            <option value="week">Week (7 days)</option>
+            <option value="month">Month (4 weeks)</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Downloads">
+      <SettingsRow
+        label="Download speed limit"
+        desc="Limit download bandwidth. The limit is shared across all active downloads."
+      >
+        <div class="dl-speed">
+          <div class="select-wrap">
+            <select id="speed-limit" v-model="speedLimitPreset">
+              <option value="0">Unlimited</option>
+              <option :value="String(1024 * 1024)">1 MB/s</option>
+              <option :value="String(5 * 1024 * 1024)">5 MB/s</option>
+              <option :value="String(10 * 1024 * 1024)">10 MB/s</option>
+              <option value="custom">Custom</option>
+            </select>
+            <svg
+              class="caret"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M19.5 8.25l-7.5 7.5-7.5-7.5"
+              />
+            </svg>
+          </div>
+          <div v-if="speedLimitPreset === 'custom'" class="custom-speed">
+            <input
+              v-model.number="customSpeedLimit"
+              type="number"
+              min="0.1"
+              step="0.1"
+              class="field-input speed-input"
+            />
+            <span class="speed-unit">MB/s</span>
+          </div>
+        </div>
+      </SettingsRow>
+      <SettingsRow label="Concurrent downloads" desc="Maximum number of simultaneous downloads.">
+        <div class="select-wrap">
+          <select id="concurrent-dl" v-model.number="concurrentDownloads">
+            <option :value="1">1</option>
+            <option :value="2">2</option>
+            <option :value="3">3</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Auto-download">
+      <SettingsRow
+        label="Auto-download airing episodes"
+        desc="Subscribed shows queue newly-aired episodes automatically. Subscribe per show on its detail page. Forward-only — already-aired episodes are never backfilled."
+      >
+        <SettingsSwitch v-model="autoDownloadEnabled" />
+      </SettingsRow>
+      <SettingsRow stack>
+        <div class="auto-dl-status">
+          <button
+            class="btn btn-sm"
+            :disabled="autoDlRunning || !autoDownloadEnabled"
+            @click="runAutoDlNow"
+          >
+            {{ autoDlRunning ? 'Running...' : 'Run now' }}
+          </button>
+          <span v-if="autoDlLastResult" class="sr-desc auto-dl-last">
+            Last run: {{ autoDlLastResult.enqueued }} enqueued,
+            {{ autoDlLastResult.skipped }} skipped, {{ autoDlLastResult.errors }} errors
+          </span>
+        </div>
+        <div class="auto-dl-subs">
+          <button
+            type="button"
+            class="auto-dl-subs-toggle"
+            @click="autoDlSubscriptionsExpanded = !autoDlSubscriptionsExpanded"
+          >
+            {{ autoDlSubscriptions.length }} show{{ autoDlSubscriptions.length === 1 ? '' : 's' }}
+            subscribed
+            <span class="tw-caret">{{ autoDlSubscriptionsExpanded ? '▾' : '▸' }}</span>
+          </button>
+          <ul
+            v-if="autoDlSubscriptionsExpanded && autoDlSubscriptions.length > 0"
+            class="auto-dl-sub-list"
+          >
+            <li v-for="sub in autoDlSubscriptions" :key="sub.animeId">
+              <span class="auto-dl-sub-name">{{ sub.animeName }}</span>
+              <span class="auto-dl-sub-meta">
+                next: Ep {{ sub.lastEnqueuedEpisodeInt + 1 }} · checked
+                {{ autoDlLastCheckedLabel(sub.lastCheckedAt) }}
+              </span>
+              <button class="btn btn-sm btn-danger" @click="unsubscribeAutoDl(sub.animeId)">
+                Unsubscribe
+              </button>
+            </li>
+          </ul>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Updates">
+      <SettingsRow label="Current version">
+        <template #desc>
+          <span v-if="updateStatus.status === 'up-to-date'">Up to date</span>
+          <span v-else-if="updateStatus.status === 'checking'">Checking…</span>
+          <span v-else-if="updateStatus.status === 'available'"
+            >v{{ updateStatus.version }} available</span
+          >
+          <span v-else-if="updateStatus.status === 'error'">{{ updateStatus.error }}</span>
+          <span v-else>Installed build</span>
+        </template>
+        <div class="update-control">
+          <span class="chip neutral mono">v{{ appVersion }}</span>
+          <button
+            v-if="
+              updateStatus.status === 'idle' ||
+              updateStatus.status === 'up-to-date' ||
+              updateStatus.status === 'error'
+            "
+            class="btn btn-sm"
+            @click="checkForUpdates"
+          >
+            Check for updates
+          </button>
+          <button
+            v-else-if="updateStatus.status === 'available'"
+            class="btn btn-sm btn-primary"
+            @click="downloadUpdate"
+          >
+            Download update
+          </button>
+          <button
+            v-else-if="updateStatus.status === 'ready'"
+            class="btn btn-sm btn-ok"
+            @click="installUpdate"
+          >
+            Restart to update
+          </button>
+        </div>
+      </SettingsRow>
+      <SettingsRow v-if="updateStatus.status === 'downloading'" stack>
+        <div class="set-progress">
+          <div class="set-progress-head">
+            <span>Downloading update…</span>
+            <span>{{ updateStatus.percent }}%</span>
+          </div>
+          <div class="bar"><span :style="{ width: (updateStatus.percent || 0) + '%' }"></span></div>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
 
 <style scoped>
+.dl-speed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custom-speed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speed-input {
+  width: 90px;
+}
+
+.speed-unit {
+  color: var(--text-3);
+  font-size: 0.8rem;
+}
+
+.update-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .auto-dl-status {
   display: flex;
   align-items: center;
-  margin-top: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.auto-dl-last {
+  margin-top: 0;
 }
 
 .auto-dl-subs {
-  margin-top: 10px;
+  margin-top: 4px;
 }
 
 .auto-dl-subs-toggle {
   background: none;
   border: none;
-  color: #8aa8d0;
+  color: var(--text-2);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   padding: 4px 0;
 }
 
-.auto-dl-subs-toggle .caret {
+.auto-dl-subs-toggle:hover {
+  color: var(--text);
+}
+
+.tw-caret {
   margin-left: 4px;
   font-size: 0.7rem;
 }
@@ -381,32 +438,19 @@ watch(autoDownloadEnabled, (val) => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-soft);
   font-size: 0.85rem;
 }
 
 .auto-dl-sub-name {
   flex: 1;
-  color: #e0e0f0;
+  color: var(--text);
 }
 
 .auto-dl-sub-meta {
-  color: #6a6a8a;
+  color: var(--text-3);
   font-size: 0.75rem;
-}
-
-.auto-dl-unsub-btn {
-  background: rgba(120, 50, 50, 0.6);
-  color: #e0a0a0;
-  border: none;
-  border-radius: 3px;
-  padding: 3px 8px;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.auto-dl-unsub-btn:hover {
-  background: rgba(150, 60, 60, 0.8);
+  font-family: var(--font-data);
 }
 </style>

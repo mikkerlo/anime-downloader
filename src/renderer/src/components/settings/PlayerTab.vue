@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
 
 const { autoSave } = useSettingsAutosave();
 
@@ -84,119 +86,101 @@ watch(prefetchNextEpisode, (val) => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label">Default player</label>
-      <p class="setting-hint">Choose what happens when you click "Open" on a downloaded episode.</p>
-      <div class="radio-group">
-        <label class="radio-label">
-          <input type="radio" v-model="playerMode" value="system" />
-          System default player
-        </label>
-        <label class="radio-label">
-          <input type="radio" v-model="playerMode" value="builtin" />
-          Built-in player
-        </label>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Anime4K upscaling preset</label>
-      <p class="setting-hint">
-        Real-time anime upscaling via WebGPU shaders. Choose a preset based on your source video
-        resolution.
-      </p>
-      <select
-        v-model="anime4kPreset"
-        class="setting-input setting-select"
-        :disabled="!webgpuStatus.available"
+    <SettingsGroup title="Playback defaults">
+      <SettingsRow
+        label="Default player"
+        desc="What happens when you click “Open” on a downloaded episode."
       >
-        <option value="off">Off</option>
-        <option value="mode-a">Mode A (1080p source)</option>
-        <option value="mode-b">Mode B (720p source)</option>
-        <option value="mode-c">Mode C (480p source)</option>
-      </select>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">WebGPU status</label>
-      <div v-if="webgpuStatus.available" class="status-line ok">
-        Available — {{ webgpuStatus.gpuName }}
-      </div>
-      <div v-else class="status-line warn">
-        Not available — Anime4K shaders are disabled. Plain video playback still works.
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">HEVC transcoding on play</label>
-      <p class="setting-hint">
-        When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264
-        in real time instead of leaving the viewer with a black screen.
-      </p>
-      <select
-        v-model="hevcTranscodeOnPlay"
-        class="setting-input setting-select"
-        :disabled="hevcMseSupported"
+        <div class="set-seg">
+          <button :class="{ on: playerMode === 'system' }" @click="playerMode = 'system'">
+            System
+          </button>
+          <button :class="{ on: playerMode === 'builtin' }" @click="playerMode = 'builtin'">
+            Built-in
+          </button>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Pre-fetch next episode"
+        desc="Starts downloading the next episode in the background while you're watching the current one. Uses your active translation and quality. Subscribed shows are skipped — the auto-downloader handles them."
       >
-        <option value="ask">Ask each time</option>
-        <option value="always">Always transcode</option>
-        <option value="never">Never — open in external player</option>
-      </select>
-      <div v-if="hevcMseSupported" class="status-line ok" style="margin-top: 0.4rem">
-        HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't
-        fire.
-      </div>
-      <div v-else class="status-line warn" style="margin-top: 0.4rem">
-        HEVC MSE decoder: not available — this setting controls the fallback for local MKV playback.
-      </div>
-    </div>
+        <div class="select-wrap">
+          <select v-model="prefetchNextEpisode">
+            <option value="off">Off</option>
+            <option value="open">On player open</option>
+            <option value="time-5min">After 5 minutes of playback</option>
+            <option value="progress-50">At 50% playback</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
 
-    <div class="setting-group">
-      <label class="setting-label">Pre-fetch next episode</label>
-      <p class="setting-hint">
-        Starts downloading the next episode in the background while you're watching the current one.
-        Uses your active translation and quality. Subscribed shows are skipped — the auto-downloader
-        handles them.
-      </p>
-      <select v-model="prefetchNextEpisode" class="setting-input setting-select">
-        <option value="off">Off</option>
-        <option value="open">On player open</option>
-        <option value="time-5min">After 5 minutes of playback</option>
-        <option value="progress-50">At 50% playback</option>
-      </select>
-    </div>
+    <SettingsGroup title="Enhancements">
+      <SettingsRow
+        label="Anime4K upscaling preset"
+        desc="Real-time anime upscaling via WebGPU shaders. Choose a preset based on your source video resolution."
+      >
+        <div class="select-wrap">
+          <select v-model="anime4kPreset" :disabled="!webgpuStatus.available">
+            <option value="off">Off</option>
+            <option value="mode-a">Mode A (1080p source)</option>
+            <option value="mode-b">Mode B (720p source)</option>
+            <option value="mode-c">Mode C (480p source)</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+      <SettingsRow stack>
+        <div v-if="webgpuStatus.available" class="status-line ok">
+          WebGPU available — {{ webgpuStatus.gpuName }}
+        </div>
+        <div v-else class="status-line warn">
+          WebGPU not available — Anime4K shaders are disabled. Plain video playback still works.
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="HEVC transcoding on play"
+        desc="When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen."
+      >
+        <div class="select-wrap">
+          <select v-model="hevcTranscodeOnPlay" :disabled="hevcMseSupported">
+            <option value="ask">Ask each time</option>
+            <option value="always">Always transcode</option>
+            <option value="never">Never — open in external player</option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+      <SettingsRow stack>
+        <div v-if="hevcMseSupported" class="status-line ok">
+          HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't
+          fire.
+        </div>
+        <div v-else class="status-line warn">
+          HEVC MSE decoder: not available — this setting controls the fallback for local MKV
+          playback.
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
 
-    <div class="setting-group">
-      <p class="setting-hint">
-        Note: the built-in player supports local MKV playback via the MSE remux pipeline. For
-        non-downloaded episodes, MKV files are streamed from the server — a Play button will appear
-        on those rows when player mode is "Built-in". If a local HEVC MKV can't be decoded by your
-        platform, the fallback above decides what happens.
-      </p>
-    </div>
+    <SettingsGroup>
+      <SettingsRow stack>
+        <p class="sr-desc">
+          Note: the built-in player supports local MKV playback via the MSE remux pipeline. For
+          non-downloaded episodes, MKV files are streamed from the server — a Play button will
+          appear on those rows when player mode is “Built-in”. If a local HEVC MKV can't be decoded
+          by your platform, the fallback above decides what happens.
+        </p>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
-
-<style scoped>
-.radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.radio-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #a0a0b8;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.radio-label input[type='radio'] {
-  accent-color: #e94560;
-}
-</style>

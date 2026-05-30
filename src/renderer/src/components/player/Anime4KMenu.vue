@@ -54,9 +54,9 @@ const presets: { key: Anime4KPreset; label: string }[] = [
 <style scoped>
 .preset-gpu-info {
   padding: 6px 12px;
-  color: #6a6a8a;
+  color: var(--text-3);
   font-size: 0.7rem;
-  border-top: 1px solid #0f3460;
+  border-top: 1px solid var(--border-soft);
   margin-top: 4px;
 }
 </style>

@@ -118,19 +118,19 @@ function typeLabelForGroup(groups: TypeGroup[], type: string): string {
 
 .tr-arrow {
   font-size: 1rem;
-  color: #8a8aaa;
+  color: var(--text-3);
   flex-shrink: 0;
 }
 
 .back-option {
-  border-bottom: 1px solid #0f3460;
+  border-bottom: 1px solid var(--border-soft);
   margin-bottom: 4px;
   padding-bottom: 8px;
   gap: 6px;
 }
 
 .back-option .tr-label {
-  color: #8a8aaa;
+  color: var(--text-3);
   font-size: 0.75rem;
 }
 
@@ -140,31 +140,32 @@ function typeLabelForGroup(groups: TypeGroup[], type: string): string {
 
 .tr-label {
   font-size: 0.8rem;
-  color: #ddd;
+  color: var(--text);
 }
 
 .tr-meta {
+  font-family: var(--font-data);
   font-size: 0.65rem;
-  color: #8a8aaa;
+  color: var(--text-3);
   margin-left: auto;
 }
 
 .preset-option.selected .tr-label {
-  color: #e94560;
+  color: var(--accent);
 }
 
 .preset-option.selected .tr-meta {
-  color: #e94560;
+  color: var(--accent);
   opacity: 0.7;
 }
 
 .tr-dl-icon {
   font-size: 0.7rem;
-  color: #6ab04c;
+  color: var(--st-green);
   flex-shrink: 0;
 }
 
 .preset-option.downloaded .tr-label {
-  color: #6ab04c;
+  color: var(--st-green);
 }
 </style>

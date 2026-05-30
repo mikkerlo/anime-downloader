@@ -4,23 +4,35 @@
  * each component gets its own scoped copy of the rules — same cascade
  * order as the original single scoped block in PlayerView.
  *
- * Phase 5 slice 5e (#118).
+ * Phase 5 slice 5e (#118). Restyled to Refined Dark tokens (#167).
  */
 
 .preset-wrapper {
   position: relative;
 }
 
+/* player-menu-btn (per the redesign spec): translucent white pill, accent
+ * when active/on. Used for the quality / translation / Anime4K / syncplay
+ * triggers in the controls bar. */
 .preset-btn {
-  font-size: 0.75rem;
-  padding: 4px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 7px 13px;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease);
+}
+
+.preset-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .preset-btn.active {
-  border-color: #e94560;
-  color: #e94560;
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 
 .preset-menu {
@@ -28,11 +40,12 @@
   bottom: 100%;
   right: 0;
   margin-bottom: 8px;
-  background: rgba(20, 20, 30, 0.95);
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 5px;
   min-width: 200px;
+  box-shadow: var(--shadow-card);
 }
 
 .preset-option {
@@ -41,35 +54,51 @@
   padding: 8px 12px;
   background: none;
   border: none;
-  color: #ccc;
-  font-size: 0.8rem;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: calc(var(--radius-btn) - 2px);
+  transition: all 0.12s var(--ease);
 }
 
 .preset-option:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .preset-option.selected {
-  color: #e94560;
-  background: rgba(233, 69, 96, 0.1);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
+/* Base control-bar icon button (play/pause/episode-nav/volume/fullscreen) —
+ * the mock's `.pctrl`: transparent, opacity-only hover, no box background. */
 .ctrl-btn {
   background: none;
   border: none;
   color: #fff;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
+  padding: 4px;
+  display: grid;
+  place-items: center;
   font-size: 0.8rem;
   font-weight: 600;
+  opacity: 0.86;
+  transition: opacity 0.15s var(--ease);
 }
 
 .ctrl-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  opacity: 1;
+}
+
+.ctrl-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+.ctrl-btn.big svg {
+  width: 30px;
+  height: 30px;
 }

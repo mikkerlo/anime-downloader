@@ -14,18 +14,12 @@ type PrefetchInFlight = {
 
 defineProps<{
   animeName: string;
-  episodeLabel: string;
-  multiEpisode: boolean;
-  canPrev: boolean;
-  canNext: boolean;
-  navigating: boolean;
+  subtitle: string;
   prefetchInFlight: PrefetchInFlight | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
-  'go-prev': [];
-  'go-next': [];
 }>();
 </script>
 
@@ -43,25 +37,10 @@ const emit = defineEmits<{
         <path d="M19 12H5M12 19l-7-7 7-7" />
       </svg>
     </button>
-    <button
-      v-if="multiEpisode"
-      class="ep-nav-btn"
-      :disabled="!canPrev || navigating"
-      @click="emit('go-prev')"
-      title="Previous episode (Shift+←)"
-    >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-      </svg>
-    </button>
-    <span class="title-text">{{ animeName }} — {{ episodeLabel }}</span>
+    <div class="pt-meta">
+      <div class="pt-title">{{ animeName }}</div>
+      <div class="pt-sub">{{ subtitle }}</div>
+    </div>
     <span
       v-if="prefetchInFlight"
       class="prefetch-indicator"
@@ -73,24 +52,6 @@ const emit = defineEmits<{
         · {{ formatSpeed(prefetchInFlight.speed) }}</template
       >
     </span>
-    <button
-      v-if="multiEpisode"
-      class="ep-nav-btn"
-      :disabled="!canNext || navigating"
-      @click="emit('go-next')"
-      title="Next episode (Shift+→)"
-    >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-      >
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-      </svg>
-    </button>
   </div>
 </template>
 
@@ -102,65 +63,66 @@ const emit = defineEmits<{
   right: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
+  gap: 14px;
+  padding: 18px 24px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.7) 0%, transparent 100%);
   z-index: 5;
 }
 
 .close-btn {
-  background: none;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.1);
   border: none;
+  border-radius: 50%;
   color: #fff;
   cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s var(--ease);
 }
 
 .close-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.2);
 }
 
-.title-text {
+.pt-meta {
+  margin-right: auto;
+  min-width: 0;
+}
+
+.pt-title {
   color: #fff;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-}
-
-.prefetch-indicator {
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 0.78rem;
-  font-weight: 500;
-  padding: 2px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.25);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ep-nav-btn {
-  background: none;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  opacity: 0.8;
+.pt-sub {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.82rem;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ep-nav-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  opacity: 1;
-}
-
-.ep-nav-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
+.prefetch-indicator {
+  color: rgba(255, 255, 255, 0.78);
+  font-family: var(--font-data);
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-chip);
+  background: rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
 }
 </style>

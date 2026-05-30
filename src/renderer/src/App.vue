@@ -27,7 +27,6 @@ const shikimoriStore = useShikimoriStore();
 const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
 const { playerState, animePrefs } = storeToRefs(playerStore);
 const { shortcuts, ffmpegDownloading, ffmpegProgress } = storeToRefs(settingsStore);
-const { loggedIn: shikimoriLoggedIn } = storeToRefs(shikimoriStore);
 
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
 
@@ -146,7 +145,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app">
-    <Sidebar :shikimori-logged-in="shikimoriLoggedIn" />
+    <Sidebar />
     <AnimeDetailView
       v-if="activeAnimeId"
       :key="activeAnimeId"
@@ -222,48 +221,15 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #1a1a2e;
-  color: #e0e0e0;
-  overflow: hidden;
-}
-
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #1a1a2e;
-}
-::-webkit-scrollbar-thumb {
-  background: #2a2a4a;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #3a3a5a;
-}
-::-webkit-scrollbar-corner {
-  background: #1a1a2e;
-}
-
-.app {
-  display: flex;
-  height: 100vh;
-}
-
+/* Base reset, body, scrollbar, and `.app` now live in assets/theme.css
+   (the shared token foundation, #161). What stays here is App.vue-local
+   chrome — the ffmpeg first-launch overlay and the cleanup toast. */
 .placeholder {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #4a4a6a;
+  color: var(--text-faint);
   font-size: 1.2rem;
 }
 
@@ -278,9 +244,9 @@ body {
 }
 
 .ffmpeg-modal {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
   padding: 2rem 2.5rem;
   text-align: center;
   min-width: 320px;
@@ -289,8 +255,8 @@ body {
 .ffmpeg-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #0f3460;
-  border-top-color: #e94560;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
   border-radius: 50%;
   margin: 0 auto 1rem;
   animation: spin 0.8s linear infinite;
@@ -311,14 +277,14 @@ body {
 .ffmpeg-progress-bar {
   width: 100%;
   height: 6px;
-  background: #0f3460;
+  background: var(--surface-3);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .ffmpeg-progress-fill {
   height: 100%;
-  background: #e94560;
+  background: var(--accent);
   border-radius: 3px;
   transition: width 0.3s ease;
 }
@@ -326,13 +292,13 @@ body {
 .ffmpeg-percent {
   margin-top: 0.5rem;
   font-size: 0.9rem;
-  color: #a0a0c0;
+  color: var(--text-2);
 }
 
 .ffmpeg-hint {
   margin-top: 0.5rem;
   font-size: 0.75rem;
-  color: #6a6a8a;
+  color: var(--text-3);
 }
 
 .cleanup-toast {
@@ -340,9 +306,9 @@ body {
   right: 20px;
   bottom: 20px;
   width: 360px;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
   padding: 14px 16px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   z-index: 8000;
@@ -354,13 +320,13 @@ body {
 .cleanup-toast-title {
   font-size: 0.92rem;
   font-weight: 600;
-  color: #e0e0e0;
+  color: var(--text);
   margin-bottom: 4px;
 }
 
 .cleanup-toast-size {
   font-size: 0.8rem;
-  color: #a0a0b8;
+  color: var(--text-2);
 }
 
 .cleanup-toast-actions {
@@ -372,33 +338,33 @@ body {
 .cleanup-toast-btn {
   padding: 5px 10px;
   font-size: 0.78rem;
-  border-radius: 5px;
-  border: 1px solid #0f3460;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--border);
   background: transparent;
-  color: #c0c0d0;
+  color: var(--text-2);
   cursor: pointer;
 }
 
 .cleanup-toast-btn:hover {
-  background: rgba(15, 52, 96, 0.4);
+  background: var(--surface-2);
 }
 
 .cleanup-toast-btn.primary {
-  background: #e94560;
-  border-color: #e94560;
-  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .cleanup-toast-btn.primary:hover {
-  background: #f25670;
+  background: var(--accent-hover);
 }
 
 .cleanup-toast-btn.subtle {
-  color: #7a7a98;
+  color: var(--text-3);
   border-color: transparent;
 }
 
 .cleanup-toast-btn.subtle:hover {
-  color: #c0c0d0;
+  color: var(--text-2);
 }
 </style>

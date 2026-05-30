@@ -1,0 +1,530 @@
+/* ============================================================
+   Anime DL — Refined Dark theme foundation (#161)
+   Single locked design direction: Refined Dark · regular density
+   · accent #ef4d67. The multi-direction / density / Tweaks
+   machinery from the design prototype is intentionally dropped
+   (epic #160). Tokens still flow through CSS variables so a future
+   re-theme stays a one-file edit.
+
+   Fonts (Manrope + JetBrains Mono) are imported in main.ts from the
+   bundled @fontsource packages — no CDN, so they render offline.
+   ============================================================ */
+
+:root {
+  /* surfaces */
+  --bg: #101019;
+  --bg-deep: #0a0a12;
+  --surface: #181a28;
+  --surface-2: #1f2235;
+  --surface-3: #272b44;
+
+  /* borders */
+  --border: #262a44;
+  --border-soft: #1f2336;
+  --border-strong: #343a5c;
+
+  /* text */
+  --text: #edeef5;
+  --text-2: #a9abc4;
+  --text-3: #71748f;
+  --text-faint: #4d5070;
+
+  /* accent (locked) + derived tints */
+  --accent: #ef4d67;
+  --accent-hover: color-mix(in srgb, var(--accent) 84%, white);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 32%, transparent);
+  --accent-ink: #ffffff;
+
+  /* status palette */
+  --st-blue: #4aa3e0;
+  --st-green: #5cc08a;
+  --st-orange: #e8a33d;
+  --st-purple: #a878e8;
+  --st-red: #ef5573;
+  --star: #f5c451;
+
+  /* radii */
+  --radius-card: 14px;
+  --radius-btn: 9px;
+  --radius-chip: 999px;
+  --radius-input: 9px;
+
+  /* fonts */
+  --font-ui: 'Manrope', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Manrope', system-ui, -apple-system, sans-serif;
+  --font-data: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* spacing (regular density) */
+  --gap: 16px;
+  --pad-x: 28px;
+  --pad-y: 18px;
+  --row-pad: 13px;
+  --poster-grid: 168px;
+
+  /* effects */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 10px 30px rgba(0, 0, 0, 0.28);
+  --hero-overlay: linear-gradient(
+    180deg,
+    rgba(16, 16, 25, 0) 0%,
+    rgba(16, 16, 25, 0.72) 62%,
+    var(--bg) 100%
+  );
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================================ Base ============================================================ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+::-webkit-scrollbar-corner {
+  background: var(--bg);
+}
+
+/* ============================================================ Sidebar ============================================================ */
+.sidebar {
+  width: 232px;
+  min-width: 232px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 22px 22px 18px;
+}
+.logo-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+  flex-shrink: 0;
+  box-shadow: 0 4px 14px var(--accent-soft);
+}
+.logo-mark svg {
+  width: 18px;
+  height: 18px;
+}
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+.logo-text .name {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.logo-text .sub {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.nav-group {
+  padding: 6px 12px;
+}
+.nav-group + .nav-group {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+  padding-top: 12px;
+}
+.nav-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 4px 12px 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-btn);
+  color: var(--text-3);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+  position: relative;
+}
+.nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nav-item .ico {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+.nav-item .count {
+  margin-left: auto;
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--surface-3);
+  color: var(--text-2);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.nav-item.active .count {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  padding: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-btn);
+  transition: background 0.15s;
+}
+.user-chip:hover {
+  background: var(--surface-2);
+}
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--accent), var(--st-purple));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  object-fit: cover;
+}
+.user-meta {
+  line-height: 1.2;
+  min-width: 0;
+}
+.user-meta .u-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-meta .u-sync {
+  font-size: 0.68rem;
+  color: var(--st-green);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.user-meta .u-sync.offline {
+  color: var(--st-orange);
+}
+.u-sync .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ============================================================ Poster grid + anime card ============================================================
+   Card internals (poster / star / score / watch-bar) are nested under
+   `.acard` so they never leak onto the bare `.poster` / `.score-badge`
+   classes other (not-yet-restyled) components still own. */
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--poster-grid), 1fr));
+  gap: var(--gap);
+}
+
+.acard {
+  position: relative;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition: all 0.18s var(--ease);
+  text-align: left;
+  cursor: pointer;
+}
+.acard:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+.acard .poster-wrap {
+  position: relative;
+  line-height: 0;
+  aspect-ratio: 2 / 3;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+.acard .poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.acard .acard-info {
+  padding: 10px 12px 12px;
+}
+.acard .acard-title {
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.28;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.acard .acard-meta {
+  margin-top: 5px;
+  font-size: 0.73rem;
+  color: var(--text-3);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.acard .star-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  color: rgba(255, 255, 255, 0.78);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+  transition: all 0.15s;
+  opacity: 0;
+}
+.acard:hover .star-btn {
+  opacity: 1;
+}
+.acard .star-btn:hover {
+  transform: scale(1.12);
+  color: var(--star);
+}
+.acard .star-btn.active {
+  opacity: 1;
+  color: var(--star);
+}
+.acard .star-btn svg {
+  width: 17px;
+  height: 17px;
+}
+.acard .score-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 3;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--star);
+  backdrop-filter: blur(3px);
+}
+.acard .score-badge svg {
+  width: 11px;
+  height: 11px;
+}
+.acard .watch-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.acard .watch-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ============================================================ Shared primitives (zero-collision) ============================================================ */
+/* progress bar */
+.pbar {
+  flex: 1;
+  height: 5px;
+  background: var(--bg-deep);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.pbar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s var(--ease);
+}
+.pbar.thin {
+  height: 3px;
+}
+
+/* pill tabs */
+.pill-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+}
+.pill-tab {
+  padding: 6px 14px;
+  border-radius: calc(var(--radius-btn) - 2px);
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pill-tab:hover {
+  color: var(--text);
+}
+.pill-tab.active {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* select with caret */
+.select-wrap {
+  position: relative;
+}
+.select-wrap select {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  padding: 9px 34px 9px 13px;
+  border-radius: var(--radius-input);
+}
+.select-wrap select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.select-wrap .caret {
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* empty state */
+.empty-state {
+  text-align: center;
+  padding: 90px 20px;
+}
+.empty-state .es-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 18px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+}
+.empty-state .es-icon svg {
+  width: 26px;
+  height: 26px;
+}
+.empty-state p {
+  color: var(--text-3);
+  font-size: 0.95rem;
+  margin-bottom: 18px;
+}

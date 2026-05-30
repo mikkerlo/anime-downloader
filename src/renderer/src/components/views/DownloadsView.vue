@@ -33,6 +33,22 @@ function groupStatus(g: EpisodeGroup): string {
   return 'queued';
 }
 
+function statusLabel(g: EpisodeGroup): string {
+  const s = groupStatus(g);
+  switch (s) {
+    case 'merging':
+      return `merging${g.mergePercent != null ? ' ' + g.mergePercent + '%' : ''}`;
+    case 'ready-for-merge':
+      return 'ready for merge';
+    case 'pending-merge':
+      return 'merge interrupted';
+    case 'merge-failed':
+      return 'merge failed';
+    default:
+      return s;
+  }
+}
+
 const hasFailed = computed(() =>
   groups.value.some((g) => {
     const items = [g.video, g.subtitle].filter(Boolean) as DownloadProgressItem[];
@@ -71,6 +87,19 @@ const hasPaused = computed(() =>
     return items.some((i) => i.status === 'paused');
   })
 );
+
+const summary = computed(() => {
+  let active = 0;
+  let done = 0;
+  let failed = 0;
+  for (const g of groups.value) {
+    const s = groupStatus(g);
+    if (s === 'merged' || s === 'ready-for-merge') done++;
+    else if (s === 'failed' || s === 'merge-failed') failed++;
+    else active++;
+  }
+  return { active, done, failed };
+});
 
 const merging = ref(false);
 
@@ -120,226 +149,216 @@ async function mergeFinished(): Promise<void> {
     <header class="topbar">
       <h2>Downloads</h2>
       <div class="topbar-actions">
-        <button v-if="hasActive" class="pause-all-btn" @click="pauseAll">Pause all</button>
-        <button v-if="hasPaused" class="resume-all-btn" @click="resumeAll">Resume all</button>
-        <button v-if="hasFailed" class="retry-all-btn" @click="retryAllFailed">
+        <button v-if="hasActive" class="btn btn-warn" @click="pauseAll">Pause all</button>
+        <button v-if="hasPaused" class="btn btn-ok" @click="resumeAll">Resume all</button>
+        <button v-if="hasFailed" class="btn btn-primary" @click="retryAllFailed">
           Retry all failed
         </button>
-        <button v-if="hasMergeable" class="merge-btn" @click="mergeFinished" :disabled="merging">
-          {{ merging ? 'Merging...' : 'Merge finished' }}
+        <button v-if="hasMergeable" class="btn btn-ok" :disabled="merging" @click="mergeFinished">
+          {{ merging ? 'Merging…' : 'Merge finished' }}
         </button>
-        <button v-if="hasFinished" class="clear-btn" @click="clearCompleted">Clear done</button>
+        <button v-if="hasFinished" class="btn" @click="clearCompleted">Clear done</button>
       </div>
     </header>
     <div class="body">
-      <div v-if="groups.length === 0" class="status-text">
-        No downloads yet. Open an anime and click "Download All".
+      <div v-if="groups.length === 0" class="empty-state">
+        <div class="es-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+            />
+          </svg>
+        </div>
+        <p>No downloads yet. Open an anime and click "Download All".</p>
       </div>
-      <div v-else class="download-list">
-        <div
-          v-for="g in groups"
-          :key="g.translationId"
-          class="episode-group"
-          :class="groupStatus(g)"
-        >
-          <div class="group-header">
-            <span class="group-title">{{ g.animeName }} - {{ g.episodeLabel }}</span>
-            <span class="group-quality">{{ g.quality }}p</span>
-            <span class="group-status" :class="groupStatus(g)">
-              <template v-if="g.mergeStatus === 'merging'"
-                >merging {{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</template
-              >
-              <template v-else-if="groupStatus(g) === 'ready-for-merge'">ready for merge</template>
-              <template v-else-if="groupStatus(g) === 'pending-merge'">merge interrupted</template>
-              <template v-else-if="groupStatus(g) === 'merge-failed'">merge failed</template>
-              <template v-else>{{ groupStatus(g) }}</template>
-            </span>
-            <div v-if="g.mergeStatus === 'merging'" class="progress-bar-wrap merge-bar">
-              <div class="progress-bar merge" :style="{ width: (g.mergePercent || 0) + '%' }"></div>
-            </div>
-            <button
-              v-if="g.mergeStatus === 'merging'"
-              class="action-btn cancel"
-              @click="cancelMerge()"
-              title="Cancel merge"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                width="14"
-                height="14"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-            <span v-if="g.mergeStatus === 'failed' && g.mergeError" class="merge-error">{{
-              g.mergeError
-            }}</span>
+      <template v-else>
+        <div class="dl-summary">
+          <div class="dl-stat">
+            <span class="n active">{{ summary.active }}</span>
+            <span class="l">Active</span>
           </div>
+          <div class="dl-stat">
+            <span class="n done">{{ summary.done }}</span>
+            <span class="l">Done</span>
+          </div>
+          <div class="dl-stat">
+            <span class="n failed">{{ summary.failed }}</span>
+            <span class="l">Failed</span>
+          </div>
+        </div>
 
-          <!-- Video row -->
-          <div v-if="g.video" class="dl-row">
-            <span class="dl-kind">VIDEO</span>
-            <span class="dl-status-badge" :class="g.video.status">{{ g.video.status }}</span>
-            <template v-if="g.video.status === 'downloading'">
-              <div class="progress-bar-wrap">
-                <div class="progress-bar" :style="{ width: progress(g.video) + '%' }"></div>
+        <div class="dl-list">
+          <div v-for="g in groups" :key="g.translationId" class="dl-card" :class="groupStatus(g)">
+            <div class="dl-head">
+              <div class="dl-poster" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 5v14l11-7z" />
+                </svg>
               </div>
-              <span class="dl-speed">{{ formatSpeed(g.video.speed) }}</span>
-              <span class="dl-eta">ETA {{ formatEta(g.video) }}</span>
-            </template>
-            <template v-else-if="g.video.status === 'paused'">
-              <div class="progress-bar-wrap">
-                <div class="progress-bar paused" :style="{ width: progress(g.video) + '%' }"></div>
+              <div class="dl-head-info">
+                <span class="dl-title">{{ g.animeName }}</span>
+                <span class="dl-ep">{{ g.episodeLabel }} · {{ g.quality }}p</span>
               </div>
-            </template>
-            <span v-if="g.video.totalBytes > 0" class="dl-size"
-              >{{ formatBytes(g.video.bytesReceived) }} /
-              {{ formatBytes(g.video.totalBytes) }}</span
-            >
-            <span v-if="g.video.error" class="dl-error">{{ g.video.error }}</span>
-            <div class="dl-actions">
-              <button
-                v-if="g.video.status === 'downloading'"
-                class="action-btn"
-                @click="pauseItem(g.video.id)"
-                title="Pause"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-                </svg>
-              </button>
-              <button
-                v-if="g.video.status === 'paused' || g.video.status === 'failed'"
-                class="action-btn resume"
-                @click="resumeItem(g.video.id)"
-                :title="g.video.status === 'failed' ? 'Retry' : 'Resume'"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-              <button
-                v-if="g.video.status === 'failed'"
-                class="action-btn restart"
-                @click="restartItem(g.video.id)"
-                title="Restart from scratch (re-fetch URLs)"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
-                  />
-                </svg>
-              </button>
-              <button
-                v-if="g.video.status !== 'completed' && g.video.status !== 'cancelled'"
-                class="action-btn cancel"
-                @click="cancelItem(g.video.id)"
-                title="Cancel"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
+              <span class="dl-status" :class="groupStatus(g)">{{ statusLabel(g) }}</span>
+            </div>
+
+            <div v-if="g.mergeStatus === 'merging'" class="dl-merge-banner merging">
+              <span class="mb-label">Merging</span>
+              <div class="pbar thin">
+                <span :style="{ width: (g.mergePercent || 0) + '%' }"></span>
+              </div>
+              <span class="mb-pct">{{ g.mergePercent != null ? g.mergePercent + '%' : '' }}</span>
+              <button class="iconbtn cancel" title="Cancel merge" @click="cancelMerge()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-          </div>
+            <div v-else-if="groupStatus(g) === 'merged'" class="dl-merge-banner merged">
+              <span class="mb-label">Merged to MKV</span>
+            </div>
+            <div v-if="g.mergeStatus === 'failed' && g.mergeError" class="dl-error-line">
+              {{ g.mergeError }}
+            </div>
 
-          <!-- Subtitle row -->
-          <div v-if="g.subtitle" class="dl-row">
-            <span class="dl-kind sub">SUB</span>
-            <span class="dl-status-badge" :class="g.subtitle.status">{{ g.subtitle.status }}</span>
-            <template v-if="g.subtitle.status === 'downloading'">
-              <div class="progress-bar-wrap">
-                <div class="progress-bar sub" :style="{ width: progress(g.subtitle) + '%' }"></div>
+            <!-- Video row -->
+            <div v-if="g.video" class="dl-row">
+              <span class="dl-kind">VIDEO</span>
+              <span class="r-status" :class="g.video.status">{{ g.video.status }}</span>
+              <template v-if="g.video.status === 'downloading'">
+                <div class="pbar thin">
+                  <span :style="{ width: progress(g.video) + '%' }"></span>
+                </div>
+                <span class="r-speed">{{ formatSpeed(g.video.speed) }}</span>
+                <span class="r-eta">ETA {{ formatEta(g.video) }}</span>
+              </template>
+              <template v-else-if="g.video.status === 'paused'">
+                <div class="pbar thin paused">
+                  <span :style="{ width: progress(g.video) + '%' }"></span>
+                </div>
+              </template>
+              <span v-if="g.video.totalBytes > 0" class="r-size"
+                >{{ formatBytes(g.video.bytesReceived) }} /
+                {{ formatBytes(g.video.totalBytes) }}</span
+              >
+              <span v-if="g.video.error" class="dl-error-line inline">{{ g.video.error }}</span>
+              <div class="dl-actions">
+                <button
+                  v-if="g.video.status === 'downloading'"
+                  class="iconbtn"
+                  title="Pause"
+                  @click="pauseItem(g.video.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.video.status === 'paused' || g.video.status === 'failed'"
+                  class="iconbtn resume"
+                  :title="g.video.status === 'failed' ? 'Retry' : 'Resume'"
+                  @click="resumeItem(g.video.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.video.status === 'failed'"
+                  class="iconbtn restart"
+                  title="Restart from scratch (re-fetch URLs)"
+                  @click="restartItem(g.video.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.video.status !== 'completed' && g.video.status !== 'cancelled'"
+                  class="iconbtn cancel"
+                  title="Cancel"
+                  @click="cancelItem(g.video.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
-              <span class="dl-speed">{{ formatSpeed(g.subtitle.speed) }}</span>
-            </template>
-            <span v-if="g.subtitle.totalBytes > 0" class="dl-size"
-              >{{ formatBytes(g.subtitle.bytesReceived) }} /
-              {{ formatBytes(g.subtitle.totalBytes) }}</span
-            >
-            <span v-if="g.subtitle.error" class="dl-error">{{ g.subtitle.error }}</span>
-            <div class="dl-actions">
-              <button
-                v-if="g.subtitle.status === 'downloading'"
-                class="action-btn"
-                @click="pauseItem(g.subtitle.id)"
-                title="Pause"
+            </div>
+
+            <!-- Subtitle row -->
+            <div v-if="g.subtitle" class="dl-row">
+              <span class="dl-kind sub">SUB</span>
+              <span class="r-status" :class="g.subtitle.status">{{ g.subtitle.status }}</span>
+              <template v-if="g.subtitle.status === 'downloading'">
+                <div class="pbar thin sub">
+                  <span :style="{ width: progress(g.subtitle) + '%' }"></span>
+                </div>
+                <span class="r-speed">{{ formatSpeed(g.subtitle.speed) }}</span>
+              </template>
+              <span v-if="g.subtitle.totalBytes > 0" class="r-size"
+                >{{ formatBytes(g.subtitle.bytesReceived) }} /
+                {{ formatBytes(g.subtitle.totalBytes) }}</span
               >
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                  <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-                </svg>
-              </button>
-              <button
-                v-if="g.subtitle.status === 'paused' || g.subtitle.status === 'failed'"
-                class="action-btn resume"
-                @click="resumeItem(g.subtitle.id)"
-                :title="g.subtitle.status === 'failed' ? 'Retry' : 'Resume'"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-              <button
-                v-if="g.subtitle.status === 'failed'"
-                class="action-btn restart"
-                @click="restartItem(g.subtitle.id)"
-                title="Restart from scratch (re-fetch URLs)"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
+              <span v-if="g.subtitle.error" class="dl-error-line inline">{{
+                g.subtitle.error
+              }}</span>
+              <div class="dl-actions">
+                <button
+                  v-if="g.subtitle.status === 'downloading'"
+                  class="iconbtn"
+                  title="Pause"
+                  @click="pauseItem(g.subtitle.id)"
                 >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
-                  />
-                </svg>
-              </button>
-              <button
-                v-if="g.subtitle.status !== 'completed' && g.subtitle.status !== 'cancelled'"
-                class="action-btn cancel"
-                @click="cancelItem(g.subtitle.id)"
-                title="Cancel"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.subtitle.status === 'paused' || g.subtitle.status === 'failed'"
+                  class="iconbtn resume"
+                  :title="g.subtitle.status === 'failed' ? 'Retry' : 'Resume'"
+                  @click="resumeItem(g.subtitle.id)"
                 >
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.subtitle.status === 'failed'"
+                  class="iconbtn restart"
+                  title="Restart from scratch (re-fetch URLs)"
+                  @click="restartItem(g.subtitle.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-if="g.subtitle.status !== 'completed' && g.subtitle.status !== 'cancelled'"
+                  class="iconbtn cancel"
+                  title="Cancel"
+                  @click="cancelItem(g.subtitle.id)"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </main>
 </template>
@@ -350,300 +369,373 @@ async function mergeFinished(): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .topbar {
-  padding: 16px 24px;
-  border-bottom: 1px solid #0f3460;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+  padding: 0 var(--pad-x);
+  height: 64px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .topbar h2 {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-family: var(--font-display);
+  font-size: 1.32rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 
 .topbar-actions {
   display: flex;
   gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.clear-btn,
-.merge-btn,
-.retry-all-btn,
-.pause-all-btn,
-.resume-all-btn {
-  padding: 6px 14px;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.8rem;
+.btn {
+  padding: 8px 14px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: all 0.15s;
 }
 
-.clear-btn {
-  background-color: #0f3460;
-  color: #a0a0b8;
+.btn:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
 }
 
-.clear-btn:hover {
-  background-color: #1a4a7a;
-  color: #e0e0e0;
-}
-
-.retry-all-btn {
-  background-color: #e94560;
-  color: white;
-}
-
-.retry-all-btn:hover {
-  background-color: #d63851;
-}
-
-.pause-all-btn {
-  background-color: #f39c12;
-  color: white;
-}
-
-.pause-all-btn:hover {
-  background-color: #d68910;
-}
-
-.resume-all-btn {
-  background-color: #6ab04c;
-  color: white;
-}
-
-.resume-all-btn:hover {
-  background-color: #5a9a3c;
-}
-
-.merge-btn {
-  background-color: #6ab04c;
-  color: white;
-}
-
-.merge-btn:hover {
-  background-color: #5a9a3c;
-}
-
-.merge-btn:disabled {
+.btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-warn {
+  border-color: color-mix(in srgb, var(--st-orange) 40%, transparent);
+  color: var(--st-orange);
+}
+
+.btn-warn:hover {
+  border-color: var(--st-orange);
+  background: color-mix(in srgb, var(--st-orange) 12%, transparent);
+}
+
+.btn-ok {
+  border-color: color-mix(in srgb, var(--st-green) 40%, transparent);
+  color: var(--st-green);
+}
+
+.btn-ok:hover:not(:disabled) {
+  border-color: var(--st-green);
+  background: color-mix(in srgb, var(--st-green) 12%, transparent);
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
+  padding: var(--pad-y) var(--pad-x) 48px;
 }
 
-.status-text {
-  text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
-  padding-top: 100px;
+/* summary */
+.dl-summary {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
 }
 
-.download-list {
+.dl-stat {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
-.episode-group {
-  background-color: #16213e;
-  border-radius: 8px;
-  padding: 12px 16px;
-  border-left: 3px solid #0f3460;
+.dl-stat .n {
+  font-family: var(--font-data);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
 }
 
-.episode-group.downloading {
-  border-left-color: #3498db;
-}
-.episode-group.ready-for-merge {
-  border-left-color: #f39c12;
-}
-.episode-group.merged {
-  border-left-color: #9b59b6;
-}
-.episode-group.merging {
-  border-left-color: #f39c12;
-}
-.episode-group.pending-merge {
-  border-left-color: #f39c12;
-}
-.episode-group.failed {
-  border-left-color: #e94560;
-}
-.episode-group.merge-failed {
-  border-left-color: #e94560;
-}
-.episode-group.paused {
-  border-left-color: #f39c12;
+.dl-stat .n.active {
+  color: var(--st-blue);
 }
 
-.group-header {
+.dl-stat .n.done {
+  color: var(--st-green);
+}
+
+.dl-stat .n.failed {
+  color: var(--st-red);
+}
+
+.dl-stat .l {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* card list */
+.dl-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.dl-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  border-left: 3px solid var(--border-strong);
+  padding: 14px 18px;
+}
+
+.dl-card.downloading {
+  border-left-color: var(--st-blue);
+}
+.dl-card.queued {
+  border-left-color: var(--text-faint);
+}
+.dl-card.paused {
+  border-left-color: var(--st-orange);
+}
+.dl-card.ready-for-merge,
+.dl-card.pending-merge {
+  border-left-color: var(--st-orange);
+}
+.dl-card.merging {
+  border-left-color: var(--st-green);
+}
+.dl-card.merged {
+  border-left-color: var(--st-purple);
+}
+.dl-card.failed,
+.dl-card.merge-failed {
+  border-left-color: var(--st-red);
+}
+
+/* card head */
+.dl-head {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
 }
 
-.group-title {
-  font-size: 0.9rem;
-  color: #e0e0e0;
-  font-weight: 600;
+.dl-poster {
+  width: 40px;
+  aspect-ratio: 2 / 3;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.dl-poster svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dl-head-info {
   flex: 1;
   min-width: 0;
+}
+
+.dl-title {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.group-quality {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.7rem;
+.dl-ep {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-data);
+  font-size: 0.74rem;
+  color: var(--text-3);
+}
+
+.dl-status {
+  font-size: 0.68rem;
   font-weight: 700;
-  background-color: #1a4a2e;
-  color: #6ab04c;
-  flex-shrink: 0;
-}
-
-.group-status {
-  font-size: 0.7rem;
-  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dl-status.downloading {
+  color: var(--st-blue);
+}
+.dl-status.queued {
+  color: var(--text-3);
+}
+.dl-status.paused,
+.dl-status.ready-for-merge,
+.dl-status.pending-merge {
+  color: var(--st-orange);
+}
+.dl-status.merging {
+  color: var(--st-green);
+}
+.dl-status.merged {
+  color: var(--st-purple);
+}
+.dl-status.failed,
+.dl-status.merge-failed {
+  color: var(--st-red);
+}
+
+/* merge banner */
+.dl-merge-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-btn);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.dl-merge-banner.merging {
+  color: var(--st-green);
+  background: color-mix(in srgb, var(--st-green) 9%, transparent);
+}
+
+.dl-merge-banner.merged {
+  color: var(--st-purple);
+  background: color-mix(in srgb, var(--st-purple) 9%, transparent);
+}
+
+.mb-label {
   flex-shrink: 0;
 }
 
-.group-status.downloading {
-  color: #3498db;
-}
-.group-status.queued {
-  color: #6a6a8a;
-}
-.group-status.paused {
-  color: #f39c12;
-}
-.group-status.ready-for-merge {
-  color: #f39c12;
-}
-.group-status.merged {
-  color: #9b59b6;
-}
-.group-status.merging {
-  color: #f39c12;
-}
-.group-status.pending-merge {
-  color: #f39c12;
-}
-.group-status.failed {
-  color: #e94560;
-}
-.group-status.merge-failed {
-  color: #e94560;
+.dl-merge-banner.merging .pbar > span {
+  background: var(--st-green);
 }
 
-.merge-error {
-  font-size: 0.7rem;
-  color: #e94560;
+.mb-pct {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  flex-shrink: 0;
 }
 
+/* stream rows */
 .dl-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0;
+  gap: 10px;
+  margin-top: 12px;
   flex-wrap: wrap;
 }
 
 .dl-kind {
-  font-size: 0.7rem;
+  font-family: var(--font-data);
+  font-size: 0.64rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background-color: #0f3460;
-  color: #3498db;
+  letter-spacing: 0.08em;
+  color: var(--st-blue);
+  width: 42px;
   flex-shrink: 0;
-  width: 40px;
-  text-align: center;
 }
 
 .dl-kind.sub {
-  color: #6ab04c;
+  color: var(--st-green);
 }
 
-.dl-status-badge {
-  font-size: 0.7rem;
+.r-status {
+  font-size: 0.74rem;
   font-weight: 600;
-  width: 80px;
+  width: 86px;
   flex-shrink: 0;
+  color: var(--text-3);
 }
 
-.dl-status-badge.downloading {
-  color: #3498db;
+.r-status.downloading {
+  color: var(--st-blue);
 }
-.dl-status-badge.queued {
-  color: #6a6a8a;
+.r-status.queued {
+  color: var(--text-3);
 }
-.dl-status-badge.paused {
-  color: #f39c12;
+.r-status.paused {
+  color: var(--st-orange);
 }
-.dl-status-badge.completed {
-  color: #6ab04c;
+.r-status.completed {
+  color: var(--st-green);
 }
-.dl-status-badge.failed {
-  color: #e94560;
+.r-status.failed {
+  color: var(--st-red);
 }
 
-.progress-bar-wrap {
-  flex: 1;
-  height: 4px;
-  background-color: #0f3460;
-  border-radius: 2px;
-  overflow: hidden;
+.pbar.thin {
   min-width: 80px;
 }
 
-.progress-bar {
-  height: 100%;
-  background-color: #3498db;
-  border-radius: 2px;
-  transition: width 0.3s ease;
+.pbar.thin.paused > span {
+  background: var(--st-orange);
 }
 
-.progress-bar.paused {
-  background-color: #f39c12;
-}
-.progress-bar.merge {
-  background-color: #9b59b6;
-}
-.merge-bar {
-  max-width: 120px;
-}
-.progress-bar.sub {
-  background-color: #6ab04c;
+.pbar.thin.sub > span {
+  background: var(--st-green);
 }
 
-.dl-speed,
-.dl-eta,
-.dl-size {
-  font-size: 0.7rem;
-  color: #6a6a8a;
+.r-speed,
+.r-eta,
+.r-size {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-3);
   flex-shrink: 0;
 }
 
-.dl-error {
-  font-size: 0.7rem;
-  color: #e94560;
+.dl-error-line {
+  margin-top: 8px;
+  font-size: 0.74rem;
+  color: var(--st-red);
+}
+
+.dl-error-line.inline {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 .dl-actions {
@@ -653,13 +745,13 @@ async function mergeFinished(): Promise<void> {
   flex-shrink: 0;
 }
 
-.action-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 4px;
-  background-color: #0f3460;
-  color: #a0a0b8;
+.iconbtn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  background: var(--surface-2);
+  color: var(--text-2);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -667,26 +759,33 @@ async function mergeFinished(): Promise<void> {
   transition: all 0.15s;
 }
 
-.action-btn:hover {
-  background-color: #1a4a7a;
-  color: #e0e0e0;
+.iconbtn svg {
+  width: 14px;
+  height: 14px;
 }
-.action-btn.resume {
-  color: #6ab04c;
+
+.iconbtn:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
 }
-.action-btn.resume:hover {
-  color: #8ee070;
+
+.iconbtn.resume {
+  color: var(--st-green);
 }
-.action-btn.restart {
-  color: #f0932b;
+.iconbtn.resume:hover {
+  border-color: var(--st-green);
 }
-.action-btn.restart:hover {
-  color: #f5b041;
+.iconbtn.restart {
+  color: var(--st-orange);
 }
-.action-btn.cancel {
-  color: #e94560;
+.iconbtn.restart:hover {
+  border-color: var(--st-orange);
 }
-.action-btn.cancel:hover {
-  color: #ff6b81;
+.iconbtn.cancel {
+  color: var(--st-red);
+}
+.iconbtn.cancel:hover {
+  border-color: var(--st-red);
 }
 </style>

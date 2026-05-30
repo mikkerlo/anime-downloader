@@ -108,15 +108,18 @@ describe('DownloadsView — status left-border card class', () => {
     }
   ]
 
-  it.each(cases)('maps a $label group to the .$expected card class', async ({ group, expected }) => {
-    stubApi([group])
-    const wrapper = mount(DownloadsView)
-    await flushPromises()
+  it.each(cases)(
+    'maps a $label group to the .$expected card class',
+    async ({ group, expected }) => {
+      stubApi([group])
+      const wrapper = mount(DownloadsView)
+      await flushPromises()
 
-    const card = wrapper.find('.dl-card')
-    expect(card.exists()).toBe(true)
-    expect(card.classes()).toContain(expected)
-  })
+      const card = wrapper.find('.dl-card')
+      expect(card.exists()).toBe(true)
+      expect(card.classes()).toContain(expected)
+    }
+  )
 
   it('renders the active/done/failed summary counts from group states', async () => {
     stubApi([

@@ -204,10 +204,7 @@ async function mergeFinished(): Promise<void> {
               <span class="dl-status" :class="groupStatus(g)">{{ statusLabel(g) }}</span>
             </div>
 
-            <div
-              v-if="g.mergeStatus === 'merging'"
-              class="dl-merge-banner merging"
-            >
+            <div v-if="g.mergeStatus === 'merging'" class="dl-merge-banner merging">
               <span class="mb-label">Merging</span>
               <div class="pbar thin">
                 <span :style="{ width: (g.mergePercent || 0) + '%' }"></span>
@@ -222,10 +219,7 @@ async function mergeFinished(): Promise<void> {
             <div v-else-if="groupStatus(g) === 'merged'" class="dl-merge-banner merged">
               <span class="mb-label">Merged to MKV</span>
             </div>
-            <div
-              v-if="g.mergeStatus === 'failed' && g.mergeError"
-              class="dl-error-line"
-            >
+            <div v-if="g.mergeStatus === 'failed' && g.mergeError" class="dl-error-line">
               {{ g.mergeError }}
             </div>
 
@@ -539,7 +533,6 @@ async function mergeFinished(): Promise<void> {
 .dl-card.pending-merge {
   border-left-color: var(--st-orange);
 }
-.dl-card.completed,
 .dl-card.merging {
   border-left-color: var(--st-green);
 }

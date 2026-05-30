@@ -81,12 +81,12 @@ function onInput(e: Event): void {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6a6a8a;
+  background: var(--text-faint);
 }
 
 .sp-dot.sp-idle,
 .sp-dot.sp-disconnected {
-  background: #6a6a8a;
+  background: var(--text-faint);
 }
 
 .sp-dot.sp-connecting,
@@ -94,11 +94,11 @@ function onInput(e: Event): void {
 .sp-dot.sp-tls-handshake,
 .sp-dot.sp-hello-sent,
 .sp-dot.sp-reconnecting {
-  background: #f0932b;
+  background: var(--st-orange);
 }
 
 .sp-dot.sp-ready {
-  background: #6ab04c;
+  background: var(--st-green);
 }
 
 .sp-label {
@@ -115,7 +115,7 @@ function onInput(e: Event): void {
 
 .sp-status-line {
   font-size: 0.8rem;
-  color: #a0a0b8;
+  color: var(--text-2);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -123,31 +123,36 @@ function onInput(e: Event): void {
 
 .sp-tls-badge {
   font-size: 0.65rem;
-  background: #0f3460;
-  color: #e0e0e0;
+  background: var(--surface-3);
+  color: var(--text);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .sp-error-line {
-  color: #e94560;
+  color: var(--st-red);
   font-size: 0.75rem;
 }
 
 .sp-label-row {
   font-size: 0.75rem;
-  color: #a0a0b8;
+  color: var(--text-2);
   margin-top: 4px;
 }
 
 .sp-input {
   width: 100%;
-  padding: 6px 8px;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 4px;
-  color: #e0e0e0;
+  padding: 7px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text);
   font-size: 0.8rem;
+}
+
+.sp-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .sp-input:disabled {
@@ -155,29 +160,30 @@ function onInput(e: Event): void {
 }
 
 .sp-action-btn {
-  padding: 6px 12px;
-  background: #e94560;
+  padding: 7px 12px;
+  background: var(--accent);
   border: none;
-  border-radius: 4px;
-  color: #fff;
+  border-radius: var(--radius-btn);
+  color: var(--accent-ink);
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s var(--ease);
 }
 
 .sp-action-btn:hover {
-  background: #d13b53;
+  background: var(--accent-hover);
 }
 
 .sp-users-list {
-  border-top: 1px solid #0f3460;
+  border-top: 1px solid var(--border-soft);
   padding-top: 6px;
   margin-top: 4px;
 }
 
 .sp-users-title {
   font-size: 0.75rem;
-  color: #a0a0b8;
+  color: var(--text-2);
   margin-bottom: 4px;
 }
 
@@ -198,17 +204,17 @@ function onInput(e: Event): void {
 }
 
 .sp-user-dot-ready {
-  background: #4ade80;
+  background: var(--st-green);
 }
 
 .sp-user-dot-buffering {
-  background: #f59e0b;
+  background: var(--st-orange);
 }
 
 .sp-user-file {
   grid-column: 2;
   font-size: 0.7rem;
-  color: #6a6a8a;
+  color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

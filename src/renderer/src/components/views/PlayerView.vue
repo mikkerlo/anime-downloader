@@ -8,6 +8,7 @@ import { useRemux } from '../../composables/use-remux';
 import { useSkipMarkers } from '../../composables/use-skip-markers';
 import { useSyncplayClient } from '../../composables/use-syncplay-client';
 import PlayerTitleBar from '../player/PlayerTitleBar.vue';
+import EpisodeNavButton from '../player/EpisodeNavButton.vue';
 import TranslationMenu from '../player/TranslationMenu.vue';
 import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
@@ -1224,6 +1225,17 @@ const currentTranslationLabel = computed(() => {
   return `${tr.label}`;
 });
 
+// Two-line title-bar subtitle (mock parity, #167): "Episode N of M · 1080p · <translation>".
+const playerSubtitle = computed(() => {
+  const total = props.allEpisodes.length;
+  const epn = currentEpisodeInt.value || activeEpisodeLabel.value;
+  const parts: string[] = [total > 1 ? `Episode ${epn} of ${total}` : `Episode ${epn}`];
+  if (selectedHeight.value) parts.push(`${selectedHeight.value}p`);
+  const tr = currentTranslationLabel.value;
+  if (tr && tr !== 'Translation') parts.push(tr);
+  return parts.join(' · ');
+});
+
 const translationTypeGroups = computed(() => {
   const groups: Record<string, { id: number; label: string; type: string; height: number }[]> = {};
   for (const tr of activeTranslations.value) {
@@ -1928,15 +1940,9 @@ const bufferedProgress = computed(() => {
       <PlayerTitleBar
         v-show="showControls"
         :anime-name="animeName"
-        :episode-label="activeEpisodeLabel"
-        :multi-episode="props.allEpisodes.length > 1"
-        :can-prev="canPrev"
-        :can-next="canNext"
-        :navigating="navigating"
+        :subtitle="playerSubtitle"
         :prefetch-in-flight="prefetchInFlight"
         @close="emit('close')"
-        @go-prev="goToEpisode('prev')"
-        @go-next="goToEpisode('next')"
       />
     </transition>
 
@@ -1970,6 +1976,7 @@ const bufferedProgress = computed(() => {
           <div class="seek-track">
             <div class="seek-buffered" :style="{ width: bufferedProgress + '%' }" />
             <div class="seek-progress" :style="{ width: seekProgress + '%' }" />
+            <div class="seek-knob" :style="{ left: seekProgress + '%' }" />
             <div
               v-if="currentEpisodeSkip?.op && duration > 0"
               class="seek-band seek-band-op"
@@ -2016,15 +2023,31 @@ const bufferedProgress = computed(() => {
         </div>
 
         <div class="controls-row">
+          <!-- Previous episode -->
+          <EpisodeNavButton
+            v-if="props.allEpisodes.length > 1"
+            direction="prev"
+            :disabled="!canPrev || navigating"
+            @nav="goToEpisode('prev')"
+          />
+
           <!-- Play/Pause -->
-          <button class="ctrl-btn" @click="togglePlay" :title="playing ? 'Pause' : 'Play'">
-            <svg v-if="!playing" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <button class="ctrl-btn big" @click="togglePlay" :title="playing ? 'Pause' : 'Play'">
+            <svg v-if="!playing" width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
-            <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <svg v-else width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
               <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
             </svg>
           </button>
+
+          <!-- Next episode -->
+          <EpisodeNavButton
+            v-if="props.allEpisodes.length > 1"
+            direction="next"
+            :disabled="!canNext || navigating"
+            @nav="goToEpisode('next')"
+          />
 
           <!-- Volume -->
           <button class="ctrl-btn" @click="toggleMute" :title="muted ? 'Unmute' : 'Mute'">
@@ -2199,101 +2222,80 @@ const bufferedProgress = computed(() => {
   top: 60px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(233, 69, 96, 0.85);
-  color: #fff;
-  padding: 6px 16px;
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 88%, transparent);
+  color: var(--accent-ink);
+  padding: 7px 16px;
+  border-radius: var(--radius-btn);
   font-size: 0.8rem;
+  font-weight: 600;
   z-index: 10;
   pointer-events: none;
 }
 
-.resume-toast {
+.resume-toast,
+.stream-skip-toast,
+.prefetch-toast,
+.syncplay-toast {
   position: absolute;
-  top: 100px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(15, 52, 96, 0.9);
-  color: #e0e0e0;
-  padding: 6px 16px;
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 16px;
+  border-radius: var(--radius-btn);
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
+  backdrop-filter: blur(6px);
 }
 
+.resume-toast,
 .stream-skip-toast {
-  position: absolute;
   top: 100px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(15, 52, 96, 0.9);
-  color: #e0e0e0;
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  z-index: 10;
-  pointer-events: none;
 }
 
 .prefetch-toast {
-  position: absolute;
   top: 140px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(15, 52, 96, 0.9);
-  color: #e0e0e0;
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  z-index: 10;
-  pointer-events: none;
+}
+
+.syncplay-toast {
+  top: 140px;
+  max-width: 60vw;
+  text-align: center;
 }
 
 .mkv-buffering-toast {
   position: absolute;
   top: 100px;
   right: 24px;
-  background: rgba(15, 52, 96, 0.85);
-  color: #e0e0e0;
-  padding: 6px 14px;
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: var(--radius-btn);
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
-}
-
-.syncplay-toast {
-  position: absolute;
-  top: 140px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(15, 52, 96, 0.9);
-  color: #e0e0e0;
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  z-index: 10;
-  pointer-events: none;
-  max-width: 60vw;
-  text-align: center;
+  backdrop-filter: blur(6px);
 }
 
 .syncplay-paused-by {
   position: absolute;
   top: 72px;
-  left: 16px;
+  left: 24px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(15, 52, 96, 0.85);
-  color: #e0e0e0;
-  padding: 6px 12px;
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text);
+  padding: 7px 12px;
+  border-radius: var(--radius-btn);
   font-size: 0.8rem;
   z-index: 10;
   pointer-events: none;
-  border: 1px solid rgba(96, 150, 255, 0.4);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(6px);
 }
 
 .syncplay-paused-icon {
@@ -2315,19 +2317,20 @@ const bufferedProgress = computed(() => {
 }
 
 .remux-modal {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
   padding: 2rem 2.5rem;
   text-align: center;
   min-width: 320px;
+  box-shadow: var(--shadow-card);
 }
 
 .remux-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid #0f3460;
-  border-top-color: #e94560;
+  border: 3px solid var(--surface-3);
+  border-top-color: var(--accent);
   border-radius: 50%;
   margin: 0 auto 1rem;
   animation: remux-spin 0.8s linear infinite;
@@ -2340,19 +2343,21 @@ const bufferedProgress = computed(() => {
 }
 
 .remux-title {
+  font-family: var(--font-display);
   font-size: 1.1rem;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-weight: 700;
+  color: var(--text);
   margin-bottom: 0.5rem;
 }
 
 .remux-error-title {
-  color: #e94560;
+  color: var(--st-red);
 }
 
 .remux-hint {
   font-size: 0.8rem;
-  color: #6a6a8a;
+  color: var(--text-3);
+  line-height: 1.5;
 }
 
 .hevc-prompt-buttons {
@@ -2365,27 +2370,29 @@ const bufferedProgress = computed(() => {
 .mkv-cancel-btn {
   margin-left: 0.75rem;
   background: transparent;
-  border: 1px solid #e94560;
-  color: #e94560;
-  border-radius: 4px;
-  padding: 2px 8px;
+  border: 1px solid var(--st-red);
+  color: var(--st-red);
+  border-radius: var(--radius-btn);
+  padding: 3px 9px;
   cursor: pointer;
   font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .remux-close-btn {
   margin-top: 1rem;
-  background: #e94560;
+  background: var(--accent);
   border: none;
-  color: #fff;
-  padding: 8px 24px;
-  border-radius: 6px;
+  color: var(--accent-ink);
+  padding: 9px 24px;
+  border-radius: var(--radius-btn);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
 .remux-close-btn:hover {
-  background: #d63050;
+  background: var(--accent-hover);
 }
 
 /* Title-bar styles moved to player/PlayerTitleBar.vue. */
@@ -2434,42 +2441,56 @@ const bufferedProgress = computed(() => {
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, transparent 100%);
-  padding: 20px 16px 12px;
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.82) 0%, transparent 100%);
+  padding: 40px 24px 20px;
   z-index: 5;
 }
 
 /* Seek bar */
 .seek-container {
   position: relative;
-  height: 20px;
+  height: 16px;
   display: flex;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 16px;
 }
 
 .seek-track {
   position: absolute;
   left: 0;
   right: 0;
-  height: 4px;
+  height: 5px;
   background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
+  border-radius: 999px;
   pointer-events: none;
 }
 
 .seek-buffered {
   position: absolute;
   height: 100%;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
 }
 
 .seek-progress {
   position: absolute;
   height: 100%;
-  background: #e94560;
-  border-radius: 2px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.seek-knob {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .seek-band {
@@ -2491,38 +2512,39 @@ const bufferedProgress = computed(() => {
 }
 
 .seek-band-op {
-  background: #4caf50;
+  background: var(--st-green);
 }
 
 .seek-band-ed {
-  background: #2196f3;
+  background: var(--st-blue);
 }
 
 /* Skip OP/ED overlay button — anchored bottom-right of the player so it
    doesn't obscure the seek bar but is still mouse-reachable while paused. */
 .skip-button-overlay {
   position: absolute;
-  right: 24px;
-  bottom: 90px;
+  right: 32px;
+  bottom: 120px;
   z-index: 12;
   display: inline-flex;
   align-items: center;
-  background: rgba(0, 0, 0, 0.78);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 8px;
-  padding: 10px 18px;
-  font-size: 0.95rem;
-  font-weight: 600;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+  border: none;
+  border-radius: var(--radius-btn);
+  padding: 12px 22px;
+  font-size: 0.9rem;
+  font-weight: 700;
   cursor: pointer;
-  letter-spacing: 0.02em;
+  gap: 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
   transition:
-    background 0.12s,
-    transform 0.12s;
+    background 0.15s var(--ease),
+    transform 0.15s var(--ease);
 }
 
 .skip-button-overlay:hover {
-  background: rgba(20, 20, 20, 0.92);
+  background: #fff;
   transform: translateY(-1px);
 }
 
@@ -2562,14 +2584,15 @@ const bufferedProgress = computed(() => {
 
 .seek-tooltip {
   position: absolute;
-  top: -28px;
+  top: -30px;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.88);
   color: #fff;
-  font-size: 0.75rem;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 3px 7px;
+  border-radius: var(--radius-btn);
   pointer-events: none;
   white-space: nowrap;
   user-select: none;
@@ -2579,47 +2602,65 @@ const bufferedProgress = computed(() => {
 .controls-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 14px;
 }
 
+/* `.pctrl` from the mock — transparent, opacity-only hover, no box. */
 .ctrl-btn {
   background: none;
   border: none;
   color: #fff;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
+  padding: 4px;
+  display: grid;
+  place-items: center;
   font-size: 0.8rem;
   font-weight: 600;
+  opacity: 0.86;
+  transition: opacity 0.15s var(--ease);
 }
 
 .ctrl-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  opacity: 1;
+}
+
+.ctrl-btn.big svg {
+  width: 30px;
+  height: 30px;
 }
 
 .volume-slider {
   width: 80px;
-  height: 4px;
+  height: 5px;
   -webkit-appearance: none;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 2px;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
   cursor: pointer;
 }
 
 .volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 0;
   border-radius: 50%;
   background: #fff;
   cursor: pointer;
 }
 
 .time-display {
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.82);
+  font-family: var(--font-data);
+  font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
@@ -2636,8 +2677,9 @@ const bufferedProgress = computed(() => {
  * directly on the play/pause/volume/fullscreen buttons — keep the rule
  * here as well so the parent's scoped scope sees it. */
 .no-gpu-hint {
-  color: #6a6a8a;
+  color: var(--text-3);
   font-size: 0.7rem;
+  font-weight: 600;
   padding: 0 4px;
 }
 

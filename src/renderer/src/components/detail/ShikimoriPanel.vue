@@ -20,9 +20,6 @@ const {
   shikiLoading,
   shikiSaving,
   shikiError,
-  shikiDetails,
-  descExpanded,
-  shikiDetailsDescription,
   syncState,
   lastSyncError,
   shikiSave,
@@ -42,53 +39,97 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
 </script>
 
 <template>
-  <div class="shiki-panel">
+  <div class="side-panel">
     <template v-if="shikiUser">
-      <div class="shiki-header">
-        <span class="shiki-label">Shikimori</span>
+      <h4>
+        <span class="sk-logo">Sh</span>Shikimori
         <a
           :href="`https://shikimori.one/animes/${props.anime.myAnimeListId}`"
           target="_blank"
-          class="shiki-link"
+          class="sk-open"
+          title="Open on Shikimori"
         >
-          Open on Shikimori
+          Open ↗
         </a>
-      </div>
-      <div v-if="shikiLoading" class="shiki-loading">Loading...</div>
-      <div v-else class="shiki-controls">
-        <select v-model="shikiStatus" class="select shiki-select">
-          <option v-for="s in SHIKI_STATUSES" :key="s.value" :value="s.value">
-            {{ s.label }}
-          </option>
-        </select>
-        <div class="shiki-episodes">
-          <span>Episodes:</span>
+      </h4>
+      <div v-if="shikiLoading" class="shiki-loading">Loading…</div>
+      <template v-else>
+        <div class="sk-field">
+          <span class="select-label">Status</span>
+          <div class="status-seg">
+            <button
+              v-for="s in SHIKI_STATUSES"
+              :key="s.value"
+              :class="{ on: shikiStatus === s.value }"
+              @click="shikiStatus = s.value"
+            >
+              {{ s.label }}
+            </button>
+          </div>
+        </div>
+        <div class="sk-field">
+          <span class="select-label">
+            Your score
+            <button v-if="shikiScore > 0" type="button" class="sk-clear" @click="shikiScore = 0">
+              Clear
+            </button>
+          </span>
+          <div class="score-pick">
+            <button
+              v-for="n in 10"
+              :key="n"
+              :class="{ on: shikiScore === n }"
+              @click="shikiScore = n"
+            >
+              {{ n }}
+            </button>
+          </div>
+        </div>
+        <div class="sk-field sk-inline">
+          <label class="select-label" for="shiki-ep">Episodes</label>
+          <div class="sk-inline-control">
+            <input
+              id="shiki-ep"
+              v-model.number="shikiEpisodes"
+              type="number"
+              min="0"
+              :max="props.anime.numberOfEpisodes || undefined"
+              class="sk-num-input"
+            />
+            <span v-if="props.anime.numberOfEpisodes" class="sk-ep-total"
+              >/ {{ props.anime.numberOfEpisodes }}</span
+            >
+          </div>
+        </div>
+        <div class="sk-field sk-inline" title="Number of times you've rewatched this anime">
+          <label class="select-label" for="shiki-rw">Rewatches</label>
           <input
-            v-model.number="shikiEpisodes"
+            id="shiki-rw"
+            v-model.number="shikiRewatches"
             type="number"
             min="0"
-            :max="props.anime.numberOfEpisodes || undefined"
-            class="shiki-ep-input"
+            class="sk-num-input"
           />
-          <span v-if="props.anime.numberOfEpisodes" class="shiki-ep-total"
-            >/ {{ props.anime.numberOfEpisodes }}</span
-          >
         </div>
-        <div class="shiki-episodes">
-          <span>Score:</span>
-          <select v-model.number="shikiScore" class="select shiki-score-select">
-            <option :value="0">—</option>
-            <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
-          </select>
+        <div v-if="props.anime.numberOfEpisodes" class="sk-field">
+          <span class="select-label">Progress</span>
+          <div class="sk-progress">
+            <div class="pbar">
+              <span
+                :style="{
+                  width:
+                    Math.min(100, Math.round(((shikiEpisodes || 0) / props.anime.numberOfEpisodes) * 100)) +
+                    '%'
+                }"
+              ></span>
+            </div>
+            <span class="ptext">{{ shikiEpisodes || 0 }} / {{ props.anime.numberOfEpisodes }}</span>
+          </div>
         </div>
-        <div class="shiki-episodes" title="Number of times you've rewatched this anime">
-          <span>Rewatches:</span>
-          <input v-model.number="shikiRewatches" type="number" min="0" class="shiki-ep-input" />
-        </div>
-        <button class="shiki-save-btn" :disabled="shikiSaving" @click="shikiSave">
-          {{ shikiSaving ? 'Saving...' : 'Save' }}
+        <button class="sk-save-btn" :disabled="shikiSaving" @click="shikiSave">
+          {{ shikiSaving ? 'Saving…' : 'Save' }}
         </button>
-      </div>
+      </template>
       <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
       <div
         v-if="offlineQueueLength > 0"
@@ -139,156 +180,249 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           Retry now
         </button>
       </div>
-      <div v-if="shikiDetails" class="shiki-details">
-        <div v-if="shikiDetails.genres?.length" class="shiki-genres">
-          <span v-for="g in shikiDetails.genres" :key="g.id" class="shiki-genre-tag">
-            {{ g.russian || g.name }}
-          </span>
-        </div>
-        <p
-          v-if="shikiDetailsDescription"
-          class="shiki-description"
-          :class="{ collapsed: !descExpanded }"
-        >
-          {{ shikiDetailsDescription }}
-        </p>
-        <button
-          v-if="shikiDetailsDescription && shikiDetailsDescription.length > 320"
-          type="button"
-          class="shiki-desc-toggle"
-          @click="descExpanded = !descExpanded"
-        >
-          {{ descExpanded ? 'Show less' : 'Show more' }}
-        </button>
-      </div>
     </template>
-    <div v-else class="shiki-loading">Loading...</div>
+    <div v-else class="shiki-loading">Loading…</div>
   </div>
 </template>
 
 <style scoped>
-.shiki-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
+.side-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 18px;
 }
 
-.shiki-header {
+.side-panel h4 {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin-bottom: 14px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
+  gap: 8px;
 }
 
-.shiki-label {
-  font-size: 0.85rem;
+.side-panel h4 .sk-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--st-blue);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 800;
+}
+
+.sk-open {
+  margin-left: auto;
+  font-size: 0.74rem;
   font-weight: 600;
-  color: #a0a0b8;
-}
-
-.shiki-link {
-  font-size: 0.8rem;
-  color: #3498db;
+  color: var(--st-blue);
   text-decoration: none;
 }
 
-.shiki-link:hover {
+.sk-open:hover {
   text-decoration: underline;
 }
 
 .shiki-loading {
   font-size: 0.85rem;
-  color: #6a6a8a;
+  color: var(--text-3);
 }
 
-.shiki-controls {
+.sk-field {
+  margin-bottom: 14px;
+}
+
+.select-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sk-clear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sk-clear:hover {
+  color: var(--accent);
+}
+
+.status-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background: var(--surface-2);
+  padding: 4px;
+  border-radius: var(--radius-btn);
+}
+
+.status-seg button {
+  padding: 8px 4px;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius-btn) - 2px);
+  color: var(--text-3);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.status-seg button:hover {
+  color: var(--text);
+}
+
+.status-seg button.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.score-pick {
+  display: flex;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
-.shiki-select {
-  min-width: 130px;
+.score-pick button {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--font-data);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.12s;
 }
 
-.shiki-episodes {
+.score-pick button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.score-pick button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.sk-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sk-inline .select-label {
+  margin-bottom: 0;
+}
+
+.sk-inline-control {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.85rem;
-  color: #a0a0b8;
 }
 
-.shiki-ep-input {
-  width: 60px;
+.sk-num-input {
+  width: 64px;
   padding: 6px 8px;
-  background-color: #1a1a2e;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #e0e0e0;
-  font-size: 0.85rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text);
+  font-family: var(--font-data);
+  font-size: 0.84rem;
   text-align: center;
 }
 
-.shiki-ep-input:focus {
+.sk-num-input:focus {
   outline: none;
-  border-color: #e94560;
+  border-color: var(--accent);
 }
 
-.shiki-ep-total {
-  color: #6a6a8a;
+.sk-ep-total {
+  color: var(--text-3);
+  font-family: var(--font-data);
+  font-size: 0.8rem;
 }
 
-.shiki-score-select {
-  width: 60px;
+.sk-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.shiki-save-btn {
-  padding: 6px 16px;
-  background-color: #0f3460;
-  border: none;
-  border-radius: 6px;
-  color: #e0e0e0;
+.ptext {
+  font-family: var(--font-data);
+  font-size: 0.76rem;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.sk-save-btn {
+  width: 100%;
+  padding: 9px 16px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-btn);
+  color: var(--accent-ink);
   font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition: all 0.15s;
 }
 
-.shiki-save-btn:hover {
-  background-color: #1a4a7a;
+.sk-save-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
 }
 
-.shiki-save-btn:disabled {
-  opacity: 0.4;
+.sk-save-btn:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .shiki-error {
   margin-top: 8px;
   font-size: 0.8rem;
-  color: #e94560;
+  color: var(--st-red);
 }
 
 .shiki-offline {
-  margin-top: 8px;
+  margin-top: 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  font-size: 0.78rem;
-  color: #f0a75f;
-  background: rgba(240, 167, 95, 0.12);
-  border: 1px solid rgba(240, 167, 95, 0.3);
-  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 0.76rem;
+  color: var(--st-orange);
+  background: color-mix(in srgb, var(--st-orange) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-orange) 32%, transparent);
+  border-radius: var(--radius-btn);
 }
 
 .shiki-offline.shiki-syncing {
-  color: #5e9cd8;
-  background: rgba(94, 156, 216, 0.12);
-  border-color: rgba(94, 156, 216, 0.3);
+  color: var(--st-blue);
+  background: color-mix(in srgb, var(--st-blue) 12%, transparent);
+  border-color: color-mix(in srgb, var(--st-blue) 32%, transparent);
 }
 
 .shiki-offline-spin {
@@ -305,67 +439,15 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   margin-left: 4px;
   padding: 2px 8px;
   font-size: 0.72rem;
-  color: #f0a75f;
+  color: inherit;
   background: transparent;
-  border: 1px solid rgba(240, 167, 95, 0.5);
-  border-radius: 3px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
   cursor: pointer;
+  opacity: 0.85;
 }
 
 .shiki-offline-retry:hover {
-  background: rgba(240, 167, 95, 0.15);
-}
-
-.shiki-details {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(15, 52, 96, 0.6);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.shiki-genres {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.shiki-genre-tag {
-  font-size: 0.72rem;
-  color: #cdd6e4;
-  background: rgba(15, 52, 96, 0.5);
-  border: 1px solid rgba(94, 156, 216, 0.25);
-  border-radius: 10px;
-  padding: 2px 8px;
-}
-
-.shiki-description {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #b8c2d4;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.shiki-description.collapsed {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.shiki-desc-toggle {
-  align-self: flex-start;
-  font-size: 0.75rem;
-  color: #5e9cd8;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-.shiki-desc-toggle:hover {
-  text-decoration: underline;
+  opacity: 1;
 }
 </style>

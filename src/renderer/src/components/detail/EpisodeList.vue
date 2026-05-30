@@ -6,6 +6,7 @@ import { EpisodeListKey } from './keys';
 defineProps<{
   playerMode: 'system' | 'builtin';
   translationType: string;
+  posterUrl: string;
 }>();
 
 const list = inject(EpisodeListKey);
@@ -66,13 +67,14 @@ const {
     <span class="page-info">{{ filteredEpisodes.length }} episodes</span>
   </div>
 
-  <div class="episode-list">
+  <div class="ep-list">
     <EpisodeRow
       v-for="row in episodeRows"
       :key="row.episode.id"
       :row="row"
       :player-mode="playerMode"
       :translation-type="translationType"
+      :poster-url="posterUrl"
     />
   </div>
 </template>
@@ -80,16 +82,17 @@ const {
 <style scoped>
 .status-text {
   text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
-  padding-top: 100px;
+  color: var(--text-faint);
+  font-size: 1.05rem;
+  padding: 40px 0;
 }
 
 .pagination {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .page-btn {
@@ -99,40 +102,43 @@ const {
   min-width: 32px;
   height: 32px;
   padding: 0 8px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  color: #a0a0b8;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-3);
+  font-family: var(--font-data);
   font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
 }
 
 .page-btn:hover:not(:disabled) {
-  border-color: #e94560;
-  color: #e0e0e0;
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .page-btn.active {
-  background-color: #e94560;
-  border-color: #e94560;
-  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .page-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .page-info {
   margin-left: 8px;
-  color: #6a6a8a;
+  color: var(--text-3);
   font-size: 0.8rem;
+  font-family: var(--font-data);
 }
 
-.episode-list {
+.ep-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 </style>

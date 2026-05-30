@@ -42,36 +42,49 @@ function open(entry: ShikiRelatedEntry): void {
 </script>
 
 <template>
-  <div class="related-panel">
-    <div class="related-header" @click="collapsed = !collapsed">
-      <div class="related-header-left">
-        <svg
-          class="related-chevron"
-          :class="{ collapsed }"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          width="14"
-          height="14"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-        </svg>
-        <span class="related-label">Chronology</span>
-      </div>
-      <span v-if="relatedLoading" class="related-summary">Loading...</span>
-      <span v-else-if="props.shikiRelated.length > 0" class="related-summary"
+  <div class="side-panel">
+    <h4 class="panel-toggle" @click="collapsed = !collapsed">
+      <svg
+        class="chrono-icon"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        width="17"
+        height="17"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
+      </svg>
+      Chronology
+      <span v-if="relatedLoading" class="panel-summary">Loading…</span>
+      <span v-else-if="props.shikiRelated.length > 0" class="panel-summary"
         >{{ props.shikiRelated.length }}
         {{ props.shikiRelated.length === 1 ? 'entry' : 'entries' }}</span
       >
-    </div>
-    <div v-if="!collapsed" class="related-body">
-      <div v-if="relatedLoading" class="related-loading">Loading chronology...</div>
-      <div v-else class="related-list">
+      <svg
+        class="panel-chevron"
+        :class="{ collapsed }"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        width="16"
+        height="16"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+      </svg>
+    </h4>
+    <div v-if="!collapsed">
+      <div v-if="relatedLoading" class="panel-muted">Loading chronology…</div>
+      <div v-else class="chrono-list">
         <div
           v-for="entry in props.shikiRelated"
           :key="entry.shikiAnime.id"
-          class="related-row"
+          class="chrono-row"
           :class="{
             clickable: entry.smotretAnime && !entry.isCurrent,
             unavailable: !entry.smotretAnime,
@@ -83,35 +96,39 @@ function open(entry: ShikiRelatedEntry): void {
           @keydown.enter.prevent="open(entry)"
           @keydown.space.prevent="open(entry)"
         >
-          <img
-            :src="entry.smotretAnime?.posterUrlSmall || entry.shikiAnime.image_url || ''"
-            :alt="entry.shikiAnime.name"
-            class="related-thumb"
-            loading="lazy"
-          />
-          <div class="related-info">
-            <div class="related-title">{{ entry.shikiAnime.name }}</div>
-            <div class="related-meta">
-              <span v-if="entry.shikiAnime.kind" class="related-kind">{{
-                KIND_LABELS[entry.shikiAnime.kind] || entry.shikiAnime.kind.toUpperCase()
-              }}</span>
-              <span v-if="entry.shikiAnime.year" class="related-year">{{
-                entry.shikiAnime.year
-              }}</span>
-              <span v-if="entry.relation" class="related-relation">{{ entry.relation }}</span>
-              <span v-if="entry.isCurrent" class="related-current-badge">Current</span>
+          <div class="chrono-thumb" :class="{ cur: entry.isCurrent }">
+            <img
+              :src="entry.smotretAnime?.posterUrlSmall || entry.shikiAnime.image_url || ''"
+              :alt="entry.shikiAnime.name"
+              loading="lazy"
+            />
+          </div>
+          <div class="chrono-info">
+            <div class="chrono-rel">
+              <template v-if="entry.isCurrent">You are here</template>
+              <template v-else>{{
+                entry.relation ||
+                KIND_LABELS[entry.shikiAnime.kind || ''] ||
+                (entry.shikiAnime.kind || '').toUpperCase()
+              }}</template>
+            </div>
+            <div class="chrono-title">{{ entry.shikiAnime.name }}</div>
+            <div
+              v-if="entry.watchStatus || (!entry.smotretAnime && !entry.isCurrent)"
+              class="chrono-tags"
+            >
               <span
                 v-if="entry.watchStatus"
-                class="related-status-badge"
+                class="chrono-status"
                 :class="'status-' + entry.watchStatus"
+                >{{ STATUS_LABELS[entry.watchStatus] }}</span
               >
-                {{ STATUS_LABELS[entry.watchStatus] }}
-              </span>
-              <span v-if="!entry.smotretAnime && !entry.isCurrent" class="related-unavailable-badge"
+              <span v-if="!entry.smotretAnime && !entry.isCurrent" class="chrono-unavail"
                 >Not available</span
               >
             </div>
           </div>
+          <span v-if="entry.shikiAnime.year" class="chrono-year">{{ entry.shikiAnime.year }}</span>
         </div>
       </div>
     </div>
@@ -119,193 +136,183 @@ function open(entry: ShikiRelatedEntry): void {
 </template>
 
 <style scoped>
-.related-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
+.side-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 18px;
 }
 
-.related-header {
+.panel-toggle {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 700;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
 }
 
-.related-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.chrono-icon {
+  color: var(--st-blue);
+  flex-shrink: 0;
 }
 
-.related-chevron {
-  color: #a0a0b8;
-  transition: transform 0.15s;
+.panel-summary {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-3);
+  margin-left: auto;
+  white-space: nowrap;
 }
 
-.related-chevron.collapsed {
+.panel-chevron {
+  color: var(--text-3);
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: transform 0.2s var(--ease);
+}
+
+.panel-chevron.collapsed {
   transform: rotate(-90deg);
 }
 
-.related-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
+.panel-muted {
+  margin-top: 12px;
+  font-size: 0.82rem;
+  color: var(--text-3);
 }
 
-.related-summary {
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.related-body {
-  margin-top: 10px;
-}
-
-.related-loading {
-  font-size: 0.85rem;
-  color: #6a6a8a;
-}
-
-.related-list {
+.chrono-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  margin-top: 6px;
 }
 
-.related-row {
+.chrono-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  transition: background-color 0.1s;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 0;
+  border-top: 1px solid var(--border-soft);
+  transition: opacity 0.15s;
 }
 
-.related-row.clickable {
+.chrono-row:first-of-type {
+  border-top: none;
+}
+
+.chrono-row.clickable {
   cursor: pointer;
 }
 
-.related-row.clickable:hover,
-.related-row.clickable:focus-visible {
-  background-color: #1a2a4d;
+.chrono-row.clickable:hover,
+.chrono-row.clickable:focus-visible {
+  opacity: 0.7;
   outline: none;
 }
 
-.related-row.unavailable {
+.chrono-row.clickable:hover .chrono-title {
+  color: var(--accent);
+}
+
+.chrono-row.unavailable {
   opacity: 0.55;
 }
 
-.related-row.current {
-  background-color: #0f3460;
+.chrono-thumb {
+  width: 34px;
+  min-width: 34px;
+  aspect-ratio: 2 / 3;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-2);
 }
 
-.related-thumb {
-  width: 40px;
-  height: 56px;
+.chrono-thumb.cur {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.chrono-thumb img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 4px;
-  flex-shrink: 0;
-  background-color: #0f3460;
+  display: block;
 }
 
-.related-info {
+.chrono-info {
   flex: 1;
   min-width: 0;
 }
 
-.related-title {
-  color: #e0e0e0;
-  font-size: 0.9rem;
+.chrono-rel {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.chrono-row.current .chrono-rel {
+  color: var(--accent);
+}
+
+.chrono-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.15s;
 }
 
-.related-meta {
+.chrono-tags {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 3px;
   flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
 }
 
-.related-kind {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: #6a6a8a;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.chrono-status,
+.chrono-unavail {
+  font-size: 0.66rem;
+  font-weight: 700;
 }
 
-.related-year {
-  font-size: 0.72rem;
-  color: #6a6a8a;
+.chrono-unavail {
+  color: var(--text-faint);
 }
 
-.related-relation {
-  font-size: 0.78rem;
-  color: #a0a0b8;
-}
-
-.related-current-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background-color: #e9456033;
-  color: #e94560;
-  white-space: nowrap;
-}
-
-.related-status-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.related-unavailable-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  background-color: #6a6a8a1a;
-  color: #6a6a8a;
-  white-space: nowrap;
-}
-
-.status-watching {
-  background-color: #27ae601a;
-  color: #6ab04c;
+.status-watching,
+.status-rewatching {
+  color: var(--st-green);
 }
 
 .status-completed {
-  background-color: #3498db1a;
-  color: #3498db;
+  color: var(--st-blue);
 }
 
 .status-planned {
-  background-color: #9b59b61a;
-  color: #9b59b6;
+  color: var(--st-purple);
 }
 
 .status-on_hold {
-  background-color: #f39c121a;
-  color: #f39c12;
+  color: var(--st-orange);
 }
 
 .status-dropped {
-  background-color: #e945601a;
-  color: #e94560;
+  color: var(--st-red);
 }
 
-.status-rewatching {
-  background-color: #1abc9c1a;
-  color: #1abc9c;
+.chrono-year {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-3);
+  flex-shrink: 0;
 }
 </style>

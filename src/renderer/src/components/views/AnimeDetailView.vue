@@ -418,187 +418,280 @@ async function onPosterError(): Promise<void> {
   const cached = await window.api.getCachedPoster(props.animeId);
   if (cached) posterSrc.value = cached;
 }
+
+// The hero owns the synopsis + genres. Prefer the smotret-anime data and fall
+// back to the Shikimori details so titles without a smotret description/genres
+// still show them (the Shikimori panel no longer renders its own copy).
+const SYNOPSIS_CLAMP = 320;
+const synopsisExpanded = ref(false);
+
+const synopsisText = computed<string>(() => {
+  const local = anime.value?.descriptions?.[0]?.value?.trim();
+  return local || shikimori.shikiDetailsDescription.value || '';
+});
+
+const genreTags = computed<{ key: string; label: string }[]>(() => {
+  const local = anime.value?.genres;
+  if (local?.length) return local.map((g) => ({ key: `a${g.id}`, label: g.title }));
+  const shiki = shikimori.shikiDetails.value?.genres;
+  if (shiki?.length) return shiki.map((g) => ({ key: `s${g.id}`, label: g.russian || g.name }));
+  return [];
+});
 </script>
 
 <template>
   <main class="detail-view">
-    <header class="topbar">
-      <button class="back-btn" @click="libraryStore.closeAnime()">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          width="18"
-          height="18"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
-          />
-        </svg>
-        Back
-      </button>
-    </header>
-
-    <div v-if="loading" class="status-text">Loading...</div>
+    <div v-if="loading" class="status-text">Loading…</div>
 
     <div v-else-if="anime" class="body">
-      <div class="anime-header">
-        <div class="poster-col">
-          <img :src="posterSrc" :alt="anime.title" class="detail-poster" @error="onPosterError" />
-          <button
-            class="continue-btn"
-            :disabled="!continueReady"
-            :title="continueReady ? 'Continue watching' : 'Loading...'"
-            @click="continueWatching"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            {{ continueLabel }}
-          </button>
-          <button class="library-btn" :class="{ active: isStarred }" @click="toggleStar">
-            <svg
-              viewBox="0 0 24 24"
-              :fill="isStarred ? 'currentColor' : 'none'"
-              stroke="currentColor"
-              stroke-width="1.5"
-              width="14"
-              height="14"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
-              />
-            </svg>
-            {{ isStarred ? 'In Library' : 'Add to Library' }}
-          </button>
-          <button
-            v-if="canAutoDl || autoDlSubscription"
-            class="library-btn auto-dl-btn"
-            :class="{ active: !!autoDlSubscription }"
-            :disabled="autoDlSaving || (!canAutoDl && !autoDlSubscription)"
-            :title="autoDlTooltip"
-            @click="toggleAutoDl"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              :fill="autoDlSubscription ? 'currentColor' : 'none'"
-              stroke="currentColor"
-              stroke-width="1.5"
-              width="14"
-              height="14"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75"
-              />
-            </svg>
-            {{ autoDlSubscription ? 'Auto-download on' : 'Auto-download' }}
-          </button>
-          <button v-if="isDownloaded" class="cleanup-btn" @click="cleanupModalOpen = true">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              width="14"
-              height="14"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
-              />
-            </svg>
-            Cleanup files…
-          </button>
+      <div class="detail-hero">
+        <div class="detail-backdrop">
+          <div class="bd-fill" :style="{ backgroundImage: `url(${posterSrc})` }"></div>
         </div>
-        <div class="anime-info">
-          <h2 class="anime-title">
-            {{ getAnimeName() }}
-            <span v-if="isOffline" class="offline-badge">OFFLINE</span>
-          </h2>
-          <div class="anime-meta">
-            <span v-if="anime.typeTitle">{{ anime.typeTitle }}</span>
-            <span v-if="anime.year"> · {{ anime.year }}</span>
-            <span v-if="anime.numberOfEpisodes"> · {{ anime.numberOfEpisodes }} episodes</span>
+        <div class="detail-top">
+          <div class="detail-poster">
+            <img :src="posterSrc" :alt="anime.title" @error="onPosterError" />
           </div>
-          <div v-if="anime.genres?.length" class="genres">
-            <span v-for="g in anime.genres" :key="g.id" class="genre-tag">{{ g.title }}</span>
+          <div class="detail-meta">
+            <button class="btn btn-ghost btn-sm back-btn" @click="libraryStore.closeAnime()">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                width="15"
+                height="15"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+                />
+              </svg>
+              Back
+            </button>
+            <h1>{{ getAnimeName() }}</h1>
+            <div v-if="anime.titles?.romaji || anime.titles?.ja" class="detail-romaji">
+              {{ anime.titles.romaji || anime.titles.ja }}
+            </div>
+            <div class="detail-tags">
+              <span v-if="isOffline" class="chip offline">OFFLINE</span>
+              <span v-if="anime.typeTitle" class="chip neutral">{{ anime.typeTitle }}</span>
+              <span v-for="g in genreTags" :key="g.key" class="chip outline">{{ g.label }}</span>
+            </div>
+            <div class="detail-facts">
+              <div v-if="anime.year" class="fact">
+                <span class="f-label">Year</span><span class="f-value">{{ anime.year }}</span>
+              </div>
+              <div v-if="anime.numberOfEpisodes" class="fact">
+                <span class="f-label">Episodes</span
+                ><span class="f-value">{{ anime.numberOfEpisodes }}</span>
+              </div>
+              <div v-if="anime.season" class="fact">
+                <span class="f-label">Season</span
+                ><span class="f-value" style="font-family: var(--font-ui)">{{ anime.season }}</span>
+              </div>
+            </div>
+            <template v-if="synopsisText">
+              <p class="detail-synopsis" :class="{ clamped: !synopsisExpanded }">
+                {{ synopsisText }}
+              </p>
+              <button
+                v-if="synopsisText.length > SYNOPSIS_CLAMP"
+                type="button"
+                class="synopsis-toggle"
+                @click="synopsisExpanded = !synopsisExpanded"
+              >
+                {{ synopsisExpanded ? 'Show less' : 'Show more' }}
+              </button>
+            </template>
+            <div class="detail-actions">
+              <button
+                class="btn btn-primary"
+                :disabled="!continueReady"
+                :title="continueReady ? 'Continue watching' : 'Loading…'"
+                @click="continueWatching"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                {{ continueLabel }}
+              </button>
+              <button class="btn btn-outline" :class="{ active: isStarred }" @click="toggleStar">
+                <svg
+                  viewBox="0 0 24 24"
+                  :fill="isStarred ? 'currentColor' : 'none'"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
+                  />
+                </svg>
+                {{ isStarred ? 'In library' : 'Add to library' }}
+              </button>
+              <button
+                v-if="canAutoDl || autoDlSubscription"
+                class="btn"
+                :class="autoDlSubscription ? 'btn-primary' : 'btn-outline'"
+                :disabled="autoDlSaving || (!canAutoDl && !autoDlSubscription)"
+                :title="autoDlTooltip"
+                @click="toggleAutoDl"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  :fill="autoDlSubscription ? 'currentColor' : 'none'"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75"
+                  />
+                </svg>
+                {{ autoDlSubscription ? 'Auto-download on' : 'Auto-download' }}
+              </button>
+              <button v-if="isDownloaded" class="btn btn-ghost" @click="cleanupModalOpen = true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+                  />
+                </svg>
+                Cleanup files…
+              </button>
+            </div>
+            <div v-if="autoDlSubscription" class="autodl-note">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">
+                <path
+                  d="M19.5 12c0 4.142-3.358 7.5-7.5 7.5S4.5 16.142 4.5 12 7.858 4.5 12 4.5c1.747 0 3.354.6 4.625 1.604M19.5 4.5v3.75h-3.75"
+                />
+              </svg>
+              <span>{{ autoDlTooltip }}</span>
+            </div>
           </div>
-          <p v-if="anime.descriptions?.length" class="description">
-            {{ anime.descriptions[0].value }}
-          </p>
         </div>
       </div>
 
-      <ShikimoriPanel
-        v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
-        :anime="anime"
-      />
+      <div class="detail-cols">
+        <div class="ep-section">
+          <div class="ep-toolbar">
+            <div>
+              <span class="select-label">Translation type</span>
+              <div class="select-wrap">
+                <select v-model="translationType">
+                  <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
+                    {{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{
+                      filteredEpisodes.length
+                    }})
+                  </option>
+                </select>
+                <svg
+                  class="caret"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                </svg>
+              </div>
+            </div>
+            <div>
+              <span class="select-label">Author</span>
+              <div class="select-wrap">
+                <select v-model="selectedAuthor">
+                  <option v-for="[author, count] in availableAuthors" :key="author" :value="author">
+                    {{ author }} ({{ count }}/{{ filteredEpisodes.length }})
+                  </option>
+                </select>
+                <svg
+                  class="caret"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                </svg>
+              </div>
+            </div>
+            <div class="grow"></div>
+            <button
+              class="btn btn-primary"
+              @click="downloadAll"
+              :disabled="episodeRows.every((r) => !r.selectedTr) || downloading"
+            >
+              {{
+                downloading
+                  ? 'Enqueuing…'
+                  : isPaginated
+                    ? `Download page ${currentPage + 1}`
+                    : 'Download all'
+              }}
+            </button>
+            <button
+              v-if="hasActiveDownloads"
+              class="btn btn-outline danger"
+              @click="cancelAllDownloads"
+            >
+              Cancel all
+            </button>
+          </div>
 
-      <ChronologyPanel
-        v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
-        v-model:collapsed="relatedCollapsed"
-        :shiki-related="shikiRelated"
-        :related-loading="relatedLoading"
-      />
+          <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
 
-      <SkipDetectionPanel :filtered-episodes="filteredEpisodes" />
+          <div class="section-head">
+            <h3>Episodes</h3>
+            <span class="muted">{{ filteredEpisodes.length }} total</span>
+          </div>
 
-      <FriendsPanel
-        v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
-        v-model:collapsed="friendsCollapsed"
-        :friends-rates="friendsRates"
-        :friends-loading="friendsLoading"
-        :number-of-episodes="anime.numberOfEpisodes"
-      />
+          <EpisodeList
+            :player-mode="playerMode"
+            :translation-type="translationType"
+            :poster-url="posterSrc"
+          />
 
-      <div class="controls">
-        <div class="control-group">
-          <label>Translation type</label>
-          <select v-model="translationType" class="select">
-            <option v-for="t in TRANSLATION_TYPES" :key="t.value" :value="t.value">
-              {{ t.label }} ({{ translationTypeCounts.get(t.value) || 0 }}/{{
-                filteredEpisodes.length
-              }})
-            </option>
-          </select>
+          <SkipDetectionPanel :filtered-episodes="filteredEpisodes" />
         </div>
-        <div class="control-group">
-          <label>Author</label>
-          <select v-model="selectedAuthor" class="select">
-            <option v-for="[author, count] in availableAuthors" :key="author" :value="author">
-              {{ author }} ({{ count }}/{{ filteredEpisodes.length }})
-            </option>
-          </select>
-        </div>
-        <button
-          class="download-btn"
-          @click="downloadAll"
-          :disabled="episodeRows.every((r) => !r.selectedTr) || downloading"
-        >
-          {{
-            downloading
-              ? 'Enqueuing...'
-              : isPaginated
-                ? `Download Page ${currentPage + 1}`
-                : 'Download All'
-          }}
-        </button>
-        <button v-if="hasActiveDownloads" class="cancel-all-btn" @click="cancelAllDownloads">
-          Cancel All
-        </button>
+
+        <aside class="detail-side">
+          <ShikimoriPanel
+            v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+            :anime="anime"
+          />
+
+          <FriendsPanel
+            v-if="anime.myAnimeListId && (shikiUser || !shikiUserChecked)"
+            v-model:collapsed="friendsCollapsed"
+            :friends-rates="friendsRates"
+            :friends-loading="friendsLoading"
+            :number-of-episodes="anime.numberOfEpisodes"
+          />
+
+          <ChronologyPanel
+            v-if="anime.myAnimeListId && (relatedLoading || shikiRelated.length > 0)"
+            v-model:collapsed="relatedCollapsed"
+            :shiki-related="shikiRelated"
+            :related-loading="relatedLoading"
+          />
+        </aside>
       </div>
-
-      <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
-
-      <EpisodeList :player-mode="playerMode" :translation-type="translationType" />
     </div>
     <CleanupModal
       v-if="cleanupModalOpen && anime"
@@ -616,280 +709,370 @@ async function onPosterError(): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.topbar {
-  padding: 12px 24px;
-  border-bottom: 1px solid #0f3460;
-}
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  color: #e94560;
-  font-size: 0.9rem;
-  cursor: pointer;
-  padding: 4px 0;
-}
-
-.back-btn:hover {
-  color: #ff6b81;
+  min-width: 0;
 }
 
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 0 0 48px;
 }
 
-.anime-header {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 24px;
+/* hero */
+.detail-hero {
+  position: relative;
+  padding: 0 var(--pad-x);
 }
 
-.poster-col {
+.detail-backdrop {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 320px;
+  overflow: hidden;
+}
+
+.detail-backdrop .bd-fill {
+  position: absolute;
+  inset: -40px;
+  background-size: cover;
+  background-position: center;
+  filter: saturate(0.9) blur(34px);
+  opacity: 0.55;
+}
+
+.detail-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--hero-overlay);
+}
+
+.detail-top {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 28px;
+  padding-top: 40px;
+  align-items: flex-start;
 }
 
 .detail-poster {
-  width: 200px;
-  border-radius: 10px;
-  object-fit: cover;
-  flex-shrink: 0;
+  width: 196px;
+  min-width: 196px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-card);
 }
 
-.continue-btn {
-  width: 200px;
-  padding: 10px 14px;
-  background: #e94560;
+.detail-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail-meta {
+  flex: 1;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.back-btn {
+  margin-bottom: 14px;
+}
+
+.detail-meta h1 {
+  font-family: var(--font-display);
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+}
+
+.detail-romaji {
+  color: var(--text-3);
+  font-size: 0.95rem;
+  margin-top: 6px;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.detail-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 18px;
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fact .f-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.fact .f-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-data);
+}
+
+.detail-synopsis {
+  margin-top: 18px;
+  max-width: 720px;
+  color: var(--text-2);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.detail-synopsis.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.synopsis-toggle {
+  margin-top: 8px;
+  background: none;
   border: none;
-  border-radius: 8px;
-  color: #fff;
-  font-size: 0.85rem;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+.synopsis-toggle:hover {
+  text-decoration: underline;
+}
+
+.detail-actions {
   display: flex;
+  gap: 10px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+
+.autodl-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  max-width: 640px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-btn);
+  font-size: 0.82rem;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.autodl-note svg {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 3px 11px;
+  border-radius: var(--radius-chip);
+  line-height: 1.4;
+}
+
+.chip.neutral {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.chip.outline {
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: var(--text-3);
+}
+
+.chip.offline {
+  background: color-mix(in srgb, var(--st-orange) 16%, transparent);
+  color: var(--st-orange);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+/* buttons */
+.btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition:
-    background 0.15s ease,
-    opacity 0.15s ease;
+  padding: 10px 16px;
+  border-radius: var(--radius-btn);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+  white-space: nowrap;
 }
 
-.continue-btn:hover:not(:disabled) {
-  background: #d63651;
-}
-
-.continue-btn:disabled {
-  background: #2a2a4a;
-  color: #6a6a8a;
+.btn:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.library-btn {
-  width: 200px;
-  padding: 10px 14px;
-  background: transparent;
-  border: 1px solid #2a2a4a;
-  border-radius: 8px;
-  color: #a0a0c0;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+.btn-sm {
+  padding: 6px 11px;
+  font-size: 0.8rem;
 }
 
-.library-btn:hover {
-  background: #16213e;
-  border-color: #3a3a5e;
-  color: #fbbf24;
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 
-.library-btn.active {
-  color: #fbbf24;
-  border-color: #fbbf24;
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
-.cleanup-btn {
-  width: 200px;
-  padding: 10px 14px;
-  background: transparent;
-  border: 1px solid #2a2a4a;
-  border-radius: 8px;
-  color: #a0a0c0;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 8px;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+.btn-ghost {
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 
-.cleanup-btn:hover {
-  background: #16213e;
-  border-color: #5a3a4e;
-  color: #f0a070;
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
-.anime-info {
-  flex: 1;
+.btn-outline {
+  background: none;
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+
+.btn-outline:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-outline.active {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+.btn-outline.danger:hover:not(:disabled) {
+  color: var(--st-red);
+  border-color: var(--st-red);
+}
+
+/* columns */
+.detail-cols {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 304px;
+  gap: 28px;
+  padding: 32px var(--pad-x) 0;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .detail-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ep-section {
   min-width: 0;
 }
 
-.anime-title {
-  font-size: 1.4rem;
+.detail-side {
+  min-width: 0;
+}
+
+/* episode toolbar */
+.ep-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.ep-toolbar .grow {
+  flex: 1;
+}
+
+.select-label {
+  font-size: 0.66rem;
   font-weight: 700;
-  color: #e0e0e0;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: block;
   margin-bottom: 6px;
 }
 
-.offline-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  background-color: rgba(243, 156, 18, 0.15);
-  border: 1px solid #f39c12;
-  border-radius: 4px;
-  color: #f39c12;
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  margin-left: 10px;
-  vertical-align: middle;
-}
-
-.anime-meta {
-  color: #6a6a8a;
-  font-size: 0.9rem;
-  margin-bottom: 10px;
-}
-
-.genres {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.genre-tag {
-  background-color: #0f3460;
-  color: #a0a0b8;
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-}
-
-.description {
-  color: #8a8aa8;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  max-height: 120px;
-  overflow-y: auto;
-}
-
-.controls {
-  display: flex;
-  align-items: flex-end;
-  gap: 16px;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-
-.control-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.control-group label {
-  font-size: 0.8rem;
-  color: #6a6a8a;
-}
-
-.select {
-  padding: 8px 12px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  color: #e0e0e0;
-  font-size: 0.85rem;
-  outline: none;
+.select-wrap select {
   min-width: 200px;
 }
 
-.select:focus {
-  border-color: #e94560;
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
-.download-btn {
-  padding: 8px 20px;
-  background-color: #6ab04c;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
+.section-head h3 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
 }
 
-.download-btn:hover {
-  background-color: #5a9a3c;
-}
-
-.download-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.cancel-all-btn {
-  padding: 8px 20px;
-  background-color: #e94560;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.cancel-all-btn:hover {
-  background-color: #d63851;
+.section-head .muted {
+  font-size: 0.82rem;
+  color: var(--text-3);
+  font-family: var(--font-data);
 }
 
 .error-banner {
   padding: 10px 16px;
-  background-color: rgba(233, 69, 96, 0.15);
-  border: 1px solid #e94560;
-  border-radius: 8px;
-  color: #e94560;
+  background: color-mix(in srgb, var(--st-red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-red) 38%, transparent);
+  border-radius: var(--radius-btn);
+  color: var(--st-red);
   font-size: 0.85rem;
   margin-bottom: 16px;
 }
 
 .status-text {
   text-align: center;
-  color: #4a4a6a;
-  font-size: 1.1rem;
+  color: var(--text-faint);
+  font-size: 1.05rem;
   padding-top: 100px;
 }
 </style>

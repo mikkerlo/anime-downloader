@@ -29,29 +29,37 @@ const {
 </script>
 
 <template>
-  <div class="skip-panel">
-    <div class="skip-header" @click="skipPanelCollapsed = !skipPanelCollapsed">
-      <div class="skip-header-left">
-        <svg
-          class="skip-chevron"
-          :class="{ collapsed: skipPanelCollapsed }"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          width="14"
-          height="14"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-        </svg>
-        <span class="skip-label">Skip Detection (experimental)</span>
-      </div>
-      <span v-if="skipAnalyzing" class="skip-summary">{{ skipProgressLabel }}</span>
-      <span v-else-if="skipDetections" class="skip-summary">
-        {{ Object.keys(skipDetections.perEpisode).length }} episodes analyzed
+  <section class="skip-panel">
+    <button class="skip-head" @click="skipPanelCollapsed = !skipPanelCollapsed">
+      <svg class="skip-ico" viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+        <path
+          d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653zM19.5 5.25a.75.75 0 01.75.75v12a.75.75 0 01-1.5 0V6a.75.75 0 01.75-.75z"
+        />
+      </svg>
+      <h3>Skip detection</h3>
+      <span class="muted">
+        {{
+          skipAnalyzing
+            ? skipProgressLabel
+            : skipDetections
+              ? `${Object.keys(skipDetections.perEpisode).length} episodes analyzed`
+              : `${skipEpisodeInputs.length} downloaded`
+        }}
       </span>
-      <span v-else class="skip-summary">{{ skipEpisodeInputs.length }} downloaded</span>
-    </div>
+      <span class="grow"></span>
+      <svg
+        class="skip-chevron"
+        :class="{ open: !skipPanelCollapsed }"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        width="18"
+        height="18"
+      >
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+      </svg>
+    </button>
     <div v-if="!skipPanelCollapsed" class="skip-body">
       <div v-if="skipEpisodeInputs.length < 2" class="skip-disabled">
         Need at least 2 downloaded episodes to analyze. Currently downloaded:
@@ -142,108 +150,140 @@ const {
         </div>
       </template>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
 .skip-panel {
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 14px 18px;
-  margin-bottom: 20px;
+  margin-top: 26px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
 }
 
-.skip-header {
+.skip-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 18px;
+  background: none;
+  border: none;
+  text-align: left;
   cursor: pointer;
-  user-select: none;
+  transition: background 0.15s;
 }
 
-.skip-header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.skip-head:hover {
+  background: var(--surface-2);
+}
+
+.skip-head .skip-ico {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.skip-head h3 {
+  font-family: var(--font-display);
+  font-size: 1.04rem;
+  font-weight: 700;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.skip-head .muted {
+  font-size: 0.8rem;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skip-head .grow {
+  flex: 1;
 }
 
 .skip-chevron {
-  color: #a0a0b8;
-  transition: transform 0.15s;
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: transform 0.2s var(--ease);
 }
 
-.skip-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.skip-label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #a0a0b8;
-}
-
-.skip-summary {
-  font-size: 0.8rem;
-  color: #6a6a8a;
+.skip-chevron.open {
+  transform: rotate(180deg);
 }
 
 .skip-body {
-  margin-top: 10px;
+  padding: 4px 18px 18px;
+  border-top: 1px solid var(--border-soft);
 }
 
 .skip-disabled {
+  padding: 18px 0 6px;
   font-size: 0.85rem;
-  color: #6a6a8a;
-  font-style: italic;
+  color: var(--text-3);
+  line-height: 1.5;
 }
 
 .skip-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 10px;
+  padding: 16px 0;
+  flex-wrap: wrap;
 }
 
 .skip-button {
-  background-color: #0f3460;
-  color: #e0e0e0;
-  border: 1px solid #1f4980;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 0.85rem;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: var(--radius-btn);
+  font-size: 0.84rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.1s;
+  transition: all 0.15s;
 }
 
 .skip-button:hover {
-  background-color: #1a4880;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.skip-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .skip-button-cancel {
-  background-color: #5a2222;
-  border-color: #803030;
+  color: var(--st-red);
+  border-color: color-mix(in srgb, var(--st-red) 40%, transparent);
 }
 
 .skip-button-cancel:hover {
-  background-color: #803030;
+  border-color: var(--st-red);
+  color: var(--st-red);
 }
 
 .skip-progress-text {
   font-size: 0.8rem;
-  color: #a0a0b8;
+  color: var(--text-2);
+  font-family: var(--font-data);
 }
 
 .skip-error {
   font-size: 0.8rem;
-  color: #ff6a6a;
+  color: var(--st-red);
   margin-bottom: 10px;
 }
 
 .skip-results-meta {
-  font-size: 0.75rem;
-  color: #6a6a8a;
-  margin-bottom: 8px;
+  font-size: 0.74rem;
+  color: var(--text-3);
+  margin-bottom: 10px;
+  font-family: var(--font-data);
 }
 
 .skip-table {
@@ -254,16 +294,20 @@ const {
 
 .skip-table th {
   text-align: left;
-  padding: 4px 8px;
-  color: #a0a0b8;
-  font-weight: 600;
-  border-bottom: 1px solid #0f3460;
+  padding: 6px 8px;
+  color: var(--text-faint);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .skip-table td {
-  padding: 4px 8px;
-  color: #d0d0e0;
-  border-bottom: 1px solid #1a2a4d;
+  padding: 7px 8px;
+  color: var(--text-2);
+  font-family: var(--font-data);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .skip-table tr:last-child td {
@@ -271,12 +315,12 @@ const {
 }
 
 .skip-pair-count {
-  color: #6a6a8a;
+  color: var(--text-faint);
   font-size: 0.7rem;
   margin-left: 4px;
 }
 
 .skip-empty {
-  color: #4a4a6a;
+  color: var(--text-faint);
 }
 </style>

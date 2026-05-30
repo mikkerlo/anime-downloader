@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
+import AnimeCard from '../shared/AnimeCard.vue';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
@@ -9,6 +10,45 @@ const shikimoriStore = useShikimoriStore();
 const entries = ref<ContinueWatchingEntry[]>([]);
 const loading = ref(true);
 const failedPosters = ref(new Set<string>());
+
+// "Recently added to your list" — the most recently updated Watching /
+// Rewatching / Planned entries from the Shikimori list (already in the store),
+// mapped to the resolved smotret-anime entry so they render as AnimeCards.
+const RECENT_STATUSES: ShikiUserRateStatus[] = ['watching', 'rewatching', 'planned'];
+const recentlyAdded = computed<AnimeSearchResult[]>(() =>
+  shikimoriStore.rates
+    .filter((e) => e.smotretAnime && RECENT_STATUSES.includes(e.rate.status))
+    .slice()
+    .sort((a, b) => new Date(b.rate.updated_at).getTime() - new Date(a.rate.updated_at).getTime())
+    .slice(0, 12)
+    .map((e) => e.smotretAnime as AnimeSearchResult)
+);
+
+const starredIds = reactive(new Set<number>());
+
+async function refreshStars(): Promise<void> {
+  const cards = recentlyAdded.value;
+  try {
+    const inLibrary = await Promise.all(cards.map((a) => window.api.libraryHas(a.id)));
+    // Bail if the list changed while we were awaiting, so two interleaved
+    // refreshes can't clear the set and apply stale results.
+    if (cards !== recentlyAdded.value) return;
+    starredIds.clear();
+    cards.forEach((a, i) => {
+      if (inLibrary[i]) starredIds.add(a.id);
+    });
+  } catch (err) {
+    console.error('Failed to load library status for Home:', err);
+  }
+}
+
+async function toggleStar(anime: AnimeSearchResult): Promise<void> {
+  const inLibrary = await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
+  if (inLibrary) starredIds.add(anime.id);
+  else starredIds.delete(anime.id);
+}
+
+watch(recentlyAdded, () => void refreshStars(), { immediate: true });
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -105,48 +145,98 @@ onUnmounted(() => {
 <template>
   <main class="home-view">
     <header class="topbar">
-      <h2>Continue Watching</h2>
-      <button class="refresh-btn" @click="manualRefresh" :disabled="loading">Refresh</button>
+      <h2>Home</h2>
+      <span class="sub">· Continue watching</span>
+      <span class="topbar-spacer"></span>
+      <button class="refresh-btn" :disabled="loading" @click="manualRefresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182"
+          />
+        </svg>
+        Refresh
+      </button>
     </header>
     <div class="body">
-      <div v-if="loading && entries.length === 0" class="status-text">Loading...</div>
-      <div v-else-if="entries.length === 0" class="empty">
-        <p>Nothing to resume yet.</p>
-        <button class="cta-btn" @click="libraryStore.navigate('search')">Browse Search</button>
-      </div>
-      <div v-else class="grid">
-        <button
-          v-for="e in entries"
-          :key="`${e.kind}:${e.animeId}:${e.episodeInt}`"
-          class="card"
-          :class="{ disabled: !e.animeId }"
-          :disabled="!e.animeId"
-          @click="onClick(e)"
-        >
-          <div class="poster">
-            <img
-              v-if="showPoster(e)"
-              :src="e.posterUrl"
-              :alt="e.animeName"
-              @error="onPosterError(e)"
-              @load="onPosterLoad(e, $event)"
+      <div v-if="loading && entries.length === 0" class="status-text">Loading…</div>
+      <template v-else>
+        <div v-if="entries.length === 0" class="empty-state">
+          <div class="es-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+          </div>
+          <p>All caught up — nothing left to resume right now.</p>
+          <button class="cta-btn" @click="libraryStore.navigate('search')">Browse Search</button>
+        </div>
+        <div v-else class="cw-grid">
+          <button
+            v-for="e in entries"
+            :key="entryKey(e)"
+            class="cw-card"
+            :class="{ disabled: !e.animeId }"
+            :disabled="!e.animeId"
+            @click="onClick(e)"
+          >
+            <div class="cw-poster">
+              <img
+                v-if="showPoster(e)"
+                :src="e.posterUrl"
+                :alt="e.animeName"
+                @error="onPosterError(e)"
+                @load="onPosterLoad(e, $event)"
+              />
+              <div v-else class="cw-poster-fallback"></div>
+            </div>
+            <div class="cw-body">
+              <div class="cw-title">{{ e.animeName || 'Unknown anime' }}</div>
+              <div class="cw-ep">
+                <span class="chip" :class="e.kind === 'resume' ? 'accent' : 'blue'">{{
+                  e.kind === 'resume' ? 'Resume' : 'Up next'
+                }}</span>
+                <span class="cw-ep-label">{{ e.episodeLabel }}</span>
+              </div>
+              <div class="cw-foot">
+                <div class="cw-play">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"
+                    />
+                  </svg>
+                </div>
+                <template v-if="e.kind === 'resume'">
+                  <div class="pbar">
+                    <span :style="{ width: progressPercent(e) + '%' }"></span>
+                  </div>
+                  <span class="ptext">{{ progressPercent(e) }}%</span>
+                </template>
+                <span v-else class="ptext grow">Not started</span>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <template v-if="recentlyAdded.length > 0">
+          <div class="section-head spaced">
+            <h3>Recently added to your list</h3>
+            <span class="muted">From Shikimori</span>
+          </div>
+          <div class="poster-grid">
+            <AnimeCard
+              v-for="a in recentlyAdded"
+              :key="a.id"
+              :anime="a"
+              :starred="starredIds.has(a.id)"
+              @toggle-star="toggleStar"
+              @click="libraryStore.openAnime(a.id)"
             />
-            <div v-else class="poster-fallback"></div>
           </div>
-          <div class="info">
-            <div class="title">{{ e.animeName || 'Unknown anime' }}</div>
-            <div class="ep">
-              <span class="chip" :class="e.kind">{{
-                e.kind === 'resume' ? 'Resume' : 'Next'
-              }}</span>
-              <span class="ep-label">{{ e.episodeLabel }}</span>
-            </div>
-            <div v-if="e.kind === 'resume'" class="progress-bar">
-              <div class="progress-fill" :style="{ width: progressPercent(e) + '%' }"></div>
-            </div>
-          </div>
-        </button>
-      </div>
+        </template>
+      </template>
     </div>
   </main>
 </template>
@@ -157,36 +247,83 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .topbar {
-  padding: 16px 24px;
-  border-bottom: 1px solid #0f3460;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
+  padding: 0 var(--pad-x);
+  height: 64px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .topbar h2 {
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #e0e0e0;
+  font-family: var(--font-display);
+  font-size: 1.32rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.topbar .sub {
+  color: var(--text-3);
+  font-size: 0.85rem;
+  margin-left: -8px;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+
+.section-head.spaced {
+  margin-top: 30px;
+}
+
+.section-head h3 {
+  font-family: var(--font-display);
+  font-size: 1.04rem;
+  font-weight: 700;
+}
+
+.section-head .muted {
+  font-size: 0.82rem;
+  color: var(--text-3);
 }
 
 .refresh-btn {
-  background: transparent;
-  border: 1px solid #0f3460;
-  color: #c0c0d8;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--radius-btn);
+  font-size: 0.86rem;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.15s var(--ease);
+}
+
+.refresh-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .refresh-btn:hover:not(:disabled) {
-  background: #0f3460;
-  color: #fff;
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .refresh-btn:disabled {
@@ -197,163 +334,182 @@ onUnmounted(() => {
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: var(--pad-y) var(--pad-x) 48px;
 }
 
-.grid {
+.cw-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--gap);
 }
 
-.card {
+.cw-card {
   display: flex;
   align-items: stretch;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
   overflow: hidden;
   cursor: pointer;
   text-align: left;
   color: inherit;
   font: inherit;
   padding: 0;
-  transition: all 0.15s;
+  transition: all 0.18s var(--ease);
 }
 
-.card:hover:not(:disabled) {
-  border-color: #e94560;
-  transform: translateY(-1px);
+.cw-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card);
 }
 
-.card.disabled,
-.card:disabled {
+.cw-card.disabled,
+.cw-card:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.poster {
-  width: 100px;
-  min-width: 100px;
-  height: 140px;
-  background: #0f1626;
+.cw-poster {
+  width: 110px;
+  min-width: 110px;
+  background: var(--bg-deep);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
 
-.poster img {
+.cw-poster img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.poster-fallback {
+.cw-poster-fallback {
   width: 100%;
   height: 100%;
-  background: linear-gradient(135deg, #1a1a2e 0%, #0f1626 100%);
+  background: linear-gradient(135deg, var(--surface-2) 0%, var(--bg-deep) 100%);
 }
 
-.info {
+.cw-body {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 14px;
+  gap: 9px;
+  padding: 14px 16px;
   min-width: 0;
 }
 
-.title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: #e0e0e0;
+.cw-title {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.ep {
+.cw-ep {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.8rem;
-  color: #a0a0c0;
+  gap: 9px;
+  font-size: 0.83rem;
+  color: var(--text-2);
 }
 
-.ep-label {
+.cw-ep-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .chip {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
   font-size: 0.7rem;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--radius-chip);
+  letter-spacing: 0.03em;
   flex-shrink: 0;
 }
 
-.chip.resume {
-  background: rgba(233, 69, 96, 0.15);
-  color: #e94560;
-  border: 1px solid rgba(233, 69, 96, 0.3);
+.chip.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
 }
 
-.chip.next {
-  background: rgba(15, 52, 96, 0.5);
-  color: #6a9eff;
-  border: 1px solid rgba(106, 158, 255, 0.3);
+.chip.blue {
+  background: color-mix(in srgb, var(--st-blue) 16%, transparent);
+  color: var(--st-blue);
 }
 
-.progress-bar {
-  width: 100%;
-  height: 3px;
-  background: #0f1626;
-  border-radius: 2px;
-  overflow: hidden;
+.cw-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
 }
 
-.progress-fill {
-  height: 100%;
-  background: #e94560;
-  transition: width 0.3s ease;
+.cw-play {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
 }
 
-.empty {
-  text-align: center;
-  padding-top: 100px;
+.cw-play svg {
+  width: 16px;
+  height: 16px;
 }
 
-.empty p {
-  color: #6a6a8a;
-  font-size: 1rem;
-  margin-bottom: 16px;
+.cw-card:hover:not(:disabled) .cw-play {
+  transform: scale(1.06);
+  background: var(--accent-hover);
+}
+
+.ptext {
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.ptext.grow {
+  flex: 1;
 }
 
 .cta-btn {
-  background: #e94560;
-  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
   border: none;
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-size: 0.9rem;
+  padding: 9px 16px;
+  border-radius: var(--radius-btn);
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .cta-btn:hover {
-  background: #d63752;
+  background: var(--accent-hover);
 }
 
 .status-text {
   text-align: center;
-  color: #4a4a6a;
+  color: var(--text-faint);
   font-size: 1rem;
   padding-top: 80px;
 }

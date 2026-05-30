@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
 
 const { showSaved } = useSettingsAutosave();
 
@@ -40,9 +42,19 @@ const webgpuStatus = ref<{ available: boolean; gpuName: string }>({
   gpuName: ''
 });
 
-function formatBinding(binding: string): string {
-  if (!binding) return 'None';
-  return binding.replace(/CmdOrCtrl/g, isMac ? '⌘' : 'Ctrl').replace(/\+/g, isMac ? '' : '+');
+const KEY_SYMBOLS: Record<string, string> = {
+  CmdOrCtrl: isMac ? '⌘' : 'Ctrl',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  Backquote: '`',
+  ' ': 'Space'
+};
+
+function keycaps(binding: string): string[] {
+  if (!binding) return [];
+  return binding.split('+').map((part) => KEY_SYMBOLS[part] || part);
 }
 
 function captureKey(e: KeyboardEvent): void {
@@ -124,151 +136,70 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label">Keyboard Shortcuts</label>
-      <p class="setting-hint">
-        Click "Record" to set a new key, press Escape to cancel recording. Click "Clear" to disable
-        a shortcut.
-      </p>
-    </div>
-
-    <div
-      v-for="(meta, action) in SHORTCUT_LABELS"
-      :key="action"
-      v-show="!String(action).startsWith('shader') || webgpuStatus.available"
-      class="shortcut-row"
+    <SettingsGroup
+      title="Keyboard shortcuts"
+      desc="Click “Record” to set a new key, press Escape to cancel recording. Click “Clear” to disable a shortcut."
     >
-      <div class="shortcut-info">
-        <span class="shortcut-action">{{ meta.label }}</span>
-        <span class="shortcut-hint">{{ meta.hint }}</span>
-      </div>
-      <div class="shortcut-controls">
-        <span v-if="recordingAction === action" class="shortcut-key recording">
-          Press a key...
-        </span>
-        <span v-else class="shortcut-key" :class="{ empty: !shortcutBindings[action] }">
-          {{ formatBinding(shortcutBindings[action]) }}
-        </span>
-        <button v-if="recordingAction === action" class="shortcut-btn" @click="cancelRecording">
-          Cancel
-        </button>
-        <button v-else class="shortcut-btn" @click="startRecording(action)">Record</button>
-        <button
-          class="shortcut-btn shortcut-clear"
-          @click="clearBinding(action)"
-          :disabled="!shortcutBindings[action]"
-        >
-          Clear
-        </button>
-      </div>
-    </div>
+      <SettingsRow
+        v-for="(meta, action) in SHORTCUT_LABELS"
+        v-show="!String(action).startsWith('shader') || webgpuStatus.available"
+        :key="action"
+        :label="meta.label"
+        :desc="meta.hint"
+      >
+        <div class="shortcut-controls">
+          <span v-if="recordingAction === action" class="kbd recording">Press a key…</span>
+          <span v-else-if="!shortcutBindings[action]" class="kbd empty">None</span>
+          <div v-else class="kbd-group">
+            <template v-for="(cap, i) in keycaps(shortcutBindings[action])" :key="i">
+              <span v-if="i > 0" class="plus">+</span>
+              <span class="kbd">{{ cap }}</span>
+            </template>
+          </div>
+          <button v-if="recordingAction === action" class="btn btn-sm" @click="cancelRecording">
+            Cancel
+          </button>
+          <button v-else class="btn btn-sm" @click="startRecording(action)">Record</button>
+          <button
+            class="btn btn-sm btn-danger"
+            :disabled="!shortcutBindings[action]"
+            @click="clearBinding(action)"
+          >
+            Clear
+          </button>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
 
-    <div class="setting-group" style="margin-top: 16px">
-      <button class="test-token-btn" @click="resetShortcuts">Reset to defaults</button>
-    </div>
+    <SettingsGroup>
+      <SettingsRow label="Reset" desc="Restore all shortcuts to their defaults.">
+        <button class="btn btn-sm" @click="resetShortcuts">Reset to defaults</button>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
 
 <style scoped>
-.shortcut-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  background-color: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  margin-bottom: 8px;
-}
-
-.shortcut-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.shortcut-action {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #e0e0e0;
-}
-
-.shortcut-hint {
-  font-size: 0.75rem;
-  color: #6a6a8a;
-}
-
 .shortcut-controls {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  margin-left: 16px;
 }
 
-.shortcut-key {
-  display: inline-block;
-  min-width: 80px;
-  text-align: center;
-  padding: 6px 12px;
-  background-color: #0f3460;
-  border: 1px solid #1a4a7a;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #e0e0e0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-}
-
-.shortcut-key.empty {
-  color: #4a4a6a;
-  font-weight: 400;
-}
-
-.shortcut-key.recording {
-  border-color: #e94560;
-  color: #e94560;
+.shortcut-controls .kbd.recording {
   animation: pulse-border 1s ease-in-out infinite;
-  outline: none;
 }
 
 @keyframes pulse-border {
   0%,
   100% {
-    border-color: #e94560;
+    border-color: var(--accent);
   }
   50% {
-    border-color: #c0374d;
+    border-color: var(--accent-line);
   }
-}
-
-.shortcut-btn {
-  padding: 6px 12px;
-  background-color: #0f3460;
-  border: none;
-  border-radius: 6px;
-  color: #a0a0b8;
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  white-space: nowrap;
-}
-
-.shortcut-btn:hover {
-  background-color: #1a4a7a;
-  color: #e0e0e0;
-}
-
-.shortcut-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.shortcut-clear {
-  color: #e94560;
 }
 </style>

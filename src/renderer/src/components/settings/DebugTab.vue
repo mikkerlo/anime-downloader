@@ -3,6 +3,9 @@ import { ref, watch, onMounted, onActivated, computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDownloadsStore } from '../../stores/downloads';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
+import SettingsSwitch from './SettingsSwitch.vue';
 
 const downloadsStore = useDownloadsStore();
 const { scanMergeProgress: scanProgress, fixMetadataProgress: fixProgress } =
@@ -218,234 +221,223 @@ watch(backgroundQualityProbe, (val) => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label">FFmpeg Info</label>
-      <div
-        v-if="ffmpeg"
-        class="ffmpeg-status"
-        :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
-      >
-        <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
-        <span v-else class="ffmpeg-missing">Not found</span>
-        <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
-        <span v-if="ffmpeg.encoders.length" class="ffmpeg-path"
-          >Encoders: {{ ffmpeg.encoders.join(', ') }}</span
-        >
-      </div>
-      <div v-else class="ffmpeg-status">Checking...</div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Merge all available</label>
-      <p class="setting-hint">
-        Scan all download folders for .mp4 files without matching .mkv and merge them with subtitles
-        if available.
-      </p>
-      <button
-        class="merge-all-btn"
-        @click="scanAndMerge"
-        :disabled="scanMerging || !ffmpeg?.available"
-      >
-        {{ scanMerging ? 'Merging...' : 'Merge all available' }}
-      </button>
-
-      <div v-if="scanProgress" class="scan-progress">
-        <div class="scan-progress-header">
-          <span>{{ scanProgress.current }} / {{ scanProgress.total }}</span>
-          <span>{{ scanProgress.percent }}%</span>
-        </div>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" :style="{ width: scanProgress.percent + '%' }"></div>
-        </div>
-        <div class="scan-progress-file">{{ scanProgress.file }}</div>
-      </div>
-
-      <div
-        v-if="scanResult"
-        class="scan-result"
-        :class="{ 'has-errors': scanResult.failed.length > 0 }"
-      >
-        <div class="scan-result-ok">Merged: {{ scanResult.merged }} file(s)</div>
-        <div v-if="scanResult.failed.length > 0" class="scan-result-errors">
-          <div>Failed ({{ scanResult.failed.length }}):</div>
-          <div v-for="(err, i) in scanResult.failed" :key="i" class="scan-error-item">
-            {{ err }}
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Fix old files</label>
-      <p class="setting-hint">
-        Re-mux existing MKV files to set subtitle language, title (translator name), and default
-        track. Uses stored episode metadata.
-      </p>
-      <button
-        class="merge-all-btn"
-        @click="fixMetadata"
-        :disabled="fixingMetadata || !ffmpeg?.available"
-      >
-        {{ fixingMetadata ? 'Fixing...' : 'Fix subtitle metadata' }}
-      </button>
-
-      <div v-if="fixProgress" class="scan-progress">
-        <div class="scan-progress-header">
-          <span>{{ fixProgress.current }} / {{ fixProgress.total }}</span>
-        </div>
-        <div class="scan-progress-file">{{ fixProgress.file }}</div>
-      </div>
-
-      <div
-        v-if="fixResult"
-        class="scan-result"
-        :class="{ 'has-errors': fixResult.failed.length > 0 }"
-      >
-        <div class="scan-result-ok">Fixed: {{ fixResult.fixed }} file(s)</div>
-        <div v-if="fixResult.failed.length > 0" class="scan-result-errors">
-          <div>Failed ({{ fixResult.failed.length }}):</div>
-          <div v-for="(err, i) in fixResult.failed" :key="i" class="scan-error-item">
-            {{ err }}
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Delete ffmpeg binaries</label>
-      <p class="setting-hint">
-        Remove downloaded ffmpeg/ffprobe binaries. They will be re-downloaded on next app launch
-        (useful for testing the download progress indicator).
-      </p>
-      <button
-        class="merge-all-btn"
-        style="background-color: #e94560"
-        @click="deleteFfmpeg"
-        :disabled="!ffmpeg?.available"
-      >
-        Delete ffmpeg + ffprobe
-      </button>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Anime4K GPU Benchmark</label>
-      <p class="setting-hint">
-        Test how fast your GPU can run Anime4K shaders (Mode A, 720p→screen resolution, 100 frames).
-        Requires WebGPU.
-      </p>
-      <button class="merge-all-btn" @click="runGpuBenchmark" :disabled="benchmarking">
-        {{ benchmarking ? 'Running benchmark...' : 'Run GPU benchmark' }}
-      </button>
-
-      <div v-if="benchmarkResult" class="scan-result">
+    <SettingsGroup title="FFmpeg">
+      <SettingsRow stack>
         <div
-          class="scan-result-ok"
-          :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }"
+          v-if="ffmpeg"
+          class="ffmpeg-status"
+          :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
         >
-          {{ benchmarkResult.preset }}: {{ benchmarkResult.fps }} fps ({{
-            benchmarkResult.avgMs
-          }}ms/frame)
+          <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
+          <span v-else class="ffmpeg-missing">Not found</span>
+          <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
+          <span v-if="ffmpeg.encoders.length" class="ffmpeg-path"
+            >Encoders: {{ ffmpeg.encoders.join(', ') }}</span
+          >
+        </div>
+        <div v-else class="ffmpeg-status">Checking...</div>
+      </SettingsRow>
+      <SettingsRow
+        label="Delete ffmpeg binaries"
+        desc="Remove downloaded ffmpeg/ffprobe binaries. They will be re-downloaded on next app launch (useful for testing the download progress indicator)."
+      >
+        <button class="btn btn-sm btn-danger" :disabled="!ffmpeg?.available" @click="deleteFfmpeg">
+          Delete ffmpeg + ffprobe
+        </button>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Batch operations">
+      <SettingsRow
+        label="Merge all available"
+        desc="Scan all download folders for .mp4 files without matching .mkv and merge them with subtitles if available."
+      >
+        <button
+          class="btn btn-sm"
+          :disabled="scanMerging || !ffmpeg?.available"
+          @click="scanAndMerge"
+        >
+          {{ scanMerging ? 'Merging...' : 'Merge all available' }}
+        </button>
+      </SettingsRow>
+      <SettingsRow v-if="scanProgress || scanResult" stack>
+        <div v-if="scanProgress" class="set-progress">
+          <div class="set-progress-head">
+            <span>{{ scanProgress.current }} / {{ scanProgress.total }}</span>
+            <span>{{ scanProgress.percent }}%</span>
+          </div>
+          <div class="bar"><span :style="{ width: scanProgress.percent + '%' }"></span></div>
+          <div class="file">{{ scanProgress.file }}</div>
         </div>
         <div
-          class="scan-error-item"
-          :style="{ color: benchmarkResult.fps >= 24 ? '#6ab04c' : '#f0932b' }"
+          v-if="scanResult"
+          class="result-box"
+          :class="{ 'has-errors': scanResult.failed.length > 0 }"
         >
-          {{
-            benchmarkResult.fps >= 24
-              ? 'Your GPU can handle real-time Anime4K shaders'
-              : 'Your GPU may struggle with real-time shaders — consider using "Off" preset'
-          }}
-        </div>
-      </div>
-
-      <div v-if="benchmarkError" class="scan-result has-errors">
-        <div class="scan-result-errors">{{ benchmarkError }}</div>
-      </div>
-
-      <div v-if="webgpuStatus.available" class="status-line ok" style="margin-top: 8px">
-        WebGPU: {{ webgpuStatus.gpuName }}
-      </div>
-      <div v-else class="status-line warn" style="margin-top: 8px">
-        WebGPU not detected — benchmark will attempt to initialize it
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Background quality probe</label>
-      <p class="setting-hint">
-        Probe actual stream quality for all translations when opening an anime page (not just the
-        selected one). Detects quality mismatches but may cause lag on slower connections.
-      </p>
-      <label class="toggle-row">
-        <input type="checkbox" v-model="backgroundQualityProbe" class="toggle-input" />
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">Enable background quality probe</span>
-      </label>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Dump quality mismatches</label>
-      <p class="setting-hint">
-        Probe the embed API for all translations in your downloaded anime and save a report of cases
-        where the reported quality differs from actual stream quality.
-      </p>
-      <button
-        class="merge-all-btn"
-        @click="dumpMismatches"
-        :disabled="dumpingMismatches || mismatchCount === 0"
-      >
-        {{ dumpingMismatches ? 'Saving...' : `Dump ${mismatchCount} mismatch(es) to file` }}
-      </button>
-
-      <div v-if="dumpResult" class="scan-result">
-        <div class="scan-result-ok" :style="{ color: '#6ab04c' }">
-          Saved {{ dumpResult.count }} mismatch(es)
-        </div>
-        <div class="scan-error-item">{{ dumpResult.path }}</div>
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">MP4 streaming-optimization check</label>
-      <p class="setting-hint">
-        After every video download or when an MP4 is opened in the player, the first ~64 KB are
-        scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before
-        <code>mdat</code>) are required to play while still downloading. If a non-faststart file is
-        found, an example is shown below for inspection.
-      </p>
-      <button class="merge-all-btn" @click="refreshMp4Stats">Refresh</button>
-      <button
-        class="merge-all-btn"
-        style="margin-left: 0.5rem"
-        @click="resetMp4Stats"
-        :disabled="!mp4Stats || mp4Stats.totalChecked === 0"
-      >
-        Reset
-      </button>
-
-      <div
-        v-if="mp4Stats"
-        class="scan-result"
-        :class="{ 'has-errors': mp4Stats.nonFaststartSamples.length > 0 }"
-      >
-        <div class="scan-result-ok">
-          Faststart: {{ mp4Stats.faststartCount }} / {{ mp4Stats.totalChecked }}
-        </div>
-        <div v-if="latestNonFaststart" class="scan-result-errors">
-          <div>
-            Sample non-faststart MP4 (most recent of {{ mp4Stats.nonFaststartSamples.length }}):
-          </div>
-          <div class="scan-error-item">
-            {{ latestNonFaststart.animeName }} — {{ latestNonFaststart.episodeLabel }} (first
-            non-ftyp box: {{ latestNonFaststart.firstNonFtypBox }})
-          </div>
-          <div class="scan-error-item" style="opacity: 0.7">
-            {{ latestNonFaststart.filePath }}
+          <div class="result-ok">Merged: {{ scanResult.merged }} file(s)</div>
+          <div v-if="scanResult.failed.length > 0" class="result-errors">
+            <div>Failed ({{ scanResult.failed.length }}):</div>
+            <div v-for="(err, i) in scanResult.failed" :key="i" class="result-error-item">
+              {{ err }}
+            </div>
           </div>
         </div>
-      </div>
-    </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Fix old files"
+        desc="Re-mux existing MKV files to set subtitle language, title (translator name), and default track. Uses stored episode metadata."
+      >
+        <button
+          class="btn btn-sm"
+          :disabled="fixingMetadata || !ffmpeg?.available"
+          @click="fixMetadata"
+        >
+          {{ fixingMetadata ? 'Fixing...' : 'Fix subtitle metadata' }}
+        </button>
+      </SettingsRow>
+      <SettingsRow v-if="fixProgress || fixResult" stack>
+        <div v-if="fixProgress" class="set-progress">
+          <div class="set-progress-head">
+            <span>{{ fixProgress.current }} / {{ fixProgress.total }}</span>
+          </div>
+          <div class="file">{{ fixProgress.file }}</div>
+        </div>
+        <div
+          v-if="fixResult"
+          class="result-box"
+          :class="{ 'has-errors': fixResult.failed.length > 0 }"
+        >
+          <div class="result-ok">Fixed: {{ fixResult.fixed }} file(s)</div>
+          <div v-if="fixResult.failed.length > 0" class="result-errors">
+            <div>Failed ({{ fixResult.failed.length }}):</div>
+            <div v-for="(err, i) in fixResult.failed" :key="i" class="result-error-item">
+              {{ err }}
+            </div>
+          </div>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="GPU benchmark">
+      <SettingsRow
+        label="Anime4K GPU benchmark"
+        desc="Test how fast your GPU can run Anime4K shaders (Mode A, 720p→screen resolution, 100 frames). Requires WebGPU."
+      >
+        <button class="btn btn-sm" :disabled="benchmarking" @click="runGpuBenchmark">
+          {{ benchmarking ? 'Running…' : 'Run GPU benchmark' }}
+        </button>
+      </SettingsRow>
+      <SettingsRow stack>
+        <div
+          v-if="benchmarkResult"
+          class="result-box"
+          :class="{ 'has-errors': benchmarkResult.fps < 24 }"
+        >
+          <div class="result-ok" :class="{ warn: benchmarkResult.fps < 24 }">
+            {{ benchmarkResult.preset }}: {{ benchmarkResult.fps }} fps ({{
+              benchmarkResult.avgMs
+            }}ms/frame)
+          </div>
+          <div class="result-error-item">
+            {{
+              benchmarkResult.fps >= 24
+                ? 'Your GPU can handle real-time Anime4K shaders'
+                : 'Your GPU may struggle with real-time shaders — consider using “Off” preset'
+            }}
+          </div>
+        </div>
+        <div v-if="benchmarkError" class="result-box has-errors">
+          <div class="result-errors">{{ benchmarkError }}</div>
+        </div>
+        <div v-if="webgpuStatus.available" class="status-line ok">
+          WebGPU: {{ webgpuStatus.gpuName }}
+        </div>
+        <div v-else class="status-line warn">
+          WebGPU not detected — benchmark will attempt to initialize it
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Diagnostics">
+      <SettingsRow
+        label="Background quality probe"
+        desc="Probe actual stream quality for all translations when opening an anime page (not just the selected one). Detects quality mismatches but may cause lag on slower connections."
+      >
+        <SettingsSwitch v-model="backgroundQualityProbe" />
+      </SettingsRow>
+      <SettingsRow
+        label="Dump quality mismatches"
+        desc="Probe the embed API for all translations in your downloaded anime and save a report of cases where the reported quality differs from actual stream quality."
+      >
+        <button
+          class="btn btn-sm"
+          :disabled="dumpingMismatches || mismatchCount === 0"
+          @click="dumpMismatches"
+        >
+          {{ dumpingMismatches ? 'Saving...' : `Dump ${mismatchCount} mismatch(es)` }}
+        </button>
+      </SettingsRow>
+      <SettingsRow v-if="dumpResult" stack>
+        <div class="result-box">
+          <div class="result-ok">Saved {{ dumpResult.count }} mismatch(es)</div>
+          <div class="result-error-item">{{ dumpResult.path }}</div>
+        </div>
+      </SettingsRow>
+      <SettingsRow stack>
+        <template #text>
+          <div class="sr-label">MP4 streaming-optimization check</div>
+          <div class="sr-desc">
+            After every video download or when an MP4 is opened in the player, the first ~64 KB are
+            scanned for the MP4 box order. Streaming-optimized files (<code>moov</code> before
+            <code>mdat</code>) are required to play while still downloading. If a non-faststart file
+            is found, an example is shown below for inspection.
+          </div>
+        </template>
+        <div class="mp4-actions">
+          <button class="btn btn-sm" @click="refreshMp4Stats">Refresh</button>
+          <button
+            class="btn btn-sm"
+            :disabled="!mp4Stats || mp4Stats.totalChecked === 0"
+            @click="resetMp4Stats"
+          >
+            Reset
+          </button>
+        </div>
+        <div
+          v-if="mp4Stats"
+          class="result-box"
+          :class="{ 'has-errors': mp4Stats.nonFaststartSamples.length > 0 }"
+        >
+          <div class="result-ok">
+            Faststart: {{ mp4Stats.faststartCount }} / {{ mp4Stats.totalChecked }}
+          </div>
+          <div v-if="latestNonFaststart" class="result-errors">
+            <div>
+              Sample non-faststart MP4 (most recent of {{ mp4Stats.nonFaststartSamples.length }}):
+            </div>
+            <div class="result-error-item">
+              {{ latestNonFaststart.animeName }} — {{ latestNonFaststart.episodeLabel }} (first
+              non-ftyp box: {{ latestNonFaststart.firstNonFtypBox }})
+            </div>
+            <div class="result-error-item" style="opacity: 0.7">
+              {{ latestNonFaststart.filePath }}
+            </div>
+          </div>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
+
+<style scoped>
+.mp4-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.result-ok.warn {
+  color: var(--st-orange);
+}
+</style>

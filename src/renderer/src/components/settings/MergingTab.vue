@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
+import SettingsSwitch from './SettingsSwitch.vue';
 
 const { autoSave } = useSettingsAutosave();
 
@@ -161,89 +164,79 @@ watch(videoCodec, (val, oldVal) => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label">FFmpeg</label>
-      <p class="setting-hint">Required for merging video + subtitles into MKV.</p>
-      <div
-        v-if="ffmpeg"
-        class="ffmpeg-status"
-        :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
-      >
-        <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
-        <span v-else class="ffmpeg-missing">Not found</span>
-        <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
-      </div>
-      <div v-else class="ffmpeg-status">Checking...</div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Auto-merge</label>
-      <p class="setting-hint">
-        Automatically merge video + subtitles into MKV when both finish downloading.
-      </p>
-      <label class="toggle-row" :class="{ disabled: !ffmpeg?.available }">
-        <input
-          type="checkbox"
-          v-model="autoMerge"
-          :disabled="!ffmpeg?.available"
-          class="toggle-input"
-        />
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">{{ autoMerge ? 'Enabled' : 'Disabled' }}</span>
-      </label>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Local skip detection</label>
-      <p class="setting-hint">
-        Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the
-        background after each download; first analysis on a show takes a minute or two of CPU.
-      </p>
-      <label class="toggle-row">
-        <input type="checkbox" v-model="enableLocalSkipDetection" class="toggle-input" />
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">{{ enableLocalSkipDetection ? 'Enabled' : 'Disabled' }}</span>
-      </label>
-      <div class="skip-backfill">
-        <button
-          type="button"
-          class="browse-btn"
-          :disabled="skipBackfillRunning"
-          @click="onBackfillSkipDetection"
+    <SettingsGroup title="FFmpeg" desc="Required for merging video + subtitles into MKV.">
+      <SettingsRow stack>
+        <div
+          v-if="ffmpeg"
+          class="ffmpeg-status"
+          :class="{ ok: ffmpeg.available, missing: !ffmpeg.available }"
         >
-          {{ skipBackfillRunning ? 'Queuing…' : 'Run detection on all downloaded shows' }}
-        </button>
-        <p v-if="skipBackfillResult" class="setting-hint">{{ skipBackfillResult }}</p>
-        <p v-if="skipQueueStatusLabel" class="setting-hint">{{ skipQueueStatusLabel }}</p>
-      </div>
-    </div>
+          <span v-if="ffmpeg.available" class="ffmpeg-ok">{{ ffmpeg.version }}</span>
+          <span v-else class="ffmpeg-missing">Not found</span>
+          <span v-if="ffmpeg.path" class="ffmpeg-path">{{ ffmpeg.path }}</span>
+        </div>
+        <div v-else class="ffmpeg-status">Checking...</div>
+      </SettingsRow>
+    </SettingsGroup>
 
-    <div class="setting-group">
-      <label class="setting-label">Re-encode video</label>
-      <p class="setting-hint">
-        Re-encode video during merge. "None" copies the stream as-is (fastest). H.265 reduces file
-        size but takes longer.
-      </p>
-      <select
-        v-model="videoCodec"
-        class="setting-input setting-select"
-        :disabled="!ffmpeg?.available"
+    <SettingsGroup title="MKV merging">
+      <SettingsRow
+        label="Auto-merge"
+        desc="Automatically merge video + subtitles into MKV when both finish downloading."
       >
-        <option v-for="c in availableCodecs" :key="c.value" :value="c.value">
-          {{ c.label }}
-        </option>
-      </select>
-      <p
+        <SettingsSwitch v-model="autoMerge" :disabled="!ffmpeg?.available" />
+      </SettingsRow>
+      <SettingsRow
+        label="Re-encode video"
+        desc="Re-encode video during merge. “None” copies the stream as-is (fastest). H.265 reduces file size but takes longer."
+      >
+        <div class="select-wrap">
+          <select v-model="videoCodec" :disabled="!ffmpeg?.available">
+            <option v-for="c in availableCodecs" :key="c.value" :value="c.value">
+              {{ c.label }}
+            </option>
+          </select>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </SettingsRow>
+      <SettingsRow
         v-if="
           (videoCodec.startsWith('libx265') || videoCodec.startsWith('hevc_')) &&
           !hevcPlaybackSupported
         "
-        class="setting-hint setting-hint-warn"
+        stack
       >
-        H.265 merges save disk space, but this platform has no HEVC decoder — the built-in player
-        will not play these files.
-      </p>
-    </div>
+        <p class="sr-warn">
+          H.265 merges save disk space, but this platform has no HEVC decoder — the built-in player
+          will not play these files.
+        </p>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title="Skip detection">
+      <SettingsRow
+        label="Local skip detection"
+        desc="Fingerprint downloaded episodes locally to detect OP/ED in the player. Runs in the background after each download; first analysis on a show takes a minute or two of CPU."
+      >
+        <SettingsSwitch v-model="enableLocalSkipDetection" />
+      </SettingsRow>
+      <SettingsRow stack>
+        <div class="skip-backfill">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :disabled="skipBackfillRunning"
+            @click="onBackfillSkipDetection"
+          >
+            {{ skipBackfillRunning ? 'Queuing…' : 'Run detection on all downloaded shows' }}
+          </button>
+          <p v-if="skipBackfillResult" class="sr-desc">{{ skipBackfillResult }}</p>
+          <p v-if="skipQueueStatusLabel" class="sr-desc">{{ skipQueueStatusLabel }}</p>
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 

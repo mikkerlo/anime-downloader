@@ -3,6 +3,8 @@ import { ref, watch, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import SettingsGroup from './SettingsGroup.vue';
+import SettingsRow from './SettingsRow.vue';
 
 const shikimoriStore = useShikimoriStore();
 const { user: shikimoriUser } = storeToRefs(shikimoriStore);
@@ -90,108 +92,110 @@ watch(token, (val) => {
 
 <template>
   <div>
-    <div class="setting-group">
-      <label class="setting-label" for="token-input">smotret-anime.ru</label>
-      <p class="setting-hint">API token for smotret-anime.ru. Required for downloading episodes.</p>
-      <div class="token-row">
-        <input
-          id="token-input"
-          v-model="token"
-          type="password"
-          class="setting-input"
-          placeholder="Enter your API token..."
-        />
-        <button
-          class="test-token-btn"
-          :disabled="!token || tokenStatus === 'checking'"
-          @click="testToken"
-        >
-          {{ tokenStatus === 'checking' ? 'Testing...' : 'Test' }}
-        </button>
-      </div>
-      <div v-if="tokenStatus === 'valid'" class="token-result token-valid">Token is valid</div>
-      <div v-if="tokenStatus === 'invalid'" class="token-result token-invalid">
-        {{ tokenError }}
-      </div>
-    </div>
-
-    <div class="setting-group">
-      <label class="setting-label">Shikimori</label>
-      <p class="setting-hint">Connect your Shikimori account to sync watch progress.</p>
-
-      <template v-if="shikimoriUser">
-        <div class="shikimori-user">
-          <img v-if="shikimoriUser.avatar" :src="shikimoriUser.avatar" class="shikimori-avatar" />
-          <span class="shikimori-nickname">{{ shikimoriUser.nickname }}</span>
-          <button class="test-token-btn" @click="shikimoriDisconnect">Disconnect</button>
+    <SettingsGroup
+      title="smotret-anime.ru"
+      desc="API token for smotret-anime.ru. Required for downloading episodes."
+    >
+      <SettingsRow stack>
+        <div class="token-row">
+          <input
+            id="token-input"
+            v-model="token"
+            type="password"
+            class="field-input token-input"
+            placeholder="Enter your API token..."
+          />
+          <button
+            class="btn btn-sm"
+            :disabled="!token || tokenStatus === 'checking'"
+            @click="testToken"
+          >
+            {{ tokenStatus === 'checking' ? 'Testing...' : 'Test' }}
+          </button>
         </div>
-      </template>
+        <div v-if="tokenStatus === 'valid'" class="inline-result ok">Token is valid</div>
+        <div v-if="tokenStatus === 'invalid'" class="inline-result bad">{{ tokenError }}</div>
+      </SettingsRow>
+    </SettingsGroup>
 
-      <template v-else>
+    <SettingsGroup title="Shikimori" desc="Connect your Shikimori account to sync watch progress.">
+      <div v-if="shikimoriUser" class="conn-card">
+        <div class="conn-logo" style="background: var(--st-blue)">
+          <img v-if="shikimoriUser.avatar" :src="shikimoriUser.avatar" />
+          <span v-else>Sh</span>
+        </div>
+        <div class="conn-info">
+          <div class="ci-name">
+            {{ shikimoriUser.nickname
+            }}<span class="chip green"><span class="dot"></span>Connected</span>
+          </div>
+          <div class="ci-meta">Shikimori account</div>
+        </div>
+        <button class="btn btn-sm btn-outline" @click="shikimoriDisconnect">Disconnect</button>
+      </div>
+
+      <SettingsRow v-else stack>
         <div v-if="!shikimoriAuthUrl">
-          <button class="browse-btn" @click="shikimoriConnect">Connect Shikimori</button>
+          <button class="btn btn-sm btn-primary" @click="shikimoriConnect">
+            Connect Shikimori
+          </button>
         </div>
         <div v-else class="shikimori-auth">
           <div v-if="shikimoriShowUrl">
-            <p class="setting-hint" style="margin-bottom: 6px">
+            <p class="sr-desc">
               Could not open browser. Copy the link and open it manually, then paste the code.
             </p>
             <div class="shikimori-url-row">
-              <span class="dir-path shikimori-url">{{ shikimoriAuthUrl }}</span>
-              <button class="test-token-btn" @click="shikimoriCopyUrl">Copy Link</button>
+              <span class="path-input shikimori-url">{{ shikimoriAuthUrl }}</span>
+              <button class="btn btn-sm" @click="shikimoriCopyUrl">Copy Link</button>
             </div>
           </div>
-          <p v-else class="setting-hint" style="margin-bottom: 6px">
+          <p v-else class="sr-desc">
             A browser window has opened. Authorize the app, then paste the code below.
             <a href="#" class="shiki-show-url" @click.prevent="shikimoriShowUrl = true"
               >Show link</a
             >
           </p>
-          <div class="token-row" style="margin-top: 8px">
+          <div class="token-row">
             <input
               v-model="shikimoriCode"
               type="text"
-              class="setting-input"
+              class="field-input token-input"
               placeholder="Paste authorization code..."
               @keydown.enter="shikimoriSubmitCode"
             />
             <button
-              class="test-token-btn"
+              class="btn btn-sm btn-primary"
               :disabled="!shikimoriCode.trim() || shikimoriConnecting"
               @click="shikimoriSubmitCode"
             >
               {{ shikimoriConnecting ? 'Connecting...' : 'Submit' }}
             </button>
           </div>
-          <div v-if="shikimoriError" class="token-result token-invalid">
-            {{ shikimoriError }}
-          </div>
+          <div v-if="shikimoriError" class="inline-result bad">{{ shikimoriError }}</div>
         </div>
-      </template>
-    </div>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped src="@renderer/assets/settings-tabs.css"></style>
 
 <style scoped>
-.shikimori-user {
+.token-row {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.shikimori-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+.token-input {
+  flex: 1;
 }
 
-.shikimori-nickname {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #e0e0e0;
-  flex: 1;
+.shikimori-auth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .shikimori-url-row {
@@ -201,12 +205,11 @@ watch(token, (val) => {
 }
 
 .shikimori-url {
-  font-size: 0.75rem;
   user-select: all;
 }
 
 .shiki-show-url {
-  color: #3498db;
+  color: var(--st-blue);
   text-decoration: none;
   font-size: 0.8rem;
 }

@@ -383,3 +383,66 @@ describe('ShikimoriSyncService — refreshShikimoriDetailsForMalId', () => {
     expect(result).toBeNull()
   })
 })
+
+function rate(target_id: number, status: string) {
+  return {
+    rate: { id: target_id, target_id, episodes: 0, status, score: 0 },
+    shikiAnime: { id: target_id, name: 'X' },
+    smotretAnime: null
+  }
+}
+
+describe('ShikimoriSyncService — prefetchShikimoriDetails genre coverage (#183)', () => {
+  it('prefetches details for completed/dropped rates, not just watching/planned', async () => {
+    // Pre-#183 the worklist filtered to {watching, planned}, so a completed-only
+    // list fetched nothing and the favorite-genres panel stayed empty.
+    const { svc } = makeService({
+      shikimoriUserRates: [rate(500, 'completed')],
+      shikimoriAnimeDetails: {}
+    })
+    getAnimeDetails.mockResolvedValue({ id: 500, name: 'Done', genres: [] })
+    await svc.prefetchShikimoriDetails()
+    expect(getAnimeDetails).toHaveBeenCalledWith('access-token', 500)
+  })
+
+  it('fetches watching/planned before other statuses', async () => {
+    vi.useFakeTimers()
+    try {
+      getAnimeDetails.mockResolvedValue({ id: 0, name: 'x', genres: [] })
+      const { svc } = makeService({
+        shikimoriUserRates: [rate(500, 'completed'), rate(10, 'watching'), rate(20, 'planned')],
+        shikimoriAnimeDetails: {}
+      })
+      const p = svc.prefetchShikimoriDetails()
+      await vi.runAllTimersAsync()
+      await p
+      expect(getAnimeDetails.mock.calls.map((c) => c[1])).toEqual([10, 20, 500])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('invokes onDetailsPrefetched after a run that fetched at least one', async () => {
+    const onDetailsPrefetched = vi.fn()
+    const { svc } = makeService({
+      shikimoriUserRates: [rate(8, 'dropped')],
+      shikimoriAnimeDetails: {}
+    })
+    getAnimeDetails.mockResolvedValue({ id: 8, name: 'x', genres: [] })
+    svc.setOnDetailsPrefetched(onDetailsPrefetched)
+    await svc.prefetchShikimoriDetails()
+    expect(onDetailsPrefetched).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not invoke onDetailsPrefetched when the worklist is empty', async () => {
+    const onDetailsPrefetched = vi.fn()
+    const { svc } = makeService({
+      shikimoriUserRates: [rate(7, 'watching')],
+      shikimoriAnimeDetails: { '7': { details: { id: 7 }, fetchedAt: Date.now() } }
+    })
+    svc.setOnDetailsPrefetched(onDetailsPrefetched)
+    await svc.prefetchShikimoriDetails()
+    expect(getAnimeDetails).not.toHaveBeenCalled()
+    expect(onDetailsPrefetched).not.toHaveBeenCalled()
+  })
+})

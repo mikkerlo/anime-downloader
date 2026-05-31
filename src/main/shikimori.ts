@@ -159,6 +159,39 @@ export async function getUser(accessToken: string): Promise<ShikiUser> {
   return response.json() as Promise<ShikiUser>
 }
 
+export interface ShikiUserStats {
+  // Anime list-breakdown buckets, e.g. { name: 'watching', size: 42 }.
+  statuses: { name: string; size: number }[]
+  // Score distribution indexed 0..9 for scores 1..10 (0 = "rated 1").
+  scores: number[]
+}
+
+// GET /api/users/:id returns the full user object including a `stats` block the
+// `/whoami` endpoint omits. Parse defensively — the shape varies (anime vs manga
+// buckets, missing arrays for fresh accounts).
+export async function getUserStats(accessToken: string, userId: number): Promise<ShikiUserStats> {
+  const response = await shikiFetch(`/api/users/${userId}`, {
+    headers: authHeaders(accessToken)
+  })
+  const body = (await response.json()) as {
+    stats?: {
+      statuses?: { anime?: { name?: string; size?: number }[] }
+      scores?: { anime?: { name?: string; value?: number }[] }
+    }
+  }
+  const statusList = body.stats?.statuses?.anime ?? []
+  const statuses = statusList
+    .filter((s) => typeof s?.name === 'string')
+    .map((s) => ({ name: s.name as string, size: Number(s.size) || 0 }))
+
+  const scores = new Array<number>(10).fill(0)
+  for (const s of body.stats?.scores?.anime ?? []) {
+    const idx = Number(s?.name) - 1
+    if (idx >= 0 && idx < 10) scores[idx] = Number(s?.value) || 0
+  }
+  return { statuses, scores }
+}
+
 export async function getUserRate(
   accessToken: string,
   userId: number,

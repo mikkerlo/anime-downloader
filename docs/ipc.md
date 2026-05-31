@@ -109,6 +109,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user |
 | `shikimori:logout` | invoke | Clear Shikimori credentials and user |
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
+| `shikimori:get-profile` | invoke | Returns the cached `ShikimoriProfile` dashboard payload instantly (if available) + triggers a background refresh; first call fetches `/api/users/:id` stats and assembles it. `null` when logged out. Powers the ShikimoriView dashboard (#178) |
+| `shikimori:profile-refreshed` | send | Profile dashboard payload re-assembled in background; ShikimoriView replaces its `profile` state |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score, rewatches); updates cached rates and broadcasts change |
 | `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |

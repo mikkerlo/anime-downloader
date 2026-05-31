@@ -53,7 +53,8 @@ export const PERSISTED_STORE_KEYS = [
   'syncplay',
   'mp4StreamingStats',
   'autoCleanupSnoozedAnimeIds',
-  'dismissedContinueWatching'
+  'dismissedContinueWatching',
+  'shikimoriProfile'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

@@ -54,6 +54,42 @@ describe('shikimori client — fixture replay', () => {
     })
   })
 
+  describe('getUserStats', () => {
+    it('parses the anime status breakdown from the user object stats block', async () => {
+      mockFetchOnce(fixture('user-stats.json'))
+      const stats = await shikimori.getUserStats('tok', 1)
+      expect(stats.statuses).toEqual([
+        { name: 'planned', size: 12 },
+        { name: 'watching', size: 7 },
+        { name: 'completed', size: 41 },
+        { name: 'dropped', size: 2 }
+      ])
+    })
+
+    it('normalizes the score distribution to a 10-slot array indexed 1..10', async () => {
+      mockFetchOnce(fixture('user-stats.json'))
+      const stats = await shikimori.getUserStats('tok', 1)
+      expect(stats.scores).toHaveLength(10)
+      expect(stats.scores[9]).toBe(8) // score 10
+      expect(stats.scores[7]).toBe(19) // score 8
+      expect(stats.scores[5]).toBe(1) // score 6
+      expect(stats.scores[0]).toBe(0) // score 1 — absent → 0
+    })
+
+    it('hits /api/users/:id', async () => {
+      mockFetchOnce(fixture('user-stats.json'))
+      await shikimori.getUserStats('tok', 42)
+      expect(lastFetchUrl()).toContain('/api/users/42')
+    })
+
+    it('tolerates a missing stats block (fresh account)', async () => {
+      mockFetchOnce({ id: 1, nickname: 'x', avatar: '' })
+      const stats = await shikimori.getUserStats('tok', 1)
+      expect(stats.statuses).toEqual([])
+      expect(stats.scores).toEqual(new Array(10).fill(0))
+    })
+  })
+
   describe('getUserRate', () => {
     it('returns the single hit when the array is non-empty', async () => {
       mockFetchOnce(fixture('user-rates-found.json'))

@@ -101,6 +101,7 @@ export const CHANNELS = {
   SHIKIMORI_GET_FRIENDS_ACTIVITY: 'shikimori:get-friends-activity',
   SHIKIMORI_GET_FRIENDS_RATES: 'shikimori:get-friends-rates',
   SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH: 'shikimori:get-offline-queue-length',
+  SHIKIMORI_GET_PROFILE: 'shikimori:get-profile',
   SHIKIMORI_GET_RATE: 'shikimori:get-rate',
   SHIKIMORI_GET_RELATED: 'shikimori:get-related',
   SHIKIMORI_GET_SYNC_STATUS: 'shikimori:get-sync-status',
@@ -215,6 +216,7 @@ export const EVENT_CHANNELS = {
   // Shikimori
   SHIKIMORI_ANIME_DETAILS_UPDATED: 'shikimori:anime-details-updated',
   SHIKIMORI_OFFLINE_QUEUE_CHANGED: 'shikimori:offline-queue-changed',
+  SHIKIMORI_PROFILE_REFRESHED: 'shikimori:profile-refreshed',
   SHIKIMORI_RATE_UPDATED: 'shikimori:rate-updated',
   SHIKIMORI_RATES_REFRESHED: 'shikimori:rates-refreshed',
   SHIKIMORI_SYNC_STATUS: 'shikimori:sync-status',

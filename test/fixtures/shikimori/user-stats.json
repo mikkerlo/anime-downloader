@@ -1,0 +1,26 @@
+{
+  "id": 1,
+  "nickname": "testuser",
+  "avatar": "https://shikimori.one/system/users/x48/1.png",
+  "stats": {
+    "statuses": {
+      "anime": [
+        { "id": 1, "grouped_id": "1", "name": "planned", "size": 12 },
+        { "id": 2, "grouped_id": "2", "name": "watching", "size": 7 },
+        { "id": 3, "grouped_id": "3", "name": "completed", "size": 41 },
+        { "id": 6, "grouped_id": "6", "name": "dropped", "size": 2 }
+      ],
+      "manga": []
+    },
+    "scores": {
+      "anime": [
+        { "name": "10", "value": 8 },
+        { "name": "9", "value": 14 },
+        { "name": "8", "value": 19 },
+        { "name": "7", "value": 6 },
+        { "name": "6", "value": 1 }
+      ],
+      "manga": []
+    }
+  }
+}

@@ -60,6 +60,79 @@ export function register({
       .catch((err) => console.warn('[shikimori] background refresh failed:', err))
   }
 
+  // Assemble the profile-dashboard payload (#178): identity from the cached
+  // user, status-breakdown + score-distribution from the Shikimori stats block,
+  // and titles/episodes/mean/days/genres derived from data already cached
+  // locally (the rate list + pre-fetched anime details). Returns null when
+  // logged out so the renderer shows the connect affordance instead of erroring.
+  async function fetchAndCacheShikimoriProfile(): Promise<ShikimoriProfile | null> {
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) return null
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const stats = await shikimori.getUserStats(accessToken, user.id)
+
+    let friendsCount = 0
+    try {
+      friendsCount = (await shikimori.getFriends(accessToken, user.id)).length
+    } catch (err) {
+      console.warn('[shikimori] profile: friends count failed:', err)
+    }
+
+    const rates = store.get('shikimoriUserRates') as {
+      rate: { target_id?: number; episodes: number; score: number }
+      shikiAnime?: { id: number }
+    }[]
+    const detailsCache = store.get('shikimoriAnimeDetails') as Record<
+      string,
+      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+    >
+
+    const episodes = rates.reduce((sum, e) => sum + (e.rate?.episodes ?? 0), 0)
+    let scoreSum = 0
+    let scoreCount = 0
+    stats.scores.forEach((count, i) => {
+      scoreSum += (i + 1) * count
+      scoreCount += count
+    })
+    const mean = scoreCount > 0 ? scoreSum / scoreCount : 0
+
+    const genreCounts = new Map<string, number>()
+    for (const e of rates) {
+      const malId = e.rate?.target_id ?? e.shikiAnime?.id
+      const details = malId != null ? detailsCache[String(malId)]?.details : undefined
+      for (const g of details?.genres ?? []) {
+        const name = g.russian || g.name
+        if (name) genreCounts.set(name, (genreCounts.get(name) ?? 0) + 1)
+      }
+    }
+    const genres = [...genreCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, n]) => ({ name, n }))
+
+    const profile: ShikimoriProfile = {
+      id: user.id,
+      nickname: user.nickname,
+      avatar: user.avatar,
+      friendsCount,
+      lists: stats.statuses.map((s) => ({ status: s.name, n: s.size })),
+      scores: stats.scores,
+      genres,
+      // ~24 min per episode → days.
+      stats: { titles: rates.length, episodes, mean, daysWatched: (episodes * 24) / 1440 }
+    }
+    store.set('shikimoriProfile', profile)
+    return profile
+  }
+
+  function refreshShikimoriProfileInBackground(): void {
+    fetchAndCacheShikimoriProfile()
+      .then((profile) => {
+        if (profile) broadcast(EVENT_CHANNELS.SHIKIMORI_PROFILE_REFRESHED, profile)
+      })
+      .catch((err) => console.warn('[shikimori] profile background refresh failed:', err))
+  }
+
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => {
     return shikimori.getAuthUrl()
   })
@@ -78,6 +151,7 @@ export function register({
     store.set('shikimoriUserRates', [])
     store.set('shikimoriUpdateQueue', [])
     store.set('shikimoriAnimeDetails', {})
+    store.set('shikimoriProfile', null)
     sync.abortPrefetch()
     sync.invalidateCalendarCache()
     sync.stopSyncTimer()
@@ -87,6 +161,21 @@ export function register({
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_USER, () => {
     return store.get('shikimoriUser') as shikimori.ShikiUser | null
+  })
+
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_PROFILE, async () => {
+    if (!store.get('shikimoriUser')) return null
+    const cached = store.get('shikimoriProfile') as ShikimoriProfile | null
+    if (cached) {
+      refreshShikimoriProfileInBackground()
+      return cached
+    }
+    try {
+      return await fetchAndCacheShikimoriProfile()
+    } catch (err) {
+      console.warn('[shikimori] profile fetch failed:', err)
+      return null
+    }
   })
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_RATE, async (_event, malId: number) => {

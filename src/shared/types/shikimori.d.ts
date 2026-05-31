@@ -85,6 +85,37 @@ interface ShikiAnimeDetails {
   episodes_aired: number
 }
 
+// Assembled Shikimori profile dashboard payload (shikimori:get-profile, #178).
+// `lists` + `scores` come straight from the Shikimori `/api/users/:id` stats
+// block; the rest is derived in the main process from the cached rate list +
+// pre-fetched anime details (genres). Presentation (status labels/colors) is
+// owned by the renderer.
+interface ShikimoriProfileList {
+  status: string
+  n: number
+}
+
+interface ShikimoriProfileGenre {
+  name: string
+  n: number
+}
+
+interface ShikimoriProfile {
+  id: number
+  nickname: string
+  avatar: string
+  friendsCount: number
+  lists: ShikimoriProfileList[]
+  scores: number[]
+  genres: ShikimoriProfileGenre[]
+  stats: {
+    titles: number
+    episodes: number
+    mean: number
+    daysWatched: number
+  }
+}
+
 interface ShikiFriendRate {
   nickname: string
   avatar: string

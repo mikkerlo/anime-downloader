@@ -359,6 +359,11 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, code),
   shikimoriLogout: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_LOGOUT),
   shikimoriGetUser: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_USER),
+  shikimoriGetProfile: () =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_PROFILE) as Promise<ShikimoriProfile | null>,
+  onShikimoriProfileRefreshed: subscribe<ShikimoriProfile>(
+    EVENT_CHANNELS.SHIKIMORI_PROFILE_REFRESHED
+  ),
   shikimoriGetRate: (malId: number) => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_RATE, malId),
   shikimoriUpdateRate: (
     malId: number,

@@ -53,7 +53,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'syncplay',
     'mp4StreamingStats',
     'autoCleanupSnoozedAnimeIds',
-    'dismissedContinueWatching'
+    'dismissedContinueWatching',
+    'shikimoriProfile'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

@@ -9,7 +9,9 @@ type Captured = {
   detailsUpdated: Listener<{ malId: number; details: ShikiAnimeDetails }>[]
   offlineQueue: Listener<{ length: number }>[]
   syncStatus: Listener<unknown>[]
+  profileRefreshed: Listener<ShikimoriProfile>[]
   getUser: ReturnType<typeof vi.fn>
+  getProfile: ReturnType<typeof vi.fn>
   getRates: ReturnType<typeof vi.fn>
   getSyncStatus: ReturnType<typeof vi.fn>
   getOfflineQueueLength: ReturnType<typeof vi.fn>
@@ -25,7 +27,9 @@ function installApi(): void {
     detailsUpdated: [],
     offlineQueue: [],
     syncStatus: [],
+    profileRefreshed: [],
     getUser: vi.fn(async () => null),
+    getProfile: vi.fn(async () => null),
     getRates: vi.fn(async () => []),
     getSyncStatus: vi.fn(async () => ({
       state: 'idle',
@@ -60,7 +64,12 @@ function installApi(): void {
         captured.syncStatus.push(cb)
         return () => {}
       },
+      onShikimoriProfileRefreshed: (cb: Listener<ShikimoriProfile>) => {
+        captured.profileRefreshed.push(cb)
+        return () => {}
+      },
       shikimoriGetUser: captured.getUser,
+      shikimoriGetProfile: captured.getProfile,
       shikimoriGetAnimeRates: captured.getRates,
       shikimoriGetSyncStatus: captured.getSyncStatus,
       shikimoriGetOfflineQueueLength: captured.getOfflineQueueLength,
@@ -165,6 +174,43 @@ describe('useShikimoriStore', () => {
     const store = useShikimoriStore()
     await store.triggerSync()
     expect(captured.triggerSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshProfile pulls the profile from the IPC bridge into state', async () => {
+    const profile = {
+      id: 1,
+      nickname: 'alice',
+      avatar: '',
+      friendsCount: 3,
+      lists: [{ status: 'watching', n: 5 }],
+      scores: new Array(10).fill(0),
+      genres: [],
+      stats: { titles: 5, episodes: 50, mean: 8, daysWatched: 0.8 }
+    } as ShikimoriProfile
+    captured.getProfile.mockResolvedValueOnce(profile)
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(store.profile).toBeNull()
+    await store.refreshProfile()
+    expect(store.profile?.stats.episodes).toBe(50)
+  })
+
+  it('replaces profile when onShikimoriProfileRefreshed fires', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(captured.profileRefreshed.length).toBe(1)
+    captured.profileRefreshed[0]({
+      id: 1,
+      nickname: 'bob',
+      avatar: '',
+      friendsCount: 0,
+      lists: [],
+      scores: new Array(10).fill(0),
+      genres: [{ name: 'Action', n: 9 }],
+      stats: { titles: 1, episodes: 1, mean: 0, daysWatched: 0 }
+    } as ShikimoriProfile)
+    expect(store.profile?.nickname).toBe('bob')
+    expect(store.profile?.genres[0].name).toBe('Action')
   })
 
   it('rateByMalId returns null for a falsy malId', async () => {

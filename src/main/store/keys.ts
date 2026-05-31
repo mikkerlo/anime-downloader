@@ -52,7 +52,8 @@ export const PERSISTED_STORE_KEYS = [
   'calendarView',
   'syncplay',
   'mp4StreamingStats',
-  'autoCleanupSnoozedAnimeIds'
+  'autoCleanupSnoozedAnimeIds',
+  'dismissedContinueWatching'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

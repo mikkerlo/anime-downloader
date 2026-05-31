@@ -26,18 +26,28 @@ const nextEntry: ContinueWatchingEntry = {
   updatedAt: 2
 }
 
-function stubApi(entries: ContinueWatchingEntry[]): void {
+function stubApi(
+  entries: ContinueWatchingEntry[],
+  dismissed: string[] = []
+): Record<string, ReturnType<typeof vi.fn>> {
   // Real methods HomeView calls; any other access (store `on*` subscriptions)
   // falls back to a no-op returning a no-op unsubscribe handle.
-  const real: Record<string, unknown> = {
+  const real: Record<string, ReturnType<typeof vi.fn>> = {
     homeGetContinueWatching: vi.fn().mockResolvedValue(entries),
     shikimoriGetAnimeRates: vi.fn().mockResolvedValue([]),
     libraryHas: vi.fn().mockResolvedValue(false),
-    libraryToggle: vi.fn().mockResolvedValue(true)
+    libraryToggle: vi.fn().mockResolvedValue(true),
+    getSetting: vi
+      .fn()
+      .mockImplementation((key: string) =>
+        Promise.resolve(key === 'dismissedContinueWatching' ? dismissed : undefined)
+      ),
+    setSetting: vi.fn().mockResolvedValue(undefined)
   }
   ;(window as unknown as { api: unknown }).api = new Proxy(real, {
     get: (target, prop, recv) => (prop in target ? Reflect.get(target, prop, recv) : () => () => {})
   })
+  return real
 }
 
 beforeEach(() => {
@@ -97,6 +107,99 @@ describe('HomeView', () => {
     expect(wrapper.find('.section-head h3').text()).toBe('Recently added to your list')
     // Most-recently-updated (id 11) sorts first.
     expect(cards[0].find('.acard-title').text()).toContain('Show 11')
+  })
+
+  it('dismisses a card, removing it and persisting the key to electron-store', async () => {
+    const api = stubApi([resumeEntry, nextEntry])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(wrapper.findAll('.cw-card')).toHaveLength(2)
+    await wrapper.findAll('.cw-dismiss')[0].trigger('click')
+    await flushPromises()
+
+    const cards = wrapper.findAll('.cw-card')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].find('.cw-title').text()).toBe('Cowboy Bebop')
+    // Persisted under the animeId:episodeInt key so it survives a restart.
+    expect(api.setSetting).toHaveBeenCalledWith('dismissedContinueWatching', ['1:12'])
+  })
+
+  it('shows the empty state once every card is dismissed', async () => {
+    stubApi([resumeEntry, nextEntry])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    for (const btn of wrapper.findAll('.cw-dismiss')) await btn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.cw-card').exists()).toBe(false)
+    expect(wrapper.find('.empty-state').exists()).toBe(true)
+    expect(wrapper.find('.empty-state p').text()).toContain('All caught up')
+  })
+
+  it('keeps a dismissal hidden across restart for the same episode (persisted key)', async () => {
+    // Simulate a relaunch: getSetting returns a previously-dismissed key. The
+    // matching card must be hidden on mount without any user interaction.
+    const api = stubApi([resumeEntry, nextEntry], ['1:12'])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(api.getSetting).toHaveBeenCalledWith('dismissedContinueWatching')
+    expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
+  })
+
+  it('prunes dismissed keys that no longer match any current entry', async () => {
+    // Persisted keys: '1:12' is still live (resumeEntry), '99:1' is dead — the
+    // anime/episode it dismissed is no longer in the continue-watching list.
+    const api = stubApi([resumeEntry, nextEntry], ['1:12', '99:1'])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    // Dead key dropped, live key kept; pruned set persisted (array shrinks 2 → 1).
+    expect(api.setSetting).toHaveBeenCalledWith('dismissedContinueWatching', ['1:12'])
+    // '1:12' still hides Steins;Gate; only Cowboy Bebop remains visible.
+    expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
+  })
+
+  it('hides the dismiss button on unavailable (no animeId) cards', async () => {
+    const unavailable: ContinueWatchingEntry = {
+      kind: 'next',
+      animeName: 'Unresolved Show',
+      episodeInt: '1',
+      episodeLabel: 'Episode 1',
+      updatedAt: 1
+    } as unknown as ContinueWatchingEntry
+    stubApi([unavailable])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(wrapper.findAll('.cw-card')).toHaveLength(1)
+    expect(wrapper.find('.cw-card.disabled').exists()).toBe(true)
+    expect(wrapper.find('.cw-dismiss').exists()).toBe(false)
+  })
+
+  it('resurfaces a dismissed show once its episode advances', async () => {
+    // Keyed on animeId:episodeInt, not animeId — so when a refresh returns a NEWER
+    // episode for the same anime (key never dismissed), the show comes back.
+    const api = stubApi([resumeEntry, nextEntry], ['1:12'])
+    const shiki = useShikimoriStore()
+    const wrapper = mount(HomeView)
+    await flushPromises()
+    expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
+
+    // Episode advances: anime 1 now resumes at ep 13. Re-fetch is driven by the
+    // store's deep rates watcher calling refresh().
+    api.homeGetContinueWatching.mockResolvedValue([
+      { ...resumeEntry, episodeInt: '13', episodeLabel: 'Episode 13', updatedAt: 3 },
+      nextEntry
+    ])
+    shiki.rates = [] as unknown as typeof shiki.rates
+    await flushPromises()
+
+    const titles = wrapper.findAll('.cw-title').map((t) => t.text())
+    expect(titles).toContain('Steins;Gate') // ep 13 (key 1:13) was never dismissed → back
+    expect(titles).toContain('Cowboy Bebop')
   })
 })
 

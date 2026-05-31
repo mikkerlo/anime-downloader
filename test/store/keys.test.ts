@@ -52,7 +52,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'calendarView',
     'syncplay',
     'mp4StreamingStats',
-    'autoCleanupSnoozedAnimeIds'
+    'autoCleanupSnoozedAnimeIds',
+    'dismissedContinueWatching'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

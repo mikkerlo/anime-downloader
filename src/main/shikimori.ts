@@ -254,6 +254,7 @@ export interface ShikiFriend {
   id: number
   nickname: string
   avatar: string
+  lastOnlineAt: string | null
 }
 
 export interface ShikiFriendRate {
@@ -268,7 +269,18 @@ export async function getFriends(accessToken: string, userId: number): Promise<S
   const response = await shikiFetch(`/api/users/${userId}/friends?limit=100`, {
     headers: authHeaders(accessToken)
   })
-  return response.json() as Promise<ShikiFriend[]>
+  const raw = (await response.json()) as {
+    id: number
+    nickname: string
+    avatar: string
+    last_online_at?: string | null
+  }[]
+  return raw.map((f) => ({
+    id: f.id,
+    nickname: f.nickname,
+    avatar: f.avatar,
+    lastOnlineAt: f.last_online_at ?? null
+  }))
 }
 
 async function getFriendRateForAnime(
@@ -417,6 +429,112 @@ export async function getUserAnimeRates(
     headers: authHeaders(accessToken)
   })
   return response.json() as Promise<ShikiAnimeRateEntry[]>
+}
+
+// A friend is "online" if Shikimori last saw them within this window.
+const FRIEND_ONLINE_WINDOW_MS = 5 * 60 * 1000
+
+export interface ShikiFriendWatching {
+  malId: number
+  // Resolved smotret-anime id for in-app navigation; null when not in catalog.
+  animeId: number | null
+  title: string
+  image: string
+  episode: number
+  total: number
+  status: ShikiUserRateStatus
+}
+
+export interface ShikiFriendCard {
+  id: number
+  nickname: string
+  avatar: string
+  lastOnlineAt: string | null
+  online: boolean
+  titles: number
+  mean: number
+  // Shared rated titles with the signed-in user (approximate "mutual").
+  mutual: number
+  watching: ShikiFriendWatching | null
+}
+
+// Pure aggregation of a single friend's card from their rate list — split out
+// from the fetch orchestration so it can be unit-tested without network.
+export function buildFriendCard(
+  friend: ShikiFriend,
+  friendRates: ShikiAnimeRateEntry[],
+  ownMalIds: Set<number>,
+  now: number = Date.now()
+): ShikiFriendCard {
+  const online = friend.lastOnlineAt
+    ? now - new Date(friend.lastOnlineAt).getTime() < FRIEND_ONLINE_WINDOW_MS
+    : false
+
+  const scored = friendRates.filter((r) => r.score > 0)
+  const mean = scored.length > 0 ? scored.reduce((s, r) => s + r.score, 0) / scored.length : 0
+  const mutual = friendRates.reduce((n, r) => n + (ownMalIds.has(r.anime.id) ? 1 : 0), 0)
+
+  const byRecency = friendRates
+    .slice()
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  const active = byRecency.find((r) => r.status === 'watching' || r.status === 'rewatching')
+  const pick = active ?? byRecency.find((r) => r.status === 'completed') ?? null
+
+  let watching: ShikiFriendWatching | null = null
+  if (pick) {
+    const img = pick.anime.image.preview || pick.anime.image.x96 || pick.anime.image.original || ''
+    watching = {
+      malId: pick.anime.id,
+      animeId: null,
+      title: pick.anime.russian || pick.anime.name,
+      image: img.startsWith('http') ? img : `${BASE_URL}${img}`,
+      episode: pick.episodes,
+      total: pick.anime.episodes,
+      status: pick.status
+    }
+  }
+
+  return {
+    id: friend.id,
+    nickname: friend.nickname,
+    avatar: friend.avatar,
+    lastOnlineAt: friend.lastOnlineAt,
+    online,
+    titles: friendRates.length,
+    mean,
+    mutual,
+    watching
+  }
+}
+
+// Friend list joined with per-friend presence + a compact stat block. Per-friend
+// rate fetches run batched (concurrency 2) to respect the rate limit; a failed
+// friend degrades to a stat-less card rather than failing the whole list.
+export async function getFriendsWithStats(
+  accessToken: string,
+  userId: number,
+  ownMalIds: Set<number>
+): Promise<ShikiFriendCard[]> {
+  const friends = await getFriends(accessToken, userId)
+  if (friends.length === 0) return []
+
+  const CONCURRENCY = 2
+  const cards: ShikiFriendCard[] = []
+  for (let i = 0; i < friends.length; i += CONCURRENCY) {
+    const batch = friends.slice(i, i + CONCURRENCY)
+    const built = await Promise.all(
+      batch.map(async (friend) => {
+        try {
+          const rates = await getUserAnimeRates(accessToken, friend.id)
+          return buildFriendCard(friend, rates, ownMalIds)
+        } catch {
+          return buildFriendCard(friend, [], ownMalIds)
+        }
+      })
+    )
+    cards.push(...built)
+  }
+  return cards
 }
 
 export interface ShikiAnimeGenre {

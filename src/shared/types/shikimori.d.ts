@@ -124,6 +124,31 @@ interface ShikiFriendRate {
   episodes: number
 }
 
+// Friends page (shikimori:get-friends, #179): per-friend presence + a compact
+// stat block + their current/last watch. `mutual` = shared rated titles with
+// the signed-in user (approximate). Assembled in the main process.
+interface ShikiFriendWatching {
+  malId: number
+  animeId: number | null
+  title: string
+  image: string
+  episode: number
+  total: number
+  status: ShikiUserRateStatus
+}
+
+interface ShikiFriendCard {
+  id: number
+  nickname: string
+  avatar: string
+  lastOnlineAt: string | null
+  online: boolean
+  titles: number
+  mean: number
+  mutual: number
+  watching: ShikiFriendWatching | null
+}
+
 interface ShikiFriendActivityEntry {
   friendId: number
   friendNickname: string

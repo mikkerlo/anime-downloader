@@ -19,6 +19,7 @@
 | `shikimoriCredentials` | object\|null | `null` | Shikimori OAuth tokens (access_token, refresh_token, created_at, expires_in) |
 | `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
 | `shikimoriProfile` | object\|null | `null` | Cached profile-dashboard payload for ShikimoriView (#178): identity, list breakdown, score distribution, derived titles/episodes/mean/days, favorite genres, friends count. Cache-first, background-refreshed via `shikimori:get-profile`/`shikimori:profile-refreshed`; cleared on logout |
+| `shikimoriFriends` | array | `[]` | Cached Friends-page cards for FriendsView (#179): per-friend presence + titles/mean/mutual + current watch. Cache-first, background-refreshed via `shikimori:get-friends`/`shikimori:friends-refreshed`; cleared on logout |
 | `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |
 | `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode) |
 | `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |

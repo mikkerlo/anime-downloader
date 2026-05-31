@@ -124,6 +124,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:sync-status` | send | Sync worker state changed (idle ↔ syncing) or a drain just finished; renderers swap offline/syncing chip variants |
 | `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
 | `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
+| `shikimori:get-friends` | invoke | Returns the cached `ShikiFriendCard[]` (friend list + presence + per-friend titles/mean/mutual + current watch) instantly (if available) + triggers a background refresh; first call fetches per-friend rates (batched, concurrency 2). `null` when logged out. Powers the Friends grid (#179) |
+| `shikimori:friends-refreshed` | send | Friend cards re-assembled in background; FriendsView replaces its grid |
 | `shikimori:get-friends-activity` | invoke | Fetch recent anime history for all Shikimori friends, merged + sorted, MAL IDs resolved |
 | `shikimori:get-calendar` | invoke | Fetch Shikimori `/api/calendar`, filter to MAL IDs the user tracks as `watching`/`rewatching`/`planned`, resolve each via `lookupByMalIds`. 5-min in-memory main-side cache invalidated on `shikimori:rate-updated`/`shikimori:rates-refreshed`/logout. Optional `force` flag bypasses the cache |
 | `shikimori:get-related` | invoke | Fetch franchise chronology for an anime via `/api/animes/:id/franchise`, resolve each related MAL ID to a smotret-anime entry |

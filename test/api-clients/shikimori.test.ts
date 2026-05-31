@@ -206,8 +206,90 @@ describe('shikimori client — fixture replay', () => {
       expect(friends[0]).toEqual({
         id: 11,
         nickname: 'alice',
-        avatar: 'https://shikimori.one/system/users/x48/11.png'
+        avatar: 'https://shikimori.one/system/users/x48/11.png',
+        lastOnlineAt: null
       })
+    })
+
+    it('captures last_online_at presence when present', async () => {
+      mockFetchOnce(fixture('friends-presence.json'))
+      const friends = await shikimori.getFriends('tok', 1)
+      expect(friends[0].lastOnlineAt).toBe('2026-05-31T11:59:00Z')
+      expect(friends[1].lastOnlineAt).toBeNull()
+    })
+  })
+
+  describe('buildFriendCard', () => {
+    function friendRate(
+      malId: number,
+      status: string,
+      episodes: number,
+      score: number,
+      updated: string
+    ) {
+      return {
+        id: malId,
+        status,
+        episodes,
+        score,
+        rewatches: 0,
+        updated_at: updated,
+        target_id: malId,
+        target_type: 'Anime',
+        anime: {
+          id: malId,
+          name: `Show ${malId}`,
+          russian: `Шоу ${malId}`,
+          image: { original: '/o.jpg', preview: '/p.jpg', x96: '', x48: '' },
+          episodes: 12,
+          episodes_aired: 12,
+          kind: 'tv',
+          score: '8.0',
+          status: 'released'
+        }
+      } as unknown as Parameters<typeof shikimori.buildFriendCard>[1][number]
+    }
+
+    const friend = {
+      id: 11,
+      nickname: 'alice',
+      avatar: 'a.png',
+      lastOnlineAt: '2026-05-31T11:59:30Z'
+    }
+    const NOW = new Date('2026-05-31T12:00:00Z').getTime()
+
+    it('derives titles, mean, mutual, online and the current watch', () => {
+      const rates = [
+        friendRate(1, 'completed', 12, 9, '2026-05-01T00:00:00Z'),
+        friendRate(2, 'watching', 4, 0, '2026-05-30T00:00:00Z'),
+        friendRate(3, 'planned', 0, 7, '2026-04-01T00:00:00Z')
+      ]
+      const card = shikimori.buildFriendCard(friend, rates, new Set([2, 99]), NOW)
+      expect(card.titles).toBe(3)
+      expect(card.mean).toBe(8) // (9 + 7) / 2
+      expect(card.mutual).toBe(1) // only malId 2 is shared
+      expect(card.online).toBe(true) // last online 30s ago
+      // Most-recently-updated watching entry wins.
+      expect(card.watching?.malId).toBe(2)
+      expect(card.watching?.status).toBe('watching')
+      expect(card.watching?.episode).toBe(4)
+    })
+
+    it('falls back to the last completed when nothing is in-progress, and marks offline', () => {
+      const stale = { ...friend, lastOnlineAt: '2026-05-31T11:00:00Z' } // 1h ago
+      const rates = [friendRate(5, 'completed', 24, 10, '2026-05-29T00:00:00Z')]
+      const card = shikimori.buildFriendCard(stale, rates, new Set(), NOW)
+      expect(card.online).toBe(false)
+      expect(card.watching?.status).toBe('completed')
+      expect(card.watching?.malId).toBe(5)
+    })
+
+    it('handles a friend with no rates (degraded card)', () => {
+      const card = shikimori.buildFriendCard(friend, [], new Set(), NOW)
+      expect(card.titles).toBe(0)
+      expect(card.mean).toBe(0)
+      expect(card.mutual).toBe(0)
+      expect(card.watching).toBeNull()
     })
   })
 

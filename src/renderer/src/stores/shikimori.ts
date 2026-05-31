@@ -33,6 +33,7 @@ const EMPTY_SYNC_STATUS: ShikimoriSyncStatusSnapshot = {
 
 export const useShikimoriStore = defineStore('shikimori', () => {
   const user = ref<ShikiUser | null>(null)
+  const profile = ref<ShikimoriProfile | null>(null)
   const rates = ref<ShikiAnimeRateEntry[]>([])
   const animeDetails = ref<Record<number, ShikiAnimeDetails>>({})
   const syncStatus = ref<ShikimoriSyncStatusSnapshot>({ ...EMPTY_SYNC_STATUS })
@@ -56,6 +57,10 @@ export const useShikimoriStore = defineStore('shikimori', () => {
 
   async function refreshRates(status?: string): Promise<void> {
     rates.value = await window.api.shikimoriGetAnimeRates(status)
+  }
+
+  async function refreshProfile(): Promise<void> {
+    profile.value = await window.api.shikimoriGetProfile()
   }
 
   async function refreshSyncStatus(): Promise<void> {
@@ -86,6 +91,9 @@ export const useShikimoriStore = defineStore('shikimori', () => {
   void window.api.onShikimoriRatesRefreshed((entries) => {
     rates.value = entries
   })
+  void window.api.onShikimoriProfileRefreshed((next) => {
+    profile.value = next
+  })
   void window.api.onShikimoriAnimeDetailsUpdated(({ malId, details }) => {
     animeDetails.value = { ...animeDetails.value, [malId]: details }
   })
@@ -99,6 +107,7 @@ export const useShikimoriStore = defineStore('shikimori', () => {
 
   return {
     user,
+    profile,
     rates,
     animeDetails,
     syncStatus,
@@ -108,6 +117,7 @@ export const useShikimoriStore = defineStore('shikimori', () => {
     animeDetailsByMalId,
     refreshUser,
     refreshRates,
+    refreshProfile,
     refreshSyncStatus,
     refreshOfflineQueueLength,
     triggerSync

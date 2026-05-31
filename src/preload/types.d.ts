@@ -279,6 +279,8 @@ interface Api {
   shikimoriExchangeCode: (code: string) => Promise<ShikiUser>
   shikimoriLogout: () => Promise<void>
   shikimoriGetUser: () => Promise<ShikiUser | null>
+  shikimoriGetProfile: () => Promise<ShikimoriProfile | null>
+  onShikimoriProfileRefreshed: (callback: (profile: ShikimoriProfile) => void) => Unsubscribe
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
   shikimoriUpdateRate: (
     malId: number,

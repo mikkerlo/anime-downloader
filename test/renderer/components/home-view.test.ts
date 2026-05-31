@@ -149,6 +149,36 @@ describe('HomeView', () => {
     expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
   })
 
+  it('prunes dismissed keys that no longer match any current entry', async () => {
+    // Persisted keys: '1:12' is still live (resumeEntry), '99:1' is dead — the
+    // anime/episode it dismissed is no longer in the continue-watching list.
+    const api = stubApi([resumeEntry, nextEntry], ['1:12', '99:1'])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    // Dead key dropped, live key kept; pruned set persisted (array shrinks 2 → 1).
+    expect(api.setSetting).toHaveBeenCalledWith('dismissedContinueWatching', ['1:12'])
+    // '1:12' still hides Steins;Gate; only Cowboy Bebop remains visible.
+    expect(wrapper.findAll('.cw-title').map((t) => t.text())).toEqual(['Cowboy Bebop'])
+  })
+
+  it('hides the dismiss button on unavailable (no animeId) cards', async () => {
+    const unavailable: ContinueWatchingEntry = {
+      kind: 'next',
+      animeName: 'Unresolved Show',
+      episodeInt: '1',
+      episodeLabel: 'Episode 1',
+      updatedAt: 1
+    } as unknown as ContinueWatchingEntry
+    stubApi([unavailable])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    expect(wrapper.findAll('.cw-card')).toHaveLength(1)
+    expect(wrapper.find('.cw-card.disabled').exists()).toBe(true)
+    expect(wrapper.find('.cw-dismiss').exists()).toBe(false)
+  })
+
   it('resurfaces a dismissed show once its episode advances', async () => {
     // Keyed on animeId:episodeInt, not animeId — so when a refresh returns a NEWER
     // episode for the same anime (key never dismissed), the show comes back.

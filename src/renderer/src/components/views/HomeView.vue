@@ -37,6 +37,23 @@ async function dismiss(e: ContinueWatchingEntry): Promise<void> {
   }
 }
 
+// Drop dismissed keys that no longer match any current continue-watching entry
+// so the persisted list can't accumulate dead `animeId:episodeInt` keys for
+// episodes long since passed. Called after each refresh; persists only when it
+// actually pruned something.
+async function pruneDismissed(): Promise<void> {
+  if (dismissed.value.size === 0) return;
+  const live = new Set(entries.value.map(dismissKey));
+  const kept = new Set([...dismissed.value].filter((k) => live.has(k)));
+  if (kept.size === dismissed.value.size) return;
+  dismissed.value = kept;
+  try {
+    await window.api.setSetting(DISMISSED_KEY, [...kept]);
+  } catch (err) {
+    console.error('Failed to persist dismissed continue-watching:', err);
+  }
+}
+
 // "Recently added to your list" — the most recently updated Watching /
 // Rewatching / Planned entries from the Shikimori list (already in the store),
 // mapped to the resolved smotret-anime entry so they render as AnimeCards.
@@ -105,6 +122,7 @@ async function refresh(): Promise<void> {
   try {
     entries.value = await window.api.homeGetContinueWatching();
     failedPosters.value = new Set();
+    await pruneDismissed();
   } catch (err) {
     console.error('Failed to load continue-watching list:', err);
     entries.value = [];
@@ -250,6 +268,7 @@ onUnmounted(() => {
               </div>
             </button>
             <button
+              v-if="e.animeId"
               class="cw-dismiss"
               :aria-label="`Dismiss ${e.animeName || 'this show'}`"
               @click.stop="dismiss(e)"

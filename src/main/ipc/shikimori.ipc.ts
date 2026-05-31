@@ -172,6 +172,11 @@ export function register({
       .catch((err) => console.warn('[shikimori] profile background refresh failed:', err))
   }
 
+  // When the detail-prefetch worker finishes a run, the genres aggregation has
+  // broader coverage — recompute and rebroadcast the profile so an open
+  // dashboard fills in its favorite-genres panel without a manual refresh (#183).
+  sync.setOnDetailsPrefetched(refreshShikimoriProfileInBackground)
+
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_AUTH_URL, () => {
     return shikimori.getAuthUrl()
   })

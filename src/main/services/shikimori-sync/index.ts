@@ -33,7 +33,15 @@ const SYNC_ITEM_DELAY_MS = 250
 
 const PREFETCH_INTER_REQUEST_MS = 2000
 const PREFETCH_STALENESS_MS = 30 * 24 * 60 * 60 * 1000
-const PREFETCH_STATUSES = new Set<shikimori.ShikiUserRateStatus>(['watching', 'planned'])
+// The worklist covers every rated anime so favorite-genres aggregation (#183) is
+// complete, but these statuses are fetched first — they back the AnimeDetailView
+// Shikimori panel, the worker's original purpose, so they must not wait behind a
+// large completed/dropped backlog.
+const PREFETCH_PRIORITY_STATUSES = new Set<shikimori.ShikiUserRateStatus>([
+  'watching',
+  'rewatching',
+  'planned'
+])
 
 export const CALENDAR_CACHE_TTL_MS = 5 * 60 * 1000
 
@@ -69,6 +77,7 @@ export interface ShikimoriSyncService {
   syncShikimoriQueue(): Promise<void>
   prefetchShikimoriDetails(): Promise<void>
   refreshShikimoriDetailsForMalId(malId: number): Promise<shikimori.ShikiAnimeDetails | null>
+  setOnDetailsPrefetched(cb: () => void): void
   abortPrefetch(): void
   invalidateCalendarCache(): void
   getCachedCalendar(): CachedCalendar | null
@@ -111,6 +120,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
 
   let prefetchInProgress = false
   let prefetchAbort = false
+  // Set by the IPC layer (#183) to recompute the profile's favorite-genres panel
+  // once a prefetch run has widened the cached-details coverage.
+  let onDetailsPrefetched: (() => void) | undefined
 
   let calendarCache: CachedCalendar | null = null
 
@@ -305,17 +317,17 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
     >
     const now = Date.now()
-    const result: number[] = []
+    const priority: number[] = []
+    const rest: number[] = []
     for (const entry of rates) {
-      if (!PREFETCH_STATUSES.has(entry.rate.status)) continue
       const malId = entry.rate.target_id ?? entry.shikiAnime?.id
       if (typeof malId !== 'number' || !Number.isFinite(malId) || malId <= 0) continue
       const cached = cache[String(malId)]
       if (!cached || now - cached.fetchedAt > PREFETCH_STALENESS_MS) {
-        result.push(malId)
+        ;(PREFETCH_PRIORITY_STATUSES.has(entry.rate.status) ? priority : rest).push(malId)
       }
     }
-    return result
+    return [...priority, ...rest]
   }
 
   async function refreshShikimoriDetailsForMalId(
@@ -362,6 +374,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
 
     prefetchInProgress = true
     prefetchAbort = false
+    let fetched = 0
 
     try {
       let accessToken: string
@@ -385,6 +398,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           >
           cache[String(malId)] = { details, fetchedAt: Date.now() }
           store.set('shikimoriAnimeDetails', cache)
+          fetched++
           broadcast(deps.animeDetailsUpdatedChannel, { malId, details })
         } catch (err) {
           if (isNetworkError(err)) {
@@ -411,6 +425,14 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     } finally {
       prefetchInProgress = false
     }
+
+    // A fuller details cache means the profile's favorite-genres panel can be
+    // recomputed with broader coverage (#183) — let the caller rebroadcast it.
+    if (fetched > 0) onDetailsPrefetched?.()
+  }
+
+  function setOnDetailsPrefetched(cb: () => void): void {
+    onDetailsPrefetched = cb
   }
 
   function abortPrefetch(): void {
@@ -439,6 +461,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     syncShikimoriQueue,
     prefetchShikimoriDetails,
     refreshShikimoriDetailsForMalId,
+    setOnDetailsPrefetched,
     abortPrefetch,
     invalidateCalendarCache,
     getCachedCalendar,

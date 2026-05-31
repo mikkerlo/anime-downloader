@@ -60,6 +60,45 @@ export function register({
       .catch((err) => console.warn('[shikimori] background refresh failed:', err))
   }
 
+  // Friends page cards (#179): friend list joined with presence + per-friend
+  // stats (titles/mean/mutual + current watch). Cache-first like the rate
+  // cache; `null` when logged out. `mutual` is shared rated titles with the
+  // signed-in user, derived from the cached own-rate list.
+  async function fetchAndCacheShikimoriFriends(): Promise<ShikiFriendCard[] | null> {
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) return null
+    const accessToken = await shikimori.ensureFreshToken(store)
+    const ownRates = store.get('shikimoriUserRates') as {
+      rate: { target_id?: number }
+      shikiAnime?: { id: number }
+    }[]
+    const ownMalIds = new Set<number>()
+    for (const e of ownRates) {
+      const malId = e.rate?.target_id ?? e.shikiAnime?.id
+      if (malId) ownMalIds.add(malId)
+    }
+    const cards = await shikimori.getFriendsWithStats(accessToken, user.id, ownMalIds)
+    // Resolve each friend's current-watch MAL id to a smotret-anime id so the
+    // card can deep-link in-app (one batched lookup for all friends).
+    const watchMalIds = cards.map((c) => c.watching?.malId).filter((m): m is number => m != null)
+    if (watchMalIds.length > 0) {
+      const malMap = await lookupByMalIds(watchMalIds)
+      for (const c of cards) {
+        if (c.watching) c.watching.animeId = malMap[c.watching.malId]?.id ?? null
+      }
+    }
+    store.set('shikimoriFriends', cards)
+    return cards
+  }
+
+  function refreshShikimoriFriendsInBackground(): void {
+    fetchAndCacheShikimoriFriends()
+      .then((cards) => {
+        if (cards) broadcast(EVENT_CHANNELS.SHIKIMORI_FRIENDS_REFRESHED, cards)
+      })
+      .catch((err) => console.warn('[shikimori] friends background refresh failed:', err))
+  }
+
   // Assemble the profile-dashboard payload (#178): identity from the cached
   // user, status-breakdown + score-distribution from the Shikimori stats block,
   // and titles/episodes/mean/days/genres derived from data already cached
@@ -152,6 +191,7 @@ export function register({
     store.set('shikimoriUpdateQueue', [])
     store.set('shikimoriAnimeDetails', {})
     store.set('shikimoriProfile', null)
+    store.set('shikimoriFriends', [])
     sync.abortPrefetch()
     sync.invalidateCalendarCache()
     sync.stopSyncTimer()
@@ -161,6 +201,21 @@ export function register({
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_USER, () => {
     return store.get('shikimoriUser') as shikimori.ShikiUser | null
+  })
+
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_FRIENDS, async () => {
+    if (!store.get('shikimoriUser')) return null
+    const cached = store.get('shikimoriFriends') as ShikiFriendCard[]
+    if (cached && cached.length > 0) {
+      refreshShikimoriFriendsInBackground()
+      return cached
+    }
+    try {
+      return await fetchAndCacheShikimoriFriends()
+    } catch (err) {
+      console.warn('[shikimori] friends fetch failed:', err)
+      return null
+    }
   })
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_PROFILE, async () => {

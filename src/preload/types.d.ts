@@ -281,6 +281,8 @@ interface Api {
   shikimoriGetUser: () => Promise<ShikiUser | null>
   shikimoriGetProfile: () => Promise<ShikimoriProfile | null>
   onShikimoriProfileRefreshed: (callback: (profile: ShikimoriProfile) => void) => Unsubscribe
+  shikimoriGetFriends: () => Promise<ShikiFriendCard[] | null>
+  onShikimoriFriendsRefreshed: (callback: (friends: ShikiFriendCard[]) => void) => Unsubscribe
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
   shikimoriUpdateRate: (
     malId: number,

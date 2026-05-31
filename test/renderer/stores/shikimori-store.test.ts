@@ -10,8 +10,10 @@ type Captured = {
   offlineQueue: Listener<{ length: number }>[]
   syncStatus: Listener<unknown>[]
   profileRefreshed: Listener<ShikimoriProfile>[]
+  friendsRefreshed: Listener<ShikiFriendCard[]>[]
   getUser: ReturnType<typeof vi.fn>
   getProfile: ReturnType<typeof vi.fn>
+  getFriends: ReturnType<typeof vi.fn>
   getRates: ReturnType<typeof vi.fn>
   getSyncStatus: ReturnType<typeof vi.fn>
   getOfflineQueueLength: ReturnType<typeof vi.fn>
@@ -28,8 +30,10 @@ function installApi(): void {
     offlineQueue: [],
     syncStatus: [],
     profileRefreshed: [],
+    friendsRefreshed: [],
     getUser: vi.fn(async () => null),
     getProfile: vi.fn(async () => null),
+    getFriends: vi.fn(async () => []),
     getRates: vi.fn(async () => []),
     getSyncStatus: vi.fn(async () => ({
       state: 'idle',
@@ -68,8 +72,13 @@ function installApi(): void {
         captured.profileRefreshed.push(cb)
         return () => {}
       },
+      onShikimoriFriendsRefreshed: (cb: Listener<ShikiFriendCard[]>) => {
+        captured.friendsRefreshed.push(cb)
+        return () => {}
+      },
       shikimoriGetUser: captured.getUser,
       shikimoriGetProfile: captured.getProfile,
+      shikimoriGetFriends: captured.getFriends,
       shikimoriGetAnimeRates: captured.getRates,
       shikimoriGetSyncStatus: captured.getSyncStatus,
       shikimoriGetOfflineQueueLength: captured.getOfflineQueueLength,
@@ -211,6 +220,34 @@ describe('useShikimoriStore', () => {
     } as ShikimoriProfile)
     expect(store.profile?.nickname).toBe('bob')
     expect(store.profile?.genres[0].name).toBe('Action')
+  })
+
+  it('refreshFriends pulls the friend cards from the IPC bridge', async () => {
+    const cards = [{ id: 11, nickname: 'alice', online: true } as unknown as ShikiFriendCard]
+    captured.getFriends.mockResolvedValueOnce(cards)
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(store.friends).toEqual([])
+    await store.refreshFriends()
+    expect(store.friends).toEqual(cards)
+  })
+
+  it('refreshFriends coerces a null IPC result to an empty array', async () => {
+    captured.getFriends.mockResolvedValueOnce(null)
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    await store.refreshFriends()
+    expect(store.friends).toEqual([])
+  })
+
+  it('replaces friends when onShikimoriFriendsRefreshed fires', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(captured.friendsRefreshed.length).toBe(1)
+    captured.friendsRefreshed[0]([
+      { id: 12, nickname: 'bob', online: false } as unknown as ShikiFriendCard
+    ])
+    expect(store.friends.map((f) => f.nickname)).toEqual(['bob'])
   })
 
   it('rateByMalId returns null for a falsy malId', async () => {

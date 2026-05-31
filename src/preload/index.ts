@@ -364,6 +364,11 @@ const api = {
   onShikimoriProfileRefreshed: subscribe<ShikimoriProfile>(
     EVENT_CHANNELS.SHIKIMORI_PROFILE_REFRESHED
   ),
+  shikimoriGetFriends: () =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_FRIENDS) as Promise<ShikiFriendCard[] | null>,
+  onShikimoriFriendsRefreshed: subscribe<ShikiFriendCard[]>(
+    EVENT_CHANNELS.SHIKIMORI_FRIENDS_REFRESHED
+  ),
   shikimoriGetRate: (malId: number) => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_RATE, malId),
   shikimoriUpdateRate: (
     malId: number,

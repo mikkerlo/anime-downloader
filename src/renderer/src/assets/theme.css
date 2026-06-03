@@ -241,8 +241,10 @@ body {
   color: var(--accent-ink);
 }
 
-.sidebar-foot {
+.sidebar-bottom {
   margin-top: auto;
+}
+.sidebar-foot {
   padding: 14px;
   border-top: 1px solid var(--border-soft);
 }

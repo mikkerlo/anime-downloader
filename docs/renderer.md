@@ -22,6 +22,7 @@ src/renderer/src/
       AnimeCard.vue
       CleanupModal.vue
       Sidebar.vue
+      SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)
     detail/                    AnimeDetailView sub-components + injection keys
       AnimeDetailShell.vue (= views/AnimeDetailView.vue acts as shell)
       ChronologyPanel.vue

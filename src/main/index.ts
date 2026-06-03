@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Notification, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, Notification, protocol, net, session } from 'electron'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -26,6 +26,7 @@ import { pathToFileURL } from 'url'
 import { Readable } from 'stream'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
+import { installShikimoriReferer } from './lib/shikimori-images'
 import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
 import type { AnimeSearchResult, AnimeDetail, Translation } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
@@ -755,6 +756,10 @@ function createWindow(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
+  // the renderer straight from shikimori.one) render instead of coming back blank.
+  installShikimoriReferer(session.defaultSession)
+
   // Handle anime-video:// protocol for local video playback with Range request support.
   // Only one URL shape: anime-video://{absolute-path}. MKV streaming now uses MSE via IPC.
   protocol.handle('anime-video', async (request) => {

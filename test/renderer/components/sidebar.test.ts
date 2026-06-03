@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import Sidebar from '../../../src/renderer/src/components/shared/Sidebar.vue'
 import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
+import { useSettingsStore } from '../../../src/renderer/src/stores/settings'
 
 beforeEach(() => {
   // The downloads + shikimori stores subscribe to `window.api.on*` at setup.
@@ -57,5 +58,16 @@ describe('Sidebar', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.u-sync').classes()).toContain('offline')
     expect(wrapper.find('.u-sync').text()).toContain('2 pending')
+  })
+
+  it('shows the update banner even when logged out (it is not gated on login)', () => {
+    // Updates are app-level, not tied to Shikimori — a logged-out user with no
+    // `.user-chip` footer must still see the banner pinned at the bottom.
+    const settings = useSettingsStore()
+    settings.updateStatus = { status: 'available', version: '4.1.12' }
+
+    const wrapper = mount(Sidebar)
+    expect(wrapper.find('.user-chip').exists()).toBe(false)
+    expect(wrapper.find('.update-banner').exists()).toBe(true)
   })
 })

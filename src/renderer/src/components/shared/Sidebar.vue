@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useLibraryStore, type LibraryView } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useDownloadsStore } from '../../stores/downloads';
+import SidebarUpdateBanner from './SidebarUpdateBanner.vue';
 
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
@@ -149,14 +150,17 @@ const syncLabel = computed(() => {
       </button>
     </nav>
 
-    <div v-if="loggedIn && user" class="sidebar-foot">
-      <div class="user-chip">
-        <img v-if="user.avatar" :src="user.avatar" :alt="user.nickname" class="user-avatar" />
-        <div v-else class="user-avatar">{{ userInitial }}</div>
-        <div class="user-meta">
-          <div class="u-name">{{ user.nickname }}</div>
-          <div class="u-sync" :class="{ offline: !fullySynced }">
-            <span class="dot"></span>{{ syncLabel }}
+    <div class="sidebar-bottom">
+      <SidebarUpdateBanner />
+      <div v-if="loggedIn && user" class="sidebar-foot">
+        <div class="user-chip">
+          <img v-if="user.avatar" :src="user.avatar" :alt="user.nickname" class="user-avatar" />
+          <div v-else class="user-avatar">{{ userInitial }}</div>
+          <div class="user-meta">
+            <div class="u-name">{{ user.nickname }}</div>
+            <div class="u-sync" :class="{ offline: !fullySynced }">
+              <span class="dot"></span>{{ syncLabel }}
+            </div>
           </div>
         </div>
       </div>

@@ -21,9 +21,14 @@
 
 Anime DL is more than a downloader — it has a built-in player with MKV streaming, Anime4K upscaling, and native ASS subtitles, two-way Shikimori sync that works offline, watch-together via Syncplay, and local OP/ED skip detection.
 
+<p align="center">
+  <img src="resources/screenshots/player-hero.jpg" alt="Anime DL built-in player with native subtitles" width="820" />
+</p>
+
 ## Contents
 
 - [Features](#features)
+- [Screenshots](#screenshots)
 - [Download](#download)
 - [Quick Start](#quick-start)
 - [Development](#development)
@@ -72,6 +77,31 @@ Anime DL is more than a downloader — it has a built-in player with MKV streami
 - **Library** of starred and downloaded anime with offline detail caching.
 - **Hot/cold storage** with automatic move of watched episodes.
 - **Auto-update** via `electron-updater`.
+
+## Screenshots
+
+<div align="center">
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="resources/screenshots/player-subtitles.jpg" alt="Built-in player rendering native subtitles" /><br />
+      <sub><b>Native ASS/SSA subtitles</b> — rendered with libass/JASSUB, full styling and positioning preserved.</sub>
+    </td>
+    <td width="50%">
+      <img src="resources/screenshots/player-scene.jpg" alt="Instant MKV streaming in the built-in player" /><br />
+      <sub><b>Instant MKV streaming</b> — frame-accurate seeking with mid-playback quality, translation, and Anime4K switching.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="resources/screenshots/home.png" alt="Home continue-watching dashboard" width="70%" /><br />
+      <sub><b>Home</b> — continue-watching dashboard with dark-theme navigation.</sub>
+    </td>
+  </tr>
+</table>
+
+</div>
 
 ## Download
 

@@ -52,27 +52,32 @@ function ocr(imagePath) {
   console.log('Opening player with test data...')
   await page.evaluate(() => {
     if (window.__openTestPlayer) {
-      window.__openTestPlayer(
-        '',
-        'https://example.com/stream1080.mp4',
-        '',
-        'Test Anime',
-        '1',
-        [
+      window.__openTestPlayer({
+        filePath: '',
+        streamUrl: 'https://example.com/stream1080.mp4',
+        subtitleContent: '',
+        animeName: 'Test Anime',
+        episodeLabel: '1',
+        availableStreams: [
           { height: 1080, url: 'https://example.com/stream1080.mp4' },
           { height: 720, url: 'https://example.com/stream720.mp4' },
           { height: 480, url: 'https://example.com/stream480.mp4' }
         ],
-        123,
-        [
+        translationId: 123,
+        translations: [
           { id: 123, label: 'AniLibria', type: 'voiceRu', height: 1080 },
           { id: 456, label: 'Studio Band', type: 'voiceRu', height: 720 },
           { id: 457, label: 'AniDUB', type: 'voiceRu', height: 1080 },
           { id: 789, label: 'HorribleSubs', type: 'subEn', height: 1080 },
           { id: 790, label: 'Erai-raws', type: 'subEn', height: 720 },
           { id: 101, label: 'Субтитры', type: 'subRu', height: 1080 }
-        ]
-      )
+        ],
+        downloadedTrIds: [],
+        allEpisodes: [],
+        episodeIndex: 0,
+        animeId: 0,
+        malId: 0
+      })
     }
   })
   await page.waitForTimeout(2000)
@@ -161,16 +166,21 @@ function ocr(imagePath) {
     console.log('Simulating remux loading state...')
     await page.evaluate(() => {
       if (window.__openTestPlayer) {
-        window.__openTestPlayer(
-          '/fake/nonexistent/long-video.mkv',
-          '',
-          '',
-          'Steins;Gate',
-          '12',
-          [],
-          0,
-          []
-        )
+        window.__openTestPlayer({
+          filePath: '/fake/nonexistent/long-video.mkv',
+          streamUrl: '',
+          subtitleContent: '',
+          animeName: 'Steins;Gate',
+          episodeLabel: '12',
+          availableStreams: [],
+          translationId: 0,
+          translations: [],
+          downloadedTrIds: [],
+          allEpisodes: [],
+          episodeIndex: 0,
+          animeId: 0,
+          malId: 0
+        })
       }
     })
     await page.waitForTimeout(200)
@@ -190,7 +200,21 @@ function ocr(imagePath) {
     console.log('Opening player with H.264 MKV test file...')
     await page.evaluate((mkvPath) => {
       if (window.__openTestPlayer) {
-        window.__openTestPlayer(mkvPath, '', '', 'MKV Test Anime', '1', [], 0, [])
+        window.__openTestPlayer({
+          filePath: mkvPath,
+          streamUrl: '',
+          subtitleContent: '',
+          animeName: 'MKV Test Anime',
+          episodeLabel: '1',
+          availableStreams: [],
+          translationId: 0,
+          translations: [],
+          downloadedTrIds: [],
+          allEpisodes: [],
+          episodeIndex: 0,
+          animeId: 0,
+          malId: 0
+        })
       }
     }, mkvTestFile)
 
@@ -222,7 +246,21 @@ function ocr(imagePath) {
     await page.evaluate(
       ({ mkvPath, subs }) => {
         if (window.__openTestPlayer) {
-          window.__openTestPlayer(mkvPath, '', subs, 'Angel Beats', '1', [], 0, [])
+          window.__openTestPlayer({
+            filePath: mkvPath,
+            streamUrl: '',
+            subtitleContent: subs,
+            animeName: 'Angel Beats',
+            episodeLabel: '1',
+            availableStreams: [],
+            translationId: 0,
+            translations: [],
+            downloadedTrIds: [],
+            allEpisodes: [],
+            episodeIndex: 0,
+            animeId: 0,
+            malId: 0
+          })
         }
       },
       { mkvPath: mkvTestFile, subs: assContent }

@@ -311,6 +311,7 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
     const runPromise = (async (): Promise<ShowSkipDetections> => {
       const result = await analyzeShow(animeId, episodes, {
         fpcalcPath,
+        ffmpegPath: getFfmpegPath() || undefined,
         signal: controller.signal,
         onProgress: (p) => broadcastSkipProgress(animeId, p),
         loadCachedFingerprint: (key) => {

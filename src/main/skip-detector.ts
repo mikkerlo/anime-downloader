@@ -239,11 +239,20 @@ async function fingerprintViaWavDecode(
   }
 }
 
+// A decode-shaped failure is one where fpcalc actually launched and exited
+// non-zero (e.g. "fpcalc exited 3: ... Error decoding audio frame"). Spawn
+// failures ("fpcalc spawn failed"), a missing binary ("fpcalc path not set"),
+// or aborts mean the WAV fallback would just hit the same broken fpcalc with the
+// same path — so we don't waste a full FFmpeg decode retrying those.
+function isFpcalcDecodeFailure(err: unknown): boolean {
+  return err instanceof Error && /^fpcalc exited /.test(err.message)
+}
+
 async function fingerprintLocalFile(filePath: string, opts: AnalyzeOptions): Promise<Fingerprint> {
   try {
     return await fingerprintFile(opts.fpcalcPath, filePath, { signal: opts.signal })
   } catch (err) {
-    if (!opts.ffmpegPath || opts.signal?.aborted) throw err
+    if (!opts.ffmpegPath || opts.signal?.aborted || !isFpcalcDecodeFailure(err)) throw err
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(
       `[skip-detector] fpcalc failed to decode ${path.basename(filePath)} (${msg}); retrying via FFmpeg WAV decode`

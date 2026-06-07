@@ -53,15 +53,23 @@ describe('analyzeShow fingerprinting resilience', () => {
   beforeEach(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'skip-fp-test-'))
     ffmpegCalls = []
-    // Default behavior: fpcalc fails on any `.mkv` whose basename starts with
-    // "bad", succeeds on everything else (good mkvs and any decoded .wav).
+    // Default behavior:
+    // - fpcalc fails (exit 3, decode error) on any `.mkv` whose basename starts
+    //   with "bad" or "corrupt"; succeeds elsewhere (good mkvs, decoded .wav).
+    // - ffmpeg decode fails (exit 1) when its input basename starts with
+    //   "corrupt", simulating a file even the full FFmpeg can't decode.
     spawnMock.mockImplementation((command: string, args: string[]) => {
       const proc = new FakeProc()
       const target = args[args.length - 1] ?? ''
       if (command.includes('ffmpeg')) {
         ffmpegCalls.push(args)
-        emit(proc, { code: 0 })
-      } else if (target.endsWith('.mkv') && path.basename(target).startsWith('bad')) {
+        const inputPath = args[args.indexOf('-i') + 1] ?? ''
+        if (path.basename(inputPath).startsWith('corrupt')) {
+          emit(proc, { stderr: 'Invalid data found when processing input', code: 1 })
+        } else {
+          emit(proc, { code: 0 })
+        }
+      } else if (target.endsWith('.mkv') && /^(bad|corrupt)/.test(path.basename(target))) {
         emit(proc, {
           stderr: 'ERROR: Error decoding audio frame (Invalid data found when processing input)',
           code: 3
@@ -104,5 +112,25 @@ describe('analyzeShow fingerprinting resilience', () => {
     await expect(analyzeShow(1, episodes, baseOpts)).rejects.toThrow(
       /Could not fingerprint enough episodes \(0 of 2 succeeded\)/
     )
+  })
+
+  it('skips an episode when the FFmpeg fallback is attempted but also fails to decode', async () => {
+    const episodes = [
+      makeEpisode('good1.mkv'),
+      makeEpisode('good2.mkv'),
+      makeEpisode('corrupt3.mkv')
+    ]
+    const result = await analyzeShow(1, episodes, { ...baseOpts, ffmpegPath: '/fake/ffmpeg' })
+    // The corrupt episode is dropped; the rest of the show still analyzes.
+    expect(Object.keys(result.perEpisode).sort()).toEqual(['1', '2'])
+    // The fallback was actually attempted for the corrupt episode.
+    expect(ffmpegCalls.length).toBe(1)
+  })
+
+  it('throws when the FFmpeg fallback also fails on too many episodes', async () => {
+    const episodes = [makeEpisode('corrupt1.mkv'), makeEpisode('corrupt2.mkv')]
+    await expect(
+      analyzeShow(1, episodes, { ...baseOpts, ffmpegPath: '/fake/ffmpeg' })
+    ).rejects.toThrow(/Could not fingerprint enough episodes \(0 of 2 succeeded\)/)
   })
 })

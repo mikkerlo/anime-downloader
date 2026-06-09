@@ -60,6 +60,11 @@ export interface AnalyzeProgress {
 
 export interface AnalyzeOptions {
   fpcalcPath: string
+  /**
+   * Full FFmpeg build path. When set, a file that fpcalc's own (slimmer) bundled
+   * FFmpeg can't decode is retried by decoding the audio to a temp WAV first.
+   */
+  ffmpegPath?: string
   signal?: AbortSignal
   onProgress?: (p: AnalyzeProgress) => void
   loadCachedFingerprint: (key: string) => CachedFingerprint | undefined
@@ -193,6 +198,69 @@ interface LoadedEpisode extends EpisodeInput {
   fingerprint: Fingerprint
 }
 
+// Decode a file's audio to a temp mono 11025 Hz WAV with the app's full FFmpeg,
+// then fingerprint that. fpcalc downsamples to mono/11025 internally, so the
+// resulting fingerprint is identical to decoding the source directly — this is
+// purely a more capable decoder front-end for files fpcalc's bundled (slimmer,
+// platform-specific) FFmpeg rejects with "Error decoding audio frame".
+async function fingerprintViaWavDecode(
+  sourcePath: string,
+  ffmpegPath: string,
+  fpcalcPath: string,
+  signal?: AbortSignal
+): Promise<Fingerprint> {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-dl-skip-decode-'))
+  const outputPath = path.join(tmpDir, 'audio.wav')
+  try {
+    await runChild(
+      ffmpegPath,
+      [
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-nostdin',
+        '-i',
+        sourcePath,
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '11025',
+        '-c:a',
+        'pcm_s16le',
+        outputPath
+      ],
+      { signal }
+    )
+    return await fingerprintFile(fpcalcPath, outputPath, { signal })
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  }
+}
+
+// A decode-shaped failure is one where fpcalc actually launched and exited
+// non-zero (e.g. "fpcalc exited 3: ... Error decoding audio frame"). Spawn
+// failures ("fpcalc spawn failed"), a missing binary ("fpcalc path not set"),
+// or aborts mean the WAV fallback would just hit the same broken fpcalc with the
+// same path — so we don't waste a full FFmpeg decode retrying those.
+function isFpcalcDecodeFailure(err: unknown): boolean {
+  return err instanceof Error && /^fpcalc exited /.test(err.message)
+}
+
+async function fingerprintLocalFile(filePath: string, opts: AnalyzeOptions): Promise<Fingerprint> {
+  try {
+    return await fingerprintFile(opts.fpcalcPath, filePath, { signal: opts.signal })
+  } catch (err) {
+    if (!opts.ffmpegPath || opts.signal?.aborted || !isFpcalcDecodeFailure(err)) throw err
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(
+      `[skip-detector] fpcalc failed to decode ${path.basename(filePath)} (${msg}); retrying via FFmpeg WAV decode`
+    )
+    return await fingerprintViaWavDecode(filePath, opts.ffmpegPath, opts.fpcalcPath, opts.signal)
+  }
+}
+
 async function getFingerprint(
   animeId: number,
   ep: EpisodeInput,
@@ -208,7 +276,7 @@ async function getFingerprint(
       hashesPerSec: cached.hashesPerSec
     }
   }
-  const fp = await fingerprintFile(opts.fpcalcPath, ep.filePath, { signal: opts.signal })
+  const fp = await fingerprintLocalFile(ep.filePath, opts)
   opts.saveCachedFingerprint(cacheKey, {
     hashes: Array.from(fp.hashes),
     durationSec: fp.durationSec,
@@ -410,8 +478,12 @@ export async function analyzeShow(
     throw new Error('analyzeShow: need at least 2 episodes')
   }
 
-  // Phase 1: fingerprint each episode (use cache when available)
+  // Phase 1: fingerprint each episode (use cache when available). A single
+  // episode that can't be decoded (even after the FFmpeg WAV fallback) is
+  // skipped rather than aborting the whole show — pairwise matching only needs
+  // two good episodes to find the OP/ED.
   const loaded: LoadedEpisode[] = []
+  const failures: { episodeLabel: string; message: string }[] = []
   for (let i = 0; i < episodes.length; i++) {
     if (opts.signal?.aborted) throw new Error('analysis cancelled')
     opts.onProgress?.({
@@ -420,14 +492,31 @@ export async function analyzeShow(
       total: episodes.length,
       episodeLabel: episodes[i].episodeLabel
     })
-    const fp = await getFingerprint(animeId, episodes[i], opts)
-    loaded.push({ ...episodes[i], fingerprint: fp })
+    try {
+      const fp = await getFingerprint(animeId, episodes[i], opts)
+      loaded.push({ ...episodes[i], fingerprint: fp })
+    } catch (err) {
+      if (opts.signal?.aborted) throw new Error('analysis cancelled')
+      const message = err instanceof Error ? err.message : String(err)
+      failures.push({ episodeLabel: episodes[i].episodeLabel, message })
+      console.warn(
+        `[skip-detector] skipping ${episodes[i].episodeLabel}: fingerprinting failed (${message})`
+      )
+    }
     opts.onProgress?.({
       phase: 'fingerprinting',
       current: i + 1,
       total: episodes.length,
       episodeLabel: episodes[i].episodeLabel
     })
+  }
+
+  if (loaded.length < 2) {
+    const detail = failures.map((f) => `${f.episodeLabel}: ${f.message}`).join('; ')
+    throw new Error(
+      `Could not fingerprint enough episodes (${loaded.length} of ${episodes.length} succeeded)` +
+        (detail ? ` — ${detail}` : '')
+    )
   }
 
   // Phase 2: pairwise comparison

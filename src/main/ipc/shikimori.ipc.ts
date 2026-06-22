@@ -3,6 +3,7 @@ import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import * as shikimori from '../shikimori'
 import {
   buildTasteProfile,
+  filterOutRated,
   rankRecommendations,
   type RecommendationCandidate,
   type TasteRate
@@ -56,6 +57,10 @@ export function register({
     fetchAndCacheShikimoriRates()
       .then((entries) => {
         sync.invalidateCalendarCache()
+        // A full rate refresh can carry completions made outside the app (e.g.
+        // on shikimori.one); clear the recs cache so it rebuilds from the
+        // updated list rather than surfacing a now-rated title (#193 follow-up).
+        invalidateRecommendations()
         broadcast(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, entries)
         void sync.syncShikimoriQueue()
         void sync.prefetchShikimoriDetails()
@@ -186,7 +191,51 @@ export function register({
   // out; `[]` when the user hasn't rated enough to seed (renderer shows a hint).
   const RECS_SEED_LIMIT = 8
   const RECS_RESULT_LIMIT = 40
+  // How many of the top candidates to fetch genres for so the genre term in the
+  // ranking actually fires (candidate genres aren't in the rated-anime detail
+  // cache by default). Bounded + throttled to respect the rate limit; results
+  // are cached so rebuilds are cheap.
+  const RECS_ENRICH_LIMIT = 25
+  const RECS_ENRICH_DELAY_MS = 250
   const SEED_STATUSES: shikimori.ShikiUserRateStatus[] = ['completed', 'watching', 'rewatching']
+
+  // Genres of an anime from the shared detail cache, fetching + caching on miss
+  // (the same `shikimoriAnimeDetails` store the detail-prefetch worker fills, so
+  // an enrichment fetch also benefits the AnimeDetailView panel). Read-modify-
+  // write is synchronous after the await, so it can't clobber a concurrent
+  // worker write.
+  async function fetchAndCacheAnimeDetails(
+    accessToken: string,
+    malId: number
+  ): Promise<shikimori.ShikiAnimeDetails> {
+    const cache = store.get('shikimoriAnimeDetails') as Record<
+      string,
+      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+    >
+    const hit = cache[String(malId)]
+    if (hit) return hit.details
+    const details = await shikimori.getAnimeDetails(accessToken, malId)
+    const fresh = store.get('shikimoriAnimeDetails') as typeof cache
+    fresh[String(malId)] = { details, fetchedAt: Date.now() }
+    store.set('shikimoriAnimeDetails', fresh)
+    broadcast(EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED, { malId, details })
+    return details
+  }
+
+  // Every MAL id on the user's list (any status), read from the live rate
+  // cache. Used both at build time and to re-validate the cached feed on read.
+  function ratedMalIdSet(): Set<number> {
+    const rates = store.get('shikimoriUserRates') as {
+      rate: { target_id?: number }
+      shikiAnime?: { id: number }
+    }[]
+    const set = new Set<number>()
+    for (const e of rates) {
+      const malId = e.rate?.target_id ?? e.shikiAnime?.id
+      if (malId) set.add(malId)
+    }
+    return set
+  }
 
   async function fetchAndCacheShikimoriRecommendations(): Promise<RecommendationEntry[] | null> {
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
@@ -238,6 +287,22 @@ export function register({
       return []
     }
 
+    // Exclusion set = everything already rated, plus every entry in the
+    // franchise of any seed (other seasons/sequels/recaps). `/similar` happily
+    // returns sibling cours as "similar", but a continuation of a show the user
+    // has watched is not discovery — it belongs in the Chronology panel. Built
+    // up front (before the `/similar` pass) so a candidate is dropped no matter
+    // which seed surfaces it (#193 follow-up).
+    const excludedIds = new Set<number>(taste.ratedMalIds)
+    for (const { malId } of seeds) {
+      try {
+        const franchise = await shikimori.getFranchise(malId)
+        for (const node of franchise.nodes) excludedIds.add(node.id)
+      } catch (err) {
+        console.warn('[shikimori] recommendations: franchise fetch failed for', malId, err)
+      }
+    }
+
     const candidatesByMal = new Map<number, RecommendationCandidate>()
     for (const { e, malId } of seeds) {
       let similar: shikimori.ShikiSimilarAnime[]
@@ -250,7 +315,7 @@ export function register({
       const seedTitle = e.shikiAnime?.russian || e.shikiAnime?.name || 'a show you rated'
       const seed = { title: seedTitle, score: e.rate.score }
       for (const s of similar) {
-        if (taste.ratedMalIds.has(s.id)) continue
+        if (excludedIds.has(s.id)) continue
         const existing = candidatesByMal.get(s.id)
         if (existing) {
           existing.seeds.push(seed)
@@ -268,7 +333,28 @@ export function register({
       }
     }
 
-    const ranked = rankRecommendations([...candidatesByMal.values()], taste, RECS_RESULT_LIMIT)
+    // Enrich the top candidates with genres so the genre-affinity term in the
+    // final ranking can fire. A preliminary rank (genre term mostly dormant —
+    // most candidates have no cached genres yet) picks which candidates are
+    // worth a detail fetch; we mutate their `genres` in place (same object
+    // refs live in `candidatesByMal`), then re-rank with the genre signal live.
+    const allCandidates = [...candidatesByMal.values()]
+    const prelim = rankRecommendations(allCandidates, taste, RECS_ENRICH_LIMIT)
+    for (const r of prelim) {
+      const cand = candidatesByMal.get(r.malId)
+      if (!cand || cand.genres.length > 0) continue
+      try {
+        const details = await fetchAndCacheAnimeDetails(accessToken, cand.malId)
+        cand.genres = (details.genres ?? [])
+          .map((g) => g.russian || g.name)
+          .filter((n): n is string => Boolean(n))
+      } catch (err) {
+        console.warn('[shikimori] recommendations: detail enrich failed for', cand.malId, err)
+      }
+      await new Promise((resolve) => setTimeout(resolve, RECS_ENRICH_DELAY_MS))
+    }
+
+    const ranked = rankRecommendations(allCandidates, taste, RECS_RESULT_LIMIT)
     const malMap = await lookupByMalIds(ranked.map((r) => r.malId))
 
     const entries: RecommendationEntry[] = ranked.map((r) => {
@@ -374,8 +460,13 @@ export function register({
     if (!store.get('shikimoriUser')) return null
     const cached = store.get('shikimoriRecommendations') as RecommendationEntry[]
     if (cached && cached.length > 0) {
+      // The cached feed outlives rate changes, so re-validate it against the
+      // current list before serving — an entry the user has since rated or
+      // completed must never show even if the cache predates that change.
+      const filtered = filterOutRated(cached, ratedMalIdSet())
+      if (filtered.length !== cached.length) store.set('shikimoriRecommendations', filtered)
       refreshShikimoriRecommendationsInBackground()
-      return cached
+      return filtered
     }
     try {
       return await fetchAndCacheShikimoriRecommendations()

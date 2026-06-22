@@ -169,7 +169,8 @@ const STORE_DEFAULTS = {
   autoCleanupSnoozedAnimeIds: {} as Record<string, true>,
   dismissedContinueWatching: [] as string[],
   shikimoriProfile: null as ShikimoriProfile | null,
-  shikimoriFriends: [] as ShikiFriendCard[]
+  shikimoriFriends: [] as ShikiFriendCard[],
+  shikimoriRecommendations: [] as RecommendationEntry[]
 }
 
 const store = createStorageService(STORE_DEFAULTS)

@@ -1,0 +1,40 @@
+[
+  {
+    "id": 9253,
+    "name": "Steins;Gate",
+    "russian": "Врата Штейна",
+    "image": {
+      "original": "/system/animes/original/9253.jpg",
+      "preview": "/system/animes/preview/9253.jpg",
+      "x96": "/system/animes/x96/9253.jpg",
+      "x48": "/system/animes/x48/9253.jpg"
+    },
+    "url": "/animes/9253-steins-gate",
+    "kind": "tv",
+    "score": "9.03",
+    "status": "released",
+    "episodes": 24,
+    "episodes_aired": 24,
+    "aired_on": "2011-04-06",
+    "released_on": "2011-09-14"
+  },
+  {
+    "id": 1535,
+    "name": "Death Note",
+    "russian": "Тетрадь смерти",
+    "image": {
+      "original": "/system/animes/original/1535.jpg",
+      "preview": "/system/animes/preview/1535.jpg",
+      "x96": "/system/animes/x96/1535.jpg",
+      "x48": "/system/animes/x48/1535.jpg"
+    },
+    "url": "/animes/1535-death-note",
+    "kind": "tv",
+    "score": "8.62",
+    "status": "released",
+    "episodes": 37,
+    "episodes_aired": 37,
+    "aired_on": "2006-10-04",
+    "released_on": "2007-06-27"
+  }
+]

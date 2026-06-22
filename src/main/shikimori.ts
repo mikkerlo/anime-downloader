@@ -581,6 +581,30 @@ export async function getAnimeDetails(
   return response.json() as Promise<ShikiAnimeDetails>
 }
 
+// Brief anime serializer returned by `/api/animes/:id/similar` (no genres —
+// those come from the cached `getAnimeDetails` payload when available).
+export interface ShikiSimilarAnime {
+  id: number
+  name: string
+  russian: string
+  image: { original: string; preview: string; x96: string; x48: string }
+  url: string
+  kind: string | null
+  score: string
+  status: string
+  episodes: number
+  episodes_aired: number
+  aired_on: string | null
+  released_on: string | null
+}
+
+export async function getSimilar(accessToken: string, malId: number): Promise<ShikiSimilarAnime[]> {
+  const response = await shikiFetch(`/api/animes/${malId}/similar`, {
+    headers: authHeaders(accessToken)
+  })
+  return response.json() as Promise<ShikiSimilarAnime[]>
+}
+
 export interface ShikiFranchiseNode {
   id: number
   date: number | null

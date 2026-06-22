@@ -283,6 +283,10 @@ interface Api {
   onShikimoriProfileRefreshed: (callback: (profile: ShikimoriProfile) => void) => Unsubscribe
   shikimoriGetFriends: () => Promise<ShikiFriendCard[] | null>
   onShikimoriFriendsRefreshed: (callback: (friends: ShikiFriendCard[]) => void) => Unsubscribe
+  shikimoriGetRecommendations: () => Promise<RecommendationEntry[] | null>
+  onShikimoriRecommendationsRefreshed: (
+    callback: (recommendations: RecommendationEntry[]) => void
+  ) => Unsubscribe
   shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
   shikimoriUpdateRate: (
     malId: number,

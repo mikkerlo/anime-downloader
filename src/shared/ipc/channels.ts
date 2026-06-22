@@ -104,6 +104,7 @@ export const CHANNELS = {
   SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH: 'shikimori:get-offline-queue-length',
   SHIKIMORI_GET_PROFILE: 'shikimori:get-profile',
   SHIKIMORI_GET_RATE: 'shikimori:get-rate',
+  SHIKIMORI_GET_RECOMMENDATIONS: 'shikimori:get-recommendations',
   SHIKIMORI_GET_RELATED: 'shikimori:get-related',
   SHIKIMORI_GET_SYNC_STATUS: 'shikimori:get-sync-status',
   SHIKIMORI_GET_USER: 'shikimori:get-user',
@@ -221,6 +222,7 @@ export const EVENT_CHANNELS = {
   SHIKIMORI_PROFILE_REFRESHED: 'shikimori:profile-refreshed',
   SHIKIMORI_RATE_UPDATED: 'shikimori:rate-updated',
   SHIKIMORI_RATES_REFRESHED: 'shikimori:rates-refreshed',
+  SHIKIMORI_RECOMMENDATIONS_REFRESHED: 'shikimori:recommendations-refreshed',
   SHIKIMORI_SYNC_STATUS: 'shikimori:sync-status',
 
   // Skip detection

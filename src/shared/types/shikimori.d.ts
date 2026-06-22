@@ -161,6 +161,22 @@ interface ShikiFriendActivityEntry {
   smotretAnime: AnimeSearchResult | null
 }
 
+// One entry in the "Recommendations" feed (shikimori:get-recommendations, #193).
+// Assembled in the main process: ranked locally from the user's taste, then
+// resolved to a smotret-anime id via `lookupByMalIds` (null when not on
+// smotret-anime, so the card renders non-clickable like Calendar/Chronology).
+interface RecommendationEntry {
+  malId: number
+  animeId: number | null
+  title: string
+  posterUrl: string
+  kind: string | null
+  /** Shikimori community score (0–10) shown as a badge. */
+  communityScore: number
+  /** Why it was recommended, e.g. «Because you liked X». */
+  reason: string
+}
+
 interface CalendarEntry {
   malId: number
   animeId: number | null

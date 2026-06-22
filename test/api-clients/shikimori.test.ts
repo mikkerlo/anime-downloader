@@ -293,6 +293,29 @@ describe('shikimori client — fixture replay', () => {
     })
   })
 
+  describe('getSimilar', () => {
+    it('parses the /similar array into ShikiSimilarAnime entries', async () => {
+      mockFetchOnce(fixture('similar.json'))
+      const similar = await shikimori.getSimilar('tok', 5114)
+      expect(similar.length).toBe(2)
+      expect(similar[0]).toMatchObject({
+        id: 9253,
+        russian: 'Врата Штейна',
+        kind: 'tv',
+        score: '9.03'
+      })
+      expect(similar[0].image.preview).toMatch(/preview/)
+    })
+
+    it('hits /api/animes/:id/similar with Bearer auth', async () => {
+      mockFetchOnce(fixture('similar.json'))
+      await shikimori.getSimilar('tok', 5114)
+      expect(lastFetchUrl()).toContain('/api/animes/5114/similar')
+      const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer tok' })
+    })
+  })
+
   describe('getFranchise', () => {
     it('parses nodes + links + current_id', async () => {
       mockFetchOnce(fixture('franchise.json'))

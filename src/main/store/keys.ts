@@ -55,7 +55,8 @@ export const PERSISTED_STORE_KEYS = [
   'autoCleanupSnoozedAnimeIds',
   'dismissedContinueWatching',
   'shikimoriProfile',
-  'shikimoriFriends'
+  'shikimoriFriends',
+  'shikimoriRecommendations'
 ] as const
 
 export type PersistedStoreKey = (typeof PERSISTED_STORE_KEYS)[number]

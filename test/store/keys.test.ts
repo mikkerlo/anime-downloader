@@ -55,7 +55,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'autoCleanupSnoozedAnimeIds',
     'dismissedContinueWatching',
     'shikimoriProfile',
-    'shikimoriFriends'
+    'shikimoriFriends',
+    'shikimoriRecommendations'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

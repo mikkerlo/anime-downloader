@@ -15,12 +15,21 @@ export type LibraryView =
   | 'shikimori'
   | 'friends'
   | 'calendar'
+  | 'recommendations'
   | 'downloads'
   | 'settings'
 
 // Views that have an inline AnimeDetailView overlay (open an anime within the
 // view, keep a back-stack per view). `downloads`/`settings` are top-level only.
-const STACKED_VIEWS = ['home', 'search', 'library', 'shikimori', 'friends', 'calendar'] as const
+const STACKED_VIEWS = [
+  'home',
+  'search',
+  'library',
+  'shikimori',
+  'friends',
+  'calendar',
+  'recommendations'
+] as const
 type StackedView = (typeof STACKED_VIEWS)[number]
 
 function emptyStacks(): Record<StackedView, number | null> {
@@ -30,7 +39,8 @@ function emptyStacks(): Record<StackedView, number | null> {
     library: null,
     shikimori: null,
     friends: null,
-    calendar: null
+    calendar: null,
+    recommendations: null
   }
 }
 
@@ -41,7 +51,8 @@ function emptyHistory(): Record<StackedView, number[]> {
     library: [],
     shikimori: [],
     friends: [],
-    calendar: []
+    calendar: [],
+    recommendations: []
   }
 }
 

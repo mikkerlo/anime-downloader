@@ -1,6 +1,12 @@
 import { ipcMain } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import * as shikimori from '../shikimori'
+import {
+  buildTasteProfile,
+  rankRecommendations,
+  type RecommendationCandidate,
+  type TasteRate
+} from '../recommendations'
 import { isNetworkError } from '../lib/errors'
 import { type QueuedShikimoriUpdate } from '../lib/shikimori-queue'
 import { CALENDAR_CACHE_TTL_MS, type CalendarEntry } from '../services/shikimori-sync'
@@ -172,6 +178,131 @@ export function register({
       .catch((err) => console.warn('[shikimori] profile background refresh failed:', err))
   }
 
+  // Recommendations feed (#193). Shikimori has no personalized endpoint, so we
+  // build it locally: seed from the user's highest-rated titles, fan out
+  // `/similar` per seed, then rank the merged pool with the pure engine in
+  // `recommendations.ts`. Results are resolved to smotret-anime ids (deep-link)
+  // and cached cache-first like the profile/friends payloads. `null` when logged
+  // out; `[]` when the user hasn't rated enough to seed (renderer shows a hint).
+  const RECS_SEED_LIMIT = 8
+  const RECS_RESULT_LIMIT = 40
+  const SEED_STATUSES: shikimori.ShikiUserRateStatus[] = ['completed', 'watching', 'rewatching']
+
+  async function fetchAndCacheShikimoriRecommendations(): Promise<RecommendationEntry[] | null> {
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (!user) return null
+    const accessToken = await shikimori.ensureFreshToken(store)
+
+    const rates = store.get('shikimoriUserRates') as {
+      rate: { target_id?: number; status: shikimori.ShikiUserRateStatus; score: number }
+      shikiAnime?: { id: number; name: string; russian: string }
+    }[]
+    const detailsCache = store.get('shikimoriAnimeDetails') as Record<
+      string,
+      { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
+    >
+
+    const malIdOf = (e: (typeof rates)[number]): number | undefined =>
+      e.rate?.target_id ?? e.shikiAnime?.id
+    const genresOf = (malId: number): string[] =>
+      (detailsCache[String(malId)]?.details?.genres ?? [])
+        .map((g) => g.russian || g.name)
+        .filter((n): n is string => Boolean(n))
+    const absoluteImage = (url: string): string =>
+      url.startsWith('http') ? url : `${SHIKI_BASE}${url}`
+
+    const tasteRates: TasteRate[] = []
+    for (const e of rates) {
+      const malId = malIdOf(e)
+      if (!malId) continue
+      tasteRates.push({
+        malId,
+        status: e.rate.status,
+        score: e.rate.score ?? 0,
+        genres: genresOf(malId)
+      })
+    }
+    const taste = buildTasteProfile(tasteRates)
+
+    const seeds = rates
+      .map((e) => ({ e, malId: malIdOf(e) }))
+      .filter(
+        (s): s is { e: (typeof rates)[number]; malId: number } =>
+          s.malId != null && s.e.rate.score > 0 && SEED_STATUSES.includes(s.e.rate.status)
+      )
+      .sort((a, b) => b.e.rate.score - a.e.rate.score)
+      .slice(0, RECS_SEED_LIMIT)
+
+    if (seeds.length === 0) {
+      store.set('shikimoriRecommendations', [])
+      return []
+    }
+
+    const candidatesByMal = new Map<number, RecommendationCandidate>()
+    for (const { e, malId } of seeds) {
+      let similar: shikimori.ShikiSimilarAnime[]
+      try {
+        similar = await shikimori.getSimilar(accessToken, malId)
+      } catch (err) {
+        console.warn('[shikimori] recommendations: similar fetch failed for', malId, err)
+        continue
+      }
+      const seedTitle = e.shikiAnime?.russian || e.shikiAnime?.name || 'a show you rated'
+      const seed = { title: seedTitle, score: e.rate.score }
+      for (const s of similar) {
+        if (taste.ratedMalIds.has(s.id)) continue
+        const existing = candidatesByMal.get(s.id)
+        if (existing) {
+          existing.seeds.push(seed)
+        } else {
+          candidatesByMal.set(s.id, {
+            malId: s.id,
+            title: s.russian || s.name,
+            posterUrl: absoluteImage(s.image.preview || s.image.x96 || s.image.original),
+            kind: s.kind,
+            communityScore: Number(s.score) || 0,
+            genres: genresOf(s.id),
+            seeds: [seed]
+          })
+        }
+      }
+    }
+
+    const ranked = rankRecommendations([...candidatesByMal.values()], taste, RECS_RESULT_LIMIT)
+    const malMap = await lookupByMalIds(ranked.map((r) => r.malId))
+
+    const entries: RecommendationEntry[] = ranked.map((r) => {
+      const smotret = malMap[r.malId] ?? null
+      return {
+        malId: r.malId,
+        animeId: smotret?.id ?? null,
+        title: r.title,
+        posterUrl: smotret?.posterUrlSmall || r.posterUrl,
+        kind: r.kind,
+        communityScore: r.communityScore,
+        reason: r.reason
+      }
+    })
+
+    store.set('shikimoriRecommendations', entries)
+    return entries
+  }
+
+  function refreshShikimoriRecommendationsInBackground(): void {
+    fetchAndCacheShikimoriRecommendations()
+      .then((recs) => {
+        if (recs) broadcast(EVENT_CHANNELS.SHIKIMORI_RECOMMENDATIONS_REFRESHED, recs)
+      })
+      .catch((err) => console.warn('[shikimori] recommendations background refresh failed:', err))
+  }
+
+  // A rate change shifts the taste signal, so the cached feed is stale. Clear it
+  // (rather than recompute eagerly — that costs N `/similar` calls) so the next
+  // tab open rebuilds from fresh taste.
+  function invalidateRecommendations(): void {
+    store.set('shikimoriRecommendations', [])
+  }
+
   // When the detail-prefetch worker finishes a run, the genres aggregation has
   // broader coverage — recompute and rebroadcast the profile so an open
   // dashboard fills in its favorite-genres panel without a manual refresh (#183).
@@ -197,6 +328,7 @@ export function register({
     store.set('shikimoriAnimeDetails', {})
     store.set('shikimoriProfile', null)
     store.set('shikimoriFriends', [])
+    store.set('shikimoriRecommendations', [])
     sync.abortPrefetch()
     sync.invalidateCalendarCache()
     sync.stopSyncTimer()
@@ -234,6 +366,21 @@ export function register({
       return await fetchAndCacheShikimoriProfile()
     } catch (err) {
       console.warn('[shikimori] profile fetch failed:', err)
+      return null
+    }
+  })
+
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RECOMMENDATIONS, async () => {
+    if (!store.get('shikimoriUser')) return null
+    const cached = store.get('shikimoriRecommendations') as RecommendationEntry[]
+    if (cached && cached.length > 0) {
+      refreshShikimoriRecommendationsInBackground()
+      return cached
+    }
+    try {
+      return await fetchAndCacheShikimoriRecommendations()
+    } catch (err) {
+      console.warn('[shikimori] recommendations fetch failed:', err)
       return null
     }
   })
@@ -310,6 +457,7 @@ export function register({
           }
           store.set('shikimoriUserRates', cached)
           sync.invalidateCalendarCache()
+          invalidateRecommendations()
           broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
           void maybeBroadcastCleanupPrompt(
             cached[idx].smotretAnime,
@@ -318,6 +466,7 @@ export function register({
             prevStatus
           )
         } else {
+          invalidateRecommendations()
           refreshShikimoriRatesInBackground()
           void maybeBroadcastCleanupPrompt(null, malId, updatedRate.status, undefined)
         }
@@ -354,6 +503,7 @@ export function register({
         }
         store.set('shikimoriUserRates', cached)
         sync.invalidateCalendarCache()
+        invalidateRecommendations()
         broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
         broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
         sync.startSyncTimer()

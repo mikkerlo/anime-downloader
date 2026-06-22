@@ -56,7 +56,7 @@ export interface RankedRecommendation {
 
 /** Aggregated taste signal derived from the user's rate list. */
 export interface TasteProfile {
-  /** Per-genre affinity: positive = liked, negative = disliked/dropped. */
+  /** Per-genre affinity: positive = liked, negative = scored-low (disliked). */
   genreWeights: Map<GenreName, number>
   /** Every MAL id already on the user's list (any status) — never recommend. */
   ratedMalIds: Set<number>
@@ -73,24 +73,37 @@ const W_SEED = 0.6
 const W_CONSENSUS = 0.8
 const W_POPULARITY = 0.25
 
-// A title the user dropped is a stronger negative signal than a merely
-// low-scored one — its genres should actively suppress similar candidates.
-const DROPPED_PENALTY = -3
-
 /**
- * Turn a watched title into a per-genre sentiment:
- *  - dropped → strongly negative regardless of score,
- *  - scored  → centered on 6 (7+ positive, ≤5 negative),
+ * Turn a watched title into a per-genre sentiment. The honest signal is the
+ * explicit score — a low score means the user disliked *this title*, whatever
+ * its status — so we deliberately do NOT add an extra penalty for `dropped`: a
+ * drop is often about a show's quality or pacing, not its genre, and shouldn't
+ * drag the genre down on its own. A dropped title only counts against its
+ * genres if the user *also* scored it low.
+ *
+ *  - scored → centered on 6 (7+ positive, ≤5 negative), regardless of status,
  *  - watched but unscored → mildly positive (they kept watching it),
- *  - planned/on-hold unscored → neutral.
+ *  - dropped-unscored / planned / on-hold → neutral.
  */
 export function rateSentiment(rate: TasteRate): number {
-  if (rate.status === 'dropped') return DROPPED_PENALTY
   if (rate.score > 0) return rate.score - 6
   if (rate.status === 'completed' || rate.status === 'watching' || rate.status === 'rewatching') {
     return 1
   }
   return 0
+}
+
+/**
+ * Drop entries whose MAL id is already on the user's list. Applied to the
+ * *cached* feed on every read so a stale cache can never surface a title the
+ * user has since rated/completed — the build-time exclusion alone isn't enough
+ * because the cached blob outlives rate changes (#193 follow-up).
+ */
+export function filterOutRated<T extends { malId: number }>(
+  entries: T[],
+  ratedMalIds: Set<number>
+): T[] {
+  return entries.filter((e) => !ratedMalIds.has(e.malId))
 }
 
 export function buildTasteProfile(rates: TasteRate[]): TasteProfile {

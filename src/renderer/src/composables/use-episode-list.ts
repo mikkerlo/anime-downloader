@@ -82,6 +82,11 @@ export function useEpisodeList(deps: {
   const episodeOverrides = ref<Map<number, number>>(new Map())
   const focusApplied = ref(false)
   const loadingEpisodes = ref(false)
+  // Episode ids whose network fetch is in flight. Lets an overlapping
+  // `loadPageEpisodes` (cache-open + the post-getAnime background refresh) skip
+  // ids already being fetched, so a partial cache can't trigger a duplicate
+  // network round-trip for the un-cached subset (#196 review).
+  const inFlightEpisodeIds = new Set<number>()
 
   let probeGeneration = 0
 
@@ -273,37 +278,35 @@ export function useEpisodeList(deps: {
     episodeOverrides.value = new Map()
   }
 
-  async function loadPageEpisodes(): Promise<void> {
-    if (!deps.anime.value || pagedEpisodes.value.length === 0) return
-    loadingEpisodes.value = true
-
-    const toLoad = pagedEpisodes.value.filter((ep) => !episodes.value.has(ep.id))
-
-    if (toLoad.length > 0) {
-      const res = await window.api.getEpisodesBatch(
-        toLoad.map((ep) => ep.id),
-        deps.getAnimeId()
-      )
-      const byId = new Map(res.data.map((d) => [d.id, d]))
-      const updated = new Map(episodes.value)
-      for (const ep of toLoad) {
-        // Episodes with no translations are absent from the bulk response —
-        // synthesize an empty detail so the map stays complete and they aren't
-        // re-fetched on every page revisit.
-        updated.set(
-          ep.id,
-          byId.get(ep.id) ?? {
-            id: ep.id,
-            episodeFull: ep.episodeFull,
-            episodeInt: ep.episodeInt,
-            episodeType: ep.episodeType,
-            translations: []
-          }
-        )
+  // Merge a batch of episode details into the episodes Map. On the network pass
+  // (`synthesizeMissing`) any still-absent episode gets an empty-translation
+  // stub so it isn't re-fetched on every page revisit; the cache pass leaves
+  // misses alone so the network fill can still paint them.
+  function mergeEpisodes(
+    requested: EpisodeSummary[],
+    data: EpisodeDetail[],
+    synthesizeMissing: boolean
+  ): void {
+    const byId = new Map(data.map((d) => [d.id, d]))
+    const updated = new Map(episodes.value)
+    for (const ep of requested) {
+      const got = byId.get(ep.id)
+      if (got) {
+        updated.set(ep.id, got)
+      } else if (synthesizeMissing && !updated.has(ep.id)) {
+        updated.set(ep.id, {
+          id: ep.id,
+          episodeFull: ep.episodeFull,
+          episodeInt: ep.episodeInt,
+          episodeType: ep.episodeType,
+          translations: []
+        })
       }
-      episodes.value = updated
     }
+    episodes.value = updated
+  }
 
+  function applyAuthorDefault(): void {
     if (availableAuthors.value.length > 0 && !deps.selectedAuthor.value) {
       const initial = deps.getInitialAuthor()
       if (initial && availableAuthors.value.some(([a]) => a === initial)) {
@@ -312,7 +315,70 @@ export function useEpisodeList(deps: {
         deps.selectedAuthor.value = availableAuthors.value[0][0]
       }
     }
+  }
 
+  async function networkFetchEpisodes(requested: EpisodeSummary[], ids: number[]): Promise<void> {
+    const animeId = deps.getAnimeId()
+    for (const id of ids) inFlightEpisodeIds.add(id)
+    try {
+      const res = await window.api.getEpisodesBatch(ids, animeId)
+      // Generation guard: a fast back-nav to another anime must not let a stale
+      // network response patch the now-current view.
+      if (deps.getAnimeId() !== animeId) return
+      mergeEpisodes(requested, res.data, true)
+    } finally {
+      for (const id of ids) inFlightEpisodeIds.delete(id)
+    }
+  }
+
+  // Cache-first page load (#196): paint whatever translations are already cached
+  // (no network), then refresh from the network and patch. The network refresh
+  // is non-blocking once the cache paints something, so the episode rows appear
+  // without waiting on a smotret round-trip for previously-viewed anime. With no
+  // cache (cold/non-library), the network fetch is awaited so the list paints.
+  async function loadPageEpisodes(): Promise<void> {
+    if (!deps.anime.value || pagedEpisodes.value.length === 0) return
+    loadingEpisodes.value = true
+
+    const toLoad = pagedEpisodes.value.filter(
+      (ep) => !episodes.value.has(ep.id) && !inFlightEpisodeIds.has(ep.id)
+    )
+    if (toLoad.length === 0) {
+      applyAuthorDefault()
+      loadingEpisodes.value = false
+      void probeSelectedQualities()
+      return
+    }
+
+    const ids = toLoad.map((ep) => ep.id)
+
+    let paintedFromCache = false
+    try {
+      const cachedRes = await window.api.getEpisodesBatchCached(ids, deps.getAnimeId())
+      if (cachedRes.data.length > 0) {
+        mergeEpisodes(toLoad, cachedRes.data, false)
+        paintedFromCache = true
+      }
+    } catch {
+      // No cache-first channel / read failed — fall through to the network.
+    }
+
+    if (paintedFromCache) {
+      applyAuthorDefault()
+      loadingEpisodes.value = false
+      void probeSelectedQualities()
+      // Background-refresh the rows we painted from cache; patch on return.
+      void networkFetchEpisodes(toLoad, ids)
+        .then(() => {
+          applyAuthorDefault()
+          void probeSelectedQualities()
+        })
+        .catch((err) => console.warn('[anime-detail] background episode refresh failed:', err))
+      return
+    }
+
+    await networkFetchEpisodes(toLoad, ids)
+    applyAuthorDefault()
     loadingEpisodes.value = false
     void probeSelectedQualities()
   }

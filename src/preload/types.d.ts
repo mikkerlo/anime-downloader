@@ -32,6 +32,10 @@ interface Api {
     episodeIds: number[],
     animeId?: number
   ) => Promise<ApiResponse<EpisodeDetail[]>>
+  getEpisodesBatchCached: (
+    episodeIds: number[],
+    animeId?: number
+  ) => Promise<ApiResponse<EpisodeDetail[]>>
   probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
   getCachedPoster: (animeId: number) => Promise<string | null>
   probeFullScanNeeded: (animeId: number, episodeCount: number) => Promise<boolean>

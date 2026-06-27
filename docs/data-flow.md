@@ -88,7 +88,8 @@ For the full store + composable inventory, see [Renderer architecture](./rendere
 ```
 AnimeDetailView  -->  getAnimeCache(id) --> instant render if cached and fresh
                  -->  getAnime(id) --> full anime with episode list (background-refresh)
-                 -->  getEpisode(id) x N (batches of 5) --> translations per episode
+                 -->  getEpisodesBatchCached(ids) --> cached translations, instant paint
+                 -->  getEpisodesBatch(ids) --> network refresh (background), patches rows
                  -->  all active translations shown (no quality minimum)
                  -->  best quality per author+type deduplication
                  -->  checkFileStatus() --> which episodes exist on disk
@@ -106,6 +107,20 @@ spinner stays up until the API responds. A per-mount generation counter +
 `disposed` flag prevent stale background fetches from polluting state when
 the user rapidly switches anime. Cache writes are gated on starred OR
 downloaded; unstarring evicts the cache entry if the anime isn't downloaded.
+
+Cache-first, non-blocking open (#196): a cache-rendered open is fully
+cache-first — episode translations paint from `get-episodes-batch-cached` (no
+network) before `getEpisodesBatch` returns, then patch on the background
+refresh. `getAnime` is fired as a non-blocking background refresh (not awaited
+inline) so watch-progress / Shikimori / skip-detection mount-tail work doesn't
+queue behind it; a *failing* background refresh keeps `dataSource: 'cache'` so
+the offline chip never flips after a successful cache paint (the
+`renderedFromCache` guard). `checkFileStatus` runs once per open. The cold open
+(no cache, e.g. non-library anime — episodes are `isCachable`-gated too, so
+they have no cache to serve) fetches the detail, then runs the episode batch +
+file scan concurrently rather than stacking them. The first per-anime file scan
+is async (`fsPromises.readdir`, `lib/episode-file-scan.ts`) so it never stalls
+the single-threaded main process, and concurrent misses are deduped to one scan.
 
 Per-episode translation selector with priority chain:
   1. In download queue → locked to queued translation

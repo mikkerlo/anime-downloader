@@ -221,6 +221,8 @@ onMounted(async () => {
       dataSource.value = 'cache';
       loading.value = false;
       renderedFromCache = true;
+      // Single file scan per open (#196) — the background getAnime refresh below
+      // does NOT re-run it.
       await loadPageEpisodes();
       await checkFileStatus();
       if (!props.initialPrefs?.translationType) applyDownloadedTranslationDefault();
@@ -229,25 +231,34 @@ onMounted(async () => {
     console.error('Failed to read anime cache:', err);
   }
 
-  try {
-    const res = await window.api.getAnime(props.animeId);
-    if (disposed || gen !== loadGeneration) return;
-    anime.value = res.data;
-    dataSource.value = res.source;
-    if (res.source === 'api') {
-      window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
+  if (renderedFromCache) {
+    // Background, non-blocking refresh (#196): patch anime.value when getAnime
+    // returns, but never block the mount-tail (watch-progress / Shikimori) on it.
+    // A FAILING refresh keeps dataSource at 'cache' so the offline chip never
+    // flips after a successful cache paint.
+    void refreshAnimeInBackground(gen);
+  } else {
+    // Cold open (no cache, e.g. non-library): fetch the detail, then run the
+    // episode batch + file scan concurrently so the user waits on one round-trip
+    // instead of two stacked.
+    try {
+      const res = await window.api.getAnime(props.animeId);
+      if (disposed || gen !== loadGeneration) return;
+      anime.value = res.data;
+      dataSource.value = res.source;
+      if (res.source === 'api') {
+        window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
+      }
+      await Promise.all([loadPageEpisodes(), checkFileStatus()]);
+      if (disposed || gen !== loadGeneration) return;
+      if (!props.initialPrefs?.translationType) {
+        applyDownloadedTranslationDefault();
+      }
+    } catch (err) {
+      console.error('Failed to load anime detail view:', err);
+    } finally {
+      if (!disposed && gen === loadGeneration) loading.value = false;
     }
-    await loadPageEpisodes();
-    if (disposed || gen !== loadGeneration) return;
-    await checkFileStatus();
-    if (disposed || gen !== loadGeneration) return;
-    if (!renderedFromCache && !props.initialPrefs?.translationType) {
-      applyDownloadedTranslationDefault();
-    }
-  } catch (err) {
-    if (!renderedFromCache) console.error('Failed to load anime detail view:', err);
-  } finally {
-    if (!disposed && gen === loadGeneration) loading.value = false;
   }
 
   // Render the queue snapshot the store already holds, then watch for any
@@ -296,6 +307,26 @@ onUnmounted(() => {
   unsubSkipDetectorSignatureUpdated?.();
   unsubChapterInjectProgress?.();
 });
+
+// Background getAnime refresh after a cache paint (#196). Patches anime.value
+// (guarded by the per-mount generation + disposed flags) and picks up any newly
+// aired episodes via loadPageEpisodes, which is itself cache-first +
+// background-patch. On failure we keep dataSource at 'cache' and stay quiet — the
+// renderedFromCache guard means the offline chip never flips after a good paint.
+async function refreshAnimeInBackground(gen: number): Promise<void> {
+  try {
+    const res = await window.api.getAnime(props.animeId);
+    if (disposed || gen !== loadGeneration) return;
+    anime.value = res.data;
+    dataSource.value = res.source;
+    if (res.source === 'api') {
+      window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
+      await loadPageEpisodes();
+    }
+  } catch {
+    // Offline / refresh failed — the cache paint stands; leave dataSource='cache'.
+  }
+}
 
 // Wraps the prefs composable's helper so call sites stay terse.
 function applyDownloadedTranslationDefault(): void {

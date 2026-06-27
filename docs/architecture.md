@@ -62,6 +62,7 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | `src/main/lib/errors.ts` | Pure helpers: `errorCode` (walks `cause` chain), `isNetworkError` (transport-vs-application classification) |
 | `src/main/lib/shikimori-queue.ts` | `QueuedShikimoriUpdate`/`ConsolidatedWorkItem` types + pure `consolidateQueue` (per-malId offline-queue collapse) |
 | `src/main/lib/filename.ts` | Pure `parseEpisodeFromFilename` (episodeInt + ext from sanitized download filename) |
+| `src/main/lib/episode-file-scan.ts` | `createEpisodeFileScanner` — the episode-file scan cache backing `file:check-episodes` (#196). Owns `fileCheckCache` + an in-flight dedupe map; exposes a synchronous `scanEpisodeFiles` (consumed by skip-analysis + cold-storage) and an async `scanEpisodeFilesAsync` that backs the cache-first `checkEpisodeFiles` (async first scan, deduped) + the background rescan. Plus pure `accumulateEpisodeFiles` / `filterScanResult`. Deps-injected (`getDirsToScan`, `sanitizeFilename`, `onEpisodesChanged`); `index.ts` wires it and forwards the sync scanner into the two services |
 | `src/main/streaming/codec-strings.ts` | Pure ffprobe→codec-string mappers: `avcCodecString`, `hevcCodecString`, `aacCodecString` (MSE-compatible RFC 6381 strings) |
 | `src/main/store/types.ts` | Injected `StorageService<S>` persistence interface (schema-typed get/set/has/delete); decouples services from `electron-store` |
 | `src/main/store/index.ts` | `createStorageService(defaults)` electron-store binding + `MainStorageService.migrateWatchProgressV2()` |

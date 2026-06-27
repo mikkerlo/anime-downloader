@@ -11,7 +11,6 @@ import {
   runAutoDownloadTick
 } from './auto-downloader'
 import * as fs from 'fs'
-import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import { execFile } from 'child_process'
 import {
@@ -48,7 +47,8 @@ import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createStreamingService } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { App } from './app/core'
-import { registerIpcRouters, type FileCheckResult } from './ipc'
+import { registerIpcRouters } from './ipc'
+import { createEpisodeFileScanner } from './lib/episode-file-scan'
 
 export interface AutoDownloadSubscription {
   animeId: number
@@ -297,187 +297,31 @@ async function sumShowFiles(animeName: string): Promise<{ bytes: number; files: 
   return { bytes, files }
 }
 
-const fileCheckCache = new Map<string, FileCheckResult>()
-
-function scanEpisodeFiles(animeName: string): FileCheckResult {
-  const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [coldStorageService.getDownloadDir()]
-  if (coldStorageService.isAdvanced()) {
-    const coldDir = coldStorageService.getColdStorageDir()
-    if (coldDir) dirsToCheck.push(coldDir)
-  }
-
-  const result: FileCheckResult = {}
-
-  for (const dir of dirsToCheck) {
-    const animeDir = path.join(dir, animeDirName)
-    if (!fs.existsSync(animeDir)) continue
-
-    let files: string[]
-    try {
-      files = fs.readdirSync(animeDir)
-    } catch {
-      continue
+// Episode-file scan cache backing `CHANNELS.FILE_CHECK_EPISODES` (#196). The
+// scanner lives in `lib/episode-file-scan.ts` so the cache-first / async-scan /
+// concurrent-dedupe behavior is unit-testable. `getDirsToScan` reads
+// `coldStorageService` lazily (declared below) — only invoked at scan time, so
+// the forward reference resolves at runtime. The synchronous
+// `fileScanner.scanEpisodeFiles` is what skip-analysis + cold-storage consume.
+const fileScanner = createEpisodeFileScanner({
+  getDirsToScan: () => {
+    const dirs = [coldStorageService.getDownloadDir()]
+    if (coldStorageService.isAdvanced()) {
+      const coldDir = coldStorageService.getColdStorageDir()
+      if (coldDir) dirs.push(coldDir)
     }
-
-    for (const file of files) {
-      const match = file.match(/^(.+?) \[(.+?)\]\.(mkv|mp4)$/)
-      if (match) {
-        const base = match[1]
-        const author = match[2]
-        const ext = match[3] as 'mkv' | 'mp4'
-        if (!result[base]) result[base] = []
-        const existing = result[base].find((e) => e.author === author)
-        if (existing) {
-          existing.type = ext
-          existing.filePath = path.join(animeDir, file)
-        } else {
-          result[base].push({ type: ext, filePath: path.join(animeDir, file), author })
-        }
-        continue
-      }
-
-      const legacyMatch = file.match(/^(.+)\.(mkv|mp4)$/)
-      if (legacyMatch) {
-        const base = legacyMatch[1]
-        const ext = legacyMatch[2] as 'mkv' | 'mp4'
-        if (!result[base]) result[base] = []
-        const hasAuthorVersion = result[base].some((e) => e.author)
-        if (!hasAuthorVersion || !result[base].some((e) => !e.author)) {
-          const existing = result[base].find((e) => !e.author)
-          if (existing) {
-            existing.type = ext
-            existing.filePath = path.join(animeDir, file)
-          } else {
-            result[base].push({ type: ext, filePath: path.join(animeDir, file) })
-          }
-        }
-      }
-    }
-  }
-  return result
-}
-
-function filterScanResult(
-  fullResult: FileCheckResult,
-  animeName: string,
-  episodeInts: string[]
-): FileCheckResult {
-  const baseMap = new Map<string, string>()
-  for (const epInt of episodeInts) {
-    const padded = epInt.padStart(2, '0')
-    const base = sanitizeFilename(`${animeName} - ${padded}`)
-    baseMap.set(base, epInt)
-  }
-
-  const filtered: FileCheckResult = {}
-  for (const [base, files] of Object.entries(fullResult)) {
-    const epInt = baseMap.get(base)
-    if (epInt) {
-      filtered[epInt] = files
-    }
-  }
-  return filtered
-}
-
-async function backgroundRescan(animeName: string): Promise<void> {
-  const animeDirName = sanitizeFilename(animeName)
-  const dirsToCheck = [coldStorageService.getDownloadDir()]
-  if (coldStorageService.isAdvanced()) {
-    const coldDir = coldStorageService.getColdStorageDir()
-    if (coldDir) dirsToCheck.push(coldDir)
-  }
-
-  const result: FileCheckResult = {}
-
-  for (const dir of dirsToCheck) {
-    const animeDir = path.join(dir, animeDirName)
-    let files: string[]
-    try {
-      files = await fsPromises.readdir(animeDir)
-    } catch {
-      continue
-    }
-
-    for (const file of files) {
-      const match = file.match(/^(.+?) \[(.+?)\]\.(mkv|mp4)$/)
-      if (match) {
-        const base = match[1]
-        const author = match[2]
-        const ext = match[3] as 'mkv' | 'mp4'
-        if (!result[base]) result[base] = []
-        const existing = result[base].find((e) => e.author === author)
-        if (existing) {
-          existing.type = ext
-          existing.filePath = path.join(animeDir, file)
-        } else {
-          result[base].push({ type: ext, filePath: path.join(animeDir, file), author })
-        }
-        continue
-      }
-
-      const legacyMatch = file.match(/^(.+)\.(mkv|mp4)$/)
-      if (legacyMatch) {
-        const base = legacyMatch[1]
-        const ext = legacyMatch[2] as 'mkv' | 'mp4'
-        if (!result[base]) result[base] = []
-        const hasAuthorVersion = result[base].some((e) => e.author)
-        if (!hasAuthorVersion || !result[base].some((e) => !e.author)) {
-          const existing = result[base].find((e) => !e.author)
-          if (existing) {
-            existing.type = ext
-            existing.filePath = path.join(animeDir, file)
-          } else {
-            result[base].push({ type: ext, filePath: path.join(animeDir, file) })
-          }
-        }
-      }
-    }
-  }
-
-  const cached = fileCheckCache.get(animeName)
-  const normalize = (r: FileCheckResult) => {
-    const sorted: FileCheckResult = {}
-    for (const key of Object.keys(r).sort()) {
-      sorted[key] = [...r[key]].sort((a, b) => (a.author || '').localeCompare(b.author || ''))
-    }
-    return sorted
-  }
-  const newJson = JSON.stringify(normalize(result))
-  const cachedJson = cached ? JSON.stringify(normalize(cached)) : ''
-  if (newJson !== cachedJson) {
-    fileCheckCache.set(animeName, result)
+    return dirs
+  },
+  sanitizeFilename,
+  onEpisodesChanged: (animeName, result) => {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send(EVENT_CHANNELS.FILE_EPISODES_CHANGED, animeName, result)
     }
   }
-}
-
-// Episode-file scan backing `CHANNELS.FILE_CHECK_EPISODES` (Phase 3 slice 3f):
-// a cache hit is served immediately and refreshed by a background rescan; a
-// miss scans synchronously and primes the cache. Kept here — not in
-// `file.ipc.ts` — because `coldStorageService` also feeds off
-// `scanEpisodeFiles` / `fileCheckCache`.
-function checkEpisodeFiles(animeName: string, episodeInts: string[]): FileCheckResult {
-  const cached = fileCheckCache.get(animeName)
-  if (cached) {
-    backgroundRescan(animeName).catch((err) => console.error('Background rescan failed:', err))
-    return filterScanResult(cached, animeName, episodeInts)
-  }
-
-  const fullResult = scanEpisodeFiles(animeName)
-  fileCheckCache.set(animeName, fullResult)
-  return filterScanResult(fullResult, animeName, episodeInts)
-}
-
-function invalidateFileCacheByDirName(animeDirName: string): void {
-  for (const [key] of fileCheckCache) {
-    if (sanitizeFilename(key) === animeDirName) {
-      fileCheckCache.delete(key)
-      break
-    }
-  }
-}
+})
+const scanEpisodeFiles = fileScanner.scanEpisodeFiles
+const checkEpisodeFiles = fileScanner.checkEpisodeFiles
+const invalidateFileCacheByDirName = fileScanner.invalidateByDirName
 
 const smotretApi = new SmotretApi(() => store.get('token') as string)
 
@@ -494,7 +338,7 @@ const coldStorageService = createColdStorageService({
   sanitizeFilename,
   parseEpisodeFromFilename,
   scanEpisodeFiles,
-  invalidateFileCache: (animeName) => fileCheckCache.delete(animeName),
+  invalidateFileCache: fileScanner.invalidate,
   broadcast: broadcastToAll,
   usageProgressChannel: EVENT_CHANNELS.STORAGE_USAGE_PROGRESS,
   cleanupPendingChannel: EVENT_CHANNELS.STORAGE_CLEANUP_PENDING,
@@ -699,7 +543,7 @@ function registerIpcHandlers(): void {
     getFfmpegPath,
     getFfprobePath,
     clearFfmpegPaths,
-    invalidateFileCache: (animeName) => fileCheckCache.delete(animeName),
+    invalidateFileCache: fileScanner.invalidate,
     getFfmpegDir,
     sumShowFiles,
     checkFfmpeg,
@@ -711,7 +555,7 @@ function registerIpcHandlers(): void {
     broadcast: broadcastToAll,
     checkEpisodeFiles,
     invalidateFileCacheByDirName,
-    clearFileCache: () => fileCheckCache.clear(),
+    clearFileCache: fileScanner.clear,
     streamingService,
     mp4StatsService
   })
@@ -851,7 +695,7 @@ async function bootstrap(): Promise<void> {
       author,
       quality
     } = info
-    fileCheckCache.delete(animeName)
+    fileScanner.invalidate(animeName)
 
     // Persist episode metadata now that the video is on disk. Writing this at enqueue
     // time caused stale ⬇ icons to survive cancelled / failed downloads.
@@ -892,7 +736,7 @@ async function bootstrap(): Promise<void> {
   })
 
   downloadManager.onMergeComplete(async ({ animeName, animeId, episodeLabel }) => {
-    fileCheckCache.delete(animeName)
+    fileScanner.invalidate(animeName)
     // Auto-move to cold after merge
     if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
       await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)

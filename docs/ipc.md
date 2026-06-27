@@ -34,7 +34,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
 | `set-anime-cache` | invoke | Write AnimeDetail to cache (no-op if anime is neither starred nor downloaded) |
 | `get-episode` | invoke | Fetch episode translations (single episode) |
-| `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure |
+| `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure (via the shared `readCachedEpisodes` helper) |
+| `get-episodes-batch-cached` | invoke | Cache-first read (#196): returns the already-cached translations for a page of episodes with no network, so the episode list paints instantly for previously-viewed anime; the renderer then background-refreshes via `get-episodes-batch` and patches. Shares `readCachedEpisodes` with the network-first fallback. Always `source: 'cache'`; empty `data` means nothing was cached |
 | `probe-embed-quality` | invoke | Probe embed API for actual stream height |
 | `report-quality-mismatch` | invoke | Report a detected quality mismatch (stored in memory) |
 | `get-quality-mismatch-count` | invoke | Get number of collected mismatches |
@@ -100,7 +101,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `update:install` | invoke | Quit and install downloaded update |
 | `update:status` | send | Update check/download progress and status |
 | `cache-get-poster` | invoke | Get base64-encoded cached poster for offline anime |
-| `file:check-episodes` | invoke | Check which episodes exist on disk (session-cached, triggers background rescan on cache hit) |
+| `file:check-episodes` | invoke | Check which episodes exist on disk (session-cached, triggers background rescan on cache hit). Async first scan (#196): the first per-anime scan uses `fsPromises.readdir` off the main loop, deduped so concurrent misses share one scan; backed by `lib/episode-file-scan.ts` |
 | `file:episodes-changed` | send | Background rescan detected file changes, pushes updated results to renderer |
 | `file:open` | invoke | Open file with default app (verifies existence, returns error + invalidates cache if missing) |
 | `file:show-in-folder` | invoke | Reveal file in explorer |

@@ -1,8 +1,20 @@
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
+import type { EpisodeDetail } from '../smotret-api'
 
 export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: AppDeps): void {
+  // Shared cache read for the cache-first channel + the network-first
+  // error-fallback (#196) so the two reads can't drift: id → cached episode
+  // translation, undefined entries filtered out.
+  function readCachedEpisodes(animeId: number, episodeIds: number[]): EpisodeDetail[] {
+    const cached = animeCacheService.getEntry(animeId)
+    if (!cached) return []
+    return episodeIds
+      .map((id) => cached.episodes[id])
+      .filter((d): d is EpisodeDetail => d !== undefined)
+  }
+
   ipcMain.handle(CHANNELS.VALIDATE_TOKEN, () => smotretApi.validateToken())
 
   ipcMain.handle(CHANNELS.SEARCH_ANIME, async (_event, query: string) => {
@@ -90,16 +102,24 @@ export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: A
         return { ...result, source: 'api' }
       } catch (err) {
         if (animeId) {
-          const cached = animeCacheService.getEntry(animeId)
-          if (cached) {
-            const data = episodeIds
-              .map((id) => cached.episodes[id])
-              .filter((d): d is NonNullable<typeof d> => d !== undefined)
-            if (data.length > 0) return { data, source: 'cache' }
-          }
+          const data = readCachedEpisodes(animeId, episodeIds)
+          if (data.length > 0) return { data, source: 'cache' }
         }
         throw err
       }
+    }
+  )
+
+  // Cache-first read: returns whatever translations `animeCacheService` already
+  // has, synchronously, with no network (#196). The renderer paints these rows
+  // immediately, then background-refreshes via the network `GET_EPISODES_BATCH`
+  // and patches. Always reports `source: 'cache'`; an empty `data` just means
+  // nothing was cached (cold/non-library anime) and the network fetch fills it.
+  ipcMain.handle(
+    CHANNELS.GET_EPISODES_BATCH_CACHED,
+    (_event, episodeIds: number[], animeId?: number) => {
+      const data = animeId ? readCachedEpisodes(animeId, episodeIds) : []
+      return { data, source: 'cache' as const }
     }
   )
 }

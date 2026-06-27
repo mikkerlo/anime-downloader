@@ -17,6 +17,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.GET_EPISODE, id, animeId),
   getEpisodesBatch: (episodeIds: number[], animeId?: number) =>
     ipcRenderer.invoke(CHANNELS.GET_EPISODES_BATCH, episodeIds, animeId),
+  getEpisodesBatchCached: (episodeIds: number[], animeId?: number) =>
+    ipcRenderer.invoke(CHANNELS.GET_EPISODES_BATCH_CACHED, episodeIds, animeId),
   probeEmbedQuality: (translationId: number, animeId?: number) =>
     ipcRenderer.invoke(CHANNELS.PROBE_EMBED_QUALITY, translationId, animeId) as Promise<
       number | null

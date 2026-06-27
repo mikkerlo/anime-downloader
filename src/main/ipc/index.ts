@@ -29,6 +29,7 @@ import * as autoDownloadRouter from './auto-download.ipc'
 import * as playerRouter from './player.ipc'
 import * as syncplayRouter from './syncplay.ipc'
 import * as debugRouter from './debug.ipc'
+import type { FileCheckResult } from '../lib/episode-file-scan'
 
 export interface FfmpegInfo {
   available: boolean
@@ -37,15 +38,10 @@ export interface FfmpegInfo {
   encoders: string[]
 }
 
-/**
- * Map of episode-int → matched files on disk, keyed without the leading-zero
- * pad. Produced by the `index.ts` episode-file scanner and returned verbatim
- * by `CHANNELS.FILE_CHECK_EPISODES`.
- */
-export type FileCheckResult = Record<
-  string,
-  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
->
+// The episode-file scan result type lives with the scanner (#196). Re-exported
+// here so the long-standing `import { FileCheckResult } from './ipc'` sites stay
+// put.
+export type { FileCheckResult }
 
 /**
  * Dependencies passed to every per-domain IPC router (refactor epic #84,
@@ -98,7 +94,7 @@ export interface AppDeps {
    * a background rescan kicked off when a cache hit is served. The scan cache +
    * helpers stay in `index.ts` because `coldStorageService` also feeds off them.
    */
-  checkEpisodeFiles: (animeName: string, episodeInts: string[]) => FileCheckResult
+  checkEpisodeFiles: (animeName: string, episodeInts: string[]) => Promise<FileCheckResult>
   /** Drops the file-scan cache entry whose key sanitizes to `dirName`. */
   invalidateFileCacheByDirName: (dirName: string) => void
   /** Clears the entire file-scan cache (used before a bulk move-to-cold). */

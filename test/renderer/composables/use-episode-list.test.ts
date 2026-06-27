@@ -7,6 +7,10 @@ import { useEpisodeList } from '../../../src/renderer/src/composables/use-episod
 type Api = {
   getEpisode: (id: number, animeId: number) => Promise<{ data: EpisodeDetail }>
   getEpisodesBatch: (episodeIds: number[], animeId: number) => Promise<{ data: EpisodeDetail[] }>
+  getEpisodesBatchCached: (
+    episodeIds: number[],
+    animeId: number
+  ) => Promise<{ data: EpisodeDetail[]; source: string }>
   watchProgressSave: (...args: unknown[]) => Promise<void>
   probeEmbedQuality: (id: number, animeId: number) => Promise<number | null>
   getSetting: (key: string) => Promise<unknown>
@@ -164,6 +168,7 @@ describe('useEpisodeList — loadPageEpisodes', () => {
     setApi({
       getEpisodesBatch,
       getEpisode,
+      getEpisodesBatchCached: vi.fn().mockResolvedValue({ data: [], source: 'cache' }),
       probeEmbedQuality: vi.fn().mockResolvedValue(null),
       getSetting: vi.fn().mockResolvedValue(false)
     })
@@ -193,6 +198,7 @@ describe('useEpisodeList — loadPageEpisodes', () => {
           }
         ] as unknown as EpisodeDetail[]
       })),
+      getEpisodesBatchCached: vi.fn().mockResolvedValue({ data: [], source: 'cache' }),
       probeEmbedQuality: vi.fn().mockResolvedValue(null),
       getSetting: vi.fn().mockResolvedValue(false)
     })
@@ -203,6 +209,111 @@ describe('useEpisodeList — loadPageEpisodes', () => {
 
     expect(list.episodes.value.size).toBe(2)
     expect(list.episodes.value.get(2)?.translations).toEqual([])
+  })
+
+  it('paints cached translations before the network getEpisodesBatch resolves, then patches', async () => {
+    const eps = [mkEpisode(1, '1'), mkEpisode(2, '2')]
+    // The network batch stays pending until we resolve it by hand.
+    let resolveNet: (v: { data: EpisodeDetail[] }) => void = () => {}
+    const netPromise = new Promise<{ data: EpisodeDetail[] }>((r) => {
+      resolveNet = r
+    })
+    const getEpisodesBatch = vi.fn(() => netPromise)
+    const getEpisodesBatchCached = vi.fn(async (ids: number[]) => ({
+      data: ids.map(
+        (id) =>
+          ({
+            id,
+            episodeFull: `Episode ${id}`,
+            episodeInt: String(id),
+            episodeType: 'tv',
+            translations: [mkTr(500 + id, 'subRu', 'Cache')]
+          }) as unknown as EpisodeDetail
+      ),
+      source: 'cache'
+    }))
+    setApi({
+      getEpisodesBatch,
+      getEpisodesBatchCached,
+      probeEmbedQuality: vi.fn().mockResolvedValue(null),
+      getSetting: vi.fn().mockResolvedValue(false)
+    })
+    const anime = ref<AnimeDetail | null>(mkAnime({ episodes: eps }))
+    const list = useEpisodeList(makeDeps({ anime }))
+
+    await list.loadPageEpisodes()
+
+    // Rows painted from cache — without awaiting the (still-pending) network call.
+    expect(list.episodes.value.size).toBe(2)
+    expect(list.episodes.value.get(1)?.translations[0].id).toBe(501)
+    expect(getEpisodesBatchCached).toHaveBeenCalledTimes(1)
+    // The network refresh fired (once) in the background but hasn't resolved.
+    expect(getEpisodesBatch).toHaveBeenCalledTimes(1)
+    expect(list.loadingEpisodes.value).toBe(false)
+
+    // When the background fetch resolves, the rows are patched with fresh data.
+    resolveNet({
+      data: eps.map(
+        (e) =>
+          ({
+            id: e.id,
+            episodeFull: e.episodeFull,
+            episodeInt: e.episodeInt,
+            episodeType: 'tv',
+            translations: [mkTr(900 + e.id, 'subRu', 'Net')]
+          }) as unknown as EpisodeDetail
+      )
+    })
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(list.episodes.value.get(1)?.translations[0].id).toBe(901)
+    // Still exactly one network fetch — cache-first must not double-fetch.
+    expect(getEpisodesBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not double-fetch un-cached episodes across overlapping loads (partial cache)', async () => {
+    const eps = [mkEpisode(1, '1'), mkEpisode(2, '2'), mkEpisode(3, '3'), mkEpisode(4, '4')]
+    const cachedSet = new Set([1, 2]) // only a subset of translations is cached
+    // Network batch stays in flight so the second load observes the in-flight ids.
+    const getEpisodesBatch = vi.fn(() => new Promise<{ data: EpisodeDetail[] }>(() => {}))
+    const getEpisodesBatchCached = vi.fn(async (ids: number[]) => ({
+      data: ids
+        .filter((id) => cachedSet.has(id))
+        .map(
+          (id) =>
+            ({
+              id,
+              episodeFull: `Episode ${id}`,
+              episodeInt: String(id),
+              episodeType: 'tv',
+              translations: [mkTr(500 + id, 'subRu', 'Cache')]
+            }) as unknown as EpisodeDetail
+        ),
+      source: 'cache'
+    }))
+    setApi({
+      getEpisodesBatch,
+      getEpisodesBatchCached,
+      probeEmbedQuality: vi.fn().mockResolvedValue(null),
+      getSetting: vi.fn().mockResolvedValue(false)
+    })
+    const anime = ref<AnimeDetail | null>(mkAnime({ episodes: eps }))
+    const list = useEpisodeList(makeDeps({ anime }))
+
+    // Cache-open paints [1,2] and backgrounds a fetch for the rest; the
+    // post-getAnime refresh fires a second loadPageEpisodes that overlaps it.
+    await list.loadPageEpisodes()
+    const second = list.loadPageEpisodes()
+    second.catch(() => {})
+    // Flush microtasks so the (old) second load would reach its network call.
+    await new Promise((r) => setTimeout(r, 0))
+
+    // Each un-cached id must be fetched at most once. On the pre-fix code the
+    // second load re-fetches ids 3 & 4 (they aren't tracked as in-flight).
+    const fetchedIds = getEpisodesBatch.mock.calls.flatMap((c) => c[0] as number[])
+    const count = (id: number): number => fetchedIds.filter((x) => x === id).length
+    expect(count(3)).toBeLessThanOrEqual(1)
+    expect(count(4)).toBeLessThanOrEqual(1)
   })
 })
 
@@ -381,6 +492,7 @@ describe('useEpisodeList — applyFocusEpisode', () => {
           data: ids.map((id) => ({ id, translations: [] }) as unknown as EpisodeDetail)
         })
       ),
+      getEpisodesBatchCached: vi.fn().mockResolvedValue({ data: [], source: 'cache' }),
       getSetting: vi.fn().mockResolvedValue(false)
     })
     const eps: EpisodeSummary[] = []

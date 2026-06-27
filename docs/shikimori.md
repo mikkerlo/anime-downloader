@@ -1,6 +1,8 @@
 # Shikimori Integration
 
-Syncs anime watch status and episode progress with [Shikimori](https://shikimori.one). Uses MAL IDs as the shared key between smotret-anime and Shikimori (`myAnimeListId` field on anime series).
+Syncs anime watch status and episode progress with [Shikimori](https://shikimori.io). Uses MAL IDs as the shared key between smotret-anime and Shikimori (`myAnimeListId` field on anime series).
+
+> **Domain:** Shikimori has migrated origins over time (`shikimori.org` → `shikimori.one` → `shikimori.io`). The origin lives in **one** place — `SHIKIMORI_ORIGIN` in `src/shared/shikimori.ts` — and everything (the API base in `shikimori.ts`, image hotlink filters, renderer deep-links) derives from it. Don't hardcode a domain literal anywhere else. The reason centralization matters: a stale domain 301-redirects to the new host, and Node/Electron `fetch` (undici) **strips the `Authorization` header on a cross-origin redirect** — so public reads silently keep working while every authenticated write 404s, which is hard to diagnose.
 
 ## OAuth Flow (OOB)
 
@@ -60,7 +62,7 @@ The **Activity** tab of `FriendsActivityView.vue` shows a chronological feed of 
 
 ### Image hotlink protection (`src/main/lib/shikimori-images.ts`)
 
-Shikimori hotlink-protects the images it serves from `shikimori.one`: a request whose `Referer` is a foreign origin (the renderer's dev-server `http://localhost:…` or the packaged `file://` origin) gets a placeholder instead of the real image. Friend avatars in both `FriendsActivityView.vue` and the detail-page `FriendsPanel.vue` are loaded by the renderer straight from `shikimori.one`, so without intervention they render blank (posters in the same rows look fine because they prefer smotret-anime's CDN). `installShikimoriReferer(session.defaultSession)` — called in `bootstrap()` — registers a `webRequest.onBeforeSendHeaders` interceptor that rewrites the `Referer` to `https://shikimori.one/` for `shikimori.one` URLs. This only touches renderer-initiated `<img>` loads; the REST calls in `shikimori.ts` go through Node `fetch` (a different network stack) and keep their auth headers.
+Shikimori hotlink-protects the images it serves from its origin: a request whose `Referer` is a foreign origin (the renderer's dev-server `http://localhost:…` or the packaged `file://` origin) gets a placeholder instead of the real image. Friend avatars in both `FriendsActivityView.vue` and the detail-page `FriendsPanel.vue` are loaded by the renderer straight from Shikimori, so without intervention they render blank (posters in the same rows look fine because they prefer smotret-anime's CDN). `installShikimoriReferer(session.defaultSession)` — called in `bootstrap()` — registers a `webRequest.onBeforeSendHeaders` interceptor that rewrites the `Referer` to `${SHIKIMORI_ORIGIN}/` for Shikimori URLs (filters derived from `SHIKIMORI_ORIGIN` in `src/shared/shikimori.ts`). This only touches renderer-initiated `<img>` loads; the REST calls in `shikimori.ts` go through Node `fetch` (a different network stack) and keep their auth headers.
 
 ## Airing Calendar
 

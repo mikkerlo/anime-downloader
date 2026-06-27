@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { inject } from 'vue';
 import { storeToRefs } from 'pinia';
+import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { ShikimoriKey } from './keys';
 
@@ -44,7 +45,7 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
       <h4>
         <span class="sk-logo">Sh</span>Shikimori
         <a
-          :href="`https://shikimori.one/animes/${props.anime.myAnimeListId}`"
+          :href="`${SHIKIMORI_ORIGIN}/animes/${props.anime.myAnimeListId}`"
           target="_blank"
           class="sk-open"
           title="Open on Shikimori"

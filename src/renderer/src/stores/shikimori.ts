@@ -44,7 +44,11 @@ export const useShikimoriStore = defineStore('shikimori', () => {
 
   function rateByMalId(malId: number): ShikiAnimeRateEntry | null {
     if (!malId) return null
-    return rates.value.find((r) => r.rate.target_id === malId) ?? null
+    // Fall back to the nested anime id: rate caches written before the
+    // target_id fix (and any future endpoint that omits a top-level target_id)
+    // store `rate.target_id` as null, so match on `shikiAnime.id` too. Keeps
+    // already-cached entries resolvable without waiting for a re-fetch.
+    return rates.value.find((r) => (r.rate.target_id ?? r.shikiAnime?.id) === malId) ?? null
   }
 
   function animeDetailsByMalId(malId: number): ShikiAnimeDetails | null {

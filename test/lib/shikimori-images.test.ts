@@ -7,12 +7,12 @@ import {
 
 describe('withShikimoriReferer', () => {
   it('sets the Referer to the Shikimori origin', () => {
-    expect(withShikimoriReferer({})).toEqual({ Referer: 'https://shikimori.one/' })
+    expect(withShikimoriReferer({})).toEqual({ Referer: 'https://shikimori.io/' })
   })
 
   it('replaces a foreign Referer (the bug: renderer origin is rejected by hotlink protection)', () => {
     const out = withShikimoriReferer({ Referer: 'http://localhost:5173/' })
-    expect(out.Referer).toBe('https://shikimori.one/')
+    expect(out.Referer).toBe('https://shikimori.io/')
   })
 
   it('preserves other request headers', () => {
@@ -20,7 +20,7 @@ describe('withShikimoriReferer', () => {
     expect(out).toEqual({
       'User-Agent': 'anime-dl',
       Accept: 'image/*',
-      Referer: 'https://shikimori.one/'
+      Referer: 'https://shikimori.io/'
     })
   })
 
@@ -28,6 +28,15 @@ describe('withShikimoriReferer', () => {
     const input = { Accept: 'image/*' }
     withShikimoriReferer(input)
     expect(input).toEqual({ Accept: 'image/*' })
+  })
+})
+
+describe('SHIKIMORI_IMAGE_URL_FILTER', () => {
+  it('scopes to the shikimori.io origin and its image subdomains (regression: domain migrated off shikimori.one)', () => {
+    expect(SHIKIMORI_IMAGE_URL_FILTER).toEqual([
+      'https://shikimori.io/*',
+      'https://*.shikimori.io/*'
+    ])
   })
 })
 
@@ -54,7 +63,7 @@ describe('installShikimoriReferer', () => {
     listener({ requestHeaders: { Referer: 'http://localhost:5173/' } }, callback)
 
     expect(callback).toHaveBeenCalledWith({
-      requestHeaders: { Referer: 'https://shikimori.one/' }
+      requestHeaders: { Referer: 'https://shikimori.io/' }
     })
   })
 })

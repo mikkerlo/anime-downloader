@@ -1,12 +1,14 @@
 import { ipcMain } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
+import { SHIKIMORI_ORIGIN } from '@shared/shikimori'
 import * as shikimori from '../shikimori'
 import { isNetworkError } from '../lib/errors'
 import { type QueuedShikimoriUpdate } from '../lib/shikimori-queue'
+import { buildRateCacheEntries } from '../lib/shikimori-rate-cache'
 import { CALENDAR_CACHE_TTL_MS, type CalendarEntry } from '../services/shikimori-sync'
 import type { AppDeps } from './index'
 
-const SHIKI_BASE = 'https://shikimori.one'
+const SHIKI_BASE = SHIKIMORI_ORIGIN
 
 export function register({
   store,
@@ -27,19 +29,7 @@ export function register({
     )
     const malIds = rates.map((r) => r.anime.id)
     const malMap = await lookupByMalIds(malIds)
-    const entries = rates.map((rate) => ({
-      rate: {
-        id: rate.id,
-        score: rate.score,
-        status: rate.status,
-        episodes: rate.episodes,
-        rewatches: rate.rewatches ?? 0,
-        updated_at: rate.updated_at,
-        target_id: rate.target_id
-      },
-      shikiAnime: rate.anime,
-      smotretAnime: malMap[rate.anime.id] ?? null
-    }))
+    const entries = buildRateCacheEntries(rates, malMap)
     if (!status) {
       store.set('shikimoriUserRates', entries)
     }

@@ -1,4 +1,4 @@
-// Shikimori serves avatars and posters from shikimori.one behind hotlink
+// Shikimori serves avatars and posters from its origin behind hotlink
 // protection: a request whose `Referer` is a foreign origin (our renderer's
 // dev-server `http://localhost:…` or packaged `file://` origin) gets a
 // placeholder instead of the real image, so friend avatars render blank.
@@ -8,11 +8,13 @@
 // `src/main/shikimori.ts` run through Node `fetch` (a different network stack)
 // and never hit this session interceptor, so their auth headers are untouched.
 
-const SHIKIMORI_REFERER = 'https://shikimori.one/'
+import { SHIKIMORI_ORIGIN, SHIKIMORI_IMAGE_URL_FILTERS } from '../../shared/shikimori'
 
-// Scoped to shikimori.one and its image subdomains (e.g. desu.shikimori.one)
-// so no other host is ever touched.
-export const SHIKIMORI_IMAGE_URL_FILTER = ['https://shikimori.one/*', 'https://*.shikimori.one/*']
+const SHIKIMORI_REFERER = `${SHIKIMORI_ORIGIN}/`
+
+// Scoped to the Shikimori origin and its image subdomains (e.g.
+// desu.shikimori.io) so no other host is ever touched.
+export const SHIKIMORI_IMAGE_URL_FILTER = SHIKIMORI_IMAGE_URL_FILTERS
 
 export function withShikimoriReferer(
   requestHeaders: Record<string, string>

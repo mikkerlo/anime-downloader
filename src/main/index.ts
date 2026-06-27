@@ -757,7 +757,7 @@ function createWindow(): void {
 
 async function bootstrap(): Promise<void> {
   // Satisfy Shikimori's image hotlink protection so friend avatars (loaded by
-  // the renderer straight from shikimori.one) render instead of coming back blank.
+  // the renderer straight from shikimori.io) render instead of coming back blank.
   installShikimoriReferer(session.defaultSession)
 
   // Handle anime-video:// protocol for local video playback with Range request support.

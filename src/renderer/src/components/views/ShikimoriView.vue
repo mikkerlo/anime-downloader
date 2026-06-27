@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
 import AnimeCard from '../shared/AnimeCard.vue';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
@@ -131,7 +132,7 @@ function selectList(status: string): void {
 
 function openProfile(): void {
   if (profileNickname.value) {
-    void window.api.shellOpenExternal(`https://shikimori.one/@${profileNickname.value}`);
+    void window.api.shellOpenExternal(`${SHIKIMORI_ORIGIN}/@${profileNickname.value}`);
   }
 }
 
@@ -155,7 +156,7 @@ function shikiPosterUrl(entry: ShikiAnimeRateEntry): string {
   // smotret entries via `enrichMissingPosters`, so this is normally non-empty.
   if (entry.smotretAnime?.posterUrlSmall) return entry.smotretAnime.posterUrlSmall;
   const img = entry.shikiAnime.image.original;
-  return img.startsWith('http') ? img : `https://shikimori.one${img}`;
+  return img.startsWith('http') ? img : `${SHIKIMORI_ORIGIN}${img}`;
 }
 
 function shikiTitle(entry: ShikiAnimeRateEntry): string {

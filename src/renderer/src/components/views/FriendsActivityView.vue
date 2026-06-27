@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
+import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
 
@@ -111,7 +112,7 @@ function openWatching(card: ShikiFriendCard): void {
   if (w.animeId != null) {
     libraryStore.openAnime(w.animeId, String(w.episode || ''));
   } else {
-    void window.api.shellOpenExternal(`https://shikimori.one/animes/${w.malId}`);
+    void window.api.shellOpenExternal(`${SHIKIMORI_ORIGIN}/animes/${w.malId}`);
   }
 }
 
@@ -242,13 +243,13 @@ onMounted(() => loadFriends());
               <div class="fc-actions">
                 <button
                   class="hdr-btn ghost sm"
-                  @click="openExternal(`https://shikimori.one/@${f.nickname}/list/anime`)"
+                  @click="openExternal(`${SHIKIMORI_ORIGIN}/@${f.nickname}/list/anime`)"
                 >
                   Compare
                 </button>
                 <button
                   class="hdr-btn ghost sm"
-                  @click="openExternal(`https://shikimori.one/@${f.nickname}`)"
+                  @click="openExternal(`${SHIKIMORI_ORIGIN}/@${f.nickname}`)"
                 >
                   Message
                 </button>

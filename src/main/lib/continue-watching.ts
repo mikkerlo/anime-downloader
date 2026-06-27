@@ -1,7 +1,8 @@
 import type { AnimeSearchResult, AnimeDetail, EpisodeSummary } from '../smotret-api'
 import type { AnimeCacheEntry } from '../services/anime-cache'
+import { SHIKIMORI_ORIGIN } from '../../shared/shikimori'
 
-const SHIKI_BASE = 'https://shikimori.one'
+const SHIKI_BASE = SHIKIMORI_ORIGIN
 const RESUME_POSITION_GATE_SECONDS = 5
 const RESUME_COMPLETION_GATE = 0.95
 const MAX_ENTRIES = 24

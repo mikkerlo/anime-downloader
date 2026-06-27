@@ -1,8 +1,9 @@
 import type { StorageService } from './store/types'
+import { SHIKIMORI_ORIGIN } from '../shared/shikimori'
 
 const CLIENT_ID = 'wlhQeTkDVSMFmXqvtDJqPG_ZhWEUnG8iI4YG9nadvLU'
 const CLIENT_SECRET = 'r_lIMZbmFWZmVgP9pC9-9XaS0e96lwduMOegZ3YREfM'
-const BASE_URL = 'https://shikimori.one'
+const BASE_URL = SHIKIMORI_ORIGIN
 const REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob'
 const USER_AGENT = 'anime-dl'
 

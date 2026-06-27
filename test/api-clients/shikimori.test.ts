@@ -52,6 +52,12 @@ describe('shikimori client — fixture replay', () => {
         'User-Agent': 'anime-dl'
       })
     })
+
+    it('targets the shikimori.io origin (regression: shikimori.one now 301-redirects and undici strips auth cross-origin)', async () => {
+      mockFetchOnce(fixture('whoami.json'))
+      await shikimori.getUser('access-token')
+      expect(lastFetchUrl()).toMatch(/^https:\/\/shikimori\.io\//)
+    })
   })
 
   describe('getUserStats', () => {

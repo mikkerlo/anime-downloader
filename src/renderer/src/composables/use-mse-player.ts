@@ -44,6 +44,19 @@ export function useMsePlayer(deps: {
   streamSessionId: Ref<string>
   remuxError: Ref<string>
   mseInitialSeek: Ref<number>
+  /**
+   * Subtitle-clock correction (seconds) measured on the first post-respawn
+   * append. ffmpeg's fmp4 muxer emits the seeked keyframe at a non-zero output
+   * PTS (`emittedStart`, the B-frame reorder delay) even after
+   * `-avoid_negative_ts make_zero`, so with `timestampOffset = keyframeTime` the
+   * A/V content of true file time T lands on the MSE timeline at
+   * `T + emittedStart` — i.e. the video element shows content `emittedStart`
+   * behind `currentTime`. libass draws subtitles at `video.currentTime +
+   * timeOffset`, so setting `timeOffset = keyframeTime - buffered.start(0)`
+   * (= `-emittedStart`) shifts the subtitle clock to match the displayed
+   * content. `currentTime` itself is left untouched. 0 means "in sync".
+   */
+  subtitleCorrection: Ref<number>
   hasActiveSession: ComputedRef<boolean>
   // Actions
   startMseSession: (opts: StartMseSessionOpts) => void
@@ -74,6 +87,11 @@ export function useMsePlayer(deps: {
   // align video.currentTime on first 'loadedmetadata' (the ffmpeg run already
   // started here, so a native seek would force an unbuffered-seek respawn).
   const mseInitialSeek = ref(0)
+  // Subtitle-clock correction measured renderer-side after each respawn (and on
+  // the initial-open path when keyframeTime > 0). See the return-type doc above
+  // for the sign derivation. PlayerView watches this and pushes it into
+  // useSubtitles' octopusInstance.timeOffset.
+  const subtitleCorrection = ref(0)
 
   const transcodeLabel = computed(() => {
     if (transcodeSpeed.value == null) return 'Transcoding HEVC → H.264…'
@@ -99,6 +117,31 @@ export function useMsePlayer(deps: {
   let chunkRecvCount = 0
   let chunkRecvBytes = 0
 
+  // When true, the first post-respawn (or initial-open) append should capture
+  // `subtitleCorrection` from `buffered.start(0)` BEFORE any eviction runs.
+  // Eviction (`onSourceBufferUpdateEnd`'s `sb.remove` and `pumpAppendQueue`'s
+  // QuotaExceededError path) moves `buffered.start(0)`, which would corrupt the
+  // measured delta, so the capture is gated ahead of both.
+  let measurePending = false
+  // The keyframeTime we set as `timestampOffset` for the run being measured —
+  // captured at the same point so the delta is computed against the matching
+  // offset even if a newer respawn changes things later.
+  let measureKeyframeTime = 0
+
+  // Capture the subtitle-clock correction from the first append of a respawned
+  // run, before eviction perturbs `buffered.start(0)`. Sign: the keyframe at
+  // absolute time `measureKeyframeTime` is emitted at output PTS
+  // `emittedStart = buffered.start(0) - measureKeyframeTime`, so the A/V content
+  // sits `emittedStart` later than `currentTime`; subtitles (drawn at
+  // `currentTime + timeOffset`) line up when `timeOffset = -emittedStart =
+  // measureKeyframeTime - buffered.start(0)`.
+  function maybeMeasureSubtitleCorrection(sb: SourceBuffer): void {
+    if (!measurePending) return
+    if (sb.buffered.length === 0) return
+    subtitleCorrection.value = measureKeyframeTime - sb.buffered.start(0)
+    measurePending = false
+  }
+
   function setTranscoding(active: boolean): void {
     transcodingHevc.value = active
     if (!active) transcodeSpeed.value = null
@@ -109,6 +152,12 @@ export function useMsePlayer(deps: {
     streamSessionId.value = sessionId
     currentStreamGen = generation
     mseInitialSeek.value = resumeTarget
+    // Fresh session: clear any stale correction. Re-armed below only when this
+    // open carries a non-zero keyframe offset (resume-from-middle) that can
+    // exhibit the emittedStart delta; a play-from-0 open shares the origin and
+    // needs no correction.
+    subtitleCorrection.value = 0
+    measurePending = false
     const ms = new MediaSource()
     mediaSource = ms
     mseSrcUrl.value = URL.createObjectURL(ms)
@@ -143,6 +192,9 @@ export function useMsePlayer(deps: {
             } catch (e) {
               console.warn('[player] initial timestampOffset failed:', e)
             }
+            // Arm the subtitle-correction measurement for the first append.
+            measurePending = true
+            measureKeyframeTime = keyframeTime
           }
           sb.addEventListener('updateend', onSourceBufferUpdateEnd)
           sb.addEventListener('error', (e) =>
@@ -173,6 +225,9 @@ export function useMsePlayer(deps: {
           `[player] append #${appendCount} buffered=${ranges.join(',')} t=${(v?.currentTime ?? 0).toFixed(2)}`
         )
       }
+      // Capture the subtitle correction BEFORE the eviction below moves
+      // `buffered.start(0)`.
+      maybeMeasureSubtitleCorrection(sb)
       const bufStart = sb.buffered.start(0)
       const v = deps.getVideoEl()
       const t = v?.currentTime ?? 0
@@ -235,6 +290,9 @@ export function useMsePlayer(deps: {
         const vv = deps.getVideoEl()
         const t = vv?.currentTime ?? 0
         if (sb.buffered.length > 0 && !sb.updating) {
+          // Capture the subtitle correction before this eviction moves
+          // `buffered.start(0)`.
+          maybeMeasureSubtitleCorrection(sb)
           const bufStart = sb.buffered.start(0)
           const removeUntil = t - 5
           if (removeUntil > bufStart + 1) {
@@ -332,6 +390,10 @@ export function useMsePlayer(deps: {
     }
     if (unbufferedSeekInFlight) return
     unbufferedSeekInFlight = true
+    // Clear any pending measurement from a previous respawn so a stale flag
+    // can't fire against this run's pre-respawn buffer; re-armed below once the
+    // new run's timestampOffset is set.
+    measurePending = false
     const seekAt = Math.max(0, target - 1)
     console.log(
       `[player] unbuffered seek → respawn ffmpeg at ${seekAt.toFixed(2)} (target ${target.toFixed(2)})`
@@ -408,6 +470,11 @@ export function useMsePlayer(deps: {
       } catch (e) {
         console.warn('[player] timestampOffset set failed:', e)
       }
+      // Arm the subtitle-correction measurement for the first append of this
+      // respawned run (captured before eviction in onSourceBufferUpdateEnd /
+      // the QuotaExceededError path).
+      measurePending = true
+      measureKeyframeTime = result.keyframeTime
       // Release main's buffered prelude for the new ffmpeg run.
       void window.api.playerStreamStart(streamSessionId.value)
       // Clear the in-flight flag *before* awaiting the buffer-ahead gate
@@ -487,6 +554,8 @@ export function useMsePlayer(deps: {
     pendingAckBytes = 0
     appendQueue.length = 0
     mseInitialSeek.value = 0
+    subtitleCorrection.value = 0
+    measurePending = false
     currentStreamGen = 0
     transcodingHevc.value = false
     transcodeSpeed.value = null
@@ -565,6 +634,7 @@ export function useMsePlayer(deps: {
     streamSessionId,
     remuxError,
     mseInitialSeek,
+    subtitleCorrection,
     hasActiveSession,
     startMseSession,
     setTranscoding,

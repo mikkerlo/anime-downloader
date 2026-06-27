@@ -413,3 +413,141 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
     m.resetMseState()
   })
 })
+
+// Regression coverage for #198. After a seek respawn, ffmpeg's fmp4 muxer emits
+// the seeked keyframe at a non-zero output PTS (the B-frame reorder delay) even
+// after `-avoid_negative_ts make_zero`, so with `timestampOffset = keyframeTime`
+// the first fragment's `buffered.start(0)` lands at `keyframeTime + emittedStart`
+// rather than exactly `keyframeTime`. The renderer must capture that delta as a
+// subtitle-clock correction on the FIRST post-respawn append — and crucially
+// BEFORE the `updateend` eviction (`sb.remove`) moves `buffered.start(0)`.
+describe('useMsePlayer — subtitle correction measurement (#198)', () => {
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    onAbort: (() => void) | null = null
+    // Off during the seek's buffer-clear (so waitForBufferAhead still sees the
+    // covering range). Flipped on after the respawn so the measurement-step
+    // eviction visibly moves buffered.start(0).
+    evictMutates = false
+    appendBuffer(): void {}
+    remove(_start: number, end: number): void {
+      if (this.evictMutates && this.buffered.ranges.length > 0) {
+        this.buffered.ranges[0][0] = end
+      }
+      queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
+    }
+    abort(): void {
+      this.onAbort?.()
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: FakeSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): FakeSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {}
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+  })
+
+  it('captures keyframeTime − buffered.start(0) before eviction moves it', async () => {
+    const fakeSb = new FakeSourceBuffer()
+    // Initial buffered range does NOT contain the seek target (100) → respawn.
+    fakeSb.buffered.ranges = [[0, 5]]
+    // After abort() the fresh run's prelude covers the target so the
+    // buffer-ahead gate returns promptly.
+    fakeSb.onAbort = () => {
+      fakeSb.buffered.ranges = [[99, 105]]
+    }
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 100,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    // ffmpeg seeks back to keyframe 30 (= target − 1 clamped to a keyframe).
+    const seekSpy = vi.fn(async () => ({ generation: 1, keyframeTime: 30 }))
+    setApi({
+      playerStreamSeek: seekSpy,
+      playerStreamStart: vi.fn(async () => {}),
+      playerStreamAck: vi.fn(async () => {})
+    })
+
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        setSyncplayLocalReady: vi.fn()
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 200,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      keyframeTime: 0
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    await m._internal.handleUnbufferedSeek()
+    expect(seekSpy).toHaveBeenCalledWith('s1', 99)
+
+    // From here on, the eviction inside onSourceBufferUpdateEnd moves
+    // buffered.start(0) (real-buffer semantics).
+    fakeSb.evictMutates = true
+    // First post-respawn append lands: the fragment emitted from keyframe 30
+    // actually starts at 30.5 (emittedStart = 0.5). This range sits far enough
+    // behind the playhead (100) that the >60 s eviction WILL fire.
+    fakeSb.buffered.ranges = [[30.5, 200]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    // Correction is the PRE-eviction delta: keyframeTime − buffered.start(0).
+    expect(m.subtitleCorrection.value).toBeCloseTo(30 - 30.5, 6)
+    // Eviction did run and moved buffered.start(0) (to 70) — proving the
+    // measurement was captured ahead of it, not after.
+    expect(fakeSb.buffered.start(0)).toBe(70)
+    expect(m.subtitleCorrection.value).not.toBeCloseTo(30 - 70, 6)
+
+    m.resetMseState()
+  })
+})

@@ -50,6 +50,7 @@ interface Api {
   getQualityMismatchCount: () => Promise<number>
   dumpQualityMismatches: () => Promise<{ count: number; path: string }>
   debugGetMp4Stats: () => Promise<Mp4StreamingStats>
+  debugGetPlayerDiagLog: () => Promise<{ path: string; exists: boolean }>
   debugResetMp4Stats: () => Promise<void>
   libraryGet: () => Promise<AnimeSearchResult[]>
   libraryToggle: (anime: AnimeSearchResult) => Promise<boolean>
@@ -236,6 +237,7 @@ interface Api {
         hasSubtitlesPending: boolean
         initialSeek: number
       }
+    | { requiresTranscode: true }
     | { error: string }
   >
   playerRemuxMkvStreamTranscode: (
@@ -257,7 +259,7 @@ interface Api {
   playerStreamSeek: (
     sessionId: string,
     seekSeconds: number
-  ) => Promise<{ ok: true; generation: number; keyframeTime: number } | { error: string }>
+  ) => Promise<{ ok: true; generation: number; timestampOffset: number } | { error: string }>
   playerCleanupRemux: () => Promise<void>
   onPlayerStreamSubtitles: (
     callback: (data: { sessionId: string; content: string }) => void

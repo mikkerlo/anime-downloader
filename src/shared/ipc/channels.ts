@@ -42,6 +42,7 @@ export const CHANNELS = {
 
   // Debug
   DEBUG_GET_MP4_STATS: 'debug:get-mp4-stats',
+  DEBUG_GET_PLAYER_DIAG_LOG: 'debug:get-player-diag-log',
   DEBUG_RESET_MP4_STATS: 'debug:reset-mp4-stats',
 
   // Downloads

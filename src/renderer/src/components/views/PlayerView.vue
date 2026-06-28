@@ -100,8 +100,7 @@ const {
   transcodeLabel,
   streamSessionId,
   remuxError,
-  mseInitialSeek,
-  subtitleCorrection
+  mseInitialSeek
 } = msePlayer;
 
 // Quality selector state
@@ -139,18 +138,8 @@ const subs = useSubtitles({
   getVideoEl: () => videoRef.value,
   getStreamSessionId: () => streamSessionId.value
 });
-const { activeSubtitleContent, initSubtitles, destroySubtitles, setSubtitleCorrection } = subs;
+const { activeSubtitleContent, initSubtitles, destroySubtitles } = subs;
 activeSubtitleContent.value = props.subtitleContent;
-
-// Keep the libass subtitle clock aligned with the A/V buffer after MKV seeks /
-// resume-from-middle. useMsePlayer measures the offset between the keyframe we
-// asked ffmpeg to seek to and where its first emitted fragment actually lands
-// (`buffered.start(0)`); applying it via octopusInstance.timeOffset shifts the
-// subtitle clock to match the displayed content without moving currentTime.
-// Covers both the stream-copy and HEVC→H.264 transcode respawn paths, since
-// both feed the same subtitleCorrection ref. immediate so the stored value is
-// seeded into useSubtitles even when the first measurement equals 0.
-watch(subtitleCorrection, (delta) => setSubtitleCorrection(delta), { immediate: true });
 
 // Translation selector state
 const showTranslationMenu = ref(false);
@@ -680,17 +669,12 @@ async function resumeFromSavedPosition(): Promise<void> {
     if (saved.watched) return;
     const d = video.duration || saved.duration;
     if (!d) return;
-    // For MSE MKV streams the ffmpeg run was already started at the saved
-    // position; skip the native seek to avoid a spurious unbuffered-seek flow.
+    // For MSE MKV streams the composable lands the playhead on the saved position
+    // itself once the first fragment arrives (the buffer starts at the leading
+    // keyframe with a matching timestampOffset, so the target plays in sync). Do
+    // NOT also set video.currentTime here — a second seek would race the
+    // composable's land and can force an unnecessary ffmpeg respawn (#198).
     if (streamSessionId.value && mseInitialSeek.value > 0) {
-      if (video.currentTime < mseInitialSeek.value) {
-        try {
-          video.currentTime = mseInitialSeek.value;
-        } catch {
-          /* ignore */
-        }
-      }
-      currentTime.value = mseInitialSeek.value;
       resumeToast.value = `Resumed at ${formatTime(saved.position)}`;
       if (resumeToastTimer) clearTimeout(resumeToastTimer);
       resumeToastTimer = setTimeout(() => {
@@ -762,6 +746,15 @@ async function prepareMkvForPlayback(
   }
 
   const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek);
+  // `hevcTranscodeOnPlay === 'always'` forces the transcode (clean re-encoded
+  // timeline) even when the browser CAN decode HEVC natively — an escape hatch
+  // for HEVC stream-copy seek/sync issues on some platforms (#198). Main
+  // short-circuits before spawning anything, so there is no copy session to
+  // clean up here.
+  if ('requiresTranscode' in streamResult) {
+    console.log('[player] forcing HEVC→H.264 transcode (hevcTranscodeOnPlay=always)');
+    return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
+  }
   if (!('error' in streamResult)) {
     const mseOk =
       typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType);
@@ -773,7 +766,7 @@ async function prepareMkvForPlayback(
         duration: streamResult.duration,
         mimeType: streamResult.mimeType,
         resumeTarget,
-        keyframeTime: streamResult.initialSeek
+        timestampOffset: streamResult.initialSeek
       });
       mkvBuffering.value = true;
       return { ok: true };
@@ -869,7 +862,7 @@ async function prepareHevcTranscode(
     duration: r.duration,
     mimeType: r.mimeType,
     resumeTarget,
-    keyframeTime: r.initialSeek
+    timestampOffset: r.initialSeek
   });
   mkvBuffering.value = true;
   return { ok: true };

@@ -259,7 +259,7 @@ export function register({
       event,
       mkvPath: string,
       initialSeek?: number
-    ): Promise<MseOpenResult | { error: string }> => {
+    ): Promise<MseOpenResult | { requiresTranscode: true } | { error: string }> => {
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
@@ -267,6 +267,13 @@ export function register({
 
       const probe = await streamingService.probeMkvForMse(mkvPath)
       if (!probe || !probe.streamCopyMimeType) return { error: 'Codecs not supported for MSE' }
+      // `hevcTranscodeOnPlay === 'always'` never plays the copy session — the
+      // renderer used to discover that only after this handler had probed,
+      // spawned ffmpeg, and kicked off subtitle extraction, then SIGKILLed it
+      // all to start the transcode. Short-circuit before any work instead.
+      if (probe.videoCodec === 'hevc' && store.get('hevcTranscodeOnPlay') === 'always') {
+        return { requiresTranscode: true }
+      }
       const streamCopyMime = probe.streamCopyMimeType
 
       fs.mkdirSync(streamingService.tmpDir, { recursive: true })
@@ -295,12 +302,23 @@ export function register({
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
           : 0
-      const startSeek =
-        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
-      console.log(
-        `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
+      // Seek ffmpeg at the RAW requested time — do NOT pre-snap to a keyframe. A
+      // pre-snapped `-ss <keyframe>` double-snaps to the *previous* keyframe (the
+      // Matroska seek deadzone), landing ~one GOP early while the renderer labels
+      // the buffer with the un-snapped time → the classic subtitles-run-ahead
+      // desync. Probe the run's true timestampOffset concurrently with the spawn
+      // (its result feeds only the IPC reply, not the session ffmpeg) so the
+      // probe never delays first bytes (#198).
+      const offsetPromise =
+        requestedSeek > 0
+          ? streamingService.probeCopyTimestampOffset(mkvPath, requestedSeek, probe.videoCodec)
+          : Promise.resolve(0)
+      session.proc = streamingService.spawnFfmpegForSession(
+        session,
+        event,
+        sessionId,
+        requestedSeek
       )
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
 
       // Kick off subtitle extraction in parallel; push to renderer when ready.
       const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
@@ -332,13 +350,17 @@ export function register({
           })
       }
 
+      const contentStart = await offsetPromise
+      console.log(
+        `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
+      )
       return {
         sessionId,
         generation: session.generation,
         duration: probe.duration,
         mimeType: streamCopyMime,
         hasSubtitlesPending,
-        initialSeek: startSeek
+        initialSeek: contentStart
       }
     }
   )
@@ -399,12 +421,18 @@ export function register({
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
           : 0
-      const startSeek =
-        requestedSeek > 0 ? await streamingService.findKeyframeBefore(mkvPath, requestedSeek) : 0
+      // Transcode decodes from a keyframe and (accurate-seek) discards forward to
+      // the exact `-ss` time, so the first emitted frame IS the requested time — no
+      // probe needed, the content start equals the request.
       console.log(
-        `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} keyframe=${startSeek.toFixed(2)}`
+        `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)}`
       )
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, startSeek)
+      session.proc = streamingService.spawnFfmpegForSession(
+        session,
+        event,
+        sessionId,
+        requestedSeek
+      )
 
       const assPath = path.join(streamingService.tmpDir, `${baseName}-${sessionId}.ass`)
       let hasSubtitlesPending = false
@@ -441,26 +469,37 @@ export function register({
         duration: probe.duration,
         mimeType,
         hasSubtitlesPending,
-        initialSeek: startSeek
+        initialSeek: requestedSeek
       }
     }
   )
 
-  // Forward seek past the buffered region: respawn ffmpeg with `-ss` so output
-  // starts at (or just before) the requested timestamp. The renderer will have
-  // already set sourceBuffer.timestampOffset to place fragments on the correct
-  // MSE timeline position. Stale chunks from the old proc are filtered out by
-  // the generation counter captured in spawnFfmpegForSession.
+  // Forward seek past the buffered region: respawn ffmpeg at the RAW requested
+  // timestamp and return the run's true timestampOffset so the renderer can map
+  // the new fragments onto the file timeline. For copy the offset is measured
+  // (probeCopyTimestampOffset: absolute landing minus the mux's emitted start);
+  // for transcode accurate-seek discards forward to the exact target, so the
+  // offset equals the request. The renderer keeps the playhead at the user's
+  // target — decoding starts from the buffer's leading keyframe, so it plays in
+  // sync (see use-mse-player). Stale chunks from the old proc are filtered by
+  // the generation counter in spawnFfmpegForSession.
   ipcMain.handle(
     CHANNELS.PLAYER_STREAM_SEEK,
     async (event, sessionId: string, seekSeconds: number) => {
       const session = streamingService.getSession(sessionId)
       if (!session) return { error: 'session not found' }
       const requestedSeek = Math.max(0, seekSeconds)
-      const keyframeTime =
-        requestedSeek > 0
-          ? await streamingService.findKeyframeBefore(session.mkvPath, requestedSeek)
-          : 0
+      // Probe concurrently with the respawn below — the offset feeds only the
+      // IPC reply, and the renderer holds new chunks in the prelude until it
+      // has set timestampOffset and re-handshaken, so this never races the data.
+      const offsetPromise =
+        requestedSeek > 0 && !session.transcode
+          ? streamingService.probeCopyTimestampOffset(
+              session.mkvPath,
+              requestedSeek,
+              session.videoCodec
+            )
+          : Promise.resolve(requestedSeek)
       session.generation++
       try {
         session.proc.kill('SIGKILL')
@@ -483,8 +522,13 @@ export function register({
           /* ignore */
         }
       }
-      session.proc = streamingService.spawnFfmpegForSession(session, event, sessionId, keyframeTime)
-      return { ok: true, generation: session.generation, keyframeTime }
+      session.proc = streamingService.spawnFfmpegForSession(
+        session,
+        event,
+        sessionId,
+        requestedSeek
+      )
+      return { ok: true, generation: session.generation, timestampOffset: await offsetPromise }
     }
   )
 

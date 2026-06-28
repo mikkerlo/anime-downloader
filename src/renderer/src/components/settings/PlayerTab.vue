@@ -145,10 +145,10 @@ watch(prefetchNextEpisode, (val) => {
       </SettingsRow>
       <SettingsRow
         label="HEVC transcoding on play"
-        desc="When a local HEVC (H.265) MKV can't be decoded by the built-in player, transcode it to H.264 in real time instead of leaving the viewer with a black screen."
+        desc="For local HEVC (H.265) MKVs: when the built-in player can't decode HEVC, transcode to H.264 instead of a black screen. Set to Always to force the transcode even when HEVC decodes natively — useful if direct HEVC playback has seek/sync issues."
       >
         <div class="select-wrap">
-          <select v-model="hevcTranscodeOnPlay" :disabled="hevcMseSupported">
+          <select v-model="hevcTranscodeOnPlay">
             <option value="ask">Ask each time</option>
             <option value="always">Always transcode</option>
             <option value="never">Never — open in external player</option>
@@ -160,8 +160,8 @@ watch(prefetchNextEpisode, (val) => {
       </SettingsRow>
       <SettingsRow stack>
         <div v-if="hevcMseSupported" class="status-line ok">
-          HEVC MSE decoder: available — the MKV pipeline plays HEVC directly and this fallback won't
-          fire.
+          HEVC MSE decoder: available — HEVC plays directly. Set to Always to force transcoding
+          anyway (e.g. if direct HEVC seeking is out of sync).
         </div>
         <div v-else class="status-line warn">
           HEVC MSE decoder: not available — this setting controls the fallback for local MKV

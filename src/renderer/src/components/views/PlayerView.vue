@@ -100,7 +100,8 @@ const {
   transcodeLabel,
   streamSessionId,
   remuxError,
-  mseInitialSeek
+  mseInitialSeek,
+  subtitleCorrection
 } = msePlayer;
 
 // Quality selector state
@@ -138,8 +139,18 @@ const subs = useSubtitles({
   getVideoEl: () => videoRef.value,
   getStreamSessionId: () => streamSessionId.value
 });
-const { activeSubtitleContent, initSubtitles, destroySubtitles } = subs;
+const { activeSubtitleContent, initSubtitles, destroySubtitles, setSubtitleCorrection } = subs;
 activeSubtitleContent.value = props.subtitleContent;
+
+// Keep the libass subtitle clock aligned with the A/V buffer after MKV seeks /
+// resume-from-middle. useMsePlayer measures the offset between the keyframe we
+// asked ffmpeg to seek to and where its first emitted fragment actually lands
+// (`buffered.start(0)`); applying it via octopusInstance.timeOffset shifts the
+// subtitle clock to match the displayed content without moving currentTime.
+// Covers both the stream-copy and HEVC→H.264 transcode respawn paths, since
+// both feed the same subtitleCorrection ref. immediate so the stored value is
+// seeded into useSubtitles even when the first measurement equals 0.
+watch(subtitleCorrection, (delta) => setSubtitleCorrection(delta), { immediate: true });
 
 // Translation selector state
 const showTranslationMenu = ref(false);

@@ -2,6 +2,8 @@
 
 The single source of truth for channel names and payload/return types is `src/shared/ipc/channels.ts`. Both main (via `ipcMain.handle`/`webContents.send`) and renderer (via `window.api.*`) dereference the same symbols (`CHANNELS.*` and `EVENT_CHANNELS.*`), so renaming or removing a channel is a compile error rather than a silent miss. The per-domain routers in `src/main/ipc/*.ipc.ts` consume the contract; see [Architecture](./architecture.md) for the router-by-router file map.
 
+**Slow-reply profiling:** `registerIpcRouters` (`src/main/ipc/index.ts`) intercepts `ipcMain.handle` for the duration of router registration, so every channel's handler is timed and any reply slower than `SLOW_IPC_MS` (`src/main/lib/perf.ts`, 100ms) is logged as `[perf] ipc <channel> took Nms`. The main process serializes all replies on one event loop, so these logs are the first place to look when the UI feels stalled. The store layer logs `[perf] store.*` the same way.
+
 ## Broadcast subscription contract (Phase 4 slice 4a, #111)
 
 `send`-direction event channels expose `on*` subscribers on `window.api` of shape
@@ -32,7 +34,6 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `search-anime` | invoke | Search anime by query |
 | `get-anime` | invoke | Fetch anime details by ID |
 | `get-anime-cache` | invoke | Read cached AnimeDetail for fast first paint (returns null if missing or older than 24h) |
-| `set-anime-cache` | invoke | Write AnimeDetail to cache (no-op if anime is neither starred nor downloaded) |
 | `get-episode` | invoke | Fetch episode translations (single episode) |
 | `get-episodes-batch` | invoke | Bulk-fetch translations for a page of episodes in one request (collapses the per-episode cold-load waterfall, #155); caches each result, falls back to cached episodes on failure (via the shared `readCachedEpisodes` helper) |
 | `get-episodes-batch-cached` | invoke | Cache-first read (#196): returns the already-cached translations for a page of episodes with no network, so the episode list paints instantly for previously-viewed anime; the renderer then background-refreshes via `get-episodes-batch` and patches. Shares `readCachedEpisodes` with the network-first fallback. Always `source: 'cache'`; empty `data` means nothing was cached |

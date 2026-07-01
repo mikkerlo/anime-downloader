@@ -49,7 +49,6 @@ function stubApi(): void {
     {
       getAnimeCache: vi.fn().mockResolvedValue(null),
       getAnime: vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
-      setAnimeCache: vi.fn().mockResolvedValue(undefined),
       getSetting: vi.fn().mockResolvedValue(null),
       libraryHas: vi.fn().mockResolvedValue(false),
       libraryIsDownloaded: vi.fn().mockResolvedValue(false),

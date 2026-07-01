@@ -22,9 +22,10 @@ function mkEpisode(id: number): EpisodeDetail {
 describe('anime.ipc — cache-first episodes (#196)', () => {
   let handlers: Map<string, Handler>
   let getEpisodesBatch: ReturnType<typeof vi.fn>
+  let store: InMemoryStorage
 
   function setup(seedEpisodes: Record<number, EpisodeDetail>): void {
-    const store = new InMemoryStorage({
+    store = new InMemoryStorage({
       animeCache: {
         '1': {
           animeDetail: null,
@@ -109,5 +110,30 @@ describe('anime.ipc — cache-first episodes (#196)', () => {
     expect(cachedRes.source).toBe('cache')
     // ...whereas the network-first fallback throws when it has no cache to serve.
     await expect(handlers.get(CHANNELS.GET_EPISODES_BATCH)!({}, [1, 2], 1)).rejects.toThrow()
+  })
+
+  it('a successful network batch persists every episode with ONE store write (perf regression)', async () => {
+    setup({})
+    getEpisodesBatch.mockResolvedValue({ data: [mkEpisode(1), mkEpisode(2), mkEpisode(3)] })
+    const setSpy = vi.spyOn(store, 'set')
+
+    const res = (await handlers.get(CHANNELS.GET_EPISODES_BATCH)!({}, [1, 2, 3], 1)) as {
+      data: EpisodeDetail[]
+      source: string
+    }
+
+    expect(res.source).toBe('api')
+    // The old per-episode updateEpisode loop rewrote the store once per
+    // episode (~60 full-file operations per 30-episode page).
+    expect(setSpy).toHaveBeenCalledTimes(1)
+    // ...and the batch is readable through the cache-first channel afterwards.
+    const cachedRes = (await handlers.get(CHANNELS.GET_EPISODES_BATCH_CACHED)!(
+      {},
+      [1, 2, 3],
+      1
+    )) as {
+      data: EpisodeDetail[]
+    }
+    expect(cachedRes.data.map((d) => d.id)).toEqual([1, 2, 3])
   })
 })

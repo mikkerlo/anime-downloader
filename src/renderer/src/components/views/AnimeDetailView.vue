@@ -246,9 +246,9 @@ onMounted(async () => {
       if (disposed || gen !== loadGeneration) return;
       anime.value = res.data;
       dataSource.value = res.source;
-      if (res.source === 'api') {
-        window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
-      }
+      // No setAnimeCache here: the get-anime handler already persisted the
+      // fresh detail on an 'api' response, so a renderer echo would only
+      // rewrite the store file a second time.
       await Promise.all([loadPageEpisodes(), checkFileStatus()]);
       if (disposed || gen !== loadGeneration) return;
       if (!props.initialPrefs?.translationType) {
@@ -320,7 +320,7 @@ async function refreshAnimeInBackground(gen: number): Promise<void> {
     anime.value = res.data;
     dataSource.value = res.source;
     if (res.source === 'api') {
-      window.api.setAnimeCache(props.animeId, res.data).catch(() => {});
+      // Cache write already happened in the get-anime handler.
       await loadPageEpisodes();
     }
   } catch {

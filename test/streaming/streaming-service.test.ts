@@ -3,7 +3,11 @@ import type { ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { createStreamingService, type MseSession } from '../../src/main/streaming'
+import {
+  createStreamingService,
+  seekAnchorStreamFor,
+  type MseSession
+} from '../../src/main/streaming'
 
 function mkSession(over: Partial<MseSession> = {}): MseSession {
   const kills: string[] = []
@@ -277,6 +281,99 @@ describe('StreamingService probeCopyTimestampOffset', () => {
   it('returns 0 for non-positive seek times without spawning anything', async () => {
     const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 0, 'h264')
     expect(offset).toBe(0)
+    expect(fs.existsSync(argsFile)).toBe(false)
+  })
+})
+
+describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () => {
+  const channels = {
+    streamChunk: 'sc',
+    streamEnd: 'se',
+    streamError: 'sx',
+    streamProgress: 'sp'
+  }
+
+  let dir: string
+  let argsFile: string
+  let ffmpeg: string
+  let ffprobe: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'anchor-test-'))
+    argsFile = path.join(dir, 'ffmpeg-args')
+    ffmpeg = path.join(dir, 'ffmpeg')
+    ffprobe = path.join(dir, 'ffprobe')
+    fs.writeFileSync(ffmpeg, `#!/bin/sh\necho "$@" >> "${argsFile}"\n`, { mode: 0o755 })
+    // Values measured on the real repro file for a 207 s seek: the muxed-seek
+    // audio landing (198.043) differs from a lone audio-only seek (198.136) —
+    // the demuxer positions differently when the video stream is mapped too.
+    fs.writeFileSync(
+      ffprobe,
+      '#!/bin/sh\ncase "$*" in\n  *"a:0"*) echo 198.043 ;;\n  *" nut "*) echo 198.115 ;;\n  *" mp4 "*) echo 0.083 ;;\nesac\n',
+      { mode: 0o755 }
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  function mkSvc(): ReturnType<typeof createStreamingService> {
+    return createStreamingService({
+      getFfmpegPath: () => ffmpeg,
+      getFfprobePath: () => ffprobe,
+      channels
+    })
+  }
+
+  it('seekAnchorStreamFor maps run type to the anchoring stream', () => {
+    expect(seekAnchorStreamFor({ transcode: false, audioStrategy: 'copy' })).toBe('video')
+    expect(seekAnchorStreamFor({ transcode: false, audioStrategy: 'transcode' })).toBe('video')
+    // Transcode with copied AAC: the untrimmable audio anchors make_zero.
+    expect(seekAnchorStreamFor({ transcode: true, audioStrategy: 'copy' })).toBe('audio')
+    // Full transcode trims every stream to the exact -ss — no early anchor.
+    expect(seekAnchorStreamFor({ transcode: true, audioStrategy: 'transcode' })).toBeNull()
+  })
+
+  it('full transcode returns the raw request without spawning probes', async () => {
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'transcode', videoCodec: 'hevc' },
+      207
+    )
+    expect(anchor).toBe(207)
+    expect(fs.existsSync(argsFile)).toBe(false)
+  })
+
+  it('stream copy delegates to the full offset measurement', async () => {
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: false, audioStrategy: 'copy', videoCodec: 'hevc' },
+      207
+    )
+    expect(anchor).toBeCloseTo(198.032, 3) // 198.115 - 0.083
+  })
+
+  it('transcode-with-copied-audio probes the audio landing in the muxed demux context (old behavior returned the raw request)', async () => {
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'hevc' },
+      207
+    )
+    expect(anchor).toBeCloseTo(198.043, 3)
+    const args = fs.readFileSync(argsFile, 'utf-8')
+    // Muxed context: BOTH streams mapped (a lone audio map seeks differently),
+    // absolute timestamps preserved, one packet per stream, piped.
+    expect(args).toContain('-map 0:v:0')
+    expect(args).toContain('-map 0:a:0?')
+    expect(args).toContain('-copyts')
+    expect(args).toContain('-frames:a 1')
+    expect(args).toContain('-f nut pipe:1')
+  })
+
+  it('non-positive times return 0 without probing', async () => {
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },
+      0
+    )
+    expect(anchor).toBe(0)
     expect(fs.existsSync(argsFile)).toBe(false)
   })
 })

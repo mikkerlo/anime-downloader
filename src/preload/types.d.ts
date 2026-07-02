@@ -26,7 +26,6 @@ interface Api {
   searchAnime: (query: string) => Promise<{ data: AnimeSearchResult[] }>
   getAnime: (id: number) => Promise<ApiResponse<AnimeDetail>>
   getAnimeCache: (id: number) => Promise<{ data: AnimeDetail; cachedAt: number } | null>
-  setAnimeCache: (id: number, data: AnimeDetail) => Promise<boolean>
   getEpisode: (id: number, animeId?: number) => Promise<ApiResponse<EpisodeDetail>>
   getEpisodesBatch: (
     episodeIds: number[],

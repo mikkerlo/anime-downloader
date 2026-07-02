@@ -96,9 +96,9 @@ export function register({ smotretApi, animeCacheService, rememberAnimeMeta }: A
     async (_event, episodeIds: number[], animeId?: number) => {
       try {
         const result = await smotretApi.getEpisodesBatch(episodeIds)
-        if (animeId) {
-          for (const ep of result.data) animeCacheService.updateEpisode(animeId, ep.id, ep)
-        }
+        // Single store write for the whole page — per-episode updates used to
+        // block this reply behind ~60 full-file store operations.
+        if (animeId) animeCacheService.updateEpisodes(animeId, result.data)
         return { ...result, source: 'api' }
       } catch (err) {
         if (animeId) {

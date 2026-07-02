@@ -11,8 +11,6 @@ const api = {
       data: AnimeDetail
       cachedAt: number
     } | null>,
-  setAnimeCache: (id: number, data: AnimeDetail) =>
-    ipcRenderer.invoke(CHANNELS.SET_ANIME_CACHE, id, data) as Promise<boolean>,
   getEpisode: (id: number, animeId?: number) =>
     ipcRenderer.invoke(CHANNELS.GET_EPISODE, id, animeId),
   getEpisodesBatch: (episodeIds: number[], animeId?: number) =>

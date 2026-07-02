@@ -66,7 +66,6 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
   const base: Record<string, ReturnType<typeof vi.fn>> = {
     getAnimeCache: overrides.getAnimeCache ?? vi.fn().mockResolvedValue(null),
     getAnime: overrides.getAnime ?? vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
-    setAnimeCache: vi.fn().mockResolvedValue(undefined),
     getEpisodesBatchCached: vi
       .fn()
       .mockResolvedValue({ data: [episodeDetail(700)], source: 'cache' }),

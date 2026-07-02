@@ -1,0 +1,6 @@
+[ffmpeg] Found: 6.1-static at /tmp/claude-1000/-home-greatkorn-anime-downloader/4c1dae3e-7ef2-4b99-b672-1a744019098d/scratchpad/profile-old/Electron/ffmpeg/ffmpeg
+[ffmpeg] Available HEVC encoders: libx265
+APPIMAGE env is not defined, current application is not an AppImage
+[113494:0702/054126.124440:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:285] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+Debugger ending on ws://127.0.0.1:42398/8ce72a44-6a4f-4756-a41d-32487ca3d613
+For help, see: https://nodejs.org/en/docs/inspector

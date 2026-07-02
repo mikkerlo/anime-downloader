@@ -122,6 +122,18 @@ file scan concurrently rather than stacking them. The first per-anime file scan
 is async (`fsPromises.readdir`, `lib/episode-file-scan.ts`) so it never stalls
 the single-threaded main process, and concurrent misses are deduped to one scan.
 
+Store-level cost: every persisted key lives in one `config.json`, and raw
+electron-store re-parses the whole file per `get` and rewrites it per `set`
+(tens of ms once the file grows to several MB). `createStorageService` now
+serves reads from an in-memory snapshot and `get-episodes-batch` persists a
+page through `animeCacheService.updateEpisodes` — one write per page instead
+of one read+write per episode — so an episode-batch reply no longer blocks
+every other IPC handler for seconds. Quality probes coalesce their writes on a
+debounce too (`updateQualityProbe`). The successful `get-anime` handler is the
+only writer of the fresh detail (the renderer no longer echoes it back via a
+`set-anime-cache` call; that channel is gone). Slow replies and store ops are
+logged via `src/main/lib/perf.ts` (`[perf] …`).
+
 Per-episode translation selector with priority chain:
   1. In download queue → locked to queued translation
   2. User per-episode override → user's manual pick

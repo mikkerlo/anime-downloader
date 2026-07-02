@@ -1,3 +1,5 @@
+import { ipcMain } from 'electron'
+import { markSlow, SLOW_IPC_MS } from '../lib/perf'
 import type { StorageService } from '../store/types'
 import type { SmotretApi, AnimeDetail, AnimeSearchResult } from '../smotret-api'
 import type { AnimeCacheService } from '../services/anime-cache'
@@ -111,6 +113,33 @@ export interface AppDeps {
  * any `ipcMain.handle` calls of its own.
  */
 export function registerIpcRouters(deps: AppDeps): void {
+  // Every reply below shares the main-process event loop, so one slow handler
+  // stalls all of them. Intercept `ipcMain.handle` for the duration of router
+  // registration so every channel gets a wall-clock probe that logs replies
+  // slower than SLOW_IPC_MS — the profiling that surfaced the store-thrash
+  // behind the slow anime-detail open.
+  const originalHandle = ipcMain.handle
+  ipcMain.handle = ((
+    channel: string,
+    handler: (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+  ) => {
+    originalHandle.call(ipcMain, channel, async (event, ...args) => {
+      const t0 = performance.now()
+      try {
+        return await handler(event, ...args)
+      } finally {
+        markSlow(`ipc ${channel}`, t0, SLOW_IPC_MS)
+      }
+    })
+  }) as typeof ipcMain.handle
+  try {
+    registerAllRouters(deps)
+  } finally {
+    ipcMain.handle = originalHandle
+  }
+}
+
+function registerAllRouters(deps: AppDeps): void {
   appRouter.register(deps)
   animeRouter.register(deps)
   libraryRouter.register(deps)

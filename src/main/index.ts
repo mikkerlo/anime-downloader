@@ -872,6 +872,9 @@ new App()
   .start({
     onReady: bootstrap,
     onBeforeQuit: () => {
+      // Persist quality probes still sitting on the debounce timer — without
+      // this, probes buffered in the last ≤500ms before quit are dropped.
+      animeCacheService.flushQualityProbes()
       downloadManager?.destroy()
       syncplay.disconnect()
     }

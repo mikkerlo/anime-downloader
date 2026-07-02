@@ -25,6 +25,17 @@ export class InMemoryStorage implements StorageService {
   }
 
   get<T = unknown>(key: string, defaultValue?: T): T | undefined {
+    // Dot-notation sub-key reads, mirroring the real StorageService (which
+    // walks its snapshot): `get('animeCache.42')` returns the nested value.
+    if (key.includes('.')) {
+      const [root, ...rest] = key.split('.')
+      let node: unknown = this.map.get(root)
+      for (const part of rest) {
+        if (node === null || typeof node !== 'object') return defaultValue
+        node = (node as Record<string, unknown>)[part]
+      }
+      return node === undefined ? defaultValue : (node as T)
+    }
     return this.map.has(key) ? (this.map.get(key) as T) : defaultValue
   }
 

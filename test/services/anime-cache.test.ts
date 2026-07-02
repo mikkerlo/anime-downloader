@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
   createAnimeCacheService,
+  PROBE_FLUSH_DEBOUNCE_MS,
   type AnimeCacheEntry,
   type AnimeCacheService
 } from '../../src/main/services/anime-cache'
@@ -108,6 +109,84 @@ describe('AnimeCacheService', () => {
     })
     await skippingSvc.cachePosterImage(42, 'https://example/x.jpg')
     expect(fs.existsSync(path.join(tmpDir, 'poster-cache', '42.jpg'))).toBe(false)
+  })
+
+  it('updateEpisodes persists a whole batch with a single store write', () => {
+    const setSpy = vi.spyOn(store, 'set')
+    svc.updateEpisodes(1, [
+      { ...mkEpisode(), id: 100 },
+      { ...mkEpisode(), id: 101 },
+      { ...mkEpisode(), id: 102 }
+    ])
+    expect(setSpy).toHaveBeenCalledTimes(1)
+    const entry = svc.getEntry(1)!
+    expect(Object.keys(entry.episodes).sort()).toEqual(['100', '101', '102'])
+    expect(entry.cachedAt).toBeGreaterThan(0)
+  })
+
+  it('updateEpisodes is a no-op for an empty batch or a non-cachable anime', () => {
+    const setSpy = vi.spyOn(store, 'set')
+    svc.updateEpisodes(1, [])
+    svc.updateEpisodes(999, [{ ...mkEpisode(), id: 100 }])
+    expect(setSpy).not.toHaveBeenCalled()
+  })
+
+  describe('quality-probe write coalescing', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('buffers probes and persists them in one debounced write', () => {
+      svc.setEntry(1, {
+        animeDetail: null,
+        episodes: {},
+        qualityProbes: {},
+        cachedAt: 1,
+        posterCached: false
+      })
+      const setSpy = vi.spyOn(store, 'set')
+      svc.updateQualityProbe(1, 500, 1080)
+      svc.updateQualityProbe(1, 501, 720)
+      expect(setSpy).not.toHaveBeenCalled() // nothing written yet
+
+      // Reads still see the pending values while the timer is armed.
+      expect(svc.getEntry(1)!.qualityProbes).toEqual({ 500: 1080, 501: 720 })
+
+      vi.advanceTimersByTime(PROBE_FLUSH_DEBOUNCE_MS)
+      expect(setSpy).toHaveBeenCalledTimes(1)
+      expect(store.get<Record<string, AnimeCacheEntry>>('animeCache')!['1'].qualityProbes).toEqual({
+        500: 1080,
+        501: 720
+      })
+    })
+
+    it('a concurrent episode update between buffer and flush is not clobbered', () => {
+      svc.updateQualityProbe(1, 500, 1080)
+      svc.updateEpisode(1, 100, mkEpisode()) // lands before the probe flush
+      vi.advanceTimersByTime(PROBE_FLUSH_DEBOUNCE_MS)
+      const persisted = store.get<Record<string, AnimeCacheEntry>>('animeCache')!['1']
+      expect(persisted.episodes['100']).toBeDefined()
+      expect(persisted.qualityProbes).toEqual({ 500: 1080 })
+    })
+
+    it('flushQualityProbes persists immediately and disarms the timer', () => {
+      const setSpy = vi.spyOn(store, 'set')
+      svc.updateQualityProbe(1, 500, 1080)
+      svc.flushQualityProbes()
+      expect(setSpy).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(PROBE_FLUSH_DEBOUNCE_MS * 2)
+      expect(setSpy).toHaveBeenCalledTimes(1) // no second write from a stale timer
+    })
+
+    it('non-cachable probes are dropped, not buffered', () => {
+      const setSpy = vi.spyOn(store, 'set')
+      svc.updateQualityProbe(999, 500, 1080)
+      vi.advanceTimersByTime(PROBE_FLUSH_DEBOUNCE_MS)
+      expect(setSpy).not.toHaveBeenCalled()
+    })
   })
 
   it('cleanupStale drops cache rows whose anime is neither downloaded nor in library', () => {

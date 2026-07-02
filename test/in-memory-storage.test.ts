@@ -26,4 +26,13 @@ describe('InMemoryStorage', () => {
     store.clear()
     expect(store.snapshot()).toEqual({})
   })
+
+  it('resolves dot-notation sub-key reads like the real StorageService', () => {
+    const store = new InMemoryStorage({ animeCache: { '42': { cachedAt: 7 } } })
+    expect(store.get('animeCache.42')).toEqual({ cachedAt: 7 })
+    expect(store.get('animeCache.42.cachedAt')).toBe(7)
+    expect(store.get('animeCache.99')).toBeUndefined()
+    expect(store.get('animeCache.99', 'fallback')).toBe('fallback')
+    expect(store.get('animeCache.42.cachedAt.deeper')).toBeUndefined()
+  })
 })

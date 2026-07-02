@@ -88,10 +88,27 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
     expect('extra' in readDisk()).toBe(false)
   })
 
-  it('dot-notation paths bypass the snapshot and re-sync it', () => {
+  it('dot-notation writes delegate to electron-store and re-sync; reads walk the snapshot', () => {
     const svc = create()
     svc.set('blob.nested', false)
     expect(svc.get('blob.nested')).toBe(false)
     expect((svc.get('blob') as { nested: boolean }).nested).toBe(false)
+    expect(svc.has('blob.nested')).toBe(true)
+    expect(svc.has('blob.missing')).toBe(false)
+  })
+
+  it('dot-notation sub-key reads clone only the addressed leaf, isolated from later reads', () => {
+    const svc = create()
+    svc.set('blob', { entry: { arr: [1] } })
+    const leaf = svc.get('blob.entry') as { arr: number[] }
+    leaf.arr.push(999)
+    expect((svc.get('blob.entry') as { arr: number[] }).arr).toEqual([1])
+  })
+
+  it('set(key, undefined) throws like electron-store (JSON would drop the key on persist)', () => {
+    const svc = create()
+    expect(() => svc.set('alpha', undefined)).toThrow(TypeError)
+    expect(() => svc.set('alpha', undefined)).toThrow('Use `delete()` to clear values')
+    expect(svc.get('alpha')).toBe(1) // untouched
   })
 })

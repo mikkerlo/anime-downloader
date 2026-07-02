@@ -51,8 +51,9 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     path.join(getPosterCacheDir(), `${animeId}.jpg`)
 
   function getEntry(animeId: number): AnimeCacheEntry | null {
-    const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-    const entry = cache[String(animeId)] || null
+    // Sub-key read: clones only this anime's entry — a whole-map read would
+    // structuredClone every cached show per call on the detail-open hot path.
+    const entry = (store.get(`animeCache.${animeId}`) as AnimeCacheEntry | undefined) ?? null
     // Overlay quality probes still sitting in the debounce buffer so readers
     // never observe older values than what `updateQualityProbe` accepted.
     const pending = entry && pendingProbes.get(animeId)

@@ -1,7 +1,7 @@
 import Store from 'electron-store'
 import type { StorageService } from './types'
 import { migrateWatchProgressV2 } from './migrate'
-import { markSlow, SLOW_STORE_OP_MS } from '../lib/perf'
+import { timeSlowSync, SLOW_STORE_OP_MS } from '../lib/perf'
 
 export type { StorageService } from './types'
 export { PERSISTED_STORE_KEYS, type PersistedStoreKey } from './keys'
@@ -28,11 +28,12 @@ export interface MainStorageService<S extends Record<string, unknown>> extends S
  * is the store's only writer, so the snapshot is authoritative:
  * - `get` returns a `structuredClone` of the snapshot value, preserving the
  *   old semantics that every read is an isolated copy (callers may mutate
- *   what they got without corrupting later reads).
+ *   what they got without corrupting later reads). Dot-notation paths walk
+ *   the snapshot and clone only the addressed leaf, so hot readers of a
+ *   single sub-entry (e.g. `animeCache.<id>`) don't pay for the whole map.
  * - `set`/`delete` update the snapshot, then persist through the `store.store`
  *   setter, which writes the file once without conf's redundant pre-read.
- * - Dot-notation paths (never used by our flat schema, but reachable through
- *   the dynamic settings IPC) bypass the snapshot and re-sync it afterwards.
+ *   Dot-notation writes delegate to electron-store and re-sync the snapshot.
  */
 export function createStorageService<S extends Record<string, unknown>>(
   defaults: S,
@@ -45,9 +46,9 @@ export function createStorageService<S extends Record<string, unknown>>(
   const snapshot: Record<string, unknown> = { ...(store.store as Record<string, unknown>) }
 
   function persist(): void {
-    const t0 = performance.now()
-    ;(store as { store: unknown }).store = snapshot
-    markSlow('store.persist', t0, SLOW_STORE_OP_MS)
+    timeSlowSync('store.persist', SLOW_STORE_OP_MS, () => {
+      ;(store as { store: unknown }).store = snapshot
+    })
   }
 
   function resyncSnapshot(): void {
@@ -56,15 +57,26 @@ export function createStorageService<S extends Record<string, unknown>>(
     Object.assign(snapshot, fresh)
   }
 
+  function readPath(key: string): unknown {
+    let node: unknown = snapshot
+    for (const part of key.split('.')) {
+      if (node === null || typeof node !== 'object') return undefined
+      node = (node as Record<string, unknown>)[part]
+    }
+    return node
+  }
+
   const svc: MainStorageService<S> = {
-    get: ((key: string) => {
-      if (key.includes('.')) return store.get(key as keyof S)
-      const t0 = performance.now()
-      const value = structuredClone(snapshot[key])
-      markSlow(`store.get(${key})`, t0, SLOW_STORE_OP_MS)
-      return value
-    }) as MainStorageService<S>['get'],
+    get: ((key: string) =>
+      timeSlowSync(`store.get(${key})`, SLOW_STORE_OP_MS, () =>
+        structuredClone(key.includes('.') ? readPath(key) : snapshot[key])
+      )) as MainStorageService<S>['get'],
     set: ((key: string, value: unknown) => {
+      if (value === undefined) {
+        // Match electron-store: JSON drops undefined on persist, so accepting
+        // it would create in-session state that vanishes across restarts.
+        throw new TypeError('Use `delete()` to clear values')
+      }
       if (key.includes('.')) {
         store.set(key as keyof S, value as S[keyof S])
         resyncSnapshot()
@@ -73,7 +85,7 @@ export function createStorageService<S extends Record<string, unknown>>(
       snapshot[key] = structuredClone(value)
       persist()
     }) as MainStorageService<S>['set'],
-    has: (key: string) => (key.includes('.') ? store.has(key as keyof S) : key in snapshot),
+    has: (key: string) => (key.includes('.') ? readPath(key) !== undefined : key in snapshot),
     delete: (key: string) => {
       if (key.includes('.')) {
         store.delete(key as keyof S)

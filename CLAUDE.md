@@ -33,12 +33,13 @@ gh pr create --fill
 - **Always run `npm run format` before any push** — the CI `quality` job runs `npm run format:check` (Prettier) and fails the build on any unformatted file. This is the single most common avoidable PR blocker.
 - Never use `git commit` / `git push` — always use jj commands
 - Always create a PR using `gh pr create` — do not push directly to main unless the user specifically asks you to.
+- **Every PR bumps the version in `package.json`** (patch unless a larger bump is warranted). CI cuts a release from the version change when it lands on main — a PR without a bump ships silently only when some later PR triggers a release (this is how #201/#202 initially missed v4.1.19).
 
 ## Commit & release workflow
 
 When asked to "make a commit" or "make a cl":
 1. `jj describe -m "message"` — describe the working copy
-2. Bump version in `package.json` if asked (ask which bump if unclear)
+2. Bump version in `package.json` — always, in every PR (patch by default; ask only when a minor/major bump seems warranted)
 3. Strike completed items in `TODO.md` if applicable
 4. Run `npm run format` (required — CI fails on unformatted files), then create a branch, push, and open a PR:
    ```bash

@@ -146,7 +146,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `player:get-local-subtitles` | invoke | Read local .ass file alongside video, return raw ASS content |
 | `player:find-local-file` | invoke | Find local file path for a translation by animeName/episodeInt/translationId. Renderer also passes the friendly `episodeLabel` so any non-faststart sample recorded from this path uses the same labeling as the download path |
 | `player:remux-mkv` | invoke | Legacy: remux MKV→MP4 via ffmpeg stream copy, await completion before returning (used as fallback when codecs aren't MSE-compatible) |
-| `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending, initialSeek }` (where `initialSeek` is the actual keyframe time ffmpeg seeked to, used by the renderer as `sourceBuffer.timestampOffset`) for MSE consumption |
+| `player:remux-mkv-stream` | invoke | ffprobe MKV + start fragmented-MP4 pipe from ffmpeg; returns `{ sessionId, duration, mimeType, hasSubtitlesPending, initialSeek }` (where `initialSeek` is the run's measured `sourceBuffer.timestampOffset`, see `docs/player.md`) for MSE consumption. Short-circuits to `{ requiresTranscode: true }` — before spawning anything — when the file is HEVC and `hevcTranscodeOnPlay` is `always` |
 | `player:remux-mkv-stream-transcode` | invoke | Same as `player:remux-mkv-stream` but re-encodes video to H.264 (and audio to AAC when not already AAC) for platforms with no HEVC decoder |
 | `player:stream-chunk` | event (main→renderer) | Fragmented-MP4 bytes from an active session, appended into the renderer's `SourceBuffer` |
 | `player:stream-end` | event (main→renderer) | ffmpeg finished writing; renderer calls `mediaSource.endOfStream()` after draining its queue |
@@ -169,4 +169,5 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `syncplay:room-event` | send | Info/warn/error/chat messages rendered as a toast in the player (join/leave/chat/disconnect) |
 | `syncplay:remote-episode-change` | send | Another room member (same anime) switched to a different episode; PlayerView auto-navigates via `goToEpisode` |
 | `debug:get-mp4-stats` | invoke | Returns the persisted `mp4StreamingStats` snapshot (totals + recent non-faststart samples) for the Settings > Debug panel |
+| `debug:get-player-diag-log` | invoke | Returns `{ path, exists }` for `userData/player-diag.log` (written while `playerDiagLogging` is on) so the Settings > Debug panel can surface and open it |
 | `debug:reset-mp4-stats` | invoke | Zeroes `mp4StreamingStats` and clears the in-session de-duplication set so re-opening previously-checked files re-probes them |

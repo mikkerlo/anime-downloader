@@ -49,6 +49,23 @@ const benchmarkError = ref('');
 
 const backgroundQualityProbe = ref(false);
 
+const playerDiagLogging = ref(false);
+const playerDiagLog = ref<{ path: string; exists: boolean } | null>(null);
+
+async function refreshPlayerDiagLog(): Promise<void> {
+  try {
+    playerDiagLog.value = await window.api.debugGetPlayerDiagLog();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function openPlayerDiagLog(): Promise<void> {
+  if (playerDiagLog.value?.exists) {
+    await window.api.shellOpenExternalFile(playerDiagLog.value.path);
+  }
+}
+
 async function scanAndMerge(): Promise<void> {
   scanMerging.value = true;
   scanProgress.value = null;
@@ -186,9 +203,12 @@ onMounted(async () => {
   ffmpeg.value = await window.api.ffmpegCheck();
   backgroundQualityProbe.value =
     ((await window.api.getSetting('backgroundQualityProbe')) as boolean) || false;
+  playerDiagLogging.value =
+    ((await window.api.getSetting('playerDiagLogging')) as boolean) || false;
 
   void refreshMismatchCount();
   void refreshMp4Stats();
+  void refreshPlayerDiagLog();
 
   // Probe WebGPU
   try {
@@ -212,10 +232,15 @@ onMounted(async () => {
 onActivated(() => {
   void refreshMismatchCount();
   void refreshMp4Stats();
+  void refreshPlayerDiagLog();
 });
 
 watch(backgroundQualityProbe, (val) => {
   if (loaded.value) autoSave('backgroundQualityProbe', val);
+});
+
+watch(playerDiagLogging, (val) => {
+  if (loaded.value) autoSave('playerDiagLogging', val);
 });
 </script>
 
@@ -360,6 +385,22 @@ watch(backgroundQualityProbe, (val) => {
 
     <SettingsGroup title="Diagnostics">
       <SettingsRow
+        label="Player seek diagnostics"
+        desc="Log each MKV seek's exact ffmpeg arguments and the probed seek landing vs. the requested time. Used to trace playback/subtitle desync after skipping or resuming. Written to player-diag.log in the app data folder; applies immediately, no restart needed."
+      >
+        <SettingsSwitch v-model="playerDiagLogging" />
+      </SettingsRow>
+      <SettingsRow v-if="playerDiagLog" stack>
+        <div class="diag-log-row">
+          <button class="btn btn-sm" :disabled="!playerDiagLog.exists" @click="openPlayerDiagLog">
+            Open log
+          </button>
+          <span class="diag-log-path">{{
+            playerDiagLog.exists ? playerDiagLog.path : 'No log written yet'
+          }}</span>
+        </div>
+      </SettingsRow>
+      <SettingsRow
         label="Background quality probe"
         desc="Probe actual stream quality for all translations when opening an anime page (not just the selected one). Detects quality mismatches but may cause lag on slower connections."
       >
@@ -435,6 +476,18 @@ watch(backgroundQualityProbe, (val) => {
 .mp4-actions {
   display: flex;
   gap: 8px;
+}
+
+.diag-log-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diag-log-path {
+  font-size: 12px;
+  opacity: 0.7;
+  word-break: break-all;
 }
 
 .result-ok.warn {

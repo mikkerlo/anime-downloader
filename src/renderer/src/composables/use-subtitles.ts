@@ -27,21 +27,11 @@ export function useSubtitles(deps: {
   initSubtitles: (video: HTMLVideoElement) => void
   destroySubtitles: () => void
   redrawAfterFullscreen: () => void
-  setSubtitleCorrection: (seconds: number) => void
   subscribeStreamSubtitles: () => () => void
 } {
   const activeSubtitleContent = ref('')
 
   let octopusInstance: InstanceType<typeof SubtitlesOctopus> | null = null
-
-  // Subtitle-clock correction (seconds) measured by useMsePlayer after a seek
-  // respawn / resume-from-middle. libass re-reads `octopusInstance.timeOffset`
-  // every tick (`subtitles-octopus.js` applies `video.currentTime + timeOffset`)
-  // so setting the field live shifts the subtitle clock without touching
-  // `video.currentTime`. Stored here because the octopus instance is destroyed
-  // + re-created on every content change (props switch, stream-sub arrival),
-  // which resets its `timeOffset` to 0 — so it must be re-applied on each init.
-  let subtitleCorrection = 0
 
   function initSubtitles(video: HTMLVideoElement): void {
     const content = activeSubtitleContent.value
@@ -60,49 +50,9 @@ export function useSubtitles(deps: {
         prescaleFactor: 0.8,
         maxRenderHeight: 0
       })
-      // Re-apply the stored A/V correction — the fresh instance starts at 0.
-      applyCorrection()
     } catch (e) {
       console.error('Failed to initialize subtitle renderer:', e)
     }
-  }
-
-  function applyCorrection(): void {
-    if (!octopusInstance) return
-    try {
-      // `timeOffset` isn't in the bundled typings but is a live-read field the
-      // vendored libass re-applies as `video.currentTime + timeOffset` each tick
-      // (subtitles-octopus.js:1009/1139/1157). Pinned vendored behavior: a
-      // libass-wasm bump that renames or stops reading this field would silently
-      // disable the A/V correction (a plain property write never throws) — if
-      // that happens, the use-subtitles redraw test below should catch the
-      // missing shift.
-      ;(octopusInstance as unknown as { timeOffset: number }).timeOffset = subtitleCorrection
-      // libass only redraws on video events (timeupdate/seeked/playing/…). After
-      // an unbuffered seek the buffer-ahead gate leaves a paused player paused,
-      // and the correction lands *after* the seek's `seeked` already fired — so
-      // without an explicit redraw a user scrubbing while paused would keep
-      // seeing the old, uncorrected offset until they hit play. Force one redraw
-      // at the corrected time. setCurrentTime is the lib's render entrypoint
-      // (subtitles-octopus.js: `self.render = self.setCurrentTime`); using it
-      // here is fine because we pass the already-corrected time, and the next
-      // live tick recomputes `currentTime + timeOffset` identically.
-      const v = deps.getVideoEl()
-      if (v) {
-        ;(octopusInstance as unknown as { setCurrentTime: (t: number) => void }).setCurrentTime(
-          v.currentTime + subtitleCorrection
-        )
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // Push the measured correction in. Stores it for future re-inits AND applies
-  // it live to the current instance so an already-rendering track shifts at once.
-  function setSubtitleCorrection(seconds: number): void {
-    subtitleCorrection = seconds
-    applyCorrection()
   }
 
   function destroySubtitles(): void {
@@ -156,7 +106,6 @@ export function useSubtitles(deps: {
     initSubtitles,
     destroySubtitles,
     redrawAfterFullscreen,
-    setSubtitleCorrection,
     subscribeStreamSubtitles
   }
 }

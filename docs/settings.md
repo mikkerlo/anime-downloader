@@ -28,6 +28,7 @@
 | `playerMode` | string | `'system'` | Default player: `system` (OS default) or `builtin` (in-app HTML5 player) |
 | `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |
 | `hevcTranscodeOnPlay` | string | `'ask'` | HEVC fallback when the built-in player has no decoder: `ask` (show modal), `always` (transcode to H.264), `never` (open in external player) |
+| `playerDiagLogging` | boolean | `false` | Settings > Debug toggle for verbose player seek diagnostics: logs ffmpeg spawn args + probed seek landings to the console and `userData/player-diag.log`. Checked live (no restart); `ANIME_DL_PLAYER_DIAG=1` force-enables |
 | `prefetchNextEpisode` | string | `'progress-50'` | Trigger for the player's next-episode pre-fetch: `off`, `open` (on player open), `time-5min` (after 5 min of real playback), `progress-50` (at 50% of duration). Skipped silently when the next episode is already on disk, in the queue, or — for auto-download-subscribed shows — strictly newer than the subscription's frozen `initialEpisodesAired` snapshot (so older/pre-subscription episodes still pre-fetch) |
 | `watchProgress` | object | `{}` | Per-episode playback position + watched flag + last-used translationId (key: `animeId:episodeInt`) |
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |

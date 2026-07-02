@@ -43,6 +43,11 @@ const api = {
     }>,
   debugGetMp4Stats: () =>
     ipcRenderer.invoke(CHANNELS.DEBUG_GET_MP4_STATS) as Promise<Mp4StreamingStats>,
+  debugGetPlayerDiagLog: () =>
+    ipcRenderer.invoke(CHANNELS.DEBUG_GET_PLAYER_DIAG_LOG) as Promise<{
+      path: string
+      exists: boolean
+    }>,
   debugResetMp4Stats: () => ipcRenderer.invoke(CHANNELS.DEBUG_RESET_MP4_STATS) as Promise<void>,
   getCachedPoster: (animeId: number) =>
     ipcRenderer.invoke(CHANNELS.CACHE_GET_POSTER, animeId) as Promise<string | null>,
@@ -310,6 +315,7 @@ const api = {
           hasSubtitlesPending: boolean
           initialSeek: number
         }
+      | { requiresTranscode: true }
       | { error: string }
     >,
   playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) =>
@@ -335,7 +341,7 @@ const api = {
     ipcRenderer.invoke(CHANNELS.PLAYER_STREAM_ACK, sessionId, bytes) as Promise<void>,
   playerStreamSeek: (sessionId: string, seekSeconds: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_STREAM_SEEK, sessionId, seekSeconds) as Promise<
-      { ok: true; generation: number; keyframeTime: number } | { error: string }
+      { ok: true; generation: number; timestampOffset: number } | { error: string }
     >,
   playerCleanupRemux: () => ipcRenderer.invoke(CHANNELS.PLAYER_CLEANUP_REMUX) as Promise<void>,
   onPlayerStreamSubtitles: subscribe<{ sessionId: string; content: string }>(

@@ -73,6 +73,19 @@ export interface StreamingServiceDeps {
   getFfmpegPath: () => string
   /** Live getter; same reasoning as `getFfmpegPath`. */
   getFfprobePath: () => string
+  /**
+   * Live check for verbose player diagnostics. Main wires this to the
+   * `playerDiagLogging` setting (Settings → Debug) so the toggle applies
+   * without a restart. Falls back to the `ANIME_DL_PLAYER_DIAG=1` env
+   * override when absent.
+   */
+  isPlayerDiagEnabled?: () => boolean
+  /**
+   * Extra sink for diag lines (they always go to the console too). Main wires
+   * a `player-diag.log` appender under `userData` so packaged builds — where
+   * the main-process console is invisible — can still retrieve the log.
+   */
+  playerDiagSink?: (line: string) => void
   channels: {
     streamChunk: string
     streamEnd: string
@@ -85,6 +98,19 @@ export interface StreamingServiceDeps {
 export const STREAM_BACKPRESSURE_HIGH_WATERMARK = 64 * 1024 * 1024
 export const STREAM_BACKPRESSURE_LOW_WATERMARK = 16 * 1024 * 1024
 
+/**
+ * Env override for verbose player diagnostics (set `ANIME_DL_PLAYER_DIAG=1`).
+ * The runtime toggle lives in Settings → Debug (`playerDiagLogging`, checked
+ * live via `StreamingServiceDeps.isPlayerDiagEnabled`); this constant is the
+ * fallback when no dep is wired. Logs the exact ffmpeg spawn args and the
+ * probed input-seek landing vs the requested timestamp, so a desync can be
+ * traced to the ffmpeg layer without a rebuild. Off by default.
+ */
+export const PLAYER_DIAG = process.env.ANIME_DL_PLAYER_DIAG === '1'
+
+/** Filename of the diag log under `userData`; shared with the Debug-tab IPC. */
+export const PLAYER_DIAG_LOG_FILENAME = 'player-diag.log'
+
 export interface StreamingService {
   /** Shared tmpdir for transient remux/transcode output. */
   readonly tmpDir: string
@@ -93,8 +119,22 @@ export interface StreamingService {
 
   /** Probe a `.mkv` and return the MSE-compatible MIME + strategy info, or `null` if unsupported. */
   probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null>
-  /** Find the last keyframe at-or-before `time` (seconds), for accurate seek alignment. */
-  findKeyframeBefore(filePath: string, time: number): Promise<number>
+  /**
+   * Ground-truth `sourceBuffer.timestampOffset` for a stream-copy `-ss time` run:
+   * the absolute file time that the run's MSE timeline zero corresponds to.
+   * Measured, not modeled — two concurrent piped ffmpeg|ffprobe probes replicate
+   * (a) the input seek with `-copyts` (absolute PTS of the landing keyframe) and
+   * (b) the exact live fMP4 mux (the output PTS that keyframe is emitted at,
+   * i.e. what the renderer's buffered range will show). Offset = (a) − (b).
+   * A keyframe-PTS-only probe is off by the mux's zeroing shift (B-frame
+   * reorder + `-avoid_negative_ts make_zero` anchoring on the earliest DTS
+   * across streams) — a sub-second subtitle drift.
+   */
+  probeCopyTimestampOffset(
+    filePath: string,
+    time: number,
+    videoCodec: 'h264' | 'hevc'
+  ): Promise<number>
   /** Cached H.264 encoder pick (vaapi → nvenc → qsv → libx264, dry-run-gated). */
   pickH264Encoder(): Promise<H264EncoderChoice>
   /** The full candidate list `pickH264Encoder` walks; exposed for tests + transcode arg assembly. */
@@ -125,6 +165,20 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
   const tmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
   const sessions = new Map<string, MseSession>()
   let cachedH264Encoder: string | null | undefined = undefined
+
+  function diagEnabled(): boolean {
+    return deps.isPlayerDiagEnabled ? deps.isPlayerDiagEnabled() : PLAYER_DIAG
+  }
+
+  function diag(line: string): void {
+    const msg = `[player][diag] ${line}`
+    console.log(msg)
+    try {
+      deps.playerDiagSink?.(msg)
+    } catch {
+      /* a broken sink must never take down the stream path */
+    }
+  }
 
   function listVaapiRenderNodes(): string[] {
     // Common default is /dev/dri/renderD128, but multi-GPU systems expose
@@ -263,56 +317,208 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     return candidates[candidates.length - 1]
   }
 
-  // Find the latest video keyframe at-or-before `time` (in seconds) by scanning a
-  // short window of frames with ffprobe. The fmp4 muxer normalizes per-output
-  // `tfdt` to start at 0 regardless of `-copyts`, so we cannot ask ffmpeg to emit
-  // absolute timestamps in its fragmented MP4 output. Instead we tell ffmpeg to
-  // `-ss <keyframeTime>` exactly, then let the renderer set
-  // `sourceBuffer.timestampOffset = keyframeTime` so the video element's timeline
-  // aligns with the original file. Without this, seeking lands on the keyframe
-  // PTS rather than the user's target (off by up to one GOP).
-  async function findKeyframeBefore(filePath: string, time: number): Promise<number> {
+  // Spawn `ffmpeg <ffmpegArgs> pipe:1 | ffprobe <ffprobeArgs> pipe:0` and resolve
+  // with the first line ffprobe prints (or '' on failure). Both processes are
+  // SIGKILLed as soon as that line arrives, so a probe never runs past the
+  // first packet and nothing touches disk.
+  function readFirstProbeLine(ffmpegArgs: string[], ffprobeArgs: string[]): Promise<string> {
+    const ffmpegPath = getFfmpegPath()
     const ffprobePath = getFfprobePath()
-    if (!ffprobePath || time <= 0) return Math.max(0, time)
-    const start = Math.max(0, time - 15)
-    return new Promise<number>((resolve) => {
-      const proc = spawn(
-        ffprobePath,
-        [
-          '-v',
-          'error',
-          '-skip_frame',
-          'nokey',
-          '-read_intervals',
-          `${start.toFixed(3)}%${time.toFixed(3)}`,
-          '-select_streams',
-          'v:0',
-          '-show_entries',
-          'frame=pts_time,key_frame',
-          '-of',
-          'csv=print_section=0',
-          filePath
-        ],
-        { stdio: ['ignore', 'pipe', 'ignore'] }
-      )
-      let buf = ''
-      proc.stdout.on('data', (data: Buffer) => {
-        buf += data.toString()
-      })
-      proc.on('error', () => resolve(Math.max(0, time)))
-      proc.on('exit', () => {
-        let latest = 0
-        for (const line of buf.split('\n')) {
-          const parts = line.trim().split(',')
-          if (parts.length < 2) continue
-          const isKey = parts[0] === '1'
-          const pts = parseFloat(parts[1])
-          if (!isKey || !isFinite(pts)) continue
-          if (pts <= time && pts > latest) latest = pts
+    return new Promise<string>((resolve) => {
+      let settled = false
+      let enc: ChildProcess | null = null
+      let probe: ChildProcess | null = null
+      const done = (v: string): void => {
+        if (settled) return
+        settled = true
+        try {
+          enc?.kill('SIGKILL')
+        } catch {
+          /* ignore */
         }
-        resolve(latest > 0 ? latest : Math.max(0, time))
+        try {
+          probe?.kill('SIGKILL')
+        } catch {
+          /* ignore */
+        }
+        resolve(v)
+      }
+      enc = spawn(ffmpegPath, ffmpegArgs, { stdio: ['ignore', 'pipe', 'ignore'] })
+      probe = spawn(ffprobePath, ffprobeArgs, { stdio: ['pipe', 'pipe', 'ignore'] })
+      enc.on('error', () => done(''))
+      probe.on('error', () => done(''))
+      // EPIPE is expected when ffprobe exits after the first packet while
+      // ffmpeg is still writing — swallow it instead of crashing the process.
+      enc.stdout?.on('error', () => {})
+      probe.stdin?.on('error', () => {})
+      if (enc.stdout && probe.stdin) enc.stdout.pipe(probe.stdin)
+      let buf = ''
+      probe.stdout?.on('data', (d: Buffer) => {
+        buf += d.toString()
+        const nl = buf.indexOf('\n')
+        if (nl !== -1) done(buf.slice(0, nl).trim())
       })
+      // 'close' (not 'exit') — exit can fire before stdout's last data event
+      // is delivered for a fast process, resolving with an empty buffer.
+      probe.on('close', () => done(buf.trim().split('\n')[0] ?? ''))
     })
+  }
+
+  // Absolute content start of a seeked copy run: replicate the exact input seek
+  // with BOTH streams mapped (the demuxer positions differently when only one
+  // stream is selected) and `-copyts` into NUT — the only common container that
+  // preserves absolute timestamps through a pipe — and read the first packet's
+  // PTS of `stream`. For video that is the landing keyframe's absolute PTS; for
+  // audio it is the first copied audio packet (the `make_zero` anchor of a
+  // transcode-with-copied-audio run).
+  function probeAbsoluteStart(
+    filePath: string,
+    time: number,
+    stream: 'video' | 'audio'
+  ): Promise<number> {
+    const sel = stream === 'audio' ? 'a' : 'v'
+    return readFirstProbeLine(
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-ss',
+        String(time),
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a:0?',
+        '-c',
+        'copy',
+        '-copyts',
+        '-frames:v',
+        '1',
+        '-frames:a',
+        '1',
+        '-f',
+        'nut',
+        'pipe:1'
+      ],
+      [
+        '-v',
+        'error',
+        '-f',
+        'nut',
+        '-i',
+        'pipe:0',
+        '-select_streams',
+        `${sel}:0`,
+        '-show_entries',
+        'packet=pts_time',
+        '-of',
+        'csv=p=0'
+      ]
+    ).then((line) => parseFloat(line))
+  }
+
+  // The output PTS the landing keyframe is emitted at by the LIVE mux — i.e.
+  // where the renderer's buffered range will actually start relative to its
+  // timestampOffset. Replicates spawnFfmpegForSession's copy args verbatim
+  // (same `make_zero` zeroing, same fMP4 per-track normalization), so the value
+  // is exact by construction rather than modeled from DTS heuristics.
+  function probeEmittedStart(
+    filePath: string,
+    time: number,
+    videoCodec: 'h264' | 'hevc'
+  ): Promise<number> {
+    return readFirstProbeLine(
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-fflags',
+        '+genpts',
+        '-ss',
+        String(time),
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a:0?',
+        '-c',
+        'copy',
+        '-avoid_negative_ts',
+        'make_zero',
+        '-muxpreload',
+        '0',
+        '-muxdelay',
+        '0',
+        ...(videoCodec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
+        '-movflags',
+        '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
+        '-frag_duration',
+        '1000000',
+        '-frames:v',
+        '1',
+        '-frames:a',
+        '1',
+        '-f',
+        'mp4',
+        'pipe:1'
+      ],
+      [
+        '-v',
+        'error',
+        '-f',
+        'mp4',
+        '-i',
+        'pipe:0',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'packet=pts_time',
+        '-of',
+        'csv=p=0'
+      ]
+    ).then((line) => parseFloat(line))
+  }
+
+  // Ground-truth timestampOffset for a stream-copy seek (see the interface doc).
+  // ffmpeg's Matroska `-ss` input seek lands on the keyframe strictly before the
+  // request (a ~0.5–1s deadzone after each keyframe still snaps to the previous
+  // one), and the fmp4 muxer then emits that keyframe at a small non-zero output
+  // PTS (B-frame reorder over the `make_zero` anchor). Both quantities are
+  // probed concurrently (~one probe of wall time) and the offset is their
+  // difference, so buffered content maps onto the absolute file timeline
+  // exactly as the live run will emit it.
+  async function probeCopyTimestampOffset(
+    filePath: string,
+    time: number,
+    videoCodec: 'h264' | 'hevc'
+  ): Promise<number> {
+    const ffmpegPath = getFfmpegPath()
+    const ffprobePath = getFfprobePath()
+    if (!ffmpegPath || !ffprobePath || !isFinite(time) || time <= 0) {
+      return Math.max(0, time || 0)
+    }
+    const [absStart, emittedStart] = await Promise.all([
+      probeAbsoluteStart(filePath, time, 'video'),
+      probeEmittedStart(filePath, time, videoCodec)
+    ])
+    if (diagEnabled()) {
+      diag(
+        `probeCopyTimestampOffset requested=${time.toFixed(3)} absStart=${
+          isFinite(absStart) ? absStart.toFixed(3) : 'n/a'
+        } emittedStart=${isFinite(emittedStart) ? emittedStart.toFixed(3) : 'n/a'}`
+      )
+    }
+    // A copy seek only ever starts at-or-before the request; a sane emitted
+    // start is a sub-minute mux offset. Anything else means a probe failed —
+    // fall back to the request itself (worst case: the pre-#198 drift).
+    if (!isFinite(absStart) || absStart < 0 || absStart > time + 0.001) {
+      return Math.max(0, time)
+    }
+    const emitted =
+      isFinite(emittedStart) && emittedStart >= 0 && emittedStart < 60 ? emittedStart : 0
+    return Math.max(0, absStart - emitted)
   }
 
   async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
@@ -412,6 +618,11 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       'mp4',
       'pipe:1'
     )
+    if (diagEnabled()) {
+      diag(
+        `ffmpeg spawn transcode=${session.transcode} seek=${seekSeconds} args: ${args.join(' ')}`
+      )
+    }
     const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const procGen = session.generation
 
@@ -551,7 +762,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     highWatermark: STREAM_BACKPRESSURE_HIGH_WATERMARK,
     lowWatermark: STREAM_BACKPRESSURE_LOW_WATERMARK,
     probeMkvForMse,
-    findKeyframeBefore,
+    probeCopyTimestampOffset,
     pickH264Encoder,
     h264EncoderCandidates,
     spawnFfmpegForSession,

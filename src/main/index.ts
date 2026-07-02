@@ -44,7 +44,7 @@ import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-
 import { createSkipAnalysisService } from './services/skip-analysis'
 import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
-import { createStreamingService } from './streaming'
+import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
@@ -371,6 +371,30 @@ const skipAnalysisService = createSkipAnalysisService({
 const streamingService = createStreamingService({
   getFfmpegPath,
   getFfprobePath,
+  // Live-read so the Settings → Debug toggle applies without a restart; the
+  // env var stays as a force-on override for one-off runs.
+  isPlayerDiagEnabled: () =>
+    process.env.ANIME_DL_PLAYER_DIAG === '1' || store.get('playerDiagLogging') === true,
+  // Packaged builds have no visible main-process console, so diag lines are
+  // also appended to userData/player-diag.log (surfaced in the Debug tab).
+  // Async and chained: diag lines fire exactly during seek storms, so a sync
+  // write on slow storage would stall the event loop that pumps the stream
+  // chunks; the promise chain keeps line order without blocking.
+  playerDiagSink: (() => {
+    let diagWriteChain = Promise.resolve()
+    return (line: string): void => {
+      diagWriteChain = diagWriteChain
+        .then(() =>
+          fs.promises.appendFile(
+            path.join(app.getPath('userData'), PLAYER_DIAG_LOG_FILENAME),
+            `${new Date().toISOString()} ${line}\n`
+          )
+        )
+        .catch(() => {
+          /* diagnostics must never break streaming */
+        })
+    }
+  })(),
   channels: {
     streamChunk: EVENT_CHANNELS.PLAYER_STREAM_CHUNK,
     streamEnd: EVENT_CHANNELS.PLAYER_STREAM_END,

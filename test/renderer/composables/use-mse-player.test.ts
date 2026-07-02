@@ -7,7 +7,7 @@ type Api = {
   playerStreamSeek: (
     sessionId: string,
     seekAt: number
-  ) => Promise<{ generation: number; keyframeTime: number } | { error: string }>
+  ) => Promise<{ generation: number; timestampOffset: number } | { error: string }>
   onPlayerStreamChunk: (
     cb: (data: { sessionId: string; gen: number; data: Uint8Array }) => void
   ) => Unsubscribe
@@ -375,7 +375,7 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
       pause: vi.fn(() => {})
     }
     const setSyncplayLocalReady = vi.fn()
-    const seekSpy = vi.fn(async () => ({ generation: 1, keyframeTime: 99 }))
+    const seekSpy = vi.fn(async () => ({ generation: 1, timestampOffset: 99 }))
     setApi({
       playerStreamSeek: seekSpy,
       playerStreamStart: vi.fn(async () => {}),
@@ -394,7 +394,7 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      keyframeTime: 0
+      timestampOffset: 0
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
     expect(m._internal.getSourceBuffer()).not.toBeNull()
@@ -402,8 +402,8 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
 
     await m._internal.handleUnbufferedSeek()
 
-    // Respawn happened…
-    expect(seekSpy).toHaveBeenCalledWith('s1', 99)
+    // Respawn happened… (the seek passes the user's exact target).
+    expect(seekSpy).toHaveBeenCalledWith('s1', 100)
     // …and the buffer-ahead gate executed on this stream-copy session.
     expect(setSyncplayLocalReady).toHaveBeenCalledWith(false)
     expect(setSyncplayLocalReady).toHaveBeenCalledWith(true)
@@ -414,14 +414,15 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
   })
 })
 
-// Regression coverage for #198. After a seek respawn, ffmpeg's fmp4 muxer emits
-// the seeked keyframe at a non-zero output PTS (the B-frame reorder delay) even
-// after `-avoid_negative_ts make_zero`, so with `timestampOffset = keyframeTime`
-// the first fragment's `buffered.start(0)` lands at `keyframeTime + emittedStart`
-// rather than exactly `keyframeTime`. The renderer must capture that delta as a
-// subtitle-clock correction on the FIRST post-respawn append — and crucially
-// BEFORE the `updateend` eviction (`sb.remove`) moves `buffered.start(0)`.
-describe('useMsePlayer — subtitle correction measurement (#198)', () => {
+// Regression coverage for #198. An unbuffered (skip) seek respawns ffmpeg at the
+// user's exact target. Main returns the TRUE content start (`timestampOffset`) —
+// the keyframe the copy run actually lands on, which is at-or-*before* the target
+// (the fmp4 muxer normalizes PTS to 0, so the buffer must be offset by it). The
+// renderer sets that offset and KEEPS the playhead on the target: the buffer
+// starts at a keyframe, so Chromium decodes from it and presents the target in
+// sync. The earlier bug snapped the playhead onto a (mislabeled) keyframe, which
+// desynced subtitles by ~one GOP — this test fails against that behavior.
+describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () => {
   class FakeBuffered {
     ranges: [number, number][] = []
     get length(): number {
@@ -440,15 +441,8 @@ describe('useMsePlayer — subtitle correction measurement (#198)', () => {
     timestampOffset = 0
     buffered = new FakeBuffered()
     onAbort: (() => void) | null = null
-    // Off during the seek's buffer-clear (so waitForBufferAhead still sees the
-    // covering range). Flipped on after the respawn so the measurement-step
-    // eviction visibly moves buffered.start(0).
-    evictMutates = false
     appendBuffer(): void {}
-    remove(_start: number, end: number): void {
-      if (this.evictMutates && this.buffered.ranges.length > 0) {
-        this.buffered.ranges[0][0] = end
-      }
+    remove(): void {
       queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
     }
     abort(): void {
@@ -486,14 +480,14 @@ describe('useMsePlayer — subtitle correction measurement (#198)', () => {
     ;(globalThis as Record<string, unknown>).URL = origURL
   })
 
-  it('captures keyframeTime − buffered.start(0) before eviction moves it', async () => {
+  it('sends the raw target, offsets the buffer by the content start, and keeps the playhead on the target', async () => {
     const fakeSb = new FakeSourceBuffer()
-    // Initial buffered range does NOT contain the seek target (100) → respawn.
+    // Target 100 is not buffered → respawn path.
     fakeSb.buffered.ranges = [[0, 5]]
-    // After abort() the fresh run's prelude covers the target so the
-    // buffer-ahead gate returns promptly.
+    // Fresh run: copy landed on keyframe 95 (before the target), buffer spans it
+    // through past the target with lead.
     fakeSb.onAbort = () => {
-      fakeSb.buffered.ranges = [[99, 105]]
+      fakeSb.buffered.ranges = [[95, 112]]
     }
     const fakeMs = new FakeMediaSource(fakeSb)
     ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
@@ -505,48 +499,140 @@ describe('useMsePlayer — subtitle correction measurement (#198)', () => {
       play: vi.fn(async () => {}),
       pause: vi.fn(() => {})
     }
-    // ffmpeg seeks back to keyframe 30 (= target − 1 clamped to a keyframe).
-    const seekSpy = vi.fn(async () => ({ generation: 1, keyframeTime: 30 }))
+    // main probes where the copy run actually lands: keyframe 95, at-or-before 100.
+    const seekSpy = vi.fn(async () => ({ generation: 1, timestampOffset: 95 }))
     setApi({
       playerStreamSeek: seekSpy,
       playerStreamStart: vi.fn(async () => {}),
       playerStreamAck: vi.fn(async () => {})
     })
 
-    const m = useMsePlayer(
-      makeDeps({
-        getVideoEl: () => video as unknown as HTMLVideoElement,
-        setSyncplayLocalReady: vi.fn()
-      })
-    )
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
     m.startMseSession({
       sessionId: 's1',
       generation: 0,
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      keyframeTime: 0
+      timestampOffset: 0
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
     await m._internal.handleUnbufferedSeek()
-    expect(seekSpy).toHaveBeenCalledWith('s1', 99)
 
-    // From here on, the eviction inside onSourceBufferUpdateEnd moves
-    // buffered.start(0) (real-buffer semantics).
-    fakeSb.evictMutates = true
-    // First post-respawn append lands: the fragment emitted from keyframe 30
-    // actually starts at 30.5 (emittedStart = 0.5). This range sits far enough
-    // behind the playhead (100) that the >60 s eviction WILL fire.
-    fakeSb.buffered.ranges = [[30.5, 200]]
+    // The user's exact target is sent.
+    expect(seekSpy).toHaveBeenCalledWith('s1', 100)
+    // Buffer offset by the true content start (95)…
+    expect(fakeSb.timestampOffset).toBe(95)
+    // …and the playhead stays on the target (100), NOT snapped to the keyframe.
+    // (The old code moved it to the keyframe, desyncing subs by a GOP.)
+    expect(video.currentTime).toBe(100)
+
+    m.resetMseState()
+  })
+
+  it('does not respawn when the target is already buffered (native seek)', async () => {
+    const fakeSb = new FakeSourceBuffer()
+    fakeSb.buffered.ranges = [[90, 130]]
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 100,
+      paused: false,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    const seekSpy = vi.fn(async () => ({ generation: 1, timestampOffset: 0 }))
+    setApi({ playerStreamSeek: seekSpy, playerStreamStart: vi.fn(async () => {}) })
+
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 200,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: 0
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    await m._internal.handleUnbufferedSeek()
+
+    // In-buffer seek → no respawn, no snap; the element handles it natively.
+    expect(seekSpy).not.toHaveBeenCalled()
+    expect(video.currentTime).toBe(100)
+
+    m.resetMseState()
+  })
+
+  it('resume-from-middle lands the playhead on the resume target (not stalled at 0)', () => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 0,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
+    // Resume at 600 → copy landed on keyframe 595; buffer begins there while
+    // currentTime is still 0, and the offset maps it onto the file timeline.
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 600,
+      timestampOffset: 595
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    // First fragment lands (buffer starts ~595, far from 0).
+    fakeSb.buffered.ranges = [[595.08, 601.0]]
     fakeSb.dispatchEvent(new Event('updateend'))
 
-    // Correction is the PRE-eviction delta: keyframeTime − buffered.start(0).
-    expect(m.subtitleCorrection.value).toBeCloseTo(30 - 30.5, 6)
-    // Eviction did run and moved buffered.start(0) (to 70) — proving the
-    // measurement was captured ahead of it, not after.
-    expect(fakeSb.buffered.start(0)).toBe(70)
-    expect(m.subtitleCorrection.value).not.toBeCloseTo(30 - 70, 6)
+    // Playhead moved off 0 onto the real resume target (600) — inside the buffered
+    // range that starts at the keyframe, so it plays the correct content in sync.
+    // Landing on the keyframe (595) instead would replay ~5s and (with the old
+    // mislabeled offset) desync subs; landing on the target is the fix.
+    expect(video.currentTime).toBe(600)
+
+    m.resetMseState()
+  })
+
+  it('play-from-start does not move the playhead', () => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 0,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: 0
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    fakeSb.buffered.ranges = [[0.0, 2.0]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    // resumeTarget 0 → no landing; plays from 0.
+    expect(video.currentTime).toBe(0)
 
     m.resetMseState()
   })

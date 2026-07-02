@@ -421,12 +421,14 @@ export function register({
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
           : 0
-      // Transcode decodes from a keyframe and (accurate-seek) discards forward to
-      // the exact `-ss` time, so the first emitted frame IS the requested time — no
-      // probe needed, the content start equals the request.
-      console.log(
-        `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)}`
-      )
+      // Transcode video is frame-accurate (accurate-seek discards to the exact
+      // `-ss`), but a copied AAC track can't be trimmed: it starts at the seek's
+      // keyframe cluster and anchors `-avoid_negative_ts make_zero` up to one GOP
+      // before the request. probeSeekAnchor measures that audio landing (or
+      // returns the raw request for a full transcode); labeling with the raw
+      // request on the audio-copy path plays ~one GOP behind the clock — the
+      // #198 desync, transcode edition. Probed concurrently with the spawn.
+      const anchorPromise = streamingService.probeSeekAnchor(session, requestedSeek)
       session.proc = streamingService.spawnFfmpegForSession(
         session,
         event,
@@ -463,26 +465,30 @@ export function register({
           })
       }
 
+      const contentStart = await anchorPromise
+      console.log(
+        `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
+      )
       return {
         sessionId,
         generation: session.generation,
         duration: probe.duration,
         mimeType,
         hasSubtitlesPending,
-        initialSeek: requestedSeek
+        initialSeek: contentStart
       }
     }
   )
 
   // Forward seek past the buffered region: respawn ffmpeg at the RAW requested
   // timestamp and return the run's true timestampOffset so the renderer can map
-  // the new fragments onto the file timeline. For copy the offset is measured
-  // (probeCopyTimestampOffset: absolute landing minus the mux's emitted start);
-  // for transcode accurate-seek discards forward to the exact target, so the
-  // offset equals the request. The renderer keeps the playhead at the user's
-  // target — decoding starts from the buffer's leading keyframe, so it plays in
-  // sync (see use-mse-player). Stale chunks from the old proc are filtered by
-  // the generation counter in spawnFfmpegForSession.
+  // the new fragments onto the file timeline. probeSeekAnchor measures it per
+  // run type: full measurement for copy (absolute landing minus the mux's
+  // emitted start), the copied audio track's landing for transcode-with-copied-
+  // audio, the raw request for a full transcode. The renderer keeps the playhead
+  // at the user's target — decoding starts from the buffer's leading keyframe,
+  // so it plays in sync (see use-mse-player). Stale chunks from the old proc are
+  // filtered by the generation counter in spawnFfmpegForSession.
   ipcMain.handle(
     CHANNELS.PLAYER_STREAM_SEEK,
     async (event, sessionId: string, seekSeconds: number) => {
@@ -492,14 +498,9 @@ export function register({
       // Probe concurrently with the respawn below — the offset feeds only the
       // IPC reply, and the renderer holds new chunks in the prelude until it
       // has set timestampOffset and re-handshaken, so this never races the data.
-      const offsetPromise =
-        requestedSeek > 0 && !session.transcode
-          ? streamingService.probeCopyTimestampOffset(
-              session.mkvPath,
-              requestedSeek,
-              session.videoCodec
-            )
-          : Promise.resolve(requestedSeek)
+      // probeSeekAnchor picks the anchor per run type (copy → full measurement,
+      // transcode+copied-audio → audio landing, full transcode → raw request).
+      const offsetPromise = streamingService.probeSeekAnchor(session, requestedSeek)
       session.generation++
       try {
         session.proc.kill('SIGKILL')

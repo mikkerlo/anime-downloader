@@ -111,6 +111,30 @@ export const PLAYER_DIAG = process.env.ANIME_DL_PLAYER_DIAG === '1'
 /** Filename of the diag log under `userData`; shared with the Debug-tab IPC. */
 export const PLAYER_DIAG_LOG_FILENAME = 'player-diag.log'
 
+/**
+ * Which stream anchors the output timeline of a seeked ffmpeg run — i.e. what
+ * `probeSeekAnchor` must measure to label the buffer:
+ *
+ * - Stream-copy run: the video track (measured end-to-end by
+ *   `probeCopyTimestampOffset`).
+ * - Transcode with copied (AAC) audio: accurate-seek trims the *decoded* video
+ *   to the exact target, but a copied stream can't be trimmed — the audio
+ *   starts at the seek's keyframe cluster (up to one GOP early) and anchors
+ *   `-avoid_negative_ts make_zero` there. Labeling with the raw request leaves
+ *   every sample ~one GOP late → the subtitles-run-ahead desync, transcode
+ *   edition.
+ * - Full transcode (video + audio both encoded): everything is trimmed to the
+ *   target, no copied stream, no early anchor → `null` (offset = raw request).
+ */
+export function seekAnchorStreamFor(session: {
+  transcode: boolean
+  audioStrategy: 'copy' | 'transcode'
+}): 'video' | 'audio' | null {
+  if (!session.transcode) return 'video'
+  if (session.audioStrategy === 'copy') return 'audio'
+  return null
+}
+
 export interface StreamingService {
   /** Shared tmpdir for transient remux/transcode output. */
   readonly tmpDir: string
@@ -134,6 +158,17 @@ export interface StreamingService {
     filePath: string,
     time: number,
     videoCodec: 'h264' | 'hevc'
+  ): Promise<number>
+  /**
+   * The `timestampOffset` for a run of `session` seeked to `time`, per
+   * `seekAnchorStreamFor`: full measurement for stream-copy, the copied audio
+   * track's absolute landing (probed in the same muxed demux context as the
+   * live run — a lone `-map 0:a:0` seek positions differently) for
+   * transcode-with-copied-audio, or the raw request for a full transcode.
+   */
+  probeSeekAnchor(
+    session: Pick<MseSession, 'mkvPath' | 'transcode' | 'audioStrategy' | 'videoCodec'>,
+    time: number
   ): Promise<number>
   /** Cached H.264 encoder pick (vaapi → nvenc → qsv → libx264, dry-run-gated). */
   pickH264Encoder(): Promise<H264EncoderChoice>
@@ -521,6 +556,34 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     return Math.max(0, absStart - emitted)
   }
 
+  async function probeSeekAnchor(
+    session: Pick<MseSession, 'mkvPath' | 'transcode' | 'audioStrategy' | 'videoCodec'>,
+    time: number
+  ): Promise<number> {
+    if (!getFfmpegPath() || !getFfprobePath() || !isFinite(time) || time <= 0) {
+      return Math.max(0, time || 0)
+    }
+    const stream = seekAnchorStreamFor(session)
+    if (!stream) return time
+    if (stream === 'video') {
+      return probeCopyTimestampOffset(session.mkvPath, time, session.videoCodec)
+    }
+    // Transcode with copied audio: the untrimmable AAC track anchors the output
+    // timeline at its first copied packet. AAC packets have PTS = DTS, so the
+    // absolute-start probe reads exactly the make_zero anchor.
+    const audioStart = await probeAbsoluteStart(session.mkvPath, time, 'audio')
+    if (diagEnabled()) {
+      diag(
+        `probeSeekAnchor stream=audio requested=${time.toFixed(3)} -> anchor=${
+          isFinite(audioStart) ? audioStart.toFixed(3) : 'n/a'
+        }`
+      )
+    }
+    // A copied-audio anchor only ever starts at-or-before the request.
+    if (isFinite(audioStart) && audioStart >= 0 && audioStart <= time + 0.001) return audioStart
+    return Math.max(0, time)
+  }
+
   async function probeMkvForMse(mkvPath: string): Promise<MkvProbeResult | null> {
     const ffprobePath = getFfprobePath()
     if (!ffprobePath) return null
@@ -763,6 +826,7 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     lowWatermark: STREAM_BACKPRESSURE_LOW_WATERMARK,
     probeMkvForMse,
     probeCopyTimestampOffset,
+    probeSeekAnchor,
     pickH264Encoder,
     h264EncoderCandidates,
     spawnFfmpegForSession,

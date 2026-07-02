@@ -505,4 +505,26 @@ describe('useEpisodeList — applyFocusEpisode', () => {
     expect(list.focusApplied.value).toBe(true)
     expect(list.currentPage.value).toBe(1)
   })
+
+  it('scrolls the matching .ep-row into view (regression: selector said .episode-row and never matched)', async () => {
+    const scrollIntoView = vi.fn()
+    const queried: string[] = []
+    ;(globalThis as { document?: unknown }).document = {
+      // Only the selector EpisodeRow actually renders returns an element —
+      // the old `.episode-row` query comes back null and the scroll is skipped.
+      querySelector: (sel: string) => {
+        queried.push(sel)
+        return sel === '.ep-row[data-ep-int="2"]' ? { scrollIntoView } : null
+      }
+    }
+    const anime = ref<AnimeDetail | null>(
+      mkAnime({ episodes: [mkEpisode(1, '1'), mkEpisode(2, '2')] })
+    )
+    const deps = makeDeps({ anime })
+    const list = useEpisodeList(deps)
+    await list.applyFocusEpisode('2')
+    expect(queried).toEqual(['.ep-row[data-ep-int="2"]'])
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' })
+    expect(list.focusApplied.value).toBe(true)
+  })
 })

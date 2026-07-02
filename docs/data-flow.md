@@ -13,7 +13,7 @@ Sort order: descending Shikimori `rate.updated_at` — same rule as the Shikimor
 
 Poster + name resolution priority for each row: `library` → `downloadedAnime` → `malIdMap` → for Next rows only, the cached `shikiAnime.image.preview/x96/original` (prefixed with the Shikimori host when relative). Episode label prefers `animeCache[animeId].animeDetail.episodes[*].episodeFull`, else `Episode N`.
 
-`HomeView` re-fetches on mount, on a 1-second-debounced `watch-progress-updated` window event (dispatched by `PlayerView`), and on `shikimori:rates-refreshed` / `shikimori:rate-updated` IPC broadcasts. Click → emits `open-anime` with `{ animeId, focusEpisodeInt }`. `App.vue` keeps a `focusEpisodeIntForAnime` map so the value flows into `AnimeDetailView` as a prop. `AnimeDetailView` watches `focusEpisodeInt` + `filteredEpisodes`; once ready it switches `currentPage` (via existing `goToPage`) and calls `scrollIntoView` on the matching `.episode-row[data-ep-int]`. The view emits `focus-applied` once per `animeId` so re-renders don't re-scroll.
+`HomeView` re-fetches on mount, on a 1-second-debounced `watch-progress-updated` window event (dispatched by `PlayerView`), and on `shikimori:rates-refreshed` / `shikimori:rate-updated` IPC broadcasts. Click → emits `open-anime` with `{ animeId, focusEpisodeInt }`. `App.vue` keeps a `focusEpisodeIntForAnime` map so the value flows into `AnimeDetailView` as a prop. `AnimeDetailView` watches `focusEpisodeInt` + `filteredEpisodes`; once ready it switches `currentPage` (via existing `goToPage`) and calls `scrollIntoView` on the matching `.ep-row[data-ep-int]`. The view emits `focus-applied` once per `animeId` so re-renders don't re-scroll.
 
 ## Anime Search & Browse
 

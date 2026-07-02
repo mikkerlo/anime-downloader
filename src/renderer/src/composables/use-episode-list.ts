@@ -494,8 +494,10 @@ export function useEpisodeList(deps: {
       await goToPage(targetPage)
     }
     await nextTick()
+    // EpisodeRow renders `class="ep-row"` — this selector previously said
+    // `.episode-row`, which matches nothing, so the scroll silently never fired.
     const el = document.querySelector(
-      `.episode-row[data-ep-int="${CSS.escape(target)}"]`
+      `.ep-row[data-ep-int="${CSS.escape(target)}"]`
     ) as HTMLElement | null
     if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
     focusApplied.value = true

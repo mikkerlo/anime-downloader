@@ -16,6 +16,9 @@ import * as os from 'os'
  * (still in-flight, background) binary download.
  */
 test('cold start: IPC answers while first-launch binary downloads are pending', async () => {
+  // XDG_CONFIG_HOME only relocates userData on Linux; elsewhere this would
+  // silently run against the real profile and stop testing first-launch state.
+  test.skip(process.platform !== 'linux', 'XDG profile isolation is Linux-only')
   const xdg = fs.mkdtempSync(join(os.tmpdir(), 'anime-dl-coldstart-'))
   const args = [resolve(__dirname, '../out/main/index.js')]
   if (process.env.CI) args.unshift('--no-sandbox')

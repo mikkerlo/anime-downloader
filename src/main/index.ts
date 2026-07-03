@@ -684,17 +684,16 @@ async function bootstrap(): Promise<void> {
   })
 
   animeCacheService.cleanupStale()
-  createWindow()
-  const mainWin = BrowserWindow.getAllWindows()[0]
+  store.migrateWatchProgressV2()
 
-  try {
-    await ensureFfmpeg(mainWin)
-  } catch (err) {
-    console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
-  }
-  // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
-  ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
-  const ffmpegInfo = await checkFfmpeg()
+  // Resolved by the background ffmpeg-ensure task below. The episode-complete
+  // hook awaits it, so a download finishing before ffmpeg is ready still
+  // merges correctly instead of silently skipping the merge.
+  let resolveFfmpegReady!: (info: FfmpegInfo) => void
+  const ffmpegReady = new Promise<FfmpegInfo>((resolve) => {
+    resolveFfmpegReady = resolve
+  })
+
   downloadManager = new DownloadManager(
     coldStorageService.getDownloadDir(),
     smotretApi,
@@ -738,6 +737,7 @@ async function bootstrap(): Promise<void> {
       store.set('downloadedEpisodes', episodes)
     }
 
+    const ffmpegInfo = await ffmpegReady
     const autoMerge = store.get('autoMerge') as boolean
     const ffmpegPath = getFfmpegPath()
     if (autoMerge && ffmpegInfo.available && ffmpegPath) {
@@ -789,7 +789,28 @@ async function bootstrap(): Promise<void> {
     })
   })
 
+  // Register IPC BEFORE creating the window: the renderer mounts as soon as
+  // the window loads, and it used to race a multi-second awaited ensureFfmpeg
+  // download — on a cold start every view's first IPC call failed with
+  // "No handler registered" and the UI sat dead (found while profiling #202).
   registerIpcHandlers()
+
+  createWindow()
+  const mainWin = BrowserWindow.getAllWindows()[0]
+
+  // First-launch binary downloads run in the background — nothing else in
+  // bootstrap may wait on the network. checkFfmpeg() never rejects; a failed
+  // install resolves ffmpegReady with { available: false }.
+  void (async () => {
+    try {
+      await ensureFfmpeg(mainWin)
+    } catch (err) {
+      console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
+    }
+    // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
+    ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
+    resolveFfmpegReady(await checkFfmpeg())
+  })()
 
   initAutoDownloader({
     store,
@@ -805,8 +826,6 @@ async function bootstrap(): Promise<void> {
       console.warn('[auto-dl] startup tick failed:', err)
     )
   }, 30_000)
-
-  store.migrateWatchProgressV2()
 
   // Auto-cleanup of watched episodes — opt-in. Run 60s after launch (warmup),
   // then once every 24h. First run that finds candidates while

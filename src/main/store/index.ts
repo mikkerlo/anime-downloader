@@ -7,12 +7,22 @@ export type { StorageService } from './types'
 export { PERSISTED_STORE_KEYS, type PersistedStoreKey } from './keys'
 
 /**
+ * Coalescing window for disk persistence: the first buffered write arms a
+ * timer, later writes ride along, and the timer fires one full-file write.
+ * This is also the crash-durability window — a hard crash loses at most this
+ * many milliseconds of non-write-through writes (see `docs/storage.md`).
+ */
+export const PERSIST_DEBOUNCE_MS = 500
+
+/**
  * `StorageService` plus the persisted-schema migrations that must run before
  * the rest of the app reads the store. Kept on the service (not free
  * functions) so call sites depend only on the injected instance.
  */
 export interface MainStorageService<S extends Record<string, unknown>> extends StorageService<S> {
   migrateWatchProgressV2(): void
+  /** Persists any writes still waiting on the coalescing timer. Wire into `before-quit`. */
+  flush(): void
 }
 
 /**
@@ -31,30 +41,55 @@ export interface MainStorageService<S extends Record<string, unknown>> extends S
  *   what they got without corrupting later reads). Dot-notation paths walk
  *   the snapshot and clone only the addressed leaf, so hot readers of a
  *   single sub-entry (e.g. `animeCache.<id>`) don't pay for the whole map.
- * - `set`/`delete` update the snapshot, then persist through the `store.store`
- *   setter, which writes the file once without conf's redundant pre-read.
- *   Dot-notation writes delegate to electron-store and re-sync the snapshot.
+ * - `set`/`delete` update the snapshot immediately (reads stay consistent)
+ *   and schedule one coalesced disk write `PERSIST_DEBOUNCE_MS` later, so a
+ *   write burst costs a single full-file stringify+write instead of one per
+ *   `set`. Dot-notation writes apply to the snapshot directly — delegating
+ *   them to `electron-store` would re-read the (stale, mid-window) file and
+ *   clobber pending writes on re-sync.
+ * - Keys in `writeThroughKeys` skip the window and persist synchronously:
+ *   losing their last write to a crash is worse than the ~30ms stall (e.g.
+ *   `shikimoriUpdateQueue` — a queued offline edit must survive).
  */
 export function createStorageService<S extends Record<string, unknown>>(
   defaults: S,
-  /** Test-only injection: config-dir override so unit tests never touch the real store file. */
-  options?: { cwd?: string }
+  options?: {
+    /** Test-only injection: config-dir override so unit tests never touch the real store file. */
+    cwd?: string
+    /** Top-level keys persisted synchronously on every write instead of debounced. */
+    writeThroughKeys?: readonly string[]
+  }
 ): MainStorageService<S> {
   const store = new Store<S>({ defaults, cwd: options?.cwd })
+  const writeThrough = new Set(options?.writeThroughKeys ?? [])
   // One full read+parse. The constructor already merged `defaults` into the
   // file, so the snapshot is complete.
   const snapshot: Record<string, unknown> = { ...(store.store as Record<string, unknown>) }
 
-  function persist(): void {
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  let dirty = false
+
+  function persistNow(): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    dirty = false
     timeSlowSync('store.persist', SLOW_STORE_OP_MS, () => {
       ;(store as { store: unknown }).store = snapshot
     })
   }
 
-  function resyncSnapshot(): void {
-    const fresh = store.store as Record<string, unknown>
-    for (const key of Object.keys(snapshot)) delete snapshot[key]
-    Object.assign(snapshot, fresh)
+  function schedulePersist(key: string): void {
+    if (writeThrough.has(key.split('.', 1)[0])) {
+      persistNow()
+      return
+    }
+    dirty = true
+    if (!persistTimer) {
+      persistTimer = setTimeout(persistNow, PERSIST_DEBOUNCE_MS)
+      persistTimer.unref?.()
+    }
   }
 
   function readPath(key: string): unknown {
@@ -64,6 +99,33 @@ export function createStorageService<S extends Record<string, unknown>>(
       node = (node as Record<string, unknown>)[part]
     }
     return node
+  }
+
+  // dot-prop `setProperty` semantics (what electron-store used to do for us):
+  // missing or non-object intermediate nodes are replaced with fresh objects.
+  function writePath(key: string, value: unknown): void {
+    const parts = key.split('.')
+    let node = snapshot
+    for (const part of parts.slice(0, -1)) {
+      const next = node[part]
+      if (next === null || typeof next !== 'object') {
+        node[part] = {}
+      }
+      node = node[part] as Record<string, unknown>
+    }
+    node[parts[parts.length - 1]] = value
+  }
+
+  function deletePath(key: string): void {
+    const parts = key.split('.')
+    let node: unknown = snapshot
+    for (const part of parts.slice(0, -1)) {
+      if (node === null || typeof node !== 'object') return
+      node = (node as Record<string, unknown>)[part]
+    }
+    if (node !== null && typeof node === 'object') {
+      delete (node as Record<string, unknown>)[parts[parts.length - 1]]
+    }
   }
 
   const svc: MainStorageService<S> = {
@@ -78,22 +140,23 @@ export function createStorageService<S extends Record<string, unknown>>(
         throw new TypeError('Use `delete()` to clear values')
       }
       if (key.includes('.')) {
-        store.set(key as keyof S, value as S[keyof S])
-        resyncSnapshot()
-        return
+        writePath(key, structuredClone(value))
+      } else {
+        snapshot[key] = structuredClone(value)
       }
-      snapshot[key] = structuredClone(value)
-      persist()
+      schedulePersist(key)
     }) as MainStorageService<S>['set'],
     has: (key: string) => (key.includes('.') ? readPath(key) !== undefined : key in snapshot),
     delete: (key: string) => {
       if (key.includes('.')) {
-        store.delete(key as keyof S)
-        resyncSnapshot()
-        return
+        deletePath(key)
+      } else {
+        delete snapshot[key]
       }
-      delete snapshot[key]
-      persist()
+      schedulePersist(key)
+    },
+    flush: () => {
+      if (dirty) persistNow()
     },
     migrateWatchProgressV2: () => migrateWatchProgressV2(svc)
   }

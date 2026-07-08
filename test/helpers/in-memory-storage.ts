@@ -40,6 +40,26 @@ export class InMemoryStorage implements StorageService {
   }
 
   set(key: string, value: unknown): void {
+    // Dot-notation sub-key writes, mirroring the real StorageService (which
+    // applies them to its snapshot): missing/non-object intermediates are
+    // replaced with fresh objects, dot-prop style.
+    if (key.includes('.')) {
+      const [root, ...rest] = key.split('.')
+      let node = this.map.get(root) as Record<string, unknown>
+      if (node === null || typeof node !== 'object') {
+        node = {}
+        this.map.set(root, node)
+      }
+      for (const part of rest.slice(0, -1)) {
+        const next = node[part]
+        if (next === null || typeof next !== 'object') {
+          node[part] = {}
+        }
+        node = node[part] as Record<string, unknown>
+      }
+      node[rest[rest.length - 1]] = value
+      return
+    }
     this.map.set(key, value)
   }
 
@@ -48,6 +68,18 @@ export class InMemoryStorage implements StorageService {
   }
 
   delete(key: string): void {
+    if (key.includes('.')) {
+      const [root, ...rest] = key.split('.')
+      let node: unknown = this.map.get(root)
+      for (const part of rest.slice(0, -1)) {
+        if (node === null || typeof node !== 'object') return
+        node = (node as Record<string, unknown>)[part]
+      }
+      if (node !== null && typeof node === 'object') {
+        delete (node as Record<string, unknown>)[rest[rest.length - 1]]
+      }
+      return
+    }
     this.map.delete(key)
   }
 

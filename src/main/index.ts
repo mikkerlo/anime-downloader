@@ -173,7 +173,12 @@ const STORE_DEFAULTS = {
   shikimoriRecommendations: [] as RecommendationEntry[]
 }
 
-const store = createStorageService(STORE_DEFAULTS)
+const store = createStorageService(STORE_DEFAULTS, {
+  // Keys whose last write must survive a crash inside the persist-coalescing
+  // window: queued offline Shikimori edits and auth material. Everything else
+  // (caches, watch positions) tolerates losing the final ≤500ms before a crash.
+  writeThroughKeys: ['shikimoriUpdateQueue', 'token', 'shikimoriCredentials']
+})
 
 // Compile-time guard: `STORE_DEFAULTS` keys must equal `PERSISTED_STORE_KEYS`.
 // Renaming a default key without updating the tuple breaks this assertion,
@@ -892,11 +897,12 @@ new App()
   .start({
     onReady: bootstrap,
     onBeforeQuit: () => {
-      // Persist quality probes still sitting on the debounce timer — without
-      // this, probes buffered in the last ≤500ms before quit are dropped.
-      animeCacheService.flushQualityProbes()
       downloadManager?.destroy()
       syncplay.disconnect()
+      // Last: persist store writes still sitting on the coalescing timer —
+      // without this, writes from the final ≤500ms (including any made by the
+      // teardown above) are dropped on quit.
+      store.flush()
     }
   })
   .catch((err) => {

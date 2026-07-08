@@ -57,11 +57,11 @@ export function createStorageService<S extends Record<string, unknown>>(
     /** Test-only injection: config-dir override so unit tests never touch the real store file. */
     cwd?: string
     /** Top-level keys persisted synchronously on every write instead of debounced. */
-    writeThroughKeys?: readonly string[]
+    writeThroughKeys?: readonly (keyof S & string)[]
   }
 ): MainStorageService<S> {
   const store = new Store<S>({ defaults, cwd: options?.cwd })
-  const writeThrough = new Set(options?.writeThroughKeys ?? [])
+  const writeThrough = new Set<string>(options?.writeThroughKeys ?? [])
   // One full read+parse. The constructor already merged `defaults` into the
   // file, so the snapshot is complete.
   const snapshot: Record<string, unknown> = { ...(store.store as Record<string, unknown>) }
@@ -74,10 +74,12 @@ export function createStorageService<S extends Record<string, unknown>>(
       clearTimeout(persistTimer)
       persistTimer = null
     }
-    dirty = false
     timeSlowSync('store.persist', SLOW_STORE_OP_MS, () => {
       ;(store as { store: unknown }).store = snapshot
     })
+    // Cleared only after the write lands: a failed write (ENOSPC, EPERM/AV
+    // lock) stays dirty so the next write or `flush()` retries it.
+    dirty = false
   }
 
   function schedulePersist(key: string): void {
@@ -87,7 +89,16 @@ export function createStorageService<S extends Record<string, unknown>>(
     }
     dirty = true
     if (!persistTimer) {
-      persistTimer = setTimeout(persistNow, PERSIST_DEBOUNCE_MS)
+      persistTimer = setTimeout(() => {
+        try {
+          persistNow()
+        } catch (err) {
+          // Unlike the synchronous persist (which threw inside the `set()`
+          // caller), a timer callback has no caller to reject — an uncaught
+          // throw here would take down the main process.
+          console.error('[store] debounced persist failed:', err)
+        }
+      }, PERSIST_DEBOUNCE_MS)
       persistTimer.unref?.()
     }
   }

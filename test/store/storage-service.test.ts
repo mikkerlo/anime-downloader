@@ -106,6 +106,27 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
     expect(writeSpy).toHaveBeenCalledTimes(1) // no second write from a stale timer
   })
 
+  it('a failing timer-fired persist is logged, not thrown, and flush() retries it', () => {
+    // A synchronous persist threw inside the `set()` caller; the timer-fired
+    // path has no caller, so a disk failure (ENOSPC, EPERM/AV lock) must not
+    // become an uncaught exception — and must stay dirty so a retry can land.
+    const svc = create()
+    const writeSpy = persistSpy()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    writeSpy.mockImplementationOnce(() => {
+      throw new Error('ENOSPC: no space left on device')
+    })
+    svc.set('alpha', 42)
+    expect(() => vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[store] debounced persist failed:',
+      expect.objectContaining({ message: expect.stringContaining('ENOSPC') })
+    )
+    expect(readDisk().alpha).toBe(1) // the failed write left the disk untouched
+    svc.flush() // the write survived as dirty — flush retries and lands it
+    expect(readDisk().alpha).toBe(42)
+  })
+
   it('flush() with nothing pending writes nothing', () => {
     const svc = create()
     const writeSpy = persistSpy()

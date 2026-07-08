@@ -40,6 +40,14 @@ describe('SidebarUpdateBanner', () => {
     expect(updateInstall).not.toHaveBeenCalled()
   })
 
+  it('labels the action "Open download page" for a manual (portable) update', async () => {
+    const { wrapper } = mountBanner({ status: 'available', version: '4.3.0', manual: true })
+    expect(wrapper.get('.ub-action').text()).toBe('Open download page')
+    // Same IPC call — the main process routes it to the release page in manual mode.
+    await wrapper.get('.ub-action').trigger('click')
+    expect(updateDownload).toHaveBeenCalledTimes(1)
+  })
+
   it('shows progress (no action button) while downloading', () => {
     const { wrapper } = mountBanner({ status: 'downloading', percent: 42 })
     expect(wrapper.find('.update-banner').exists()).toBe(true)

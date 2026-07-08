@@ -20,6 +20,7 @@
 | `shikimoriUser` | object\|null | `null` | Cached Shikimori user profile (id, nickname, avatar) |
 | `shikimoriProfile` | object\|null | `null` | Cached profile-dashboard payload for ShikimoriView (#178): identity, list breakdown, score distribution, derived titles/episodes/mean/days, favorite genres, friends count. Cache-first, background-refreshed via `shikimori:get-profile`/`shikimori:profile-refreshed`; cleared on logout |
 | `shikimoriFriends` | array | `[]` | Cached Friends-page cards for FriendsView (#179): per-friend presence + titles/mean/mutual + current watch. Cache-first, background-refreshed via `shikimori:get-friends`/`shikimori:friends-refreshed`; cleared on logout |
+| `shikimoriRecommendations` | array | `[]` | Cached "For You" feed for RecommendationsView (#193): locally-ranked `RecommendationEntry[]` (malId, smotret animeId, title, poster, community score, reason). Cache-first, background-refreshed via `shikimori:get-recommendations`/`shikimori:recommendations-refreshed`; **invalidated (cleared) on any rate change** so it rebuilds from fresh taste; cleared on logout |
 | `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |
 | `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode) |
 | `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |

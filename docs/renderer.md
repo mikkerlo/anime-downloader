@@ -16,6 +16,7 @@ src/renderer/src/
       ShikimoriView.vue
       FriendsActivityView.vue
       CalendarView.vue
+      RecommendationsView.vue
       PlayerView.vue
       SettingsView.vue         (thin wrapper around settings/SettingsShell.vue)
     shared/                    Reusable atoms used across views
@@ -68,7 +69,7 @@ The five stores in `src/renderer/src/stores/` own cross-view state and, where ap
 | `useLibraryStore` | `library.ts` | `currentView`, `animeByView[view]`, `animeHistoryByView[view]`, `focusEpisodeIntForAnime` | — |
 | `usePlayerStore` | `player.ts` | `playerState` (`PlayerPayload \| null`), `animePrefs` | — |
 | `useSettingsStore` | `settings.ts` | `shortcuts`, `ffmpegDownloading`/`Progress`, `fpcalcDownloading`/`Progress`, `updateStatus` | `onFfmpegDownloadProgress`, `onFpcalcDownloadProgress`, `onUpdateStatus` (lifetime-scoped) |
-| `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
+| `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `recommendations`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriRecommendationsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.

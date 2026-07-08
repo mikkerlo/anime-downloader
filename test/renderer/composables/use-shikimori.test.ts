@@ -24,6 +24,7 @@ type Api = {
   onShikimoriRatesRefreshed: (cb: (entries: unknown[]) => void) => Unsubscribe
   onShikimoriProfileRefreshed: (cb: (profile: unknown) => void) => Unsubscribe
   onShikimoriFriendsRefreshed: (cb: (friends: unknown[]) => void) => Unsubscribe
+  onShikimoriRecommendationsRefreshed: (cb: (recs: unknown[]) => void) => Unsubscribe
   onShikimoriAnimeDetailsUpdated: (cb: (data: unknown) => void) => Unsubscribe
   onShikimoriOfflineQueueChanged: (cb: (data: unknown) => void) => Unsubscribe
   onShikimoriSyncStatus: (cb: (data: unknown) => void) => Unsubscribe
@@ -38,6 +39,7 @@ const STORE_BROADCAST_STUBS: Partial<Api> = {
   onShikimoriRatesRefreshed: noopSub,
   onShikimoriProfileRefreshed: noopSub,
   onShikimoriFriendsRefreshed: noopSub,
+  onShikimoriRecommendationsRefreshed: noopSub,
   onShikimoriAnimeDetailsUpdated: noopSub,
   onShikimoriOfflineQueueChanged: noopSub,
   onShikimoriSyncStatus: noopSub

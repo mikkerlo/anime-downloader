@@ -16,6 +16,7 @@ import AnimeDetailView from './components/views/AnimeDetailView.vue';
 import ShikimoriView from './components/views/ShikimoriView.vue';
 import FriendsActivityView from './components/views/FriendsActivityView.vue';
 import CalendarView from './components/views/CalendarView.vue';
+import RecommendationsView from './components/views/RecommendationsView.vue';
 import HomeView from './components/views/HomeView.vue';
 import PlayerView from './components/views/PlayerView.vue';
 import { formatBytes } from './utils';
@@ -159,6 +160,7 @@ onBeforeUnmount(() => {
     <ShikimoriView v-show="currentView === 'shikimori' && !activeAnimeId" />
     <FriendsActivityView v-show="currentView === 'friends' && !activeAnimeId" />
     <CalendarView v-if="currentView === 'calendar' && !activeAnimeId" />
+    <RecommendationsView v-if="currentView === 'recommendations' && !activeAnimeId" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
     <PlayerView

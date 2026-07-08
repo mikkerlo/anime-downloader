@@ -11,9 +11,11 @@ type Captured = {
   syncStatus: Listener<unknown>[]
   profileRefreshed: Listener<ShikimoriProfile>[]
   friendsRefreshed: Listener<ShikiFriendCard[]>[]
+  recommendationsRefreshed: Listener<RecommendationEntry[]>[]
   getUser: ReturnType<typeof vi.fn>
   getProfile: ReturnType<typeof vi.fn>
   getFriends: ReturnType<typeof vi.fn>
+  getRecommendations: ReturnType<typeof vi.fn>
   getRates: ReturnType<typeof vi.fn>
   getSyncStatus: ReturnType<typeof vi.fn>
   getOfflineQueueLength: ReturnType<typeof vi.fn>
@@ -31,9 +33,11 @@ function installApi(): void {
     syncStatus: [],
     profileRefreshed: [],
     friendsRefreshed: [],
+    recommendationsRefreshed: [],
     getUser: vi.fn(async () => null),
     getProfile: vi.fn(async () => null),
     getFriends: vi.fn(async () => []),
+    getRecommendations: vi.fn(async () => []),
     getRates: vi.fn(async () => []),
     getSyncStatus: vi.fn(async () => ({
       state: 'idle',
@@ -76,9 +80,14 @@ function installApi(): void {
         captured.friendsRefreshed.push(cb)
         return () => {}
       },
+      onShikimoriRecommendationsRefreshed: (cb: Listener<RecommendationEntry[]>) => {
+        captured.recommendationsRefreshed.push(cb)
+        return () => {}
+      },
       shikimoriGetUser: captured.getUser,
       shikimoriGetProfile: captured.getProfile,
       shikimoriGetFriends: captured.getFriends,
+      shikimoriGetRecommendations: captured.getRecommendations,
       shikimoriGetAnimeRates: captured.getRates,
       shikimoriGetSyncStatus: captured.getSyncStatus,
       shikimoriGetOfflineQueueLength: captured.getOfflineQueueLength,
@@ -248,6 +257,48 @@ describe('useShikimoriStore', () => {
       { id: 12, nickname: 'bob', online: false } as unknown as ShikiFriendCard
     ])
     expect(store.friends.map((f) => f.nickname)).toEqual(['bob'])
+  })
+
+  it('refreshRecommendations pulls the feed and coerces null to an empty array', async () => {
+    const recs = [
+      {
+        malId: 1,
+        animeId: 5,
+        title: 'X',
+        posterUrl: '',
+        kind: 'tv',
+        communityScore: 8,
+        reason: 'r'
+      }
+    ] as RecommendationEntry[]
+    captured.getRecommendations.mockResolvedValueOnce(recs)
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(store.recommendations).toEqual([])
+    await store.refreshRecommendations()
+    expect(store.recommendations).toEqual(recs)
+
+    captured.getRecommendations.mockResolvedValueOnce(null)
+    await store.refreshRecommendations()
+    expect(store.recommendations).toEqual([])
+  })
+
+  it('replaces recommendations when onShikimoriRecommendationsRefreshed fires', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(captured.recommendationsRefreshed.length).toBe(1)
+    captured.recommendationsRefreshed[0]([
+      {
+        malId: 9,
+        animeId: null,
+        title: 'Steins;Gate',
+        posterUrl: '',
+        kind: 'tv',
+        communityScore: 9,
+        reason: 'Because you liked «X»'
+      }
+    ] as RecommendationEntry[])
+    expect(store.recommendations.map((r) => r.title)).toEqual(['Steins;Gate'])
   })
 
   it('rateByMalId returns null for a falsy malId', async () => {

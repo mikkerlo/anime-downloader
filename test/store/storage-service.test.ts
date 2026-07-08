@@ -1,14 +1,30 @@
 // Pins the in-memory snapshot semantics of the main StorageService: reads are
 // served from memory (electron-store's per-get full-file re-parse was the main
 // source of main-process stalls on the anime detail page), every read is an
-// isolated copy, and writes still land on disk. Runs against the REAL
+// isolated copy, and writes coalesce into one debounced disk write per
+// PERSIST_DEBOUNCE_MS window (issue #204 — a synchronous full-file write per
+// `set` stalled playback every watch-progress save). Runs against the REAL
 // electron-store in a temp dir (via the test-only `cwd` injection — with an
 // explicit cwd, electron-store never consults `electron.app`).
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { createStorageService } from '../../src/main/store'
+import Store from 'electron-store'
+import { createStorageService, PERSIST_DEBOUNCE_MS } from '../../src/main/store'
+
+/**
+ * Counts disk persists. The service writes the file by assigning the `store`
+ * accessor on Conf's prototype (electron-store's base class) — `atomically`
+ * writes via fd+rename, so spying `fs.writeFileSync` would see nothing.
+ */
+function persistSpy(): ReturnType<typeof vi.spyOn> {
+  let proto: object | null = Store.prototype
+  while (proto && !Object.getOwnPropertyDescriptor(proto, 'store')) {
+    proto = Object.getPrototypeOf(proto)
+  }
+  return vi.spyOn(proto as { store: unknown }, 'store', 'set')
+}
 
 const DEFAULTS = {
   alpha: 1,
@@ -20,16 +36,21 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
   let cfg: string
 
   beforeEach(() => {
+    vi.useFakeTimers()
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-service-test-'))
     cfg = path.join(dir, 'config.json')
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  function create(): ReturnType<typeof createStorageService<typeof DEFAULTS>> {
-    return createStorageService(DEFAULTS, { cwd: dir })
+  function create(options?: {
+    writeThroughKeys?: readonly string[]
+  }): ReturnType<typeof createStorageService<typeof DEFAULTS>> {
+    return createStorageService(DEFAULTS, { cwd: dir, ...options })
   }
 
   function readDisk(): Record<string, unknown> {
@@ -42,15 +63,88 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
     expect(svc.get('blob')).toEqual({ nested: true })
   })
 
-  it('set → get round-trips and persists to disk', () => {
+  it('set → get round-trips immediately; disk lands after the coalescing window', () => {
     const svc = create()
     svc.set('alpha', 42)
-    expect(svc.get('alpha')).toBe(42)
+    expect(svc.get('alpha')).toBe(42) // read-your-writes during the window
+    expect(readDisk().alpha).toBe(1) // disk still pre-write
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
     expect(readDisk().alpha).toBe(42)
   })
 
-  it('a new service instance sees previously persisted values', () => {
-    create().set('alpha', 9)
+  it('a write burst coalesces into one disk write with the final values', () => {
+    // watchProgressSave-shaped regression: N sets in one window must not
+    // produce N full-file writes.
+    const svc = create()
+    const writeSpy = persistSpy()
+    for (let i = 0; i < 10; i++) {
+      svc.set('alpha', i)
+      svc.set('blob', { tick: i })
+    }
+    expect(writeSpy).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    expect(readDisk()).toMatchObject({ alpha: 9, blob: { tick: 9 } })
+  })
+
+  it('the window does not extend under a continuous writer (bounded staleness)', () => {
+    const svc = create()
+    svc.set('alpha', 1)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS - 100)
+    svc.set('alpha', 2) // second write inside the window must not re-arm it
+    vi.advanceTimersByTime(100)
+    expect(readDisk().alpha).toBe(2)
+  })
+
+  it('flush() persists pending writes immediately and disarms the timer', () => {
+    const svc = create()
+    const writeSpy = persistSpy()
+    svc.set('alpha', 7)
+    svc.flush()
+    expect(readDisk().alpha).toBe(7)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS * 2)
+    expect(writeSpy).toHaveBeenCalledTimes(1) // no second write from a stale timer
+  })
+
+  it('a failing timer-fired persist is logged, not thrown, and flush() retries it', () => {
+    // A synchronous persist threw inside the `set()` caller; the timer-fired
+    // path has no caller, so a disk failure (ENOSPC, EPERM/AV lock) must not
+    // become an uncaught exception — and must stay dirty so a retry can land.
+    const svc = create()
+    const writeSpy = persistSpy()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    writeSpy.mockImplementationOnce(() => {
+      throw new Error('ENOSPC: no space left on device')
+    })
+    svc.set('alpha', 42)
+    expect(() => vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[store] debounced persist failed:',
+      expect.objectContaining({ message: expect.stringContaining('ENOSPC') })
+    )
+    expect(readDisk().alpha).toBe(1) // the failed write left the disk untouched
+    svc.flush() // the write survived as dirty — flush retries and lands it
+    expect(readDisk().alpha).toBe(42)
+  })
+
+  it('flush() with nothing pending writes nothing', () => {
+    const svc = create()
+    const writeSpy = persistSpy()
+    svc.flush()
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+
+  it('writeThroughKeys persist synchronously, carrying pending writes along', () => {
+    const svc = create({ writeThroughKeys: ['blob'] })
+    svc.set('alpha', 5) // debounced
+    svc.set('blob', { critical: true }) // write-through
+    expect(readDisk()).toMatchObject({ alpha: 5, blob: { critical: true } })
+  })
+
+  it('a new service instance sees previously flushed values', () => {
+    const first = create()
+    first.set('alpha', 9)
+    first.flush()
     expect(create().get('alpha')).toBe(9)
   })
 
@@ -85,16 +179,47 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
     expect(svc.has('extra')).toBe(true)
     svc.delete('extra')
     expect(svc.has('extra')).toBe(false)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
     expect('extra' in readDisk()).toBe(false)
   })
 
-  it('dot-notation writes delegate to electron-store and re-sync; reads walk the snapshot', () => {
+  it('dot-notation writes apply to the snapshot and persist debounced', () => {
     const svc = create()
     svc.set('blob.nested', false)
     expect(svc.get('blob.nested')).toBe(false)
     expect((svc.get('blob') as { nested: boolean }).nested).toBe(false)
     expect(svc.has('blob.nested')).toBe(true)
     expect(svc.has('blob.missing')).toBe(false)
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
+    expect((readDisk().blob as { nested: boolean }).nested).toBe(false)
+  })
+
+  it('dot-notation writes create missing intermediates (dot-prop semantics)', () => {
+    const svc = create()
+    svc.set('blob.deep.leaf', 1)
+    expect(svc.get('blob.deep.leaf')).toBe(1)
+    svc.set('alpha.forced', 2) // non-object intermediate is replaced
+    expect(svc.get('alpha')).toEqual({ forced: 2 })
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
+    expect(readDisk()).toMatchObject({ blob: { deep: { leaf: 1 } }, alpha: { forced: 2 } })
+  })
+
+  it('dot-notation set stores a copy — later mutation of the argument is not visible', () => {
+    const svc = create()
+    const entry: Record<string, unknown> = { height: 720 }
+    svc.set('blob.entry', entry)
+    entry.height = 1080
+    expect((svc.get('blob.entry') as { height: number }).height).toBe(720)
+  })
+
+  it('dot-notation delete removes the leaf and persists debounced', () => {
+    const svc = create()
+    svc.set('blob.nested', false)
+    svc.delete('blob.nested')
+    expect(svc.has('blob.nested')).toBe(false)
+    svc.delete('blob.missing.path') // no-op, must not throw
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS)
+    expect(readDisk().blob).toEqual({})
   })
 
   it('dot-notation sub-key reads clone only the addressed leaf, isolated from later reads', () => {

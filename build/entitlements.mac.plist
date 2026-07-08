@@ -3,15 +3,16 @@
 <plist version="1.0">
   <!-- Hardened-runtime entitlements required for Electron under codesign
        (notarization mandates the hardened runtime, and Electron's JIT +
-       V8 memory model crash on launch without these carve-outs). -->
+       V8 memory model crash on launch without these carve-outs).
+       Deliberately narrow: allow-dyld-environment-variables is NOT granted
+       (it re-enables DYLD_INSERT_LIBRARIES injection); re-add only if a
+       notarized build demonstrably fails to launch without it. -->
   <dict>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
   </dict>
 </plist>

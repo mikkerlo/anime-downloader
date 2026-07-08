@@ -21,6 +21,8 @@ export function isPortableBuild(
 /**
  * Dotted numeric version compare (`v` prefix tolerated, missing segments are
  * 0, non-numeric segments compare as 0): true when `candidate` > `current`.
+ * Pre-release tags compare as *newer* than their release (`4.3.0-beta.1` >
+ * `4.3.0`) — harmless here because `releases/latest` never returns prereleases.
  */
 export function isNewerVersion(candidate: string, current: string): boolean {
   const parse = (v: string): number[] =>

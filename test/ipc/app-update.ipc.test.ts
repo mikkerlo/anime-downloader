@@ -132,6 +132,20 @@ describe('update IPC — manual mode (Windows portable)', () => {
     expect((store.get('lastUpdateCheck') as number) >= before).toBe(true)
   })
 
+  it('a failed openExternal on install broadcasts an error instead of rejecting', async () => {
+    stubLatestRelease('v99.0.0', 'https://example.test/releases/tag/v99.0.0')
+    ;(shell.openExternal as Mock).mockRejectedValueOnce(new Error('no browser'))
+    const { invoke, send } = registerRouter()
+
+    await invoke(CHANNELS.UPDATE_INSTALL)
+
+    expect(send).toHaveBeenCalledWith(
+      EVENT_CHANNELS.UPDATE_STATUS,
+      expect.objectContaining({ status: 'error', error: 'no browser' })
+    )
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
   it('a failed GitHub check broadcasts an error status', async () => {
     vi.stubGlobal(
       'fetch',

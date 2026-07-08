@@ -90,12 +90,19 @@ export function register({ store }: AppDeps): void {
     }
   })
 
-  ipcMain.handle(CHANNELS.UPDATE_INSTALL, () => {
-    if (manualUpdate) {
-      void shell.openExternal(manualReleaseUrl)
-      return
+  ipcMain.handle(CHANNELS.UPDATE_INSTALL, async () => {
+    try {
+      if (manualUpdate) {
+        await shell.openExternal(manualReleaseUrl)
+        return
+      }
+      autoUpdater.quitAndInstall()
+    } catch (err) {
+      broadcastUpdateStatus({
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err)
+      })
     }
-    autoUpdater.quitAndInstall()
   })
 
   const lastCheck = (store.get('lastUpdateCheck') as number) || 0

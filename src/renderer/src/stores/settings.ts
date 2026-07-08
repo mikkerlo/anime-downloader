@@ -24,6 +24,8 @@ export type UiUpdateStatus = {
   version?: string
   percent?: number
   error?: string
+  /** Portable build: "download" opens the GitHub release page instead of self-updating. */
+  manual?: boolean
 }
 
 export const useSettingsStore = defineStore('settings', () => {

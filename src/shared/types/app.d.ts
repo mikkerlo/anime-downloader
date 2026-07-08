@@ -6,4 +6,6 @@ interface UpdateStatus {
   version?: string
   percent?: number
   error?: string
+  /** Portable build: update can't self-install, "download" opens the release page. */
+  manual?: boolean
 }

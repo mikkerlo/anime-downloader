@@ -64,6 +64,40 @@ jobs:
 
       - run: npm ci
 
+      # Signing + notarization env, scoped to the mac release build only
+      # (never check.yml PR builds) and sourced from the ANIME_DL_* repo
+      # secrets — see docs/build.md for the mapping. Degrades gracefully:
+      # without ANIME_DL_CSC_LINK the build stays green but unsigned; with a
+      # cert but no API key it signs without notarizing. The .p8 is written to
+      # a file because @electron/notarize takes APPLE_API_KEY as a path.
+      - name: Set up macOS signing & notarization
+        if: matrix.platform == 'mac'
+        env:
+          CSC_LINK_B64: ${{ secrets.ANIME_DL_CSC_LINK }}
+          CSC_KEY_PASSWORD_VAL: ${{ secrets.ANIME_DL_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.ANIME_DL_APPLE_API_KEY }}
+          APPLE_API_KEY_ID_VAL: ${{ secrets.ANIME_DL_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_VAL: ${{ secrets.ANIME_DL_APPLE_API_ISSUER }}
+        run: |
+          if [ -z "$CSC_LINK_B64" ]; then
+            echo "ANIME_DL_CSC_LINK secret not set — building unsigned."
+            exit 0
+          fi
+          {
+            echo "CSC_LINK=$CSC_LINK_B64"
+            echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_VAL"
+          } >> "$GITHUB_ENV"
+          if [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+            {
+              echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8"
+              echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID_VAL"
+              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_VAL"
+            } >> "$GITHUB_ENV"
+          else
+            echo "ANIME_DL_APPLE_API_KEY secret not set — signing without notarization."
+          fi
+
       - run: npx electron-vite build
 
       - run: npx electron-builder ${{ matrix.args }}
@@ -80,6 +114,7 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.yml
+            dist/*.blockmap
           if-no-files-found: ignore
 
   release:

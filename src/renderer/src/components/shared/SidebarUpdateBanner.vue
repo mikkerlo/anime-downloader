@@ -76,7 +76,7 @@ function install(): void {
     </div>
 
     <button v-if="updateStatus.status === 'available'" class="ub-action" @click="download">
-      Download
+      {{ updateStatus.manual ? 'Open download page' : 'Download' }}
     </button>
     <button v-else-if="updateStatus.status === 'ready'" class="ub-action" @click="install">
       Restart to update

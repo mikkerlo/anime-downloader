@@ -341,7 +341,7 @@ watch(autoDownloadEnabled, (val) => {
             class="btn btn-sm btn-primary"
             @click="downloadUpdate"
           >
-            Download update
+            {{ updateStatus.manual ? 'Open download page' : 'Download update' }}
           </button>
           <button
             v-else-if="updateStatus.status === 'ready'"

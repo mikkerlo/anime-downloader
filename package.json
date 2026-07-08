@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "4.2.2",
+  "version": "4.2.3",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "engines": {
@@ -39,6 +39,9 @@
       ],
       "icon": "resources/icon.ico"
     },
+    "portable": {
+      "artifactName": "Anime-DL-${version}-${arch}-portable.${ext}"
+    },
     "linux": {
       "target": [
         "AppImage",
@@ -49,7 +52,12 @@
       "target": [
         "zip",
         "dmg"
-      ]
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "publish": {
       "provider": "github",

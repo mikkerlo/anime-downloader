@@ -227,7 +227,21 @@ export function register({
     return set
   }
 
-  async function fetchAndCacheShikimoriRecommendations(): Promise<RecommendationEntry[] | null> {
+  // A rebuild is the most expensive refresh in the app (franchise + /similar
+  // fan-out per seed, plus genre enrichment), and both the cache-hit read path
+  // and the Refresh button can trigger one — dedupe concurrent callers onto a
+  // single in-flight build instead of stacking rebuilds (PR #194 review).
+  let recommendationsBuild: Promise<RecommendationEntry[] | null> | null = null
+  function fetchAndCacheShikimoriRecommendations(): Promise<RecommendationEntry[] | null> {
+    if (!recommendationsBuild) {
+      recommendationsBuild = buildShikimoriRecommendations().finally(() => {
+        recommendationsBuild = null
+      })
+    }
+    return recommendationsBuild
+  }
+
+  async function buildShikimoriRecommendations(): Promise<RecommendationEntry[] | null> {
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) return null
     const accessToken = await shikimori.ensureFreshToken(store)
@@ -454,9 +468,16 @@ export function register({
       // current list before serving — an entry the user has since rated or
       // completed must never show even if the cache predates that change.
       const filtered = filterOutRated(cached, ratedMalIdSet())
-      if (filtered.length !== cached.length) store.set('shikimoriRecommendations', filtered)
-      refreshShikimoriRecommendationsInBackground()
-      return filtered
+      if (filtered.length > 0) {
+        if (filtered.length !== cached.length) store.set('shikimoriRecommendations', filtered)
+        refreshShikimoriRecommendationsInBackground()
+        return filtered
+      }
+      // The filter emptied the feed — every cached entry has since been rated.
+      // Fall through to the synchronous rebuild instead of returning [] and
+      // flashing the "rate a few shows" empty state while a background refresh
+      // runs (PR #194 review).
+      store.set('shikimoriRecommendations', [])
     }
     try {
       return await fetchAndCacheShikimoriRecommendations()

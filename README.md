@@ -86,7 +86,7 @@ Anime DL is more than a downloader — it has a built-in player with MKV streami
   <tr>
     <td width="50%">
       <img src="resources/screenshots/player-subtitles.jpg" alt="Built-in player rendering native subtitles" /><br />
-      <sub><b>Native ASS/SSA subtitles</b> — rendered with libass/JASSUB, full styling and positioning preserved.</sub>
+      <sub><b>Native ASS/SSA subtitles</b> — rendered with libass, full styling and positioning preserved.</sub>
     </td>
     <td width="50%">
       <img src="resources/screenshots/player-scene.jpg" alt="Instant MKV streaming in the built-in player" /><br />

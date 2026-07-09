@@ -6,6 +6,8 @@ import {
   buildTasteProfile,
   filterOutRated,
   rankRecommendations,
+  splitAiringRow,
+  type RankedRecommendation,
   type RecommendationCandidate,
   type TasteRate
 } from '../recommendations'
@@ -187,6 +189,11 @@ export function register({
   // are cached so rebuilds are cheap.
   const RECS_ENRICH_LIMIT = 25
   const RECS_ENRICH_DELAY_MS = 250
+  // "Airing now for you" (#206): how many top-ranked ongoing titles to pull as
+  // a second candidate pool, and how many survive into the row after the
+  // genre-affinity gate.
+  const RECS_AIRING_FETCH_LIMIT = 30
+  const RECS_AIRING_ROW_LIMIT = 10
   const SEED_STATUSES: shikimori.ShikiUserRateStatus[] = ['completed', 'watching', 'rewatching']
 
   // Genres of an anime from the shared detail cache, fetching + caching on miss
@@ -337,15 +344,55 @@ export function register({
       }
     }
 
+    // Second candidate pool (#206): the top currently-airing titles. `/similar`
+    // is community-derived and lags for brand-new shows, so a just-started
+    // season may not be surfaced by any seed — this pool closes that sourcing
+    // gap. The `excludedIds` guard must be applied here explicitly (it lives
+    // inline in the `/similar` loop above, and `rankRecommendations` only
+    // checks rated ids), or an airing sequel of a watched show would leak into
+    // the row. A failed fetch degrades to the similar-only pool.
+    try {
+      const ongoing = await shikimori.getOngoingRanked(accessToken, RECS_AIRING_FETCH_LIMIT)
+      for (const a of ongoing) {
+        if (excludedIds.has(a.id)) continue
+        const existing = candidatesByMal.get(a.id)
+        if (existing) {
+          existing.airing = true
+        } else {
+          candidatesByMal.set(a.id, {
+            malId: a.id,
+            title: a.russian || a.name,
+            posterUrl: absoluteImage(a.image.preview || a.image.x96 || a.image.original),
+            kind: a.kind,
+            communityScore: Number(a.score) || 0,
+            genres: genresOf(a.id),
+            seeds: [],
+            airing: true
+          })
+        }
+      }
+    } catch (err) {
+      console.warn('[shikimori] recommendations: ongoing fetch failed', err)
+    }
+
     // Enrich the top candidates with genres so the genre-affinity term in the
     // final ranking can fire. A preliminary rank (genre term mostly dormant —
     // most candidates have no cached genres yet) picks which candidates are
     // worth a detail fetch; we mutate their `genres` in place (same object
     // refs live in `candidatesByMal`), then re-rank with the genre signal live.
+    // Airing candidates are enriched unconditionally: seedless, they score only
+    // the popularity term in the prelim rank and would never make the cut —
+    // yet genres are exactly what gates them into the row. The pool is bounded
+    // (RECS_AIRING_FETCH_LIMIT), so this adds at most ~7.5 s to a rebuild at
+    // the 250 ms throttle, and nothing when genres are already cached.
     const allCandidates = [...candidatesByMal.values()]
     const prelim = rankRecommendations(allCandidates, taste, RECS_ENRICH_LIMIT)
-    for (const r of prelim) {
-      const cand = candidatesByMal.get(r.malId)
+    const enrichIds = new Set<number>(prelim.map((r) => r.malId))
+    for (const c of allCandidates) {
+      if (c.airing) enrichIds.add(c.malId)
+    }
+    for (const malId of enrichIds) {
+      const cand = candidatesByMal.get(malId)
       if (!cand || cand.genres.length > 0) continue
       try {
         const details = await fetchAndCacheAnimeDetails(accessToken, cand.malId)
@@ -358,10 +405,20 @@ export function register({
       await new Promise((resolve) => setTimeout(resolve, RECS_ENRICH_DELAY_MS))
     }
 
-    const ranked = rankRecommendations(allCandidates, taste, RECS_RESULT_LIMIT)
-    const malMap = await lookupByMalIds(ranked.map((r) => r.malId))
+    // Rank UNCAPPED (explicit Infinity — the default limit is 60), partition
+    // into the airing row + main feed, then cap each section. Ranking straight
+    // to RECS_RESULT_LIMIT would truncate the bottom-clustered seedless airing
+    // entries before the partition ever saw them.
+    const ranked = rankRecommendations(allCandidates, taste, Infinity)
+    const { airingRow, mainFeed } = splitAiringRow(ranked, RECS_AIRING_ROW_LIMIT, RECS_RESULT_LIMIT)
+    const finalRanked = [...airingRow, ...mainFeed]
+    const malMap = await lookupByMalIds(finalRanked.map((r) => r.malId))
 
-    const entries: RecommendationEntry[] = ranked.map((r) => {
+    // The persisted `airing` flag means "belongs in the airing row" (the
+    // renderer partitions the flat cached feed on it), NOT "came from the
+    // ongoing pool" — a gated-out airing title that makes the main feed is
+    // stored unflagged so the renderer can't resurrect it into the row.
+    const toEntry = (r: RankedRecommendation, inAiringRow: boolean): RecommendationEntry => {
       const smotret = malMap[r.malId] ?? null
       return {
         malId: r.malId,
@@ -370,9 +427,14 @@ export function register({
         posterUrl: smotret?.posterUrlSmall || r.posterUrl,
         kind: r.kind,
         communityScore: r.communityScore,
-        reason: r.reason
+        reason: inAiringRow ? `Airing now · ${r.reason}` : r.reason,
+        ...(inAiringRow ? { airing: true } : {})
       }
-    })
+    }
+    const entries: RecommendationEntry[] = [
+      ...airingRow.map((r) => toEntry(r, true)),
+      ...mainFeed.map((r) => toEntry(r, false))
+    ]
 
     store.set('shikimoriRecommendations', entries)
     return entries

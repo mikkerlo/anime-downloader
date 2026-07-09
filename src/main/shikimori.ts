@@ -606,6 +606,24 @@ export async function getSimilar(accessToken: string, malId: number): Promise<Sh
   return response.json() as Promise<ShikiSimilarAnime[]>
 }
 
+// `GET /api/animes` uses the same brief list serializer as `/similar`.
+export type ShikiOngoingAnime = ShikiSimilarAnime
+
+export async function getOngoingRanked(
+  accessToken: string,
+  limit: number
+): Promise<ShikiOngoingAnime[]> {
+  const params = new URLSearchParams({
+    status: 'ongoing',
+    order: 'ranked',
+    limit: String(limit)
+  })
+  const response = await shikiFetch(`/api/animes?${params}`, {
+    headers: authHeaders(accessToken)
+  })
+  return response.json() as Promise<ShikiOngoingAnime[]>
+}
+
 export interface ShikiFranchiseNode {
   id: number
   date: number | null

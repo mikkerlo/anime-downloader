@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useLibraryStore } from '../../stores/library';
 import { useShikimoriStore } from '../../stores/shikimori';
@@ -7,6 +7,19 @@ import { useShikimoriStore } from '../../stores/shikimori';
 const libraryStore = useLibraryStore();
 const shikimoriStore = useShikimoriStore();
 const { recommendations } = storeToRefs(shikimoriStore);
+
+// The cached feed is one flat list; the `airing` flag marks row membership
+// (assigned in the main process by `splitAiringRow`), so partitioning here is
+// a pure filter.
+const sections = computed(() => {
+  const airing = recommendations.value.filter((r) => r.airing);
+  const main = recommendations.value.filter((r) => !r.airing);
+  const out: { key: string; title: string; items: RecommendationEntry[] }[] = [];
+  if (airing.length > 0) out.push({ key: 'airing', title: 'Airing now for you', items: airing });
+  if (main.length > 0)
+    out.push({ key: 'main', title: airing.length > 0 ? 'More for you' : '', items: main });
+  return out;
+});
 
 const loading = ref(false);
 const error = ref('');
@@ -97,27 +110,35 @@ onMounted(load);
         </div>
         <p>Rate a few shows on the Shikimori tab and we'll suggest what to watch next.</p>
       </div>
-      <div v-else class="poster-grid">
-        <div
-          v-for="rec in recommendations"
-          :key="rec.malId"
-          class="acard rec-card"
-          :class="{ clickable: rec.animeId !== null }"
-          @click="open(rec)"
-        >
-          <div class="poster-wrap">
-            <img :src="rec.posterUrl" :alt="rec.title" class="poster" loading="lazy" />
-            <span v-if="rec.communityScore > 0" class="score-badge"
-              >★ {{ scoreLabel(rec.communityScore) }}</span
+      <template v-else>
+        <section v-for="section in sections" :key="section.key" class="rec-section">
+          <h3 v-if="section.title" class="section-title">{{ section.title }}</h3>
+          <div class="poster-grid">
+            <div
+              v-for="rec in section.items"
+              :key="rec.malId"
+              class="acard rec-card"
+              :class="{ clickable: rec.animeId !== null }"
+              @click="open(rec)"
             >
-            <span v-if="rec.animeId === null" class="rec-unavailable">Not on smotret-anime</span>
+              <div class="poster-wrap">
+                <img :src="rec.posterUrl" :alt="rec.title" class="poster" loading="lazy" />
+                <span v-if="rec.airing" class="airing-badge">Airing</span>
+                <span v-if="rec.communityScore > 0" class="score-badge"
+                  >★ {{ scoreLabel(rec.communityScore) }}</span
+                >
+                <span v-if="rec.animeId === null" class="rec-unavailable"
+                  >Not on smotret-anime</span
+                >
+              </div>
+              <div class="acard-info">
+                <div class="acard-title" :title="rec.title">{{ rec.title }}</div>
+                <div class="rec-reason" :title="rec.reason">{{ rec.reason }}</div>
+              </div>
+            </div>
           </div>
-          <div class="acard-info">
-            <div class="acard-title" :title="rec.title">{{ rec.title }}</div>
-            <div class="rec-reason" :title="rec.reason">{{ rec.reason }}</div>
-          </div>
-        </div>
-      </div>
+        </section>
+      </template>
     </div>
   </main>
 </template>
@@ -199,6 +220,33 @@ onMounted(load);
   flex: 1;
   overflow-y: auto;
   padding: var(--pad-y) var(--pad-x) 48px;
+}
+
+.rec-section + .rec-section {
+  margin-top: 28px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 14px;
+}
+
+.airing-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 78%, black);
 }
 
 .rec-card.clickable {

@@ -19,6 +19,7 @@ const ensureFreshToken = vi.fn()
 const getSimilar = vi.fn()
 const getFranchise = vi.fn()
 const getAnimeDetails = vi.fn()
+const getOngoingRanked = vi.fn()
 
 vi.mock('../../src/main/shikimori', async () => {
   const actual = await vi.importActual<typeof import('../../src/main/shikimori')>(
@@ -29,7 +30,8 @@ vi.mock('../../src/main/shikimori', async () => {
     ensureFreshToken: (...a: unknown[]) => ensureFreshToken(...a),
     getSimilar: (...a: unknown[]) => getSimilar(...a),
     getFranchise: (...a: unknown[]) => getFranchise(...a),
-    getAnimeDetails: (...a: unknown[]) => getAnimeDetails(...a)
+    getAnimeDetails: (...a: unknown[]) => getAnimeDetails(...a),
+    getOngoingRanked: (...a: unknown[]) => getOngoingRanked(...a)
   }
 })
 
@@ -60,6 +62,10 @@ function similarAnime(id: number) {
     aired_on: null,
     released_on: null
   }
+}
+
+function ongoingAnime(id: number) {
+  return { ...similarAnime(id), name: `Ongoing ${id}`, russian: '', status: 'ongoing' }
 }
 
 function recEntry(malId: number) {
@@ -130,6 +136,7 @@ beforeEach(() => {
   getFranchise.mockReset().mockResolvedValue({ links: [], nodes: [], current_id: 0 })
   getSimilar.mockReset().mockResolvedValue([])
   getAnimeDetails.mockReset().mockResolvedValue({ genres: [] })
+  getOngoingRanked.mockReset().mockResolvedValue([])
 })
 
 describe('SHIKIMORI_GET_RECOMMENDATIONS read path', () => {
@@ -166,6 +173,90 @@ describe('SHIKIMORI_GET_RECOMMENDATIONS read path', () => {
     expect(
       (store.get('shikimoriRecommendations') as Array<{ malId: number }>).map((r) => r.malId)
     ).toEqual([200])
+  })
+
+  // "Airing now for you" (#206): the ongoing pool is a second candidate source
+  // merged into the same rebuild, so its seams are pinned here too.
+  describe('airing pool', () => {
+    it('recommends a title present only in the ongoing pool (behavior difference vs similar-only sourcing)', async () => {
+      // 999 appears in NO seed's /similar list — the old sourcing could never
+      // surface it. With genre affinity (Драма rated 8 → positive) it must
+      // land in the airing row, flagged and reason-prefixed.
+      getOngoingRanked.mockResolvedValue([ongoingAnime(999)])
+      const { handler } = boot({
+        shikimoriUserRates: [ratedEntry(1)],
+        shikimoriAnimeDetails: { '1': detailsEntry(['Драма']), '999': detailsEntry(['Драма']) }
+      })
+
+      const result = (await handler({})) as Array<{
+        malId: number
+        airing?: boolean
+        reason: string
+      }>
+
+      expect(result.map((r) => r.malId)).toEqual([999])
+      expect(result[0].airing).toBe(true)
+      expect(result[0].reason).toMatch(/^Airing now · /)
+    })
+
+    it('degrades to the similar-only feed when the ongoing fetch fails', async () => {
+      getOngoingRanked.mockRejectedValue(new Error('boom'))
+      getSimilar.mockResolvedValue([similarAnime(200)])
+      const { handler } = boot({
+        shikimoriUserRates: [ratedEntry(1)],
+        shikimoriAnimeDetails: { '200': detailsEntry(['Драма']) }
+      })
+
+      const result = (await handler({})) as Array<{ malId: number; airing?: boolean }>
+
+      expect(result.map((r) => r.malId)).toEqual([200])
+      expect(result[0].airing).toBeUndefined()
+    })
+
+    it('enriches an airing candidate even when the seeded pool fills the prelim enrich cut', async () => {
+      // 26 seeded candidates (all with cached genres) outrank the seedless
+      // airing one, so the prelim top-25 contains no airing entry. The old
+      // prelim-only enrichment would leave 999 genre-less → gated out of the
+      // row; unconditional airing enrichment must fetch its details.
+      const seededIds = Array.from({ length: 26 }, (_, i) => 200 + i)
+      getSimilar.mockResolvedValue(seededIds.map(similarAnime))
+      getOngoingRanked.mockResolvedValue([ongoingAnime(999)])
+      getAnimeDetails.mockResolvedValue({
+        genres: [{ id: 1, name: 'Drama', russian: 'Драма' }]
+      })
+      const details = Object.fromEntries(
+        seededIds.map((id) => [String(id), detailsEntry(['Драма'])])
+      )
+      const { handler } = boot({
+        shikimoriUserRates: [ratedEntry(1)],
+        shikimoriAnimeDetails: { ...details, '1': detailsEntry(['Драма']) }
+      })
+
+      const result = (await handler({})) as Array<{ malId: number; airing?: boolean }>
+
+      expect(getAnimeDetails).toHaveBeenCalledWith('access-token', 999)
+      expect(result.filter((r) => r.airing).map((r) => r.malId)).toEqual([999])
+    })
+
+    it('excludes an airing franchise-sibling of a seed', async () => {
+      // The excludedIds guard lives inline in the /similar merge loop; the
+      // ongoing merge must apply it too or airing sequels of watched shows
+      // leak into the top row.
+      getFranchise.mockResolvedValue({ links: [], nodes: [{ id: 999 }], current_id: 1 })
+      getOngoingRanked.mockResolvedValue([ongoingAnime(999), ongoingAnime(500)])
+      const { handler } = boot({
+        shikimoriUserRates: [ratedEntry(1)],
+        shikimoriAnimeDetails: {
+          '1': detailsEntry(['Драма']),
+          '500': detailsEntry(['Драма']),
+          '999': detailsEntry(['Драма'])
+        }
+      })
+
+      const result = (await handler({})) as Array<{ malId: number }>
+
+      expect(result.map((r) => r.malId)).toEqual([500])
+    })
   })
 
   it('dedupes concurrent reads onto a single in-flight rebuild', async () => {

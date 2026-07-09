@@ -175,6 +175,11 @@ interface RecommendationEntry {
   communityScore: number
   /** Why it was recommended, e.g. «Because you liked X». */
   reason: string
+  /**
+   * Belongs in the "Airing now for you" row (#206). Row membership, not pool
+   * provenance — optional because cached feeds from older versions lack it.
+   */
+  airing?: boolean
 }
 
 interface CalendarEntry {

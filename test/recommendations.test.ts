@@ -4,6 +4,7 @@ import {
   filterOutRated,
   rankRecommendations,
   rateSentiment,
+  splitAiringRow,
   type RecommendationCandidate,
   type TasteRate
 } from '../src/main/recommendations'
@@ -142,5 +143,84 @@ describe('rankRecommendations', () => {
       candidate({ malId: 1000 + i, genres: ['Drama'] })
     )
     expect(rankRecommendations(many, taste, 10)).toHaveLength(10)
+  })
+})
+
+describe('splitAiringRow (#206)', () => {
+  const taste = buildTasteProfile([
+    { malId: 10, status: 'completed', score: 9, genres: ['Drama'] }, // liked → +
+    { malId: 11, status: 'completed', score: 3, genres: ['Ecchi'] } // scored low → -
+  ])
+
+  it('puts an airing candidate with positive genre affinity in the row', () => {
+    const ranked = rankRecommendations(
+      [candidate({ malId: 100, genres: ['Drama'], airing: true })],
+      taste,
+      Infinity
+    )
+    const { airingRow, mainFeed } = splitAiringRow(ranked, 10, 40)
+    expect(airingRow.map((r) => r.malId)).toEqual([100])
+    expect(mainFeed).toEqual([])
+  })
+
+  it('gates zero-affinity (no genre data) and negative-affinity airing candidates into the main feed', () => {
+    // Zero is the score for BOTH "no genre data" and "no overlap" — neither is
+    // personalized, so `> 0` (not `>= 0`) is the row predicate. The gated-out
+    // entries still compete for the main feed like any other candidate.
+    const ranked = rankRecommendations(
+      [
+        candidate({ malId: 100, genres: [], airing: true }),
+        candidate({ malId: 101, genres: ['Ecchi'], airing: true })
+      ],
+      taste,
+      Infinity
+    )
+    const { airingRow, mainFeed } = splitAiringRow(ranked, 10, 40)
+    expect(airingRow).toEqual([])
+    expect(mainFeed.map((r) => r.malId).sort()).toEqual([100, 101])
+  })
+
+  it('places a seeded+airing candidate only in the airing row (no duplicate)', () => {
+    const ranked = rankRecommendations(
+      [
+        candidate({
+          malId: 100,
+          genres: ['Drama'],
+          seeds: [{ title: 'Seed', score: 9 }],
+          airing: true
+        })
+      ],
+      taste,
+      Infinity
+    )
+    const { airingRow, mainFeed } = splitAiringRow(ranked, 10, 40)
+    expect(airingRow.map((r) => r.malId)).toEqual([100])
+    expect(mainFeed).toEqual([])
+  })
+
+  it('keeps airing entries when the mixed ranking exceeds the main-feed cap (behavior difference)', () => {
+    // 45 seeded candidates outscore the seedless airing one, so under the old
+    // "rank straight to RECS_RESULT_LIMIT=40 then partition" order the airing
+    // entry would be truncated before the partition ever saw it. Ranking with
+    // an explicit Infinity and partitioning first must preserve it.
+    const seeded = Array.from({ length: 45 }, (_, i) =>
+      candidate({ malId: 1000 + i, genres: ['Drama'], seeds: [{ title: 'Seed', score: 9 }] })
+    )
+    const airing = candidate({ malId: 100, genres: ['Drama'], airing: true })
+    const ranked = rankRecommendations([...seeded, airing], taste, Infinity)
+    const { airingRow, mainFeed } = splitAiringRow(ranked, 10, 40)
+    expect(airingRow.map((r) => r.malId)).toEqual([100])
+    expect(mainFeed).toHaveLength(40)
+    expect(mainFeed.map((r) => r.malId)).not.toContain(100)
+  })
+
+  it('overflows the row cap into the main feed', () => {
+    const airing = Array.from({ length: 4 }, (_, i) =>
+      candidate({ malId: 100 + i, genres: ['Drama'], airing: true })
+    )
+    const ranked = rankRecommendations(airing, taste, Infinity)
+    const { airingRow, mainFeed } = splitAiringRow(ranked, 3, 40)
+    expect(airingRow).toHaveLength(3)
+    expect(mainFeed).toHaveLength(1)
   })
 })

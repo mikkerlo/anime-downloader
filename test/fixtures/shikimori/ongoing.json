@@ -1,0 +1,40 @@
+[
+  {
+    "id": 52991,
+    "name": "Sousou no Frieren",
+    "russian": "Фрирен, провожающая в последний путь",
+    "image": {
+      "original": "/system/animes/original/52991.jpg",
+      "preview": "/system/animes/preview/52991.jpg",
+      "x96": "/system/animes/x96/52991.jpg",
+      "x48": "/system/animes/x48/52991.jpg"
+    },
+    "url": "/animes/52991-sousou-no-frieren",
+    "kind": "tv",
+    "score": "9.09",
+    "status": "ongoing",
+    "episodes": 28,
+    "episodes_aired": 10,
+    "aired_on": "2026-06-29",
+    "released_on": null
+  },
+  {
+    "id": 21,
+    "name": "One Piece",
+    "russian": "Ван-Пис",
+    "image": {
+      "original": "/system/animes/original/21.jpg",
+      "preview": "/system/animes/preview/21.jpg",
+      "x96": "/system/animes/x96/21.jpg",
+      "x48": "/system/animes/x48/21.jpg"
+    },
+    "url": "/animes/21-one-piece",
+    "kind": "tv",
+    "score": "8.71",
+    "status": "ongoing",
+    "episodes": 0,
+    "episodes_aired": 1122,
+    "aired_on": "1999-10-20",
+    "released_on": null
+  }
+]

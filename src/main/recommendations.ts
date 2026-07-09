@@ -39,6 +39,8 @@ export interface RecommendationCandidate {
   genres: GenreName[]
   /** Distinct seed titles that surfaced this candidate (provenance + consensus). */
   seeds: CandidateSeed[]
+  /** Sourced from the currently-airing pool (#206). */
+  airing?: boolean
 }
 
 /** A scored, ranked recommendation (pre smotret-anime resolution). */
@@ -50,8 +52,12 @@ export interface RankedRecommendation {
   communityScore: number
   /** Internal ranking score — exposed for stable sort + debugging. */
   matchScore: number
+  /** Genre-affinity term alone — the `splitAiringRow` partition predicate. */
+  genreScore: number
   /** Human-readable explanation shown as a chip in the UI. */
   reason: string
+  /** Sourced from the currently-airing pool (#206). */
+  airing?: boolean
 }
 
 /** Aggregated taste signal derived from the user's rate list. */
@@ -168,8 +174,9 @@ export function rankRecommendations(
     if (taste.ratedMalIds.has(c.malId)) continue
 
     const seed = bestSeed(c.seeds)
+    const genre = genreScore(c.genres, taste)
     const matchScore =
-      W_GENRE * genreScore(c.genres, taste) +
+      W_GENRE * genre +
       W_SEED * (seed ? seed.score : 0) +
       W_CONSENSUS * c.seeds.length +
       W_POPULARITY * c.communityScore
@@ -181,10 +188,42 @@ export function rankRecommendations(
       kind: c.kind,
       communityScore: c.communityScore,
       matchScore,
-      reason: buildReason(c, taste)
+      genreScore: genre,
+      reason: buildReason(c, taste),
+      airing: c.airing
     })
   }
 
   ranked.sort((a, b) => b.matchScore - a.matchScore || b.communityScore - a.communityScore)
   return ranked.slice(0, limit)
+}
+
+/**
+ * Partition an UNCAPPED ranking into the "Airing now for you" row and the main
+ * feed, then cap each section. Must run before any result-limit slice: seedless
+ * airing entries cluster at the bottom of a mixed ranking, so a pre-capped list
+ * would have already truncated exactly the entries the row exists to surface.
+ *
+ * Row membership = sourced from the airing pool AND positive genre affinity
+ * (`genreScore > 0` — zero means no genre data or no overlap, and the row is
+ * personalized, not a popularity chart). An airing entry that fails the gate or
+ * overflows the row cap falls through to the main feed like any other
+ * candidate; the persisted `airing` flag must then reflect ROW MEMBERSHIP, not
+ * pool provenance, or the renderer's flag-based partition would resurrect it.
+ */
+export function splitAiringRow(
+  ranked: RankedRecommendation[],
+  airingCap: number,
+  mainCap: number
+): { airingRow: RankedRecommendation[]; mainFeed: RankedRecommendation[] } {
+  const airingRow: RankedRecommendation[] = []
+  const mainFeed: RankedRecommendation[] = []
+  for (const r of ranked) {
+    if (r.airing && r.genreScore > 0 && airingRow.length < airingCap) {
+      airingRow.push(r)
+    } else if (mainFeed.length < mainCap) {
+      mainFeed.push(r)
+    }
+  }
+  return { airingRow, mainFeed }
 }

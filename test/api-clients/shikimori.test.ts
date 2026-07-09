@@ -322,6 +322,33 @@ describe('shikimori client — fixture replay', () => {
     })
   })
 
+  describe('getOngoingRanked', () => {
+    it('parses the /api/animes list into ShikiOngoingAnime entries', async () => {
+      mockFetchOnce(fixture('ongoing.json'))
+      const ongoing = await shikimori.getOngoingRanked('tok', 30)
+      expect(ongoing.length).toBe(2)
+      expect(ongoing[0]).toMatchObject({
+        id: 52991,
+        russian: 'Фрирен, провожающая в последний путь',
+        kind: 'tv',
+        score: '9.09',
+        status: 'ongoing'
+      })
+      expect(ongoing[0].image.preview).toMatch(/preview/)
+    })
+
+    it('encodes status=ongoing + order=ranked + limit with Bearer auth', async () => {
+      mockFetchOnce(fixture('ongoing.json'))
+      await shikimori.getOngoingRanked('tok', 30)
+      expect(lastFetchUrl()).toContain('/api/animes?')
+      expect(lastFetchUrl()).toContain('status=ongoing')
+      expect(lastFetchUrl()).toContain('order=ranked')
+      expect(lastFetchUrl()).toContain('limit=30')
+      const init = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer tok' })
+    })
+  })
+
   describe('getFranchise', () => {
     it('parses nodes + links + current_id', async () => {
       mockFetchOnce(fixture('franchise.json'))

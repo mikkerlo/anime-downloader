@@ -8,6 +8,9 @@ defineProps<{
   status: SyncplayStatus;
   roomInput: string;
   roomUsers: SyncplayRoomUser[];
+  /** Greys the button out — e.g. while watching a growing .part (#63),
+      since Syncplay assumes fixed file identity/size. */
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -26,13 +29,14 @@ function onInput(e: Event): void {
     <button
       class="ctrl-btn preset-btn syncplay-btn"
       :class="{ active: status.state === 'ready' }"
+      :disabled="disabled"
       @click="emit('toggle-menu')"
-      title="Watch Together"
+      :title="disabled ? 'Not available while the episode is downloading' : 'Watch Together'"
     >
       <span class="sp-dot" :class="'sp-' + status.state"></span>
       <span class="sp-label">Sync</span>
     </button>
-    <div v-if="open" class="preset-menu syncplay-menu" @click.stop>
+    <div v-if="open && !disabled" class="preset-menu syncplay-menu" @click.stop>
       <div class="sp-status-line">
         Status: <strong>{{ status.state }}</strong>
         <span v-if="status.tls" class="sp-tls-badge">TLS</span>
@@ -75,6 +79,11 @@ function onInput(e: Event): void {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.syncplay-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .sp-dot {

@@ -6,6 +6,7 @@ import { type ChildProcess } from 'child_process'
 import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
+import { probeMp4Faststart } from '../mp4-faststart'
 import type { MseSession, MseOpenResult } from '../streaming'
 import type { AppDeps } from './index'
 
@@ -59,9 +60,20 @@ export function register({
   coldStorageService,
   streamingService,
   mp4StatsService,
+  downloadManager,
+  playerLockService,
   getFfmpegPath,
   getFfprobePath
 }: AppDeps): void {
+  // Watch-while-downloading (#63): the renderer reports which local file it
+  // has open so DownloadManager defers the .part rename + merge meanwhile.
+  ipcMain.handle(CHANNELS.PLAYER_OPENED, (_event, filePath: string) => {
+    if (typeof filePath === 'string' && filePath) playerLockService.open(filePath)
+  })
+  ipcMain.handle(CHANNELS.PLAYER_CLOSED, (_event, filePath: string) => {
+    if (typeof filePath === 'string' && filePath) playerLockService.close(filePath)
+  })
+
   ipcMain.handle(
     CHANNELS.PLAYER_GET_STREAM_URL,
     async (_event, translationId: number, maxHeight: number) => {
@@ -113,6 +125,36 @@ export function register({
       translationId: number,
       episodeLabel: string
     ) => {
+      // Watch-while-downloading (#63): a translation still in flight has no
+      // downloadedEpisodes metadata and no final file — resolve the growing
+      // .part straight from the download queue, but only when its head is
+      // already faststart (moov before mdat; a moov-at-end partial cannot be
+      // played, so the caller falls back to CDN streaming).
+      const findPartial = async (): Promise<{
+        filePath: string
+        subtitleContent: string | null
+        isPartial: true
+        totalBytes: number
+      } | null> => {
+        const partial = downloadManager.getPartialVideoPath(translationId)
+        if (!partial || !fs.existsSync(partial.partPath)) return null
+        const probe = await probeMp4Faststart(partial.partPath)
+        if (!probe?.faststart) return null
+        const assPath = partial.partPath.replace(/\.mp4\.part$/i, '.ass')
+        let subtitleContent: string | null = null
+        try {
+          subtitleContent = fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
+        } catch {
+          /* ignore */
+        }
+        return {
+          filePath: partial.partPath,
+          subtitleContent,
+          isPartial: true,
+          totalBytes: partial.totalBytes
+        }
+      }
+
       const episodes = store.get('downloadedEpisodes') as Record<
         string,
         { translationType: string; author: string; quality: number; translationId: number }
@@ -129,7 +171,7 @@ export function register({
           }
         }
       }
-      if (!meta) return null
+      if (!meta) return findPartial()
 
       const animeDirName = sanitizeFilename(animeName)
       const padded = episodeInt.padStart(2, '0')
@@ -193,7 +235,9 @@ export function register({
           }
         }
       }
-      return null
+      // Meta existed (e.g. an older completed download of this translation)
+      // but no file survived on disk — a fresh re-download may be in flight.
+      return findPartial()
     }
   )
 

@@ -14,6 +14,7 @@ import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
 import { previewSeek, commitSeek } from '../../utils';
+import { useGrowingFile } from '../../composables/use-growing-file';
 
 const props = defineProps<{
   filePath: string;
@@ -148,6 +149,26 @@ const switchingTranslation = ref(false);
 const hasTranslations = computed(() => activeTranslations.value.length > 1);
 const translationMenuLevel = ref<'types' | 'items'>('types');
 const selectedTypeGroup = ref('');
+
+// Watch-while-downloading (#63): growing .part playback — buffered-derived
+// seek clamp, display-only download fill, "waiting for download" state.
+const growingFile = useGrowingFile({
+  activeFilePath,
+  activeTranslationId,
+  getVideoEl: () => videoRef.value
+});
+const { isPartial, downloadProgressPct, downloadDead, waitingForDownload } = growingFile;
+
+// Report which local file the player holds so the main process defers the
+// .part → final rename + merge until we let go (player lock, #63).
+watch(
+  activeFilePath,
+  (newPath, oldPath) => {
+    if (oldPath) void window.api.playerClosed(oldPath);
+    if (newPath) void window.api.playerOpened(newPath);
+  },
+  { immediate: true }
+);
 
 // Episode navigation state
 const activeEpisodeIndex = ref(props.episodeIndex);
@@ -902,7 +923,7 @@ function togglePlay(): void {
 function seek(time: number): void {
   const video = videoRef.value;
   if (!video) return;
-  video.currentTime = Math.max(0, Math.min(time, duration.value));
+  video.currentTime = Math.max(0, Math.min(growingFile.clampSeekTarget(time), duration.value));
 }
 
 function seekRelative(delta: number): void {
@@ -1024,7 +1045,13 @@ function onProgress(): void {
 
 function onCanPlay(): void {
   if (mkvBuffering.value) mkvBuffering.value = false;
+  growingFile.onPlaying();
   syncplay.onLocalCanPlay();
+}
+
+function onWaiting(): void {
+  growingFile.onWaiting();
+  onVideoWaiting();
 }
 
 function onSeekStart(): void {
@@ -1043,6 +1070,9 @@ function onSeekInput(event: Event): void {
 
 function onSeekEnd(): void {
   seeking.value = false;
+  // Growing .part (#63): don't let the release land beyond the download
+  // frontier — snap the preview position back to the clamped target too.
+  currentTime.value = growingFile.clampSeekTarget(currentTime.value);
   commitSeek(currentTime.value, videoRef.value);
 }
 
@@ -1785,6 +1815,10 @@ onBeforeUnmount(() => {
     video.src = '';
     video.load();
   }
+  // Release the player lock (#63) — lets a deferred .part rename + merge run.
+  if (activeFilePath.value) {
+    void window.api.playerClosed(activeFilePath.value);
+  }
   // Stop listening for stream events
   unsubPlayerStreamSubtitles?.();
   unsubPlayerStreamSubtitles = null;
@@ -1845,6 +1879,20 @@ const bufferedProgress = computed(() => {
         </div>
       </div>
     </div>
+
+    <!-- Growing .part (#63): playhead caught the download frontier -->
+    <transition name="fade">
+      <div v-if="waitingForDownload && !downloadDead" class="mkv-buffering-toast">
+        Waiting for download…
+      </div>
+    </transition>
+
+    <!-- Growing .part (#63): the backing download died mid-watch -->
+    <transition name="fade">
+      <div v-if="downloadDead" class="streaming-banner">
+        Download stopped — only the downloaded portion can play
+      </div>
+    </transition>
 
     <!-- Streaming MKV: subtle toast while the first seconds buffer -->
     <transition name="fade">
@@ -1922,7 +1970,8 @@ const bufferedProgress = computed(() => {
         @durationchange="onDurationChange"
         @progress="onProgress"
         @canplay="onCanPlay"
-        @waiting="onVideoWaiting"
+        @waiting="onWaiting"
+        @playing="growingFile.onPlaying"
         @ended="onVideoEnded"
         @click="togglePlay"
         @dblclick="toggleFullscreen"
@@ -1978,6 +2027,11 @@ const bufferedProgress = computed(() => {
         <!-- Seek bar -->
         <div class="seek-container">
           <div class="seek-track">
+            <div
+              v-if="isPartial"
+              class="seek-downloaded"
+              :style="{ width: downloadProgressPct + '%' }"
+            />
             <div class="seek-buffered" :style="{ width: bufferedProgress + '%' }" />
             <div class="seek-progress" :style="{ width: seekProgress + '%' }" />
             <div class="seek-knob" :style="{ left: seekProgress + '%' }" />
@@ -2129,12 +2183,14 @@ const bufferedProgress = computed(() => {
             No GPU
           </div>
 
-          <!-- Watch Together (Syncplay) -->
+          <!-- Watch Together (Syncplay) — unavailable on a growing .part:
+               Syncplay assumes fixed file identity/size (#63) -->
           <SyncplayMenu
             :open="syncplayMenuOpen"
             :status="syncplayStatus"
             :room-input="syncplayRoomInput"
             :room-users="syncplayRoomUsers"
+            :disabled="isPartial"
             @toggle-menu="syncplayMenuOpen = !syncplayMenuOpen"
             @update:room-input="syncplayRoomInput = $event"
             @toggle="toggleSyncplayConnection()"
@@ -2473,6 +2529,15 @@ const bufferedProgress = computed(() => {
   position: absolute;
   height: 100%;
   background: rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+}
+
+/* Growing .part (#63): how much of the file is on disk. Display-only —
+   sits under the buffered fill, tinted like the downloads UI. */
+.seek-downloaded {
+  position: absolute;
+  height: 100%;
+  background: color-mix(in srgb, var(--st-blue, #4a9eda) 45%, transparent);
   border-radius: 999px;
 }
 

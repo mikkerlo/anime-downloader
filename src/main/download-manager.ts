@@ -25,7 +25,10 @@ export type DownloadStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
-export type MergeStatus = 'pending' | 'merging' | 'completed' | 'failed'
+// 'deferred': the video finished downloading while the built-in player had the
+// file open — both the .part → final rename and the merge wait for the player
+// lock to release (finalizeDeferred), surviving restarts via queue.json.
+export type MergeStatus = 'pending' | 'merging' | 'completed' | 'failed' | 'deferred'
 
 export interface DownloadItem {
   id: string
@@ -143,6 +146,7 @@ export class DownloadManager {
   private mergeCancelled = false
   private queueFilePath: string
   private persistScheduled = false
+  private isFileLocked: (absPath: string) => boolean = () => false
 
   constructor(
     downloadDir: string,
@@ -252,6 +256,52 @@ export class DownloadManager {
 
   getItem(id: string): DownloadItem | null {
     return this.queue.find((i) => i.id === id) || null
+  }
+
+  /**
+   * Resolve an absolute on-disk path (with or without a `.part` suffix) to its
+   * queue item. Used by the anime-video:// protocol handler to serve growing
+   * .part files with the expected final size.
+   */
+  getActiveDownloadByPath(
+    absPath: string
+  ): { bytesReceived: number; totalBytes: number; status: DownloadStatus } | null {
+    const normalized = path.resolve(
+      absPath.endsWith('.part') ? absPath.slice(0, -'.part'.length) : absPath
+    )
+    const item = this.queue.find(
+      (i) => i.status !== 'cancelled' && path.resolve(this.downloadDir, i.filename) === normalized
+    )
+    if (!item) return null
+    return { bytesReceived: item.bytesReceived, totalBytes: item.totalBytes, status: item.status }
+  }
+
+  setFileLockCheck(isLocked: (absPath: string) => boolean): void {
+    this.isFileLocked = isLocked
+  }
+
+  /**
+   * Absolute `.part` path + expected size for a translation whose video is
+   * still in flight (#63). Resolved from the queue item itself — during a
+   * download there is no `downloadedEpisodes` metadata to reconstruct the
+   * filename from. Null when the download is dead or its size is unknown.
+   */
+  getPartialVideoPath(
+    translationId: number
+  ): { partPath: string; totalBytes: number; status: DownloadStatus } | null {
+    const item = this.queue.find(
+      (i) =>
+        i.translationId === translationId &&
+        i.kind === 'video' &&
+        i.status !== 'cancelled' &&
+        i.status !== 'failed'
+    )
+    if (!item || item.totalBytes <= 0) return null
+    return {
+      partPath: path.join(this.downloadDir, item.filename) + '.part',
+      totalBytes: item.totalBytes,
+      status: item.status
+    }
   }
 
   findCancellableItems(animeName: string, episodeLabel?: string): DownloadItem[] {
@@ -572,8 +622,9 @@ export class DownloadManager {
       } else if (item.status === 'completed') {
         // Clear when merge is done/failed, or when no merge has ever started
         // (ready-for-merge: user opted out, or files deleted from disk).
-        // Mid-merge ('merging') and crash-recovered ('pending') stay — user
-        // may want to resume them with "Merge finished".
+        // Mid-merge ('merging'), crash-recovered ('pending'), and
+        // player-locked ('deferred') stay — user may want to resume them
+        // with "Merge finished", and deferred files are still .part.
         const merge = this.mergeStatuses.get(item.translationId)
         if (!merge || merge.status === 'completed' || merge.status === 'failed') {
           removedTrIds.add(item.translationId)
@@ -585,6 +636,45 @@ export class DownloadManager {
       this.mergeStatuses.delete(trId)
     }
     this.schedulePersist()
+  }
+
+  getMergeStatus(translationId: number): MergeStatus | null {
+    return this.mergeStatuses.get(translationId)?.status ?? null
+  }
+
+  /**
+   * Finish episodes whose finalize (.part → final rename, then merge) was
+   * deferred because the player held the file (#63). Renames what is no
+   * longer locked and flips its status to 'pending'; returns the
+   * translationIds that became ready so the caller can run the normal
+   * episode-complete tail (auto-merge, cold move, skip analysis).
+   */
+  finalizeDeferred(): number[] {
+    const ready: number[] = []
+    for (const [translationId, ms] of this.mergeStatuses) {
+      if (ms.status !== 'deferred') continue
+      const video = this.queue.find(
+        (i) => i.translationId === translationId && i.kind === 'video' && i.status === 'completed'
+      )
+      if (!video) {
+        // Video item vanished (queue cleared) — nothing left to finalize.
+        this.mergeStatuses.delete(translationId)
+        continue
+      }
+      const filePath = path.join(this.downloadDir, video.filename)
+      if (this.isFileLocked(filePath)) continue
+      const partPath = filePath + '.part'
+      try {
+        if (fs.existsSync(partPath)) fs.renameSync(partPath, filePath)
+      } catch (err) {
+        console.error(`[download] Deferred rename failed: ${video.filename}`, err)
+        continue
+      }
+      this.mergeStatuses.set(translationId, { status: 'pending' })
+      ready.push(translationId)
+    }
+    if (ready.length > 0) this.schedulePersist()
+    return ready
   }
 
   async mergeCompleted(
@@ -614,6 +704,9 @@ export class DownloadManager {
       if (this.mergeCancelled) break
       if (!group.video || group.video.status !== 'completed') continue
       if (group.mergeStatus === 'completed' || group.mergeStatus === 'merging') continue
+      // Deferred episodes still live as .part under a player lock — never
+      // hand them to ffmpeg; finalizeDeferred() re-queues them as 'pending'.
+      if (group.mergeStatus === 'deferred') continue
 
       const videoPath = path.join(this.downloadDir, group.video.filename)
       if (!fs.existsSync(videoPath)) continue
@@ -869,7 +962,11 @@ export class DownloadManager {
 
   private processQueue(): void {
     while (this.activeCount < this.getConcurrentLimit()) {
-      const next = this.queue.find((i) => i.status === 'queued')
+      // Subtitles first: they are tiny and watching-while-downloading (#63)
+      // needs the .ass on disk before the video is anywhere near done.
+      const next =
+        this.queue.find((i) => i.status === 'queued' && i.kind === 'subtitle') ||
+        this.queue.find((i) => i.status === 'queued')
       if (!next) break
       this.startDownload(next)
     }
@@ -1007,7 +1104,7 @@ export class DownloadManager {
       const readable = Readable.fromWeb(response.body as import('stream/web').ReadableStream)
       await pipeline(readable, trackProgress, throttle, fileStream)
 
-      fs.renameSync(partPath, filePath)
+      this.finishDownloadedFile(item, filePath, partPath)
       item.status = 'completed'
       item.speed = 0
       this.schedulePersist()
@@ -1046,6 +1143,22 @@ export class DownloadManager {
         this.activeCount--
         this.processQueue()
       }
+    }
+  }
+
+  /**
+   * Applies a finished transfer to disk. Normally renames `.part` → final,
+   * but while the built-in player is reading the file (#63) the rename would
+   * EPERM on Windows and 404 the player's anime-video:// URL everywhere —
+   * so the .part stays put and the episode is marked 'deferred';
+   * finalizeDeferred() renames + merges once the player lets go.
+   */
+  private finishDownloadedFile(item: DownloadItem, filePath: string, partPath: string): void {
+    if (item.kind === 'video' && this.isFileLocked(filePath)) {
+      this.mergeStatuses.set(item.translationId, { status: 'deferred' })
+      console.log(`[download] Player holds file, deferring finalize: ${item.filename}`)
+    } else {
+      fs.renameSync(partPath, filePath)
     }
   }
 

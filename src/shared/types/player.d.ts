@@ -10,6 +10,16 @@ interface WatchProgressEntry {
   translationId?: number
 }
 
+// `player:find-local-file` result. `isPartial` marks a growing `.part` file
+// being watched while it downloads (#63); `totalBytes` is the expected final
+// size reported by the download's Content-Range.
+interface PlayerLocalFileResult {
+  filePath: string
+  subtitleContent: string | null
+  isPartial?: boolean
+  totalBytes?: number
+}
+
 interface Mp4StreamingStatsSample {
   animeId: number
   animeName: string

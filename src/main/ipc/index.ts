@@ -11,6 +11,7 @@ import type { ShikiUserRateStatus } from '../shikimori'
 import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
 import type { StreamingService } from '../streaming'
 import type { Mp4StatsService } from '../services/mp4-stats'
+import type { PlayerLockService } from '../services/player-lock'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -105,6 +106,8 @@ export interface AppDeps {
   streamingService: StreamingService
   /** mp4-faststart sampling service backing `player:find-local-file` + the mp4 debug channels. */
   mp4StatsService: Mp4StatsService
+  /** Files the built-in player holds open — gates .part rename + merge (#63). */
+  playerLockService: PlayerLockService
 }
 
 /**

@@ -140,6 +140,12 @@ export function createAnimeVideoHandler(
       if (match) {
         const start = parseInt(match[1], 10)
         const end = match[2] ? parseInt(match[2], 10) : totalSize - 1
+        if (start >= totalSize || start > end) {
+          return new Response('Range Not Satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${totalSize}` }
+          })
+        }
         const chunkSize = end - start + 1
         const headers = {
           'Content-Type': mimeType,

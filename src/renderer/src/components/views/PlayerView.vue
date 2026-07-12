@@ -155,9 +155,28 @@ const selectedTypeGroup = ref('');
 const growingFile = useGrowingFile({
   activeFilePath,
   activeTranslationId,
-  getVideoEl: () => videoRef.value
+  getVideoEl: () => videoRef.value,
+  fetchSubtitles: () => window.api.playerGetLocalSubtitles(activeFilePath.value)
 });
 const { isPartial, downloadProgressPct, downloadDead, waitingForDownload } = growingFile;
+
+// Late subtitle load (#63): a .part session can open before its .ass lands —
+// poll for the sibling subtitle and hot-attach it instead of leaving the
+// whole watch subtitle-less.
+watch(
+  [isPartial, activeFilePath],
+  () => {
+    growingFile.stopSubtitlePolling();
+    if (isPartial.value && !activeSubtitleContent.value) {
+      growingFile.startSubtitlePolling((content) => {
+        activeSubtitleContent.value = content;
+        const video = videoRef.value;
+        if (video) initSubtitles(video);
+      });
+    }
+  },
+  { immediate: true }
+);
 
 // Report which local file the player holds so the main process defers the
 // .part → final rename + merge until we let go (player lock, #63).
@@ -1819,6 +1838,7 @@ onBeforeUnmount(() => {
   if (activeFilePath.value) {
     void window.api.playerClosed(activeFilePath.value);
   }
+  growingFile.stopSubtitlePolling();
   // Stop listening for stream events
   unsubPlayerStreamSubtitles?.();
   unsubPlayerStreamSubtitles = null;

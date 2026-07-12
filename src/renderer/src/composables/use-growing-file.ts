@@ -11,11 +11,15 @@ import { computed, ref, type Ref } from 'vue'
 import { useDownloadsStore } from '../stores/downloads'
 
 export const GROWING_SEEK_MARGIN_SEC = 2
+export const SUBTITLE_POLL_MS = 3000
 
 export interface UseGrowingFileDeps {
   activeFilePath: Ref<string>
   activeTranslationId: Ref<number>
   getVideoEl: () => Pick<HTMLVideoElement, 'buffered' | 'currentTime'> | null
+  /** Late subtitle load (#63): fetch the sibling `.ass` of the active file. */
+  fetchSubtitles?: () => Promise<string | null>
+  subtitlePollMs?: number
 }
 
 export function useGrowingFile(deps: UseGrowingFileDeps): {
@@ -27,6 +31,8 @@ export function useGrowingFile(deps: UseGrowingFileDeps): {
   clampSeekTarget: (t: number) => number
   onWaiting: () => void
   onPlaying: () => void
+  startSubtitlePolling: (onFound: (content: string) => void) => void
+  stopSubtitlePolling: () => void
 } {
   const downloadsStore = useDownloadsStore()
 
@@ -84,6 +90,46 @@ export function useGrowingFile(deps: UseGrowingFileDeps): {
     waitingForDownload.value = false
   }
 
+  // Late subtitle load (#63): the subtitle queues before its video, but a
+  // session opened in the first seconds after enqueue can still beat the .ass
+  // to disk. Poll for it and hand it to the caller to hot-attach, instead of
+  // leaving the whole watch subtitle-less.
+  let subtitleTimer: ReturnType<typeof setInterval> | null = null
+  let subtitleFetchInFlight = false
+
+  function stopSubtitlePolling(): void {
+    if (subtitleTimer) {
+      clearInterval(subtitleTimer)
+      subtitleTimer = null
+    }
+  }
+
+  function startSubtitlePolling(onFound: (content: string) => void): void {
+    stopSubtitlePolling()
+    const fetchSubtitles = deps.fetchSubtitles
+    if (!fetchSubtitles || !isPartial.value) return
+    const tick = async (): Promise<void> => {
+      if (subtitleFetchInFlight || !subtitleTimer) return
+      subtitleFetchInFlight = true
+      try {
+        const content = await fetchSubtitles()
+        if (content) {
+          stopSubtitlePolling()
+          onFound(content)
+        } else if (downloadCompleted.value || downloadDead.value) {
+          // Subtitle-first ordering: once the video is done (or dead), a
+          // still-missing .ass will never arrive — stop asking.
+          stopSubtitlePolling()
+        }
+      } catch {
+        /* transient IPC failure — next tick retries */
+      } finally {
+        subtitleFetchInFlight = false
+      }
+    }
+    subtitleTimer = setInterval(() => void tick(), deps.subtitlePollMs ?? SUBTITLE_POLL_MS)
+  }
+
   return {
     isPartial,
     downloadProgressPct,
@@ -92,6 +138,8 @@ export function useGrowingFile(deps: UseGrowingFileDeps): {
     waitingForDownload,
     clampSeekTarget,
     onWaiting,
-    onPlaying
+    onPlaying,
+    startSubtitlePolling,
+    stopSubtitlePolling
   }
 }

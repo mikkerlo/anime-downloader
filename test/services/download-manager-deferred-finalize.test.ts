@@ -232,6 +232,27 @@ describe('DownloadManager — watch while downloading (#63)', () => {
     expect(fs.existsSync(partPath())).toBe(true)
   })
 
+  it('mergeCompleted re-defers an episode the player grabbed after finalize (two-way lock)', async () => {
+    // Finalized: the video sits at its final path, merge would normally run —
+    // but the player opened it in the finalize → merge window.
+    fs.mkdirSync(path.dirname(videoPath()), { recursive: true })
+    fs.writeFileSync(videoPath(), 'video-bytes')
+    seed(dm, [makeItem({ status: 'completed' })], [[1, { status: 'pending' }]])
+    dm.setFileLockCheck(() => true)
+
+    await dm.mergeCompleted('/nonexistent/ffmpeg', '/nonexistent/ffprobe')
+
+    // Without the lock check this would be 'failed' (ffmpeg path is fake) —
+    // 'deferred' proves the group was skipped before any merge attempt.
+    expect(dm.getMergeStatus(1)).toBe('deferred')
+    expect(fs.readFileSync(videoPath(), 'utf-8')).toBe('video-bytes')
+
+    // Lock released → finalizeDeferred re-queues it (nothing left to rename).
+    dm.setFileLockCheck(() => false)
+    expect(dm.finalizeDeferred()).toEqual([1])
+    expect(dm.getMergeStatus(1)).toBe('pending')
+  })
+
   describe('path/queue lookups for the protocol handler and player', () => {
     it('getActiveDownloadByPath resolves both the .part and the final path', () => {
       seed(dm, [makeItem({ status: 'downloading', bytesReceived: 10, totalBytes: 100 })])

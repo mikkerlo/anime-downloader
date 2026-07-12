@@ -105,7 +105,11 @@ export function register({
   )
 
   ipcMain.handle(CHANNELS.PLAYER_GET_LOCAL_SUBTITLES, async (_event, filePath: string) => {
-    const assPath = filePath.replace(/\.(mp4|mkv)$/i, '.ass')
+    // .part-aware (#63): a growing `x.mp4.part` session maps to the same
+    // sibling `x.ass` as its final file would.
+    const assPath = filePath.replace(/\.(mp4|mkv)(\.part)?$/i, '.ass')
+    // Unrecognized extension — never read the video file itself back as ASS.
+    if (assPath === filePath) return null
     try {
       if (fs.existsSync(assPath)) {
         return fs.readFileSync(assPath, 'utf-8')
@@ -125,6 +129,12 @@ export function register({
       translationId: number,
       episodeLabel: string
     ) => {
+      // Two-way lock (#63): while ffmpeg is merging this translation, the
+      // .mkv at the final path is half-written and the source .mp4 is about
+      // to be unlinked — neither is safe to open. Fall back to CDN streaming;
+      // _mergeAll defers merges of files the player grabs first.
+      if (downloadManager.getMergeStatus(translationId) === 'merging') return null
+
       // Watch-while-downloading (#63): a translation still in flight has no
       // downloadedEpisodes metadata and no final file — resolve the growing
       // .part straight from the download queue, but only when its head is

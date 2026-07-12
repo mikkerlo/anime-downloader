@@ -73,6 +73,39 @@ describe('legacy behavior (complete files) is unchanged', () => {
   })
 })
 
+describe('unsatisfiable ranges', () => {
+  it('416s a start at/past the file size', async () => {
+    const fp = path.join(dir, 'movie.mp4')
+    fs.writeFileSync(fp, '0123456789')
+
+    const res = await handler()(makeRequest(fp, 'bytes=10-'))
+
+    expect(res.status).toBe(416)
+    expect(res.headers.get('Content-Range')).toBe('bytes */10')
+  })
+
+  it('416s an inverted range (start > end)', async () => {
+    const fp = path.join(dir, 'movie.mp4')
+    fs.writeFileSync(fp, '0123456789')
+
+    const res = await handler()(makeRequest(fp, 'bytes=5-2'))
+
+    expect(res.status).toBe(416)
+  })
+
+  it('416s a start past the advertised total of a growing .part (no empty tail stream)', async () => {
+    const fp = path.join(dir, 'ep.mp4.part')
+    fs.writeFileSync(fp, '0123456789')
+
+    const res = await handler({ bytesReceived: 10, totalBytes: 20, status: 'downloading' })(
+      makeRequest(fp, 'bytes=20-')
+    )
+
+    expect(res.status).toBe(416)
+    expect(res.headers.get('Content-Range')).toBe('bytes */20')
+  })
+})
+
 describe('growing .part files', () => {
   it('derives the MIME from the underlying extension, not .part', async () => {
     const fp = path.join(dir, 'ep.mp4.part')

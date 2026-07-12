@@ -684,6 +684,8 @@ async function bootstrap(): Promise<void> {
       // The merge-complete hook below handles cold-move / notify / skip analysis.
       await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
     } else {
+      // Deliberately no 'each'-mode "Download complete" notification here:
+      // the user was literally watching this episode and just closed it.
       for (const trId of readyTrIds) {
         const group = groups.find((g) => g.translationId === trId)
         if (!group) continue

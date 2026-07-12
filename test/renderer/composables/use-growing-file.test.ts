@@ -2,7 +2,7 @@
 // buffered ranges (time domain), never from the byte ratio — bytes are
 // display-only. Also covers the waiting flag and terminal download states.
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import {
@@ -44,6 +44,7 @@ function makeGrowing(opts: {
   downloadStatus?: string
   bytesReceived?: number
   totalBytes?: number
+  fetchSubtitles?: () => Promise<string | null>
 }): ReturnType<typeof useGrowingFile> {
   const store = useDownloadsStore()
   if (opts.downloadStatus) {
@@ -61,7 +62,9 @@ function makeGrowing(opts: {
   return useGrowingFile({
     activeFilePath: ref(opts.filePath ?? '/dl/anime/ep.mp4.part'),
     activeTranslationId: ref(7),
-    getVideoEl: () => opts.video ?? null
+    getVideoEl: () => opts.video ?? null,
+    fetchSubtitles: opts.fetchSubtitles,
+    subtitlePollMs: 10
   })
 }
 
@@ -153,5 +156,66 @@ describe('waiting-for-download flag', () => {
     const dead = makeGrowing({ downloadStatus: 'failed' })
     dead.onWaiting()
     expect(dead.waitingForDownload.value).toBe(false)
+  })
+})
+
+describe('late subtitle load — polling for the sibling .ass', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('hot-attaches the subtitle once it lands, then stops polling', async () => {
+    const results: (string | null)[] = [null, null, 'Dialogue: subs']
+    const fetchSubtitles = vi.fn(async () => results.shift() ?? null)
+    const onFound = vi.fn()
+    const g = makeGrowing({ downloadStatus: 'downloading', fetchSubtitles })
+
+    g.startSubtitlePolling(onFound)
+    await vi.advanceTimersByTimeAsync(35)
+
+    expect(onFound).toHaveBeenCalledExactlyOnceWith('Dialogue: subs')
+    const calls = fetchSubtitles.mock.calls.length
+    await vi.advanceTimersByTimeAsync(50)
+    expect(fetchSubtitles).toHaveBeenCalledTimes(calls)
+  })
+
+  it('gives up once the download is done and the .ass still is not there', async () => {
+    const fetchSubtitles = vi.fn(async () => null)
+    const onFound = vi.fn()
+    const g = makeGrowing({ downloadStatus: 'completed', fetchSubtitles })
+
+    g.startSubtitlePolling(onFound)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(onFound).not.toHaveBeenCalled()
+    expect(fetchSubtitles).toHaveBeenCalledTimes(1)
+  })
+
+  it('never starts for a non-partial session', async () => {
+    const fetchSubtitles = vi.fn(async () => 'subs')
+    const g = makeGrowing({ filePath: '/dl/ep.mp4', fetchSubtitles })
+
+    g.startSubtitlePolling(vi.fn())
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(fetchSubtitles).not.toHaveBeenCalled()
+  })
+
+  it('stopSubtitlePolling halts the poll (player unmount / file switch)', async () => {
+    const fetchSubtitles = vi.fn(async () => null)
+    const g = makeGrowing({ downloadStatus: 'downloading', fetchSubtitles })
+
+    g.startSubtitlePolling(vi.fn())
+    await vi.advanceTimersByTimeAsync(25)
+    expect(fetchSubtitles.mock.calls.length).toBeGreaterThan(0)
+
+    g.stopSubtitlePolling()
+    const calls = fetchSubtitles.mock.calls.length
+    await vi.advanceTimersByTimeAsync(50)
+    expect(fetchSubtitles).toHaveBeenCalledTimes(calls)
   })
 })

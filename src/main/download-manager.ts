@@ -711,6 +711,15 @@ export class DownloadManager {
       const videoPath = path.join(this.downloadDir, group.video.filename)
       if (!fs.existsSync(videoPath)) continue
 
+      // A player that grabbed the file between finalize and this merge pass
+      // holds it open (merging would unlink it out from under the <video>).
+      // Defer again — the lock's onRelease hook re-runs finalizeDeferred().
+      if (this.isFileLocked(videoPath)) {
+        this.mergeStatuses.set(group.translationId, { status: 'deferred' })
+        this.schedulePersist()
+        continue
+      }
+
       const hasSubtitle = group.subtitle && group.subtitle.status === 'completed'
       const subtitlePath = hasSubtitle
         ? path.join(this.downloadDir, group.subtitle!.filename)

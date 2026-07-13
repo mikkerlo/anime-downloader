@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Notification, protocol, net, session } from 'electron'
+import { app, shell, BrowserWindow, Notification, protocol, session } from 'electron'
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -21,13 +21,11 @@ import {
   getFfmpegDir
 } from './ffmpeg-binaries'
 import * as shikimori from './shikimori'
-import { pathToFileURL } from 'url'
-import { Readable } from 'stream'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { installShikimoriReferer } from './lib/shikimori-images'
-import { avcCodecString, hevcCodecString, aacCodecString } from './streaming/codec-strings'
-import type { AnimeSearchResult, AnimeDetail, Translation } from './smotret-api'
+import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
+import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
@@ -46,6 +44,7 @@ import { createColdStorageService } from './services/cold-storage'
 import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
+import { createPlayerLockService } from './services/player-lock'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -196,6 +195,7 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
 // Owns the mp4-faststart sampling state (Phase 3 slice 3g): the per-session
 // probed-paths set + the write-serialization chain now live in the service.
 const mp4StatsService = createMp4StatsService({ store })
+const playerLockService = createPlayerLockService()
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
@@ -587,7 +587,8 @@ function registerIpcHandlers(): void {
     invalidateFileCacheByDirName,
     clearFileCache: fileScanner.clear,
     streamingService,
-    mp4StatsService
+    mp4StatsService,
+    playerLockService
   })
 }
 
@@ -620,6 +621,9 @@ function createWindow(): void {
 
   mainWindow.webContents.on('destroyed', () => {
     skipAnalysisService.cancelStreamSkipDetection(mainWindow.webContents.id)
+    // Renderer gone without a player:closed (crash / reload) — release every
+    // player lock so deferred episodes can finalize.
+    playerLockService.closeAll()
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -636,58 +640,14 @@ async function bootstrap(): Promise<void> {
 
   // Handle anime-video:// protocol for local video playback with Range request support.
   // Only one URL shape: anime-video://{absolute-path}. MKV streaming now uses MSE via IPC.
-  protocol.handle('anime-video', async (request) => {
-    const raw = request.url.replace('anime-video://', '')
-    const filePath = decodeURIComponent(raw)
-
-    let stat: fs.Stats
-    try {
-      stat = fs.statSync(filePath)
-    } catch {
-      return new Response('File not found', { status: 404 })
-    }
-
-    const fileSize = stat.size
-    const rangeHeader = request.headers.get('Range')
-
-    const ext = path.extname(filePath).toLowerCase()
-    const mimeType =
-      ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : 'application/octet-stream'
-
-    if (rangeHeader) {
-      const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
-      if (match) {
-        const start = parseInt(match[1], 10)
-        const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
-        const chunkSize = end - start + 1
-
-        const nodeStream = fs.createReadStream(filePath, { start, end })
-        const webStream = Readable.toWeb(nodeStream) as ReadableStream
-
-        return new Response(webStream, {
-          status: 206,
-          headers: {
-            'Content-Type': mimeType,
-            'Content-Length': String(chunkSize),
-            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-            'Accept-Ranges': 'bytes'
-          }
-        })
-      }
-    }
-
-    const nodeStream = fs.createReadStream(filePath)
-    const webStream = Readable.toWeb(nodeStream) as ReadableStream
-
-    return new Response(webStream, {
-      status: 200,
-      headers: {
-        'Content-Type': mimeType,
-        'Content-Length': String(fileSize),
-        'Accept-Ranges': 'bytes'
-      }
+  // Growing .part files (watch-while-downloading, #63) are tail-streamed; the
+  // handler lives in streaming/anime-video-protocol.ts so it can be unit-tested.
+  protocol.handle(
+    'anime-video',
+    createAnimeVideoHandler({
+      getActiveDownload: (fp) => downloadManager?.getActiveDownloadByPath(fp) ?? null
     })
-  })
+  )
 
   animeCacheService.cleanupStale()
   store.migrateWatchProgressV2()
@@ -708,6 +668,42 @@ async function bootstrap(): Promise<void> {
     () => (store.get('concurrentDownloads') as number) || 2
   )
   downloadManager.loadQueue()
+  downloadManager.setFileLockCheck(playerLockService.isLocked)
+
+  // Watch-while-downloading (#63): when the player releases a file, finish any
+  // episode whose .part → final rename (and merge) was deferred under the lock.
+  const finalizeDeferredEpisodes = async (): Promise<void> => {
+    const readyTrIds = downloadManager.finalizeDeferred()
+    if (readyTrIds.length === 0) return
+    const groups = downloadManager.getEpisodeGroups()
+    const ffmpegInfo = await ffmpegReady
+    const autoMerge = store.get('autoMerge') as boolean
+    const ffmpegPath = getFfmpegPath()
+    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
+      const codec = (store.get('videoCodec') as string) || 'copy'
+      // The merge-complete hook below handles cold-move / notify / skip analysis.
+      await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
+    } else {
+      // Deliberately no 'each'-mode "Download complete" notification here:
+      // the user was literally watching this episode and just closed it.
+      for (const trId of readyTrIds) {
+        const group = groups.find((g) => g.translationId === trId)
+        if (!group) continue
+        fileScanner.invalidate(group.animeName)
+        if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
+          await coldStorageService.moveEpisodeToColdStorage(group.animeName, group.episodeLabel)
+        }
+        if (group.animeId > 0)
+          skipAnalysisService.scheduleAutoSkipAnalysis(group.animeId, group.animeName)
+      }
+    }
+  }
+  playerLockService.onRelease(() => {
+    void finalizeDeferredEpisodes().catch((err) =>
+      console.error('[download] Deferred finalize failed:', err)
+    )
+  })
+
   const showBackgroundNotification = (title: string, body: string): void => {
     if (BrowserWindow.getFocusedWindow() !== null) return
     new Notification({ title, body }).show()
@@ -741,6 +737,13 @@ async function bootstrap(): Promise<void> {
         translationId
       }
       store.set('downloadedEpisodes', episodes)
+    }
+
+    if (downloadManager.getMergeStatus(translationId) === 'deferred') {
+      // The player is watching this episode from its .part (#63) — the file
+      // can't be renamed or merged yet. finalizeDeferredEpisodes() runs the
+      // rest of this tail once the player releases the file.
+      return
     }
 
     const ffmpegInfo = await ffmpegReady
@@ -816,6 +819,11 @@ async function bootstrap(): Promise<void> {
     // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
     ensureFpcalc(mainWin).catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
     resolveFfmpegReady(await checkFfmpeg())
+    // Crash recovery (#63): no locks exist at boot, so any 'deferred' episode
+    // restored from queue.json gets its rename + merge now.
+    await finalizeDeferredEpisodes().catch((err) =>
+      console.error('[download] Boot deferred finalize failed:', err)
+    )
   })()
 
   initAutoDownloader({

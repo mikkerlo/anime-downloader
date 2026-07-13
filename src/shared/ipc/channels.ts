@@ -79,7 +79,9 @@ export const CHANNELS = {
 
   // Player
   PLAYER_CLEANUP_REMUX: 'player:cleanup-remux',
+  PLAYER_CLOSED: 'player:closed',
   PLAYER_FIND_LOCAL_FILE: 'player:find-local-file',
+  PLAYER_OPENED: 'player:opened',
   PLAYER_GET_LOCAL_SUBTITLES: 'player:get-local-subtitles',
   PLAYER_GET_STREAM_URL: 'player:get-stream-url',
   PLAYER_REMUX_MKV: 'player:remux-mkv',

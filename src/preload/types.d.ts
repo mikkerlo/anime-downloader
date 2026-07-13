@@ -220,7 +220,10 @@ interface Api {
     episodeInt: string,
     translationId: number,
     episodeLabel: string
-  ) => Promise<{ filePath: string; subtitleContent: string | null } | null>
+  ) => Promise<PlayerLocalFileResult | null>
+  /** Report a local file opened/closed in the built-in player — gates deferred .part finalize (#63). */
+  playerOpened: (filePath: string) => Promise<void>
+  playerClosed: (filePath: string) => Promise<void>
   playerRemuxMkv: (
     mkvPath: string
   ) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>

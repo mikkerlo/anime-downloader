@@ -88,6 +88,8 @@ export function useEpisodeDownloads(deps: {
   cancelAllDownloads: () => Promise<void>
   openFile: (row: EpisodeRow) => Promise<void>
   playStream: (row: EpisodeRow) => Promise<void>
+  canPlayPartial: (row: EpisodeRow) => boolean
+  playPartial: (row: EpisodeRow) => Promise<void>
   showInFolder: (row: EpisodeRow) => void
   deleteFile: (row: EpisodeRow) => Promise<void>
   continueWatching: () => Promise<void>
@@ -446,6 +448,50 @@ export function useEpisodeDownloads(deps: {
     }
   }
 
+  // Watch-while-downloading (#63): the episode's video is on its way to disk —
+  // offer local playback of the growing .part instead of a CDN stream.
+  function canPlayPartial(row: EpisodeRow): boolean {
+    if (deps.playerMode.value !== 'builtin') return false
+    const status = getGroup(row.episode.episodeFull)?.video?.status
+    return status === 'downloading' || status === 'paused'
+  }
+
+  async function playPartial(row: EpisodeRow): Promise<void> {
+    const group = getGroup(row.episode.episodeFull)
+    const trId = group?.video?.translationId
+    if (!trId) return
+    const name = deps.anime.value ? deps.getAnimeName() : ''
+    const local = await window.api.playerFindLocalFile(
+      name,
+      row.episode.episodeInt,
+      trId,
+      row.episode.episodeFull
+    )
+    if (!local?.isPartial) {
+      // .part not servable (no bytes yet / moov-at-end / size unknown) —
+      // fall back to CDN streaming.
+      await playStream(row)
+      return
+    }
+    const allEps = buildAllEpisodes()
+    const epIdx = allEps.findIndex((e) => e.episodeInt === row.episode.episodeInt)
+    deps.playerStore.openPlayer({
+      filePath: local.filePath,
+      streamUrl: '',
+      subtitleContent: local.subtitleContent || '',
+      animeName: name,
+      episodeLabel: row.episode.episodeInt,
+      availableStreams: [],
+      translationId: trId,
+      translations: buildTranslationList(row),
+      downloadedTrIds: [...row.downloadedTrIds],
+      allEpisodes: allEps,
+      episodeIndex: epIdx,
+      animeId: deps.getAnimeId(),
+      malId: deps.anime.value?.myAnimeListId ?? 0
+    })
+  }
+
   function showInFolder(row: EpisodeRow): void {
     if (!row.selectedTr) return
     const info = getFileForTranslation(row.episode.episodeInt, row.selectedTr.id)
@@ -536,6 +582,8 @@ export function useEpisodeDownloads(deps: {
     cancelAllDownloads,
     openFile,
     playStream,
+    canPlayPartial,
+    playPartial,
     showInFolder,
     deleteFile,
     continueWatching,

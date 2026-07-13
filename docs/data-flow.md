@@ -182,11 +182,19 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    at enqueue time. This prevents cancelled or never-finished downloads from
    leaving a stale ⬇ icon in the UI.
 6. processQueue(): run up to 2 concurrent downloads
+   - Queued subtitles start before queued videos (#63): the .ass must be on
+     disk before watch-while-downloading playback begins
 7. startDownload():
    a. HTTP fetch with Range header (resume support)
    b. Handle 416 (Range Not Satisfiable): delete .part, retry from zero
    c. Pipe through Transform (speed tracking) to .part file
    d. On complete: rename .part --> final, check episode complete
+      - UNLESS the built-in player holds the file (playerLockService, #63):
+        the .part stays put and the episode's merge status is set to
+        'deferred' (persisted). finalizeDeferred() renames + re-queues the
+        merge when the player releases the file, and again at boot for crash
+        recovery. Renaming under the player would EPERM on Windows and 404
+        the player's anime-video:// URL everywhere.
    e. On failure: retry up to 3x with exponential backoff
 8. broadcastProgress() every 500ms --> renderer updates
 9. checkEpisodeComplete() --> trigger auto-merge if enabled
@@ -205,6 +213,9 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
 ```
 mergeCompleted(ffmpegPath, videoCodec):
   For each EpisodeGroup where video=completed:
+    0. Skip groups whose merge status is 'deferred' (#63) — their video is
+       still a .part under a player lock; finalizeDeferred() flips them to
+       'pending' on player close / boot and re-triggers this pipeline
     1. Probe input duration via ffprobe (for accurate progress)
     2. With subtitle:  ffmpeg -i video.mp4 -i subs.ass -map 0:v -map 0:a -map 1:s
                        -c:v [copy|libx265|hevc_nvenc|...] -c:a copy -c:s ass

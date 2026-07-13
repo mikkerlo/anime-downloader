@@ -298,7 +298,11 @@ const api = {
       episodeInt,
       translationId,
       episodeLabel
-    ) as Promise<{ filePath: string; subtitleContent: string | null } | null>,
+    ) as Promise<PlayerLocalFileResult | null>,
+  playerOpened: (filePath: string) =>
+    ipcRenderer.invoke(CHANNELS.PLAYER_OPENED, filePath) as Promise<void>,
+  playerClosed: (filePath: string) =>
+    ipcRenderer.invoke(CHANNELS.PLAYER_CLOSED, filePath) as Promise<void>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV, mkvPath) as Promise<
       { mp4Path: string; subtitleContent?: string } | { error: string }

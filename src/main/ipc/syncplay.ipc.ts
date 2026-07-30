@@ -45,4 +45,6 @@ export function register({ store }: AppDeps): void {
   })
 
   ipcMain.handle(CHANNELS.SYNCPLAY_GET_STATUS, () => syncplay.getStatus())
+
+  ipcMain.handle(CHANNELS.SYNCPLAY_GET_ROOM_USERS, () => syncplay.getRoomUsers())
 }

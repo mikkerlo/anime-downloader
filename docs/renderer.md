@@ -17,6 +17,7 @@ src/renderer/src/
       FriendsActivityView.vue
       CalendarView.vue
       RecommendationsView.vue
+      WatchTogetherView.vue    (join a Syncplay room pre-player, #213)
       PlayerView.vue
       SettingsView.vue         (thin wrapper around settings/SettingsShell.vue)
     shared/                    Reusable atoms used across views
@@ -50,8 +51,8 @@ src/renderer/src/
       ShortcutsTab.vue
       WatchTogetherTab.vue
       DebugTab.vue
-  composables/                 Reactive logic (15 modules — see below)
-  stores/                      Pinia stores (5 stores — see below)
+  composables/                 Reactive logic (16 modules — see below)
+  stores/                      Pinia stores (6 stores — see below)
   assets/                      Shared CSS
     theme.css                  Global design tokens + base + shared primitives (imported once in main.ts)
     player-menus.css           Imported scoped into each component
@@ -62,7 +63,7 @@ src/renderer/src/
 
 ## Pinia stores
 
-The five stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
+The six stores in `src/renderer/src/stores/` own cross-view state and, where applicable, the disposable IPC subscriptions for their domain (Phase 4 ownership rule — see [IPC](./ipc.md#broadcast-subscription-contract-phase-4-slice-4a-111)).
 
 | Store | File | State | Subscriptions owned |
 |---|---|---|---|
@@ -71,6 +72,7 @@ The five stores in `src/renderer/src/stores/` own cross-view state and, where ap
 | `useSettingsStore` | `settings.ts` | `shortcuts`, `ffmpegDownloading`/`Progress`, `fpcalcDownloading`/`Progress`, `updateStatus` | `onFfmpegDownloadProgress`, `onFpcalcDownloadProgress`, `onUpdateStatus` (lifetime-scoped) |
 | `useShikimoriStore` | `shikimori.ts` | `user`, `profile`, `friends`, `recommendations`, `loggedIn` (computed), `rates`, `animeDetails`, `syncStatus`, `offlineQueueLength` | `onShikimoriRateUpdated`, `onShikimoriRatesRefreshed`, `onShikimoriProfileRefreshed`, `onShikimoriFriendsRefreshed`, `onShikimoriRecommendationsRefreshed`, `onShikimoriAnimeDetailsUpdated`, `onShikimoriOfflineQueueChanged`, `onShikimoriSyncStatus` (lifetime-scoped) |
 | `useDownloadsStore` | `downloads.ts` | `groups`, `scanMergeProgress`, `fixMetadataProgress` | `onDownloadProgress`, `onScanMergeProgress`, `onFixMetadataProgress` (lifetime-scoped) |
+| `useSyncplayStore` | `syncplay.ts` | `status` (`SyncplayStatus`), `roomUsers`, `isActive` (computed), `refresh()` re-seed from `get-status`/`get-room-users` | `onSyncplayConnectionStatus`, `onSyncplayRoomUsers` (lifetime-scoped) |
 
 Stores singleton-own their broadcast subscriptions and never dispose them — they live for the app's lifetime. Component-local subscriptions (per-anime, per-player-instance) bind to `onUnmounted` instead. See [IPC](./ipc.md) for the full ownership rule and the CI gate.
 
@@ -100,7 +102,11 @@ Global reactive logic that doesn't belong on a Pinia store goes into `src/render
 - **`useGrowingFile({ activeFilePath, activeTranslationId, getVideoEl, fetchSubtitles? })`** — watch-while-downloading (#63) playback state for a growing `.part` file. `isPartial` keys off the active path's `.part` suffix; the download item is looked up in `useDownloadsStore.groups` by translationId. Exposes `clampSeekTarget(t)` (buffered-end minus a 2 s margin — with the tail-streaming protocol, `buffered.end` tracks the true time-domain download frontier; the byte ratio is **display-only** via `downloadProgressPct` because bytes are not time under VBR), `downloadCompleted` / `downloadDead` terminal projections, the `waitingForDownload` flag driven by the consumer's `waiting`/`playing`/`canplay` handlers, and `startSubtitlePolling(onFound)` / `stopSubtitlePolling()` — a 3 s poll of `fetchSubtitles` (PlayerView passes `player:get-local-subtitles`) that hot-attaches a late-landing `.ass` to a subtitle-less partial session and gives up once the video download finishes or dies. Pure-logic; no lifecycle hooks — PlayerView owns start/stop. (#63)
 - **`useRemux()`** — legacy MKV full-remux fallback state. Tiny composable (`remuxing` flag drives the loading overlay, `remuxedPath` feeds the `videoSrc` computed) + `runLegacyRemux(filePath)` that wraps the `player:remux-mkv` IPC + `clear()` for resets between sessions. Only used when MSE rejects the codecs and `prepareMkvForPlayback` falls back to a one-shot ffmpeg stream-copy to MP4. (Phase 5 slice 5d.2.b)
 - **`useSkipMarkers({ getAnimeId, getCurrentEpisodeInt, getCurrentTime, isStreaming, activeStreamUrl, onSeek })`** — OP/ED skip-marker detection + skip button visibility for PlayerView. Owns the dual-mode detection (local playback reads stored per-episode boundaries via `skipDetectorGetDetections`; streamed playback runs `skipDetectorDetectStream` to fingerprint the live stream and match it against the locally-derived show signatures), the skip-button grace timer (debounces flicker when scrubbing through a band), the per-session "already-skipped" guard (so rewinding doesn't re-show the button), the request-id race guard on stream detection, the streaming reactivity watch (5-source: `isStreaming` / `activeStreamUrl` / episode-int / signature analyzedAt / source), and the `skip-detector:signature-updated` IPC subscription. `onMounted` + `onBeforeUnmount` are registered inside the composable (handles signature sub + cancel-in-flight on teardown). Exposes `loadSkipDetections`, `refreshStreamSkipDetection`, `cancelStreamDetection`, `onSkipClick`, `resetSkipUiState`. The consumer (PlayerView) only wires the episode-change reset because that path also touches prefetch state. Constants: `SKIP_GRACE_MS = 250`, `SKIP_LEAD_IN_SEC = 0.25`. (Phase 5 slice 5d.2.c)
-- **`useSyncplayClient({ getVideoEl, getDuration, getAnimeId, getMalId, getAnimeName, getCurrentEpisodeInt, getActiveEpisodeLabel, activeTranslationId, activeEpisodeIndex, formatTime, onRemoteEpisodeChange })`** — Syncplay (Watch Together) client for PlayerView. Owns the connection state (`syncplayStatus`), room state (`syncplayRoomUsers`, `syncplayRoomInput`, `syncplayMenuOpen`), toast state (`syncplayToast`, `syncplayPausedBy`), internal local-ready/last-remote-playing flags, the suppress-window for echo-back prevention, the 1s snapshot heartbeat timer, all 6 IPC subscriptions (connection-status, remote-state, room-users, room-event, trace, remote-episode-change), the `applyRemoteState` apply pipeline (with seek + play-pause diff + suppress-window), the `applyReadyGate` (`shouldPlay = lastRemotePlaying && allUsersReady`), and the file-push + connection toggle helpers. Exposes `onLocalPlay` / `onLocalPause` / `onLocalCanPlay` so PlayerView's own video handlers can delegate the syncplay bookkeeping. The `onRemoteEpisodeChange` callback hands episode-change events back to PlayerView's navigator because the step-toward loop also touches `goToEpisode` + `activeEpisodeIndex`. `onMounted` loads status + saved room + installs the subs + starts the snapshot timer; `onBeforeUnmount` unsubs all 6 + clears 3 timers. Constant: `WAITING_DEBOUNCE_MS = 600`. (Phase 5 slice 5d.2.d)
+- **`useSyncplayClient({ getVideoEl, getDuration, getAnimeId, getMalId, getAnimeName, getCurrentEpisodeInt, getActiveEpisodeLabel, activeTranslationId, activeEpisodeIndex, formatTime, onRemoteEpisodeChange })`** — Syncplay (Watch Together) client for PlayerView. Reads `syncplayStatus` + `syncplayRoomUsers` from `useSyncplayStore` (#213) and reacts to them via watchers; owns the player-scoped state (`syncplayRoomInput`, `syncplayMenuOpen`, toast state `syncplayToast` / `syncplayPausedBy`), internal local-ready/last-remote-playing flags, the suppress-window for echo-back prevention, the 1s snapshot heartbeat timer, the 4 player-scoped IPC subscriptions (remote-state, room-event, trace, remote-episode-change), the `applyRemoteState` apply pipeline (with seek + play-pause diff + suppress-window), the `applyReadyGate` (`shouldPlay = lastRemotePlaying && allUsersReady`), and the file-push + connection toggle helpers. Exposes `onLocalPlay` / `onLocalPause` / `onLocalCanPlay` so PlayerView's own video handlers can delegate the syncplay bookkeeping. The `onRemoteEpisodeChange` callback hands episode-change events back to PlayerView's navigator because the step-toward loop also touches `goToEpisode` + `activeEpisodeIndex`. `onMounted` re-seeds the store, **pushes the current file if the session is already `'ready'`** (join flow — the transition-into-ready watcher never fires then, #213), loads the saved room, installs the subs, and starts the snapshot timer; `onBeforeUnmount` unsubs all 4 + clears 3 timers. Constant: `WAITING_DEBOUNCE_MS = 600`. (Phase 5 slice 5d.2.d)
+
+### Watch Together
+
+- **`useOpenEpisode()`** — standalone "open the player at `(animeId, episodeInt, translationId?)`" path (#213). Fetches the anime, the episode-detail window around the target (same `PAGE_SIZE` granularity the detail view paginates by), and downloaded-episode metadata, resolves a CDN stream (requested translation first, then the rest by quality), and calls `playerStore.openPlayer()`. Returns `{ok} | {ok:false, error}`. Used by WatchTogetherView's "Join & watch"; the natural seam for future deep links.
 
 ### Settings
 

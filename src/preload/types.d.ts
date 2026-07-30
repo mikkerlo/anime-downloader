@@ -345,6 +345,7 @@ interface Api {
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
+  syncplayGetRoomUsers: () => Promise<SyncplayRoomUser[]>
   onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => Unsubscribe
   onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => Unsubscribe
   onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => Unsubscribe

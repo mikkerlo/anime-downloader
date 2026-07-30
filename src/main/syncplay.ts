@@ -117,12 +117,19 @@ export class SyncplayClient extends EventEmitter {
   private lastAppliedRoomEpisode: string | null = null
 
   private serverRtt = 0
+  // Last transport-level failure, surfaced in the disconnected status so the
+  // UI can show *why* the socket dropped instead of a bare "Connection closed".
+  // Cleared only on user-initiated connect() — reconnect attempts re-enter via
+  // openSocket() directly, so the freshest failure survives the whole retry
+  // cycle and ends up in the maxed-out error.
+  private lastSocketError: string | null = null
 
   connect(config: SyncplayConfig): void {
     this.disconnectInternal(false)
     this.config = config
     this.reconnectAttempts = 0
     this.lastAppliedRoomEpisode = null
+    this.lastSocketError = null
     this.openSocket()
   }
 
@@ -132,6 +139,10 @@ export class SyncplayClient extends EventEmitter {
 
   getStatus(): SyncplayStatus {
     return { ...this.status }
+  }
+
+  getRoomUsers(): SyncplayRoomUser[] {
+    return this.roomUsers.map((u) => ({ ...u }))
   }
 
   setFile(file: SyncplayFileInfo): void {
@@ -657,6 +668,10 @@ export class SyncplayClient extends EventEmitter {
   private onSocketError(err: Error & { code?: string }): void {
     const code = err.code ? ` (${err.code})` : ''
     console.warn('[syncplay] socket error:', err.message + code)
+    // Node's message usually embeds the code ("connect ECONNREFUSED 1.2.3.4:8999");
+    // append it only when it doesn't, so the surfaced reason never duplicates.
+    this.lastSocketError =
+      err.code && !err.message.includes(err.code) ? err.message + code : err.message
     // TLS / certificate validation failures are not transient — don't burn
     // five reconnect attempts on a misconfigured server. Disconnect cleanly
     // with a clear error and stop. Detected by Node TLS error codes (all
@@ -699,9 +714,13 @@ export class SyncplayClient extends EventEmitter {
       // status.error surfaces in the UI (test-connection button, player
       // popover). 'Auto-reconnect disabled' is *why we're not retrying*, not
       // *why we disconnected* — showing it as the error confuses users (#119).
-      // Use a neutral 'Connection closed' for the user-initiated-off case;
-      // the room-event log still carries the retry-state for diagnostics.
-      const errorReason = maxedOut ? 'Max reconnect attempts reached' : 'Connection closed'
+      // The last transport error (#213) is *why we disconnected* — append it
+      // so the user sees "Connection closed — connect ECONNREFUSED …" instead
+      // of guessing; the room-event log still carries the retry-state.
+      const detail = this.lastSocketError ? ` — ${this.lastSocketError}` : ''
+      const errorReason = maxedOut
+        ? `Max reconnect attempts reached${detail}`
+        : `Connection closed${detail}`
       const eventReason = maxedOut ? 'Max reconnect attempts reached' : 'auto-reconnect disabled'
       this.setStatus({
         state: 'disconnected',

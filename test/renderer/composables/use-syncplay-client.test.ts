@@ -1,9 +1,14 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ref } from 'vue'
+import { defineComponent, ref } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
 import { useSyncplayClient } from '../../../src/renderer/src/composables/use-syncplay-client'
+import { useSyncplayStore } from '../../../src/renderer/src/stores/syncplay'
 
 type Api = {
   syncplayGetStatus: () => Promise<SyncplayStatus>
+  syncplayGetRoomUsers: () => Promise<SyncplayRoomUser[]>
   syncplayConnect: (cfg: SyncplayConnectConfig) => Promise<void>
   syncplayDisconnect: () => Promise<void>
   syncplaySetFile: (payload: SyncplayFilePayload) => void
@@ -33,6 +38,7 @@ function setApi(api: Partial<Api>): void {
 
 const DEFAULT_API: Partial<Api> = {
   syncplayGetStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
+  syncplayGetRoomUsers: vi.fn().mockResolvedValue([]),
   syncplayConnect: vi.fn().mockResolvedValue(undefined),
   syncplayDisconnect: vi.fn().mockResolvedValue(undefined),
   syncplaySetFile: vi.fn(),
@@ -52,6 +58,7 @@ const DEFAULT_API: Partial<Api> = {
 
 beforeEach(() => {
   ;(globalThis as { window?: { api: Partial<Api> } }).window = { api: { ...DEFAULT_API } }
+  setActivePinia(createPinia())
 })
 
 afterEach(() => {
@@ -315,6 +322,51 @@ describe('useSyncplayClient — onLocalPlay / onLocalPause / onLocalCanPlay', ()
     // setReady never got the false call because canplay cleared the timer
     // first. The flip from default(true) to true is a no-op.
     expect(setReady).not.toHaveBeenCalled()
+  })
+})
+
+describe('useSyncplayClient — mounting into an already-ready session (#213)', () => {
+  function mountHost(deps: Deps): ReturnType<typeof mount> {
+    const Host = defineComponent({
+      setup() {
+        useSyncplayClient(deps)
+        return () => null
+      }
+    })
+    return mount(Host)
+  }
+
+  it('pushes the current file on mount when the connection is already ready', async () => {
+    const setFile = vi.fn()
+    setApi({
+      syncplaySetFile: setFile,
+      syncplayGetStatus: vi.fn().mockResolvedValue({ state: 'ready' })
+    })
+    // Reproduce the join flow: the store already holds a ready session
+    // (established from WatchTogetherView) before the player mounts, so the
+    // transition-into-ready watcher never fires.
+    const store = useSyncplayStore()
+    store.status = { state: 'ready' }
+
+    const v = fakeVideo({ duration: 1500 } as Partial<HTMLVideoElement>)
+    const wrapper = mountHost(
+      makeDeps({ video: v, animeId: 42, animeName: 'COTE', episodeInt: '7', translationId: 123 })
+    )
+    await flushPromises()
+
+    expect(setFile).toHaveBeenCalledWith(
+      expect.objectContaining({ animeId: 42, canonicalName: 'COTE - 7', duration: 1500 })
+    )
+    wrapper.unmount()
+  })
+
+  it('does not push on mount when there is no active session', async () => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const wrapper = mountHost(makeDeps({ video: fakeVideo() }))
+    await flushPromises()
+    expect(setFile).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })
 

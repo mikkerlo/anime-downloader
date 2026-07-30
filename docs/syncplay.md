@@ -8,6 +8,8 @@ Standalone TCP/TLS client. **TLS-only:** `net.Socket` opens the TCP connection, 
 
 State machine: `idle → connecting → tls-probing → tls-handshake → hello-sent → ready → (reconnecting) → disconnected`. On transport error: exponential backoff reconnect, max 5 attempts. On protocol error (wrong password, bad handshake, server refused TLS): abort without retry.
 
+**Disconnect reasons (#213):** the last transport error (`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, …) is remembered in `lastSocketError` and appended to the disconnected `status.error` — `Connection closed — connect ECONNREFUSED …` / `Max reconnect attempts reached — …` — so the Settings test-connection button and the player popover show *why* the socket dropped instead of a bare "Connection closed". It is cleared only on user-initiated `connect()` (reconnect attempts re-enter via `openSocket()` directly), so each failed retry overwrites it and the maxed-out error carries the freshest failure. Per #119, "auto-reconnect disabled" is still never shown as a disconnect reason.
+
 ## File Identity
 
 Syncplay clients identify "are we watching the same thing?" by file name + duration. We canonicalize our label to `"{animeName} - {episodeInt}"` so mpv/VLC users see a human-readable name, and duration is the HTML5 `<video>` `duration` rounded to the nearest second. For app-to-app sync (two instances of this app), we additionally stamp `features.animeDlAppMeta = { animeId, malId, episodeInt, translationId }` on outbound `Set.file` messages — the remote side uses this to auto-navigate when the other user advances to the next episode. Users on mpv/VLC don't emit this field, so auto-nav is a best-effort upgrade and the app falls back to identity-by-name for them.
@@ -42,8 +44,16 @@ When the remote user advances to a new episode (detected by `features.animeDlApp
 - **Match** — walks `goToEpisode('next'|'prev')` in a loop until `activeEpisodeIndex` reaches the target. Reuses the normal episode-switch path (including translation resolution).
 - **Mismatch or episode not in list** — toast only. The app can't navigate to an anime that isn't loaded in the current view.
 
+## Join Flow (WatchTogetherView, #213)
+
+A dedicated **Watch Together** sidebar view lets a user join a room *before* opening the player. It connects with the saved server/username settings, renders the live member list (username, ready dot, current file) from the `useSyncplayStore` Pinia store, and — for members whose `Set.file` carried `animeDlAppMeta` — offers **"Join & watch"**: the room state is re-fetched at click time (the peer may have advanced episodes), then `useOpenEpisode` resolves the anime + a CDN stream for the peer's `(animeId, episodeInt, translationId)` and opens the built-in player. mpv/VLC peers (no app metadata) are listed but not auto-joinable.
+
+Connection handoff: the room connection lives in main and outlasts view mounts. `useSyncplayClient` never assumes it owns the lifecycle — on mount it re-seeds the store and, if the session is already `ready`, immediately pushes the current file (the transition-into-ready watcher never fires in that case; without the push the joiner would stay invisible to the host). `onDurationChange` re-pushes once real duration is known.
+
+Renderer state ownership: `useSyncplayStore` (`src/renderer/src/stores/syncplay.ts`) singleton-owns the `connection-status` and `room-users` subscriptions, seeded from `syncplay:get-status`/`syncplay:get-room-users`; WatchTogetherView and the player's `useSyncplayClient` both read from it. Player-scoped subscriptions (remote-state, room-event, trace, remote-episode-change) stay in `useSyncplayClient`.
+
 ## IPC Surface
 
-Main-side handlers (see [IPC Handlers](./ipc.md)): `connect`, `disconnect`, `set-file`, `local-state`, `local-snapshot`, `get-status`. Broadcasts: `connection-status`, `remote-state`, `room-users`, `room-event`, `remote-episode-change`. Settings tab "Watch Together" in `SettingsView.vue` persists host/port/room/username/autoReconnect under the `syncplay` electron-store key — session state (currently-connected room, password) is **not** persisted across restarts.
+Main-side handlers (see [IPC Handlers](./ipc.md)): `connect`, `disconnect`, `set-file`, `local-state`, `local-snapshot`, `set-ready`, `get-status`, `get-room-users`. Broadcasts: `connection-status`, `remote-state`, `room-users`, `room-event`, `remote-episode-change`. Settings tab "Watch Together" in `SettingsView.vue` persists host/port/room/username/autoReconnect under the `syncplay` electron-store key — session state (currently-connected room, password) is **not** persisted across restarts.
 
 Debug tracing gated by `SYNCPLAY_DEBUG=1` env var — dumps every inbound/outbound JSON message and state transition to the main process log.

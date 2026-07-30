@@ -472,6 +472,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_READY, isReady) as Promise<void>,
   syncplayGetStatus: () =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_STATUS) as Promise<SyncplayStatus>,
+  syncplayGetRoomUsers: () =>
+    ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_ROOM_USERS) as Promise<SyncplayRoomUser[]>,
   onSyncplayConnectionStatus: subscribe<SyncplayStatus>(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS),
   onSyncplayRemoteState: subscribe<SyncplayRemoteState>(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE),
   onSyncplayRoomUsers: subscribe<SyncplayRoomUser[]>(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS),

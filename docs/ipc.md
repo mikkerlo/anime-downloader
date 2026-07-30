@@ -16,9 +16,9 @@ other subscriber on the channel. There are no `off*` methods on `window.api`.
 
 | Subscription kind | Owner | Disposal |
 |---|---|---|
-| Cross-view (download/scan-merge/fix-metadata progress, Shikimori rate/refresh/sync/details/offline-queue, ffmpeg/fpcalc/update status) | Pinia store (`useDownloadsStore`, `useShikimoriStore`, `useSettingsStore`) | Lifetime-scoped — singleton, never disposed |
+| Cross-view (download/scan-merge/fix-metadata progress, Shikimori rate/refresh/sync/details/offline-queue, ffmpeg/fpcalc/update status, syncplay connection-status/room-users) | Pinia store (`useDownloadsStore`, `useShikimoriStore`, `useSettingsStore`, `useSyncplayStore`) | Lifetime-scoped — singleton, never disposed |
 | Anime-specific (file-episodes-changed, skip-detector progress/signature, chapter-inject progress, cleanup-prompt toast) | The consuming component | `onBeforeUnmount` / `onUnmounted` |
-| Player-instance (player-stream chunks/end/error/progress/subtitles, syncplay session) | `PlayerView.vue` | `onBeforeUnmount` |
+| Player-instance (player-stream chunks/end/error/progress/subtitles, syncplay remote-state/room-event/trace/remote-episode-change) | `PlayerView.vue` | `onBeforeUnmount` |
 
 The CI step `npm run check:subscription-contract` greps `src/preload/` and
 `src/renderer/` for `removeAllListeners(` or `window.api.off*(` calls and fails
@@ -168,6 +168,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `syncplay:local-snapshot` | invoke | Renderer pushes `{position, paused}` every ~1 s so main's heartbeat carries fresh position without wiring `timeupdate` across IPC |
 | `syncplay:set-ready` | invoke | Send `Set: {ready: {isReady, manuallyInitiated:false}}` — flips buffering state so peers pause until everyone's ready |
 | `syncplay:get-status` | invoke | Return the current `{state, host, port, room, username, tls, error?}` for initial hydration |
+| `syncplay:get-room-users` | invoke | Return the current room-member snapshot (`SyncplayRoomUser[]`, incl. per-user `animeDlAppMeta`) so a consumer mounting mid-session — the Watch Together view, the player popover, or a reloaded renderer — sees live members without waiting for the next `room-users` broadcast (#213) |
 | `syncplay:connection-status` | send | State machine transitions (`idle` → `connecting` → `hello-sent` → `ready` → `reconnecting`/`disconnected`) |
 | `syncplay:remote-state` | send | Remote `play`/`pause`/`seek` resolved to `{paused, position, setBy, doSeek}` with RTT-compensated position, after the `ignoringOnTheFly` counter round-trips |
 | `syncplay:room-users` | send | Current room member list with each member's advertised file info and `animeDlAppMeta` (if available) |

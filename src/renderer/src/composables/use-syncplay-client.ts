@@ -1,23 +1,29 @@
 // Syncplay (Watch Together) client for PlayerView (Phase 5 slice 5d.2.d,
 // #118).
 //
-// Owns the entire syncplay surface — connection state, room users, IPC
-// subscriptions (6 channels: connection-status, remote-state, room-users,
-// room-event, trace, remote-episode-change), the 1s snapshot heartbeat
-// timer, the local-ready gate (`syncplayLocalReady` + `applyReadyGate`),
-// the remote-state apply pipeline, the file-push helper, and the toast +
-// pausedBy UI hooks.
+// Owns the player-scoped syncplay surface — the IPC subscriptions for
+// remote-state, room-event, trace, and remote-episode-change, the 1s
+// snapshot heartbeat timer, the local-ready gate (`syncplayLocalReady` +
+// `applyReadyGate`), the remote-state apply pipeline, the file-push helper,
+// and the toast + pausedBy UI hooks. Connection status and room users are
+// read from the cross-view syncplay store (#213) and reacted to via
+// watchers.
 //
 // Does NOT own: the `onSyncplayRemoteEpisodeChange` follow-through (calling
 // `goToEpisode` across the episode-index delta lives in PlayerView because
 // it crosses navigation state) — the composable delivers a typed callback
 // `onRemoteEpisodeChange(ep)` and PlayerView wires the navigation.
 //
-// Lifecycle: `onMounted` loads the saved room from settings + status from
-// main + installs all 6 IPC subs + starts the 1s snapshot timer.
+// Lifecycle: `onMounted` loads the saved room from settings + re-seeds the
+// store + installs the player-scoped IPC subs + starts the 1s snapshot
+// timer. If the session is already 'ready' at mount (joined from
+// WatchTogetherView before the player opened), the current file is pushed
+// immediately — the transition-into-ready watcher never fires in that case.
 // `onBeforeUnmount` removes all subs + clears all timers.
 
 import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useSyncplayStore } from '../stores/syncplay'
 
 const WAITING_DEBOUNCE_MS = 600
 
@@ -70,8 +76,8 @@ export type SyncplayClient = {
 }
 
 export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
-  const syncplayStatus = ref<SyncplayStatus>({ state: 'idle' })
-  const syncplayRoomUsers = ref<SyncplayRoomUser[]>([])
+  const syncplayStore = useSyncplayStore()
+  const { status: syncplayStatus, roomUsers: syncplayRoomUsers } = storeToRefs(syncplayStore)
   const syncplayRoomInput = ref('')
   const syncplayMenuOpen = ref(false)
   const syncplayToast = ref('')
@@ -85,9 +91,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplayLastRemotePlaying = false
   let syncplayLastAppliedPaused: boolean | null = null
 
-  let unsubConnectionStatus: Unsubscribe | null = null
   let unsubRemoteState: Unsubscribe | null = null
-  let unsubRoomUsers: Unsubscribe | null = null
   let unsubRoomEvent: Unsubscribe | null = null
   let unsubTrace: Unsubscribe | null = null
   let unsubRemoteEpisodeChange: Unsubscribe | null = null
@@ -288,47 +292,51 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     setSyncplayLocalReady(true)
   }
 
+  watch(syncplayStatus, (status, prev) => {
+    const wasReady = prev?.state === 'ready'
+    console.log('[syncplay] status:', status.state, status.error ? `error=${status.error}` : '')
+    if (status.state === 'ready' && !wasReady) {
+      pushSyncplayFile()
+    }
+    if (status.state === 'idle' || status.state === 'disconnected') {
+      syncplayLocalReady = true
+      syncplayLastRemotePlaying = false
+      syncplayLastAppliedPaused = null
+      syncplayPausedBy.value = null
+      if (syncplayWaitingTimer) {
+        clearTimeout(syncplayWaitingTimer)
+        syncplayWaitingTimer = null
+      }
+    }
+    if (status.state === 'reconnecting') {
+      showSyncplayToast('Reconnecting to Syncplay server…', 8000)
+    } else if (status.state === 'disconnected') {
+      showSyncplayToast(
+        status.error ? `Disconnected: ${status.error}` : 'Disconnected from Syncplay',
+        8000
+      )
+    }
+  })
+
+  watch(syncplayRoomUsers, () => {
+    applySyncplayReadyGate()
+  })
+
   onMounted(async () => {
     try {
-      syncplayStatus.value = await window.api.syncplayGetStatus()
+      // Re-seed from main so a player mounting into an already-connected
+      // session (join flow) starts from live state, then announce our file —
+      // the transition-into-ready watcher will never fire in that case.
+      await syncplayStore.refresh()
+      if (syncplayStatus.value.state === 'ready') pushSyncplayFile()
     } catch {
       /* ignore */
     }
     const cfg = (await window.api.getSetting('syncplay')) as { lastRoom?: string } | null
     if (cfg?.lastRoom) syncplayRoomInput.value = cfg.lastRoom
 
-    unsubConnectionStatus = window.api.onSyncplayConnectionStatus((status) => {
-      const wasReady = syncplayStatus.value.state === 'ready'
-      console.log('[syncplay] status:', status.state, status.error ? `error=${status.error}` : '')
-      syncplayStatus.value = status
-      if (status.state === 'ready' && !wasReady) {
-        pushSyncplayFile()
-      }
-      if (status.state === 'idle' || status.state === 'disconnected') {
-        syncplayLocalReady = true
-        syncplayLastRemotePlaying = false
-        syncplayLastAppliedPaused = null
-        syncplayPausedBy.value = null
-        if (syncplayWaitingTimer) {
-          clearTimeout(syncplayWaitingTimer)
-          syncplayWaitingTimer = null
-        }
-      }
-      if (status.state === 'reconnecting') {
-        showSyncplayToast('Reconnecting to Syncplay server…', 8000)
-      } else if (status.state === 'disconnected') {
-        showSyncplayToast(
-          status.error ? `Disconnected: ${status.error}` : 'Disconnected from Syncplay',
-          8000
-        )
-      }
-    })
     unsubRemoteState = window.api.onSyncplayRemoteState((state) => {
       applyRemoteState(state)
-    })
-    unsubRoomUsers = window.api.onSyncplayRoomUsers((users) => {
-      syncplayRoomUsers.value = users
-      applySyncplayReadyGate()
     })
     unsubRoomEvent = window.api.onSyncplayRoomEvent((ev) => {
       if (ev.level === 'warn' || ev.level === 'error') {
@@ -366,12 +374,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   })
 
   onBeforeUnmount(() => {
-    unsubConnectionStatus?.()
-    unsubConnectionStatus = null
     unsubRemoteState?.()
     unsubRemoteState = null
-    unsubRoomUsers?.()
-    unsubRoomUsers = null
     unsubRoomEvent?.()
     unsubRoomEvent = null
     unsubTrace?.()

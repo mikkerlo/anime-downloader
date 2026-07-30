@@ -17,10 +17,12 @@ export type LibraryView =
   | 'calendar'
   | 'recommendations'
   | 'downloads'
+  | 'watch-together'
   | 'settings'
 
 // Views that have an inline AnimeDetailView overlay (open an anime within the
-// view, keep a back-stack per view). `downloads`/`settings` are top-level only.
+// view, keep a back-stack per view). `downloads`/`watch-together`/`settings`
+// are top-level only.
 const STACKED_VIEWS = [
   'home',
   'search',

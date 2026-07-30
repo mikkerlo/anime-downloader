@@ -12,6 +12,7 @@ import SearchView from './components/views/SearchView.vue';
 import LibraryView from './components/views/LibraryView.vue';
 import SettingsView from './components/views/SettingsView.vue';
 import DownloadsView from './components/views/DownloadsView.vue';
+import WatchTogetherView from './components/views/WatchTogetherView.vue';
 import AnimeDetailView from './components/views/AnimeDetailView.vue';
 import ShikimoriView from './components/views/ShikimoriView.vue';
 import FriendsActivityView from './components/views/FriendsActivityView.vue';
@@ -163,6 +164,7 @@ onBeforeUnmount(() => {
     <RecommendationsView v-if="currentView === 'recommendations' && !activeAnimeId" />
     <SettingsView v-if="currentView === 'settings'" />
     <DownloadsView v-if="currentView === 'downloads'" />
+    <WatchTogetherView v-if="currentView === 'watch-together'" />
     <PlayerView
       v-if="playerState"
       :file-path="playerState.filePath"

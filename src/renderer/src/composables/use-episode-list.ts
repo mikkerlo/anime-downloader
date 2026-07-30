@@ -32,6 +32,18 @@ export interface EpisodeRow {
 
 export const PAGE_SIZE = 30
 
+// Pure form of the filteredEpisodes computed, shared with use-open-episode
+// (#213 review) so both build the same list — a drift here would silently
+// desync episodeIndex/allEpisodes between the join flow and the detail view.
+export function filterEpisodes(anime: AnimeDetail): EpisodeSummary[] {
+  const allActive = anime.episodes.filter((ep) => ep.isActive === 1 && ep.episodeType !== 'preview')
+  if (!anime.type) return allActive
+  const matched = anime.episodes.filter((ep) => ep.isActive === 1 && ep.episodeType === anime.type)
+  if (matched.length === 0) return allActive
+  if (anime.numberOfEpisodes && matched.length !== anime.numberOfEpisodes) return allActive
+  return matched
+}
+
 const TRANSLATION_TYPE_ORDER: readonly string[] = ['subRu', 'subEn', 'voiceRu', 'voiceEn', 'raw']
 
 export function useEpisodeList(deps: {
@@ -113,20 +125,9 @@ export function useEpisodeList(deps: {
     return [...best.values()]
   }
 
-  const filteredEpisodes = computed(() => {
-    if (!deps.anime.value) return []
-    const allActive = deps.anime.value.episodes.filter(
-      (ep) => ep.isActive === 1 && ep.episodeType !== 'preview'
-    )
-    if (!deps.anime.value.type) return allActive
-    const matched = deps.anime.value.episodes.filter(
-      (ep) => ep.isActive === 1 && ep.episodeType === deps.anime.value!.type
-    )
-    if (matched.length === 0) return allActive
-    if (deps.anime.value.numberOfEpisodes && matched.length !== deps.anime.value.numberOfEpisodes)
-      return allActive
-    return matched
-  })
+  const filteredEpisodes = computed(() =>
+    deps.anime.value ? filterEpisodes(deps.anime.value) : []
+  )
 
   const totalPages = computed(() =>
     Math.max(1, Math.ceil(filteredEpisodes.value.length / PAGE_SIZE))

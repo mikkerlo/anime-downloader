@@ -309,6 +309,10 @@ export class SyncplayClient extends EventEmitter {
 
   private finishHandshake(): void {
     if (!this.config) return
+    // A failure from an earlier attempt must not outlive a successful
+    // connection — without this, a clean server FIN hours later would
+    // resurface the stale pre-ready error as the disconnect reason.
+    this.lastSocketError = null
     this.setStatus({
       state: 'ready',
       host: this.config.host,

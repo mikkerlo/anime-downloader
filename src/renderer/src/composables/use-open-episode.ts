@@ -9,7 +9,7 @@
 // Used by WatchTogetherView's "Join & watch"; also the natural seam for
 // future deep links and the remote-episode-change mismatch case.
 
-import { PAGE_SIZE } from './use-episode-list'
+import { PAGE_SIZE, filterEpisodes } from './use-episode-list'
 import { usePlayerStore, type PlayerTranslation } from '../stores/player'
 import { getAnimeName } from '../utils'
 
@@ -20,18 +20,6 @@ export type OpenEpisodeTarget = {
 }
 
 export type OpenEpisodeResult = { ok: true } | { ok: false; error: string }
-
-// Mirror of use-episode-list's filteredEpisodes: active episodes, previews
-// dropped, refined to the anime's own type when that matches the declared
-// episode count.
-function filterEpisodes(anime: AnimeDetail): EpisodeSummary[] {
-  const allActive = anime.episodes.filter((ep) => ep.isActive === 1 && ep.episodeType !== 'preview')
-  if (!anime.type) return allActive
-  const matched = anime.episodes.filter((ep) => ep.isActive === 1 && ep.episodeType === anime.type)
-  if (matched.length === 0) return allActive
-  if (anime.numberOfEpisodes && matched.length !== anime.numberOfEpisodes) return allActive
-  return matched
-}
 
 function toPlayerTranslations(detail: EpisodeDetail | undefined): PlayerTranslation[] {
   if (!detail) return []

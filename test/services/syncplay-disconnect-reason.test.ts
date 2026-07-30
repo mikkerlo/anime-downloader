@@ -130,6 +130,22 @@ describe('SyncplayClient transport error surfacing (#213)', () => {
     )
   })
 
+  it('clears the remembered error once the session reaches ready', () => {
+    connect(true)
+    // Attempt 1 fails; attempt 2 succeeds (finishHandshake fires).
+    socketError('connect ECONNREFUSED 93.184.216.34:8999', 'ECONNREFUSED')
+    ;(client as unknown as { finishHandshake(): void }).finishHandshake()
+    // Much later the server closes cleanly (no fresh error event) during
+    // retries that also close cleanly — the surfaced reason must not be the
+    // stale pre-ready failure.
+    ;(client as unknown as { reconnectAttempts: number }).reconnectAttempts = 5
+    lastSocket!.emit('close')
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe('Max reconnect attempts reached')
+  })
+
   it('clears the remembered error on a fresh user-initiated connect()', () => {
     connect()
     socketError('connect ECONNREFUSED 93.184.216.34:8999', 'ECONNREFUSED')

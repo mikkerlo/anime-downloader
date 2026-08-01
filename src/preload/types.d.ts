@@ -346,6 +346,8 @@ interface Api {
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
   syncplayGetRoomUsers: () => Promise<SyncplayRoomUser[]>
+  syncplaySetPassword: (password: string) => Promise<void>
+  syncplayHasPassword: () => Promise<boolean>
   onSyncplayConnectionStatus: (callback: (status: SyncplayStatus) => void) => Unsubscribe
   onSyncplayRemoteState: (callback: (state: SyncplayRemoteState) => void) => Unsubscribe
   onSyncplayRoomUsers: (callback: (users: SyncplayRoomUser[]) => void) => Unsubscribe

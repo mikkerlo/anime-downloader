@@ -139,9 +139,11 @@ export const CHANNELS = {
   SYNCPLAY_DISCONNECT: 'syncplay:disconnect',
   SYNCPLAY_GET_ROOM_USERS: 'syncplay:get-room-users',
   SYNCPLAY_GET_STATUS: 'syncplay:get-status',
+  SYNCPLAY_HAS_PASSWORD: 'syncplay:has-password',
   SYNCPLAY_LOCAL_SNAPSHOT: 'syncplay:local-snapshot',
   SYNCPLAY_LOCAL_STATE: 'syncplay:local-state',
   SYNCPLAY_SET_FILE: 'syncplay:set-file',
+  SYNCPLAY_SET_PASSWORD: 'syncplay:set-password',
   SYNCPLAY_SET_READY: 'syncplay:set-ready',
 
   // Watch progress

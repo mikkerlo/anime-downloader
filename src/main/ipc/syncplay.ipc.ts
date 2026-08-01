@@ -1,10 +1,13 @@
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import { syncplay } from '../syncplay'
+import { SyncplayPasswordVault } from '../syncplay-credentials'
 import type { SyncplayConfig, SyncplayFileInfo } from '../syncplay'
 import type { AppDeps } from './index'
 
 export function register({ store }: AppDeps): void {
+  const passwordVault = new SyncplayPasswordVault(store)
+
   ipcMain.handle(CHANNELS.SYNCPLAY_CONNECT, (_event, cfg: SyncplayConfig) => {
     const persisted = store.get('syncplay') as Record<string, unknown>
     store.set('syncplay', {
@@ -15,8 +18,18 @@ export function register({ store }: AppDeps): void {
       username: cfg.username,
       autoReconnect: Boolean(cfg.autoReconnect)
     })
-    syncplay.connect(cfg)
+    // The join flows (WatchTogetherView, in-player join) never carry the
+    // password — main owns it, so every entry point authenticates the same way
+    // as Settings → Test connection (#216).
+    const password = cfg.password || passwordVault.get()
+    syncplay.connect({ ...cfg, password: password || undefined })
   })
+
+  ipcMain.handle(CHANNELS.SYNCPLAY_SET_PASSWORD, (_event, password: string) => {
+    passwordVault.set(typeof password === 'string' ? password : '')
+  })
+
+  ipcMain.handle(CHANNELS.SYNCPLAY_HAS_PASSWORD, () => passwordVault.has())
 
   ipcMain.handle(CHANNELS.SYNCPLAY_DISCONNECT, () => {
     syncplay.disconnect()

@@ -152,6 +152,9 @@ const STORE_DEFAULTS = {
     username: string
     autoReconnect: boolean
   },
+  // Deliberately outside the `syncplay` object: the renderer overwrites that
+  // wholesale on every settings save and would drop it (#216).
+  syncplayPassword: '',
   mp4StreamingStats: {
     totalChecked: 0,
     faststartCount: 0,

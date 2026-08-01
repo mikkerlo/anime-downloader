@@ -161,13 +161,15 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `player:cleanup-remux` | invoke | Kill any active stream sessions and delete all temp remuxed files |
 | `shell:open-external` | invoke | Open URL in default browser (returns success boolean) |
 | `shell:open-external-file` | invoke | Open a local file with the OS default app via `shell.openPath` (returns `{ ok, error? }`) |
-| `syncplay:connect` | invoke | Open a TLS-only Syncplay connection with supplied `{host, port, room, username, password?, autoReconnect}` (TCP → STARTTLS probe → TLS handshake → `Hello`; aborts if the server refuses TLS or fails cert validation) and persist the session intent |
+| `syncplay:connect` | invoke | Open a TLS-only Syncplay connection with supplied `{host, port, room, username, password?, autoReconnect}` — `password` is optional and normally omitted: main injects the stored one, so the join flows never handle the credential (TCP → STARTTLS probe → TLS handshake → `Hello`; aborts if the server refuses TLS or fails cert validation) and persist the session intent |
 | `syncplay:disconnect` | invoke | Close the active Syncplay connection (cancels any pending auto-reconnect) |
 | `syncplay:set-file` | invoke | Announce the currently-playing file to the room as `{canonicalName, duration, features.animeDlAppMeta:{animeId, malId, episodeInt, translationId}}` |
 | `syncplay:local-state` | invoke | Emit a `State` message on a discrete local event (`play` / `pause` / `seek`); increments the client-side `ignoringOnTheFly` counter |
 | `syncplay:local-snapshot` | invoke | Renderer pushes `{position, paused}` every ~1 s so main's heartbeat carries fresh position without wiring `timeupdate` across IPC |
 | `syncplay:set-ready` | invoke | Send `Set: {ready: {isReady, manuallyInitiated:false}}` — flips buffering state so peers pause until everyone's ready |
 | `syncplay:get-status` | invoke | Return the current `{state, host, port, room, username, tls, error?}` for initial hydration |
+| `syncplay:set-password` | invoke | Store the Syncplay server password (empty string clears it). Persisted under its own store key; the renderer can never read it back |
+| `syncplay:has-password` | invoke | Whether a password is stored, so Settings can show a "saved" state without holding the credential |
 | `syncplay:get-room-users` | invoke | Return the current room-member snapshot (`SyncplayRoomUser[]`, incl. per-user `animeDlAppMeta`) so a consumer mounting mid-session — the Watch Together view, the player popover, or a reloaded renderer — sees live members without waiting for the next `room-users` broadcast (#213) |
 | `syncplay:connection-status` | send | State machine transitions (`idle` → `connecting` → `hello-sent` → `ready` → `reconnecting`/`disconnected`) |
 | `syncplay:remote-state` | send | Remote `play`/`pause`/`seek` resolved to `{paused, position, setBy, doSeek}` with RTT-compensated position, after the `ignoringOnTheFly` counter round-trips |

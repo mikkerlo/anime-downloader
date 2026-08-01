@@ -1,5 +1,6 @@
 import * as net from 'net'
 import * as tls from 'tls'
+import { createHash } from 'crypto'
 import { EventEmitter } from 'events'
 
 const CLIENT_VERSION = '1.6.9'
@@ -92,6 +93,10 @@ type JsonObject = Record<string, unknown>
 
 function isObject(v: unknown): v is JsonObject {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function md5Hex(value: string): string {
+  return createHash('md5').update(value, 'utf8').digest('hex')
 }
 
 export class SyncplayClient extends EventEmitter {
@@ -206,14 +211,26 @@ export class SyncplayClient extends EventEmitter {
       }
       this.socket = null
     }
+    this.resetTransportState()
+    this.roomUsers = []
+    this.ownIsReady = true
+  }
+
+  // State that belongs to one socket, not to the session. The reconnect path in
+  // onSocketClose() opens a brand-new socket without going through tearDown(),
+  // so it has to clear this too — most importantly `tlsUpgraded`: leaving it set
+  // makes handleTls() treat the new socket's probe reply as a spurious
+  // post-upgrade message, so we never call tls.connect() again and the retry
+  // hangs in 'tls-probing' until the server times it out. Room membership and
+  // the readiness toggle deliberately survive a reconnect — the server replaces
+  // them with a fresh List and finishHandshake() re-sends readiness.
+  private resetTransportState(): void {
     this.rxBuffer = ''
     this.tlsUpgraded = false
     this.clientIgnoreCounter = 0
     this.pendingClientAck = 0
     this.pendingServerAck = 0
     this.serverRtt = 0
-    this.roomUsers = []
-    this.ownIsReady = true
   }
 
   private disconnectInternal(userInitiated: boolean): void {
@@ -246,9 +263,12 @@ export class SyncplayClient extends EventEmitter {
       log('tcp connected — probing TLS')
       this.setStatus({ state: 'tls-probing' })
       // TLS-only: probe before sending Hello so credentials are never on the
-      // wire in plaintext. The server replies with {TLS:{startTLS:'true'|'false'}};
-      // anything other than 'true' aborts the connection.
-      this.sendJson({ TLS: { option: 'send' } })
+      // wire in plaintext. The key MUST be `startTLS` — a Syncplay server reads
+      // `message["startTLS"]` and drops the connection outright on anything else
+      // (we shipped `option` until #216, which made every connect fail instantly).
+      // The server replies with {TLS:{startTLS:'true'|'false'}}; anything other
+      // than 'true' aborts the connection.
+      this.sendJson({ TLS: { startTLS: 'send' } })
     })
     sock.on('data', (chunk) => this.onData(chunk))
     sock.on('error', (err) => this.onSocketError(err))
@@ -593,7 +613,13 @@ export class SyncplayClient extends EventEmitter {
       version: CLIENT_VERSION,
       features
     }
-    if (this.config.password) hello.password = this.config.password
+    // Syncplay's wire format for the server password is an MD5 hex digest: the
+    // server MD5s its own `--password` at startup and compares digests, so a
+    // plaintext password is always rejected with "Wrong password supplied".
+    // MD5 is the protocol's choice, not a security claim on our side — the
+    // whole session already runs inside TLS. Matches the reference client,
+    // which hashes unconditionally (a pre-hashed value would be hashed again).
+    if (this.config.password) hello.password = md5Hex(this.config.password)
     this.sendJson({ Hello: hello })
   }
 
@@ -708,7 +734,7 @@ export class SyncplayClient extends EventEmitter {
     if (this.status.state === 'idle') return
     const cfg = this.config
     this.socket = null
-    this.rxBuffer = ''
+    this.resetTransportState()
     if (!cfg) {
       this.setStatus({ state: 'disconnected' })
       return

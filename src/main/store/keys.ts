@@ -51,6 +51,7 @@ export const PERSISTED_STORE_KEYS = [
   'enableLocalSkipDetection',
   'calendarView',
   'syncplay',
+  'syncplayPassword',
   'mp4StreamingStats',
   'autoCleanupSnoozedAnimeIds',
   'dismissedContinueWatching',

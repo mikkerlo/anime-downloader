@@ -19,8 +19,14 @@ const syncplayPassword = ref('');
 const syncplayAutoReconnect = ref(true);
 const syncplayTestStatus = ref<'idle' | 'testing' | 'ok' | 'failed'>('idle');
 const syncplayTestError = ref('');
+// The password is owned by main and never read back into the renderer (#216) —
+// we only learn *whether* one is stored, so the input starts blank even when a
+// password is saved.
+const syncplayPasswordSaved = ref(false);
+const syncplayPasswordDirty = ref(false);
 
 let syncplaySaveTimer: ReturnType<typeof setTimeout> | null = null;
+let syncplayPasswordTimer: ReturnType<typeof setTimeout> | null = null;
 
 function saveSyncplaySettings(): void {
   if (!loaded.value) return;
@@ -37,6 +43,33 @@ function saveSyncplaySettings(): void {
 function scheduleSyncplaySave(): void {
   if (syncplaySaveTimer) clearTimeout(syncplaySaveTimer);
   syncplaySaveTimer = setTimeout(saveSyncplaySettings, 600);
+}
+
+async function saveSyncplayPassword(): Promise<void> {
+  if (!syncplayPasswordDirty.value) return;
+  syncplayPasswordDirty.value = false;
+  await window.api.syncplaySetPassword(syncplayPassword.value);
+  syncplayPasswordSaved.value = syncplayPassword.value.length > 0;
+  showSaved();
+}
+
+function scheduleSyncplayPasswordSave(): void {
+  if (syncplayPasswordTimer) clearTimeout(syncplayPasswordTimer);
+  syncplayPasswordTimer = setTimeout(() => void saveSyncplayPassword(), 600);
+}
+
+async function flushSyncplayPassword(): Promise<void> {
+  if (syncplayPasswordTimer) {
+    clearTimeout(syncplayPasswordTimer);
+    syncplayPasswordTimer = null;
+  }
+  await saveSyncplayPassword();
+}
+
+async function clearSyncplayPassword(): Promise<void> {
+  syncplayPassword.value = '';
+  syncplayPasswordDirty.value = true;
+  await flushSyncplayPassword();
 }
 
 async function testSyncplayConnection(): Promise<void> {
@@ -68,12 +101,13 @@ async function testSyncplayConnection(): Promise<void> {
   });
 
   try {
+    // Persist any just-typed password first — main injects it into the connect.
+    await flushSyncplayPassword();
     await window.api.syncplayConnect({
       host,
       port,
       room,
       username,
-      password: syncplayPassword.value || undefined,
       autoReconnect: false
     });
     setTimeout(() => {
@@ -109,6 +143,7 @@ onMounted(async () => {
   if (!syncplayUsername.value && shikimoriStore.user) {
     syncplayUsername.value = shikimoriStore.user.nickname;
   }
+  syncplayPasswordSaved.value = await window.api.syncplayHasPassword();
   loaded.value = true;
 });
 
@@ -117,6 +152,10 @@ onUnmounted(() => {
     clearTimeout(syncplaySaveTimer);
     syncplaySaveTimer = null;
   }
+  if (syncplayPasswordTimer) {
+    clearTimeout(syncplayPasswordTimer);
+    syncplayPasswordTimer = null;
+  }
 });
 
 watch([syncplayHost, syncplayPort, syncplayRoom, syncplayUsername], () => {
@@ -124,6 +163,11 @@ watch([syncplayHost, syncplayPort, syncplayRoom, syncplayUsername], () => {
 });
 watch(syncplayAutoReconnect, () => {
   if (loaded.value) saveSyncplaySettings();
+});
+watch(syncplayPassword, () => {
+  if (!loaded.value) return;
+  syncplayPasswordDirty.value = true;
+  scheduleSyncplayPasswordSave();
 });
 </script>
 
@@ -186,9 +230,25 @@ watch(syncplayAutoReconnect, () => {
       </SettingsRow>
       <SettingsRow
         label="Password (optional)"
-        desc="Some servers require a password to log in. Leave empty for public servers."
+        desc="Some servers require a password to log in. Leave empty for public servers. Saved with your other settings and used for every room you join."
       >
-        <input id="sp-password" v-model="syncplayPassword" type="password" class="field-input" />
+        <div class="sp-password-row">
+          <input
+            id="sp-password"
+            v-model="syncplayPassword"
+            type="password"
+            class="field-input"
+            :placeholder="syncplayPasswordSaved && !syncplayPassword ? '•••••••• (saved)' : ''"
+          />
+          <button
+            v-if="syncplayPasswordSaved"
+            class="btn btn-sm"
+            type="button"
+            @click="clearSyncplayPassword"
+          >
+            Clear
+          </button>
+        </div>
       </SettingsRow>
     </SettingsGroup>
 
@@ -247,6 +307,12 @@ watch(syncplayAutoReconnect, () => {
 }
 
 .sp-host-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sp-password-row {
   display: flex;
   gap: 8px;
   align-items: center;

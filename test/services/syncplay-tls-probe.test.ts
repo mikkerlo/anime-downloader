@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
 import { createHash } from 'crypto'
 
@@ -335,5 +335,209 @@ describe('SyncplayClient protocol garbage detection (#215)', () => {
 
     expect(client.getStatus().state).toBe('ready')
     client.disconnect()
+  })
+})
+
+describe('SyncplayClient handshake watchdog (#215)', () => {
+  let client: SyncplayClient
+  let statuses: Array<{ state: string; error?: string }>
+  let roomEvents: Array<{ level: string; text: string }>
+  const sockets: FakeSocket[] = []
+  const tlsSockets: FakeSocket[] = []
+
+  const connect = (autoReconnect: boolean): void => {
+    client.connect({ host: 'syncplay.test', port: 8999, room: 'r', username: 'u', autoReconnect })
+  }
+
+  const poke = (): { reconnectAttempts: number } =>
+    client as unknown as { reconnectAttempts: number }
+
+  beforeEach(() => {
+    sockets.length = 0
+    tlsSockets.length = 0
+    vi.useFakeTimers()
+    vi.mocked(net.createConnection).mockImplementation((() => {
+      lastSocket = new FakeSocket()
+      sockets.push(lastSocket)
+      return lastSocket
+    }) as unknown as typeof net.createConnection)
+    vi.mocked(tls.connect).mockImplementation((() => {
+      lastTlsSocket = new FakeSocket()
+      tlsSockets.push(lastTlsSocket)
+      return lastTlsSocket
+    }) as unknown as typeof tls.connect)
+    client = new SyncplayClient()
+    statuses = []
+    roomEvents = []
+    client.on('connection-status', (s) => statuses.push(s as { state: string; error?: string }))
+    client.on('room-event', (e) => roomEvents.push(e as { level: string; text: string }))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('fires after 8s of silence and names the phase (no retry configured)', async () => {
+    connect(false)
+    sockets[0].emit('connect')
+    await vi.advanceTimersByTimeAsync(8000)
+
+    expect(sockets[0].destroy).toHaveBeenCalled()
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe('No reply received in 8s while in tls-probing')
+  })
+
+  it('uses the TCP-specific wording in the connecting phase, where nothing was sent yet', async () => {
+    connect(false)
+    // No 'connect' event — the TCP connect itself is hanging.
+    await vi.advanceTimersByTimeAsync(8000)
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(
+      'Could not establish a TCP connection within 8s — the host may be unreachable or the port filtered'
+    )
+  })
+
+  it('defers to the reconnect path instead of hard-aborting, with its own neutral room-event', async () => {
+    connect(true)
+    sockets[0].emit('connect')
+    await vi.advanceTimersByTimeAsync(8000)
+
+    expect(statuses[statuses.length - 1].state).toBe('reconnecting')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sockets).toHaveLength(2)
+
+    expect(roomEvents.some((e) => e.text === 'No reply received in 8s while in tls-probing')).toBe(
+      true
+    )
+    expect(roomEvents.some((e) => e.text.startsWith('Connection error'))).toBe(false)
+  })
+
+  it('carries the short watchdog wording into the maxed-out error', async () => {
+    connect(true)
+    sockets[0].emit('connect')
+    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(1000)
+    poke().reconnectAttempts = 5
+    sockets[1].emit('connect')
+    await vi.advanceTimersByTimeAsync(8000)
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(
+      'Max reconnect attempts reached — no reply received in 8s while in tls-probing'
+    )
+  })
+
+  it('does not fire when the handshake completes in time', async () => {
+    connect(false)
+    sockets[0].emit('connect')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    tlsSockets[0].emit('secureConnect')
+    tlsSockets[0].emit('data', '{"Hello":{"username":"u","room":{"name":"r"}}}\r\n')
+    expect(client.getStatus().state).toBe('ready')
+
+    await vi.advanceTimersByTimeAsync(20000)
+
+    // Assert on states, not write counts — the 1s heartbeat also fires here.
+    expect(client.getStatus().state).toBe('ready')
+    expect(statuses.some((s) => s.state === 'disconnected')).toBe(false)
+    client.disconnect()
+  })
+
+  it('a watchdog armed on attempt N does not fire during a successful attempt N+1', async () => {
+    connect(true)
+    // Attempt 1 dies early on a transport error, well before 8s.
+    const err = new Error('connect ECONNREFUSED 1.2.3.4:8999') as Error & { code?: string }
+    err.code = 'ECONNREFUSED'
+    sockets[0].emit('error', err)
+    sockets[0].emit('close')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    // Attempt 2 completes; the (cleared) attempt-1 timer must not kill it.
+    sockets[1].emit('connect')
+    sockets[1].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    tlsSockets[0].emit('secureConnect')
+    tlsSockets[0].emit('data', '{"Hello":{"username":"u","room":{"name":"r"}}}\r\n')
+    expect(client.getStatus().state).toBe('ready')
+
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(client.getStatus().state).toBe('ready')
+    expect(statuses.some((s) => s.state === 'disconnected')).toBe(false)
+    client.disconnect()
+  })
+
+  it('suppresses the fatal-TLS classifier for the destroy-induced ECONNRESET in tls-handshake', async () => {
+    connect(true)
+    sockets[0].emit('connect')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    // Node reports destroy-before-secureConnect exactly like this:
+    const err = new Error(
+      'Client network socket disconnected before secure TLS connection was established'
+    ) as Error & { code?: string }
+    err.code = 'ECONNRESET'
+    tlsSockets[0].destroyError = err
+
+    await vi.advanceTimersByTimeAsync(8000)
+
+    // Reconnect path, not the hard abort the classifier would produce.
+    expect(statuses[statuses.length - 1].state).toBe('reconnecting')
+    expect(statuses.some((s) => s.error?.startsWith('TLS error'))).toBe(false)
+    expect(roomEvents.some((e) => e.text.startsWith('Connection error'))).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('watchdogDetail outranks the destroy-induced transport error in the final message', async () => {
+    connect(true)
+    sockets[0].emit('connect')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    const err = new Error(
+      'Client network socket disconnected before secure TLS connection was established'
+    ) as Error & { code?: string }
+    err.code = 'ECONNRESET'
+    tlsSockets[0].destroyError = err
+    poke().reconnectAttempts = 5
+
+    await vi.advanceTimersByTimeAsync(8000)
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(
+      'Max reconnect attempts reached — no reply received in 8s while in tls-handshake'
+    )
+    expect(last.error).not.toContain('ECONNRESET')
+  })
+
+  it('a genuine ECONNRESET in tls-handshake on the next attempt still hard-aborts', async () => {
+    // The only case that distinguishes a per-attempt fired flag from a
+    // per-session one.
+    connect(true)
+    sockets[0].emit('connect')
+    await vi.advanceTimersByTimeAsync(8000)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    sockets[1].emit('connect')
+    sockets[1].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    const err = new Error('read ECONNRESET') as Error & { code?: string }
+    err.code = 'ECONNRESET'
+    tlsSockets[0].emit('error', err)
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toMatch(/^TLS error/)
+  })
+
+  it('is cleared on user teardown — no fire after disconnect()', async () => {
+    connect(false)
+    client.disconnect()
+    const count = statuses.length
+    expect(statuses[statuses.length - 1].state).toBe('idle')
+
+    await vi.advanceTimersByTimeAsync(20000)
+
+    expect(statuses).toHaveLength(count)
   })
 })

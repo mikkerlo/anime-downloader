@@ -7,6 +7,43 @@ const CLIENT_VERSION = '1.6.9'
 const HEARTBEAT_MS = 1000
 const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_MS = 1000
+// Pre-ready protocol garbage detection (#215): a handshake that has produced
+// this many JSON parse failures, or received this many bytes without a single
+// valid message, is not talking to a Syncplay server. The threshold is >1 so a
+// benign malformed MOTD line can't abort a working handshake; post-ready a
+// corrupt line keeps today's skip-and-log behavior (a live session shouldn't
+// die on one bad frame).
+const GARBAGE_PARSE_FAILURE_LIMIT = 5
+const GARBAGE_BYTE_CAP = 64 * 1024
+const GARBAGE_REASON = 'Server sent data that is not Syncplay protocol — is this a Syncplay server?'
+// Handshake watchdog (#215): 8 s, deliberately strictly below the Settings
+// test button's 10 s renderer timer — equal intervals would make the visible
+// message depend on an IPC race, and the renderer's copy is the uninformative
+// "Timed out after 10s". Still an order of magnitude above a real
+// three-round-trip handshake. Also always beats the OS SYN timeout (~130 s),
+// so `connect ETIMEDOUT` is unreachable pre-ready — deliberate: the
+// `connecting` wording below is faster and clearer.
+const WATCHDOG_MS = 8000
+
+function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
+  // In `connecting` nothing has been written to the socket yet (the probe goes
+  // out inside the 'connect' handler), so "no reply received" would report a
+  // missing reply to a message never sent. Neither form carries a "Connection
+  // closed" prefix — that would be factually false here, *we* closed the
+  // socket — and neither attributes the silence: a client-side hang produces
+  // the same observation as a mute server.
+  const secs = `${WATCHDOG_MS / 1000}s`
+  if (phase === 'connecting') {
+    return {
+      long: `Could not establish a TCP connection within ${secs} — the host may be unreachable or the port filtered`,
+      short: `could not establish a TCP connection within ${secs}`
+    }
+  }
+  return {
+    long: `No reply received in ${secs} while in ${phase}`,
+    short: `no reply received in ${secs} while in ${phase}`
+  }
+}
 const DEBUG = process.env.SYNCPLAY_DEBUG === '1' || process.env.SYNCPLAY_DEBUG === 'true'
 
 function log(...args: unknown[]): void {
@@ -99,6 +136,45 @@ function md5Hex(value: string): string {
   return createHash('md5').update(value, 'utf8').digest('hex')
 }
 
+// The five phases a single connection attempt walks through. `lastAttemptPhase`
+// tracks the furthest one the *current* attempt reached — `status.state` can't
+// be used for close reasons because on the default auto-reconnect config the
+// close that produces the final disconnected status belongs to a retry, whose
+// state has already been overwritten to 'reconnecting' (#215).
+const ATTEMPT_PHASES = [
+  'connecting',
+  'tls-probing',
+  'tls-handshake',
+  'hello-sent',
+  'ready'
+] as const satisfies readonly SyncplayState[]
+type AttemptPhase = (typeof ATTEMPT_PHASES)[number]
+
+// Long form fills status.error on its own; the short form goes after the
+// "Max reconnect attempts reached — " prefix so the message stays one sentence.
+const PHASE_CLOSE_REASON: Record<AttemptPhase, { long: string; short: string }> = {
+  connecting: {
+    long: 'Connection closed before it was established',
+    short: 'never established'
+  },
+  'tls-probing': {
+    long: 'Server closed the connection during the TLS probe — it may not be a Syncplay server, or may not support TLS (Syncplay 1.6.3+ required)',
+    short: 'no reply to TLS probe'
+  },
+  'tls-handshake': {
+    long: 'Server closed the connection during the TLS handshake',
+    short: 'TLS handshake incomplete'
+  },
+  'hello-sent': {
+    long: 'Server closed the connection during login without a reply',
+    short: 'no reply to login'
+  },
+  ready: {
+    long: 'Connection to the server was lost',
+    short: 'connection lost'
+  }
+}
+
 export class SyncplayClient extends EventEmitter {
   private config: SyncplayConfig | null = null
   private socket: net.Socket | tls.TLSSocket | null = null
@@ -113,6 +189,13 @@ export class SyncplayClient extends EventEmitter {
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
+  // Garbage-detection counters: per-attempt (reset in resetTransportState(),
+  // so attempts 1–4 can't accumulate onto a healthy attempt 5) but deliberately
+  // NOT reset by the TLS upgrade — plaintext-phase garbage counts toward the
+  // same attempt's verdict even though upgradeToTls() swaps rxBuffer/sockets.
+  private garbageParseFailures = 0
+  private garbageBytes = 0
+  private sawValidMessage = false
   private roomUsers: SyncplayRoomUser[] = []
   private ownIsReady = true
 
@@ -122,19 +205,32 @@ export class SyncplayClient extends EventEmitter {
   private lastAppliedRoomEpisode: string | null = null
 
   private serverRtt = 0
-  // Last transport-level failure, surfaced in the disconnected status so the
-  // UI can show *why* the socket dropped instead of a bare "Connection closed".
-  // Cleared only on user-initiated connect() — reconnect attempts re-enter via
-  // openSocket() directly, so the freshest failure survives the whole retry
-  // cycle and ends up in the maxed-out error.
+  // Per-attempt detail slots for the disconnect reason (#213/#215). All three
+  // reset in openSocket() — never in resetTransportState(), which runs at the
+  // top of onSocketClose() before the reason is composed — so the surfaced
+  // detail always belongs to the *last* attempt, whatever kind it is. The
+  // errorless close always has a phase reason to fall back on, which is what
+  // allows lastSocketError to be per-attempt instead of #213's session scope.
   private lastSocketError: string | null = null
+  // Text of a non-escalated server Error frame, recorded only pre-ready: it
+  // exists to explain login-phase closes ("Room name is invalid" then FIN must
+  // not read "without a reply"). Post-ready frames stay room-events only.
+  private lastServerError: string | null = null
+  private lastAttemptPhase: AttemptPhase = 'connecting'
+  // Watchdog state. The timer is per-socket (cleared in resetTransportState()
+  // like the other timers, so attempt N's watchdog can never fire into attempt
+  // N+1); the detail and fired flag are per-attempt detail slots (reset in
+  // openSocket() — resetTransportState() runs at the top of onSocketClose(),
+  // before the reason is composed, and would erase them).
+  private watchdogTimer: NodeJS.Timeout | null = null
+  private watchdogDetail: { long: string; short: string } | null = null
+  private watchdogFired = false
 
   connect(config: SyncplayConfig): void {
     this.disconnectInternal(false)
     this.config = config
     this.reconnectAttempts = 0
     this.lastAppliedRoomEpisode = null
-    this.lastSocketError = null
     this.openSocket()
   }
 
@@ -231,26 +327,42 @@ export class SyncplayClient extends EventEmitter {
     this.pendingClientAck = 0
     this.pendingServerAck = 0
     this.serverRtt = 0
+    this.garbageParseFailures = 0
+    this.garbageBytes = 0
+    this.sawValidMessage = false
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer)
+      this.watchdogTimer = null
+    }
   }
 
   private disconnectInternal(userInitiated: boolean): void {
     this.tearDown()
     if (userInitiated) {
       this.config = null
-      this.setStatus({ state: 'idle' })
+      // Clear any prior failure: the popover renders status.error unconditional
+      // on state, and setStatus() merges — without this an explicit Disconnect
+      // after a failed connect keeps the old diagnosis rendered under 'idle'.
+      this.setStatus({ state: 'idle', error: undefined })
     }
   }
 
   private openSocket(): void {
     if (!this.config) return
     const { host, port } = this.config
+    this.lastAttemptPhase = 'connecting'
+    this.lastSocketError = null
+    this.lastServerError = null
+    this.watchdogDetail = null
+    this.watchdogFired = false
     this.setStatus({
       state: this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting',
       host,
       port,
       room: this.config.room,
       username: this.config.username,
-      tls: false
+      tls: false,
+      error: undefined
     })
     log('connecting', host, port)
 
@@ -273,10 +385,41 @@ export class SyncplayClient extends EventEmitter {
     sock.on('data', (chunk) => this.onData(chunk))
     sock.on('error', (err) => this.onSocketError(err))
     sock.on('close', () => this.onSocketClose())
+
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null
+      this.onWatchdogFire()
+    }, WATCHDOG_MS)
+  }
+
+  private onWatchdogFire(): void {
+    const wording = watchdogWording(this.lastAttemptPhase)
+    this.watchdogDetail = wording
+    this.watchdogFired = true
+    log('watchdog fired in', this.lastAttemptPhase)
+    this.emit('room-event', { level: 'warn', text: wording.long })
+    // Destroy this.socket, not a captured local: after the TLS upgrade the
+    // openSocket() closure's socket is the raw one underneath the live
+    // tls.TLSSocket, and destroying it produces a different event sequence.
+    // The 'close' that follows runs the normal reconnect path — a transient
+    // hang gets the retries auto-reconnect exists for; hard aborts stay
+    // reserved for failures a retry provably can't fix.
+    this.socket?.destroy()
   }
 
   private onData(chunk: Buffer | string): void {
-    this.rxBuffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    if (this.status.state !== 'ready' && !this.sawValidMessage) {
+      // Catches garbage with no newlines at all (nothing ever reaches the
+      // parser): an attempt that has received this much without one valid
+      // message is not a Syncplay handshake.
+      this.garbageBytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
+      if (this.garbageBytes >= GARBAGE_BYTE_CAP) {
+        this.failHandshake(GARBAGE_REASON)
+        return
+      }
+    }
+    this.rxBuffer += text
     let idx: number
     while ((idx = this.rxBuffer.indexOf('\n')) >= 0) {
       const line = this.rxBuffer.slice(0, idx).trim()
@@ -287,8 +430,20 @@ export class SyncplayClient extends EventEmitter {
         msg = JSON.parse(line)
       } catch (err) {
         log('json parse error', err, line.slice(0, 200))
+        // Read the live state, not a pre-loop snapshot: dispatch() below can
+        // reach finishHandshake() mid-chunk, and a Hello packed together with
+        // unparseable lines must not let the garbage detector abort a session
+        // that already reached ready.
+        if (this.status.state !== 'ready') {
+          this.garbageParseFailures += 1
+          if (this.garbageParseFailures >= GARBAGE_PARSE_FAILURE_LIMIT) {
+            this.failHandshake(GARBAGE_REASON)
+            return
+          }
+        }
         continue
       }
+      this.sawValidMessage = true
       if (!isObject(msg)) continue
       this.dispatch(msg)
     }
@@ -329,17 +484,28 @@ export class SyncplayClient extends EventEmitter {
 
   private finishHandshake(): void {
     if (!this.config) return
-    // A failure from an earlier attempt must not outlive a successful
+    // A failure from an earlier phase must not outlive a successful
     // connection — without this, a clean server FIN hours later would
-    // resurface the stale pre-ready error as the disconnect reason.
+    // resurface the stale pre-ready detail as the disconnect reason. The
+    // per-attempt reset in openSocket() does not cover a login-phase server
+    // Error on an attempt that reaches ready anyway ("Room name is invalid"
+    // then Hello), so the clear has to happen here too.
     this.lastSocketError = null
+    this.lastServerError = null
+    this.watchdogDetail = null
+    this.watchdogFired = false
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer)
+      this.watchdogTimer = null
+    }
     this.setStatus({
       state: 'ready',
       host: this.config.host,
       port: this.config.port,
       room: this.config.room,
       username: this.config.username,
-      tls: this.tlsUpgraded
+      tls: this.tlsUpgraded,
+      error: undefined
     })
     this.reconnectAttempts = 0
     if (this.currentFile) this.sendSetFile(this.currentFile)
@@ -594,6 +760,14 @@ export class SyncplayClient extends EventEmitter {
           error: text
         })
       }
+    } else if (this.status.state !== 'ready') {
+      // Remember the server's own explanation so a FIN right after it does not
+      // read "closed during login without a reply". Once ready the frame stays
+      // a room-event only — otherwise a complaint from hours ago would outrank
+      // "Connection to the server was lost" at the eventual drop. Note the same
+      // text is deliberately shown twice on close (room-event + status.error),
+      // matching how the escalated branch above already behaves.
+      this.lastServerError = text
     }
   }
 
@@ -702,6 +876,14 @@ export class SyncplayClient extends EventEmitter {
     // append it only when it doesn't, so the surfaced reason never duplicates.
     this.lastSocketError =
       err.code && !err.message.includes(err.code) ? err.message + code : err.message
+    // Errors after a watchdog fire are manufactured by our own destroy() —
+    // destroying a tls.TLSSocket before secureConnect emits ECONNRESET, the
+    // exact signature the fatal-TLS classifier below treats as a hard abort,
+    // and the fall-through room-event would report the app's own destroy as
+    // the server's fault. Both are suppressed for this attempt; the recorded
+    // lastSocketError is harmless because watchdogDetail outranks it in the
+    // disconnect-reason composition.
+    if (this.watchdogFired) return
     // TLS / certificate validation failures are not transient — don't burn
     // five reconnect attempts on a misconfigured server. Disconnect cleanly
     // with a clear error and stop. Detected by Node TLS error codes (all
@@ -744,13 +926,32 @@ export class SyncplayClient extends EventEmitter {
       // status.error surfaces in the UI (test-connection button, player
       // popover). 'Auto-reconnect disabled' is *why we're not retrying*, not
       // *why we disconnected* — showing it as the error confuses users (#119).
-      // The last transport error (#213) is *why we disconnected* — append it
-      // so the user sees "Connection closed — connect ECONNREFUSED …" instead
-      // of guessing; the room-event log still carries the retry-state.
-      const detail = this.lastSocketError ? ` — ${this.lastSocketError}` : ''
-      const errorReason = maxedOut
-        ? `Max reconnect attempts reached${detail}`
-        : `Connection closed${detail}`
+      // The detail is composed from the *last attempt only*, in precedence
+      // order: the server's own Error text, then the transport error (#213),
+      // then the phase the attempt reached (#215) — an errorless close always
+      // has a phase to name, never the bare "Connection closed".
+      const phaseReason = PHASE_CLOSE_REASON[this.lastAttemptPhase]
+      let errorReason: string
+      if (maxedOut) {
+        const detail =
+          this.lastServerError ??
+          this.watchdogDetail?.short ??
+          this.lastSocketError ??
+          phaseReason.short
+        errorReason = `Max reconnect attempts reached — ${detail}`
+      } else if (this.lastServerError) {
+        errorReason = this.lastServerError
+      } else if (this.watchdogDetail) {
+        // Outranks lastSocketError: the destroy that follows a watchdog fire
+        // manufactures its own transport error, which must not erase the
+        // message the watchdog fired to produce. No "Connection closed"
+        // prefix — we closed the socket.
+        errorReason = this.watchdogDetail.long
+      } else if (this.lastSocketError) {
+        errorReason = `Connection closed — ${this.lastSocketError}`
+      } else {
+        errorReason = phaseReason.long
+      }
       const eventReason = maxedOut ? 'Max reconnect attempts reached' : 'auto-reconnect disabled'
       this.setStatus({
         state: 'disconnected',
@@ -789,6 +990,12 @@ export class SyncplayClient extends EventEmitter {
   }
 
   private setStatus(patch: Partial<SyncplayStatus>): void {
+    // Single point of truth for phase tracking: any transition into one of the
+    // five attempt phases advances lastAttemptPhase, so a future phase can't
+    // be missed by forgetting a call site. openSocket() resets it per attempt.
+    if (patch.state && (ATTEMPT_PHASES as readonly string[]).includes(patch.state)) {
+      this.lastAttemptPhase = patch.state as AttemptPhase
+    }
     this.status = { ...this.status, ...patch }
     this.emit('connection-status', { ...this.status })
   }

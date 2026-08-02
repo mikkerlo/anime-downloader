@@ -4,8 +4,17 @@ import { createHash } from 'crypto'
 
 class FakeSocket extends EventEmitter {
   setKeepAlive = vi.fn()
-  destroy = vi.fn()
   write = vi.fn()
+  // Mirrors real net.Socket: destroy surfaces an error first (when there is
+  // one), then always 'close'. Order matters — 'close' runs
+  // resetTransportState(), so an error emitted after it would be read against
+  // the next attempt's state. Cannot re-enter onSocketClose() from the
+  // teardown paths: tearDown() calls removeAllListeners() before destroy().
+  destroyError: (Error & { code?: string }) | null = null
+  destroy = vi.fn(() => {
+    if (this.destroyError) this.emit('error', this.destroyError)
+    this.emit('close')
+  })
 }
 
 let lastSocket: FakeSocket | null = null
@@ -211,5 +220,120 @@ describe('SyncplayClient reconnect after a TLS session (#216)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('SyncplayClient protocol garbage detection (#215)', () => {
+  let client: SyncplayClient
+  let statuses: Array<{ state: string; error?: string }>
+  const sockets: FakeSocket[] = []
+  const tlsSockets: FakeSocket[] = []
+
+  const GARBAGE_REASON =
+    'Server sent data that is not Syncplay protocol — is this a Syncplay server?'
+
+  const connect = (autoReconnect = false): void => {
+    client.connect({ host: 'syncplay.test', port: 8999, room: 'r', username: 'u', autoReconnect })
+  }
+
+  beforeEach(() => {
+    sockets.length = 0
+    tlsSockets.length = 0
+    vi.mocked(net.createConnection).mockImplementation((() => {
+      lastSocket = new FakeSocket()
+      sockets.push(lastSocket)
+      return lastSocket
+    }) as unknown as typeof net.createConnection)
+    vi.mocked(tls.connect).mockImplementation((() => {
+      lastTlsSocket = new FakeSocket()
+      tlsSockets.push(lastTlsSocket)
+      return lastTlsSocket
+    }) as unknown as typeof tls.connect)
+    client = new SyncplayClient()
+    statuses = []
+    client.on('connection-status', (s) => statuses.push(s as { state: string; error?: string }))
+  })
+
+  it('aborts the handshake after 5 unparseable lines (HTTP server on the port)', () => {
+    connect()
+    lastSocket!.emit('connect')
+    lastSocket!.emit(
+      'data',
+      'HTTP/1.1 400 Bad Request\r\n' +
+        'Content-Type: text/html\r\n' +
+        'Connection: close\r\n' +
+        '\r\n' +
+        '<html>bad request</html>\r\n' +
+        'trailing junk\r\n'
+    )
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(GARBAGE_REASON)
+  })
+
+  it('aborts on the 64 KB byte cap when the stream has no newlines at all', () => {
+    connect()
+    lastSocket!.emit('connect')
+    lastSocket!.emit('data', 'x'.repeat(64 * 1024))
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(GARBAGE_REASON)
+  })
+
+  it('does not accumulate parse failures across attempts', async () => {
+    vi.useFakeTimers()
+    try {
+      connect(true)
+      // Attempt 1: three garbage lines — below the threshold of 5 — then dies.
+      sockets[0].emit('connect')
+      sockets[0].emit('data', 'junk one\r\njunk two\r\njunk three\r\n')
+      sockets[0].emit('close')
+      await vi.advanceTimersByTimeAsync(1000)
+
+      // Attempt 2: three more garbage lines. A session-scoped counter would
+      // cross the threshold here and kill a server that recovers.
+      sockets[1].emit('connect')
+      sockets[1].emit('data', 'junk four\r\njunk five\r\njunk six\r\n')
+      expect(statuses[statuses.length - 1].state).not.toBe('disconnected')
+
+      // The same attempt then completes normally.
+      sockets[1].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+      tlsSockets[0].emit('secureConnect')
+      tlsSockets[0].emit('data', '{"Hello":{"username":"u","room":{"name":"r"}}}\r\n')
+      expect(client.getStatus().state).toBe('ready')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('counts failures across the TLS upgrade within one attempt', () => {
+    connect()
+    // Three garbage lines on the plaintext socket…
+    sockets[0].emit('connect')
+    sockets[0].emit('data', 'junk one\r\njunk two\r\njunk three\r\n')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    tlsSockets[0].emit('secureConnect')
+    // …and two more on the TLS socket cross the threshold for the attempt.
+    tlsSockets[0].emit('data', 'junk four\r\njunk five\r\n')
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(GARBAGE_REASON)
+  })
+
+  it('does not kill a live session on a corrupt line post-ready', () => {
+    connect()
+    sockets[0].emit('connect')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    tlsSockets[0].emit('secureConnect')
+    tlsSockets[0].emit('data', '{"Hello":{"username":"u","room":{"name":"r"}}}\r\n')
+    expect(client.getStatus().state).toBe('ready')
+
+    tlsSockets[0].emit('data', 'corrupt frame that is not JSON\r\n')
+
+    expect(client.getStatus().state).toBe('ready')
+    client.disconnect()
   })
 })

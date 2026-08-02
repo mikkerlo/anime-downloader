@@ -7,6 +7,15 @@ const CLIENT_VERSION = '1.6.9'
 const HEARTBEAT_MS = 1000
 const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_MS = 1000
+// Pre-ready protocol garbage detection (#215): a handshake that has produced
+// this many JSON parse failures, or received this many bytes without a single
+// valid message, is not talking to a Syncplay server. The threshold is >1 so a
+// benign malformed MOTD line can't abort a working handshake; post-ready a
+// corrupt line keeps today's skip-and-log behavior (a live session shouldn't
+// die on one bad frame).
+const GARBAGE_PARSE_FAILURE_LIMIT = 5
+const GARBAGE_BYTE_CAP = 64 * 1024
+const GARBAGE_REASON = 'Server sent data that is not Syncplay protocol — is this a Syncplay server?'
 const DEBUG = process.env.SYNCPLAY_DEBUG === '1' || process.env.SYNCPLAY_DEBUG === 'true'
 
 function log(...args: unknown[]): void {
@@ -152,6 +161,13 @@ export class SyncplayClient extends EventEmitter {
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
+  // Garbage-detection counters: per-attempt (reset in resetTransportState(),
+  // so attempts 1–4 can't accumulate onto a healthy attempt 5) but deliberately
+  // NOT reset by the TLS upgrade — plaintext-phase garbage counts toward the
+  // same attempt's verdict even though upgradeToTls() swaps rxBuffer/sockets.
+  private garbageParseFailures = 0
+  private garbageBytes = 0
+  private sawValidMessage = false
   private roomUsers: SyncplayRoomUser[] = []
   private ownIsReady = true
 
@@ -275,6 +291,9 @@ export class SyncplayClient extends EventEmitter {
     this.pendingClientAck = 0
     this.pendingServerAck = 0
     this.serverRtt = 0
+    this.garbageParseFailures = 0
+    this.garbageBytes = 0
+    this.sawValidMessage = false
   }
 
   private disconnectInternal(userInitiated: boolean): void {
@@ -327,7 +346,19 @@ export class SyncplayClient extends EventEmitter {
   }
 
   private onData(chunk: Buffer | string): void {
-    this.rxBuffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    const preReady = this.status.state !== 'ready'
+    if (preReady && !this.sawValidMessage) {
+      // Catches garbage with no newlines at all (nothing ever reaches the
+      // parser): an attempt that has received this much without one valid
+      // message is not a Syncplay handshake.
+      this.garbageBytes += text.length
+      if (this.garbageBytes >= GARBAGE_BYTE_CAP) {
+        this.failHandshake(GARBAGE_REASON)
+        return
+      }
+    }
+    this.rxBuffer += text
     let idx: number
     while ((idx = this.rxBuffer.indexOf('\n')) >= 0) {
       const line = this.rxBuffer.slice(0, idx).trim()
@@ -338,8 +369,16 @@ export class SyncplayClient extends EventEmitter {
         msg = JSON.parse(line)
       } catch (err) {
         log('json parse error', err, line.slice(0, 200))
+        if (preReady) {
+          this.garbageParseFailures += 1
+          if (this.garbageParseFailures >= GARBAGE_PARSE_FAILURE_LIMIT) {
+            this.failHandshake(GARBAGE_REASON)
+            return
+          }
+        }
         continue
       }
+      this.sawValidMessage = true
       if (!isObject(msg)) continue
       this.dispatch(msg)
     }

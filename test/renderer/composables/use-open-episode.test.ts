@@ -166,6 +166,34 @@ describe('useOpenEpisode', () => {
     expect(api.getEpisodesBatch).not.toHaveBeenCalled()
   })
 
+  it('refetches a cached target that lacks the requested translation (stale cache)', async () => {
+    // The joiner cached this anime before the host's translation existed. The
+    // target must be refetched so the join opens the host's translation
+    // (701, only on the network) instead of silently degrading to another one.
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [100, 101, 102].map((id) => makeDetail(id, String(id - 99), [500 + id])),
+      source: 'cache'
+    })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([101], 42)
+    expect(usePlayerStore().playerState!.translationId).toBe(701)
+  })
+
+  it('degrades to the cached translation when the stale-target refetch fails', async () => {
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [100, 101, 102].map((id) => makeDetail(id, String(id - 99), [500 + id])),
+      source: 'cache'
+    })
+    api.getEpisodesBatch.mockRejectedValue(new Error('offline'))
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    // Host's translation is unreachable; the cached one (601) still plays.
+    expect(usePlayerStore().playerState!.translationId).toBe(601)
+  })
+
   it('survives a network failure when the target episode is cached', async () => {
     // Only episode 1 is cached; the network refresh for the neighbors fails.
     api.getEpisodesBatchCached.mockResolvedValue({

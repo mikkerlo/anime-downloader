@@ -181,6 +181,24 @@ describe('useOpenEpisode', () => {
     expect(usePlayerStore().playerState!.translationId).toBe(701)
   })
 
+  it('treats a cached target whose host translation is inactive as stale', async () => {
+    // The staleness check must agree with toPlayerTranslations' isActive
+    // filter: a cached copy of the host's translation with isActive: 0 would
+    // otherwise be judged fresh, then dropped by the filter — degrading to a
+    // different translation, the exact failure the refetch exists to close.
+    const staleTarget = makeDetail(101, '2', [601, 701])
+    staleTarget.translations[1].isActive = 0
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [makeDetail(100, '1', [600, 700]), staleTarget, makeDetail(102, '3', [602, 702])],
+      source: 'cache'
+    })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([101], 42)
+    expect(usePlayerStore().playerState!.translationId).toBe(701)
+  })
+
   it('degrades to the cached translation when the stale-target refetch fails', async () => {
     api.getEpisodesBatchCached.mockResolvedValue({
       data: [100, 101, 102].map((id) => makeDetail(id, String(id - 99), [500 + id])),

@@ -69,9 +69,10 @@ export function useOpenEpisode(): {
     // target that predates the host's translation is refetched too, so the
     // join doesn't silently degrade to a different translation than the host.
     const targetId = eps[episodeIndex].id
+    const cachedTargetTrs = details.get(targetId)?.translations
     const targetStale =
       target.translationId != null &&
-      !details.get(targetId)?.translations.some((t) => t.id === target.translationId)
+      !cachedTargetTrs?.some((t) => t.id === target.translationId && t.isActive === 1)
     const missingIds = windowIds.filter(
       (id) => !details.has(id) || (id === targetId && targetStale)
     )

@@ -32,15 +32,16 @@ function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // closed" prefix — that would be factually false here, *we* closed the
   // socket — and neither attributes the silence: a client-side hang produces
   // the same observation as a mute server.
+  const secs = `${WATCHDOG_MS / 1000}s`
   if (phase === 'connecting') {
     return {
-      long: 'Could not establish a TCP connection within 8s — the host may be unreachable or the port filtered',
-      short: 'could not establish a TCP connection within 8s'
+      long: `Could not establish a TCP connection within ${secs} — the host may be unreachable or the port filtered`,
+      short: `could not establish a TCP connection within ${secs}`
     }
   }
   return {
-    long: `No reply received in 8s while in ${phase}`,
-    short: `no reply received in 8s while in ${phase}`
+    long: `No reply received in ${secs} while in ${phase}`,
+    short: `no reply received in ${secs} while in ${phase}`
   }
 }
 const DEBUG = process.env.SYNCPLAY_DEBUG === '1' || process.env.SYNCPLAY_DEBUG === 'true'
@@ -146,7 +147,7 @@ const ATTEMPT_PHASES = [
   'tls-handshake',
   'hello-sent',
   'ready'
-] as const
+] as const satisfies readonly SyncplayState[]
 type AttemptPhase = (typeof ATTEMPT_PHASES)[number]
 
 // Long form fills status.error on its own; the short form goes after the
@@ -408,12 +409,11 @@ export class SyncplayClient extends EventEmitter {
 
   private onData(chunk: Buffer | string): void {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
-    const preReady = this.status.state !== 'ready'
-    if (preReady && !this.sawValidMessage) {
+    if (this.status.state !== 'ready' && !this.sawValidMessage) {
       // Catches garbage with no newlines at all (nothing ever reaches the
       // parser): an attempt that has received this much without one valid
       // message is not a Syncplay handshake.
-      this.garbageBytes += text.length
+      this.garbageBytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
       if (this.garbageBytes >= GARBAGE_BYTE_CAP) {
         this.failHandshake(GARBAGE_REASON)
         return
@@ -430,7 +430,11 @@ export class SyncplayClient extends EventEmitter {
         msg = JSON.parse(line)
       } catch (err) {
         log('json parse error', err, line.slice(0, 200))
-        if (preReady) {
+        // Read the live state, not a pre-loop snapshot: dispatch() below can
+        // reach finishHandshake() mid-chunk, and a Hello packed together with
+        // unparseable lines must not let the garbage detector abort a session
+        // that already reached ready.
+        if (this.status.state !== 'ready') {
           this.garbageParseFailures += 1
           if (this.garbageParseFailures >= GARBAGE_PARSE_FAILURE_LIMIT) {
             this.failHandshake(GARBAGE_REASON)

@@ -336,6 +336,25 @@ describe('SyncplayClient protocol garbage detection (#215)', () => {
     expect(client.getStatus().state).toBe('ready')
     client.disconnect()
   })
+
+  it('does not count lines that follow a Hello delivered in the same chunk', () => {
+    connect()
+    sockets[0].emit('connect')
+    sockets[0].emit('data', '{"TLS":{"startTLS":"true"}}\r\n')
+    tlsSockets[0].emit('secureConnect')
+    // Hello and five unparseable lines arrive in a single TCP segment: the
+    // session reaches ready mid-chunk, so the remaining lines are post-ready
+    // and must keep skip-and-log — a pre-loop preReady snapshot would count
+    // them and hard-abort a connection that just came up.
+    tlsSockets[0].emit(
+      'data',
+      '{"Hello":{"username":"u","room":{"name":"r"}}}\r\n' +
+        'junk 1\r\njunk 2\r\njunk 3\r\njunk 4\r\njunk 5\r\n'
+    )
+
+    expect(client.getStatus().state).toBe('ready')
+    client.disconnect()
+  })
 })
 
 describe('SyncplayClient handshake watchdog (#215)', () => {

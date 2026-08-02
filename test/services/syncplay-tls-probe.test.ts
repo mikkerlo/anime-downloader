@@ -282,6 +282,18 @@ describe('SyncplayClient protocol garbage detection (#215)', () => {
     expect(last.error).toBe(GARBAGE_REASON)
   })
 
+  it('measures the cap in bytes, not UTF-16 code units, on the Buffer path real sockets take', () => {
+    connect()
+    lastSocket!.emit('connect')
+    // 64 KB on the wire but only 32 K code units: counting text.length would
+    // let twice the promised bytes through before tripping.
+    lastSocket!.emit('data', Buffer.from('ф'.repeat(32 * 1024), 'utf8'))
+
+    const last = statuses[statuses.length - 1]
+    expect(last.state).toBe('disconnected')
+    expect(last.error).toBe(GARBAGE_REASON)
+  })
+
   it('does not accumulate parse failures across attempts', async () => {
     vi.useFakeTimers()
     try {

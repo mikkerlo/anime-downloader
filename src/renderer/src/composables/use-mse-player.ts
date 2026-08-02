@@ -40,6 +40,9 @@ export function useMsePlayer(deps: {
   getVideoEl: () => HTMLVideoElement | null
   /** Syncplay coordination: pause local ready-state while waiting for buffer ahead. */
   setSyncplayLocalReady: (ready: boolean) => void
+  /** Flags the pause/play this refill performs, so syncplay doesn't read it
+   *  as the user pausing the room (a stall would otherwise stop everyone). */
+  markProgrammaticPlayback?: (paused: boolean | null) => void
 }): {
   // Reactive state
   mseSrcUrl: Ref<string>
@@ -322,7 +325,10 @@ export function useMsePlayer(deps: {
     const wasPaused = v.paused
     deps.setSyncplayLocalReady(false)
     try {
-      v.pause()
+      if (!v.paused) {
+        deps.markProgrammaticPlayback?.(true)
+        v.pause()
+      }
     } catch {
       /* ignore */
     }
@@ -332,11 +338,13 @@ export function useMsePlayer(deps: {
         const t = v.currentTime
         for (let i = 0; i < sb.buffered.length; i++) {
           if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
-            if (!wasPaused) {
+            if (!wasPaused && v.paused) {
               try {
+                deps.markProgrammaticPlayback?.(false)
                 await v.play()
               } catch {
-                /* ignore */
+                // Rejected: no 'play' event will consume the mark.
+                deps.markProgrammaticPlayback?.(null)
               }
             }
             return
@@ -344,11 +352,13 @@ export function useMsePlayer(deps: {
         }
         await new Promise<void>((res) => setTimeout(res, 200))
       }
-      if (!wasPaused) {
+      if (!wasPaused && v.paused) {
         try {
+          deps.markProgrammaticPlayback?.(false)
           await v.play()
         } catch {
-          /* ignore */
+          // Rejected: no 'play' event will consume the mark.
+          deps.markProgrammaticPlayback?.(null)
         }
       }
     } finally {

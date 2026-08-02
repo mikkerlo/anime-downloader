@@ -92,7 +92,8 @@ let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null;
 // until called.
 const msePlayer = useMsePlayer({
   getVideoEl: () => videoRef.value,
-  setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready)
+  setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
+  markProgrammaticPlayback: (paused) => syncplay.markProgrammaticPlayback(paused)
 });
 const {
   mseSrcUrl,
@@ -1033,6 +1034,7 @@ function onTimeUpdate(): void {
   if (!seeking.value && videoRef.value) {
     currentTime.value = videoRef.value.currentTime;
   }
+  syncplay.onVideoTimeUpdate();
   trackProgressDelta(Date.now());
   saveProgress();
   maybeMarkWatched();

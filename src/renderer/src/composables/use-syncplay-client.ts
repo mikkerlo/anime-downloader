@@ -61,12 +61,18 @@ export type SyncplayClient = {
   showSyncplayToast: (text: string, ms?: number) => void
   pushSyncplayFile: () => void
   setSyncplayLocalReady: (ready: boolean) => void
+  /** Flag a pause/play this app performs itself (buffer refill), so the
+   *  resulting element event is never mistaken for the user's intent. */
+  markProgrammaticPlayback: (paused: boolean | null) => void
   applySyncplayReadyGate: () => void
   toggleSyncplayConnection: () => Promise<void>
   /** Wire into <video @seeked>. */
   onVideoSeeked: () => void
   /** Wire into <video @waiting>. */
   onVideoWaiting: () => void
+  /** Wire into <video @timeupdate>: keeps snapshots flowing when a background
+   *  window's timers are throttled. */
+  onVideoTimeUpdate: () => void
   /** PlayerView's `onPlay` should call this after its own bookkeeping. */
   onLocalPlay: () => void
   /** PlayerView's `onPause` should call this after its own bookkeeping. */
@@ -87,6 +93,29 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplaySnapshotTimer: ReturnType<typeof setInterval> | null = null
   let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null
   let suppressNextLocalEventUntil = 0
+  // What we last *applied* from a remote state. The 1500 ms window above is a
+  // wall-clock guess, and a seek on a network stream regularly completes later
+  // than that — the element's `seeked` then escapes as our own seek and we
+  // hand the peer their own position back with doSeek, dragging the room to a
+  // stale point and bumping the ignore counter (which makes main drop the
+  // inbound states we need). Keying on what we asked for is exact, however
+  // long the element takes to get there.
+  let appliedSeekPosition: number | null = null
+  let appliedPaused: boolean | null = null
+  const APPLIED_SEEK_EPSILON = 0.5
+  // What *this user* wants the room to be doing. `v.paused` is not that: the
+  // readiness gate and the MSE buffer machinery pause and resume the element
+  // on their own, and reporting those as intent pauses the room on every
+  // stall — and fights the user's own pause, which then "doesn't work".
+  // null until something establishes it (a remote state we adopt, or the user
+  // pressing play/pause); until then the element itself is the best answer.
+  let intendedPaused: boolean | null = null
+  let lastSnapshotPushAt = 0
+  const SNAPSHOT_MIN_INTERVAL_MS = 900
+
+  function intentOr(v: HTMLVideoElement): boolean {
+    return intendedPaused ?? v.paused
+  }
   let syncplayLocalReady = true
   let syncplayLastRemotePlaying = false
   let syncplayLastAppliedPaused: boolean | null = null
@@ -128,10 +157,34 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const v = deps.getVideoEl()
     if (!v) return
     window.api.syncplaySendLocalState({
-      paused: v.paused,
+      paused: intentOr(v),
       position: v.currentTime,
       cause
     })
+  }
+
+  // Main reads the gap between pushes as "no player is driving playback" and
+  // demotes us to a spectator that mirrors the room. A plain setInterval can't
+  // carry that alone: backgroundThrottling is on, and Chromium stretches timers
+  // in a muted or occluded window toward 1/min, which would silently demote an
+  // active viewer. `timeupdate` is a media event — not timer-throttled while
+  // playing — so it keeps the pushes alive; the 1 s floor keeps its ~4 Hz rate
+  // from becoming IPC spam, and the interval still covers a paused player,
+  // where timeupdate doesn't fire and a stale snapshot is harmless anyway.
+  function pushSyncplaySnapshot(): void {
+    if (syncplayStatus.value.state !== 'ready') return
+    const v = deps.getVideoEl()
+    if (!v) return
+    lastSnapshotPushAt = Date.now()
+    window.api.syncplaySendLocalSnapshot({
+      position: v.currentTime,
+      paused: intentOr(v)
+    })
+  }
+
+  function onVideoTimeUpdate(): void {
+    if (Date.now() - lastSnapshotPushAt < SNAPSHOT_MIN_INTERVAL_MS) return
+    pushSyncplaySnapshot()
   }
 
   function syncplayAllUsersReady(): boolean {
@@ -140,6 +193,22 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       if (u.isReady === false) return false
     }
     return true
+  }
+
+  // The MSE buffer machinery pauses and resumes the element to refill; those
+  // moves are no more the user's intent than the readiness gate's are, and
+  // each leaked one stalls or resumes the whole room.
+  // `null` retracts a mark whose call turned out not to fire an event (a
+  // rejected play()), which would otherwise latch and swallow the user's next
+  // real one — the same latch family as the already-paused case. Only a resume
+  // mark is retracted: a play() rejecting *because* a later pause() aborted it
+  // must not clear that pause's own mark, and the slot is single.
+  function markProgrammaticPlayback(paused: boolean | null): void {
+    if (paused === null) {
+      if (appliedPaused === false) appliedPaused = null
+      return
+    }
+    appliedPaused = paused
   }
 
   function setSyncplayLocalReady(ready: boolean): void {
@@ -156,12 +225,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const v = deps.getVideoEl()
     if (!v) return
     const shouldPlay = syncplayLastRemotePlaying && syncplayAllUsersReady()
+    // The gate moves the element on the room's behalf, never the user's — mark
+    // it like a remote apply so the resulting event isn't mistaken for intent
+    // however late the element gets around to firing it.
     if (!shouldPlay && !v.paused) {
       suppressNextLocalEventUntil = Date.now() + 1500
+      appliedPaused = true
       v.pause()
     } else if (shouldPlay && v.paused) {
       suppressNextLocalEventUntil = Date.now() + 1500
-      v.play().catch(() => {})
+      appliedPaused = false
+      v.play().catch(() => {
+        // The call failed, so no 'play' event will ever consume the marker —
+        // retract it, or the user's next real play is swallowed as this echo.
+        // Through the same function as useMsePlayer's retraction, so hardening
+        // the semantics can't apply to one call site and not the other.
+        markProgrammaticPlayback(null)
+      })
     }
   }
 
@@ -183,10 +263,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (!needsSeek && !needsPlayPause) return
     suppressNextLocalEventUntil = Date.now() + 1500
 
+    // Adopting the room's intent as our own — a later heartbeat must report
+    // this, not whatever the buffer machinery has done to the element since.
+    intendedPaused = state.paused
     if (needsSeek) {
-      v.currentTime = Math.max(0, state.position)
+      const target = Math.max(0, state.position)
+      appliedSeekPosition = target
+      v.currentTime = target
     }
     if (needsPlayPause) {
+      appliedPaused = effectivePaused
       if (effectivePaused) v.pause()
       else v.play().catch(() => {})
     }
@@ -252,6 +338,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onVideoSeeked(): void {
+    const v = deps.getVideoEl()
+    if (
+      v &&
+      appliedSeekPosition !== null &&
+      Math.abs(v.currentTime - appliedSeekPosition) < APPLIED_SEEK_EPSILON
+    ) {
+      // This is the peer's own seek arriving back at us, not a user seek.
+      appliedSeekPosition = null
+      return
+    }
+    appliedSeekPosition = null
     sendSyncplayLocalState('seek')
   }
 
@@ -264,6 +361,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onLocalPlay(): void {
+    if (appliedPaused === false) {
+      // The element realizing a remote resume — not a local one.
+      appliedPaused = null
+      applySyncplayReadyGate()
+      return
+    }
+    // Intent is recorded whatever the wall-clock window says. A genuine echo
+    // is already caught by the marker above; anything reaching here is the
+    // user. Gating this on the window meant a pause inside it left intent at
+    // "playing" while the element sat paused — the heartbeat then asserted
+    // play and the next remote apply resumed it, so the pause "didn't work".
+    intendedPaused = false
     if (Date.now() >= suppressNextLocalEventUntil) {
       syncplayLastRemotePlaying = true
       syncplayLastAppliedPaused = false
@@ -274,6 +383,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onLocalPause(): void {
+    if (appliedPaused === true) {
+      appliedPaused = null
+      return
+    }
+    intendedPaused = true
     if (Date.now() >= suppressNextLocalEventUntil) {
       syncplayLastRemotePlaying = false
       syncplayLastAppliedPaused = true
@@ -361,16 +475,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       deps.onRemoteEpisodeChange(ep)
     })
 
-    // 1-second snapshot push so main's heartbeat has fresh position.
-    syncplaySnapshotTimer = setInterval(() => {
-      if (syncplayStatus.value.state !== 'ready') return
-      const v = deps.getVideoEl()
-      if (!v) return
-      window.api.syncplaySendLocalSnapshot({
-        position: v.currentTime,
-        paused: v.paused
-      })
-    }, 1000)
+    // 1-second snapshot push so main's heartbeat has fresh position. The
+    // timer is only half of it — see pushSyncplaySnapshot / onVideoTimeUpdate.
+    syncplaySnapshotTimer = setInterval(pushSyncplaySnapshot, 1000)
   })
 
   onBeforeUnmount(() => {
@@ -406,9 +513,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     showSyncplayToast,
     pushSyncplayFile,
     setSyncplayLocalReady,
+    markProgrammaticPlayback,
     applySyncplayReadyGate,
     toggleSyncplayConnection,
     onVideoSeeked,
+    onVideoTimeUpdate,
     onVideoWaiting,
     onLocalPlay,
     onLocalPause,

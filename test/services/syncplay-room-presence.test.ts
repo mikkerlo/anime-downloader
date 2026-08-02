@@ -34,6 +34,10 @@ vi.mock('tls', () => ({
 
 import { SyncplayClient, type SyncplayRoomUser } from '../../src/main/syncplay'
 
+// Mirrors PLAYBACK_STALE_MS in the client: how long without a renderer push
+// before main decides no player is driving playback.
+const PLAYBACK_STALE_MS = 5000
+
 type Frame = Record<string, unknown>
 
 const frames = (sock: FakeSocket | null): Frame[] =>
@@ -42,7 +46,7 @@ const frames = (sock: FakeSocket | null): Frame[] =>
 const statesOf = (
   sock: FakeSocket | null
 ): Array<{
-  playstate?: { position: number; paused: boolean; doSeek: boolean }
+  playstate?: { position: number; paused?: boolean; doSeek: boolean }
 }> =>
   frames(sock)
     .filter((f) => 'State' in f)
@@ -261,7 +265,9 @@ describe('SyncplayClient room presence on join (#220)', () => {
       vi.advanceTimersByTime(1000)
 
       const [state] = statesOf(lastTlsSocket)
-      expect(state.playstate).toEqual({ position: 742.5, paused: true, doSeek: false })
+      // Position mirrored; no `paused` field at all — a spectator must never be
+      // able to flip the room's pause state.
+      expect(state.playstate).toEqual({ position: 742.5, doSeek: false })
     })
 
     it('advances the mirrored position while the room is playing, so we never read as lagging', () => {
@@ -273,7 +279,32 @@ describe('SyncplayClient room presence on join (#220)', () => {
 
       const states = statesOf(lastTlsSocket)
       expect(states.at(-1)!.playstate!.position).toBeCloseTo(103, 1)
-      expect(states.at(-1)!.playstate!.paused).toBe(false)
+      expect(states.at(-1)!.playstate!.paused).toBeUndefined()
+    })
+
+    // The race: a peer pauses, the room flips server-side, and our next
+    // heartbeat is still carrying `paused: false` from the stale lastRoomState
+    // — its arrival unpauses the room, setBy us. The server reads a *missing*
+    // paused as "no claim", so a mirror that omits it cannot flip anything.
+    // Distinct from the case below by actually crossing that boundary.
+    it('carries no pause claim across a peer’s pause landing mid-stream', () => {
+      handshake()
+      serverState(100, false, 'mikkerlo')
+      lastTlsSocket!.write.mockClear()
+      vi.advanceTimersByTime(2000)
+      const beforeCount = statesOf(lastTlsSocket).length
+
+      // The peer's pause reaches us only now; heartbeats straddle it.
+      serverState(100, true, 'mikkerlo')
+      vi.advanceTimersByTime(2000)
+
+      const states = statesOf(lastTlsSocket)
+      expect(beforeCount).toBeGreaterThan(0)
+      expect(states.length).toBeGreaterThan(beforeCount)
+      for (const s of states) {
+        expect(s.playstate).toBeDefined()
+        expect('paused' in s.playstate!).toBe(false)
+      }
     })
 
     it('never claims paused while the room is playing', () => {
@@ -283,7 +314,9 @@ describe('SyncplayClient room presence on join (#220)', () => {
 
       vi.advanceTimersByTime(5000)
 
-      for (const s of statesOf(lastTlsSocket)) expect(s.playstate!.paused).toBe(false)
+      // Stronger than "never claims paused": a mirror makes no pause claim at
+      // all, so it cannot race the room's own in-flight pause broadcast.
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate!.paused).toBeUndefined()
     })
   })
 
@@ -309,7 +342,7 @@ describe('SyncplayClient room presence on join (#220)', () => {
       vi.advanceTimersByTime(1000)
 
       const [state] = statesOf(lastTlsSocket)
-      expect(state.playstate!.paused).toBe(false)
+      expect(state.playstate!.paused).toBeUndefined()
       expect(state.playstate!.position).toBeGreaterThan(742)
     })
 
@@ -349,6 +382,95 @@ describe('SyncplayClient room presence on join (#220)', () => {
       vi.advanceTimersByTime(1000)
 
       expect(statesOf(lastTlsSocket)[0].playstate!.position).toBe(400)
+    })
+
+    // With peers listed we know we are not the first user, so an empty
+    // lastRoomState means we are early (our heartbeat can beat the server's
+    // first State), not alone — asserting the fresh {0, paused} there is the
+    // same yank the gate exists to prevent.
+    it('holds off when peers are present but no room state has arrived yet', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      client.updateSnapshot({ position: 0, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate).toBeUndefined()
+    })
+
+    // Reopening the *same* episode gets a fresh <video> at 0 with an identical
+    // canonicalName, so setFile()'s identity check can't see the transition.
+    it('re-converges when a new player reopens the same episode', () => {
+      handshake()
+      serverState(600, false)
+      const file = {
+        animeId: 42,
+        malId: 7,
+        episodeInt: '2',
+        translationId: 601,
+        canonicalName: 'Show - 2',
+        duration: 1440
+      }
+      client.setFile(file)
+      client.updateSnapshot({ position: 600, paused: false })
+      vi.advanceTimersByTime(1000)
+
+      // Player closed: pushes stop long enough to go stale, then the same
+      // episode is reopened and its fresh element reports 0.
+      vi.advanceTimersByTime(PLAYBACK_STALE_MS + 1000)
+      client.setFile(file)
+      client.updateSnapshot({ position: 0, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      const [state] = statesOf(lastTlsSocket)
+      expect(state.playstate!.position).toBeGreaterThan(600)
+      expect(state.playstate!.paused).toBeUndefined()
+    })
+
+    // Main's readiness outlives the player; the renderer's is per-player and
+    // only pushes on a change, so a player closed mid-buffer left main stuck
+    // at false — pinning us as "Buffering" in every peer's roster.
+    it('clears a stale buffering flag when a new player announces its file', () => {
+      handshake()
+      client.setReady(false)
+      lastTlsSocket!.write.mockClear()
+
+      client.setFile({
+        animeId: 42,
+        malId: 7,
+        episodeInt: '2',
+        translationId: 601,
+        canonicalName: 'Show - 2',
+        duration: 1440
+      })
+
+      expect(frames(lastTlsSocket)).toContainEqual({
+        Set: { ready: { isReady: true, manuallyInitiated: false } }
+      })
+    })
+
+    // One applied seek yields one `seeked`, so the echo target must retire —
+    // otherwise a later genuine seek onto a peer's old position is dropped.
+    it('retires the echo target so a later seek to the same spot still sends', () => {
+      handshake()
+      serverState(309.229, false, 'mikkerlo')
+      client.updateSnapshot({ position: 309.229, paused: false })
+      vi.advanceTimersByTime(1000)
+      client.sendLocalState({ position: 309.228948, paused: false, cause: 'seek' })
+      lastTlsSocket!.write.mockClear()
+
+      // Much later the user deliberately seeks back to the same spot.
+      client.sendLocalState({ position: 309.229, paused: false, cause: 'seek' })
+
+      expect(statesOf(lastTlsSocket)[0].playstate!.doSeek).toBe(true)
     })
 
     it('asserts immediately when no room state exists yet — the first user sets it', () => {
@@ -417,6 +539,78 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(remote.map((r) => Math.round(r.position))).toContain(800)
     })
 
+    // The readiness gate pauses the local element while we buffer; buffering
+    // has its own channel (`Set: {ready}`) precisely so a slow client doesn't
+    // ping-pong pause/play at the room. Caught live: a joiner whose stream
+    // stalled paused everyone, over and over.
+    // A user pause has to survive buffering. An earlier attempt withheld every
+    // assertion while !ownIsReady, so the next heartbeat mirrored the room's
+    // "playing" straight back and undid the pause a second after it was
+    // pressed — reported live as "I paused and it didn't pause".
+    it('keeps asserting a user pause while we are buffering', () => {
+      handshake()
+      serverState(742.5, false)
+      client.updateSnapshot({ position: 742.5, paused: false })
+      vi.advanceTimersByTime(1000)
+
+      client.setReady(false)
+      client.sendLocalState({ position: 742.5, paused: true, cause: 'pause' })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(2000)
+
+      const states = statesOf(lastTlsSocket)
+      expect(states.length).toBeGreaterThan(0)
+      for (const s of states) expect(s.playstate!.paused).toBe(true)
+    })
+
+    // Caught in a live session: applying a peer's seek makes our element fire
+    // `seeked` once it finishes — often past the renderer's 1500 ms window on a
+    // network stream — and we handed the peer their own position back with
+    // doSeek, dragging the room to a stale point and bumping the ignore
+    // counter so inbound states got dropped. "Sync breaks after a few seeks".
+    it('does not echo a seek that merely lands on the room position', () => {
+      handshake()
+      serverState(309.229, false, 'mikkerlo')
+      client.updateSnapshot({ position: 309.229, paused: false })
+      vi.advanceTimersByTime(1000)
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 309.228948, paused: false, cause: 'seek' })
+
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate?.doSeek).not.toBe(true)
+    })
+
+    it('keeps applying remote states after an echoed seek (no ignore-counter stall)', () => {
+      handshake()
+      serverState(309.229, false, 'mikkerlo')
+      client.updateSnapshot({ position: 309.229, paused: false })
+      vi.advanceTimersByTime(1000)
+      const remote: Array<{ position: number }> = []
+      client.on('remote-state', (s) => remote.push(s as { position: number }))
+
+      client.sendLocalState({ position: 309.228948, paused: false, cause: 'seek' })
+      serverState(400, false, 'mikkerlo')
+
+      expect(remote.map((r) => Math.round(r.position))).toContain(400)
+    })
+
+    it('still propagates a real user seek away from the room', () => {
+      handshake()
+      serverState(309.229, false, 'mikkerlo')
+      client.updateSnapshot({ position: 309.229, paused: false })
+      vi.advanceTimersByTime(1000)
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 90, paused: false, cause: 'seek' })
+
+      expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
+        position: 90,
+        paused: false,
+        doSeek: true
+      })
+    })
+
     it('propagates an explicit local pause once converged', () => {
       handshake()
       serverState(742.5, false)
@@ -428,12 +622,15 @@ describe('SyncplayClient room presence on join (#220)', () => {
         canonicalName: 'Show - 2',
         duration: 1440
       })
+      // The apply rule has seeked us onto the room, so we speak for ourselves.
+      client.updateSnapshot({ position: 742.5, paused: false })
+      vi.advanceTimersByTime(1000)
       lastTlsSocket!.write.mockClear()
 
-      client.sendLocalState({ position: 5, paused: true, cause: 'pause' })
+      client.sendLocalState({ position: 742.5, paused: true, cause: 'pause' })
 
       expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
-        position: 5,
+        position: 742.5,
         paused: true,
         doSeek: false
       })
@@ -462,7 +659,7 @@ describe('SyncplayClient room presence on join (#220)', () => {
 
       const [state] = statesOf(lastTlsSocket)
       expect(state.playstate!.position).toBeGreaterThan(30)
-      expect(state.playstate!.paused).toBe(false)
+      expect(state.playstate!.paused).toBeUndefined()
     })
   })
 
@@ -497,13 +694,18 @@ describe('SyncplayClient room presence on join (#220)', () => {
     it('reverts to mirroring when the player stops pushing snapshots', () => {
       handshake()
       serverState(600, false)
-      client.updateSnapshot({ position: 12.5, paused: true })
+      // Converge first: at a drift of ~590 the client mirrors because it never
+      // adopted, so this would pass with the staleness rule deleted. The frozen
+      // snapshot has to be one it would otherwise be asserting.
+      client.updateSnapshot({ position: 600, paused: false })
+      vi.advanceTimersByTime(1000)
+      client.updateSnapshot({ position: 601, paused: true })
       lastTlsSocket!.write.mockClear()
 
       vi.advanceTimersByTime(10_000)
 
       const last = statesOf(lastTlsSocket).at(-1)!
-      expect(last.playstate!.paused).toBe(false)
+      expect(last.playstate!.paused).toBeUndefined()
       expect(last.playstate!.position).toBeGreaterThan(600)
     })
   })

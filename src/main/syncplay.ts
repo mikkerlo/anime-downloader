@@ -39,6 +39,12 @@ const PLAYBACK_STALE_MS = 5000
 // snapshot before the first remote State has seeked it, so without this the
 // player path re-creates the very bug the spectator rule fixes.
 const ADOPT_TOLERANCE_S = 3
+// A "seek" this close to where the room already is didn't come from the user —
+// it's the element finishing the seek we applied from the room, arriving after
+// the renderer's suppression window. Tight on purpose: a real user seek lands
+// somewhere else, and a real seek to within half a second of the room's own
+// position is a no-op for everyone anyway.
+const ECHO_SEEK_EPSILON_S = 0.5
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -213,6 +219,11 @@ export class SyncplayClient extends EventEmitter {
   // opened file — its <video> reports {0, paused} until the first remote State
   // seeks it — so that startup state is never asserted at the room.
   private playbackAdopted = false
+  // The last position we emitted to the renderer as a remote state, i.e. the
+  // value it seeks the element to. The element reports exactly this back once
+  // the seek completes — that's the echo, and it's the only reliable way to
+  // tell it apart from a user seek.
+  private lastAppliedRemotePosition: number | null = null
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
@@ -279,6 +290,13 @@ export class SyncplayClient extends EventEmitter {
     // the player re-pushes the same file once real duration is known.
     if (this.currentFile?.canonicalName !== file.canonicalName) this.playbackAdopted = false
     this.currentFile = file
+    // The renderer's readiness is player-scoped and only pushes on a change, so
+    // a player closed mid-buffer leaves main stuck at isReady:false: the next
+    // player starts its closure at `true`, hits the equality guard, and sends
+    // nothing. That pins us as "Buffering" in every peer's roster and holds
+    // their ready gate down for the rest of the session. A new player is ready
+    // until it says otherwise.
+    if (!this.ownIsReady) this.setReady(true)
     if (this.status.state === 'ready') this.sendSetFile(file)
   }
 
@@ -307,10 +325,42 @@ export class SyncplayClient extends EventEmitter {
   }): void {
     this.snapshot = { position: payload.position, paused: payload.paused }
     this.lastSnapshotAt = Date.now()
-    // An explicit play/pause/seek is the user driving the room on purpose —
-    // it asserts even if we hadn't converged yet (pausing on arrival is a
-    // legitimate thing to do, and is how the room learns we're here).
-    this.playbackAdopted = true
+    // These arrive from the <video> element's own play/pause/seeked events,
+    // which a freshly opened player fires at ~0 while it loads — before any
+    // remote state has been applied, so the renderer's suppression window
+    // isn't up yet. That is not the user driving the room, and treating it as
+    // such is what pulled everyone back to 0 on "Join & watch". Until we have
+    // converged, such an event changes nothing on the wire: no assertion, and
+    // no ignore-counter bump either — the counter makes handleState() drop
+    // inbound states, which would starve the very convergence we're waiting
+    // for and desync the session outright.
+    if (!this.isAdopted()) {
+      log('local-state (pre-adoption, not sent)', payload.cause, 'pos=', payload.position)
+      return
+    }
+    // Belt to the renderer's braces: a seek that lands where the room already
+    // is carries no intent — it is the element finishing the seek we applied
+    // *from* the room. Re-asserting it with doSeek hands the peer their own
+    // position back, drags the room to a stale point if it has moved on, and
+    // bumps the ignore counter so inbound states get dropped. Live sessions
+    // showed exactly this: `local-state seek pos=309.228948` answering
+    // `remote-state position: 309.2289481359405 setBy: mikkerlo`.
+    // Compared against the position we *handed the renderer*, not the room's
+    // projected one: the element reports back exactly what it was told to seek
+    // to, however long it took, while the room has moved on in the meantime.
+    if (
+      payload.cause === 'seek' &&
+      this.lastAppliedRemotePosition !== null &&
+      Math.abs(payload.position - this.lastAppliedRemotePosition) < ECHO_SEEK_EPSILON_S
+    ) {
+      log('local-state (seek echoes an applied remote state, not sent) pos=', payload.position)
+      this.lastAppliedRemotePosition = null
+      return
+    }
+    // Asserting makes our position the room's, which retires any in-flight
+    // target: leaving it armed would silently drop a later, genuine seek that
+    // happened to land on a peer's old position.
+    this.lastAppliedRemotePosition = null
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     log(
@@ -325,6 +375,11 @@ export class SyncplayClient extends EventEmitter {
   }
 
   updateSnapshot(snap: SyncplaySnapshot): void {
+    // A push arriving after a stale gap is a *different* <video>, not the old
+    // one continuing: reopening the same episode gets a fresh element at 0 and
+    // setFile()'s identity check can't see it (same canonicalName). Re-converge
+    // before asserting; a false positive re-adopts on the next tick.
+    if (!this.hasLivePlayback()) this.playbackAdopted = false
     this.snapshot = snap
     this.lastSnapshotAt = Date.now()
   }
@@ -355,6 +410,7 @@ export class SyncplayClient extends EventEmitter {
     this.lastSnapshotAt = 0
     this.lastRoomState = null
     this.playbackAdopted = false
+    this.lastAppliedRemotePosition = null
   }
 
   // State that belongs to one socket, not to the session. The reconnect path in
@@ -811,6 +867,7 @@ export class SyncplayClient extends EventEmitter {
     }
 
     const compensated = position + this.serverRtt / 2
+    this.lastAppliedRemotePosition = Math.max(0, compensated)
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -924,6 +981,12 @@ export class SyncplayClient extends EventEmitter {
   // lagging user either — and sends no playstate at all until the server has
   // told us one (ping-only messages keep RTT calibration alive).
   private buildPlaystate(doSeek: boolean): JsonObject | null {
+    // The snapshot now carries the renderer's *intent*, not the element's flag
+    // (the readiness gate and the MSE buffer refill move the element on their
+    // own), so it is safe to assert while buffering: a genuine user pause must
+    // stick. Withholding it here instead — an earlier attempt at the same bug
+    // — meant the next heartbeat mirrored the room's "playing" back and undid
+    // the user's own pause a second after they pressed it.
     if (this.hasLivePlayback() && this.isAdopted()) {
       return {
         position: this.snapshot.position,
@@ -933,9 +996,24 @@ export class SyncplayClient extends EventEmitter {
     }
     const room = this.lastRoomState
     if (!room) return null
+    // Position only, no `paused`: the reference server reads a missing paused
+    // as "no claim" (__hasPauseChanged(None) is False) while still applying the
+    // position — so the mirror keeps our server-side watcher glued to the room
+    // (a stale stored position would drag the min() room position back after a
+    // room seek) but can never flip the room's pause. Mirroring `room.paused`
+    // raced the room's own in-flight pause broadcasts: a heartbeat crossing a
+    // peer's fresh pause on the wire unpaused the room, setBy us.
+    //
+    // Known consequence: the server reads a missing paused as not-paused in
+    // _updatePositionByAge too, so it forward-delay-compensates the mirrored
+    // position even while the room is paused. Invisible with peers present (we
+    // land ahead, never the min()), but spectating *alone* in a paused room our
+    // own crept value comes back as lastRoomState and compounds at ~one forward
+    // delay per second. Nobody is watching in that state and adopting a player
+    // resets it — documented rather than fixed, so it isn't rediscovered as
+    // "the room moved while I was away".
     return {
       position: this.projectedRoomPosition(room),
-      paused: room.paused,
       doSeek: false
     }
   }
@@ -956,8 +1034,16 @@ export class SyncplayClient extends EventEmitter {
     if (this.playbackAdopted) return true
     const room = this.lastRoomState
     if (!room) {
-      this.playbackAdopted = true
-      return true
+      // Alone in the room we establish its position. With peers present and no
+      // State yet we are simply early — our heartbeat starts at
+      // finishHandshake() and can beat the server's first State — so hold off
+      // rather than guess: buildPlaystate() then falls through to the
+      // ping-only frame, which is the right answer for "a player exists but we
+      // don't know where the room is". The roster is the signal that we're not
+      // first; it's why this PR requests it.
+      const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
+      if (alone) this.playbackAdopted = true
+      return this.playbackAdopted
     }
     const drift = Math.abs(this.snapshot.position - this.projectedRoomPosition(room))
     if (drift <= ADOPT_TOLERANCE_S) this.playbackAdopted = true

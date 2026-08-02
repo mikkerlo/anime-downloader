@@ -155,6 +155,34 @@ describe('growing .part files', () => {
     expect(await bodyText(res)).toBe('0123456789ABCDEFGHIJ')
   })
 
+  it('delivers a file whose last flush lands exactly when the download completes', async () => {
+    // Regression (#218 follow-up): the tail loop used to stat the file first
+    // and check download liveness second. A download whose final append and
+    // 'completed' flip both landed between those two calls got a stale size
+    // with a dead status — and the stream errored a fully-written file. This
+    // getActiveDownload mock reproduces that interleaving deterministically:
+    // by the time the loop learns the download ended, the bytes are on disk.
+    const fp = path.join(dir, 'ep.mp4.part')
+    fs.writeFileSync(fp, '0123456789')
+    // Call 1 is the handler's request-time lookup — still downloading. Every
+    // later call comes from the tail loop: the download finishes (flush, then
+    // status flip) right at that liveness probe.
+    let calls = 0
+    const h = createAnimeVideoHandler({
+      getActiveDownload: () => {
+        calls += 1
+        if (calls === 1) return { bytesReceived: 10, totalBytes: 20, status: 'downloading' }
+        if (calls === 2) fs.appendFileSync(fp, 'ABCDEFGHIJ')
+        return { bytesReceived: 20, totalBytes: 20, status: 'completed' }
+      },
+      pollIntervalMs: 5
+    })
+
+    const res = await h(makeRequest(fp, 'bytes=0-'))
+    expect(res.headers.get('Content-Range')).toBe('bytes 0-19/20')
+    expect(await bodyText(res)).toBe('0123456789ABCDEFGHIJ')
+  })
+
   it('errors the body when the download dies short of the promised range', async () => {
     const fp = path.join(dir, 'ep.mp4.part')
     fs.writeFileSync(fp, '0123456789')

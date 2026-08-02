@@ -54,6 +54,17 @@ function createTailStream(
       try {
         if (!handle) handle = await fs.promises.open(filePath, 'r')
         while (offset <= end) {
+          // Snapshot liveness *before* reading the size: bytes reach the disk
+          // before the download flips to 'completed', so a stat taken after
+          // the status can never miss the final flush. The reverse order
+          // raced — a stat just before the last append plus a status check
+          // just after the flip spuriously errored a fully-written file.
+          const download = deps.getActiveDownload(filePath)
+          const canGrow =
+            download &&
+            (download.status === 'downloading' ||
+              download.status === 'queued' ||
+              download.status === 'paused')
           const size = (await handle.stat()).size
           const available = Math.min(end + 1, size) - offset
           if (available > 0) {
@@ -65,13 +76,6 @@ function createTailStream(
               return
             }
           }
-          // Nothing readable yet — decide whether more bytes can still arrive.
-          const download = deps.getActiveDownload(filePath)
-          const canGrow =
-            download &&
-            (download.status === 'downloading' ||
-              download.status === 'queued' ||
-              download.status === 'paused')
           if (!canGrow) {
             // failed / cancelled / vanished, or completed short of the
             // promised range: the remaining bytes will never arrive.

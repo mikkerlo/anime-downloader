@@ -54,11 +54,13 @@ function createTailStream(
       try {
         if (!handle) handle = await fs.promises.open(filePath, 'r')
         while (offset <= end) {
-          // Snapshot liveness *before* reading the size: bytes reach the disk
-          // before the download flips to 'completed', so a stat taken after
-          // the status can never miss the final flush. The reverse order
-          // raced — a stat just before the last append plus a status check
-          // just after the flip spuriously errored a fully-written file.
+          // Snapshot liveness *before* reading the size: DownloadManager awaits
+          // the write pipeline and finalizes the .part *before* it sets
+          // `item.status = 'completed'` (download-manager.ts, startDownload), so
+          // a stat taken after the status read can never miss the final flush.
+          // The reverse order raced — a stat just before the last append plus a
+          // status check just after the flip spuriously errored a fully-written
+          // file. Keep that ordering in the download manager or this breaks.
           const download = deps.getActiveDownload(filePath)
           const canGrow =
             download &&

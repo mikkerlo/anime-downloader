@@ -106,7 +106,7 @@ Global reactive logic that doesn't belong on a Pinia store goes into `src/render
 
 ### Watch Together
 
-- **`useOpenEpisode()`** — standalone "open the player at `(animeId, episodeInt, translationId?)`" path (#213). Fetches the anime, the episode-detail window around the target (same `PAGE_SIZE` granularity the detail view paginates by), and downloaded-episode metadata, resolves a CDN stream (requested translation first, then the rest by quality), and calls `playerStore.openPlayer()`. Returns `{ok} | {ok:false, error}`. Used by WatchTogetherView's "Join & watch"; the natural seam for future deep links.
+- **`useOpenEpisode()`** — standalone "open the player at `(animeId, episodeInt, translationId?)`" path (#213). Fetches the anime, the episode-detail window around the target (same `PAGE_SIZE` granularity the detail view paginates by; cache-first, then the network for whatever the cache is missing — a cold cache is the norm when joining a room for an anime never opened locally), and downloaded-episode metadata, resolves a CDN stream (requested translation first, then the rest by quality), and calls `playerStore.openPlayer()`. Returns `{ok} | {ok:false, error}`. Used by WatchTogetherView's "Join & watch"; the natural seam for future deep links.
 
 ### Settings
 

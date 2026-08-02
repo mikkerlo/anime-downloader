@@ -62,6 +62,24 @@ export function useOpenEpisode(): {
       return { ok: false, error: `Failed to load episode details: ${String(err)}` }
     }
 
+    // The cached channel only returns what a prior detail-view visit stored.
+    // On a cold cache (joining a room for an anime never opened locally) it
+    // returns nothing, so fetch the gaps from the network — otherwise the join
+    // fails with "no translations" for perfectly available episodes.
+    const missingIds = windowIds.filter((id) => !details.has(id))
+    if (missingIds.length > 0) {
+      try {
+        const fetched = await window.api.getEpisodesBatch(missingIds, target.animeId)
+        for (const d of fetched.data) details.set(d.id, d)
+      } catch (err) {
+        // Fatal only if the target episode itself is still unknown; missing
+        // neighbors just lose their prev/next translation lists.
+        if (!details.has(eps[episodeIndex].id)) {
+          return { ok: false, error: `Failed to load episode details: ${String(err)}` }
+        }
+      }
+    }
+
     const allEpisodes = eps.map((ep) => ({
       episodeInt: ep.episodeInt,
       episodeFull: ep.episodeFull,

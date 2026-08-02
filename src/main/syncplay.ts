@@ -24,6 +24,14 @@ const GARBAGE_REASON = 'Server sent data that is not Syncplay protocol — is th
 // so `connect ETIMEDOUT` is unreachable pre-ready — deliberate: the
 // `connecting` wording below is faster and clearer.
 const WATCHDOG_MS = 8000
+// A local player pushes a snapshot every second (`syncplay:local-snapshot`).
+// Older than this and nothing is driving playback here — the Watch Together
+// view joins a room with no player at all, and closing the player stops the
+// pushes — so our `snapshot` is not a playstate we may assert. 5× the push
+// cadence: long enough that a stuttering renderer never flips us to spectator
+// mid-playback, short enough that closing the player stops our assertions
+// within one heartbeat or two. See sendStateMessage().
+const PLAYBACK_STALE_MS = 5000
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -186,6 +194,14 @@ export class SyncplayClient extends EventEmitter {
   private reconnectAttempts = 0
 
   private snapshot: SyncplaySnapshot = { position: 0, paused: true }
+  // When the renderer last pushed a real playback snapshot. 0 = never, i.e. no
+  // player has ever driven this session (joined from the Watch Together view).
+  // Guards every outbound playstate assertion — see sendStateMessage().
+  private lastSnapshotAt = 0
+  // The room's own playstate as the server last reported it, kept raw (no RTT
+  // compensation — this goes back out on the wire). Lets a spectator echo the
+  // room instead of asserting a position it doesn't have.
+  private lastRoomState: { position: number; paused: boolean; at: number } | null = null
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
@@ -275,6 +291,7 @@ export class SyncplayClient extends EventEmitter {
     cause: 'play' | 'pause' | 'seek'
   }): void {
     this.snapshot = { position: payload.position, paused: payload.paused }
+    this.lastSnapshotAt = Date.now()
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     log(
@@ -290,6 +307,7 @@ export class SyncplayClient extends EventEmitter {
 
   updateSnapshot(snap: SyncplaySnapshot): void {
     this.snapshot = snap
+    this.lastSnapshotAt = Date.now()
   }
 
   private tearDown(): void {
@@ -310,6 +328,13 @@ export class SyncplayClient extends EventEmitter {
     this.resetTransportState()
     this.roomUsers = []
     this.ownIsReady = true
+    // Session-scoped, like roomUsers: a new session must not inherit the last
+    // one's playback claim (which would let a stale snapshot move the next
+    // room) or its room state. A *reconnect* keeps both — it doesn't come
+    // through here — because the player and the room are still the same.
+    this.snapshot = { position: 0, paused: true }
+    this.lastSnapshotAt = 0
+    this.lastRoomState = null
   }
 
   // State that belongs to one socket, not to the session. The reconnect path in
@@ -477,6 +502,12 @@ export class SyncplayClient extends EventEmitter {
       this.config = { ...this.config, username: advertisedUsername }
     }
 
+    // Adopt the room name the server actually seated us in — it may have
+    // canonicalized ours, and the `List` roster is keyed by the server's name.
+    if (isObject(payload.room) && typeof payload.room.name === 'string' && payload.room.name) {
+      this.config = { ...this.config, room: payload.room.name }
+    }
+
     if (motd) this.emit('room-event', { level: 'info', text: motd })
 
     this.finishHandshake()
@@ -511,6 +542,12 @@ export class SyncplayClient extends EventEmitter {
     if (this.currentFile) this.sendSetFile(this.currentFile)
     this.sendSetReady(this.ownIsReady)
     this.updateOwnReadinessInRoom()
+    // Ask for the membership roster. The server only *broadcasts* `Set: {user}`
+    // for changes that happen while we're connected, so without this request
+    // everyone already sitting in the room stays invisible and the view reads
+    // "Room is empty — you're the first one here". Re-requested on every
+    // reconnect, which is also how membership resyncs after a drop.
+    this.sendJson({ List: null })
     this.startHeartbeat()
   }
 
@@ -610,22 +647,37 @@ export class SyncplayClient extends EventEmitter {
     if (usersDirty) this.emit('room-users', this.roomUsers.slice())
   }
 
+  // `Set: {user:{X:{file}}}` and the `List` roster carry the same file shape,
+  // and "Join & watch" only offers a peer whose metadata survived the parse —
+  // so both paths must read it the same way.
+  private extractAppMeta(file: JsonObject): SyncplayRoomUser['animeDlAppMeta'] {
+    if (!isObject(file.features) || !isObject(file.features.animeDlAppMeta)) return undefined
+    const m = file.features.animeDlAppMeta
+    if (typeof m.animeId !== 'number' || typeof m.episodeInt !== 'string') return undefined
+    return {
+      animeId: m.animeId,
+      malId: typeof m.malId === 'number' ? m.malId : null,
+      episodeInt: m.episodeInt,
+      translationId: typeof m.translationId === 'number' ? m.translationId : null
+    }
+  }
+
+  // The server's `List` reply covers *every* room it knows, so flattening it
+  // would seat strangers from other rooms in ours. Prefer our own room by
+  // name; if the server canonicalized the name out from under us, a payload
+  // with exactly one room must still be ours — we're in it.
+  private pickOwnRoom(payload: JsonObject): unknown {
+    const own = this.config ? payload[this.config.room] : undefined
+    if (own !== undefined) return own
+    const rooms = Object.values(payload)
+    return rooms.length === 1 ? rooms[0] : undefined
+  }
+
   private absorbRemoteFile(username: string, file: JsonObject): void {
     const name = typeof file.name === 'string' ? file.name : ''
     const duration = typeof file.duration === 'number' ? file.duration : 0
     const size = typeof file.size === 'number' ? file.size : undefined
-    let meta: SyncplayRoomUser['animeDlAppMeta']
-    if (isObject(file.features) && isObject(file.features.animeDlAppMeta)) {
-      const m = file.features.animeDlAppMeta
-      if (typeof m.animeId === 'number' && typeof m.episodeInt === 'string') {
-        meta = {
-          animeId: m.animeId,
-          malId: typeof m.malId === 'number' ? m.malId : null,
-          episodeInt: m.episodeInt,
-          translationId: typeof m.translationId === 'number' ? m.translationId : null
-        }
-      }
-    }
+    const meta = this.extractAppMeta(file)
     let user = this.roomUsers.find((u) => u.username === username)
     if (!user) {
       user = { username, file: null }
@@ -659,10 +711,10 @@ export class SyncplayClient extends EventEmitter {
   }
 
   private handleList(payload: unknown): void {
-    if (!isObject(payload)) return
+    if (!isObject(payload) || !this.config) return
     const users: SyncplayRoomUser[] = []
-    for (const [_roomName, roomEntry] of Object.entries(payload)) {
-      if (!isObject(roomEntry)) continue
+    const roomEntry = this.pickOwnRoom(payload)
+    if (isObject(roomEntry)) {
       for (const [username, data] of Object.entries(roomEntry)) {
         if (!isObject(data)) continue
         const file = isObject(data.file)
@@ -673,7 +725,8 @@ export class SyncplayClient extends EventEmitter {
             }
           : null
         const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
-        users.push({ username, file, isReady })
+        const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
+        users.push({ username, file, isReady, animeDlAppMeta: meta })
       }
     }
     if (this.config) {
@@ -716,6 +769,11 @@ export class SyncplayClient extends EventEmitter {
     const position = typeof ps.position === 'number' ? ps.position : 0
     const paused = ps.paused === true
     const doSeek = ps.doSeek === true
+
+    // Record the room's view before the echo guards below: a spectator mirrors
+    // this back to the server, and the server's own periodic States (no setBy)
+    // are exactly the ones that keep it fresh.
+    this.lastRoomState = { position, paused, at: Date.now() }
 
     if (setBy === null) return
     if (this.config && setBy.toLowerCase() === this.config.username.toLowerCase()) return
@@ -820,19 +878,51 @@ export class SyncplayClient extends EventEmitter {
     this.sendJson({ Set: set })
   }
 
+  // Whether a real player is driving us right now. The Watch Together view
+  // joins a room *before* any player exists, and closing the player stops the
+  // renderer's snapshot pushes while the connection lives on.
+  private hasLivePlayback(): boolean {
+    return this.lastSnapshotAt > 0 && Date.now() - this.lastSnapshotAt <= PLAYBACK_STALE_MS
+  }
+
+  // The playstate to assert, or null to assert none at all.
+  //
+  // Without a live player our `snapshot` is the initial {position: 0, paused:
+  // true} (or a frozen leftover from a closed player), and the 1 s heartbeat
+  // used to broadcast it unconditionally: joining a room from the Watch
+  // Together view yanked everyone else back to 0 and paused them. A spectator
+  // must never move the room, so it echoes the room's own last known state —
+  // advanced by wall time while the room is playing, so we don't read as the
+  // lagging user either — and sends no playstate at all until the server has
+  // told us one (ping-only messages keep RTT calibration alive).
+  private buildPlaystate(doSeek: boolean): JsonObject | null {
+    if (this.hasLivePlayback()) {
+      return {
+        position: this.snapshot.position,
+        paused: this.snapshot.paused,
+        doSeek
+      }
+    }
+    const room = this.lastRoomState
+    if (!room) return null
+    const elapsed = room.paused ? 0 : (Date.now() - room.at) / 1000
+    return {
+      position: room.position + elapsed,
+      paused: room.paused,
+      doSeek: false
+    }
+  }
+
   private sendStateMessage(opts: { doSeek: boolean }): void {
     if (this.status.state !== 'ready') return
     const msg: JsonObject = {
-      playstate: {
-        position: this.snapshot.position,
-        paused: this.snapshot.paused,
-        doSeek: opts.doSeek
-      },
       ping: {
         clientLatencyCalculation: Date.now() / 1000,
         ...(this.serverRtt > 0 ? { clientRtt: this.serverRtt } : {})
       }
     }
+    const playstate = this.buildPlaystate(opts.doSeek)
+    if (playstate) msg.playstate = playstate
     const iotf: JsonObject = {}
     if (this.pendingClientAck > 0) iotf.client = this.pendingClientAck
     if (this.pendingServerAck > 0) {

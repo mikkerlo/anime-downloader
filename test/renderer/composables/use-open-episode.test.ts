@@ -5,6 +5,7 @@ import { usePlayerStore } from '../../../src/renderer/src/stores/player'
 
 type ApiMocks = {
   getAnime: ReturnType<typeof vi.fn>
+  getEpisodesBatch: ReturnType<typeof vi.fn>
   getEpisodesBatchCached: ReturnType<typeof vi.fn>
   downloadedEpisodesGet: ReturnType<typeof vi.fn>
   playerGetStreamUrl: ReturnType<typeof vi.fn>
@@ -61,9 +62,13 @@ beforeEach(() => {
   setActivePinia(createPinia())
   api = {
     getAnime: vi.fn(async () => ({ data: makeAnime(), source: 'api' })),
-    getEpisodesBatchCached: vi.fn(async (ids: number[]) => ({
+    getEpisodesBatch: vi.fn(async (ids: number[]) => ({
       data: ids.map((id) => makeDetail(id, String(id - 99), [500 + id, 600 + id])),
       source: 'api'
+    })),
+    getEpisodesBatchCached: vi.fn(async (ids: number[]) => ({
+      data: ids.map((id) => makeDetail(id, String(id - 99), [500 + id, 600 + id])),
+      source: 'cache'
     })),
     downloadedEpisodesGet: vi.fn(async () => ({})),
     playerGetStreamUrl: vi.fn(async () => ({
@@ -140,6 +145,93 @@ describe('useOpenEpisode', () => {
     expect(ids).toHaveLength(30)
     expect(ids[0]).toBe(130)
     expect(ids[29]).toBe(159)
+  })
+
+  it('falls back to the network when the cache has nothing (cold-cache join)', async () => {
+    // The Watch Together join case: this anime was never opened locally, so
+    // the cached channel returns an empty batch. Without the network fallback
+    // this failed with "No translations available".
+    api.getEpisodesBatchCached.mockResolvedValue({ data: [], source: 'cache' })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 601 })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([100, 101, 102], 42)
+    expect(usePlayerStore().playerState!.translationId).toBe(601)
+  })
+
+  it('skips the network fetch when the cache covers the whole window', async () => {
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '1' })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).not.toHaveBeenCalled()
+  })
+
+  it('refetches a cached target that lacks the requested translation (stale cache)', async () => {
+    // The joiner cached this anime before the host's translation existed. The
+    // target must be refetched so the join opens the host's translation
+    // (701, only on the network) instead of silently degrading to another one.
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [100, 101, 102].map((id) => makeDetail(id, String(id - 99), [500 + id])),
+      source: 'cache'
+    })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([101], 42)
+    expect(usePlayerStore().playerState!.translationId).toBe(701)
+  })
+
+  it('treats a cached target whose host translation is inactive as stale', async () => {
+    // The staleness check must agree with toPlayerTranslations' isActive
+    // filter: a cached copy of the host's translation with isActive: 0 would
+    // otherwise be judged fresh, then dropped by the filter — degrading to a
+    // different translation, the exact failure the refetch exists to close.
+    const staleTarget = makeDetail(101, '2', [601, 701])
+    staleTarget.translations[1].isActive = 0
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [makeDetail(100, '1', [600, 700]), staleTarget, makeDetail(102, '3', [602, 702])],
+      source: 'cache'
+    })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([101], 42)
+    expect(usePlayerStore().playerState!.translationId).toBe(701)
+  })
+
+  it('degrades to the cached translation when the stale-target refetch fails', async () => {
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [100, 101, 102].map((id) => makeDetail(id, String(id - 99), [500 + id])),
+      source: 'cache'
+    })
+    api.getEpisodesBatch.mockRejectedValue(new Error('offline'))
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2', translationId: 701 })
+    expect(result).toEqual({ ok: true })
+    // Host's translation is unreachable; the cached one (601) still plays.
+    expect(usePlayerStore().playerState!.translationId).toBe(601)
+  })
+
+  it('survives a network failure when the target episode is cached', async () => {
+    // Only episode 1 is cached; the network refresh for the neighbors fails.
+    api.getEpisodesBatchCached.mockResolvedValue({
+      data: [makeDetail(100, '1', [600, 700])],
+      source: 'cache'
+    })
+    api.getEpisodesBatch.mockRejectedValue(new Error('offline'))
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '1', translationId: 600 })
+    expect(result).toEqual({ ok: true })
+    expect(usePlayerStore().playerState!.translationId).toBe(600)
+  })
+
+  it('reports an error when the cache is cold and the network fails', async () => {
+    api.getEpisodesBatchCached.mockResolvedValue({ data: [], source: 'cache' })
+    api.getEpisodesBatch.mockRejectedValue(new Error('offline'))
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '2' })
+    expect(result).toEqual({ ok: false, error: expect.stringContaining('offline') })
+    expect(usePlayerStore().playerState).toBeNull()
   })
 
   it('marks downloaded translations from episode metadata', async () => {

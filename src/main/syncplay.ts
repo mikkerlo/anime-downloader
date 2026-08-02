@@ -32,6 +32,13 @@ const WATCHDOG_MS = 8000
 // mid-playback, short enough that closing the player stops our assertions
 // within one heartbeat or two. See sendStateMessage().
 const PLAYBACK_STALE_MS = 5000
+// How close to the room our local position must be before we start asserting
+// it. Same 3 s the renderer's apply rule uses to decide a seek is needed: at or
+// under it the renderer wouldn't move us anyway, so we have converged. A
+// freshly mounted <video> starts at {0, paused} and the renderer pushes that
+// snapshot before the first remote State has seeked it, so without this the
+// player path re-creates the very bug the spectator rule fixes.
+const ADOPT_TOLERANCE_S = 3
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -202,6 +209,10 @@ export class SyncplayClient extends EventEmitter {
   // compensation — this goes back out on the wire). Lets a spectator echo the
   // room instead of asserting a position it doesn't have.
   private lastRoomState: { position: number; paused: boolean; at: number } | null = null
+  // Whether local playback has converged with the room. False for a freshly
+  // opened file — its <video> reports {0, paused} until the first remote State
+  // seeks it — so that startup state is never asserted at the room.
+  private playbackAdopted = false
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
@@ -263,6 +274,10 @@ export class SyncplayClient extends EventEmitter {
   }
 
   setFile(file: SyncplayFileInfo): void {
+    // A different file means a fresh <video> at position 0 — it has to converge
+    // on the room again before it may assert. Identity, not object equality:
+    // the player re-pushes the same file once real duration is known.
+    if (this.currentFile?.canonicalName !== file.canonicalName) this.playbackAdopted = false
     this.currentFile = file
     if (this.status.state === 'ready') this.sendSetFile(file)
   }
@@ -292,6 +307,10 @@ export class SyncplayClient extends EventEmitter {
   }): void {
     this.snapshot = { position: payload.position, paused: payload.paused }
     this.lastSnapshotAt = Date.now()
+    // An explicit play/pause/seek is the user driving the room on purpose —
+    // it asserts even if we hadn't converged yet (pausing on arrival is a
+    // legitimate thing to do, and is how the room learns we're here).
+    this.playbackAdopted = true
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     log(
@@ -335,6 +354,7 @@ export class SyncplayClient extends EventEmitter {
     this.snapshot = { position: 0, paused: true }
     this.lastSnapshotAt = 0
     this.lastRoomState = null
+    this.playbackAdopted = false
   }
 
   // State that belongs to one socket, not to the session. The reconnect path in
@@ -667,8 +687,11 @@ export class SyncplayClient extends EventEmitter {
   // name; if the server canonicalized the name out from under us, a payload
   // with exactly one room must still be ours — we're in it.
   private pickOwnRoom(payload: JsonObject): unknown {
-    const own = this.config ? payload[this.config.room] : undefined
-    if (own !== undefined) return own
+    // hasOwnProperty, not `payload[name] !== undefined`: a room named
+    // `constructor` or `toString` would otherwise resolve to the prototype's
+    // member, skip the fallback, and fail isObject() — an empty roster.
+    const ownName = this.config?.room ?? ''
+    if (Object.prototype.hasOwnProperty.call(payload, ownName)) return payload[ownName]
     const rooms = Object.values(payload)
     return rooms.length === 1 ? rooms[0] : undefined
   }
@@ -726,7 +749,12 @@ export class SyncplayClient extends EventEmitter {
           : null
         const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
         const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
-        users.push({ username, file, isReady, animeDlAppMeta: meta })
+        // The reference server writes `file: {}` — never null, never absent —
+        // for a watcher with nothing loaded, so `file` above is a hollow
+        // {name:'', duration:0} for them and the view would render an empty
+        // file line. The `Set` path can't reach this: it omits a falsy file.
+        const hasFile = file !== null && file.name !== ''
+        users.push({ username, file: hasFile ? file : null, isReady, animeDlAppMeta: meta })
       }
     }
     if (this.config) {
@@ -896,7 +924,7 @@ export class SyncplayClient extends EventEmitter {
   // lagging user either — and sends no playstate at all until the server has
   // told us one (ping-only messages keep RTT calibration alive).
   private buildPlaystate(doSeek: boolean): JsonObject | null {
-    if (this.hasLivePlayback()) {
+    if (this.hasLivePlayback() && this.isAdopted()) {
       return {
         position: this.snapshot.position,
         paused: this.snapshot.paused,
@@ -905,12 +933,35 @@ export class SyncplayClient extends EventEmitter {
     }
     const room = this.lastRoomState
     if (!room) return null
-    const elapsed = room.paused ? 0 : (Date.now() - room.at) / 1000
     return {
-      position: room.position + elapsed,
+      position: this.projectedRoomPosition(room),
       paused: room.paused,
       doSeek: false
     }
+  }
+
+  // Where the room is *now*: its last reported position, advanced by wall time
+  // if it kept playing. Mirroring a stale position would read as lag.
+  private projectedRoomPosition(room: { position: number; paused: boolean; at: number }): number {
+    const elapsed = room.paused ? 0 : (Date.now() - room.at) / 1000
+    return room.position + elapsed
+  }
+
+  // A player is driving us, but is it playing *this room's* content yet? With
+  // no room state there is nothing to contradict — the first user in a room
+  // establishes its position. Otherwise we wait until our position has
+  // converged; the renderer's apply rule seeks us there within a heartbeat or
+  // two. Latches, so ordinary drift later never demotes a live player.
+  private isAdopted(): boolean {
+    if (this.playbackAdopted) return true
+    const room = this.lastRoomState
+    if (!room) {
+      this.playbackAdopted = true
+      return true
+    }
+    const drift = Math.abs(this.snapshot.position - this.projectedRoomPosition(room))
+    if (drift <= ADOPT_TOLERANCE_S) this.playbackAdopted = true
+    return this.playbackAdopted
   }
 
   private sendStateMessage(opts: { doSeek: boolean }): void {

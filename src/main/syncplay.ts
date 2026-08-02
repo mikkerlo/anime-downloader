@@ -99,6 +99,45 @@ function md5Hex(value: string): string {
   return createHash('md5').update(value, 'utf8').digest('hex')
 }
 
+// The five phases a single connection attempt walks through. `lastAttemptPhase`
+// tracks the furthest one the *current* attempt reached — `status.state` can't
+// be used for close reasons because on the default auto-reconnect config the
+// close that produces the final disconnected status belongs to a retry, whose
+// state has already been overwritten to 'reconnecting' (#215).
+const ATTEMPT_PHASES = [
+  'connecting',
+  'tls-probing',
+  'tls-handshake',
+  'hello-sent',
+  'ready'
+] as const
+type AttemptPhase = (typeof ATTEMPT_PHASES)[number]
+
+// Long form fills status.error on its own; the short form goes after the
+// "Max reconnect attempts reached — " prefix so the message stays one sentence.
+const PHASE_CLOSE_REASON: Record<AttemptPhase, { long: string; short: string }> = {
+  connecting: {
+    long: 'Connection closed before it was established',
+    short: 'never established'
+  },
+  'tls-probing': {
+    long: 'Server closed the connection during the TLS probe — it may not be a Syncplay server, or may not support TLS (Syncplay 1.6.3+ required)',
+    short: 'no reply to TLS probe'
+  },
+  'tls-handshake': {
+    long: 'Server closed the connection during the TLS handshake',
+    short: 'TLS handshake incomplete'
+  },
+  'hello-sent': {
+    long: 'Server closed the connection during login without a reply',
+    short: 'no reply to login'
+  },
+  ready: {
+    long: 'Connection to the server was lost',
+    short: 'connection lost'
+  }
+}
+
 export class SyncplayClient extends EventEmitter {
   private config: SyncplayConfig | null = null
   private socket: net.Socket | tls.TLSSocket | null = null
@@ -122,19 +161,24 @@ export class SyncplayClient extends EventEmitter {
   private lastAppliedRoomEpisode: string | null = null
 
   private serverRtt = 0
-  // Last transport-level failure, surfaced in the disconnected status so the
-  // UI can show *why* the socket dropped instead of a bare "Connection closed".
-  // Cleared only on user-initiated connect() — reconnect attempts re-enter via
-  // openSocket() directly, so the freshest failure survives the whole retry
-  // cycle and ends up in the maxed-out error.
+  // Per-attempt detail slots for the disconnect reason (#213/#215). All three
+  // reset in openSocket() — never in resetTransportState(), which runs at the
+  // top of onSocketClose() before the reason is composed — so the surfaced
+  // detail always belongs to the *last* attempt, whatever kind it is. The
+  // errorless close always has a phase reason to fall back on, which is what
+  // allows lastSocketError to be per-attempt instead of #213's session scope.
   private lastSocketError: string | null = null
+  // Text of a non-escalated server Error frame, recorded only pre-ready: it
+  // exists to explain login-phase closes ("Room name is invalid" then FIN must
+  // not read "without a reply"). Post-ready frames stay room-events only.
+  private lastServerError: string | null = null
+  private lastAttemptPhase: AttemptPhase = 'connecting'
 
   connect(config: SyncplayConfig): void {
     this.disconnectInternal(false)
     this.config = config
     this.reconnectAttempts = 0
     this.lastAppliedRoomEpisode = null
-    this.lastSocketError = null
     this.openSocket()
   }
 
@@ -237,20 +281,27 @@ export class SyncplayClient extends EventEmitter {
     this.tearDown()
     if (userInitiated) {
       this.config = null
-      this.setStatus({ state: 'idle' })
+      // Clear any prior failure: the popover renders status.error unconditional
+      // on state, and setStatus() merges — without this an explicit Disconnect
+      // after a failed connect keeps the old diagnosis rendered under 'idle'.
+      this.setStatus({ state: 'idle', error: undefined })
     }
   }
 
   private openSocket(): void {
     if (!this.config) return
     const { host, port } = this.config
+    this.lastAttemptPhase = 'connecting'
+    this.lastSocketError = null
+    this.lastServerError = null
     this.setStatus({
       state: this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting',
       host,
       port,
       room: this.config.room,
       username: this.config.username,
-      tls: false
+      tls: false,
+      error: undefined
     })
     log('connecting', host, port)
 
@@ -329,17 +380,22 @@ export class SyncplayClient extends EventEmitter {
 
   private finishHandshake(): void {
     if (!this.config) return
-    // A failure from an earlier attempt must not outlive a successful
+    // A failure from an earlier phase must not outlive a successful
     // connection — without this, a clean server FIN hours later would
-    // resurface the stale pre-ready error as the disconnect reason.
+    // resurface the stale pre-ready detail as the disconnect reason. The
+    // per-attempt reset in openSocket() does not cover a login-phase server
+    // Error on an attempt that reaches ready anyway ("Room name is invalid"
+    // then Hello), so the clear has to happen here too.
     this.lastSocketError = null
+    this.lastServerError = null
     this.setStatus({
       state: 'ready',
       host: this.config.host,
       port: this.config.port,
       room: this.config.room,
       username: this.config.username,
-      tls: this.tlsUpgraded
+      tls: this.tlsUpgraded,
+      error: undefined
     })
     this.reconnectAttempts = 0
     if (this.currentFile) this.sendSetFile(this.currentFile)
@@ -594,6 +650,14 @@ export class SyncplayClient extends EventEmitter {
           error: text
         })
       }
+    } else if (this.status.state !== 'ready') {
+      // Remember the server's own explanation so a FIN right after it does not
+      // read "closed during login without a reply". Once ready the frame stays
+      // a room-event only — otherwise a complaint from hours ago would outrank
+      // "Connection to the server was lost" at the eventual drop. Note the same
+      // text is deliberately shown twice on close (room-event + status.error),
+      // matching how the escalated branch above already behaves.
+      this.lastServerError = text
     }
   }
 
@@ -744,13 +808,22 @@ export class SyncplayClient extends EventEmitter {
       // status.error surfaces in the UI (test-connection button, player
       // popover). 'Auto-reconnect disabled' is *why we're not retrying*, not
       // *why we disconnected* — showing it as the error confuses users (#119).
-      // The last transport error (#213) is *why we disconnected* — append it
-      // so the user sees "Connection closed — connect ECONNREFUSED …" instead
-      // of guessing; the room-event log still carries the retry-state.
-      const detail = this.lastSocketError ? ` — ${this.lastSocketError}` : ''
-      const errorReason = maxedOut
-        ? `Max reconnect attempts reached${detail}`
-        : `Connection closed${detail}`
+      // The detail is composed from the *last attempt only*, in precedence
+      // order: the server's own Error text, then the transport error (#213),
+      // then the phase the attempt reached (#215) — an errorless close always
+      // has a phase to name, never the bare "Connection closed".
+      const phaseReason = PHASE_CLOSE_REASON[this.lastAttemptPhase]
+      let errorReason: string
+      if (maxedOut) {
+        const detail = this.lastServerError ?? this.lastSocketError ?? phaseReason.short
+        errorReason = `Max reconnect attempts reached — ${detail}`
+      } else if (this.lastServerError) {
+        errorReason = this.lastServerError
+      } else if (this.lastSocketError) {
+        errorReason = `Connection closed — ${this.lastSocketError}`
+      } else {
+        errorReason = phaseReason.long
+      }
       const eventReason = maxedOut ? 'Max reconnect attempts reached' : 'auto-reconnect disabled'
       this.setStatus({
         state: 'disconnected',
@@ -789,6 +862,12 @@ export class SyncplayClient extends EventEmitter {
   }
 
   private setStatus(patch: Partial<SyncplayStatus>): void {
+    // Single point of truth for phase tracking: any transition into one of the
+    // five attempt phases advances lastAttemptPhase, so a future phase can't
+    // be missed by forgetting a call site. openSocket() resets it per attempt.
+    if (patch.state && (ATTEMPT_PHASES as readonly string[]).includes(patch.state)) {
+      this.lastAttemptPhase = patch.state as AttemptPhase
+    }
     this.status = { ...this.status, ...patch }
     this.emit('connection-status', { ...this.status })
   }

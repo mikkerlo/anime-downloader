@@ -380,3 +380,89 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     expect(sendLocalState).toHaveBeenCalledTimes(1)
   })
 })
+
+// Live sessions (#220) kept surfacing the same class of bug: the app's own
+// machinery moves the <video>, and the element's flags were read as the
+// user's intent — pausing everyone on every buffer stall, and (once intent
+// tracking landed) swallowing the user's real pause instead.
+describe('useSyncplayClient — playback intent vs machinery (#220)', () => {
+  it('reports the user intent, not the element flag, in the snapshot', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 50, cause: 'pause' })
+  })
+
+  // Defect A: marking a pause that fires no event latched appliedPaused, and
+  // the guard then ate the user's *next* real pause — "pauses don't work".
+  it('does not swallow a real pause after a programmatic mark that never fired', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    // Buffer refill marked a pause; suppose no event followed.
+    s.markProgrammaticPlayback(true)
+    s.onLocalPause() // the echo it was marking
+    sendLocalState.mockClear()
+    s.onLocalPause() // the user, moments later
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 50, cause: 'pause' })
+  })
+
+  // A marked pause is machinery and must not reach the room at all.
+  it('swallows exactly one marked programmatic pause', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const s = useSyncplayClient(makeDeps({ video: fakeVideo() }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.markProgrammaticPlayback(true)
+    s.onLocalPause()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// The marker latches whenever the call it flags fires no event. The
+// already-paused door was closed in cc7db47; this is the failed-call door.
+describe('useSyncplayClient — a retracted mark cannot swallow the next play (#220)', () => {
+  it('does not eat a real play after a programmatic mark was retracted', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 30, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    // A refill marked a resume, then play() rejected and retracted it.
+    s.markProgrammaticPlayback(false)
+    s.markProgrammaticPlayback(null)
+    s.onLocalPlay()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 30, cause: 'play' })
+  })
+
+  // The retraction only clears a *resume* mark: the slot is single, and a
+  // play() promise can outlive the mark it was installed with.
+  it('does not retract a pause mark when a stale play() rejection lands', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const s = useSyncplayClient(makeDeps({ video: fakeVideo() }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    // A resume was marked, a pause superseded it, and only afterwards does the
+    // old play() reject — the pause's own mark must survive that retraction.
+    s.markProgrammaticPlayback(false)
+    s.markProgrammaticPlayback(true)
+    s.markProgrammaticPlayback(null)
+    s.onLocalPause()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})

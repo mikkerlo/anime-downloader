@@ -709,4 +709,118 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(last.playstate!.position).toBeGreaterThan(600)
     })
   })
+
+  // Every roster test above drives membership through `List`. `handleSet` is
+  // the other half — the only path that carries live membership changes — and
+  // no test fed it a raw frame, so its branches were reachable only in
+  // production.
+  describe('handleSet seats membership from live Set broadcasts', () => {
+    const serverSet = (user: Record<string, unknown>): void => {
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { user } }) + '\r\n'))
+    }
+
+    it('seats a peer on a joined event and drops it on left', () => {
+      handshake()
+
+      serverSet({ peer: { event: { joined: true } } })
+      expect(roomUsers.at(-1)!.map((u) => u.username)).toContain('peer')
+
+      serverSet({ peer: { event: { left: true } } })
+      expect(roomUsers.at(-1)!.map((u) => u.username)).not.toContain('peer')
+    })
+
+    it('does not seat the same peer twice on a repeated join', () => {
+      handshake()
+
+      serverSet({ peer: { event: { joined: true } } })
+      const afterFirst = roomUsers.at(-1)!.filter((u) => u.username === 'peer').length
+      serverSet({ peer: { event: { joined: true } } })
+
+      expect(afterFirst).toBe(1)
+      expect(roomUsers.at(-1)!.filter((u) => u.username === 'peer')).toHaveLength(1)
+    })
+
+    it('absorbs a peer file pushed without any event key', () => {
+      handshake()
+
+      serverSet({
+        peer: {
+          file: {
+            name: 'COTE - 7',
+            duration: 1440,
+            features: { animeDlAppMeta: { animeId: 42, episodeInt: '7', translationId: 1 } }
+          }
+        }
+      })
+
+      const peer = roomUsers.at(-1)!.find((u) => u.username === 'peer')
+      expect(peer?.file?.name).toBe('COTE - 7')
+    })
+
+    // The branch accepts two shapes for `data.isReady` — a nested object and a
+    // bare boolean — and this pins both arms.
+    //
+    // DELETE WITH THE BRANCH. This characterizes handleSet's `data.isReady`
+    // branch, which the reference server never emits — readiness travels as a
+    // top-level Set:{ready}. #229 deletes that branch and removes this test,
+    // replaced by a case feeding the real sendUserSetting shape ({room, file,
+    // event} with no isReady). (#225's item A1 specified the same deletion and
+    // was folded into #229 on 2026-08-06, so #229 is the sole owner.)
+    it('records peer readiness from both the object and boolean shapes', () => {
+      handshake()
+
+      serverSet({ peer: { isReady: { isReady: false } } })
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'peer')?.isReady).toBe(false)
+
+      serverSet({ other: { isReady: true } })
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'other')?.isReady).toBe(true)
+    })
+
+    it('ignores a malformed per-user payload without disturbing the roster', () => {
+      handshake()
+      serverSet({ peer: { event: { joined: true } } })
+      const before = roomUsers.length
+
+      serverSet({ peer: 'not-an-object' })
+
+      expect(roomUsers).toHaveLength(before)
+      expect(roomUsers.at(-1)!.map((u) => u.username)).toContain('peer')
+    })
+
+    // handleSet is also how the server tells us it canonicalized our room name.
+    // The rename is only observable through what it changes: pickOwnRoom() keys
+    // the next List off the adopted name, so a dropped rename reads the wrong
+    // room's roster (or none) from a multi-room payload.
+    //
+    // INVERT WITH #230. A top-level Set:{room} is a client→server command; no
+    // server-side sendSet emits it. #230 deletes the branch so the room filter's
+    // reference name cannot be rewritten mid-session, and this case flips to
+    // asserting the rename is ignored (its test 7).
+    it('adopts a server-renamed room, so the next List is read under the new name', () => {
+      handshake('cinema')
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(JSON.stringify({ Set: { room: { name: 'Cinema' } } }) + '\r\n')
+      )
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              Cinema: { me: { isReady: true, file: {} }, peer: { isReady: true, file: {} } },
+              cinema: { stranger: { isReady: true, file: {} } }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(
+        roomUsers
+          .at(-1)!
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'peer'])
+    })
+  })
 })

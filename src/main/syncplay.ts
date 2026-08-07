@@ -972,8 +972,39 @@ export class SyncplayClient extends EventEmitter {
     const serverCounter = typeof iotf.server === 'number' ? iotf.server : null
     const clientEcho = typeof iotf.client === 'number' ? iotf.client : null
 
+    // #232. Both statements below must stay *above* the drop guard at the
+    // bottom of this method — that guard returns, so anything placed after it
+    // is a no-op for the symptom this exists to fix. The server's forced State
+    // carries `ignoringOnTheFly.server` and the playstate in the same frame.
     if (serverCounter !== null) {
       this.pendingServerAck = serverCounter
+      // Zero our own counter unconditionally, matching the reference client
+      // (protocols.py:287-288, whose `not self.clientIgnoringOnTheFly` gate at
+      // :296 then lets the forced state through). Without it a *peer's* seek
+      // crossing our own unacked change on the wire is eaten by the drop guard
+      // below — and a forced State is one-shot, so it is never resent. In the
+      // forward direction that is unrecoverable: the room re-derives its
+      // position from min(watchers) (server.py:597-604), our stale position
+      // wins, `_setBy` becomes us, and our own self-guard then drops the
+      // periodic — silently reverting the peer's seek for the whole room.
+      //
+      // Deliberately not restructured into if/elif for shape parity with the
+      // reference: once this runs, `pendingClientAck` is 0 and the server only
+      // writes a `client` key when its own counter is truthy (protocols.py:
+      // 758-760), so the compare below can never match and its body would
+      // assign 0 to a 0. Accepted trade-off: we give up echo protection for the
+      // ~1 RTT between our assertion going out and the server echoing it back.
+      // Our change is already on the wire by then; we only stop suppressing
+      // inbound states.
+      this.pendingClientAck = 0
+      // Answer on receipt rather than waiting for the heartbeat. Called from
+      // *inside* this branch on purpose: four early returns sit between here
+      // and the remote-state emit, and the self-`setBy` one is the dominant
+      // path for a counter-bearing frame — the server broadcasts its forced
+      // update back to the setter too (server.py:184, :441-445, no sender
+      // filter). An ack at the end of handleState() would therefore never fire
+      // for our own seeks, which is exactly the deaf window it exists to close.
+      this.sendAck()
     }
     if (clientEcho !== null) {
       if (clientEcho === this.pendingClientAck) this.pendingClientAck = 0
@@ -987,8 +1018,13 @@ export class SyncplayClient extends EventEmitter {
     const doSeek = ps.doSeek === true
 
     // Record the room's view before the echo guards below: a spectator mirrors
-    // this back to the server, and the server's own periodic States (no setBy)
-    // are exactly the ones that keep it fresh.
+    // this back to the server, and the server's own periodic States are exactly
+    // the ones that keep it fresh. They do carry a setBy, contrary to what this
+    // comment used to claim — server.py:82-87 always passes room.getSetBy(),
+    // and Room.getPosition() re-elects it to the min() watcher whenever the room
+    // state is over a second old, so a periodic frame can arrive setBy *us* and
+    // return at the self-guard below. Recording above the guards is what keeps
+    // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
 
     if (setBy === null) return
@@ -1262,6 +1298,59 @@ export class SyncplayClient extends EventEmitter {
     const ms = Date.now() - arrivedAt
     if (ms < 0 || ms >= 5000) return null
     return ts + ms / 1000
+  }
+
+  // Immediate, ping-only answer to an inbound server ignore counter (#232).
+  //
+  // A dedicated emitter rather than a flag on sendStateMessage(), so that "the
+  // ack can never carry a playstate" is a property of the code instead of
+  // something a caller has to remember. It matters: on the tick the counter
+  // lands the renderer has not applied the forced state yet — remote-state is
+  // emitted further down handleState() and the element takes hundreds of ms to
+  // seek, while `snapshot` only refreshes on the renderer's 1 s push — so
+  // buildPlaystate() would return the *pre-seek* position as a live assertion,
+  // and the adoption gate cannot withhold it because playbackAdopted latches.
+  // That same frame is the one that lifts the server's ignore flag
+  // (protocols.py:775-777, ahead of the :788 gate), so the first playstate the
+  // server accepts from us would be the stale one — and Room.getPosition()
+  // takes min(watchers), so a stale-behind position drags the whole room back.
+  //
+  // This is a deliberate *divergence* from the reference, not convergence: the
+  // reference client does ship a playstate on its echo frame (protocols.py:
+  // 304-305 — both disjuncts are true right after :287-288). We diverge because
+  // our seek latency and 1 s snapshot cadence make our stale window far wider
+  // than mpv's, and because a playstate-free State is provably inert
+  // server-side: updateState(None, None, None, …) reads __hasPauseChanged(None)
+  // as False and skips setPosition (server.py:865-868, :880-882).
+  //
+  // Not a storm: while serverIgnoringOnTheFly != 0 the server suppresses its own
+  // periodic State (protocols.py:761) and only increments on `forced`, so this
+  // costs exactly one extra outbound frame per forced server update.
+  private sendAck(): void {
+    // Load-bearing, not decorative: dispatch() has no readiness gate, so
+    // handleState() genuinely runs pre-`ready` and during teardown. A counter
+    // dropped here is not lost — sendStateMessage()'s own drain carries it out
+    // on the first heartbeat once ready, which is why that drain is not dead
+    // code after this change.
+    if (this.status.state !== 'ready') return
+    if (this.pendingServerAck === 0) return
+    // Through the shared consume-once helper, like every other sender: two emit
+    // sites reading the stored pair independently is exactly how #231's
+    // duplicate-sample bug would come back. The timestamp arrived on this very
+    // frame, so the hold is sub-millisecond — the reference's own reply-driven
+    // timing, for free.
+    const echo = this.consumeServerLatencyEcho()
+    const msg: JsonObject = {
+      ping: {
+        clientLatencyCalculation: Date.now() / 1000,
+        ...(this.serverRtt > 0 ? { clientRtt: this.serverRtt } : {}),
+        ...(echo !== null ? { latencyCalculation: echo } : {})
+      },
+      // No `client` key: pendingClientAck was just zeroed in the same branch.
+      ignoringOnTheFly: { server: this.pendingServerAck }
+    }
+    this.pendingServerAck = 0
+    this.sendJson({ State: msg })
   }
 
   private sendStateMessage(opts: { doSeek: boolean }): void {

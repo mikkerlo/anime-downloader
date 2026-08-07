@@ -13,7 +13,7 @@ import TranslationMenu from '../player/TranslationMenu.vue';
 import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
-import { previewSeek, commitSeek } from '../../utils';
+import { previewSeek, commitSeek, resolveSeekTarget, sanitizeDuration } from '../../utils';
 import { useGrowingFile } from '../../composables/use-growing-file';
 
 const props = defineProps<{
@@ -943,7 +943,12 @@ function togglePlay(): void {
 function seek(time: number): void {
   const video = videoRef.value;
   if (!video) return;
-  video.currentTime = Math.max(0, Math.min(growingFile.clampSeekTarget(time), duration.value));
+  const target = resolveSeekTarget(growingFile.clampSeekTarget(time), {
+    elementDuration: video.duration,
+    refDuration: duration.value
+  });
+  if (target === null) return;
+  video.currentTime = target;
 }
 
 function seekRelative(delta: number): void {
@@ -1050,7 +1055,7 @@ function onTimeUpdate(): void {
 
 function onDurationChange(): void {
   if (videoRef.value) {
-    duration.value = videoRef.value.duration;
+    duration.value = sanitizeDuration(videoRef.value.duration);
   }
   pushSyncplayFile();
   if (prefetchSetting.value === 'open') {

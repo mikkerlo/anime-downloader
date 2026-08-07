@@ -53,3 +53,47 @@ export function commitSeek(time: number, video: { currentTime: number } | null |
   if (!isFinite(time)) return
   video.currentTime = time
 }
+
+// Seek bounding for `PlayerView.seek()` (#237). `HTMLMediaElement.currentTime`
+// is a WebIDL *restricted* double, so a non-finite write throws `TypeError`
+// rather than coercing — the value handed to the setter must always be finite.
+//
+// The upper clamp applies only when a duration is genuinely known (finite and
+// `> 0`). During the load window that follows every episode switch the element
+// reports `NaN` and the ref is still `0`; clamping against either collapses the
+// seek (to `NaN` → a throw, or to `0` → silently discarded intent). Unknown
+// means "no upper bound", not "bound of zero". The element is preferred over
+// the ref because the ref only moves when the queued `durationchange` task
+// runs, so it is stale by construction in exactly this window.
+//
+// The lower clamp always survives: `seekRelative` feeds `currentTime + delta`
+// back in, so a pre-metadata `seekRelative(-5)` arrives as `-5`.
+export function resolveSeekTarget(
+  requested: number,
+  durations: { elementDuration?: number; refDuration?: number }
+): number | null {
+  if (!Number.isFinite(requested)) return null
+  const { elementDuration, refDuration } = durations
+  const known = isKnownDuration(elementDuration)
+    ? elementDuration
+    : isKnownDuration(refDuration)
+      ? refDuration
+      : null
+  if (known === null) return Math.max(0, requested)
+  return Math.max(0, Math.min(requested, known))
+}
+
+// Guards the one write to `PlayerView`'s `duration` ref (#237). The HTML load
+// algorithm sets `duration` to `NaN` and fires `durationchange` on every
+// element reload, and `NaN` slips past the `<= 0` guards the seek bar's
+// progress computeds use, emitting `width: NaN%` into the DOM. `Infinity`
+// slips past all of them and would be persisted by `saveProgress`. Collapsing
+// both to `0` — the value every consumer already reads as "unknown" — repairs
+// them.
+export function sanitizeDuration(d: number): number {
+  return Number.isFinite(d) && d > 0 ? d : 0
+}
+
+function isKnownDuration(d: number | undefined): d is number {
+  return typeof d === 'number' && Number.isFinite(d) && d > 0
+}

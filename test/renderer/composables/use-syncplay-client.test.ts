@@ -61,8 +61,19 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+// Unmounting in the test body is skipped whenever an assertion above it throws,
+// and the composable's onMounted installs the snapshot interval — so one red
+// test would hand a live interval and its remote-state closure to every test
+// after it. Tear them down here instead, where a throw cannot skip it.
+const mountedWrappers: { unmount: () => void }[] = []
+
+// Timers first: if an unmount throws, fake timers would otherwise leak into
+// every following test — the same bleed this hook exists to stop. useRealTimers
+// discards the pending fake timers itself, so the composable's clearInterval
+// running against a stale fake id afterwards is harmless.
 afterEach(() => {
   vi.useRealTimers()
+  mountedWrappers.splice(0).forEach((w) => w.unmount())
 })
 
 type Deps = Parameters<typeof useSyncplayClient>[0]
@@ -96,6 +107,59 @@ function makeDeps(
   }
 }
 
+type Client = ReturnType<typeof useSyncplayClient>
+
+// The single mount site. Every mount registers for teardown here, so a new one
+// cannot forget — an untracked mount leaks the snapshot interval installed at
+// `use-syncplay-client.ts:480` into whatever runs next. The wrapper is
+// deliberately not returned: nothing needs to unmount mid-body, and a caller
+// that did would then be unmounted a second time by the hook.
+function trackedMount(deps: Deps): { client: Client } {
+  let client: Client | null = null
+  const Host = defineComponent({
+    setup() {
+      client = useSyncplayClient(deps)
+      return () => null
+    }
+  })
+  mountedWrappers.push(mount(Host))
+  return { client: client! }
+}
+
+// applyRemoteState lives behind the onSyncplayRemoteState subscription, which
+// is only wired in onMounted — so reaching it needs a real mount plus a stub
+// that hands the callback back out.
+async function mountWithRemoteState(
+  deps: Deps,
+  status: SyncplayStatus = { state: 'ready' }
+): Promise<{
+  client: Client
+  emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+}> {
+  let cb: ((s: SyncplayRemoteState) => void) | null = null
+  setApi({
+    onSyncplayRemoteState: (fn: (s: SyncplayRemoteState) => void) => {
+      cb = fn
+      return () => {}
+    }
+  })
+  const { client } = trackedMount(deps)
+  await flushPromises()
+  client.syncplayStatus.value = status
+  // Typed rather than cast: a fifth required field on SyncplayRemoteState must
+  // fail typecheck here, not leave every test below delivering a payload main
+  // would never send.
+  const base: SyncplayRemoteState = { position: 0, paused: true, doSeek: false, setBy: null }
+  return {
+    client,
+    emitRemoteState: (s) => cb?.({ ...base, ...s })
+  }
+}
+
+// NEEDS `readyState: 1` UNDER #240. That issue forks applyRemoteState on
+// `v.readyState >= 1` and parks the state below it; with no readyState here
+// `undefined >= 1` is false, so every remote apply in this file would defer and
+// the apply-rule and 1.5s-window tests go red at once. Default it to 1 there.
 function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement {
   const v: Record<string, unknown> = {
     currentTime: 0,
@@ -326,16 +390,6 @@ describe('useSyncplayClient — onLocalPlay / onLocalPause / onLocalCanPlay', ()
 })
 
 describe('useSyncplayClient — mounting into an already-ready session (#213)', () => {
-  function mountHost(deps: Deps): ReturnType<typeof mount> {
-    const Host = defineComponent({
-      setup() {
-        useSyncplayClient(deps)
-        return () => null
-      }
-    })
-    return mount(Host)
-  }
-
   it('pushes the current file on mount when the connection is already ready', async () => {
     const setFile = vi.fn()
     setApi({
@@ -349,7 +403,7 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
     store.status = { state: 'ready' }
 
     const v = fakeVideo({ duration: 1500 } as Partial<HTMLVideoElement>)
-    const wrapper = mountHost(
+    trackedMount(
       makeDeps({ video: v, animeId: 42, animeName: 'COTE', episodeInt: '7', translationId: 123 })
     )
     await flushPromises()
@@ -357,27 +411,213 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
     expect(setFile).toHaveBeenCalledWith(
       expect.objectContaining({ animeId: 42, canonicalName: 'COTE - 7', duration: 1500 })
     )
-    wrapper.unmount()
   })
 
   it('does not push on mount when there is no active session', async () => {
     const setFile = vi.fn()
     setApi({ syncplaySetFile: setFile })
-    const wrapper = mountHost(makeDeps({ video: fakeVideo() }))
+    trackedMount(makeDeps({ video: fakeVideo() }))
     await flushPromises()
     expect(setFile).not.toHaveBeenCalled()
-    wrapper.unmount()
   })
 })
 
+// The window is armed by an apply, so a test that never applies a remote state
+// asserts nothing about it — the previous version of this block called
+// onLocalPlay() on a fresh client and checked the state *was* sent, which
+// passes with the gate at use-syncplay-client.ts:156 deleted.
+//
+// Reaching the wall-clock gate also needs a seek the *value*-keyed guard lets
+// through (use-syncplay-client.ts:343-351): an event landing on the position we
+// applied is consumed there and never gets as far as the window.
 describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
-  it('suppresses local state during the 1.5s post-remote-apply window', () => {
+  // Characterization of today's behavior, and precisely the defect #239 is
+  // filed against: this seek is the user's, to a position nobody applied, and
+  // the room never hears about it. When #239 lands this expectation flips.
+  it('swallows a user seek to an unrelated position inside the 1.5s window (#239)', async () => {
+    vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
-    const s = useSyncplayClient(makeDeps({ video: fakeVideo() }))
-    s.syncplayStatus.value = { state: 'ready' }
-    s.onLocalPlay()
-    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // A remote seek arms the window and moves the element to 300.
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // 200 ms later the user drags the scrubber somewhere else entirely, so the
+    // value guard does not match and only the wall clock can suppress it.
+    vi.advanceTimersByTime(200)
+    v.currentTime = 900
+    client.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('sends that same seek once the window has expired', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    vi.advanceTimersByTime(1501)
+    v.currentTime = 900
+    client.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+  })
+
+  // The value-keyed guard is the one that must catch the element's own echo,
+  // however late it fires — this is what makes the window a backstop and not
+  // the mechanism.
+  it('swallows the echo of an applied seek even after the window has expired', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // A slow network stream takes longer than the window to land the seek.
+    vi.advanceTimersByTime(4000)
+    v.currentTime = 300
+    client.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// applyRemoteState is reachable only through the onSyncplayRemoteState
+// subscription — it is not on the returned surface — and the default API stub
+// wires that to noopSub, so before this block no test ever delivered a remote
+// state and the whole apply rule was uncovered.
+describe('useSyncplayClient — applyRemoteState', () => {
+  it('seeks when the room says doSeek, however small the drift', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 101, paused: true, doSeek: true })
+
+    expect(v.currentTime).toBe(101)
+  })
+
+  it('seeks on drift over the 3s tolerance and ignores drift under it', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 102, paused: true, doSeek: false })
+    expect(v.currentTime).toBe(100)
+
+    emitRemoteState({ position: 110, paused: true, doSeek: false })
+    expect(v.currentTime).toBe(110)
+  })
+
+  it('clamps a negative remote position to 0 rather than writing it', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: -5, paused: true, doSeek: true })
+
+    expect(v.currentTime).toBe(0)
+  })
+
+  it('plays and pauses the element to match the room', async () => {
+    const v = fakeVideo({ currentTime: 10, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 10, paused: false, doSeek: false })
+    expect(v.play).toHaveBeenCalled()
+
+    v.paused = false
+    emitRemoteState({ position: 10, paused: true, doSeek: false })
+    expect(v.pause).toHaveBeenCalled()
+  })
+
+  it('records who paused the room and clears it on resume', async () => {
+    const v = fakeVideo({ currentTime: 10, paused: false } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 10, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    v.paused = true
+    emitRemoteState({ position: 10, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  it('toasts a remote seek that names its author', async () => {
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 125, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(client.syncplayToast.value).toBe('peer seeked to 2:05')
+  })
+
+  // The room saying "playing" is not enough on its own: a peer still buffering
+  // holds the gate down, and applying the room's play there would resume a
+  // client the rest of the room is waiting for.
+  //
+  // REPLACE WITH #240. Not because it goes red — the `readyState: 1` default
+  // that issue adds to `fakeVideo` keeps it on the immediate path — but because
+  // it can only ever pass through the `!needsSeek && !needsPlayPause` early
+  // return (`use-syncplay-client.ts:263`): position matches and the element is
+  // already paused, so it never observes *when* effectivePaused was computed.
+  // #240 replaces it with the live-roster case: park at an explicit
+  // `readyState: 0` with every peer ready, flip one to not-ready, fire
+  // loadedmetadata, assert no play(). effectivePaused is recomputed at apply
+  // time precisely so that case fails on a park-time snapshot.
+  it('keeps the element paused while a peer is not ready, even on a playing room', async () => {
+    const v = fakeVideo({ currentTime: 10, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+
+    emitRemoteState({ position: 10, paused: false, doSeek: false })
+
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // The other half of the same fold, and the more interesting one: we are
+  // already playing when a peer starts buffering. effectivePaused flips to
+  // true, so needsPlayPause becomes true and the room stalls us — this is the
+  // only case that reaches the pause arm rather than the early return above.
+  it('pauses an already-playing element when a peer goes not ready', async () => {
+    const v = fakeVideo({ currentTime: 10, paused: false } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+
+    emitRemoteState({ position: 10, paused: false, doSeek: false })
+
+    expect(v.pause).toHaveBeenCalled()
+    expect(v.play).not.toHaveBeenCalled()
   })
 })
 

@@ -110,9 +110,11 @@ function makeDeps(
 type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
-// cannot forget — an untracked mount leaks its snapshot interval (`:493`) into
-// whatever runs next.
-function trackedMount(deps: Deps): { client: Client; wrapper: ReturnType<typeof mount> } {
+// cannot forget — an untracked mount leaks the snapshot interval installed at
+// `use-syncplay-client.ts:480` into whatever runs next. The wrapper is
+// deliberately not returned: nothing needs to unmount mid-body, and a caller
+// that did would then be unmounted a second time by the hook.
+function trackedMount(deps: Deps): { client: Client } {
   let client: Client | null = null
   const Host = defineComponent({
     setup() {
@@ -120,9 +122,8 @@ function trackedMount(deps: Deps): { client: Client; wrapper: ReturnType<typeof 
       return () => null
     }
   })
-  const wrapper = mount(Host)
-  mountedWrappers.push(wrapper)
-  return { client: client!, wrapper }
+  mountedWrappers.push(mount(Host))
+  return { client: client! }
 }
 
 // applyRemoteState lives behind the onSyncplayRemoteState subscription, which
@@ -389,10 +390,6 @@ describe('useSyncplayClient — onLocalPlay / onLocalPause / onLocalCanPlay', ()
 })
 
 describe('useSyncplayClient — mounting into an already-ready session (#213)', () => {
-  function mountHost(deps: Deps): void {
-    trackedMount(deps)
-  }
-
   it('pushes the current file on mount when the connection is already ready', async () => {
     const setFile = vi.fn()
     setApi({
@@ -406,7 +403,7 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
     store.status = { state: 'ready' }
 
     const v = fakeVideo({ duration: 1500 } as Partial<HTMLVideoElement>)
-    mountHost(
+    trackedMount(
       makeDeps({ video: v, animeId: 42, animeName: 'COTE', episodeInt: '7', translationId: 123 })
     )
     await flushPromises()
@@ -419,7 +416,7 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
   it('does not push on mount when there is no active session', async () => {
     const setFile = vi.fn()
     setApi({ syncplaySetFile: setFile })
-    mountHost(makeDeps({ video: fakeVideo() }))
+    trackedMount(makeDeps({ video: fakeVideo() }))
     await flushPromises()
     expect(setFile).not.toHaveBeenCalled()
   })
@@ -587,14 +584,13 @@ describe('useSyncplayClient — applyRemoteState', () => {
   //
   // REPLACE WITH #240. Not because it goes red — the `readyState: 1` default
   // that issue adds to `fakeVideo` keeps it on the immediate path — but because
-  // it can only ever pass
-  // through the `!needsSeek && !needsPlayPause` early return
-  // (`use-syncplay-client.ts:263`): position matches and the element is already
-  // paused, so it never observes *when* effectivePaused was computed. #240
-  // replaces it with the live-roster case: park at an explicit `readyState: 0`
-  // with every peer ready, flip one to not-ready, fire loadedmetadata, assert
-  // no play(). effectivePaused is recomputed at apply time precisely so that
-  // case fails on a park-time snapshot.
+  // it can only ever pass through the `!needsSeek && !needsPlayPause` early
+  // return (`use-syncplay-client.ts:263`): position matches and the element is
+  // already paused, so it never observes *when* effectivePaused was computed.
+  // #240 replaces it with the live-roster case: park at an explicit
+  // `readyState: 0` with every peer ready, flip one to not-ready, fire
+  // loadedmetadata, assert no play(). effectivePaused is recomputed at apply
+  // time precisely so that case fails on a park-time snapshot.
   it('keeps the element paused while a peer is not ready, even on a playing room', async () => {
     const v = fakeVideo({ currentTime: 10, paused: true } as Partial<HTMLVideoElement>)
     const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {

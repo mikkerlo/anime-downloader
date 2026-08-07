@@ -998,7 +998,18 @@ export class SyncplayClient extends EventEmitter {
       return
     }
 
-    const compensated = position + this.serverRtt / 2
+    // Only a *playing* room has aged since the state left the peer; a paused
+    // position doesn't advance with wall time, so shifting it forward is pure
+    // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
+    // (use-syncplay-client.ts:259), so a paused scrub lands every peer up to
+    // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
+    // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
+    // mirrored server-side in _updatePositionByAge, server.py:871-872).
+    //
+    // One expression, read twice below. Branching the stored echo reference
+    // (next line) apart from the emitted value re-arms the #220 self-seek loop
+    // documented at :341-350 on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
+    const compensated = paused ? position : position + this.serverRtt / 2
     this.lastAppliedRemotePosition = Math.max(0, compensated)
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {

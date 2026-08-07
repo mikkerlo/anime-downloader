@@ -787,16 +787,13 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomUsers.at(-1)!.map((u) => u.username)).toContain('peer')
     })
 
-    // handleSet is also how the server tells us it canonicalized our room name.
-    // The rename is only observable through what it changes: pickOwnRoom() keys
-    // the next List off the adopted name, so a dropped rename reads the wrong
-    // room's roster (or none) from a multi-room payload.
-    //
-    // INVERT WITH #230. A top-level Set:{room} is a client→server command; no
-    // server-side sendSet emits it. #230 deletes the branch so the room filter's
-    // reference name cannot be rewritten mid-session, and this case flips to
-    // asserting the rename is ignored (its test 7).
-    it('adopts a server-renamed room, so the next List is read under the new name', () => {
+    // A top-level `Set: {room}` is a client→server command — the reference
+    // server consumes it and no server-side `sendSet` emits it. Since the room
+    // filter (#230) keys off `this.config.room`, honouring an unsolicited one
+    // would rewrite the filter's reference name mid-session and re-expose
+    // every stranger, so the branch is gone: the roster stays keyed to the
+    // name `handleHello` seated us under.
+    it('ignores a top-level Set:{room}, so the filter’s reference name cannot be rewritten', () => {
       handshake('cinema')
 
       lastTlsSocket!.emit(
@@ -808,8 +805,8 @@ describe('SyncplayClient room presence on join (#220)', () => {
         Buffer.from(
           JSON.stringify({
             List: {
-              Cinema: { me: { isReady: true, file: {} }, peer: { isReady: true, file: {} } },
-              cinema: { stranger: { isReady: true, file: {} } }
+              cinema: { me: { isReady: true, file: {} }, peer: { isReady: true, file: {} } },
+              Cinema: { stranger: { isReady: true, file: {} } }
             }
           }) + '\r\n'
         )
@@ -821,6 +818,224 @@ describe('SyncplayClient room presence on join (#220)', () => {
           .map((u) => u.username)
           .sort()
       ).toEqual(['me', 'peer'])
+
+      // …and the per-user filter still reads "cinema" as ours, so the renamed
+      // room's occupant stays out of the roster.
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            Set: { user: { stranger: { room: { name: 'Cinema' }, file: { name: 'X - 1' } } } }
+          }) + '\r\n'
+        )
+      )
+
+      expect(
+        roomUsers
+          .at(-1)!
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'peer'])
+    })
+  })
+
+  // With `isolateRooms` off — the reference server's default — `RoomManager.
+  // broadcast` fans `Set: {user}` out to *every* room on the server, and
+  // `handleSet` never read `data.room.name`. Strangers were seated, their
+  // episode changes logged, and their file frames could navigate our player.
+  // The filter has to be ordered rather than flat: a peer switching *out* of
+  // our room arrives as a lone entry naming their **destination**
+  // (`sendRoomSwitchMessage` broadcasts after `moveWatcher` has already
+  // reassigned the room), so "ignore off-room entries" would discard the only
+  // frame that tells us they left.
+  describe('handleSet scopes Set:{user} to our own room (#230)', () => {
+    let roomEvents: string[]
+    let episodeChanges: unknown[]
+
+    const serverSet = (user: Record<string, unknown>): void => {
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { user } }) + '\r\n'))
+    }
+
+    const fileFrame = (name: string, withMeta = false): Record<string, unknown> => ({
+      name,
+      duration: 1440,
+      ...(withMeta
+        ? { features: { animeDlAppMeta: { animeId: 42, malId: 7, episodeInt: '7' } } }
+        : {})
+    })
+
+    const usernames = (): string[] => (roomUsers.at(-1) ?? []).map((u) => u.username).sort()
+
+    beforeEach(() => {
+      roomEvents = []
+      episodeChanges = []
+      client.on('room-event', (e) => roomEvents.push((e as { text: string }).text))
+      client.on('remote-episode-change', (e) => episodeChanges.push(e))
+    })
+
+    // Written first, and it is not a regression guard: it passes on `main`
+    // (where no room name is read at all) and fails only on a correct-looking
+    // filter that keeps `pickOwnRoom`'s stale name. That hole is the one way
+    // this change can make a working server worse — the roster would fill from
+    // `List` and then empty itself peer by peer as each pushes a file.
+    it('adopts the fallback room name, so later Set frames from that room are not filtered', () => {
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'cinema',
+        username: 'me',
+        autoReconnect: false
+      })
+      lastSocket!.emit('connect')
+      lastSocket!.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
+      lastTlsSocket!.emit('secureConnect')
+      // No `room` key in Hello, so `handleHello` cannot adopt a canonical name.
+      lastTlsSocket!.emit('data', Buffer.from('{"Hello":{"username":"me","version":"1.6.9"}}\r\n'))
+      // Single room, keyed under a name we never learned → pickOwnRoom's
+      // fallback arm resolves the roster but must also adopt "Cinema".
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { Cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+
+      serverSet({ mikkerlo: { room: { name: 'Cinema' }, file: fileFrame('COTE - 7') } })
+
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.file?.name).toBe('COTE - 7')
+    })
+
+    // Case 1: the frame that separates an ordered filter from a flat one. It
+    // names the peer's *new* room and carries no `left` event, because plain
+    // `RoomManager.moveWatcher` emits none.
+    it('drops a seated peer named by an off-room entry — that is the switch-out frame', () => {
+      handshake()
+      serverSet({ mikkerlo: { event: { joined: true } } })
+      roomEvents.length = 0
+
+      serverSet({ mikkerlo: { room: { name: 'elsewhere' } } })
+
+      expect(usernames()).toEqual(['me'])
+      expect(roomEvents).toEqual(['mikkerlo left the room'])
+    })
+
+    // Case 10: `sendFileUpdate` also emits `{room, file}` with no `event`, on
+    // the hot path, so "no event means switch-in, announce a join" would put a
+    // spurious join line in front of every switched-to line.
+    it('seats an unseated in-room peer from a file frame without announcing a join', () => {
+      handshake()
+
+      serverSet({ mikkerlo: { room: { name: 'cinema' }, file: fileFrame('COTE - 7') } })
+
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+      expect(roomEvents).toEqual(['mikkerlo switched to "COTE - 7"'])
+    })
+
+    it('seats a peer switching into our room from a room-only frame', () => {
+      handshake()
+
+      serverSet({ mikkerlo: { room: { name: 'cinema' } } })
+
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+      expect(roomEvents).toEqual(['mikkerlo joined the room'])
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.file).toBeNull()
+    })
+
+    it('ignores a stranger’s file frame entirely — no seat, no log line, no auto-nav', () => {
+      handshake()
+
+      serverSet({
+        stranger: { room: { name: 'elsewhere' }, file: fileFrame('Some Other Show - 1', true) }
+      })
+
+      expect(usernames()).toEqual(['me'])
+      expect(roomEvents).toEqual([])
+      expect(episodeChanges).toEqual([])
+    })
+
+    it('ignores join and leave events from another room', () => {
+      handshake()
+      const emitsBefore = roomUsers.length
+
+      serverSet({ stranger: { room: { name: 'elsewhere' }, event: { joined: true } } })
+      serverSet({ stranger: { room: { name: 'elsewhere' }, event: { left: true } } })
+
+      expect(roomUsers).toHaveLength(emitsBefore)
+      expect(usernames()).toEqual(['me'])
+      expect(roomEvents).toEqual([])
+    })
+
+    // Rule 0: self is exempt from the room filter. A flat rule 2 would delete
+    // us from our own roster, and we would only reappear on the next readiness
+    // toggle or reconnect.
+    it('never evicts us on a self entry naming another room, and keeps our room name', () => {
+      handshake()
+
+      serverSet({ me: { room: { name: 'elsewhere' } } })
+
+      expect(usernames()).toEqual(['me'])
+      expect(roomEvents).toEqual([])
+
+      // The filter still keys off "cinema", so an in-room peer is accepted.
+      serverSet({ mikkerlo: { room: { name: 'cinema' } } })
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+    })
+
+    // Rule 0 is "exempt from the room filter", not "skip the entry".
+    // `sendFileUpdate` broadcasts without excluding the sender, so our own push
+    // comes back to us and `absorbRemoteFile` is what keeps our roster row's
+    // file current between `List` replies.
+    it('still absorbs our own echoed file, silently', () => {
+      handshake()
+
+      serverSet({ me: { room: { name: 'cinema' }, file: fileFrame('COTE - 7', true) } })
+
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.file?.name).toBe('COTE - 7')
+      expect(roomEvents).toEqual([])
+      expect(episodeChanges).toEqual([])
+    })
+
+    // Characterization, not a regression guard: `sendUserSetting` always writes
+    // `room`, so a roomless entry only arrives from a proxy or a non-reference
+    // server. Treating it as ours preserves today's behavior exactly.
+    it('treats an entry with no room key as ours', () => {
+      handshake()
+
+      serverSet({ mikkerlo: { file: fileFrame('COTE - 7') } })
+
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.file?.name).toBe('COTE - 7')
+    })
+
+    // `PublicRoomManager.moveWatcher` (isolateRooms=True) does broadcast a
+    // `left`, but with the **old** room and room-scoped — so it names our own
+    // room and takes today's exact path.
+    it('keeps the isolateRooms leave frame working, since it names our own room', () => {
+      handshake()
+      serverSet({ mikkerlo: { event: { joined: true } } })
+      roomEvents.length = 0
+
+      serverSet({ mikkerlo: { room: { name: 'cinema' }, event: { left: true } } })
+
+      expect(usernames()).toEqual(['me'])
+      expect(roomEvents).toEqual(['mikkerlo left the room'])
+    })
+
+    // …and on that server the switch-in's file frame arrives *before* the
+    // switch frame (`moveWatcher` ends with `setFile`, inside `setWatcherRoom`,
+    // ahead of `sendRoomSwitchMessage`). So the peer is seated silently by the
+    // file frame and the room-only frame that follows must do nothing at all.
+    it('seats an isolated switch-in once, and the trailing room-only frame is a no-op', () => {
+      handshake()
+      serverSet({ mikkerlo: { room: { name: 'cinema' }, file: fileFrame('COTE - 7') } })
+      const emitsAfterFile = roomUsers.length
+
+      serverSet({ mikkerlo: { room: { name: 'cinema' } } })
+
+      expect(roomUsers.at(-1)!.filter((u) => u.username === 'mikkerlo')).toHaveLength(1)
+      expect(roomEvents).toEqual(['mikkerlo switched to "COTE - 7"'])
+      expect(roomUsers).toHaveLength(emitsAfterFile)
     })
   })
 })

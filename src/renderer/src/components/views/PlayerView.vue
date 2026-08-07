@@ -224,9 +224,18 @@ const skipMarkers = useSkipMarkers({
   getAnimeId: () => props.animeId,
   getCurrentEpisodeInt: () => currentEpisodeInt.value,
   getCurrentTime: () => currentTime.value,
+  // The landing check must read the element, not the display ref: `currentTime`
+  // is written only from `timeupdate` and is frozen while the scrubber-drag
+  // latch is set (#238).
+  getPlayheadTime: () => videoRef.value?.currentTime ?? 0,
   isStreaming,
   activeStreamUrl,
-  onSeek: (t) => seek(t)
+  onSeek: (t) => seek(t),
+  onSkipLandedShort: () => {
+    // "Waiting for download…" already occupies this slot and says the same
+    // thing; don't stack a second toast on top of it.
+    if (!waitingForDownload.value) showSkipClampToast();
+  }
 });
 const {
   showSkipDetections,
@@ -249,6 +258,7 @@ void streamSkipDetection;
 // the same per-show payload, so they don't need a refetch on episode flip.
 watch(currentEpisodeInt, (epInt) => {
   resetSkipUiState();
+  clearSkipClampToast();
   if (prefetchInFlight.value && prefetchInFlight.value.episodeInt === epInt) {
     prefetchInFlight.value = null;
     stopPrefetchPolling();
@@ -262,6 +272,34 @@ let episodeOpenedAt = Date.now();
 let pendingPrevEpisodeInt = '';
 const resumeToast = ref('');
 let resumeToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Growing .part (#238): a skip whose seek landed short of the band end. The
+// button stays up, so the toast is the only feedback that the click did not
+// take — keep the copy neutral, it must not claim the playhead moved.
+const SKIP_CLAMP_TOAST_MS = 2500;
+const skipClampToast = ref('');
+let skipClampToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearSkipClampToast(): void {
+  skipClampToast.value = '';
+  if (skipClampToastTimer) {
+    clearTimeout(skipClampToastTimer);
+    skipClampToastTimer = null;
+  }
+}
+
+function showSkipClampToast(): void {
+  skipClampToast.value = "Not downloaded yet — can't skip past the download";
+  if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
+  skipClampToastTimer = setTimeout(() => {
+    skipClampToast.value = '';
+    skipClampToastTimer = null;
+  }, SKIP_CLAMP_TOAST_MS);
+}
+
+// The composable resets its own state on the stream-mode transition; the
+// toast lives here, so it needs its own clear.
+watch(isStreaming, () => clearSkipClampToast());
 
 // Pre-fetch next episode (issue #78)
 type PrefetchSetting = 'off' | 'open' | 'time-5min' | 'progress-50';
@@ -362,6 +400,14 @@ const {
   onVideoSeeked,
   onVideoWaiting
 } = syncplay;
+
+// `seeked` is shared: syncplay uses it for echo suppression, and useSkipMarkers
+// uses it as the landing oracle for a pending skip (#238). Order doesn't
+// matter — neither reads the other's state.
+function onVideoSeekedAll(): void {
+  skipMarkers.onVideoSeeked();
+  onVideoSeeked();
+}
 
 function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   if (ep.animeId !== props.animeId) {
@@ -1809,6 +1855,7 @@ onBeforeUnmount(() => {
   }
   if (prefetchToastTimer) clearTimeout(prefetchToastTimer);
   if (resumeToastTimer) clearTimeout(resumeToastTimer);
+  if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
   // The document keydown listener is removed by usePlayerKeyboard's
   // onBeforeUnmount hook.
   document.removeEventListener('fullscreenchange', onFullscreenChange);
@@ -1967,6 +2014,11 @@ const bufferedProgress = computed(() => {
       <div v-if="prefetchToast" class="prefetch-toast">{{ prefetchToast }}</div>
     </transition>
 
+    <!-- Growing .part (#238): a skip click that couldn't clear the band -->
+    <transition name="fade">
+      <div v-if="skipClampToast" class="mkv-buffering-toast">{{ skipClampToast }}</div>
+    </transition>
+
     <!-- Syncplay toast -->
     <transition name="fade">
       <div v-if="syncplayToast" class="syncplay-toast">{{ syncplayToast }}</div>
@@ -1992,7 +2044,7 @@ const bufferedProgress = computed(() => {
         crossorigin="anonymous"
         @play="onPlay"
         @pause="onPause"
-        @seeked="onVideoSeeked"
+        @seeked="onVideoSeekedAll"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"

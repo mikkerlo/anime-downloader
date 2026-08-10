@@ -879,6 +879,8 @@ describe('SyncplayClient room presence on join (#220)', () => {
     // this change can make a working server worse — the roster would fill from
     // `List` and then empty itself peer by peer as each pushes a file.
     it('adopts the fallback room name, so later Set frames from that room are not filtered', () => {
+      const statuses: Array<{ room?: string }> = []
+      client.on('connection-status', (s) => statuses.push(s as { room?: string }))
       client.connect({
         host: 'syncplay.test',
         port: 8999,
@@ -905,6 +907,12 @@ describe('SyncplayClient room presence on join (#220)', () => {
 
       expect(usernames()).toEqual(['me', 'mikkerlo'])
       expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.file?.name).toBe('COTE - 7')
+
+      // The name the view renders is a third copy: `finishHandshake` emitted
+      // "cinema" before the `List` arrived, and every later status that carries
+      // a room reads it back off the config — so the adoption has to push it
+      // through, or the displayed room flips on the next reconnect.
+      expect(statuses.at(-1)!.room).toBe('Cinema')
     })
 
     // Case 1: the frame that separates an ordered filter from a flat one. It
@@ -995,6 +1003,69 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.file?.name).toBe('COTE - 7')
       expect(roomEvents).toEqual([])
       expect(episodeChanges).toEqual([])
+    })
+
+    // …and the branch where the exemption actually earns its keep: the case
+    // above names our own room, so it takes the ordinary in-room path and would
+    // pass with rule 0 deleted. Only an off-room *self* entry reaches rule 2's
+    // `continue`, which would drop our own file instead of absorbing it.
+    // Unreachable against a reference server — belt and braces for rule 0.
+    it('absorbs our own echoed file even when the entry names another room', () => {
+      handshake()
+
+      serverSet({ me: { room: { name: 'elsewhere' }, file: fileFrame('COTE - 7', true) } })
+
+      expect(usernames()).toEqual(['me'])
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.file?.name).toBe('COTE - 7')
+      expect(roomEvents).toEqual([])
+      expect(episodeChanges).toEqual([])
+    })
+
+    // Rule 1 announces a switch-in only for frames that carry nothing but a
+    // room. `isReady` speaks for itself: the branch at the bottom of the loop
+    // seats the user, so announcing here would put a spurious join line in
+    // front of it. Dead against a reference server (live readiness is a
+    // top-level `Set: {ready}`), live again the moment #229 revives the path.
+    it('seats a peer from a {room, isReady} entry without announcing a join', () => {
+      handshake()
+
+      serverSet({ mikkerlo: { room: { name: 'cinema' }, isReady: false } })
+
+      expect(usernames()).toEqual(['me', 'mikkerlo'])
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBe(false)
+      expect(roomEvents).toEqual([])
+    })
+
+    // Pins the invariant that makes `handleSet` safe to write against a
+    // non-null `config`: the two sites that null it (`failHandshake`,
+    // `disconnectInternal(true)`) both go through `tearDown` →
+    // `resetTransportState`, which sets `rxBuffer = ''` — so the rest of the
+    // chunk is discarded mid-drain rather than dispatched without a config.
+    // (`tearDown` also strips the socket's listeners, and `upgradeToTls`
+    // reassigns `this.socket` to the TLS socket, so no *later* chunk arrives
+    // either.) Without this the filter's own-room comparison would need a
+    // fail-closed reading of `undefined` to mean anything.
+    it('discards the rest of the chunk once an escalating Error tears the session down', () => {
+      handshake()
+      const emitsBefore = roomUsers.length
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ Error: { message: 'You are banned from this server' } }) +
+            '\r\n' +
+            JSON.stringify({
+              Set: { user: { stranger: { room: { name: 'elsewhere' } } } }
+            }) +
+            '\r\n'
+        )
+      )
+
+      // `tearDown` already emptied the roster without broadcasting, so the
+      // proof is that the stranger produced neither a fresh `room-users` emit
+      // nor a join line.
+      expect(roomUsers).toHaveLength(emitsBefore)
+      expect(roomEvents).toEqual(['You are banned from this server'])
     })
 
     // Characterization, not a regression guard: `sendUserSetting` always writes

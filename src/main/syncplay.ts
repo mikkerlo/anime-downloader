@@ -701,7 +701,15 @@ export class SyncplayClient extends EventEmitter {
         // reaches its own self-guard.
         const entryRoom =
           isObject(data.room) && typeof data.room.name === 'string' ? data.room.name : undefined
-        const offRoom = entryRoom !== undefined && ownRoom !== undefined && entryRoom !== ownRoom
+        // No `ownRoom !== undefined` clause: `config.room` is a `string`, so an
+        // undefined own room means `this.config` is null — and both sites that
+        // null it tear the transport down first, clearing `rxBuffer` mid-drain
+        // and stripping the socket's listeners, so no frame reaches here
+        // without a config. Comparing straight through therefore changes no
+        // reachable behavior; it just makes an unknown own room read as
+        // *off*-room rather than as "no filter", so the failure mode if that
+        // invariant ever breaks is dropping strangers, not seating them.
+        const offRoom = entryRoom !== undefined && entryRoom !== ownRoom
         // Rule 0: never filter ourselves. A self entry naming another room
         // can't come from a reference server (the server only relocates a
         // watcher that asked to move, and we never send `Set: {room}`), so we
@@ -730,12 +738,19 @@ export class SyncplayClient extends EventEmitter {
         // nothing at all. The announcement is gated on `file` because
         // `sendFileUpdate` emits `{room, file}` with no `event` on the hot
         // path, and there absorbRemoteFile already announces the switch and
-        // owns the seating.
+        // owns the seating. `isReady` is excluded on the same principle: the
+        // branch at the bottom of the loop seats the user itself, so a
+        // `{room, isReady}` entry would announce a join in front of it. That
+        // shape is unreachable against a reference server (live readiness is a
+        // *top-level* `Set: {ready}`, and `user[X].isReady` is dead code —
+        // see docs/syncplay.md), so this keeps the announcement to frames that
+        // carry a room and nothing that already speaks for itself.
         if (
           entryRoom !== undefined &&
           username !== this.config?.username &&
           !isObject(data.event) &&
           !isObject(data.file) &&
+          data.isReady === undefined &&
           !this.roomUsers.some((u) => u.username === username)
         ) {
           this.emit('room-event', { level: 'info', text: `${username} joined the room` })
@@ -803,6 +818,9 @@ export class SyncplayClient extends EventEmitter {
   // would seat strangers from other rooms in ours. Prefer our own room by
   // name; if the server canonicalized the name out from under us, a payload
   // with exactly one room must still be ours — we're in it.
+  //
+  // Despite the name this is a **mutator** on the fallback arm: it adopts that
+  // entry's key into `config.room` *and* `status.room` (see below).
   private pickOwnRoom(payload: JsonObject): unknown {
     // hasOwnProperty, not `payload[name] !== undefined`: a room named
     // `constructor` or `toString` would otherwise resolve to the prototype's
@@ -817,7 +835,15 @@ export class SyncplayClient extends EventEmitter {
     // off-room and evict each peer as they push a file — a roster that fills
     // from `List` and then empties itself.
     const [name, entry] = rooms[0]
-    if (this.config) this.config = { ...this.config, room: name }
+    if (this.config) {
+      this.config = { ...this.config, room: name }
+      // `status.room` is the third copy of the name and the one the view
+      // renders. `finishHandshake` already emitted the pre-adoption name, and
+      // every later setStatus that carries a room reads it back off the config
+      // (openSocket, both scheduleReconnect arms) — so without this the
+      // displayed room would silently change on the next reconnect.
+      this.setStatus({ room: name })
+    }
     return entry
   }
 

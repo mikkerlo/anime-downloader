@@ -66,6 +66,16 @@ export function commitSeek(time: number, video: { currentTime: number } | null |
 // the ref because the ref only moves when the queued `durationchange` task
 // runs, so it is stale by construction in exactly this window.
 //
+// The ref is a fallback, not a second opinion: at the sole caller
+// (`PlayerView.seek`) `elementDuration` always comes from a live element, so
+// the ref is read only while the element itself reports nothing. Between an
+// episode switch's `:src` swap and that reload's `NaN` `durationchange`, the
+// ref still holds the *previous* episode's length, and a seek there clamps to
+// it instead of passing through. Left as-is deliberately (#237): the window is
+// brief, skip targets are ~90 s, and `seekRelative` is already capped by the
+// playhead. The ref is only trustworthy once that `durationchange` has run it
+// through `sanitizeDuration`.
+//
 // The lower clamp always survives: `seekRelative` feeds `currentTime + delta`
 // back in, so a pre-metadata `seekRelative(-5)` arrives as `-5`.
 export function resolveSeekTarget(

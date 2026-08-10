@@ -98,7 +98,13 @@ describe('resolveSeekTarget', () => {
     expect(resolveSeekTarget(9999, { elementDuration: 1500, refDuration: 1400 })).toBe(1500)
   })
 
-  it('falls back to the ref when the element has no duration yet', () => {
+  it('falls back to the ref, which mid-reload is the previous episode length', () => {
+    // The one window where the fallback is not a repair: between an episode
+    // switch's :src swap and that reload's NaN durationchange, the element
+    // reports nothing while the ref still holds the *previous* episode's
+    // duration, so the seek clamps to it rather than passing through. Accepted
+    // in #237 (brief window, ~90 s skip targets), pinned here so that any
+    // future change to it is a deliberate one rather than an incidental one.
     expect(resolveSeekTarget(9999, { elementDuration: NaN, refDuration: 1400 })).toBe(1400)
   })
 

@@ -73,13 +73,16 @@ describe('SyncplayClient room presence on join (#220)', () => {
     )
   }
 
+  // A plausible time.time() rather than 1: since #231 this key is no longer
+  // inert here — it arms a real echo through consumeServerLatencyEcho() — and
+  // one second past the epoch would be a ~56-year RTT on the wire.
   const serverState = (position: number, paused: boolean, setBy: string | null = null): void => {
     lastTlsSocket!.emit(
       'data',
       Buffer.from(
         JSON.stringify({
           State: {
-            ping: { latencyCalculation: 1 },
+            ping: { latencyCalculation: 1_770_000_000.25 },
             playstate: { position, paused, doSeek: false, setBy }
           }
         }) + '\r\n'

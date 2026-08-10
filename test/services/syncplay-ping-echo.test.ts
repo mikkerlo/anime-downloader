@@ -167,7 +167,6 @@ describe('SyncplayClient ping.latencyCalculation echo (#231)', () => {
 
     const echo = lastOutboundState(lastTlsSocket).ping.latencyCalculation
     expect(echo).toBeCloseTo(ts + 0.8, 6)
-    expect(echo).not.toBeCloseTo(ts + 800, 6)
   })
 
   // 8. The boundary the zero-inclusive lower edge exists for. It is #232's ack
@@ -219,6 +218,12 @@ describe('SyncplayClient ping.latencyCalculation echo (#231)', () => {
 
       vi.setSystemTime(Date.now() - 100)
       sendNow()
+      // Step back *inside* the window before the second send, or the states[1]
+      // assertion below holds for the wrong reason: with the clock still out of
+      // window an implementation that parked the pair instead of consuming it
+      // would emit no key on the second frame either. From here the shipped code
+      // has nothing left to echo, while park-and-retry would carry ts + 0.1.
+      vi.setSystemTime(Date.now() + 200)
       sendNow(43)
 
       const states = outboundStates(lastTlsSocket)
@@ -234,6 +239,9 @@ describe('SyncplayClient ping.latencyCalculation echo (#231)', () => {
 
       vi.setSystemTime(Date.now() + 5000)
       sendNow()
+      // Back inside the window before the second send — a net hold of 100 ms
+      // from arrival. See the backward-step case above for why.
+      vi.setSystemTime(Date.now() - 4900)
       sendNow(43)
 
       const states = outboundStates(lastTlsSocket)

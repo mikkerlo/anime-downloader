@@ -1191,6 +1191,15 @@ export class SyncplayClient extends EventEmitter {
   // one as redundant. Every outbound State must build its echo through here so
   // consume-once holds across senders.
   //
+  // Note the exact grain: consume-once is per *attempted* State, not per State
+  // that reaches the wire. The pair is burned here, before sendJson(), which
+  // returns early on a null socket and swallows a failed write — so a frame that
+  // never ships still spends the timestamp. Both losses are benign (the server
+  // substitutes 0, returns early, and holds its last forward delay) and the
+  // `state !== 'ready'` guard in sendStateMessage() makes the null-socket path
+  // effectively unreachable, so this is deliberately not restructured. It
+  // matters when #232's sendAck() lands with its own send path.
+  //
   // Units: `ts` is the server's time.time() in *seconds*; `ms` is a difference
   // of two Date.now() reads in *milliseconds*. The `/ 1000` is load-bearing.
   private consumeServerLatencyEcho(): number | null {

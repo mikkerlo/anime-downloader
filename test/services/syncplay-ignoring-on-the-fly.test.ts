@@ -260,7 +260,16 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(pendingServerAck()).toBe(0)
     })
 
-    it('sends nothing for a counter arriving after disconnect', () => {
+    // Not a `sendAck()` ready-guard case, despite sitting in this block:
+    // tearDown() calls socket.removeAllListeners() (src/main/syncplay.ts:406)
+    // before destroy(), so the frame below reaches no handler and handleState()
+    // never runs — `outboundStates()` alone would be empty against any
+    // implementation, guard or no guard (verified: deleting the guard leaves
+    // this case green while the pre-`ready` pair above goes red). What it pins
+    // is that teardown detaches the socket, asserted directly on the counter
+    // and the emit so the case is not vacuous. The guard itself is covered by
+    // that pre-`ready` pair.
+    it('does not process a counter arriving after disconnect', () => {
       handshake()
       const sock = lastTlsSocket!
       client.disconnect()
@@ -275,6 +284,8 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         )
       )
 
+      expect(pendingServerAck()).toBe(0)
+      expect(remoteStates).toHaveLength(0)
       expect(outboundStates(sock)).toHaveLength(0)
     })
   })

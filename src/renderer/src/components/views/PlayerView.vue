@@ -13,7 +13,13 @@ import TranslationMenu from '../player/TranslationMenu.vue';
 import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
-import { previewSeek, commitSeek, resolveSeekTarget, sanitizeDuration } from '../../utils';
+import {
+  previewSeek,
+  commitSeek,
+  resolveSeekTarget,
+  sanitizeDuration,
+  waitingToastVisible
+} from '../../utils';
 import { useGrowingFile } from '../../composables/use-growing-file';
 
 const props = defineProps<{
@@ -160,6 +166,13 @@ const growingFile = useGrowingFile({
   fetchSubtitles: () => window.api.playerGetLocalSubtitles(activeFilePath.value)
 });
 const { isPartial, downloadProgressPct, downloadDead, waitingForDownload } = growingFile;
+// Single source of truth for the `.mkv-buffering-toast` slot: both the
+// "Waiting for download…" toast and the #238 short-landing toast render into
+// it, so both gates read this one computed rather than re-deriving the
+// condition (they drifted otherwise, and the two toasts stacked).
+const waitingToastUp = computed(() =>
+  waitingToastVisible(waitingForDownload.value, downloadDead.value)
+);
 
 // Late subtitle load (#63): a .part session can open before its .ass lands —
 // poll for the sibling subtitle and hot-attach it instead of leaving the
@@ -233,8 +246,10 @@ const skipMarkers = useSkipMarkers({
   onSeek: (t) => seek(t),
   onSkipLandedShort: () => {
     // "Waiting for download…" already occupies this slot and says the same
-    // thing; don't stack a second toast on top of it.
-    if (!waitingForDownload.value) showSkipClampToast();
+    // thing; don't stack a second toast on top of it. Fast path only — the
+    // template re-checks `waitingToastUp` reactively, because `waiting`
+    // usually fires a beat *after* the clamped landing.
+    if (!waitingToastUp.value) showSkipClampToast();
   }
 });
 const {
@@ -1956,9 +1971,7 @@ const bufferedProgress = computed(() => {
 
     <!-- Growing .part (#63): playhead caught the download frontier -->
     <transition name="fade">
-      <div v-if="waitingForDownload && !downloadDead" class="mkv-buffering-toast">
-        Waiting for download…
-      </div>
+      <div v-if="waitingToastUp" class="mkv-buffering-toast">Waiting for download…</div>
     </transition>
 
     <!-- Growing .part (#63): the backing download died mid-watch -->
@@ -2016,7 +2029,9 @@ const bufferedProgress = computed(() => {
 
     <!-- Growing .part (#238): a skip click that couldn't clear the band -->
     <transition name="fade">
-      <div v-if="skipClampToast" class="mkv-buffering-toast">{{ skipClampToast }}</div>
+      <div v-if="skipClampToast && !waitingToastUp" class="mkv-buffering-toast">
+        {{ skipClampToast }}
+      </div>
     </transition>
 
     <!-- Syncplay toast -->

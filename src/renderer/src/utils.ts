@@ -94,6 +94,24 @@ export function resolveSeekTarget(
   return Math.max(0, Math.min(requested, known))
 }
 
+// Who owns the `.mkv-buffering-toast` slot (`top: 100px; right: 24px`), which
+// fits exactly one toast (#238). The growing-`.part` pair both target it, so
+// the gate has to be one predicate rather than two hand-copied booleans:
+//   - "Waiting for download…" renders only while the download is still alive —
+//     once it dies the `.streaming-banner` (a different slot, `top: 60px`)
+//     carries the message instead, leaving this slot empty.
+//   - The short-landing toast may therefore take the slot in the
+//     `waiting && dead` state, which is precisely the state where the skip can
+//     never land and feedback matters most.
+// It must be read *reactively* at the point of use. Sampling it once when the
+// short landing fires is not enough: a clamped skip parks the playhead just
+// behind the frontier, so `waiting` typically fires a second or two later while
+// the short-landing toast is still up, and the two would then render on top of
+// each other.
+export function waitingToastVisible(waitingForDownload: boolean, downloadDead: boolean): boolean {
+  return waitingForDownload && !downloadDead
+}
+
 // Guards the one write to `PlayerView`'s `duration` ref (#237). The HTML load
 // algorithm sets `duration` to `NaN` and fires `durationchange` on every
 // element reload, and `NaN` slips past the `<= 0` guards the seek bar's

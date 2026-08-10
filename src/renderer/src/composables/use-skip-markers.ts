@@ -81,7 +81,9 @@ export function useSkipMarkers(deps: {
   let skipButtonGraceTimer: ReturnType<typeof setTimeout> | null = null
   // Single-shot: armed by a skip click, resolved by the first `seeked` that
   // follows it. Until it resolves, nothing is committed and nothing is hidden.
-  let pendingSkipLanding: { key: string; endSec: number; kind: 'op' | 'ed' } | null = null
+  // `key` already encodes the kind (`skipRangeKey`), so the kind is not carried
+  // separately — a second copy could only drift out of sync with it.
+  let pendingSkipLanding: { key: string; endSec: number } | null = null
   let streamSkipRequestId = 0
   let unsubSignatureUpdated: Unsubscribe | null = null
 
@@ -129,11 +131,7 @@ export function useSkipMarkers(deps: {
   function onSkipClick(): void {
     const bounds = activeSkipBounds()
     if (!bounds) return
-    pendingSkipLanding = {
-      key: skipRangeKey(bounds.kind),
-      endSec: bounds.endSec,
-      kind: bounds.kind
-    }
+    pendingSkipLanding = { key: skipRangeKey(bounds.kind), endSec: bounds.endSec }
     deps.onSeek(bounds.endSec)
   }
 

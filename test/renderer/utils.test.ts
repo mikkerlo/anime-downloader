@@ -3,7 +3,8 @@ import {
   previewSeek,
   commitSeek,
   resolveSeekTarget,
-  sanitizeDuration
+  sanitizeDuration,
+  waitingToastVisible
 } from '../../src/renderer/src/utils'
 
 // Regression coverage for #127: the slider must not write video.currentTime
@@ -143,5 +144,30 @@ describe('sanitizeDuration', () => {
   it('treats zero and negatives as unknown', () => {
     expect(sanitizeDuration(0)).toBe(0)
     expect(sanitizeDuration(-1)).toBe(0)
+  })
+})
+
+// #238 review: the "Waiting for download…" toast and the short-landing toast
+// share one absolutely-positioned slot, so the second must be gated on whether
+// the first is actually rendering. Both PlayerView `v-if`s read this predicate
+// so the two gates cannot drift apart (they did: the fire-time gate checked
+// `waitingForDownload` alone, the template checked nothing).
+describe('waitingToastVisible', () => {
+  it('owns the slot while the playhead is stalled on a live download', () => {
+    expect(waitingToastVisible(true, false)).toBe(true)
+  })
+
+  it('releases the slot when the download dies, because the banner takes over', () => {
+    // The waiting toast is `v-if="waitingForDownload && !downloadDead"`, and
+    // `waitingForDownload` is a ref cleared only by `playing` — so a download
+    // that dies while stalled leaves it true with nothing rendered. Suppressing
+    // the short-landing toast there would blank the one state in which a skip
+    // can never land.
+    expect(waitingToastVisible(true, true)).toBe(false)
+  })
+
+  it('leaves the slot free whenever nothing is waiting', () => {
+    expect(waitingToastVisible(false, false)).toBe(false)
+    expect(waitingToastVisible(false, true)).toBe(false)
   })
 })

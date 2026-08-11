@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { previewSeek, commitSeek } from '../../src/renderer/src/utils'
+import {
+  previewSeek,
+  commitSeek,
+  resolveSeekTarget,
+  sanitizeDuration
+} from '../../src/renderer/src/utils'
 
 // Regression coverage for #127: the slider must not write video.currentTime
 // while the user is still dragging. previewSeek updates the displayed time
@@ -57,5 +62,86 @@ describe('commitSeek', () => {
 
     commitSeek(currentTime.value, video)
     expect(video.currentTime).toBe(60)
+  })
+})
+
+// #237: seek() used to write `Math.max(0, Math.min(clamped, duration.value))`
+// straight onto the element. During the load window that follows every episode
+// switch the element's duration is `NaN` and the ref is still `0`, so that
+// expression produced `NaN` (the restricted-double setter throws) or `0`
+// (silently discarding the seek). No DOM here on purpose — this file runs under
+// the repo's default `environment: 'node'`, and the helper's contract holds at
+// the return-value level.
+describe('resolveSeekTarget', () => {
+  it('drops the upper clamp when neither duration is known', () => {
+    // Old behavior: Math.min(1400, NaN) → NaN → TypeError at the setter.
+    expect(resolveSeekTarget(1400, { elementDuration: NaN, refDuration: NaN })).toBe(1400)
+  })
+
+  it('drops the upper clamp on the live pre-metadata shape', () => {
+    // refDuration: 0 is what the ref holds before the first durationchange
+    // (and, post-sanitizeDuration, mid-reload too). Old behavior: 0.
+    expect(resolveSeekTarget(1400, { elementDuration: NaN, refDuration: 0 })).toBe(1400)
+  })
+
+  it('treats Infinity as unknown, not as a usable bound', () => {
+    // Pins the rule as Number.isFinite rather than !Number.isNaN — Infinity is
+    // the one non-NaN non-finite value that sails past every downstream guard.
+    expect(resolveSeekTarget(1400, { elementDuration: Infinity })).toBe(1400)
+    // The live-stream shape in full: an Infinity element duration pairs with a
+    // ref that sanitizeDuration has already collapsed to 0, so neither side
+    // supplies a bound and the request passes through.
+    expect(resolveSeekTarget(1400, { elementDuration: Infinity, refDuration: 0 })).toBe(1400)
+  })
+
+  it('still applies the upper clamp when the duration is known', () => {
+    expect(resolveSeekTarget(9999, { elementDuration: 1400 })).toBe(1400)
+  })
+
+  it('prefers the element over a stale ref from the previous episode', () => {
+    expect(resolveSeekTarget(9999, { elementDuration: 1500, refDuration: 1400 })).toBe(1500)
+  })
+
+  it('falls back to the ref, which mid-reload is the previous episode length', () => {
+    // The one window where the fallback is not a repair: between an episode
+    // switch's :src swap and that reload's NaN durationchange, the element
+    // reports nothing while the ref still holds the *previous* episode's
+    // duration, so the seek clamps to it rather than passing through. Accepted
+    // in #237 (brief window, ~90 s skip targets), pinned here so that any
+    // future change to it is a deliberate one rather than an incidental one.
+    expect(resolveSeekTarget(9999, { elementDuration: NaN, refDuration: 1400 })).toBe(1400)
+  })
+
+  it('keeps the lower clamp for a pre-metadata seekRelative(-5)', () => {
+    expect(resolveSeekTarget(-5, { elementDuration: NaN, refDuration: 0 })).toBe(0)
+    expect(resolveSeekTarget(-5, { elementDuration: 1400 })).toBe(0)
+  })
+
+  it('refuses a non-finite request so the element is never written', () => {
+    // Old behavior: Math.max(0, Math.min(NaN, 1400)) → NaN → TypeError.
+    expect(resolveSeekTarget(NaN, { elementDuration: 1400 })).toBeNull()
+    expect(resolveSeekTarget(NaN, { elementDuration: NaN, refDuration: 0 })).toBeNull()
+    expect(resolveSeekTarget(Infinity, { elementDuration: 1400 })).toBeNull()
+  })
+})
+
+// #237: the sole write to PlayerView's `duration` ref assigned the element's
+// duration straight through, so `NaN` reached the seek bar's progress computeds
+// (which guard with `<= 0`, false for NaN) and emitted `width: NaN%`; `Infinity`
+// escaped every guard in the file, including saveProgress's.
+describe('sanitizeDuration', () => {
+  it('collapses a non-finite duration to the "unknown" value every consumer bails on', () => {
+    expect(sanitizeDuration(NaN)).toBe(0)
+    expect(sanitizeDuration(Infinity)).toBe(0)
+    expect(sanitizeDuration(-Infinity)).toBe(0)
+  })
+
+  it('passes a real duration through untouched', () => {
+    expect(sanitizeDuration(1420.5)).toBe(1420.5)
+  })
+
+  it('treats zero and negatives as unknown', () => {
+    expect(sanitizeDuration(0)).toBe(0)
+    expect(sanitizeDuration(-1)).toBe(0)
   })
 })

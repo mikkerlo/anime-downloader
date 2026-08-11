@@ -102,9 +102,28 @@ describe('clampSeekTarget — buffered-derived, never byte-derived', () => {
     expect(g.clampSeekTarget(200)).toBe(50)
   })
 
-  it('clamps to the playhead when nothing is buffered yet', () => {
+  // #237: these three pin the unknown-frontier pass-through. Before the fix
+  // `frontier()` reported 0 for both branches of its single `return`, so the
+  // limit collapsed to the playhead and every forward seek on a fresh .part was
+  // snapped back to where it already was — the "skip opening does nothing"
+  // symptom. The clamp resumes as soon as one buffered range exists (above).
+  it('passes the target through when nothing is buffered yet', () => {
     const g = makeGrowing({ video: makeVideo(null, 0), downloadStatus: 'downloading' })
-    expect(g.clampSeekTarget(42)).toBe(0)
+    expect(g.clampSeekTarget(42)).toBe(42) // old behavior: 0
+  })
+
+  it('passes through rather than raising the floor to a non-zero playhead', () => {
+    // Looks identical to the "never clamps below the current playhead" case
+    // above at a glance, but there buffered.length is 1, so its floor applies.
+    const g = makeGrowing({ video: makeVideo(null, 50), downloadStatus: 'downloading' })
+    expect(g.clampSeekTarget(200)).toBe(200) // old behavior: 50
+  })
+
+  it('passes the target through when there is no element at all', () => {
+    // Reachable from the scrubber drag-release path (PlayerView onSeekEnd),
+    // which calls clampSeekTarget without seek()'s early return.
+    const g = makeGrowing({ video: null, downloadStatus: 'downloading' })
+    expect(g.clampSeekTarget(42)).toBe(42) // old behavior: 0
   })
 
   it('lifts the clamp once the download completes', () => {

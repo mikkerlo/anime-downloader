@@ -65,18 +65,28 @@ export function useGrowingFile(deps: UseGrowingFileDeps): {
   // it plays again.
   const waitingForDownload = ref(false)
 
-  function frontier(): number {
+  // `null` means the frontier is unknown — no element, or nothing buffered yet.
+  // Reporting `0` there collapsed `clampSeekTarget`'s limit to the playhead, so
+  // every forward seek before the first buffered range landed was clamped to
+  // where we already are (#237).
+  function frontier(): number | null {
     const video = deps.getVideoEl()
-    if (!video || video.buffered.length === 0) return 0
+    if (!video || video.buffered.length === 0) return null
     return video.buffered.end(video.buffered.length - 1)
   }
 
   function clampSeekTarget(t: number): number {
     if (!isPartial.value || downloadCompleted.value) return t
+    const end = frontier()
+    // Unknown frontier: pass the target through rather than snapping the user
+    // back. An unreachable target stalls at the download frontier and surfaces
+    // the "Waiting for download…" affordance; the clamp resumes on the next
+    // seek, since `frontier()` is re-read on every call.
+    if (end === null) return t
     const video = deps.getVideoEl()
     // Never clamp below the current position — the playhead is by definition
     // inside parseable data.
-    const limit = Math.max(frontier() - GROWING_SEEK_MARGIN_SEC, video?.currentTime ?? 0)
+    const limit = Math.max(end - GROWING_SEEK_MARGIN_SEC, video?.currentTime ?? 0)
     return Math.min(t, limit)
   }
 

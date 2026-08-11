@@ -782,6 +782,18 @@ async function resumeFromSavedPosition(): Promise<void> {
     if (!saved) return;
     watchedReported = !!saved.watched;
     if (saved.watched) return;
+    // #240: the room outranks our saved position. This function is `async` and
+    // awaits an IPC round-trip, so it always lands *after* the synchronous
+    // syncplay apply in the same `loadedmetadata` dispatch — without this guard
+    // it would silently overwrite the room's position on every episode open.
+    // The "Resumed at …" toast goes with the resume it describes: leaving it up
+    // over the room's position states the playhead is somewhere it is not, and
+    // the remote-seek toast already explains the movement. `watchedReported` is
+    // set above, from the saved record, either way.
+    // `hasRemoteStateApplied()` and not `state === 'ready'` alone: main only
+    // emits `remote-state` for a non-null, non-self `setBy`, so a user alone in
+    // a room never receives one and must keep their saved position.
+    if (syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied()) return;
     const d = video.duration || saved.duration;
     if (!d) return;
     // For MSE MKV streams the composable lands the playhead on the saved position
@@ -2079,6 +2091,7 @@ const bufferedProgress = computed(() => {
         @play="onPlay"
         @pause="onPause"
         @seeked="onVideoSeekedAll"
+        @loadedmetadata="syncplay.onVideoLoadedMetadata"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"

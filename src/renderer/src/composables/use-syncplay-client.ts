@@ -74,6 +74,14 @@ export type SyncplayClient = {
   onVideoSeeked: () => void
   /** Wire into <video @waiting>. */
   onVideoWaiting: () => void
+  /** Wire into <video @loadedmetadata>: applies a state that arrived while the
+   *  element could not honor it (#240). */
+  onVideoLoadedMetadata: () => void
+  /** True while a remote state is parked, or once one has been applied since
+   *  the last reset (episode/translation switch, idle/disconnected). The
+   *  room's position outranks the local saved position while this holds —
+   *  `PlayerView`'s `resumeFromSavedPosition` reads it (#240). */
+  hasRemoteStateApplied: () => boolean
   /** Wire into <video @timeupdate>: keeps snapshots flowing when a background
    *  window's timers are throttled. */
   onVideoTimeUpdate: () => void
@@ -145,6 +153,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplayLocalReady = true
   let syncplayLastRemotePlaying = false
   let syncplayLastAppliedPaused: boolean | null = null
+  // The freshest state the element could not honor yet (#240) — see
+  // applyRemoteState. `remoteStateApplied` is the "the room has told us where it
+  // is" half of `hasRemoteStateApplied()`; both are cleared by
+  // resetRemoteStateTracking.
+  let pendingRemoteState: SyncplayRemoteState | null = null
+  let remoteStateApplied = false
 
   let unsubRemoteState: Unsubscribe | null = null
   let unsubRoomEvent: Unsubscribe | null = null
@@ -342,9 +356,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     }
   }
 
-  function applyRemoteState(state: SyncplayRemoteState): void {
-    const v = deps.getVideoEl()
-    if (!v) return
+  // The element-independent half of an inbound state (#240). It runs on every
+  // state, above the `getVideoEl()` lookup: the ready gate reads
+  // `syncplayLastRemotePlaying`, so dropping it because no element is mounted
+  // yet — or because the element cannot honor the write yet — leaves the gate
+  // acting on a stale play intent the moment a player appears or the buffer
+  // fills. `syncplayPausedBy` is the same class: it is UI state about the room,
+  // not about our element.
+  function recordRemoteState(state: SyncplayRemoteState): void {
     syncplayLastRemotePlaying = !state.paused
     const pausedChanged = syncplayLastAppliedPaused !== state.paused
     syncplayLastAppliedPaused = state.paused
@@ -352,6 +371,20 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       if (state.paused && state.setBy) syncplayPausedBy.value = state.setBy
       else if (!state.paused) syncplayPausedBy.value = null
     }
+  }
+
+  // The half whose result must reflect the *moment of the write*, so all of it
+  // is deferred with the write and none of it is computed at park time:
+  // - `effectivePaused` reads the live roster through `syncplayAllUsersReady()`;
+  //   a park-time snapshot goes stale and would resume us over a peer that went
+  //   not-ready in the meantime.
+  // - the early-out and `suppressNextLocalEventUntil` gate *sending* around the
+  //   element writes, so they have to fire when the writes do.
+  // - `intendedPaused` is the room intent we assert on the next heartbeat;
+  //   adopting it while the element still sits at 0 would report an intent we
+  //   have not enacted.
+  function applyRemoteStateToElement(state: SyncplayRemoteState, v: HTMLVideoElement): void {
+    remoteStateApplied = true
     const diff = Math.abs(v.currentTime - state.position)
     const needsSeek = state.doSeek || diff > 3.0
     const effectivePaused = state.paused || !syncplayAllUsersReady()
@@ -382,12 +415,65 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     }
   }
 
+  // At `HAVE_NOTHING` the HTML spec routes a `currentTime` write to the
+  // *default playback start position* instead of seeking: nothing fires then,
+  // and the value is silently re-targeted by whatever writes `currentTime`
+  // next — and on every episode open something does (`resumeFromSavedPosition`,
+  // the MSE land, the nav rewinds). So an early remote position loses a race to
+  // local state rather than moving the playhead. Hold the freshest state and
+  // apply it when the element can honor it; no element at all is the same
+  // condition, and the park is invalidated on an episode/translation switch and
+  // on disconnect so a stale position is never adopted late.
+  //
+  // The fork, not a bare `loadedmetadata` listener: the common case is joining
+  // a room with the element already loaded, where a listener-only apply would
+  // never run. `>= 1` (HAVE_METADATA) rather than `>= 3` — duration and
+  // seekability are all the apply needs, and waiting for future data would
+  // reintroduce the same race on a slow network.
+  function applyRemoteState(state: SyncplayRemoteState): void {
+    recordRemoteState(state)
+    const v = deps.getVideoEl()
+    if (!v || v.readyState < 1) {
+      // Overwrite, never queue: only the freshest state may be applied late.
+      pendingRemoteState = state
+      return
+    }
+    pendingRemoteState = null
+    applyRemoteStateToElement(state, v)
+  }
+
+  function onVideoLoadedMetadata(): void {
+    const state = pendingRemoteState
+    if (!state) return
+    const v = deps.getVideoEl()
+    if (!v) return
+    pendingRemoteState = null
+    applyRemoteStateToElement(state, v)
+  }
+
+  // A remote episode change swaps the <video> source, and a state parked for the
+  // previous episode must never be applied at the new one's `loadedmetadata`.
+  // The applied flag is reset with it — it must not latch for the session: main
+  // stops emitting `remote-state` the moment we are alone in the room, so a
+  // latched flag would eat the user's saved position on every later episode
+  // open, forever. Resetting inside a live room costs at most a sub-second flash
+  // at the saved position before the next 1 Hz state seeks us to the room.
+  function resetRemoteStateTracking(): void {
+    pendingRemoteState = null
+    remoteStateApplied = false
+  }
+
+  function hasRemoteStateApplied(): boolean {
+    return pendingRemoteState !== null || remoteStateApplied
+  }
+
   // Episode/translation switch: re-announce the file to peers but DO NOT
   // reset syncplayLastRemotePlaying. If a peer is currently playing,
   // applySyncplayReadyGate will start the new episode as soon as the buffer
   // fills — by design, so a remote "next episode" or local prev/next
   // auto-resumes the binge instead of pausing.
   watch([deps.activeEpisodeIndex, deps.activeTranslationId], () => {
+    resetRemoteStateTracking()
     pushSyncplayFile()
   })
 
@@ -527,6 +613,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayLastRemotePlaying = false
       syncplayLastAppliedPaused = null
       syncplayPausedBy.value = null
+      resetRemoteStateTracking()
       if (syncplayWaitingTimer) {
         clearTimeout(syncplayWaitingTimer)
         syncplayWaitingTimer = null
@@ -630,6 +717,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     onVideoSeeked,
     onVideoTimeUpdate,
     onVideoWaiting,
+    onVideoLoadedMetadata,
+    hasRemoteStateApplied,
     onLocalPlay,
     onLocalPause,
     onLocalCanPlay

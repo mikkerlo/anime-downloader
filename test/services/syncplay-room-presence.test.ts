@@ -1293,6 +1293,41 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomEvents).toEqual([])
     })
 
+    // Test 5b, the state guard on that re-assert — the one guard the plan names
+    // ("Send under `if (this.status.state === 'ready')`, exactly as `setReady`
+    // does"). It is not an edge case but the server's *normal* ordering:
+    // `handleHello` runs `addWatcher` (which seats us and fires
+    // `sendJoinMessage`'s `broadcastRoom`, protocols.py:558) *before*
+    // `sendHello` at :560, so we are already receiving room broadcasts while
+    // `status.state` is still pre-`ready`. Nothing is lost by dropping the
+    // re-assert in that window: `finishHandshake()` sends `ownIsReady`
+    // unconditionally moments later, which is what actually corrects the
+    // server's stored value.
+    it('writes nothing for an override that lands before the handshake completes', () => {
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'cinema',
+        username: 'me',
+        autoReconnect: false
+      })
+      lastSocket!.emit('connect')
+      lastSocket!.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
+      lastTlsSocket!.emit('secureConnect')
+      expect(readyWrites()).toHaveLength(0)
+
+      readySet({ username: 'me', isReady: false, manuallyInitiated: true, setBy: 'mikkerlo' })
+
+      // Not one byte of readiness on the wire before `Hello` comes back.
+      expect(readyWrites()).toHaveLength(0)
+      // Our own value is untouched, so the handshake's assert still says `true`.
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.6.9"}}\r\n')
+      )
+      expect(readyWrites()).toEqual([{ isReady: true, manuallyInitiated: false }])
+    })
+
     // Test 6, the anti-spin case. `isReady()` returns `None` for every watcher
     // on a `--disable-ready` server, and `null` can never equal `ownIsReady`,
     // so without the boolean guard the re-assert above would be a wire-speed

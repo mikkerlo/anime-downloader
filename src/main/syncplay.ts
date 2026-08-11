@@ -885,8 +885,19 @@ export class SyncplayClient extends EventEmitter {
     // check would write a line on every peer's `waiting`/recovery flap, into
     // the same log the user reads for joins and chat. Peer-only by
     // construction: the self branch above returns before reaching this.
+    //
+    // Not additionally gated on `isReady !== undefined`: no reference server
+    // reaches here with a non-boolean. The two broadcasts that carry a `None`
+    // readiness — `sendJoinMessage` and `sendRoomSwitchMessage` (server.py:170
+    // and :150) — both pass `manuallyInitiated=False` and no `setBy`, so they
+    // fail this condition anyway; and the `--disable-ready` case, where
+    // `Watcher.isReady()` (server.py:760) returns `None` for everyone, seats no
+    // boolean to move away from, because `handleList` maps a non-boolean to
+    // `undefined` too. The guard would only ever fire for a peer that put a
+    // literal `null` on the wire itself, and an unreachable branch no test can
+    // kill is the thing a later PR deletes with no way to tell it mattered.
     const setBy = typeof data.setBy === 'string' ? data.setBy : undefined
-    if (isReady !== undefined && (data.manuallyInitiated === true || setBy !== undefined)) {
+    if (data.manuallyInitiated === true || setBy !== undefined) {
       const state = isReady ? 'ready' : 'not ready'
       this.emit('room-event', {
         level: 'info',

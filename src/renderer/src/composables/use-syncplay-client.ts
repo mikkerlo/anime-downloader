@@ -253,12 +253,28 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // position). The user's own paths (`seek()`, the scrubber's `commitSeek`)
   // deliberately do not.
   //
-  // Value-agnostic, TTL-bounded — see the AppliedSeek comment above. Same latch
-  // family as markProgrammaticPlayback: a write that fires no `seeked` at all
-  // (e.g. `currentTime = 0` on an element already at 0) leaves this armed and
-  // swallows one later user seek; the TTL is the backstop, and a retraction
-  // path must not be added without a test for it.
+  // Value-agnostic, TTL-bounded — see the AppliedSeek comment above.
+  //
+  // Only armed when the write can actually move the element, the same rule
+  // markProgrammaticPlayback states for an already-paused element: a write that
+  // fires no `seeked` has nothing to consume its mark, so it latches for the
+  // whole TTL and swallows the user's *next* real seek. Writing the position
+  // the element already reports is exactly that case — and it is the normal
+  // case for the two episode-nav rewinds, which run in a `nextTick` *after* the
+  // `src` rebind, so the element has already reloaded to `readyState 0` at 0:
+  // the write there only sets the *default playback start position*, which
+  // fires nothing then and, being zero, is not seeked to when metadata arrives
+  // either. The sites that do move the element still arm — including the same
+  // rewind on the MSE/remux path, where `mseSrcUrl` has not been rebound yet so
+  // the element still holds the old source at a non-zero position. Guarded here
+  // rather than at the seven call sites so an eighth cannot forget it.
+  //
+  // The residual latch is a write that does move the element but whose `seeked`
+  // never arrives (an aborted load); the TTL is the backstop for that, and a
+  // retraction path must not be added without a test for it.
   function markProgrammaticSeek(target: number): void {
+    const v = deps.getVideoEl()
+    if (v && v.currentTime === target) return
     appliedSeekPosition = {
       value: target,
       expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,

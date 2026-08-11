@@ -459,20 +459,43 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
 
   // The window still gates play/pause: they have no applied value to key on, so
   // deleting it wholesale would leak the readiness gate's own pause/resume.
-  it('still swallows a play inside the 1.5s window', async () => {
+  //
+  // Both halves, because they are only coupled by the shape of one condition:
+  // with the `play` case alone, narrowing `cause !== 'seek'` to `cause ===
+  // 'play'` at use-syncplay-client.ts:190 leaves the whole suite green, and the
+  // `pause` half is the one #228's `cause === 'pause'` residual leans on.
+  //
+  // Each case has to reach the window at all: `onLocalPlay`/`onLocalPause`
+  // return early on a matching `appliedPaused`, so the apply that arms the
+  // window must leave that flag unset — i.e. it must move the playhead but not
+  // the play state (`needsSeek` without `needsPlayPause`). Hence the remote
+  // `paused` matching the element's in both rows; a mismatch there sets
+  // `appliedPaused` and the case goes vacuous.
+  it.each([
+    {
+      label: 'play',
+      paused: true,
+      fire: (c: Client) => c.onLocalPlay()
+    },
+    {
+      label: 'pause',
+      paused: false,
+      fire: (c: Client) => c.onLocalPause()
+    }
+  ])('still swallows a $label inside the 1.5s window', async ({ paused, fire }) => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
-    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const v = fakeVideo({ currentTime: 0, paused } as Partial<HTMLVideoElement>)
     const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
       state: 'ready'
     })
 
-    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    emitRemoteState({ position: 300, paused, doSeek: true })
     sendLocalState.mockClear()
 
     vi.advanceTimersByTime(200)
-    client.onLocalPlay()
+    fire(client)
 
     expect(sendLocalState).not.toHaveBeenCalled()
   })
@@ -596,7 +619,10 @@ describe('useSyncplayClient — applied-seek marker lifetime (#239)', () => {
 // Step 1 of #239: the app's own currentTime writes must never reach the wire.
 // The PlayerView call sites are unreachable from a unit test (nothing mounts
 // PlayerView, and selectQuality / selectTranslation are unexported `<script
-// setup>` internals), so the contract is pinned here at the composable seam.
+// setup>` internals), so the contract is pinned here at the composable seam —
+// which is also why the "only arm a write that will move the element" rule is
+// enforced inside markProgrammaticSeek instead of at each call site: a guard
+// spelled out in PlayerView.vue could not be regression-tested at all.
 describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
   it('swallows the seeked of a write that landed where it was told', () => {
     const sendLocalState = vi.fn()
@@ -657,14 +683,65 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    // `currentTime = 0` on an element already at 0 fires nothing, so this mark
-    // has no event to consume it. The TTL is the only thing that frees it.
-    s.markProgrammaticSeek(0)
+    // A real write — the element is at 0 and we ask for 420, so this arms —
+    // whose `seeked` never arrives (the load was aborted first). The TTL is the
+    // only thing that frees the mark then.
+    s.markProgrammaticSeek(420)
     vi.advanceTimersByTime(15001)
     v.currentTime = 900
     s.onVideoSeeked()
 
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+  })
+
+  // Regression, and the reason the "will this actually move the element?" rule
+  // lives inside markProgrammaticSeek rather than at the call sites.
+  //
+  // `goToEpisode` writes `currentTime = 0` in a nextTick that runs *after* the
+  // `src` rebind, so the element has already reloaded: `readyState 0`, playhead
+  // 0. Per the HTML media element spec that write only sets the default
+  // playback start position, which fires no `seeked` then and — being zero — is
+  // not seeked to on `loadedmetadata` either. Arming there gave the mark no
+  // event to consume it, so it latched for the full 15 s TTL and ate the user's
+  // next real seek: next episode → OP → Skip OP within 15 s went nowhere, which
+  // is #239's own defect at a new site.
+  it('arms nothing for a rewind to 0 on an element already at 0, so Skip OP still sends', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.markProgrammaticSeek(0)
+
+    // Well inside the TTL: the user hits Skip OP a few seconds into the new
+    // episode.
+    vi.advanceTimersByTime(4000)
+    v.currentTime = 90
+    s.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 90, cause: 'seek' })
+  })
+
+  // The other side of that guard: the same rewind on the MSE/remux path is a
+  // real seek. `mseSrcUrl` has not been rebound yet, so the element still holds
+  // the old source at a non-zero position and `currentTime = 0` does fire a
+  // `seeked` — which must not reach the room, or `forcePositionUpdate` drags
+  // every peer back to 0. Dropping the arming altogether would pass the test
+  // above and fail this one.
+  it('still arms the same rewind when the element has somewhere to move from', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.markProgrammaticSeek(0)
+    v.currentTime = 0
+    s.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
   })
 })
 

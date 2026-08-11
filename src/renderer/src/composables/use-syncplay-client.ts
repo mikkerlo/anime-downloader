@@ -269,6 +269,26 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // the element still holds the old source at a non-zero position. Guarded here
   // rather than at the seven call sites so an eighth cannot forget it.
   //
+  // The assumption that buys that: a write to the position the element already
+  // reports fires no `seeked`. True at `readyState 0`, which is where every
+  // current caller sits — the five restores/rewinds run in a `nextTick` after
+  // the `src` rebind, and the MSE land is behind its own `t < resumeLandTarget`
+  // check. It is not true in general: the HTML seek algorithm has no
+  // same-position early-out, so at `readyState >= HAVE_METADATA` a same-value
+  // write still queues `seeking`/`seeked`. A future caller arming from a loaded
+  // element would see that `seeked` arrive unmarked, send it as intent at the
+  // position we are already at, and have `forcePositionUpdate` push it to every
+  // watcher. `resumeFromSavedPosition` is already such a post-metadata caller
+  // (it runs behind `readyState >= 1`, else on `loadedmetadata`); it is safe
+  // only because its write is gated on `saved.position > 5` while the element
+  // sits at 0, so the two values cannot coincide.
+  //
+  // Kept broad rather than `&& v.readyState === 0`, which would confine it to
+  // the pre-metadata case above: narrowing re-opens the latch on any engine
+  // that short-circuits a same-value seek without firing events, and a latch
+  // swallowing the user's real seek for 15 s is the defect this exists to fix,
+  // while a redundant update at our own position is not.
+  //
   // The residual latch is a write that does move the element but whose `seeked`
   // never arrives (an aborted load); the TTL is the backstop for that, and a
   // retraction path must not be added without a test for it.

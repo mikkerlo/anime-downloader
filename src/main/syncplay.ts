@@ -1334,7 +1334,7 @@ export class SyncplayClient extends EventEmitter {
     // first heartbeat once ready, which is why that drain is not dead code
     // after this change. It does *not* run during teardown, contrary to what
     // this comment first claimed: tearDown() calls socket.removeAllListeners()
-    // (:406) and resetTransportState() empties rxBuffer, so no further frame
+    // (:418) and resetTransportState() empties rxBuffer, so no further frame
     // reaches the parser.
     if (this.status.state !== 'ready') return
     if (this.pendingServerAck === 0) return

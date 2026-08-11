@@ -261,7 +261,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     })
 
     // Not a `sendAck()` ready-guard case, despite sitting in this block:
-    // tearDown() calls socket.removeAllListeners() (src/main/syncplay.ts:406)
+    // tearDown() calls socket.removeAllListeners() (src/main/syncplay.ts:418)
     // before destroy(), so the frame below reaches no handler and handleState()
     // never runs — `outboundStates()` alone would be empty against any
     // implementation, guard or no guard (verified: deleting the guard leaves

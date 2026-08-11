@@ -244,6 +244,140 @@ describe('SyncplayClient room presence on join (#220)', () => {
           .sort()
       ).toEqual(['me', 'mikkerlo'])
     })
+
+    // The wipe (#223): with no entry the client can key, `handleList` used to
+    // fall through, seat the local user alone and emit — blanking every peer
+    // and rendering "Room is empty" in a room that is not. Two foreign rooms,
+    // so `pickOwnRoom`'s sole-entry fallback cannot rescue this one.
+    it('keeps the seated roster when the List reply has no entry for our room', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      const emissions = roomUsers.length
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              'someone-elses-room': { stranger: { isReady: true, file: {} } },
+              'a-third-room': { passer_by: { isReady: true, file: {} } }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(
+        client
+          .getRoomUsers()
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+      // Nothing to tell the view: the roster it already has is still correct.
+      expect(roomUsers).toHaveLength(emissions)
+    })
+
+    // The obvious objection to returning before the roster is assigned: does
+    // skipping cost us our own seat? It cannot — `finishHandshake` seats the
+    // local user through `updateOwnReadinessInRoom()` before it asks for the
+    // list, and the roster is only ever cleared on session teardown.
+    it('leaves the local user seated when the very first List reply is unkeyable', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              'someone-elses-room': { stranger: { isReady: true, file: {} } },
+              'a-third-room': { passer_by: { isReady: true, file: {} } }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(client.getRoomUsers().map((u) => u.username)).toEqual(['me'])
+    })
+
+    // `extractAppMeta` is fed `data.file`, never `data`, so a `features` block
+    // sitting at the *entry* level is not file metadata. Well-formed on
+    // purpose: a placeholder would assert `undefined` even after a refactor
+    // that passed `data`, which is exactly the regression this pins.
+    it('does not mistake a top-level features block for file metadata', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              cinema: {
+                mikkerlo: {
+                  isReady: true,
+                  file: { name: 'Ore dake Level Up na Ken Season 2 - 2', duration: 1440 },
+                  features: {
+                    animeDlAppMeta: { animeId: 42, malId: 7, episodeInt: '2', translationId: 601 }
+                  }
+                }
+              }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      const peer = roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!
+      expect(peer.file?.name).toBe('Ore dake Level Up na Ken Season 2 - 2')
+      expect(peer.animeDlAppMeta).toBeUndefined()
+    })
+
+    // The server pads empty rooms with space-named placeholder watchers. They
+    // only ever sit under rooms that are not ours, so the room filter is what
+    // keeps them out — but our own room has to be in the payload, or the
+    // sole-entry fallback would adopt the foreign one and surface the blank.
+    it('never surfaces the server’s blank placeholder rows', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              cinema: { mikkerlo: { isReady: true, file: {} } },
+              'someone-elses-room': { ' ': { isReady: true, file: {} } }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      const latest = roomUsers.at(-1)!
+      expect(latest.map((u) => u.username).sort()).toEqual(['me', 'mikkerlo'])
+      expect(latest.some((u) => u.username.trim() === '')).toBe(false)
+    })
+
+    // A roster replacement must never let a server value that predates our
+    // last `set-ready` clobber local readiness — the renderer's ready gate
+    // reads its own row back out of this list.
+    it('keeps local readiness when the List reply has not caught up to it', () => {
+      handshake()
+      client.setReady(false)
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              cinema: {
+                me: { isReady: true, file: {} },
+                mikkerlo: { isReady: true, file: {} }
+              }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.isReady).toBe(false)
+      expect(client.getRoomUsers().find((u) => u.username === 'me')!.isReady).toBe(false)
+    })
   })
 
   describe('a joiner without a player never moves the room', () => {

@@ -636,4 +636,109 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
 
     m.resetMseState()
   })
+
+  // #239: with the 1500 ms wall-clock gate gone for seeks, this land is only
+  // kept off the wire by the marker. Unmarked, syncplay reads it as the user
+  // seeking and the reference server drags every peer onto our resume point.
+  it('marks the resume land as programmatic before writing currentTime (#239)', () => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 0,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    // Records the playhead at call time, so "before" is asserted rather than
+    // merely "at some point" — a call after the write would record 600.
+    const seenAtMark: number[] = []
+    const markProgrammaticSeek = vi.fn((_t: number) => {
+      seenAtMark.push(video.currentTime)
+    })
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        markProgrammaticSeek
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 600,
+      timestampOffset: 595
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    fakeSb.buffered.ranges = [[595.08, 601.0]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    expect(markProgrammaticSeek).toHaveBeenCalledWith(600)
+    expect(seenAtMark).toEqual([0])
+    expect(video.currentTime).toBe(600)
+
+    m.resetMseState()
+  })
+
+  // The mark must track the *write*, not the intent to land: a mark armed for a
+  // write that never happens has no `seeked` to consume it and latches, so the
+  // user's next real seek is swallowed for the whole TTL.
+  it.each([
+    // resumeTarget 0 → no land pending at all.
+    { label: 'play-from-start', resumeTarget: 0, offset: 0, at: 0, ranges: [[0.0, 2.0]] },
+    // Land pending, but the playhead already sits past the target, so the
+    // `t < resumeLandTarget` guard skips the write. The range starts within
+    // 60 s of the playhead on purpose — a wider one trips the eviction branch,
+    // whose remove() re-dispatches `updateend` and loops.
+    {
+      label: 'playhead already past the target',
+      resumeTarget: 600,
+      offset: 595,
+      at: 700,
+      ranges: [[660.0, 720.0]]
+    }
+  ])(
+    'does not mark when no currentTime write happens — $label',
+    ({ resumeTarget, offset, at, ranges }) => {
+      const fakeSb = new FakeSourceBuffer()
+      const fakeMs = new FakeMediaSource(fakeSb)
+      ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+      const video = {
+        currentTime: at,
+        paused: true,
+        error: null,
+        play: vi.fn(async () => {}),
+        pause: vi.fn(() => {})
+      }
+      const markProgrammaticSeek = vi.fn()
+      const m = useMsePlayer(
+        makeDeps({
+          getVideoEl: () => video as unknown as HTMLVideoElement,
+          markProgrammaticSeek
+        })
+      )
+      m.startMseSession({
+        sessionId: 's1',
+        generation: 0,
+        duration: 1421,
+        mimeType: 'video/mp4',
+        resumeTarget,
+        timestampOffset: offset
+      })
+      fakeMs.dispatchEvent(new Event('sourceopen'))
+
+      fakeSb.buffered.ranges = ranges
+      fakeSb.dispatchEvent(new Event('updateend'))
+
+      expect(markProgrammaticSeek).not.toHaveBeenCalled()
+      expect(video.currentTime).toBe(at)
+
+      m.resetMseState()
+    }
+  )
 })

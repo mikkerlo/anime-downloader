@@ -43,6 +43,9 @@ export function useMsePlayer(deps: {
   /** Flags the pause/play this refill performs, so syncplay doesn't read it
    *  as the user pausing the room (a stall would otherwise stop everyone). */
   markProgrammaticPlayback?: (paused: boolean | null) => void
+  /** Flags the resume land's `currentTime` write, so syncplay doesn't read it
+   *  as the user seeking (which would drag every peer to our resume point). */
+  markProgrammaticSeek?: (target: number) => void
 }): {
   // Reactive state
   mseSrcUrl: Ref<string>
@@ -207,6 +210,7 @@ export function useMsePlayer(deps: {
       if (initialLandPending && v) {
         if (t < resumeLandTarget) {
           try {
+            deps.markProgrammaticSeek?.(resumeLandTarget)
             v.currentTime = resumeLandTarget
             console.log(
               `[player] resume land → ${resumeLandTarget.toFixed(2)} (buffer start ${bufStart.toFixed(2)})`

@@ -270,8 +270,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // rather than at the seven call sites so an eighth cannot forget it.
   //
   // The assumption that buys that: a write to the position the element already
-  // reports fires no `seeked`. True at `readyState 0`, which is where every
-  // current caller sits — the five restores/rewinds run in a `nextTick` after
+  // reports fires no `seeked`. True at `readyState 0`, where six of the seven
+  // current callers sit — the five restores/rewinds run in a `nextTick` after
   // the `src` rebind, and the MSE land is behind its own `t < resumeLandTarget`
   // check. It is not true in general: the HTML seek algorithm has no
   // same-position early-out, so at `readyState >= HAVE_METADATA` a same-value

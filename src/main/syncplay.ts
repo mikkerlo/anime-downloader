@@ -50,13 +50,13 @@ const PLAYBACK_STALE_MS = 5000
 // freshly mounted <video> starts at {0, paused} and the renderer pushes that
 // snapshot before the first remote State has seeked it, so without this the
 // player path re-creates the very bug the spectator rule fixes.
-const ADOPT_TOLERANCE_S = 3
+export const ADOPT_TOLERANCE_S = 3
 // A "seek" this close to where the room already is didn't come from the user —
 // it's the element finishing the seek we applied from the room, arriving after
 // the renderer's suppression window. Tight on purpose: a real user seek lands
 // somewhere else, and a real seek to within half a second of the room's own
 // position is a no-op for everyone anyway.
-const ECHO_SEEK_EPSILON_S = 0.5
+export const ECHO_SEEK_EPSILON_S = 0.5
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -998,7 +998,18 @@ export class SyncplayClient extends EventEmitter {
       return
     }
 
-    const compensated = position + this.serverRtt / 2
+    // Only a *playing* room has aged since the state left the peer; a paused
+    // position doesn't advance with wall time, so shifting it forward is pure
+    // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
+    // (use-syncplay-client.ts:259), so a paused scrub lands every peer up to
+    // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
+    // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
+    // mirrored server-side in _updatePositionByAge, server.py:871-872).
+    //
+    // One expression, read twice below. Branching the stored echo reference
+    // (next line) apart from the emitted value re-arms the #220 self-seek loop
+    // documented at :341-350 on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
+    const compensated = paused ? position : position + this.serverRtt / 2
     this.lastAppliedRemotePosition = Math.max(0, compensated)
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {

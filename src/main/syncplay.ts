@@ -683,8 +683,81 @@ export class SyncplayClient extends EventEmitter {
     if (!isObject(payload)) return
     let usersDirty = false
     if (isObject(payload.user)) {
+      const ownRoom = this.config?.room
       for (const [username, data] of Object.entries(payload.user)) {
         if (!isObject(data)) continue
+
+        // Scope the entry to our own room (#230). With `isolateRooms` off —
+        // the reference server's default — `RoomManager.broadcast` fans
+        // `Set: {user}` out to *every* room, so an unscoped handler seats
+        // strangers, logs their episode changes and lets their file frames
+        // navigate our player. `sendUserSetting` always writes `room` into the
+        // entry; a missing one only comes from a proxy or a non-reference
+        // server, and is read as ours to preserve today's behavior.
+        //
+        // The filter is ordered, not flat, and it has to sit at the loop head:
+        // gating inside absorbRemoteFile would still seat the stranger, since
+        // that function pushes the user and emits `room-users` before it ever
+        // reaches its own self-guard.
+        const entryRoom =
+          isObject(data.room) && typeof data.room.name === 'string' ? data.room.name : undefined
+        // No `ownRoom !== undefined` clause: `config.room` is a `string`, so an
+        // undefined own room means `this.config` is null — and both sites that
+        // null it tear the transport down first, clearing `rxBuffer` mid-drain
+        // and stripping the socket's listeners, so no frame reaches here
+        // without a config. Comparing straight through therefore changes no
+        // reachable behavior; it just makes an unknown own room read as
+        // *off*-room rather than as "no filter", so the failure mode if that
+        // invariant ever breaks is dropping strangers, not seating them.
+        const offRoom = entryRoom !== undefined && entryRoom !== ownRoom
+        // Rule 0: never filter ourselves. A self entry naming another room
+        // can't come from a reference server (the server only relocates a
+        // watcher that asked to move, and we never send `Set: {room}`), so we
+        // take the cheap guard. Note it exempts, it does not skip: our own
+        // file push is broadcast back to us without sender exclusion, and
+        // absorbRemoteFile is what keeps our roster row's file current between
+        // `List` replies.
+        if (username !== this.config?.username && offRoom) {
+          // Rule 2: a peer switching out reaches us as one entry naming their
+          // **destination**, with no `left` event — `sendRoomSwitchMessage`
+          // broadcasts after `moveWatcher` has already reassigned the room.
+          // So any off-room entry naming someone we have seated is a leave.
+          // This must precede the `file` branch, or absorbRemoteFile re-seats
+          // the user we just removed on a frame carrying both.
+          if (this.roomUsers.some((u) => u.username === username)) {
+            this.emit('room-event', { level: 'info', text: `${username} left the room` })
+            this.roomUsers = this.roomUsers.filter((u) => u.username !== username)
+            usersDirty = true
+          }
+          // Rule 3: an off-room stranger is ignored whole — `file` and
+          // `isReady` included.
+          continue
+        }
+        // Rule 1: an in-room entry carrying a room and neither `event` nor
+        // `file` is a switch *into* our room, which otherwise reaches us as
+        // nothing at all. The announcement is gated on `file` because
+        // `sendFileUpdate` emits `{room, file}` with no `event` on the hot
+        // path, and there absorbRemoteFile already announces the switch and
+        // owns the seating. `isReady` is excluded on the same principle: the
+        // branch at the bottom of the loop seats the user itself, so a
+        // `{room, isReady}` entry would announce a join in front of it. That
+        // shape is unreachable against a reference server (live readiness is a
+        // *top-level* `Set: {ready}`, and `user[X].isReady` is dead code —
+        // see docs/syncplay.md), so this keeps the announcement to frames that
+        // carry a room and nothing that already speaks for itself.
+        if (
+          entryRoom !== undefined &&
+          username !== this.config?.username &&
+          !isObject(data.event) &&
+          !isObject(data.file) &&
+          data.isReady === undefined &&
+          !this.roomUsers.some((u) => u.username === username)
+        ) {
+          this.emit('room-event', { level: 'info', text: `${username} joined the room` })
+          this.roomUsers.push({ username, file: null })
+          usersDirty = true
+        }
+
         if (isObject(data.event)) {
           if (data.event.left === true) {
             this.emit('room-event', { level: 'info', text: `${username} left the room` })
@@ -716,10 +789,13 @@ export class SyncplayClient extends EventEmitter {
         }
       }
     }
-    if (isObject(payload.room)) {
-      const name = typeof payload.room.name === 'string' ? payload.room.name : undefined
-      if (name && this.config) this.config.room = name
-    }
+    // No top-level `payload.room` branch: that field is a client→server
+    // command (the server consumes it, no server-side `sendSet` emits it).
+    // Since the room filter above keys off `this.config.room`, honouring it
+    // would let one unsolicited frame rewrite the filter's reference name
+    // mid-session and re-expose every stranger. `handleHello` already adopts
+    // the server's canonical name at the only moment that can legitimately
+    // happen.
     if (usersDirty) this.emit('room-users', this.roomUsers.slice())
   }
 
@@ -742,14 +818,33 @@ export class SyncplayClient extends EventEmitter {
   // would seat strangers from other rooms in ours. Prefer our own room by
   // name; if the server canonicalized the name out from under us, a payload
   // with exactly one room must still be ours — we're in it.
+  //
+  // Despite the name this is a **mutator** on the fallback arm: it adopts that
+  // entry's key into `config.room` *and* `status.room` (see below).
   private pickOwnRoom(payload: JsonObject): unknown {
     // hasOwnProperty, not `payload[name] !== undefined`: a room named
     // `constructor` or `toString` would otherwise resolve to the prototype's
     // member, skip the fallback, and fail isObject() — an empty roster.
     const ownName = this.config?.room ?? ''
     if (Object.prototype.hasOwnProperty.call(payload, ownName)) return payload[ownName]
-    const rooms = Object.values(payload)
-    return rooms.length === 1 ? rooms[0] : undefined
+    const rooms = Object.entries(payload)
+    if (rooms.length !== 1) return undefined
+    // Adopt the fallback room's *name*, not just its roster. `handleSet`'s
+    // room filter (#230) keys off `this.config.room`, so leaving the stale
+    // name here would make every subsequent in-room `Set` entry read as
+    // off-room and evict each peer as they push a file — a roster that fills
+    // from `List` and then empties itself.
+    const [name, entry] = rooms[0]
+    if (this.config) {
+      this.config = { ...this.config, room: name }
+      // `status.room` is the third copy of the name and the one the view
+      // renders. `finishHandshake` already emitted the pre-adoption name, and
+      // every later setStatus that carries a room reads it back off the config
+      // (openSocket, both scheduleReconnect arms) — so without this the
+      // displayed room would silently change on the next reconnect.
+      this.setStatus({ room: name })
+    }
+    return entry
   }
 
   private absorbRemoteFile(username: string, file: JsonObject): void {

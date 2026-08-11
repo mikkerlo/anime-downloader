@@ -285,15 +285,6 @@ export class SyncplayClient extends EventEmitter {
   private garbageBytes = 0
   private sawValidMessage = false
   private roomUsers: SyncplayRoomUser[] = []
-  // Whether this socket has already adopted a roster (#221). Per-socket, not
-  // per-session: it resets in resetTransportState(), which the reconnect path
-  // runs, because `roomUsers` deliberately survives a reconnect — so without the
-  // reset the new socket's handshake `List` would arrive ratcheted and a stale
-  // `isReady: true` from the previous socket would mask a peer that is genuinely
-  // buffering on this one, with nothing but that peer's own recovery to correct
-  // it. Set at the point a roster is *adopted*, which includes the emit gate's
-  // equality branch (see handleList).
-  private hasReceivedList = false
   private ownIsReady = true
 
   private clientIgnoreCounter = 0
@@ -504,7 +495,6 @@ export class SyncplayClient extends EventEmitter {
     this.garbageParseFailures = 0
     this.garbageBytes = 0
     this.sawValidMessage = false
-    this.hasReceivedList = false
     if (this.watchdogTimer) {
       clearTimeout(this.watchdogTimer)
       this.watchdogTimer = null
@@ -1083,7 +1073,7 @@ export class SyncplayClient extends EventEmitter {
             size: typeof data.file.size === 'number' ? data.file.size : undefined
           }
         : null
-      const isReady = this.adoptPeerReadiness(username, data.isReady)
+      const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
       const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
       // The reference server writes `file: {}` — never null, never absent —
       // for a watcher with nothing loaded, so `file` above is a hollow
@@ -1097,16 +1087,6 @@ export class SyncplayClient extends EventEmitter {
       if (me) me.isReady = this.ownIsReady
       else users.push({ username: this.config.username, file: null, isReady: this.ownIsReady })
     }
-    // The roster is adopted here — past #223's guard and past the `!isObject`
-    // return above — and *regardless of which branch the emit gate below takes*.
-    // An equal roster is still an adopted one: anchoring this to the assignment
-    // would leave the flag false after a reconnect into an unchanged room (the
-    // reconnect keeps `roomUsers` and `ownIsReady`, so a quiet room's fresh
-    // handshake `List` rebuilds field-for-field identical, takes the
-    // keep-previous branch and assigns nothing) and hand this socket's
-    // unratcheted slot to the *next poll* — free to seat an `isReady: false`
-    // and pause the local player, the exact hazard the ratchet excludes.
-    this.hasReceivedList = true
     // Emit only on a real change (#221). On a 15 s timer an unconditional emit
     // is four `room-users` broadcasts a minute for the life of every session,
     // each one a fresh array into the store and another run of the renderer's
@@ -1114,32 +1094,6 @@ export class SyncplayClient extends EventEmitter {
     if (this.sameRoster(this.roomUsers, users)) return
     this.roomUsers = users
     this.emit('room-users', users.slice())
-  }
-
-  // The readiness ratchet (#221). A `List` that is not the first adopted roster
-  // of this socket may clear a peer's not-ready, never introduce one: `isReady`
-  // is taken from the incoming entry only when it is `true`, and otherwise the
-  // value already seated for that username is kept — `undefined` for a username
-  // we have never seen, which is what a non-boolean already parses to and what
-  // the renderer's strict `=== false` gate treats as ready.
-  //
-  // Readiness is playback *control*, not decoration: the renderer pauses the
-  // element for any member reading `isReady === false`, and until the top-level
-  // `Set: {ready}` broadcast is parsed (#229) nothing else updates peer
-  // readiness — so letting a 15 s poll *engage* that gate would make the release
-  // wait for a poll too, stalling this user for up to 15 s after a peer's 800 ms
-  // buffer recovered. Repair is safe in the other direction and is the point.
-  //
-  // Retire this whole helper (and `hasReceivedList`) when #229 lands: readiness
-  // then has a push channel on the same ordered connection, so the later frame
-  // always carries the newer value and a poll cannot resurrect a superseded one.
-  private adoptPeerReadiness(username: string, raw: unknown): boolean | undefined {
-    const incoming = typeof raw === 'boolean' ? raw : undefined
-    // Only `true` is adopted — never merely truthy. A `--disable-ready` server
-    // sends `isReady: null`, which must stay `undefined` rather than repair or
-    // engage anything.
-    if (!this.hasReceivedList || incoming === true) return incoming
-    return this.roomUsers.find((u) => u.username === username)?.isReady
   }
 
   // Roster equality for the emit gate, keyed by **username** rather than by

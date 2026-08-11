@@ -4,8 +4,8 @@
 // peer that died without a clean disconnect, and a peer the server moved into
 // our room without re-broadcasting their file all leave the member list wrong
 // until the user disconnects and reconnects. This file covers the 15 s poll that
-// closes that, plus the two properties that make a repeated full-roster
-// replacement safe: the readiness ratchet and the emit-on-change gate.
+// closes that, its lifecycle, the emit-on-change gate that keeps a repeated
+// full-roster replacement cheap, and the readiness it adopts.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
@@ -299,9 +299,31 @@ describe('SyncplayClient room list polling (#221)', () => {
     })
   })
 
-  // Retire this whole describe block when #229 lands (parsing the top-level
-  // `Set: {ready}` broadcast) — see the ratchet's comment in syncplay.ts.
-  describe('readiness ratchet', () => {
+  // A poll adopts `isReady` verbatim, in both directions.
+  //
+  // It was briefly ratcheted — a later roster could clear a peer's not-ready but
+  // never introduce one — because peer readiness had no push channel, so a poll
+  // allowed to *engage* the gate would have made the release wait for a poll
+  // too, stalling this user for up to 15 s after a peer's 800 ms buffer had
+  // recovered. #229 added that channel (`handleSet()` dispatches
+  // `applyRemoteReadiness()` on the top-level `Set: {ready}` broadcast), so the
+  // later frame on the same ordered connection always carries the newer value
+  // and a poll cannot resurrect a superseded state. Post-#229 the ratchet was a
+  // straight loss: a peer the poll discovers mid-buffer would seat `undefined`
+  // and render green with the gate open, where verbatim adoption seats `false`
+  // and the next broadcast releases it in milliseconds.
+  describe('peer readiness from a poll', () => {
+    it('adopts a later roster’s not-ready for a known peer (engage direction)', () => {
+      handshake()
+      deliverList({ cinema: { zoe: { isReady: true, file: {} }, me: selfEntry } })
+      const emitted = roomUsers.length
+
+      deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
+
+      expect(userNamed('zoe')?.isReady).toBe(false)
+      expect(roomUsers).toHaveLength(emitted + 1)
+    })
+
     it('adopts a peer turning ready on a later roster (release direction)', () => {
       handshake()
       deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
@@ -314,116 +336,28 @@ describe('SyncplayClient room list polling (#221)', () => {
       expect(roomUsers).toHaveLength(emitted + 1)
     })
 
-    it('refuses a later roster’s not-ready for a known peer (engage direction)', () => {
-      handshake()
-      deliverList({ cinema: { zoe: { isReady: true, file: {} }, me: selfEntry } })
-      const emitted = roomUsers.length
-
-      deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
-
-      expect(userNamed('zoe')?.isReady).toBe(true)
-      expect(roomUsers).toHaveLength(emitted)
-    })
-
-    // The case a "only for users we already know" rule gets wrong — and a peer
-    // discovered *by* a poll is exactly what the poll exists for. `undefined`
-    // rather than `false`, because the renderer's gate is a strict `=== false`.
-    it('seats an unknown peer’s not-ready as undefined, not false', () => {
+    // A peer discovered *by* a poll is what the poll exists for, and a genuine
+    // not-ready has to reach the gate rather than render green.
+    it('seats an unknown peer’s not-ready as false', () => {
       handshake()
       deliverList({ cinema: { me: selfEntry } })
       const emitted = roomUsers.length
 
       deliverList({ cinema: { me: selfEntry, newbie: { isReady: false, file: {} } } })
 
-      expect(userNamed('newbie')?.isReady).toBeUndefined()
-      // Membership genuinely changed, so this one does emit — which is exactly
-      // why the readiness value it carries has to be right.
+      expect(userNamed('newbie')?.isReady).toBe(false)
       expect(roomUsers).toHaveLength(emitted + 1)
     })
 
-    it('adopts the first roster of a socket verbatim', () => {
+    // A `--disable-ready` server reports `isReady: null`. It must stay
+    // `undefined` — the renderer's dots and gate key on a strict `=== false`, so
+    // coercing it would pin the peer amber and hold the gate shut all session.
+    it('maps a non-boolean readiness to undefined, never false', () => {
       handshake()
-
-      deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
-
-      expect(userNamed('zoe')?.isReady).toBe(false)
-    })
-
-    // Per socket, not per session: `roomUsers` deliberately survives a reconnect,
-    // so a flag that did not reset would leave the previous socket's stale `true`
-    // masking a peer who is genuinely buffering on the new one.
-    it('unratchets again on the socket opened by a reconnect', async () => {
-      handshake(true)
-      deliverList({ cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } })
-      expect(userNamed('zoe')?.isReady).toBe(true)
-
-      tlsSockets[0].emit('close')
-      await vi.advanceTimersByTimeAsync(RECONNECT_MS)
-      completeHandshake()
-
-      // Not identical to the surviving roster (the file differs), so this one
-      // reaches the assignment branch.
-      deliverList({
-        cinema: {
-          zoe: { isReady: false, file: { name: 'B', duration: 20 } },
-          me: selfEntry
-        }
-      })
-
-      expect(userNamed('zoe')?.isReady).toBe(false)
-    })
-
-    // The flag/emit-gate collision. An *equal* roster is still an adopted one —
-    // anchor the flag to the assignment and a quiet room's reconnect leaves the
-    // socket's unratcheted slot for the next poll, which is then free to seat a
-    // false and pause the local player.
-    it('consumes the unratcheted slot even when the reconnect’s roster is identical', async () => {
-      handshake(true)
-      const roster = { cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } }
-      deliverList(roster)
-
-      tlsSockets[0].emit('close')
-      await vi.advanceTimersByTimeAsync(RECONNECT_MS)
-      completeHandshake()
-      const emitted = roomUsers.length
-
-      // Field-for-field identical to the roster that survived the reconnect.
-      deliverList(roster)
-      expect(roomUsers).toHaveLength(emitted)
-
-      // ...and the next one is nonetheless ratcheted.
-      deliverList({ cinema: { zoe: { isReady: false, file: fileWithMeta }, me: selfEntry } })
-
-      expect(userNamed('zoe')?.isReady).toBe(true)
-    })
-
-    // A reply #223's guard rejects must not burn the socket's one unratcheted
-    // roster: the flag is set on adoption, not on entry.
-    it('does not let a rejected reply consume the unratcheted slot', () => {
-      handshake()
-      deliverList({ lounge: { stranger: { isReady: true, file: {} } }, annex: {} })
-
-      deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
-
-      expect(userNamed('zoe')?.isReady).toBe(false)
-    })
-
-    // A `--disable-ready` server reports `isReady: null`. The rule is "adopt only
-    // a literal true", not "adopt anything truthy" — and null must not repair a
-    // seated false either.
-    it('treats a non-boolean readiness as unknown in both directions', () => {
-      handshake()
-      deliverList({ cinema: { zoe: { isReady: null, file: {} }, me: selfEntry } })
-      expect(userNamed('zoe')?.isReady).toBeUndefined()
-
-      deliverList({ cinema: { zoe: { isReady: false, file: {} }, me: selfEntry } })
-      expect(userNamed('zoe')?.isReady).toBeUndefined()
-
-      deliverList({ cinema: { zoe: { isReady: true, file: {} }, me: selfEntry } })
-      expect(userNamed('zoe')?.isReady).toBe(true)
 
       deliverList({ cinema: { zoe: { isReady: null, file: {} }, me: selfEntry } })
-      expect(userNamed('zoe')?.isReady).toBe(true)
+
+      expect(userNamed('zoe')?.isReady).toBeUndefined()
     })
   })
 
@@ -437,6 +371,24 @@ describe('SyncplayClient room list polling (#221)', () => {
     }
 
     const equalPoll = { cinema: { zoe: { file: fileWithMeta }, me: selfEntry } }
+
+    // `roomUsers` deliberately survives a reconnect, so the fresh socket's
+    // handshake `List` rebuilds a quiet room field-for-field identical and must
+    // take the keep-previous branch rather than re-emitting on every drop.
+    it('emits nothing when the reconnect’s roster is identical', async () => {
+      handshake(true)
+      const roster = { cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } }
+      deliverList(roster)
+
+      tlsSockets[0].emit('close')
+      await vi.advanceTimersByTimeAsync(RECONNECT_MS)
+      completeHandshake()
+      const emitted = roomUsers.length
+
+      deliverList(roster)
+
+      expect(roomUsers).toHaveLength(emitted)
+    })
 
     it('emits nothing for an unchanged roster, whichever path assembled it', () => {
       handshake()

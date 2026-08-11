@@ -243,6 +243,17 @@ export class SyncplayClient extends EventEmitter {
   private lastAppliedRoomEpisode: string | null = null
 
   private serverRtt = 0
+  // The server's own `ping.latencyCalculation` from the last inbound State, and
+  // the wall-clock moment it arrived (#231). We echo it back so the server can
+  // measure its round trip to us — but because our sends are timer-driven we
+  // hold it for up to a heartbeat, so the echo carries `ts + hold` rather than
+  // `ts` (see consumeServerLatencyEcho). The two are written as a pair and
+  // consumed as a pair; a timestamp paired with a stale arrival time reports the
+  // wrong hold. Per-socket: a timestamp minted by the previous socket would
+  // report the outage duration as the RTT, so both reset in
+  // resetTransportState() alongside serverRtt.
+  private lastServerLatencyCalculation: number | null = null
+  private lastServerLatencyArrivalMs = 0
   // Per-attempt detail slots for the disconnect reason (#213/#215). All three
   // reset in openSocket() — never in resetTransportState(), which runs at the
   // top of onSocketClose() before the reason is composed — so the surfaced
@@ -428,6 +439,8 @@ export class SyncplayClient extends EventEmitter {
     this.pendingClientAck = 0
     this.pendingServerAck = 0
     this.serverRtt = 0
+    this.lastServerLatencyCalculation = null
+    this.lastServerLatencyArrivalMs = 0
     this.garbageParseFailures = 0
     this.garbageBytes = 0
     this.sawValidMessage = false
@@ -930,6 +943,18 @@ export class SyncplayClient extends EventEmitter {
         const rtt = Date.now() / 1000 - myTs
         if (rtt > 0 && rtt < 5) this.serverRtt = rtt
       }
+      // The server's own timestamp, to be echoed on our next outbound State
+      // (#231). Type-guarded like every other read here: a malformed frame
+      // leaves the stored pair untouched rather than parking a string for the
+      // next echo, and never nulls a good value. Recorded above the `if (!ps)`
+      // guard below so a ping-only frame still refreshes it. The pair overwrites
+      // together — a second State arriving before we send must replace the
+      // arrival time too, or the echo reports the wrong hold.
+      const serverTs = typeof ping.latencyCalculation === 'number' ? ping.latencyCalculation : null
+      if (serverTs !== null) {
+        this.lastServerLatencyCalculation = serverTs
+        this.lastServerLatencyArrivalMs = Date.now()
+      }
     }
 
     const serverCounter = typeof iotf.server === 'number' ? iotf.server : null
@@ -1145,12 +1170,68 @@ export class SyncplayClient extends EventEmitter {
     return this.playbackAdopted
   }
 
+  // Hold-time-corrected, consume-once read of the server's pending
+  // `latencyCalculation` (#231). Two independent mechanisms live here and they
+  // are not redundant:
+  //
+  //  - The `+ ms / 1000` correction is what makes the echoed number a *network*
+  //    RTT. Our sends are timer-driven, so we sit on the timestamp for up to a
+  //    heartbeat; echoed verbatim the server bills that hold to the network
+  //    (its `_rtt = time.time() - timestamp` has no upper bound) and derives
+  //    ~0.7 s of phantom forward delay from a ~50 ms link. The reference server
+  //    solves the mirror-image problem the same way, echoing our stamp plus its
+  //    own processingTime.
+  //  - Clearing the pair unconditionally is duplicate-sample suppression, not
+  //    poison prevention: with the correction in, a re-echoed timestamp is
+  //    arithmetically correct, just derived from one old measurement. N copies
+  //    of it would all feed the server's 0.85 EMA as correlated samples during
+  //    exactly the windows where it has the least fresh information.
+  //
+  // They fail differently and neither test covers the other, so don't delete
+  // one as redundant. Every outbound State must build its echo through here so
+  // consume-once holds across senders.
+  //
+  // Note the exact grain: consume-once is per *attempted* State, not per State
+  // that reaches the wire. The pair is burned here, before sendJson(), which
+  // returns early on a null socket and swallows a failed write — so a frame that
+  // never ships still spends the timestamp. Both losses are benign (the server
+  // substitutes 0, returns early, and holds its last forward delay) and the
+  // `state !== 'ready'` guard in sendStateMessage() makes the null-socket path
+  // effectively unreachable, so this is deliberately not restructured. It
+  // matters when #232's sendAck() lands with its own send path.
+  //
+  // Units: `ts` is the server's time.time() in *seconds*; `ms` is a difference
+  // of two Date.now() reads in *milliseconds*. The `/ 1000` is load-bearing.
+  private consumeServerLatencyEcho(): number | null {
+    const ts = this.lastServerLatencyCalculation
+    const arrivedAt = this.lastServerLatencyArrivalMs
+    this.lastServerLatencyCalculation = null
+    this.lastServerLatencyArrivalMs = 0
+    if (ts === null) return null
+    // Sanity window on the *hold* — our own measurement across two Date.now()
+    // reads — mirroring the inbound guard at `rtt > 0 && rtt < 5`, but
+    // zero-inclusive: a same-millisecond hold is the most accurate sample this
+    // client can produce (and is #232's ack frame), so it belongs inside the
+    // window. Date.now() is a wall clock, so an NTP step or a suspend between
+    // arrival and send makes the hold meaningless; out of window we drop the
+    // pair and send no key rather than echoing verbatim, which would hand the
+    // server a positive, plausible-looking RTT inflated by up to a full
+    // heartbeat — the exact failure the correction exists to prevent, and one
+    // its own guard (negatives only) cannot catch. A missing key is benign: the
+    // server substitutes 0 and returns early, holding its last forward delay.
+    const ms = Date.now() - arrivedAt
+    if (ms < 0 || ms >= 5000) return null
+    return ts + ms / 1000
+  }
+
   private sendStateMessage(opts: { doSeek: boolean }): void {
     if (this.status.state !== 'ready') return
+    const echo = this.consumeServerLatencyEcho()
     const msg: JsonObject = {
       ping: {
         clientLatencyCalculation: Date.now() / 1000,
-        ...(this.serverRtt > 0 ? { clientRtt: this.serverRtt } : {})
+        ...(this.serverRtt > 0 ? { clientRtt: this.serverRtt } : {}),
+        ...(echo !== null ? { latencyCalculation: echo } : {})
       }
     }
     const playstate = this.buildPlaystate(opts.doSeek)

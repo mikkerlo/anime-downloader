@@ -221,6 +221,60 @@ describe('SyncplayClient reconnect after a TLS session (#216)', () => {
       vi.useRealTimers()
     }
   })
+
+  // The server's ping timestamp is per-socket too (#231): it is the previous
+  // connection's `time.time()`, so echoing it on the new socket would report the
+  // outage duration as the round trip — straight into the server's RTT, which
+  // has no upper bound of its own.
+  it('drops the pending server ping timestamp when the retry opens', async () => {
+    vi.useFakeTimers()
+    try {
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'r',
+        username: 'u',
+        autoReconnect: true
+      })
+      reachReady()
+      // Ping-only, and delivered *after* any local send: an outbound State
+      // consumes the pending pair, which would leave nothing for the reset to
+      // clear and make the assertion below vacuous.
+      tlsSockets[0].emit(
+        'data',
+        Buffer.from('{"State":{"ping":{"latencyCalculation":1770000000.25}}}\r\n')
+      )
+      expect(
+        (client as unknown as { lastServerLatencyCalculation: number | null })
+          .lastServerLatencyCalculation
+      ).toBe(1770000000.25)
+
+      tlsSockets[0].emit('close')
+      await vi.advanceTimersByTimeAsync(1500)
+
+      expect(
+        (client as unknown as { lastServerLatencyCalculation: number | null })
+          .lastServerLatencyCalculation
+      ).toBeNull()
+      expect(
+        (client as unknown as { lastServerLatencyArrivalMs: number }).lastServerLatencyArrivalMs
+      ).toBe(0)
+
+      // And nothing stale reaches the wire: the first outbound State on the
+      // fresh socket carries no echo.
+      reachReady()
+      tlsSockets[1].write.mockClear()
+      await vi.advanceTimersByTimeAsync(1000)
+
+      const states = written(tlsSockets[1])
+        .filter((f) => 'State' in (f as Record<string, unknown>))
+        .map((f) => (f as { State: { ping: Record<string, unknown> } }).State)
+      expect(states.length).toBeGreaterThan(0)
+      expect(states[0].ping).not.toHaveProperty('latencyCalculation')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('SyncplayClient protocol garbage detection (#215)', () => {

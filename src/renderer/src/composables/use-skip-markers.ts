@@ -7,6 +7,10 @@
 //   - Streamed playback asks main to fingerprint the current stream and
 //     only surfaces ranges that match the locally-derived show signatures.
 //
+// Owns the *lifetime* of the stream-detection toast too (`streamSkipStatus`,
+// #222): main's side of that IPC is unbounded, so the status is driven by a
+// local deadline rather than by the promise settling.
+//
 // Also owns the skip button visibility state (with a small grace timer so
 // scrubbing through a band doesn't flicker the button) and the
 // per-session "already skipped" set so rewinding past a band doesn't
@@ -31,6 +35,25 @@ const SKIP_LEAD_IN_SEC = 0.25
 // (#238); a landing 0.3 s before `endSec` counts as done, one 40 s short does
 // not.
 const SKIP_LANDING_EPSILON_SEC = 0.5
+
+// #222. The stream-detect IPC has no upper bound of its own: main pulls two
+// 8-minute audio clips off the CDN through ffmpeg and then fpcalc's every
+// locally downloaded episode on a cold fingerprint cache, and none of those
+// spawns resolve on anything but child `exit` — a half-open socket means the
+// reply never comes and the toast is pinned for the rest of the session. The
+// toast's lifetime is therefore owned here rather than by the promise.
+const STREAM_DETECT_TIMEOUT_MS = 90_000
+// How long the "unavailable" text holds before the toast fades. Short: it is
+// purely informational, there is nothing to act on.
+const STREAM_FAILURE_TOAST_MS = 3000
+const STREAM_DETECT_TIMEOUT = Symbol('stream-detect-timeout')
+
+/**
+ * `'failed'` names the *run*, not the message — the toast text ("OP/ED markers
+ * unavailable") is derived from it in exactly one place, the PlayerView
+ * template.
+ */
+export type StreamSkipStatus = 'idle' | 'detecting' | 'failed'
 
 export function useSkipMarkers(deps: {
   /** Live anime id getter (props pass-through). */
@@ -61,7 +84,7 @@ export function useSkipMarkers(deps: {
 }): {
   showSkipDetections: Ref<ShowSkipDetections | null>
   streamSkipDetection: Ref<EpisodeSkipDetection | null>
-  streamSkipDetecting: Ref<boolean>
+  streamSkipStatus: Ref<StreamSkipStatus>
   skipButtonVisible: Ref<boolean>
   currentEpisodeSkip: ComputedRef<EpisodeSkipDetection | null>
   activeSkipRange: ComputedRef<'op' | 'ed' | null>
@@ -74,7 +97,7 @@ export function useSkipMarkers(deps: {
 } {
   const showSkipDetections = ref<ShowSkipDetections | null>(null)
   const streamSkipDetection = ref<EpisodeSkipDetection | null>(null)
-  const streamSkipDetecting = ref(false)
+  const streamSkipStatus = ref<StreamSkipStatus>('idle')
   const skippedRanges = ref<Set<string>>(new Set())
   const skipButtonVisible = ref(false)
 
@@ -85,6 +108,11 @@ export function useSkipMarkers(deps: {
   // separately — a second copy could only drift out of sync with it.
   let pendingSkipLanding: { key: string; endSec: number } | null = null
   let streamSkipRequestId = 0
+  // Both are #222 state: the deadline that bounds the in-flight IPC, and the
+  // hold on the failure text. Every path that retires a request clears them,
+  // otherwise a timer outlives its generation and fires against a new episode.
+  let streamDeadlineTimer: ReturnType<typeof setTimeout> | null = null
+  let streamFailureTimer: ReturnType<typeof setTimeout> | null = null
   let unsubSignatureUpdated: Unsubscribe | null = null
 
   const currentEpisodeSkip = computed<EpisodeSkipDetection | null>(() => {
@@ -197,10 +225,46 @@ export function useSkipMarkers(deps: {
     skipButtonVisible.value = false
   }
 
+  function clearStreamTimers(): void {
+    if (streamDeadlineTimer) {
+      clearTimeout(streamDeadlineTimer)
+      streamDeadlineTimer = null
+    }
+    if (streamFailureTimer) {
+      clearTimeout(streamFailureTimer)
+      streamFailureTimer = null
+    }
+  }
+
+  // Terminal transition for a run that gave up (deadline or a rejected IPC).
+  //
+  // The cancel IPC is what actually drops main's ffmpeg/fpcalc children: the
+  // renderer has stopped waiting, but nothing over there notices on its own —
+  // `detectStream` swallows abort errors and resolves as `null`, or, on a warm
+  // fingerprint cache, with real ranges.
+  //
+  // It is the *raw* IPC rather than `cancelStreamDetection()` on purpose: that
+  // helper also drives the composable's own "idle" terminal state, and this
+  // function owns a different one. Routing through it would make the 'failed'
+  // below depend on running after the reset rather than being independent of
+  // it — the two are equivalent today only because of that statement order.
+  function failStreamDetection(): void {
+    void window.api.skipDetectorCancelStreamDetect()
+    clearStreamTimers()
+    streamSkipStatus.value = 'failed'
+    streamFailureTimer = setTimeout(() => {
+      streamFailureTimer = null
+      streamSkipStatus.value = 'idle'
+    }, STREAM_FAILURE_TOAST_MS)
+  }
+
   async function refreshStreamSkipDetection(): Promise<void> {
     const requestId = ++streamSkipRequestId
+    // Before the early returns: a stream→local flip during the failure hold
+    // would otherwise leave a timer that fires against the new state.
+    clearStreamTimers()
     streamSkipDetection.value = null
-    streamSkipDetecting.value = false
+    streamSkipStatus.value = 'idle'
     const animeId = deps.getAnimeId()
     const epInt = deps.getCurrentEpisodeInt()
     if (!deps.isStreaming.value || !animeId || !epInt || !deps.activeStreamUrl.value) return
@@ -212,29 +276,57 @@ export function useSkipMarkers(deps: {
     } catch {
       // ignore best-effort cancel races before starting a fresh request
     }
-    streamSkipDetecting.value = true
-    try {
-      const result = await window.api.skipDetectorDetectStream(
-        animeId,
-        epInt,
-        deps.activeStreamUrl.value
+    // #222: that cancel is a real IPC round-trip, so a newer request — or a
+    // `cancelStreamDetection()` from the stream→local flip — can land while we
+    // are suspended in it. Without this re-check a superseded run turns the
+    // toast back *on* after the newer path turned it off, and then declines to
+    // turn it off again at its own exit (that exit is generation-gated, and the
+    // generation is stale) — the toast is pinned for the rest of the session.
+    if (requestId !== streamSkipRequestId) return
+    streamSkipStatus.value = 'detecting'
+
+    const deadline = new Promise<typeof STREAM_DETECT_TIMEOUT>((resolve) => {
+      streamDeadlineTimer = setTimeout(
+        () => resolve(STREAM_DETECT_TIMEOUT),
+        STREAM_DETECT_TIMEOUT_MS
       )
+    })
+    const ownDeadlineTimer = streamDeadlineTimer
+    try {
+      // A genuine race, not a side-effect-only timer: the promise this function
+      // returns has to settle at the deadline too, or every caller awaiting it
+      // inherits the unbounded wait.
+      const outcome = await Promise.race([
+        window.api.skipDetectorDetectStream(animeId, epInt, deps.activeStreamUrl.value),
+        deadline
+      ])
       if (requestId !== streamSkipRequestId) return
-      streamSkipDetection.value = result
+      if (outcome === STREAM_DETECT_TIMEOUT) {
+        // Returning here is what retires the run: the IPC promise is still
+        // pending, but racing it means it has no continuation left that could
+        // write `streamSkipDetection` or reset the status behind the failure
+        // message. `Promise.race` has already attached a rejection handler to
+        // it, so a late rejection can't surface as an unhandled one either.
+        failStreamDetection()
+        return
+      }
+      streamSkipDetection.value = outcome
+      streamSkipStatus.value = 'idle'
     } catch (err) {
       if (requestId !== streamSkipRequestId) return
       console.error('Failed to detect streamed skip ranges:', err)
       streamSkipDetection.value = null
+      failStreamDetection()
     } finally {
-      if (requestId === streamSkipRequestId) {
-        streamSkipDetecting.value = false
-      }
+      if (ownDeadlineTimer) clearTimeout(ownDeadlineTimer)
+      if (streamDeadlineTimer === ownDeadlineTimer) streamDeadlineTimer = null
     }
   }
 
   function cancelStreamDetection(): void {
     streamSkipRequestId++
-    streamSkipDetecting.value = false
+    clearStreamTimers()
+    streamSkipStatus.value = 'idle'
     void window.api.skipDetectorCancelStreamDetect()
   }
 
@@ -290,7 +382,7 @@ export function useSkipMarkers(deps: {
   return {
     showSkipDetections,
     streamSkipDetection,
-    streamSkipDetecting,
+    streamSkipStatus,
     skipButtonVisible,
     currentEpisodeSkip,
     activeSkipRange,

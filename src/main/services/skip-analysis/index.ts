@@ -17,6 +17,13 @@ export type SkipAnalysisFileCheckResult = Record<
 
 const AUTO_SKIP_DEBOUNCE_MS = 5000
 
+// #222 leak backstop. Deliberately *above* the renderer's own 90 s deadline
+// (`STREAM_DETECT_TIMEOUT_MS` in `use-skip-markers.ts`): if the two matched,
+// this abort's `null` resolution would race the renderer's failure toast. At
+// 120 s the renderer always owns the user-visible message and this only exists
+// to stop ffmpeg/fpcalc children outliving a renderer that has given up.
+const STREAM_DETECT_DEADLINE_MS = 120_000
+
 export interface SkipAnalysisServiceDeps {
   store: StorageService
   scanEpisodeFiles: (animeName: string) => SkipAnalysisFileCheckResult
@@ -31,6 +38,13 @@ export interface SkipAnalysisServiceDeps {
   getFpcalcPath: () => string
   getFfmpegPath: () => string
   getFfprobePath: () => string
+  /**
+   * Test seam (#222) for the stream-detection deadline: defaults to the real
+   * `detectStream`. Injected rather than `vi.mock`'d because this module also
+   * imports `analyzeShow` from the same file and exercises it elsewhere, so a
+   * module-wide mock has a far larger blast radius than one optional dep.
+   */
+  detectStream?: typeof detectStream
 }
 
 export interface SkipAnalysisService {
@@ -102,7 +116,8 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
     analyzeProgressChannel,
     getFpcalcPath,
     getFfmpegPath,
-    getFfprobePath
+    getFfprobePath,
+    detectStream: runDetectStream = detectStream
   } = deps
 
   let currentSkipAnalysis: CurrentSkipAnalysis | null = null
@@ -377,7 +392,20 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
       string,
       CachedFingerprint
     >
-    const runPromise = detectStream(animeId, episodeInt, streamUrl, detections, {
+    // Nothing in the chain below resolves on anything but child `exit`, so a
+    // half-open CDN socket leaves ffmpeg/fpcalc (and this promise) alive
+    // indefinitely. The abort reaches every child and every temp dir already —
+    // `runChild`, `probeDurationSec`, fpcalc via `fingerprint.ts`, and the
+    // stream-clip temp WAV dir's `finally` — so the timer is a complete
+    // backstop on its own with no extra cleanup.
+    const deadlineTimer = setTimeout(() => {
+      console.warn(
+        `[skip-detector] stream detection deadline hit after ${STREAM_DETECT_DEADLINE_MS} ms (animeId=${animeId} ep=${episodeInt}) — aborting`
+      )
+      controller.abort()
+    }, STREAM_DETECT_DEADLINE_MS)
+
+    const runPromise = runDetectStream(animeId, episodeInt, streamUrl, detections, {
       fpcalcPath,
       ffmpegPath,
       ffprobePath: getFfprobePath() || undefined,
@@ -394,6 +422,10 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
 
     currentStreamSkipDetections.set(senderId, { senderId, controller, promise: runPromise })
     runPromise.finally(() => {
+      // Cleared here, not only on the deadline path: a timer left armed past a
+      // normal resolution would abort whichever run happens to be live 120 s
+      // later, since `controller.abort()` is captured by reference.
+      clearTimeout(deadlineTimer)
       const current = currentStreamSkipDetections.get(senderId)
       if (current && current.controller === controller) {
         currentStreamSkipDetections.delete(senderId)

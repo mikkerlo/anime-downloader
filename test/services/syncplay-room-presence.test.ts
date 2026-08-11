@@ -722,6 +722,10 @@ describe('SyncplayClient room presence on join (#220)', () => {
       lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { user } }) + '\r\n'))
     }
 
+    const readySet = (ready: Record<string, unknown>): void => {
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { ready } }) + '\r\n'))
+    }
+
     it('seats a peer on a joined event and drops it on left', () => {
       handshake()
 
@@ -760,23 +764,28 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(peer?.file?.name).toBe('COTE - 7')
     })
 
-    // The branch accepts two shapes for `data.isReady` — a nested object and a
-    // bare boolean — and this pins both arms.
-    //
-    // DELETE WITH THE BRANCH. This characterizes handleSet's `data.isReady`
-    // branch, which the reference server never emits — readiness travels as a
-    // top-level Set:{ready}. #229 deletes that branch and removes this test,
-    // replaced by a case feeding the real sendUserSetting shape ({room, file,
-    // event} with no isReady). (#225's item A1 specified the same deletion and
-    // was folded into #229 on 2026-08-06, so #229 is the sole owner.)
-    it('records peer readiness from both the object and boolean shapes', () => {
+    // Replaces #241's `records peer readiness from both the object and boolean
+    // shapes`, deleted with the `user[X].isReady` branch it characterized
+    // (#229). This is the shape the reference server actually sends on the
+    // `user` path — `sendUserSetting` writes `room`/`file`/`event` and nothing
+    // else — so readiness must come from the top-level `Set: {ready}` alone.
+    it('leaves readiness untouched on the real sendUserSetting shape', () => {
       handshake()
 
-      serverSet({ peer: { isReady: { isReady: false } } })
+      readySet({ username: 'peer', isReady: false, manuallyInitiated: true })
+      serverSet({ peer: { event: { joined: true } } })
+      readySet({ username: 'peer', isReady: false, manuallyInitiated: true })
       expect(roomUsers.at(-1)!.find((u) => u.username === 'peer')?.isReady).toBe(false)
 
-      serverSet({ other: { isReady: true } })
-      expect(roomUsers.at(-1)!.find((u) => u.username === 'other')?.isReady).toBe(true)
+      serverSet({
+        peer: {
+          room: { name: 'cinema' },
+          file: { name: 'COTE - 7', duration: 1440 },
+          event: { joined: true }
+        }
+      })
+
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'peer')?.isReady).toBe(false)
     })
 
     it('ignores a malformed per-user payload without disturbing the roster', () => {
@@ -1024,19 +1033,21 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(episodeChanges).toEqual([])
     })
 
-    // Rule 1 announces a switch-in only for frames that carry nothing but a
-    // room. `isReady` speaks for itself: the branch at the bottom of the loop
-    // seats the user, so announcing here would put a spurious join line in
-    // front of it. Dead against a reference server (live readiness is a
-    // top-level `Set: {ready}`), live again the moment #229 revives the path.
-    it('seats a peer from a {room, isReady} entry without announcing a join', () => {
+    // Rule 1 used to exclude `isReady` so it would not announce a join in front
+    // of the per-user readiness branch that seated the user itself. #229
+    // deleted that branch — `sendUserSetting` never writes `isReady`, so the
+    // key is not something a server puts on the `user` path at all — and with
+    // it the exclusion. A `{room, isReady}` entry is therefore a room-only
+    // frame now: seated and announced like any other switch-in, with the stray
+    // `isReady` ignored rather than read into the roster.
+    it('treats a {room, isReady} entry as a plain switch-in, ignoring the stray key', () => {
       handshake()
 
       serverSet({ mikkerlo: { room: { name: 'cinema' }, isReady: false } })
 
       expect(usernames()).toEqual(['me', 'mikkerlo'])
-      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBe(false)
-      expect(roomEvents).toEqual([])
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBeUndefined()
+      expect(roomEvents).toEqual(['mikkerlo joined the room'])
     })
 
     // Pins the invariant that makes `handleSet` safe to write against a
@@ -1110,6 +1121,272 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomUsers.at(-1)!.filter((u) => u.username === 'mikkerlo')).toHaveLength(1)
       expect(roomEvents).toEqual(['mikkerlo switched to "COTE - 7"'])
       expect(roomUsers).toHaveLength(emitsAfterFile)
+    })
+  })
+
+  // Live readiness travels as a *top-level* `Set: {ready}` (#229) — the
+  // reference `sendSetReady` — broadcast on join, on room switch and on every
+  // toggle. Before this the roster's `isReady` was a join-time snapshot from
+  // the `List` reply and never moved again, so both roster dots were frozen
+  // and `applySyncplayReadyGate()` could never see a peer start or stop
+  // buffering.
+  describe('handleSet parses the live readiness broadcast (#229)', () => {
+    let roomEvents: string[]
+
+    const serverSet = (user: Record<string, unknown>): void => {
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { user } }) + '\r\n'))
+    }
+
+    const readySet = (ready: Record<string, unknown>): void => {
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ Set: { ready } }) + '\r\n'))
+    }
+
+    // Every outbound `Set: {ready}`. The handshake always contributes one
+    // (`finishHandshake` asserts `ownIsReady` unconditionally), so the
+    // wire-silence assertions below are written against a baseline rather than
+    // against zero.
+    const readyWrites = (): Array<Record<string, unknown>> =>
+      frames(lastTlsSocket)
+        .filter((f) => 'Set' in f && 'ready' in (f.Set as Record<string, unknown>))
+        .map((f) => (f.Set as { ready: Record<string, unknown> }).ready)
+
+    const seatPeer = (username: string): void => {
+      serverSet({ [username]: { event: { joined: true } } })
+    }
+
+    beforeEach(() => {
+      roomEvents = []
+      client.on('room-event', (e) => roomEvents.push((e as { text: string }).text))
+    })
+
+    // Test 1, and the reason it is written first: it passes trivially against
+    // the old `handleSet` (which parsed nothing) and is exactly the case a
+    // naive `payload.ready.isReady === true` port breaks. A watcher that has
+    // never toggled carries `_ready = None`, so this is the literal join
+    // broadcast — coerced to `false` it would give the peer a permanent amber
+    // dot and hold the local gate shut for the whole session.
+    it('maps a null isReady to undefined, not false, so the join broadcast cannot pin the gate', () => {
+      handshake()
+      seatPeer('mikkerlo')
+
+      readySet({ username: 'mikkerlo', isReady: null, manuallyInitiated: false })
+
+      const peer = roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!
+      expect(peer.isReady).toBeUndefined()
+      expect(peer.isReady).not.toBe(false)
+    })
+
+    // Test 2. The dot has to move in both directions, and the *emit* is what
+    // the renderer's `watch(syncplayRoomUsers)` → `applySyncplayReadyGate()`
+    // chain hangs off — so assert the emitted array, not internal state. The
+    // one-emit-per-frame count is scoped to this `ready`-only frame: it is not
+    // a global per-`Set` invariant, because `absorbRemoteFile` emits outside
+    // the `usersDirty` accounting.
+    it('flips a seated peer’s dot both ways, one room-users emit per frame', () => {
+      handshake()
+      seatPeer('mikkerlo')
+      const baseline = roomUsers.length
+
+      readySet({ username: 'mikkerlo', isReady: false, manuallyInitiated: false })
+      expect(roomUsers).toHaveLength(baseline + 1)
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBe(false)
+
+      readySet({ username: 'mikkerlo', isReady: true, manuallyInitiated: false })
+      expect(roomUsers).toHaveLength(baseline + 2)
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBe(true)
+
+      // A repeat of the value already held changes nothing and emits nothing.
+      readySet({ username: 'mikkerlo', isReady: true, manuallyInitiated: false })
+      expect(roomUsers).toHaveLength(baseline + 2)
+    })
+
+    // Test 3. Membership gets one owner: the frame carries no room key at all,
+    // so seating from it is a write the #230 room filter structurally cannot
+    // gate, and an invented row can carry `isReady:false` and pause us for a
+    // member we have no membership evidence for. Nothing is lost — the second
+    // half is the case the insert used to exist for, now served by #230's
+    // rule 1 from the bare `{user:{X:{room}}}` frame the server broadcasts one
+    // line earlier.
+    it('seats nobody for an unknown username, and #230’s rule 1 covers the switch-in', () => {
+      handshake()
+      const baseline = roomUsers.length
+
+      readySet({ username: 'ghost', isReady: false, manuallyInitiated: false })
+
+      expect(roomUsers).toHaveLength(baseline)
+      expect((roomUsers.at(-1) ?? []).map((u) => u.username)).not.toContain('ghost')
+
+      // Now in the server's own order: the switch-in frame, then readiness.
+      serverSet({ latecomer: { room: { name: 'cinema' } } })
+      readySet({ username: 'latecomer', isReady: false, manuallyInitiated: false })
+
+      expect(roomUsers.at(-1)!.filter((u) => u.username === 'latecomer')).toHaveLength(1)
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'latecomer')!.isReady).toBe(false)
+    })
+
+    // Test 4. `broadcastRoom` has no sender filter, so our own `sendSetReady`
+    // echoes straight back with our username stamped on it. That echo compares
+    // equal and must do nothing at all — no wire write, no roster write.
+    // (The case-only spelling is pinned in the override test below, not here:
+    // on the *equal* path an exact compare and a case-insensitive one are
+    // indistinguishable, since the peer branch finds nobody seated under the
+    // other spelling and also does nothing.)
+    it('is silent on its own echo, and a later List reverts nothing', () => {
+      handshake()
+      const writes = readyWrites().length
+      const emits = roomUsers.length
+
+      readySet({ username: 'me', isReady: true, manuallyInitiated: false })
+      readySet({ username: 'ME', isReady: true, manuallyInitiated: false })
+
+      expect(readyWrites()).toHaveLength(writes)
+      expect(roomUsers).toHaveLength(emits)
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { cinema: { me: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.isReady).toBe(true)
+    })
+
+    // Test 5. The `setOthersReadiness` shape: any peer can force our readiness
+    // in an ordinary room, and the server *stores* the forced value. Skipping
+    // the frame would leave the server serving `false` for us until a buffer
+    // flap or a reconnect — our only client-side writer is edge-triggered on a
+    // local change — holding every peer's ready gate down. So: exactly one
+    // re-assert carrying *our* value and no `username` field (which is what
+    // makes the server take its plain `else` arm and rebroadcast our value),
+    // `ownIsReady` and the roster self row untouched, and the resulting echo
+    // silent. Adopting the peer's value instead is the dead end this pins
+    // against.
+    it('re-asserts our own value once when a peer overrides us, and converges', () => {
+      handshake()
+      const writes = readyWrites().length
+
+      readySet({ username: 'me', isReady: false, manuallyInitiated: true, setBy: 'mikkerlo' })
+
+      const sent = readyWrites().slice(writes)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toEqual({ isReady: true, manuallyInitiated: false })
+      expect(sent[0]).not.toHaveProperty('username')
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'me')!.isReady).toBe(true)
+      // Peer-only room log: the server's own "X set Y as ready" chat notice is
+      // the user's explanation here, and a second line would double-announce.
+      expect(roomEvents).toEqual([])
+
+      // The server stores our value and rebroadcasts *that* — now equal.
+      readySet({ username: 'me', isReady: true, manuallyInitiated: false })
+      expect(readyWrites()).toHaveLength(writes + 1)
+
+      // Case-insensitively, and this is the path where it is observable: an
+      // exact compare would drop the frame into the peer branch, find nobody
+      // seated under that spelling, and never re-assert — leaving the server
+      // serving `false` for us and every peer's gate down. Safe because the
+      // server's `findFreeUsername` lowercases every live watcher name into its
+      // taken-name set, so no real peer can hold a case-only variant of ours.
+      readySet({ username: 'ME', isReady: false, manuallyInitiated: true, setBy: 'mikkerlo' })
+
+      expect(readyWrites()).toHaveLength(writes + 2)
+      expect(readyWrites().at(-1)).toEqual({ isReady: true, manuallyInitiated: false })
+      expect(roomEvents).toEqual([])
+    })
+
+    // Test 5b, the state guard on that re-assert — the one guard the plan names
+    // ("Send under `if (this.status.state === 'ready')`, exactly as `setReady`
+    // does"). It is not an edge case but the server's *normal* ordering:
+    // `handleHello` runs `addWatcher` (which seats us and fires
+    // `sendJoinMessage`'s `broadcastRoom`, protocols.py:558) *before*
+    // `sendHello` at :560, so we are already receiving room broadcasts while
+    // `status.state` is still pre-`ready`. Nothing is lost by dropping the
+    // re-assert in that window: `finishHandshake()` sends `ownIsReady`
+    // unconditionally moments later, which is what actually corrects the
+    // server's stored value.
+    it('writes nothing for an override that lands before the handshake completes', () => {
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'cinema',
+        username: 'me',
+        autoReconnect: false
+      })
+      lastSocket!.emit('connect')
+      lastSocket!.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
+      lastTlsSocket!.emit('secureConnect')
+      expect(readyWrites()).toHaveLength(0)
+
+      readySet({ username: 'me', isReady: false, manuallyInitiated: true, setBy: 'mikkerlo' })
+
+      // Not one byte of readiness on the wire before `Hello` comes back.
+      expect(readyWrites()).toHaveLength(0)
+      // Our own value is untouched, so the handshake's assert still says `true`.
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.6.9"}}\r\n')
+      )
+      expect(readyWrites()).toEqual([{ isReady: true, manuallyInitiated: false }])
+    })
+
+    // Test 6, the anti-spin case. `isReady()` returns `None` for every watcher
+    // on a `--disable-ready` server, and `null` can never equal `ownIsReady`,
+    // so without the boolean guard the re-assert above would be a wire-speed
+    // loop against such a server.
+    it('writes nothing for a self frame carrying a null isReady', () => {
+      handshake()
+      const writes = readyWrites().length
+
+      readySet({ username: 'me', isReady: null, manuallyInitiated: false })
+      readySet({ username: 'me', isReady: null, manuallyInitiated: false })
+
+      expect(readyWrites()).toHaveLength(writes)
+    })
+
+    // Test 8, the readiness angle on the switch-out frame. #230's rule 2 owns
+    // the membership assertion; the *harm* it guards against only exists once
+    // readiness is live — a peer that switches away mid-buffer would otherwise
+    // leave an `isReady:false` behind and `syncplayAllUsersReady()` would hold
+    // our playback paused.
+    it('removes a peer that switches out, so a stale false cannot pin our gate', () => {
+      handshake()
+      seatPeer('mikkerlo')
+      readySet({ username: 'mikkerlo', isReady: false, manuallyInitiated: false })
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBe(false)
+
+      serverSet({ mikkerlo: { room: { name: 'other-room' } } })
+
+      expect(roomUsers.at(-1)!.map((u) => u.username)).not.toContain('mikkerlo')
+    })
+
+    // The optional room log line, gated on truth rather than presence:
+    // `manuallyInitiated` is present in *both* branches of the server's
+    // `sendSetReady` and the buffer-driven path is exactly the one that sets it
+    // `false`, so a presence check would write a line on every peer's MSE
+    // `waiting`/recovery flap into the log the user reads for joins and chat.
+    it('logs a deliberate peer transition and stays quiet on a buffer flap', () => {
+      handshake()
+      seatPeer('mikkerlo')
+      roomEvents.length = 0
+
+      readySet({ username: 'mikkerlo', isReady: false, manuallyInitiated: false })
+      expect(roomEvents).toEqual([])
+
+      readySet({ username: 'mikkerlo', isReady: true, manuallyInitiated: true })
+      expect(roomEvents).toEqual(['mikkerlo is ready'])
+
+      readySet({ username: 'mikkerlo', isReady: false, manuallyInitiated: false, setBy: 'someone' })
+      expect(roomEvents).toEqual(['mikkerlo is ready', 'mikkerlo was set not ready by someone'])
+    })
+
+    it('ignores a readiness frame with no username', () => {
+      handshake()
+      seatPeer('mikkerlo')
+      const emits = roomUsers.length
+
+      readySet({ isReady: false, manuallyInitiated: true })
+
+      expect(roomUsers).toHaveLength(emits)
+      expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBeUndefined()
     })
   })
 })

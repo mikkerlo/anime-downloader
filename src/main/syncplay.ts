@@ -3,28 +3,18 @@ import * as tls from 'tls'
 import { createHash } from 'crypto'
 import { EventEmitter } from 'events'
 
-// The version we claim on the outbound Hello (#233). This is a wire-protocol
-// claim, not our app version (`package.json` is on 4.x) — the field has always
-// been a protocol-capability claim, and the capabilities themselves are
-// declared truthfully in `features` below. Three constraints bind the value:
-//   1. It must be >= the server's `RECENT_CLIENT_THRESHOLD`, which upstream
-//      bumps to the release's own version every release (1.7.3/1.7.4/1.7.5/
-//      1.7.6). Below it the server prepends an "upgrade available" nag to the
-//      MOTD, which we surface verbatim as an `info` room-event. Headroom is
-//      zero by construction: the nag returns on the first server shipping
-//      1.7.7, and the fix is bumping this line.
-//   2. It must be strictly numeric dotted (`N.N.N`). The server's MOTD gate
-//      int()s each component *outside* its try/except, so a suffixed value
-//      like '1.7.6-animedl' raises mid-handshake and kills the connection
+// The version we claim on the outbound Hello (#233) — a wire-protocol claim,
+// not our app version. Three constraints bind it, and `docs/syncplay.md`
+// carries the server-side mechanism behind each:
+//   1. >= the server's `RECENT_CLIENT_THRESHOLD`, which upstream bumps to the
+//      release's own version every release — headroom is zero, so the nag
+//      returns on the first server shipping 1.7.7 and the fix is this line.
+//   2. Strictly numeric dotted (`N.N.N`); a suffixed value kills the handshake
 //      rather than merely degrading the MOTD.
-//   3. It must *string*-compare >= '1.5.0' (`CHAT_MIN_VERSION`) or the server
-//      stops sending us `Chat` frames. Note this comparator is a raw string
-//      compare, not the tuple compare the MOTD gate uses — a future '1.10.0'
-//      would pass the latter and silently fail the former.
-// Do not add a `realversion` field: the server prefers it over `version` when
-// present, so it would override this value outright and could reintroduce the
-// nag. (The reference client's companion `version: '1.2.255'` exists only for
-// 1.2.x-server compatibility, which is unreachable for us — we are TLS-only.)
+//   3. *String*-compares >= '1.5.0' (`CHAT_MIN_VERSION`), a different
+//      comparator from the MOTD gate's tuple compare — a future '1.10.0'
+//      passes that one and silently fails this one.
+// Never add `realversion`: the server prefers it over `version` when present.
 const SYNCPLAY_WIRE_VERSION = '1.7.6'
 const HEARTBEAT_MS = 1000
 const MAX_RECONNECT_ATTEMPTS = 5

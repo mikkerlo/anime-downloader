@@ -270,17 +270,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // rather than at the seven call sites so an eighth cannot forget it.
   //
   // The assumption that buys that: a write to the position the element already
-  // reports fires no `seeked`. True at `readyState 0`, where six of the seven
-  // current callers sit — the five restores/rewinds run in a `nextTick` after
-  // the `src` rebind, and the MSE land is behind its own `t < resumeLandTarget`
-  // check. It is not true in general: the HTML seek algorithm has no
+  // reports fires no `seeked`. True at `readyState 0`, where five of the seven
+  // current callers sit — the restores/rewinds, which run in a `nextTick` after
+  // the `src` rebind. It is not true in general: the HTML seek algorithm has no
   // same-position early-out, so at `readyState >= HAVE_METADATA` a same-value
   // write still queues `seeking`/`seeked`. A future caller arming from a loaded
   // element would see that `seeked` arrive unmarked, send it as intent at the
   // position we are already at, and have `forcePositionUpdate` push it to every
-  // watcher. `resumeFromSavedPosition` is already such a post-metadata caller
-  // (it runs behind `readyState >= 1`, else on `loadedmetadata`); it is safe
-  // only because its write is gated on `saved.position > 5` while the element
+  // watcher.
+  //
+  // The other two current callers are already post-metadata, and are safe for
+  // their own reasons rather than this one. The MSE land runs from
+  // `onSourceBufferUpdateEnd` under `sb.buffered.length > 0`, by which point
+  // MSE's init-segment-received algorithm has taken the element to
+  // `HAVE_METADATA`; its strict `t < resumeLandTarget` makes a same-value write
+  // unreachable at any `readyState`, which is the stronger property.
+  // `resumeFromSavedPosition` runs behind `readyState >= 1` (else on
+  // `loadedmetadata`) and is gated on `saved.position > 5` while the element
   // sits at 0, so the two values cannot coincide.
   //
   // Kept broad rather than `&& v.readyState === 0`, which would confine it to

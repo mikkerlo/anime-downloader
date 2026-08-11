@@ -205,6 +205,25 @@ describe('SyncplayClient room list polling (#221)', () => {
 
       expect(polledLists(tlsSockets[1])).toBe(1)
     })
+
+    // handleHello() has no already-ready guard, so a duplicate `Hello` on one
+    // socket re-enters finishHandshake() with no `close` in between — the only
+    // thing standing between that and two intervals on one socket is
+    // startListPolling()'s stop-first.
+    it('runs exactly one poller after a duplicate Hello on the same socket', () => {
+      handshake()
+      expect(vi.getTimerCount()).toBe(2)
+
+      tlsSock().emit(
+        'data',
+        Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.6.9"}}\r\n')
+      )
+
+      expect(vi.getTimerCount()).toBe(2)
+      const before = polledLists()
+      vi.advanceTimersByTime(LIST_POLL_MS)
+      expect(polledLists() - before).toBe(1)
+    })
   })
 
   describe('a repeated roster degrades nothing', () => {
@@ -496,6 +515,31 @@ describe('SyncplayClient room list polling (#221)', () => {
 
       expect(roomUsers).toHaveLength(emitted + 1)
       expect(userNamed('zoe')?.animeDlAppMeta).toEqual(meta)
+    })
+
+    // One case per term: a fixture that moved all four at once would leave each
+    // individual comparison maskable by the other three.
+    it.each([
+      ['animeId', { animeId: 2 }],
+      ['malId', { malId: 7 }],
+      ['episodeInt', { episodeInt: '4' }],
+      ['translationId', { translationId: 9 }]
+    ])('emits when only animeDlAppMeta.%s changes', (_k, patch) => {
+      handshake()
+      deliverList({ cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } })
+      const emitted = roomUsers.length
+
+      deliverList({
+        cinema: {
+          zoe: {
+            isReady: true,
+            file: { ...fileWithMeta, features: { animeDlAppMeta: { ...meta, ...patch } } }
+          },
+          me: selfEntry
+        }
+      })
+
+      expect(roomUsers).toHaveLength(emitted + 1)
     })
 
     // "Keep the previous array on equality" is observable as *order*, never as

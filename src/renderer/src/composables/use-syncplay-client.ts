@@ -64,6 +64,10 @@ export type SyncplayClient = {
   /** Flag a pause/play this app performs itself (buffer refill), so the
    *  resulting element event is never mistaken for the user's intent. */
   markProgrammaticPlayback: (paused: boolean | null) => void
+  /** Flag a `currentTime` this app writes on the user's behalf (resume land,
+   *  quality/translation restore, episode-nav rewind), so the resulting
+   *  `seeked` is never broadcast to the room as the user's own seek. */
+  markProgrammaticSeek: (target: number) => void
   applySyncplayReadyGate: () => void
   toggleSyncplayConnection: () => Promise<void>
   /** Wire into <video @seeked>. */
@@ -93,16 +97,38 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplaySnapshotTimer: ReturnType<typeof setInterval> | null = null
   let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null
   let suppressNextLocalEventUntil = 0
-  // What we last *applied* from a remote state. The 1500 ms window above is a
-  // wall-clock guess, and a seek on a network stream regularly completes later
-  // than that — the element's `seeked` then escapes as our own seek and we
-  // hand the peer their own position back with doSeek, dragging the room to a
-  // stale point and bumping the ignore counter (which makes main drop the
-  // inbound states we need). Keying on what we asked for is exact, however
-  // long the element takes to get there.
-  let appliedSeekPosition: number | null = null
+  // The `currentTime` write we are still waiting for the element to realize.
+  // The 1500 ms window above is a wall-clock guess, and a seek on a network
+  // stream regularly completes later than that — the element's `seeked` then
+  // escapes as our own seek and we hand the peer their own position back with
+  // doSeek, dragging the room to a stale point and bumping the ignore counter
+  // (which makes main drop the inbound states we need). Keying on the write
+  // itself is exact, however long the element takes to get there.
+  //
+  // Two kinds, differing only in how they are consumed (#239):
+  // - `anyValue: false` — a remote apply. Matched by value within
+  //   APPLIED_SEEK_EPSILON. Deliberately strict: it is the only renderer-side
+  //   echo guard an apply gets, and a value-agnostic one would swallow the
+  //   user's first real seek after every apply.
+  // - `anyValue: true` — a write this app made on the user's behalf
+  //   (`markProgrammaticSeek`). Consumes the next `seeked` whatever position it
+  //   reports, because the write often lands on an element at `readyState 0`:
+  //   it becomes the *default playback start position*, fires no `seeked` then,
+  //   and is clamped into `seekable` once metadata arrives — so the eventual
+  //   event can sit arbitrarily far from what we asked for.
+  //
+  // Bounded by a TTL rather than a wall clock — a short window is the same
+  // fragility this keying exists to remove — and cleared on a consume or on
+  // expiry, never on a mismatch: between an apply and its echo any of the
+  // programmatic sites can fire a `seeked`, and consuming the marker there
+  // would let the real echo escape.
+  type AppliedSeek = { value: number; expiresAt: number; anyValue: boolean }
+  let appliedSeekPosition: AppliedSeek | null = null
   let appliedPaused: boolean | null = null
   const APPLIED_SEEK_EPSILON = 0.5
+  // Floored by the MSE respawn path, which waits up to 15 s for buffer-ahead on
+  // a transcode (`use-mse-player.ts` waitForBufferAhead) before the seek lands.
+  const APPLIED_SEEK_TTL_MS = 15000
   // What *this user* wants the room to be doing. `v.paused` is not that: the
   // readiness gate and the MSE buffer machinery pause and resume the element
   // on their own, and reporting those as intent pauses the room on every
@@ -153,7 +179,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   function sendSyncplayLocalState(cause: 'play' | 'pause' | 'seek'): void {
     if (syncplayStatus.value.state !== 'ready') return
-    if (Date.now() < suppressNextLocalEventUntil) return
+    // Seeks are keyed on the value applied, not on the clock (#239). The
+    // wall-clock window dropped *every* seek inside it — including the user's,
+    // to a position nobody applied — so a skip-opening click landing right
+    // after a remote apply (or inside the 1500 ms the readiness gate re-arms on
+    // every buffer refill) moved only the local player and the room never
+    // heard about it. `appliedSeekPosition` is what suppresses echoes now, and
+    // every programmatic `currentTime` write arms it via markProgrammaticSeek.
+    // play/pause keep the window: they have no equivalent value to key on.
+    if (cause !== 'seek' && Date.now() < suppressNextLocalEventUntil) return
     const v = deps.getVideoEl()
     if (!v) return
     window.api.syncplaySendLocalState({
@@ -209,6 +243,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       return
     }
     appliedPaused = paused
+  }
+
+  // The seek-side counterpart (#239). Every `currentTime` the app writes on the
+  // user's behalf — the MSE resume land, the quality/translation `savedTime`
+  // restores, the episode-nav rewind to 0 — must arm this before the write, or
+  // the resulting `seeked` reads as intent and the reference server broadcasts
+  // it to the whole room (`forcePositionUpdate` sets *every* watcher's
+  // position). The user's own paths (`seek()`, the scrubber's `commitSeek`)
+  // deliberately do not.
+  //
+  // Value-agnostic, TTL-bounded — see the AppliedSeek comment above. Same latch
+  // family as markProgrammaticPlayback: a write that fires no `seeked` at all
+  // (e.g. `currentTime = 0` on an element already at 0) leaves this armed and
+  // swallows one later user seek; the TTL is the backstop, and a retraction
+  // path must not be added without a test for it.
+  function markProgrammaticSeek(target: number): void {
+    appliedSeekPosition = {
+      value: target,
+      expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
+      anyValue: true
+    }
   }
 
   function setSyncplayLocalReady(ready: boolean): void {
@@ -268,7 +323,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     intendedPaused = state.paused
     if (needsSeek) {
       const target = Math.max(0, state.position)
-      appliedSeekPosition = target
+      appliedSeekPosition = {
+        value: target,
+        expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
+        anyValue: false
+      }
       v.currentTime = target
     }
     if (needsPlayPause) {
@@ -339,16 +398,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   function onVideoSeeked(): void {
     const v = deps.getVideoEl()
-    if (
-      v &&
-      appliedSeekPosition !== null &&
-      Math.abs(v.currentTime - appliedSeekPosition) < APPLIED_SEEK_EPSILON
-    ) {
-      // This is the peer's own seek arriving back at us, not a user seek.
-      appliedSeekPosition = null
-      return
+    const mark = appliedSeekPosition
+    if (mark) {
+      if (Date.now() >= mark.expiresAt) {
+        // Stale: whatever write armed it either never fired an event or its
+        // event was consumed long ago. Drop it and read this as the user.
+        appliedSeekPosition = null
+      } else if (
+        mark.anyValue ||
+        (v && Math.abs(v.currentTime - mark.value) < APPLIED_SEEK_EPSILON)
+      ) {
+        // The element realizing a move we made — the peer's seek arriving back
+        // at us, or one of our own programmatic writes. Not the user.
+        appliedSeekPosition = null
+        return
+      }
+      // A value-keyed mismatch leaves the mark armed on purpose: this is some
+      // other `seeked` that arrived between the apply and its echo, and
+      // consuming the marker here is what let the real echo escape (#224).
     }
-    appliedSeekPosition = null
     sendSyncplayLocalState('seek')
   }
 
@@ -514,6 +582,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     pushSyncplayFile,
     setSyncplayLocalReady,
     markProgrammaticPlayback,
+    markProgrammaticSeek,
     applySyncplayReadyGate,
     toggleSyncplayConnection,
     onVideoSeeked,

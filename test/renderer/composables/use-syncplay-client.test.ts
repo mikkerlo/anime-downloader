@@ -431,10 +431,11 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
 // through (use-syncplay-client.ts:343-351): an event landing on the position we
 // applied is consumed there and never gets as far as the window.
 describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
-  // Characterization of today's behavior, and precisely the defect #239 is
-  // filed against: this seek is the user's, to a position nobody applied, and
-  // the room never hears about it. When #239 lands this expectation flips.
-  it('swallows a user seek to an unrelated position inside the 1.5s window (#239)', async () => {
+  // #239: this seek is the user's, to a position nobody applied. It used to die
+  // inside the wall-clock window — the user pressed Skip, the video moved
+  // locally, and the room never heard about it. Seeks are keyed on the applied
+  // value now, so only an actual echo is suppressed.
+  it('sends a user seek to an unrelated position inside the 1.5s window', async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -448,10 +449,30 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     sendLocalState.mockClear()
 
     // 200 ms later the user drags the scrubber somewhere else entirely, so the
-    // value guard does not match and only the wall clock can suppress it.
+    // value guard does not match and only the wall clock could suppress it.
     vi.advanceTimersByTime(200)
     v.currentTime = 900
     client.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+  })
+
+  // The window still gates play/pause: they have no applied value to key on, so
+  // deleting it wholesale would leak the readiness gate's own pause/resume.
+  it('still swallows a play inside the 1.5s window', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    vi.advanceTimersByTime(200)
+    client.onLocalPlay()
 
     expect(sendLocalState).not.toHaveBeenCalled()
   })
@@ -496,6 +517,154 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     client.onVideoSeeked()
 
     expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// The marker is the whole mechanism once the wall clock stops gating seeks, so
+// its lifetime is load-bearing rather than an implementation detail (#239).
+describe('useSyncplayClient — applied-seek marker lifetime (#239)', () => {
+  it('survives a mismatching seeked and still catches the real echo', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // Some other seeked arrives first — the user scrubbing while the applied
+    // seek is still in flight on a slow stream.
+    vi.advanceTimersByTime(2000)
+    v.currentTime = 900
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+
+    // Consuming the marker on that mismatch is what let the real echo escape
+    // and re-armed #224's self-seek loop.
+    v.currentTime = 300
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+  })
+
+  it('expires the marker, so a genuine seek back to the applied position sends', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // Past APPLIED_SEEK_TTL_MS (15 s). Without this case the constant is
+    // unpinned upward and 15 s → 15 min would be a silent no-op that swallows
+    // any later user seek landing on a position the room once published.
+    vi.advanceTimersByTime(15001)
+    v.currentTime = 300
+    client.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'seek' })
+  })
+
+  it('keeps the marker armed just under the TTL', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // Pins the TTL from below: the transcode respawn path waits up to 15 s for
+    // buffer-ahead before the seek lands, so anything shorter leaks that echo.
+    vi.advanceTimersByTime(14999)
+    v.currentTime = 300
+    client.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// Step 1 of #239: the app's own currentTime writes must never reach the wire.
+// The PlayerView call sites are unreachable from a unit test (nothing mounts
+// PlayerView, and selectQuality / selectTranslation are unexported `<script
+// setup>` internals), so the contract is pinned here at the composable seam.
+describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
+  it('swallows the seeked of a write that landed where it was told', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.markProgrammaticSeek(420)
+    v.currentTime = 420
+    s.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('swallows it even when the element clamped the write somewhere else', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    // The three savedTime restores write to an element at readyState 0 with an
+    // empty `seekable`: the value becomes the default playback start position
+    // and is clamped into range once metadata arrives. A shorter alt-translation
+    // release therefore fires its seeked far from what we asked for — which is
+    // why these marks are value-agnostic.
+    s.markProgrammaticSeek(1400)
+    v.currentTime = 12
+    s.onVideoSeeked()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('consumes exactly one seeked — the next real user seek still sends', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.markProgrammaticSeek(420)
+    v.currentTime = 420
+    s.onVideoSeeked()
+
+    v.currentTime = 900
+    s.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+  })
+
+  it('lets the mark expire rather than latching forever when no seeked fires', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    // `currentTime = 0` on an element already at 0 fires nothing, so this mark
+    // has no event to consume it. The TTL is the only thing that frees it.
+    s.markProgrammaticSeek(0)
+    vi.advanceTimersByTime(15001)
+    v.currentTime = 900
+    s.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
   })
 })
 

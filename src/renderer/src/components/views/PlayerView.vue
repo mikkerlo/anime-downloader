@@ -99,7 +99,8 @@ let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null;
 const msePlayer = useMsePlayer({
   getVideoEl: () => videoRef.value,
   setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
-  markProgrammaticPlayback: (paused) => syncplay.markProgrammaticPlayback(paused)
+  markProgrammaticPlayback: (paused) => syncplay.markProgrammaticPlayback(paused),
+  markProgrammaticSeek: (target) => syncplay.markProgrammaticSeek(target)
 });
 const {
   mseSrcUrl,
@@ -797,6 +798,7 @@ async function resumeFromSavedPosition(): Promise<void> {
       return;
     }
     if (saved.position > 5 && saved.position / d < 0.95) {
+      syncplay.markProgrammaticSeek(saved.position);
       video.currentTime = saved.position;
       currentTime.value = saved.position;
       resumeToast.value = `Resumed at ${formatTime(saved.position)}`;
@@ -1330,6 +1332,7 @@ function selectQuality(stream: { height: number; url: string }): void {
   nextTick(() => {
     const v = videoRef.value;
     if (!v) return;
+    syncplay.markProgrammaticSeek(savedTime);
     v.currentTime = savedTime;
     if (wasPlaying) v.play();
   });
@@ -1479,6 +1482,7 @@ async function selectTranslation(tr: {
         nextTick(() => {
           const v = videoRef.value;
           if (!v) return;
+          syncplay.markProgrammaticSeek(savedTime);
           v.currentTime = savedTime;
           if (wasPlaying) v.play();
           switchingTranslation.value = false;
@@ -1523,6 +1527,7 @@ async function selectTranslation(tr: {
     nextTick(() => {
       const v = videoRef.value;
       if (!v) return;
+      syncplay.markProgrammaticSeek(savedTime);
       v.currentTime = savedTime;
       if (wasPlaying) v.play();
       switchingTranslation.value = false;
@@ -1649,6 +1654,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         nextTick(() => {
           const v = videoRef.value;
           if (v) {
+            syncplay.markProgrammaticSeek(0);
             v.currentTime = 0;
             v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
             v.play();
@@ -1681,6 +1687,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     nextTick(() => {
       const v = videoRef.value;
       if (v) {
+        syncplay.markProgrammaticSeek(0);
         v.currentTime = 0;
         v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
         v.play();

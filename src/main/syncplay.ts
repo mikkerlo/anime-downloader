@@ -1001,25 +1001,46 @@ export class SyncplayClient extends EventEmitter {
     if (!isObject(payload) || !this.config) return
     const users: SyncplayRoomUser[] = []
     const roomEntry = this.pickOwnRoom(payload)
-    if (isObject(roomEntry)) {
-      for (const [username, data] of Object.entries(roomEntry)) {
-        if (!isObject(data)) continue
-        const file = isObject(data.file)
-          ? {
-              name: typeof data.file.name === 'string' ? data.file.name : '',
-              duration: typeof data.file.duration === 'number' ? data.file.duration : 0,
-              size: typeof data.file.size === 'number' ? data.file.size : undefined
-            }
-          : null
-        const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
-        const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
-        // The reference server writes `file: {}` — never null, never absent —
-        // for a watcher with nothing loaded, so `file` above is a hollow
-        // {name:'', duration:0} for them and the view would render an empty
-        // file line. The `Set` path can't reach this: it omits a falsy file.
-        const hasFile = file !== null && file.name !== ''
-        users.push({ username, file: hasFile ? file : null, isReady, animeDlAppMeta: meta })
-      }
+    // A payload we cannot key is not evidence that the room emptied, and
+    // falling through here is the worst available reading of it: the loop is
+    // skipped, the local user is seated alone below, and `room-users` goes out
+    // with a roster of one — every peer vanishes and the view reads "Room is
+    // empty — you're the first one here" in a room that is not. Today that is
+    // a one-shot flash per connection (`finishHandshake` sends `{List: null}`
+    // once) which the next `Set: {user}` slowly repairs; under #221's 15 s
+    // poll it becomes a roster that flaps to empty and back on a timer.
+    // Keeping the existing roster is safe: `Set: {user}` broadcasts carry
+    // membership changes on their own, and the local seat is already in place
+    // from `finishHandshake`'s `updateOwnReadinessInRoom()`. Note this is
+    // *only* the non-object case — an object entry stays authoritative even
+    // when empty, or a room that genuinely empties would never clear under the
+    // poll, trading a self-healing wipe for a freeze that has no repair path.
+    // Logged, not emitted as a `room-event`: under a poll a user-visible
+    // warning would be noise on every tick, and the log is the escape hatch
+    // for a canonicalization neither `handleHello` nor `pickOwnRoom` covers.
+    if (!isObject(roomEntry)) {
+      log('List reply has no usable entry for room', this.config.room, '— keeping roster; keys:', [
+        ...Object.keys(payload)
+      ])
+      return
+    }
+    for (const [username, data] of Object.entries(roomEntry)) {
+      if (!isObject(data)) continue
+      const file = isObject(data.file)
+        ? {
+            name: typeof data.file.name === 'string' ? data.file.name : '',
+            duration: typeof data.file.duration === 'number' ? data.file.duration : 0,
+            size: typeof data.file.size === 'number' ? data.file.size : undefined
+          }
+        : null
+      const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
+      const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
+      // The reference server writes `file: {}` — never null, never absent —
+      // for a watcher with nothing loaded, so `file` above is a hollow
+      // {name:'', duration:0} for them and the view would render an empty
+      // file line. The `Set` path can't reach this: it omits a falsy file.
+      const hasFile = file !== null && file.name !== ''
+      users.push({ username, file: hasFile ? file : null, isReady, animeDlAppMeta: meta })
     }
     if (this.config) {
       const me = users.find((u) => u.username === this.config!.username)

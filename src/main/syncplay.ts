@@ -17,6 +17,18 @@ import { EventEmitter } from 'events'
 // Never add `realversion`: the server prefers it over `version` when present.
 const SYNCPLAY_WIRE_VERSION = '1.7.6'
 const HEARTBEAT_MS = 1000
+// Room-list poll (#221). The `List` reply is the only refresh path we have for
+// membership: `Set: {user}` broadcasts cover changes that happen while we are
+// connected, but a frame lost to a mid-reconnect gap, a peer that died without
+// a clean disconnect, and a peer moved into our room by `RoomManager.moveWatcher`
+// (which re-broadcasts nothing) all leave the roster wrong until the next
+// reconnect. 15 s rather than something tighter because the reply is *not*
+// room-scoped: the default `RoomManager` builds it from every watcher on the
+// server, so a busy public server answers with tens of KB of which we keep one
+// room. A separate interval rather than a modulo counter inside the heartbeat —
+// the heartbeat is latency-sensitive at 1 s, and coupling the two would make the
+// poll cadence drift with it.
+const LIST_POLL_MS = 15000
 const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_MS = 1000
 // Pre-ready protocol garbage detection (#215): a handshake that has produced
@@ -169,6 +181,31 @@ function md5Hex(value: string): string {
   return createHash('md5').update(value, 'utf8').digest('hex')
 }
 
+// Field-wise comparisons for handleList()'s emit gate (#221). Both sub-objects
+// are rebuilt on every reply, so a reference compare is `false` every time and
+// would silently reinstate emit-always with a green test.
+function sameRosterFile(a: SyncplayRoomUser['file'], b: SyncplayRoomUser['file']): boolean {
+  if (!a || !b) return a === b
+  return a.name === b.name && a.duration === b.duration && a.size === b.size
+}
+
+// `extractAppMeta()` is the single writer on both assemblers and its return
+// literal always carries all four keys, so this could be a stringify — spelled
+// out instead because the enclosing user object is *not* safe that way, and the
+// distinction is one nobody should have to re-derive.
+function sameAppMeta(
+  a: SyncplayRoomUser['animeDlAppMeta'],
+  b: SyncplayRoomUser['animeDlAppMeta']
+): boolean {
+  if (!a || !b) return a === b
+  return (
+    a.animeId === b.animeId &&
+    a.malId === b.malId &&
+    a.episodeInt === b.episodeInt &&
+    a.translationId === b.translationId
+  )
+}
+
 // The five phases a single connection attempt walks through. `lastAttemptPhase`
 // tracks the furthest one the *current* attempt reached — `status.state` can't
 // be used for close reasons because on the default auto-reconnect config the
@@ -215,6 +252,7 @@ export class SyncplayClient extends EventEmitter {
   private status: SyncplayStatus = { state: 'idle' }
 
   private heartbeatTimer: NodeJS.Timeout | null = null
+  private listPollTimer: NodeJS.Timeout | null = null
   private reconnectTimer: NodeJS.Timeout | null = null
   private reconnectAttempts = 0
 
@@ -247,6 +285,15 @@ export class SyncplayClient extends EventEmitter {
   private garbageBytes = 0
   private sawValidMessage = false
   private roomUsers: SyncplayRoomUser[] = []
+  // Whether this socket has already adopted a roster (#221). Per-socket, not
+  // per-session: it resets in resetTransportState(), which the reconnect path
+  // runs, because `roomUsers` deliberately survives a reconnect — so without the
+  // reset the new socket's handshake `List` would arrive ratcheted and a stale
+  // `isReady: true` from the previous socket would mask a peer that is genuinely
+  // buffering on this one, with nothing but that peer's own recovery to correct
+  // it. Set at the point a roster is *adopted*, which includes the emit gate's
+  // equality branch (see handleList).
+  private hasReceivedList = false
   private ownIsReady = true
 
   private clientIgnoreCounter = 0
@@ -413,6 +460,7 @@ export class SyncplayClient extends EventEmitter {
       this.reconnectTimer = null
     }
     this.stopHeartbeat()
+    this.stopListPolling()
     if (this.socket) {
       try {
         this.socket.removeAllListeners()
@@ -456,6 +504,7 @@ export class SyncplayClient extends EventEmitter {
     this.garbageParseFailures = 0
     this.garbageBytes = 0
     this.sawValidMessage = false
+    this.hasReceivedList = false
     if (this.watchdogTimer) {
       clearTimeout(this.watchdogTimer)
       this.watchdogTimer = null
@@ -650,6 +699,7 @@ export class SyncplayClient extends EventEmitter {
     // reconnect, which is also how membership resyncs after a drop.
     this.sendJson({ List: null })
     this.startHeartbeat()
+    this.startListPolling()
   }
 
   private handleTls(payload: unknown): void {
@@ -1033,7 +1083,7 @@ export class SyncplayClient extends EventEmitter {
             size: typeof data.file.size === 'number' ? data.file.size : undefined
           }
         : null
-      const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
+      const isReady = this.adoptPeerReadiness(username, data.isReady)
       const meta = isObject(data.file) ? this.extractAppMeta(data.file) : undefined
       // The reference server writes `file: {}` — never null, never absent —
       // for a watcher with nothing loaded, so `file` above is a hollow
@@ -1047,8 +1097,70 @@ export class SyncplayClient extends EventEmitter {
       if (me) me.isReady = this.ownIsReady
       else users.push({ username: this.config.username, file: null, isReady: this.ownIsReady })
     }
+    // The roster is adopted here — past #223's guard and past the `!isObject`
+    // return above — and *regardless of which branch the emit gate below takes*.
+    // An equal roster is still an adopted one: anchoring this to the assignment
+    // would leave the flag false after a reconnect into an unchanged room (the
+    // reconnect keeps `roomUsers` and `ownIsReady`, so a quiet room's fresh
+    // handshake `List` rebuilds field-for-field identical, takes the
+    // keep-previous branch and assigns nothing) and hand this socket's
+    // unratcheted slot to the *next poll* — free to seat an `isReady: false`
+    // and pause the local player, the exact hazard the ratchet excludes.
+    this.hasReceivedList = true
+    // Emit only on a real change (#221). On a 15 s timer an unconditional emit
+    // is four `room-users` broadcasts a minute for the life of every session,
+    // each one a fresh array into the store and another run of the renderer's
+    // ready-gate watcher. Same shape as handleSet()'s `usersDirty`.
+    if (this.sameRoster(this.roomUsers, users)) return
     this.roomUsers = users
     this.emit('room-users', users.slice())
+  }
+
+  // The readiness ratchet (#221). A `List` that is not the first adopted roster
+  // of this socket may clear a peer's not-ready, never introduce one: `isReady`
+  // is taken from the incoming entry only when it is `true`, and otherwise the
+  // value already seated for that username is kept — `undefined` for a username
+  // we have never seen, which is what a non-boolean already parses to and what
+  // the renderer's strict `=== false` gate treats as ready.
+  //
+  // Readiness is playback *control*, not decoration: the renderer pauses the
+  // element for any member reading `isReady === false`, and until the top-level
+  // `Set: {ready}` broadcast is parsed (#229) nothing else updates peer
+  // readiness — so letting a 15 s poll *engage* that gate would make the release
+  // wait for a poll too, stalling this user for up to 15 s after a peer's 800 ms
+  // buffer recovered. Repair is safe in the other direction and is the point.
+  //
+  // Retire this whole helper (and `hasReceivedList`) when #229 lands: readiness
+  // then has a push channel on the same ordered connection, so the later frame
+  // always carries the newer value and a poll cannot resurrect a superseded one.
+  private adoptPeerReadiness(username: string, raw: unknown): boolean | undefined {
+    const incoming = typeof raw === 'boolean' ? raw : undefined
+    // Only `true` is adopted — never merely truthy. A `--disable-ready` server
+    // sends `isReady: null`, which must stay `undefined` rather than repair or
+    // engage anything.
+    if (!this.hasReceivedList || incoming === true) return incoming
+    return this.roomUsers.find((u) => u.username === username)?.isReady
+  }
+
+  // Roster equality for the emit gate, keyed by **username** rather than by
+  // position: `handleList` builds in `Object.entries` order and appends self at
+  // the tail, while `handleSet` appends a joiner and `absorbRemoteFile` appends
+  // an unknown user — so the same membership carries different orderings
+  // depending on how it was assembled, and an index-wise compare would report a
+  // spurious change on the first poll after any `Set`-driven seat. A
+  // `JSON.stringify` is wrong for the same reason plus one more: the two
+  // assemblers disagree on key order and on `undefined`-vs-absent.
+  private sameRoster(prev: SyncplayRoomUser[], next: SyncplayRoomUser[]): boolean {
+    if (prev.length !== next.length) return false
+    const byName = new Map(prev.map((u) => [u.username, u]))
+    for (const u of next) {
+      const p = byName.get(u.username)
+      if (!p) return false
+      if (p.isReady !== u.isReady) return false
+      if (!sameRosterFile(p.file, u.file)) return false
+      if (!sameAppMeta(p.animeDlAppMeta, u.animeDlAppMeta)) return false
+    }
+    return true
   }
 
   private handleState(payload: unknown): void {
@@ -1514,6 +1626,29 @@ export class SyncplayClient extends EventEmitter {
     }
   }
 
+  // The same frame finishHandshake() sends, on a timer (#221). The `ready` guard
+  // mirrors sendStateMessage()'s and is kept for symmetry only — it is
+  // unreachable through the timer, which is started after `ready` is set and
+  // stopped on every transition out of it.
+  private sendListRequest(): void {
+    if (this.status.state !== 'ready') return
+    this.sendJson({ List: null })
+  }
+
+  private startListPolling(): void {
+    this.stopListPolling()
+    this.listPollTimer = setInterval(() => {
+      this.sendListRequest()
+    }, LIST_POLL_MS)
+  }
+
+  private stopListPolling(): void {
+    if (this.listPollTimer) {
+      clearInterval(this.listPollTimer)
+      this.listPollTimer = null
+    }
+  }
+
   private onSocketError(err: Error & { code?: string }): void {
     const code = err.code ? ` (${err.code})` : ''
     console.warn('[syncplay] socket error:', err.message + code)
@@ -1558,6 +1693,10 @@ export class SyncplayClient extends EventEmitter {
         ')'
     )
     this.stopHeartbeat()
+    // The reconnect path never goes through tearDown(), so the poller has to be
+    // stopped here too — otherwise the interval outlives its socket and the
+    // retry's startListPolling() leaves two running (#216's failure class).
+    this.stopListPolling()
     if (this.status.state === 'idle') return
     const cfg = this.config
     this.socket = null

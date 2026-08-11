@@ -39,11 +39,7 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient } from '../../src/main/syncplay'
-
-// Mirrors ECHO_SEEK_EPSILON_S / ADOPT_TOLERANCE_S in the client.
-const ECHO_SEEK_EPSILON_S = 0.5
-const ADOPT_TOLERANCE_S = 3
+import { SyncplayClient, ECHO_SEEK_EPSILON_S, ADOPT_TOLERANCE_S } from '../../src/main/syncplay'
 
 type Frame = Record<string, unknown>
 type RemoteState = { paused: boolean; position: number; setBy: string; doSeek: boolean }
@@ -154,7 +150,8 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   })
 
   // Case 3 — the echo-suppression coupling: one expression, two reads. Catches
-  // a 869/870 split at any seed. Positions stay non-negative so the
+  // a split between the emitted `compensated` and the stored
+  // `lastAppliedRemotePosition` at any seed. Positions stay non-negative so the
   // Math.max(0, …) on the stored read remains the no-op it is in practice.
   it('stores exactly the position it emits, on both the paused and playing branches', () => {
     handshake()
@@ -167,9 +164,10 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   })
 
   // Case 4 — end-to-end on the paused path. Seeded at rtt ~= 2.0 deliberately:
-  // at 0.8 a 869/870 split diverges by only 0.4, *inside* ECHO_SEEK_EPSILON_S,
-  // so the guard would still suppress and this case would pass on the very
-  // implementation it exists to reject. At 2.0 the divergence is 1.0 > 0.5.
+  // at 0.8 a split between the emitted value and the stored echo reference
+  // diverges by only 0.4, *inside* ECHO_SEEK_EPSILON_S, so the guard would
+  // still suppress and this case would pass on the very implementation it
+  // exists to reject. At 2.0 the divergence is 1.0 > 0.5.
   it('suppresses the element echo of an applied paused seek instead of re-asserting it', () => {
     handshake()
     serverState({ position: 120, paused: true, doSeek: true, rtt: 2.0 })
@@ -186,8 +184,9 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   })
 
   // Case 6 in the issue — the control for case 4. Without it, "no doSeek frame"
-  // could be true because of the pre-adoption gate (:337-339) or the spectator
-  // mirror's hardcoded doSeek: false (:1015-1018) rather than the echo guard.
+  // could be true because of the pre-adoption gate (:337-339) or the hardcoded
+  // doSeek: false in buildPlaystate()'s spectator fallback, rather than the
+  // echo guard.
   // The offset sits inside ADOPT_TOLERANCE_S (so this call adopts on its own)
   // but outside ECHO_SEEK_EPSILON_S (so it is not an echo).
   it('does assert a genuine non-echo seek made from the same applied position', () => {

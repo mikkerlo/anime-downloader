@@ -50,13 +50,13 @@ const PLAYBACK_STALE_MS = 5000
 // freshly mounted <video> starts at {0, paused} and the renderer pushes that
 // snapshot before the first remote State has seeked it, so without this the
 // player path re-creates the very bug the spectator rule fixes.
-const ADOPT_TOLERANCE_S = 3
+export const ADOPT_TOLERANCE_S = 3
 // A "seek" this close to where the room already is didn't come from the user —
 // it's the element finishing the seek we applied from the room, arriving after
 // the renderer's suppression window. Tight on purpose: a real user seek lands
 // somewhere else, and a real seek to within half a second of the room's own
 // position is a no-op for everyone anyway.
-const ECHO_SEEK_EPSILON_S = 0.5
+export const ECHO_SEEK_EPSILON_S = 0.5
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes

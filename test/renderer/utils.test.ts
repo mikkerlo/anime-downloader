@@ -88,6 +88,10 @@ describe('resolveSeekTarget', () => {
     // Pins the rule as Number.isFinite rather than !Number.isNaN — Infinity is
     // the one non-NaN non-finite value that sails past every downstream guard.
     expect(resolveSeekTarget(1400, { elementDuration: Infinity })).toBe(1400)
+    // The live-stream shape in full: an Infinity element duration pairs with a
+    // ref that sanitizeDuration has already collapsed to 0, so neither side
+    // supplies a bound and the request passes through.
+    expect(resolveSeekTarget(1400, { elementDuration: Infinity, refDuration: 0 })).toBe(1400)
   })
 
   it('still applies the upper clamp when the duration is known', () => {

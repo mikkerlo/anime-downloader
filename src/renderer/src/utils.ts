@@ -68,7 +68,8 @@ export function commitSeek(time: number, video: { currentTime: number } | null |
 //
 // The ref is a fallback, not a second opinion: at the sole caller
 // (`PlayerView.seek`) `elementDuration` always comes from a live element, so
-// the ref is read only while the element itself reports nothing. Between an
+// the ref is read only while the element itself reports nothing usable —
+// `isKnownDuration` rejects `Infinity` and `<= 0` as well as `NaN`. Between an
 // episode switch's `:src` swap and that reload's `NaN` `durationchange`, the
 // ref still holds the *previous* episode's length, and a seek there clamps to
 // it instead of passing through. Left as-is deliberately (#237): the window is

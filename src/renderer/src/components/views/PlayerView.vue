@@ -100,7 +100,8 @@ const msePlayer = useMsePlayer({
   getVideoEl: () => videoRef.value,
   setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
   markProgrammaticPlayback: (paused) => syncplay.markProgrammaticPlayback(paused),
-  markProgrammaticSeek: (target) => syncplay.markProgrammaticSeek(target)
+  markProgrammaticSeek: (target) => syncplay.markProgrammaticSeek(target),
+  hasRemoteStateApplied: () => roomOwnsPlayhead()
 });
 const {
   mseSrcUrl,
@@ -772,6 +773,19 @@ function startPrefetchPolling(): void {
   }, 1000);
 }
 
+// #240: true when the syncplay room owns the playhead — a remote state is
+// parked, or one has been applied since the last reset, in a live session.
+// Both resume paths defer to it: `resumeFromSavedPosition` below (direct-file
+// seek + toast) and the MSE composable's initial land, which is the *only*
+// thing that moves the playhead on a stream session. Read through one predicate
+// so the two can't drift apart and re-open the bounce (room → saved → room).
+// `hasRemoteStateApplied()` and not `state === 'ready'` alone: main only emits
+// `remote-state` for a non-null, non-self `setBy`, so a user alone in a room
+// never receives one and must keep their saved position.
+function roomOwnsPlayhead(): boolean {
+  return syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied();
+}
+
 async function resumeFromSavedPosition(): Promise<void> {
   const video = videoRef.value;
   if (!video) return;
@@ -790,10 +804,11 @@ async function resumeFromSavedPosition(): Promise<void> {
     // over the room's position states the playhead is somewhere it is not, and
     // the remote-seek toast already explains the movement. `watchedReported` is
     // set above, from the saved record, either way.
-    // `hasRemoteStateApplied()` and not `state === 'ready'` alone: main only
-    // emits `remote-state` for a non-null, non-self `setBy`, so a user alone in
-    // a room never receives one and must keep their saved position.
-    if (syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied()) return;
+    // Above the MSE early return on purpose, and only correct because the same
+    // predicate cancels the composable's initial land: that branch performs no
+    // seek of its own, so suppressing its toast is the whole of its share of the
+    // rule and the land is where the room's position would otherwise be lost.
+    if (roomOwnsPlayhead()) return;
     const d = video.duration || saved.duration;
     if (!d) return;
     // For MSE MKV streams the composable lands the playhead on the saved position

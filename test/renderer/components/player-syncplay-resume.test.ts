@@ -30,8 +30,7 @@ function resumeBody(): string {
   return SOURCE.slice(start, end)
 }
 
-const GUARD =
-  "if (syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied()) return;"
+const GUARD = 'if (roomOwnsPlayhead()) return;'
 
 describe('PlayerView — remote state outranks the saved position (#240)', () => {
   it('guards the resume on a ready session with a remote state applied or pending', () => {
@@ -40,6 +39,18 @@ describe('PlayerView — remote state outranks the saved position (#240)', () =>
     // `setBy`), and `hasRemoteStateApplied()` alone would honor a room we are no
     // longer connected to.
     expect(resumeBody().replace(/\s+/g, ' ')).toContain(GUARD)
+    expect(FLAT).toContain(
+      "function roomOwnsPlayhead(): boolean { return syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied(); }"
+    )
+  })
+
+  it('cancels the MSE resume land through the same predicate', () => {
+    // The MSE branch of `resumeFromSavedPosition` is toast-only — it deliberately
+    // writes no `currentTime` (#198), so the guard above suppresses a toast and
+    // nothing else on that path. The playhead is moved by `use-mse-player`'s
+    // initial land instead, and without this dep it overwrites the room's
+    // position on every local `.mkv` open with saved progress.
+    expect(FLAT).toContain('hasRemoteStateApplied: () => roomOwnsPlayhead()')
   })
 
   it('places the guard after watchedReported and before the seek and both toasts', () => {

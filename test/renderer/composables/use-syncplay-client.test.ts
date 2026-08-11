@@ -1021,11 +1021,17 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
   // reporting a frontier-shortened position is an unsignalled room seek that
   // drags every peer back — at 1 Hz, through the snapshot heartbeat.
   //
-  // Coverage caveat: `fakeVideo.currentTime` is a plain property, so this proves
-  // only that *our code* writes the room's position verbatim. That the *element*
-  // does not clamp it on a growing `.part` rests on the `seekable` span the
-  // protocol handler advertises (full `totalBytes` denominator + tail stream),
-  // and is covered by manual scenario (a) alone.
+  // Coverage caveats, twice over. (a) `fakeVideo.currentTime` is a plain
+  // property, so this proves only that *our code* writes the room's position
+  // verbatim. That the *element* does not clamp it on a growing `.part` rests on
+  // the `seekable` span the protocol handler advertises (full `totalBytes`
+  // denominator + tail stream), and is covered by manual scenario (a) alone.
+  // (b) What it pins is a clamp applied *inside* `applyRemoteStateToElement`. It
+  // is not a proof against every reintroduction: bringing the clamp back the way
+  // #240 originally specified — an optional `clampSeekTarget` on `SyncplayDeps` —
+  // leaves `makeDeps` free to default it to `(t) => t`, and this test then passes
+  // unchanged. Adding that hook means adding a test that exercises it with a real
+  // frontier clamp.
   it('writes a position past the download frontier unclamped, and reports it', async () => {
     const sendLocalState = vi.fn()
     const sendSnapshot = vi.fn()
@@ -1087,6 +1093,41 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     client.onVideoLoadedMetadata()
 
     expect(v.currentTime).toBe(0)
+  })
+
+  // Splitting the halves let them disagree: the bookkeeping ran at park time,
+  // a local play during the wait overwrote it, and the deferred apply then
+  // paused the element while `syncplayLastRemotePlaying` still said "playing" —
+  // so the next ready-gate pass played it straight back, with `pausedBy` naming
+  // nobody. Re-asserting the bookkeeping at write time is what keeps the two
+  // consistent; `main` never had the gap because the halves were one function.
+  it('re-asserts the room bookkeeping when a local play beat the parked state', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+
+    // The user hits play before metadata arrives.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    expect(client.syncplayPausedBy.value).toBeNull()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    // The parked state pauses the element…
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+    // …and the room bookkeeping agrees with it, so the gate leaves it paused
+    // and the popover names the peer that paused rather than nobody.
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    client.applySyncplayReadyGate()
+    expect(v.play).not.toHaveBeenCalled()
   })
 })
 
@@ -1160,6 +1201,26 @@ describe('useSyncplayClient — hasRemoteStateApplied (#240)', () => {
     expect(client.hasRemoteStateApplied()).toBe(true)
 
     client.syncplayStatus.value = { state: 'disconnected' }
+    await flushPromises()
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  // `reconnecting` is neither an episode switch nor a disconnect, but it has the
+  // same shape: main stops emitting `remote-state` while we are out of the room
+  // and we may come back to it alone. Leaving the flag armed biases toward
+  // suppressing the resume — safe in the moment, but it is exactly the latch the
+  // reset exists to prevent, and `docs/syncplay.md` claims it unlatches here.
+  it('does not latch across a reconnect', async () => {
+    const { emitRemoteState, client } = await mountWithRemoteState(
+      makeDeps({ video: fakeVideo() }),
+      { state: 'ready' }
+    )
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    client.syncplayStatus.value = { state: 'reconnecting' }
     await flushPromises()
 
     expect(client.hasRemoteStateApplied()).toBe(false)

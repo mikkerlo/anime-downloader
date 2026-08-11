@@ -78,9 +78,12 @@ export type SyncplayClient = {
    *  element could not honor it (#240). */
   onVideoLoadedMetadata: () => void
   /** True while a remote state is parked, or once one has been applied since
-   *  the last reset (episode/translation switch, idle/disconnected). The
-   *  room's position outranks the local saved position while this holds —
-   *  `PlayerView`'s `resumeFromSavedPosition` reads it (#240). */
+   *  the last reset (episode/translation switch, reconnecting,
+   *  idle/disconnected). The room's position outranks the local saved position
+   *  while this holds — `PlayerView`'s `resumeFromSavedPosition` and the MSE
+   *  resume land both defer to it (#240). It means "the room has told us where
+   *  it is", not "the element is there": a parked state whose `loadedmetadata`
+   *  never arrives keeps it true. */
   hasRemoteStateApplied: () => boolean
   /** Wire into <video @timeupdate>: keeps snapshots flowing when a background
    *  window's timers are throttled. */
@@ -448,6 +451,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const v = deps.getVideoEl()
     if (!v) return
     pendingRemoteState = null
+    // Re-assert the bookkeeping at write time. It already ran when the state
+    // arrived — that is the point of splitting it out, so the ready gate is
+    // never stale — but a local play/pause during the wait overwrites it, and
+    // the two halves then disagree: the parked state pauses the element and
+    // adopts `intendedPaused = true` while `syncplayLastRemotePlaying` still
+    // says the room is playing, so the very next `applySyncplayReadyGate()`
+    // plays it again with `syncplayPausedBy` naming nobody. Re-running here
+    // costs nothing on the immediate path (it just ran, so `pausedChanged` is
+    // false) and makes the deferred apply mean what it says: the room's state,
+    // as of the moment we enact it.
+    recordRemoteState(state)
     applyRemoteStateToElement(state, v)
   }
 
@@ -463,6 +477,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     remoteStateApplied = false
   }
 
+  // Read-only view of the tracking above. Note what it does *not* promise: a
+  // parked state that never reaches `loadedmetadata` — a load error, a dead
+  // `.part`, a failed MKV prep — leaves this `true` until the next reset, so it
+  // means "the room has told us where it is", not "the element is there". Every
+  // current consumer runs at or after metadata (`resumeFromSavedPosition` is
+  // reachable only from `loadedmetadata`/`readyState >= 1`, and the MSE land
+  // only from an append that has already taken the element to HAVE_METADATA),
+  // where the two coincide. A consumer that can run before metadata must not
+  // read this as "the playhead is at the room's position".
   function hasRemoteStateApplied(): boolean {
     return pendingRemoteState !== null || remoteStateApplied
   }
@@ -620,6 +643,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       }
     }
     if (status.state === 'reconnecting') {
+      // A reconnect drops us out of the room: main stops emitting `remote-state`
+      // and we may come back alone, so the tracking must unlatch here too or the
+      // saved position is eaten on every later episode open — the failure the
+      // reset exists to prevent, and what `docs/syncplay.md` already claims.
+      // Only this tracking: `syncplayLastRemotePlaying` and the ready flag
+      // deliberately survive a reconnect, unlike the `idle`/`disconnected`
+      // branch above, which is a genuine session end.
+      resetRemoteStateTracking()
       showSyncplayToast('Reconnecting to Syncplay server…', 8000)
     } else if (status.state === 'disconnected') {
       showSyncplayToast(

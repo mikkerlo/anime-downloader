@@ -3,7 +3,19 @@ import * as tls from 'tls'
 import { createHash } from 'crypto'
 import { EventEmitter } from 'events'
 
-const CLIENT_VERSION = '1.6.9'
+// The version we claim on the outbound Hello (#233) — a wire-protocol claim,
+// not our app version. Three constraints bind it, and `docs/syncplay.md`
+// carries the server-side mechanism behind each:
+//   1. >= the server's `RECENT_CLIENT_THRESHOLD`, which upstream bumps to the
+//      release's own version every release — headroom is zero, so the nag
+//      returns on the first server shipping 1.7.7 and the fix is this line.
+//   2. Strictly numeric dotted (`N.N.N`); a suffixed value kills the handshake
+//      rather than merely degrading the MOTD.
+//   3. *String*-compares >= '1.5.0' (`CHAT_MIN_VERSION`), a different
+//      comparator from the MOTD gate's tuple compare — a future '1.10.0'
+//      passes that one and silently fails this one.
+// Never add `realversion`: the server prefers it over `version` when present.
+const SYNCPLAY_WIRE_VERSION = '1.7.6'
 const HEARTBEAT_MS = 1000
 const MAX_RECONNECT_ATTEMPTS = 5
 const RECONNECT_BASE_MS = 1000
@@ -1036,18 +1048,35 @@ export class SyncplayClient extends EventEmitter {
 
   private sendHello(): void {
     if (!this.config) return
+    // A flag is declared `true` iff this client actually reads or writes that
+    // feature's frames on the wire (#234) — not "iff we implement both
+    // directions". `chat` is true because inbound Chat is consumed and shown to
+    // the user even though we never send one; `readiness` because sendSetReady()
+    // writes and the List roster read backs it. Do not re-flip these.
+    // Keep all six keys present, using explicit `false` rather than omission:
+    // the server defaults a missing *key* to false, but an absent or empty
+    // `features` object makes it derive the whole set from our version string
+    // instead.
+    // Two keys are deliberately absent, and both absences are load-bearing:
+    //   - `uiMode`: the server's `sendList(toGUIOnly=True)` returns without
+    //     sending when the key is missing while it assumes we are a GUI client.
+    //     Adding it would opt us into unsolicited roster pushes on rooms-DB
+    //     servers — a behavior change, not a feature declaration.
+    //   - `setOthersReadiness`: advertising it makes the server *skip* its own
+    //     "X set Y as ready" chat notice, which is the user's only explanation
+    //     for why their ready state changed under them when a peer sets it.
     const features: JsonObject = {
       sharedPlaylists: false,
       chat: true,
-      featureList: true,
+      featureList: false,
       readiness: true,
-      managedRooms: true,
+      managedRooms: false,
       persistentRooms: false
     }
     const hello: JsonObject = {
       username: this.config.username,
       room: { name: this.config.room },
-      version: CLIENT_VERSION,
+      version: SYNCPLAY_WIRE_VERSION,
       features
     }
     // Syncplay's wire format for the server password is an MD5 hex digest: the

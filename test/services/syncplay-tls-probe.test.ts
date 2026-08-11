@@ -88,6 +88,68 @@ describe('SyncplayClient startTLS probe (#216)', () => {
     expect(statuses.map((s) => s.state)).toContain('hello-sent')
   })
 
+  // The claimed version is a wire-protocol claim, not our app version (#233).
+  it('claims a version recent enough that the server does not nag, in one field', () => {
+    connect()
+    lastSocket!.emit('data', Buffer.from('{"TLS": {"startTLS": "true"}}\r\n'))
+    lastTlsSocket!.emit('secureConnect')
+
+    const hello = written(lastTlsSocket)[0] as { Hello: Record<string, unknown> }
+    // Below the server's RECENT_CLIENT_THRESHOLD (bumped to each release's own
+    // version) the MOTD carries an "upgrade available" nag we toast verbatim.
+    expect(hello.Hello.version).toBe('1.7.6')
+    // Strictly numeric dotted: the server int()s each component outside its
+    // try/except, so a suffixed value kills the handshake rather than merely
+    // degrading the MOTD. Not redundant with the literal above — it is what
+    // fires when a future bump edits the constant and this literal together.
+    expect(hello.Hello.version).toMatch(/^\d+\.\d+\.\d+$/)
+    // Chat delivery is gated on a raw *string* compare against CHAT_MIN_VERSION,
+    // not the tuple compare the MOTD gate uses: '1.10.0' would pass that gate
+    // and silently fail this one, killing every inbound Chat frame.
+    expect((hello.Hello.version as string) >= '1.5.0').toBe(true)
+    // `realversion` overrides `version` server-side, so it would defeat all of
+    // the above. The reference client's 1.2.x-compat pair is unreachable for us.
+    expect(hello.Hello).not.toHaveProperty('realversion')
+  })
+
+  it('declares only the features it reads or writes on the wire', () => {
+    connect()
+    lastSocket!.emit('data', Buffer.from('{"TLS": {"startTLS": "true"}}\r\n'))
+    lastTlsSocket!.emit('secureConnect')
+
+    const hello = written(lastTlsSocket)[0] as { Hello: { features: Record<string, boolean> } }
+    // Deep equality on purpose: it fails both on an overclaim (`featureList` /
+    // `managedRooms` back to true) and on a key being *dropped* instead of set
+    // false — an absent or empty features object makes the server derive the
+    // whole set from our version string.
+    expect(hello.Hello.features).toEqual({
+      sharedPlaylists: false,
+      chat: true,
+      featureList: false,
+      readiness: true,
+      managedRooms: false,
+      persistentRooms: false
+    })
+    // Deliberately redundant with the deep-equal: these two name *why* they are
+    // not part of the trim, so an over-eager future trim has to argue with a
+    // named assertion rather than quietly editing an anonymous object. Inbound
+    // Chat is consumed and toasted; sendSetReady() writes and the List roster
+    // read backs readiness.
+    expect(hello.Hello.features.chat).toBe(true)
+    expect(hello.Hello.features.readiness).toBe(true)
+    // Absent on purpose: the server's sendList(toGUIOnly=True) returns without
+    // sending when `uiMode` is missing while isGUIUser() assumes a GUI client
+    // (a missing key falls back to GRAPHICAL). Adding it would opt us into
+    // unsolicited roster pushes on rooms-DB servers — a behavior change, not a
+    // feature declaration. We request the roster ourselves on join/reconnect.
+    expect(hello.Hello.features).not.toHaveProperty('uiMode')
+    // Absent on purpose: sendChatMessage(msg, "setOthersReadiness") returns
+    // early for clients advertising this flag, suppressing the server's own
+    // "X set Y as ready" room notice — the user's only explanation for why
+    // their ready state changed under them when a peer sets it.
+    expect(hello.Hello.features).not.toHaveProperty('setOthersReadiness')
+  })
+
   // The server MD5s its own --password at startup and compares digests, so a
   // plaintext password is rejected with "Wrong password supplied".
   it('sends the room password as an MD5 hex digest, never in plaintext', () => {

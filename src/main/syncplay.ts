@@ -754,8 +754,7 @@ export class SyncplayClient extends EventEmitter {
             this.roomUsers = this.roomUsers.filter((u) => u.username !== username)
             usersDirty = true
           }
-          // Rule 3: an off-room stranger is ignored whole — `file` and
-          // `isReady` included.
+          // Rule 3: an off-room stranger is ignored whole, `file` included.
           continue
         }
         // Rule 1: an in-room entry carrying a room and neither `event` nor
@@ -763,19 +762,17 @@ export class SyncplayClient extends EventEmitter {
         // nothing at all. The announcement is gated on `file` because
         // `sendFileUpdate` emits `{room, file}` with no `event` on the hot
         // path, and there absorbRemoteFile already announces the switch and
-        // owns the seating. `isReady` is excluded on the same principle: the
-        // branch at the bottom of the loop seats the user itself, so a
-        // `{room, isReady}` entry would announce a join in front of it. That
-        // shape is unreachable against a reference server (live readiness is a
-        // *top-level* `Set: {ready}`, and `user[X].isReady` is dead code —
-        // see docs/syncplay.md), so this keeps the announcement to frames that
-        // carry a room and nothing that already speaks for itself.
+        // owns the seating. There is deliberately no `isReady` exclusion any
+        // more (#229): it used to keep this from announcing in front of a
+        // per-user readiness branch further down the loop, and that branch is
+        // gone — `sendUserSetting` never writes `isReady` (readiness is a
+        // *top-level* `Set: {ready}`), so a `{room, isReady}` entry is a
+        // room-only frame from a proxy and is seated like any other.
         if (
           entryRoom !== undefined &&
           username !== this.config?.username &&
           !isObject(data.event) &&
           !isObject(data.file) &&
-          data.isReady === undefined &&
           !this.roomUsers.some((u) => u.username === username)
         ) {
           this.emit('room-event', { level: 'info', text: `${username} joined the room` })
@@ -799,21 +796,16 @@ export class SyncplayClient extends EventEmitter {
         if (isObject(data.file)) {
           this.absorbRemoteFile(username, data.file)
         }
-        if (isObject(data.isReady) || typeof data.isReady === 'boolean') {
-          const isReady =
-            typeof data.isReady === 'boolean' ? data.isReady : data.isReady.isReady === true
-          let u = this.roomUsers.find((x) => x.username === username)
-          if (!u) {
-            u = { username, file: null }
-            this.roomUsers.push(u)
-          }
-          if (u.isReady !== isReady) {
-            u.isReady = isReady
-            usersDirty = true
-          }
-        }
       }
     }
+    // Live readiness is a **top-level** key, not a per-user one (#229): the
+    // reference `sendSetReady` emits `Set: {ready:{username, isReady,
+    // manuallyInitiated, setBy?}}`, broadcast on join, on room switch and on
+    // every toggle, while `sendUserSetting` carries only `room`/`file`/`event`.
+    // It routes through the same `usersDirty` accounting as the loop above so
+    // one `Set` produces one `room-users` emit — a second emit inside the
+    // branch would double-fire the renderer's watcher and its ready gate.
+    if (isObject(payload.ready) && this.applyRemoteReadiness(payload.ready)) usersDirty = true
     // No top-level `payload.room` branch: that field is a client→server
     // command (the server consumes it, no server-side `sendSet` emits it).
     // Since the room filter above keys off `this.config.room`, honouring it
@@ -822,6 +814,86 @@ export class SyncplayClient extends EventEmitter {
     // the server's canonical name at the only moment that can legitimately
     // happen.
     if (usersDirty) this.emit('room-users', this.roomUsers.slice())
+  }
+
+  // The live readiness broadcast (#229). Returns whether the roster changed;
+  // the caller owns the single `room-users` emit.
+  //
+  // Three rules, none of them defensive:
+  //
+  //  1. Non-boolean `isReady` maps to `undefined`, never `false`. A watcher
+  //     that has never toggled has `_ready = None`, and `isReady()` returns
+  //     `None` unconditionally on a `--disable-ready` server, so the join
+  //     broadcast is literally `{ready:{username, isReady:null}}`. Coerced to
+  //     `false` that pins the peer's amber dot and holds
+  //     `syncplayAllUsersReady()` shut for the whole session — playback never
+  //     starts, which is worse than the frozen dot this branch exists to fix.
+  //     The same `null` already reaches `handleList` through the `List` roster,
+  //     so the expression here is that one, reused verbatim.
+  //
+  //  2. A frame naming **us** re-asserts our own value; it is never adopted.
+  //     Readiness in this app is a measured fact, not a preference: its single
+  //     writer is the renderer's `syncplayLocalReady`, edge-triggered off MSE
+  //     buffering, and there is no main→renderer path to reset it. So an equal
+  //     value (our own echo — `broadcastRoom` has no sender filter) is silent,
+  //     and an unequal one — a peer's `setOthersReadiness`, which the server
+  //     *stores* against our watcher — gets exactly one `sendSetReady` of our
+  //     own value back. Adopting it instead is a dead end: the roster self row
+  //     would go `false` and pause us, while the renderer's copy stays `true`
+  //     and its equality guard means it never pushes again. It converges in one
+  //     round trip: our `sendSetReady` omits `username`, so the server takes
+  //     the plain `else` arm, stores our value and rebroadcasts it — and that
+  //     echo compares equal. The boolean guard is load-bearing here rather than
+  //     defensive: against a `--disable-ready` server every frame is `null`,
+  //     which can never equal `ownIsReady`, and an unguarded re-assert would be
+  //     a wire-speed loop.
+  //
+  //  3. A frame naming an **unseated** username seats nobody. Membership has
+  //     one owner: this frame carries no room key at all, so seating from it is
+  //     a write the room filter above structurally cannot gate, and a row
+  //     invented from it can carry `isReady:false` and pause us for a member we
+  //     have no membership evidence for. Nothing is lost — the switch-in that
+  //     used to need the insert is seated by rule 1 above (#230), from the bare
+  //     `{user:{X:{room}}}` frame the server broadcasts one line earlier.
+  private applyRemoteReadiness(data: JsonObject): boolean {
+    const username = typeof data.username === 'string' ? data.username : undefined
+    if (username === undefined) return false
+    const isReady = typeof data.isReady === 'boolean' ? data.isReady : undefined
+
+    // Case-insensitive: the server's `findFreeUsername` lowercases every live
+    // watcher name and suffixes `_` until free, so two watchers can never hold
+    // names differing only in case and this cannot swallow a peer's frame.
+    // Deliberately not gated on `status.state` — the join broadcast reaches us
+    // *before* `Hello`, so the parse has to run pre-`ready`.
+    if (username.toLowerCase() === this.config?.username.toLowerCase()) {
+      if (isReady === undefined || isReady === this.ownIsReady) return false
+      // Only the send is state-guarded, mirroring setReady(). Dropping a
+      // pre-`ready` re-assert costs nothing: finishHandshake() asserts
+      // `ownIsReady` unconditionally moments later. Never route this through
+      // setReady() — it has no equality guard, and with the echo coming back
+      // that is a 1:1 infinite loop.
+      if (this.status.state === 'ready') this.sendSetReady(this.ownIsReady)
+      return false
+    }
+
+    const peer = this.roomUsers.find((u) => u.username === username)
+    if (!peer || peer.isReady === isReady) return false
+    peer.isReady = isReady
+    // Room-log line for a *deliberate* transition only. `manuallyInitiated` is
+    // present in both branches of the server's `sendSetReady` and the
+    // buffer-driven path is exactly the one that sets it `false`, so a presence
+    // check would write a line on every peer's `waiting`/recovery flap, into
+    // the same log the user reads for joins and chat. Peer-only by
+    // construction: the self branch above returns before reaching this.
+    const setBy = typeof data.setBy === 'string' ? data.setBy : undefined
+    if (isReady !== undefined && (data.manuallyInitiated === true || setBy !== undefined)) {
+      const state = isReady ? 'ready' : 'not ready'
+      this.emit('room-event', {
+        level: 'info',
+        text: setBy ? `${username} was set ${state} by ${setBy}` : `${username} is ${state}`
+      })
+    }
+    return true
   }
 
   // `Set: {user:{X:{file}}}` and the `List` roster carry the same file shape,

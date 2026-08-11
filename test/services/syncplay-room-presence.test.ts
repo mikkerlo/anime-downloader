@@ -302,6 +302,132 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(client.getRoomUsers().map((u) => u.username)).toEqual(['me'])
     })
 
+    // #257: `pickOwnRoom`'s sole-entry fallback used to adopt the entry's key
+    // into `config.room` *and* `status.room` before `handleList`'s guard could
+    // reject the entry — so a payload the guard correctly refuses still
+    // rewrote the name every other path keys off. The roster survived the
+    // `List` (the guard works), and then `handleSet`'s room filter (#230),
+    // now comparing against `ghost-room`, read the next genuine in-room frame
+    // as off-room and evicted the peer through rule 2. Under #221's 15 s poll
+    // that is terminal: every later `List` keyed `cinema` misses the adopted
+    // name too, lands back on the guard's `return`, and nothing repairs it.
+    it('keeps the roster usable after a sole-entry List whose entry is not an object', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      expect(
+        client
+          .getRoomUsers()
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(JSON.stringify({ List: { 'ghost-room': null } }) + '\r\n')
+      )
+
+      // The guard (#223/#255) already kept the roster here…
+      expect(
+        client
+          .getRoomUsers()
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+
+      // …but the name it keeps has to still be ours, or the next genuine
+      // in-room broadcast reads as a switch-out and evicts the peer.
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            Set: {
+              user: {
+                mikkerlo: { room: { name: 'cinema' }, file: { name: 'COTE - 7', duration: 1440 } }
+              }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(
+        client
+          .getRoomUsers()
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+    })
+
+    // The same bug seen through the third copy of the name: `status.room` is
+    // what WatchTogetherView renders, so the adoption also relabelled the room
+    // in the UI after a payload we then refused to read.
+    it('never renames the room from an entry it cannot read', () => {
+      const statuses: Array<{ room?: string }> = []
+      client.on('connection-status', (s) => statuses.push(s as { room?: string }))
+      handshake()
+
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(JSON.stringify({ List: { 'ghost-room': null } }) + '\r\n')
+      )
+
+      expect(statuses.map((s) => s.room)).not.toContain('ghost-room')
+      expect(statuses.filter((s) => s.room !== undefined).at(-1)!.room).toBe('cinema')
+    })
+
+    // The gate defers the adoption, it does not abandon it: a later payload
+    // whose sole entry *is* usable still renames us, so a server that
+    // canonicalized our room out from under us is not locked out by one
+    // unreadable reply.
+    it('still adopts the fallback name once a usable sole entry arrives', () => {
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'cinema',
+        username: 'me',
+        autoReconnect: false
+      })
+      lastSocket!.emit('connect')
+      lastSocket!.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
+      lastTlsSocket!.emit('secureConnect')
+      // No `room` key in Hello, so only `pickOwnRoom` can learn the real name.
+      lastTlsSocket!.emit('data', Buffer.from('{"Hello":{"username":"me","version":"1.6.9"}}\r\n'))
+
+      lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { Cinema: null } }) + '\r\n'))
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { Cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+
+      expect(
+        roomUsers
+          .at(-1)!
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+      // …and the adopted name is live: an in-room `Set` from it is accepted.
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            Set: { user: { mikkerlo: { room: { name: 'Cinema' }, file: { name: 'COTE - 7' } } } }
+          }) + '\r\n'
+        )
+      )
+      expect(
+        roomUsers
+          .at(-1)!
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+    })
+
     // `extractAppMeta` is fed `data.file`, never `data`, so a `features` block
     // sitting at the *entry* level is not file metadata. Well-formed on
     // purpose: a placeholder would assert `undefined` even after a refactor

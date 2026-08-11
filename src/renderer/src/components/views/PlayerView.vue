@@ -13,7 +13,13 @@ import TranslationMenu from '../player/TranslationMenu.vue';
 import QualityMenu from '../player/QualityMenu.vue';
 import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
-import { previewSeek, commitSeek, resolveSeekTarget, sanitizeDuration } from '../../utils';
+import {
+  previewSeek,
+  commitSeek,
+  resolveSeekTarget,
+  sanitizeDuration,
+  waitingToastVisible
+} from '../../utils';
 import { useGrowingFile } from '../../composables/use-growing-file';
 
 const props = defineProps<{
@@ -160,6 +166,13 @@ const growingFile = useGrowingFile({
   fetchSubtitles: () => window.api.playerGetLocalSubtitles(activeFilePath.value)
 });
 const { isPartial, downloadProgressPct, downloadDead, waitingForDownload } = growingFile;
+// Single source of truth for the `.mkv-buffering-toast` slot: both the
+// "Waiting for download…" toast and the #238 short-landing toast render into
+// it, so both gates read this one computed rather than re-deriving the
+// condition (they drifted otherwise, and the two toasts stacked).
+const waitingToastUp = computed(() =>
+  waitingToastVisible(waitingForDownload.value, downloadDead.value)
+);
 
 // Late subtitle load (#63): a .part session can open before its .ass lands —
 // poll for the sibling subtitle and hot-attach it instead of leaving the
@@ -224,9 +237,20 @@ const skipMarkers = useSkipMarkers({
   getAnimeId: () => props.animeId,
   getCurrentEpisodeInt: () => currentEpisodeInt.value,
   getCurrentTime: () => currentTime.value,
+  // The landing check must read the element, not the display ref: `currentTime`
+  // is written only from `timeupdate` and is frozen while the scrubber-drag
+  // latch is set (#238).
+  getPlayheadTime: () => videoRef.value?.currentTime ?? 0,
   isStreaming,
   activeStreamUrl,
-  onSeek: (t) => seek(t)
+  onSeek: (t) => seek(t),
+  onSkipLandedShort: () => {
+    // "Waiting for download…" already occupies this slot and says the same
+    // thing; don't stack a second toast on top of it. Fast path only — the
+    // template re-checks `waitingToastUp` reactively, because `waiting`
+    // usually fires a beat *after* the clamped landing.
+    if (!waitingToastUp.value) showSkipClampToast();
+  }
 });
 const {
   showSkipDetections,
@@ -249,6 +273,7 @@ void streamSkipDetection;
 // the same per-show payload, so they don't need a refetch on episode flip.
 watch(currentEpisodeInt, (epInt) => {
   resetSkipUiState();
+  clearSkipClampToast();
   if (prefetchInFlight.value && prefetchInFlight.value.episodeInt === epInt) {
     prefetchInFlight.value = null;
     stopPrefetchPolling();
@@ -262,6 +287,46 @@ let episodeOpenedAt = Date.now();
 let pendingPrevEpisodeInt = '';
 const resumeToast = ref('');
 let resumeToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Growing .part (#238): a skip whose seek landed short of the band end. The
+// button stays up, so the toast is the only feedback that the click did not
+// take — keep the copy neutral, it must not claim the playhead moved.
+const SKIP_CLAMP_TOAST_MS = 2500;
+const skipClampToast = ref('');
+let skipClampToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearSkipClampToast(): void {
+  skipClampToast.value = '';
+  if (skipClampToastTimer) {
+    clearTimeout(skipClampToastTimer);
+    skipClampToastTimer = null;
+  }
+}
+
+function showSkipClampToast(): void {
+  skipClampToast.value = "Not downloaded yet — can't skip past the download";
+  if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
+  skipClampToastTimer = setTimeout(() => {
+    skipClampToast.value = '';
+    skipClampToastTimer = null;
+  }, SKIP_CLAMP_TOAST_MS);
+}
+
+// The slot changed hands. Hiding the short-landing notice in the template is
+// not enough on its own: `showSkipClampToast` arms a `SKIP_CLAMP_TOAST_MS`
+// timer, and a clamped landing parks the playhead `GROWING_SEEK_MARGIN_SEC`
+// behind the frontier, so `waiting` typically fires well inside that window —
+// the next `playing`/`canplay` would then fade a stale notice back in for the
+// remainder. Retire it on the rise instead. The template gate still covers the
+// case where the waiting toast is already up when the short landing fires, in
+// which case this never runs.
+watch(waitingToastUp, (up) => {
+  if (up) clearSkipClampToast();
+});
+
+// The composable resets its own state on the stream-mode transition; the
+// toast lives here, so it needs its own clear.
+watch(isStreaming, () => clearSkipClampToast());
 
 // Pre-fetch next episode (issue #78)
 type PrefetchSetting = 'off' | 'open' | 'time-5min' | 'progress-50';
@@ -362,6 +427,14 @@ const {
   onVideoSeeked,
   onVideoWaiting
 } = syncplay;
+
+// `seeked` is shared: syncplay uses it for echo suppression, and useSkipMarkers
+// uses it as the landing oracle for a pending skip (#238). Order doesn't
+// matter — neither reads the other's state.
+function onVideoSeekedAll(): void {
+  skipMarkers.onVideoSeeked();
+  onVideoSeeked();
+}
 
 function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   if (ep.animeId !== props.animeId) {
@@ -1809,6 +1882,7 @@ onBeforeUnmount(() => {
   }
   if (prefetchToastTimer) clearTimeout(prefetchToastTimer);
   if (resumeToastTimer) clearTimeout(resumeToastTimer);
+  if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
   // The document keydown listener is removed by usePlayerKeyboard's
   // onBeforeUnmount hook.
   document.removeEventListener('fullscreenchange', onFullscreenChange);
@@ -1909,9 +1983,7 @@ const bufferedProgress = computed(() => {
 
     <!-- Growing .part (#63): playhead caught the download frontier -->
     <transition name="fade">
-      <div v-if="waitingForDownload && !downloadDead" class="mkv-buffering-toast">
-        Waiting for download…
-      </div>
+      <div v-if="waitingToastUp" class="mkv-buffering-toast">Waiting for download…</div>
     </transition>
 
     <!-- Growing .part (#63): the backing download died mid-watch -->
@@ -1967,6 +2039,13 @@ const bufferedProgress = computed(() => {
       <div v-if="prefetchToast" class="prefetch-toast">{{ prefetchToast }}</div>
     </transition>
 
+    <!-- Growing .part (#238): a skip click that couldn't clear the band -->
+    <transition name="fade">
+      <div v-if="skipClampToast && !waitingToastUp" class="mkv-buffering-toast">
+        {{ skipClampToast }}
+      </div>
+    </transition>
+
     <!-- Syncplay toast -->
     <transition name="fade">
       <div v-if="syncplayToast" class="syncplay-toast">{{ syncplayToast }}</div>
@@ -1992,7 +2071,7 @@ const bufferedProgress = computed(() => {
         crossorigin="anonymous"
         @play="onPlay"
         @pause="onPause"
-        @seeked="onVideoSeeked"
+        @seeked="onVideoSeekedAll"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"

@@ -15,12 +15,22 @@
 // Does NOT own: the seek action (caller supplies `onSeek` so the button
 // click can drive the same seek path the rest of PlayerView uses), the
 // episode change reset trigger (caller wires that because it also touches
-// prefetch state).
+// prefetch state), the `seeked` event and the element's playhead (the caller
+// fans `@seeked` into `onVideoSeeked()` and supplies `getPlayheadTime` — a
+// skip is committed only once the element is observed to have *arrived*,
+// #238).
 
 import { computed, ref, watch, onMounted, onBeforeUnmount, type ComputedRef, type Ref } from 'vue'
 
 const SKIP_GRACE_MS = 250
 const SKIP_LEAD_IN_SEC = 0.25
+// Deliberately distinct from SKIP_LEAD_IN_SEC, and strictly greater: that one
+// is the *band-entry* tolerance for `activeSkipRange`, this one is the
+// *arrival* tolerance for a completed seek and must additionally absorb the
+// browser's keyframe snap. Collapsing the two back together is a regression
+// (#238); a landing 0.3 s before `endSec` counts as done, one 40 s short does
+// not.
+const SKIP_LANDING_EPSILON_SEC = 0.5
 
 export function useSkipMarkers(deps: {
   /** Live anime id getter (props pass-through). */
@@ -29,12 +39,25 @@ export function useSkipMarkers(deps: {
   getCurrentEpisodeInt: () => string
   /** Live currentTime getter (the player progress ref). */
   getCurrentTime: () => number
+  /**
+   * Live playhead getter reading the **element's** `currentTime`, not the
+   * display ref. The display ref is written only from `timeupdate` and is
+   * frozen while the scrubber-drag latch is set, so it cannot be trusted to
+   * describe where a `seeked` actually landed (#238).
+   */
+  getPlayheadTime: () => number
   /** Reactive: are we playing a stream URL (vs a local file)? */
   isStreaming: Ref<boolean>
   /** Reactive: the active stream URL (when streaming). */
   activeStreamUrl: Ref<string>
   /** Caller-supplied seek action; called with the OP/ED end time on click. */
   onSeek: (timeSec: number) => void
+  /**
+   * Fired when a skip seek completed short of the band end (the download
+   * frontier clamped it). The caller surfaces the "can't skip past the
+   * download" toast; nothing is committed and the button stays up.
+   */
+  onSkipLandedShort?: () => void
 }): {
   showSkipDetections: Ref<ShowSkipDetections | null>
   streamSkipDetection: Ref<EpisodeSkipDetection | null>
@@ -46,6 +69,7 @@ export function useSkipMarkers(deps: {
   refreshStreamSkipDetection: () => Promise<void>
   cancelStreamDetection: () => void
   onSkipClick: () => void
+  onVideoSeeked: () => void
   resetSkipUiState: () => void
 } {
   const showSkipDetections = ref<ShowSkipDetections | null>(null)
@@ -55,6 +79,11 @@ export function useSkipMarkers(deps: {
   const skipButtonVisible = ref(false)
 
   let skipButtonGraceTimer: ReturnType<typeof setTimeout> | null = null
+  // Single-shot: armed by a skip click, resolved by the first `seeked` that
+  // follows it. Until it resolves, nothing is committed and nothing is hidden.
+  // `key` already encodes the kind (`skipRangeKey`), so the kind is not carried
+  // separately — a second copy could only drift out of sync with it.
+  let pendingSkipLanding: { key: string; endSec: number } | null = null
   let streamSkipRequestId = 0
   let unsubSignatureUpdated: Unsubscribe | null = null
 
@@ -92,16 +121,33 @@ export function useSkipMarkers(deps: {
     return { startSec: range.startSec, endSec: range.endSec, kind }
   }
 
+  // The click only *requests* the skip. On a growing `.part` the seek can be
+  // clamped to the download frontier, or never complete at all, so committing
+  // the range (or hiding the button) here left both stuck for the rest of the
+  // episode — the range was marked and `activeSkipRange` never changed, so the
+  // visibility watch could not re-arm it. Both now wait for a confirmed
+  // landing in `onVideoSeeked` (#238). Not hiding is what makes the
+  // never-completes case safe: there is nothing to restore.
   function onSkipClick(): void {
     const bounds = activeSkipBounds()
     if (!bounds) return
-    skippedRanges.value.add(skipRangeKey(bounds.kind))
-    skipButtonVisible.value = false
-    if (skipButtonGraceTimer) {
-      clearTimeout(skipButtonGraceTimer)
-      skipButtonGraceTimer = null
-    }
+    pendingSkipLanding = { key: skipRangeKey(bounds.kind), endSec: bounds.endSec }
     deps.onSeek(bounds.endSec)
+  }
+
+  // Caller fans the element's `seeked` here. No-op unless a skip click is
+  // pending; single-shot, so an unrelated later seek can never re-resolve it.
+  function onVideoSeeked(): void {
+    const pending = pendingSkipLanding
+    if (!pending) return
+    pendingSkipLanding = null
+    if (deps.getPlayheadTime() >= pending.endSec - SKIP_LANDING_EPSILON_SEC) {
+      // Arrived: dedupe the range so rewinding into it doesn't re-offer the
+      // skip. The button hides on its own once the playhead leaves the band.
+      skippedRanges.value.add(pending.key)
+      return
+    }
+    deps.onSkipLandedShort?.()
   }
 
   // Grace-timer-gated button visibility — debounces flicker when scrubbing
@@ -141,6 +187,9 @@ export function useSkipMarkers(deps: {
 
   function resetSkipUiState(): void {
     skippedRanges.value = new Set()
+    // An episode/stream flip must not let the previous band's pending click be
+    // resolved by the new episode's first `seeked`.
+    pendingSkipLanding = null
     if (skipButtonGraceTimer) {
       clearTimeout(skipButtonGraceTimer)
       skipButtonGraceTimer = null
@@ -249,6 +298,7 @@ export function useSkipMarkers(deps: {
     refreshStreamSkipDetection,
     cancelStreamDetection,
     onSkipClick,
+    onVideoSeeked,
     resetSkipUiState
   }
 }

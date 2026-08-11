@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { useSkipMarkers } from '../../../src/renderer/src/composables/use-skip-markers'
 
 type Api = {
@@ -86,10 +86,60 @@ function makeDeps(overrides: {
     getAnimeId: () => overrides.animeId ?? 42,
     getCurrentEpisodeInt: () => overrides.epInt ?? '1',
     getCurrentTime: () => overrides.time ?? 0,
+    getPlayheadTime: () => overrides.time ?? 0,
     isStreaming,
     activeStreamUrl,
     onSeek: overrides.onSeek ?? (() => {})
   }
+}
+
+/**
+ * Reactive harness for anything that depends on `activeSkipRange` changing.
+ * `makeDeps` reads a static `time`, so its `getCurrentTime` never invalidates
+ * the computed and `watch(activeSkipRange, …)` never re-fires — the grace-timer
+ * half of the button contract is unobservable through it.
+ *
+ * `time` is the display ref (what `activeSkipRange` reads); `playhead` is the
+ * element's own `currentTime` (what the landing check reads). They are separate
+ * on purpose: that split is exactly what the `getPlayheadTime` dep exists for.
+ */
+function makeLiveHarness(overrides: { epInt?: string } = {}): {
+  deps: Deps
+  time: Ref<number>
+  playhead: Ref<number>
+  seek: ReturnType<typeof vi.fn>
+  landedShort: ReturnType<typeof vi.fn>
+} {
+  const time = ref(0)
+  const playhead = ref(0)
+  const isStreaming = ref(false)
+  const activeStreamUrl = ref('')
+  const seek = vi.fn()
+  const landedShort = vi.fn()
+  return {
+    deps: {
+      getAnimeId: () => 42,
+      getCurrentEpisodeInt: () => overrides.epInt ?? '1',
+      getCurrentTime: () => time.value,
+      getPlayheadTime: () => playhead.value,
+      isStreaming,
+      activeStreamUrl,
+      onSeek: seek,
+      onSkipLandedShort: landedShort
+    },
+    time,
+    playhead,
+    seek,
+    landedShort
+  }
+}
+
+/** Move the display playhead and let the computed + grace watcher settle. */
+async function moveTo(h: { time: Ref<number>; playhead: Ref<number> }, t: number): Promise<void> {
+  h.time.value = t
+  h.playhead.value = t
+  await Promise.resolve()
+  vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
 }
 
 describe('useSkipMarkers — initial state', () => {
@@ -181,19 +231,26 @@ describe('useSkipMarkers — loadSkipDetections', () => {
 })
 
 describe('useSkipMarkers — onSkipClick', () => {
-  it('seeks to the end of the active band and hides the button', async () => {
+  // Rebuilt for #238. The previous version of this case was vacuous: it never
+  // awaited between assigning the detections and advancing the clock, so the
+  // grace watcher had not run and `skipButtonVisible` was never `true` — the
+  // `toBe(false)` assertion passed for the wrong reason. It is now on the
+  // reactive harness with an explicit `true` precondition, and the assertion is
+  // inverted, because the click no longer hides anything.
+  it('seeks to the end of the active band and leaves the button up', async () => {
     vi.useFakeTimers()
-    const seek = vi.fn()
-    const deps = makeDeps({ epInt: '1', time: 60, onSeek: seek })
-    const s = useSkipMarkers(deps)
+    const h = makeLiveHarness()
+    const s = useSkipMarkers(h.deps)
     s.showSkipDetections.value = fakeShow({
       '1': fakeEp('1', { startSec: 60, endSec: 150 })
     })
-    // Activate the band first: time is 60, in op band → grace timer fires
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
+
     s.onSkipClick()
-    expect(seek).toHaveBeenCalledWith(150)
-    expect(s.skipButtonVisible.value).toBe(false)
+
+    expect(h.seek).toHaveBeenCalledWith(150)
+    expect(s.skipButtonVisible.value).toBe(true)
     vi.useRealTimers()
   })
 
@@ -210,76 +267,184 @@ describe('useSkipMarkers — onSkipClick', () => {
 })
 
 describe('useSkipMarkers — already-skipped dedup', () => {
-  it('does not re-show the button after a skip click on the same range', async () => {
+  // #238 changed the shape of this: the dedup no longer happens on the click,
+  // it happens on the *confirmed landing*. The button then hides on its own via
+  // the `activeSkipRange → null` transition, not by an explicit clear.
+  it('dedups the range once the seek is observed to land, and stays hidden on rewind', async () => {
     vi.useFakeTimers()
-    // Use a reactive time ref so changing it triggers the activeSkipRange
-    // computed + the grace-timer watcher.
-    const time = ref(0)
-    const isStreaming = ref(false)
-    const activeStreamUrl = ref('')
-    const seek = vi.fn()
-    const s = useSkipMarkers({
-      getAnimeId: () => 42,
-      getCurrentEpisodeInt: () => '1',
-      getCurrentTime: () => time.value,
-      isStreaming,
-      activeStreamUrl,
-      onSeek: seek
-    })
+    const h = makeLiveHarness()
+    const s = useSkipMarkers(h.deps)
     s.showSkipDetections.value = fakeShow({
       '1': fakeEp('1', { startSec: 60, endSec: 150 })
     })
-    // Cross into the op band.
-    time.value = 60
-    await Promise.resolve() // flush computed/watch
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    await moveTo(h, 60)
     expect(s.skipButtonVisible.value).toBe(true)
-    s.onSkipClick()
-    expect(s.skipButtonVisible.value).toBe(false)
-    expect(seek).toHaveBeenCalledWith(150)
 
-    // Step outside the band and back in — button stays hidden because the
-    // range was already skipped this session.
-    time.value = 500
-    await Promise.resolve()
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    s.onSkipClick()
+    expect(h.seek).toHaveBeenCalledWith(150)
+    // Still up: nothing has arrived yet.
+    expect(s.skipButtonVisible.value).toBe(true)
+
+    // The element arrives at the band end and reports it.
+    h.playhead.value = 150
+    s.onVideoSeeked()
+    expect(h.landedShort).not.toHaveBeenCalled()
+
+    // Leaving the band hides it through the watch, not through the click.
+    await moveTo(h, 500)
     expect(s.skipButtonVisible.value).toBe(false)
-    time.value = 60
-    await Promise.resolve()
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    // Rewinding back in keeps it hidden — the range is deduped for the session.
+    await moveTo(h, 60)
     expect(s.skipButtonVisible.value).toBe(false)
     vi.useRealTimers()
   })
 
   it('shows the button again after resetSkipUiState (episode change)', async () => {
     vi.useFakeTimers()
-    const time = ref(0)
-    const isStreaming = ref(false)
-    const activeStreamUrl = ref('')
-    const s = useSkipMarkers({
-      getAnimeId: () => 42,
-      getCurrentEpisodeInt: () => '1',
-      getCurrentTime: () => time.value,
-      isStreaming,
-      activeStreamUrl,
-      onSeek: () => {}
-    })
+    const h = makeLiveHarness()
+    const s = useSkipMarkers(h.deps)
     s.showSkipDetections.value = fakeShow({
       '1': fakeEp('1', { startSec: 60, endSec: 150 })
     })
-    time.value = 60
-    await Promise.resolve()
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    await moveTo(h, 60)
     s.onSkipClick()
+    h.playhead.value = 150
+    s.onVideoSeeked()
     // Now reset (simulating an episode change) and re-enter the band.
     s.resetSkipUiState()
-    time.value = 500
-    await Promise.resolve()
-    time.value = 60
-    await Promise.resolve()
-    vi.advanceTimersByTime(SKIP_GRACE_MS_TEST)
+    await moveTo(h, 500)
+    await moveTo(h, 60)
     expect(s.skipButtonVisible.value).toBe(true)
     vi.useRealTimers()
+  })
+})
+
+// The landing oracle (#238). A click only *requests* the skip; nothing is
+// committed and nothing is hidden until the element reports where it actually
+// arrived. On a growing `.part` the seek can land short — or never complete at
+// all, once #237's frontier pass-through stops clamping the request.
+describe('useSkipMarkers — skip landing (#238)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  async function armedClick(
+    band: { startSec: number; endSec: number } = { startSec: 60, endSec: 150 },
+    kind: 'op' | 'ed' = 'op'
+  ): Promise<{ s: ReturnType<typeof useSkipMarkers>; h: ReturnType<typeof makeLiveHarness> }> {
+    const h = makeLiveHarness()
+    const s = useSkipMarkers(h.deps)
+    s.showSkipDetections.value = fakeShow({
+      '1': fakeEp('1', kind === 'op' ? band : null, kind === 'ed' ? band : null)
+    })
+    await moveTo(h, band.startSec)
+    expect(s.skipButtonVisible.value).toBe(true)
+    s.onSkipClick()
+    expect(h.seek).toHaveBeenCalledWith(band.endSec)
+    return { s, h }
+  }
+
+  // The headline regression: short landing must not commit and must not hide.
+  it('does not commit or hide when the seek lands short, and re-offers the skip', async () => {
+    const { s, h } = await armedClick()
+
+    h.playhead.value = 80
+    s.onVideoSeeked()
+
+    expect(s.skipButtonVisible.value).toBe(true)
+    expect(h.landedShort).toHaveBeenCalledTimes(1)
+
+    // Not deduped: leaving and re-entering the band re-offers it.
+    await moveTo(h, 500)
+    expect(s.skipButtonVisible.value).toBe(false)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
+  })
+
+  // The case the synchronous-return oracle would have failed: with #237's
+  // pass-through the element can be asked for a position it never reaches, so
+  // no `seeked` ever fires. Nothing may hide, and nothing may be committed.
+  it('leaves the button up when the seek never completes', async () => {
+    const { s, h } = await armedClick()
+
+    // No onVideoSeeked() at all.
+    expect(s.skipButtonVisible.value).toBe(true)
+    expect(h.landedShort).not.toHaveBeenCalled()
+
+    await moveTo(h, 500)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
+  })
+
+  // Pins that the landing epsilon is its own constant: 149.6 is inside the
+  // 0.5 s window and outside SKIP_LEAD_IN_SEC's 0.25 s one, so re-collapsing
+  // the two constants fails here.
+  it('treats a keyframe-snap landing within SKIP_LANDING_EPSILON_SEC as arrived', async () => {
+    const { s, h } = await armedClick()
+
+    h.playhead.value = 149.6
+    s.onVideoSeeked()
+
+    expect(h.landedShort).not.toHaveBeenCalled()
+    await moveTo(h, 500)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(false)
+  })
+
+  it('treats a landing outside SKIP_LANDING_EPSILON_SEC as short', async () => {
+    const { s, h } = await armedClick()
+
+    h.playhead.value = 149.4
+    s.onVideoSeeked()
+
+    expect(h.landedShort).toHaveBeenCalledTimes(1)
+    await moveTo(h, 500)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
+  })
+
+  // No special-casing by band kind.
+  it('applies the same landing rule to an ED band', async () => {
+    const { s, h } = await armedClick({ startSec: 1300, endSec: 1400 }, 'ed')
+
+    h.playhead.value = 1350
+    s.onVideoSeeked()
+
+    expect(s.skipButtonVisible.value).toBe(true)
+    expect(h.landedShort).toHaveBeenCalledTimes(1)
+  })
+
+  // An episode flip must not let the previous band's pending click be resolved
+  // by the new episode's first seeked — this is why resetSkipUiState clears it.
+  it('drops a pending landing on resetSkipUiState so the next episode is unaffected', async () => {
+    const { s, h } = await armedClick()
+
+    s.resetSkipUiState()
+    h.playhead.value = 150
+    s.onVideoSeeked()
+
+    expect(h.landedShort).not.toHaveBeenCalled()
+    // The band still offers its button — nothing was committed.
+    await moveTo(h, 500)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
+  })
+
+  it('is a no-op when no skip is pending', async () => {
+    const h = makeLiveHarness()
+    const s = useSkipMarkers(h.deps)
+    s.showSkipDetections.value = fakeShow({
+      '1': fakeEp('1', { startSec: 60, endSec: 150 })
+    })
+    await moveTo(h, 60)
+
+    h.playhead.value = 150
+    s.onVideoSeeked()
+
+    expect(h.landedShort).not.toHaveBeenCalled()
+    // Nothing committed: the band still shows after leaving and returning.
+    await moveTo(h, 500)
+    await moveTo(h, 60)
+    expect(s.skipButtonVisible.value).toBe(true)
   })
 })
 

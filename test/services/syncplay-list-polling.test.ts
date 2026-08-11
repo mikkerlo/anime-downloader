@@ -359,6 +359,18 @@ describe('SyncplayClient room list polling (#221)', () => {
 
       expect(userNamed('zoe')?.isReady).toBeUndefined()
     })
+
+    // The composition the retirement rests on: a poll that seats a genuine
+    // not-ready is released by #229's broadcast, not by the next poll.
+    it('releases a poll-seated not-ready on the next Set: {ready} broadcast', () => {
+      handshake()
+      deliverList({ cinema: { me: selfEntry, zoe: { isReady: false, file: {} } } })
+      expect(userNamed('zoe')?.isReady).toBe(false)
+
+      deliver({ Set: { ready: { username: 'zoe', isReady: true, manuallyInitiated: false } } })
+
+      expect(userNamed('zoe')?.isReady).toBe(true)
+    })
   })
 
   describe('emit on change', () => {

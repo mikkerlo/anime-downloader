@@ -312,6 +312,18 @@ function showSkipClampToast(): void {
   }, SKIP_CLAMP_TOAST_MS);
 }
 
+// The slot changed hands. Hiding the short-landing notice in the template is
+// not enough on its own: `showSkipClampToast` arms a `SKIP_CLAMP_TOAST_MS`
+// timer, and a clamped landing parks the playhead `GROWING_SEEK_MARGIN_SEC`
+// behind the frontier, so `waiting` typically fires well inside that window —
+// the next `playing`/`canplay` would then fade a stale notice back in for the
+// remainder. Retire it on the rise instead. The template gate still covers the
+// case where the waiting toast is already up when the short landing fires, in
+// which case this never runs.
+watch(waitingToastUp, (up) => {
+  if (up) clearSkipClampToast();
+});
+
 // The composable resets its own state on the stream-mode transition; the
 // toast lives here, so it needs its own clear.
 watch(isStreaming, () => clearSkipClampToast());

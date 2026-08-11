@@ -95,8 +95,16 @@ export function resolveSeekTarget(
 }
 
 // Who owns the `.mkv-buffering-toast` slot (`top: 100px; right: 24px`), which
-// fits exactly one toast (#238). The growing-`.part` pair both target it, so
-// the gate has to be one predicate rather than two hand-copied booleans:
+// fits exactly one toast (#238). `PlayerView` renders a third toast into that
+// class — the MSE `mkvBuffering` / transcode notice — and it stays deliberately
+// outside this predicate: the MSE path is entered only under `isMkv`
+// (`.mkv`) and the growing-file path only under `isPartial` (`.part`), and one
+// path cannot end with both, so a streamed-MKV session and a growing `.part`
+// are mutually exclusive modes. (That is the reason, rather than "`mkvBuffering`
+// is only set when a session starts" — it is also raised mid-session, on the
+// unbuffered-seek respawn in `use-mse-player.ts`.) The growing-`.part` pair do
+// both target the slot, so their gate has to be one predicate rather than two
+// hand-copied booleans:
 //   - "Waiting for download…" renders only while the download is still alive —
 //     once it dies the `.streaming-banner` (a different slot, `top: 60px`)
 //     carries the message instead, leaving this slot empty.

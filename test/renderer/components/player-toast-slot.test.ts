@@ -42,4 +42,18 @@ describe('PlayerView growing-.part toast slot', () => {
   it('derives that predicate from the shared utils helper, not from a local rule', () => {
     expect(SOURCE).toContain('waitingToastVisible(waitingForDownload.value, downloadDead.value)')
   })
+
+  // Hiding the short-landing toast in the template is not enough on its own:
+  // `showSkipClampToast` arms a 2500 ms timer that keeps `skipClampToast`
+  // non-empty, and a clamped landing parks the playhead 2 s behind the frontier,
+  // so `waiting` normally fires inside that window. Without a cancel, the next
+  // `playing`/`canplay` drops the gate again and fades a stale notice back in
+  // for the remainder of the timer. Same source-scan caveat as above — the
+  // watcher lives in `<script setup>` and there is no mount harness, so this
+  // pins the wiring, not the observable fade.
+  it('retires the short-landing toast when the waiting toast takes the slot', () => {
+    expect(SOURCE).toMatch(
+      /watch\(\s*waitingToastUp\s*,\s*\(\s*(\w+)\s*\)\s*=>\s*\{\s*if \(\1\)\s*clearSkipClampToast\(\)/
+    )
+  })
 })

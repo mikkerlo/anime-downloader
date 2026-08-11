@@ -173,11 +173,16 @@ describe('SyncplayClient room list polling (#221)', () => {
       vi.advanceTimersByTime(LIST_POLL_MS)
       const sock = tlsSock()
       const written = frames(sock).length
+      expect(vi.getTimerCount()).toBe(2)
 
       client.disconnect()
       vi.advanceTimersByTime(LIST_POLL_MS * 2)
 
       expect(frames(sock)).toHaveLength(written)
+      // The frame count above cannot see a leaked interval: tearDown() nulls
+      // this.socket and sendJson() early-returns on a null socket, so an orphan
+      // poller writes nowhere. Count the pending timers instead.
+      expect(vi.getTimerCount()).toBe(0)
     })
 
     // Same per-socket-state class as #216: the reconnect path never goes through
@@ -185,7 +190,12 @@ describe('SyncplayClient room list polling (#221)', () => {
     // leave two intervals running and double the poll rate on every drop.
     it('runs exactly one poller after a reconnect', async () => {
       handshake(true)
+      expect(vi.getTimerCount()).toBe(2)
       tlsSockets[0].emit('close')
+      // Only the reconnect backoff timer may be pending here. The frame count at
+      // the end of this test cannot separate onSocketClose()'s stopListPolling()
+      // from startListPolling()'s stop-first — either one alone keeps it green.
+      expect(vi.getTimerCount()).toBe(1)
       await vi.advanceTimersByTimeAsync(RECONNECT_MS)
       expect(sockets).toHaveLength(2)
       completeHandshake()
@@ -435,6 +445,57 @@ describe('SyncplayClient room list polling (#221)', () => {
 
       expect(roomUsers).toHaveLength(emitted + 1)
       expect(userNamed('zoe')?.file?.name).toBe('B')
+    })
+
+    // The null arms of sameRosterFile/sameAppMeta are what decide whether a
+    // peer who picked up a file during a lost `Set` ever gets a file line and a
+    // **Join & watch** button. Both are poll-only paths by construction.
+    it('emits when a peer picks up a file on the poll path alone', () => {
+      handshake()
+      deliverList({ cinema: { zoe: { isReady: true, file: {} }, me: selfEntry } })
+      expect(userNamed('zoe')?.file).toBeNull()
+      const emitted = roomUsers.length
+
+      deliverList({
+        cinema: { zoe: { isReady: true, file: { name: 'A', duration: 10 } }, me: selfEntry }
+      })
+
+      expect(roomUsers).toHaveLength(emitted + 1)
+      expect(userNamed('zoe')?.file?.name).toBe('A')
+
+      // ...and every term of sameRosterFile carries its own weight: a same-name
+      // file whose duration (a re-mux) or size (a different release) changed is
+      // still a change the roster has to show.
+      deliverList({
+        cinema: { zoe: { isReady: true, file: { name: 'A', duration: 20 } }, me: selfEntry }
+      })
+
+      expect(roomUsers).toHaveLength(emitted + 2)
+      expect(userNamed('zoe')?.file?.duration).toBe(20)
+
+      deliverList({
+        cinema: {
+          zoe: { isReady: true, file: { name: 'A', duration: 20, size: 4096 } },
+          me: selfEntry
+        }
+      })
+
+      expect(roomUsers).toHaveLength(emitted + 3)
+      expect(userNamed('zoe')?.file?.size).toBe(4096)
+    })
+
+    it('emits when a peer’s file gains animeDlAppMeta on the poll path alone', () => {
+      handshake()
+      deliverList({
+        cinema: { zoe: { isReady: true, file: { name: 'A', duration: 10 } }, me: selfEntry }
+      })
+      const emitted = roomUsers.length
+
+      // Same name and duration, so only sameAppMeta's null arm separates these.
+      deliverList({ cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } })
+
+      expect(roomUsers).toHaveLength(emitted + 1)
+      expect(userNamed('zoe')?.animeDlAppMeta).toEqual(meta)
     })
 
     // "Keep the previous array on equality" is observable as *order*, never as

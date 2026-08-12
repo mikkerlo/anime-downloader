@@ -231,7 +231,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // forward, so drift can pass ADOPT_TOLERANCE_S and the first post-unhide
   // action is dropped until a remote apply seeks us back. Fixing it means a
   // snapshot source that survives background throttling while paused; see
-  // syncplay.ts:1398-1405 and test/services/syncplay-room-presence.test.ts,
+  // the "Known consequence" note on `buildPlaystate()` in syncplay.ts for
+  // the forward-compensation mechanism (its "nobody is watching in that
+  // state" framing predates this issue — a live paused player reaches it
+  // too), and test/services/syncplay-room-presence.test.ts,
   // "a paused hidden player goes stale and recovers".
   function pushSyncplaySnapshot(): void {
     if (syncplayStatus.value.state !== 'ready') return
@@ -652,9 +655,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // own split (`tearDown()` in syncplay.ts, which clears `snapshot`,
       // `lastRoomState` and `playbackAdopted` and which the reconnect path
       // deliberately skips). A *reconnect* keeps every ref below: same room,
-      // same player, same user, and the element writes these mark may still be
-      // in flight. A session end keeps none of them, because room B must not
-      // inherit room A's intent (#227).
+      // same player, same user, and the element writes those markers stand for
+      // may still be in flight. A session end keeps none of them, because room B
+      // must not inherit room A's intent (#227).
       //
       // The one exception is the remote-state tracking, which is per-*socket*
       // and so resets here and on `reconnecting` alike — it is a receipt for
@@ -672,6 +675,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // attribution of the first intent recorded inside the dead session's
       // window, and `lastSnapshotPushAt` drops the first `timeupdate` snapshot
       // when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
+      //
+      // Tradeoff, the twin of the widening #227 notes for the suppression
+      // window: `appliedPaused` and `appliedSeekPosition` are also armed by
+      // machinery that is *not* scoped to the syncplay session — the buffer
+      // refill and the resume-from-middle land in `use-mse-player`, and
+      // `PlayerView`'s saved-position restores. A session end landing between
+      // one of those arms and the element's event un-marks it, so that echo
+      // reaches the next room as a user action. One event, and the alternative
+      // is the swallowed-event bug above — but it is the room-dragging
+      // direction, so it is written down rather than discovered.
       intendedPaused = null
       appliedPaused = null
       appliedSeekPosition = null

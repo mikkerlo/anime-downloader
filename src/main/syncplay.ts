@@ -972,8 +972,9 @@ export class SyncplayClient extends EventEmitter {
   // name; if the server canonicalized the name out from under us, a payload
   // with exactly one room must still be ours — we're in it.
   //
-  // Despite the name this is a **mutator** on the fallback arm: it adopts that
-  // entry's key into `config.room` *and* `status.room` (see below).
+  // Despite the name this is a **mutator** on the fallback arm: when that
+  // entry is usable it adopts its key into `config.room` *and* `status.room`
+  // (see below).
   private pickOwnRoom(payload: JsonObject): unknown {
     // hasOwnProperty, not `payload[name] !== undefined`: a room named
     // `constructor` or `toString` would otherwise resolve to the prototype's
@@ -988,6 +989,22 @@ export class SyncplayClient extends EventEmitter {
     // off-room and evict each peer as they push a file — a roster that fills
     // from `List` and then empties itself.
     const [name, entry] = rooms[0]
+    // …but only once the entry is one we can actually read (#257). A name
+    // adopted off an entry `handleList`'s guard is about to refuse buys
+    // nothing and costs `handleSet`'s filter its reference point: `config.room`
+    // would hold a room we are not in, every genuine in-room `Set` would read
+    // as off-room and evict its peer. What happens next depends on the shape of
+    // the following `List`: one carrying >=2 rooms — the usual shape, since the
+    // reply covers every room the server knows — misses on both arms and lands
+    // back on that same guard every tick, and a reconnect only makes the ghost
+    // name authoritative (the Hello re-sends `config.room`) rather than undoing
+    // it; a single-room reply keyed by our real room does re-fire this fallback
+    // and self-heals within one #221 tick, losing only the `Set` frames inside
+    // that window; and one that still carries the ghost key as an *object* seats
+    // that room's members as ours, which is worse than either freeze. The first
+    // of those is what the guard traded the wipe to avoid. Deferred, not
+    // abandoned: the next reply whose sole entry *is* an object adopts as usual.
+    if (!isObject(entry)) return undefined
     if (this.config) {
       this.config = { ...this.config, room: name }
       // `status.room` is the third copy of the name and the one the view
@@ -1059,9 +1076,12 @@ export class SyncplayClient extends EventEmitter {
     // warning would be noise on every tick, and the log is the escape hatch
     // for a canonicalization neither `handleHello` nor `pickOwnRoom` covers.
     if (!isObject(roomEntry)) {
-      log('List reply has no usable entry for room', this.config.room, '— keeping roster; keys:', [
-        ...Object.keys(payload)
-      ])
+      log(
+        'List reply has no usable entry for room',
+        this.config.room,
+        '— keeping roster; keys:',
+        Object.keys(payload)
+      )
       return
     }
     for (const [username, data] of Object.entries(roomEntry)) {

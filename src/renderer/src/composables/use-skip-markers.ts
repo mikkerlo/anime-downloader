@@ -47,6 +47,12 @@ const STREAM_DETECT_TIMEOUT_MS = 90_000
 // purely informational, there is nothing to act on.
 const STREAM_FAILURE_TOAST_MS = 3000
 const STREAM_DETECT_TIMEOUT = Symbol('stream-detect-timeout')
+// #263. The other way the deadline promise can settle: its timer was torn down
+// under a run that is still parked on the race. Deliberately distinct from
+// STREAM_DETECT_TIMEOUT so the post-race branch can tell "we gave up waiting"
+// (which must raise the failure toast) from "somebody else has already taken
+// over" (which must write nothing at all).
+const STREAM_DETECT_SUPERSEDED = Symbol('stream-detect-superseded')
 
 /**
  * `'failed'` names the *run*, not the message — the toast text ("OP/ED markers
@@ -112,6 +118,11 @@ export function useSkipMarkers(deps: {
   // hold on the failure text. Every path that retires a request clears them,
   // otherwise a timer outlives its generation and fires against a new episode.
   let streamDeadlineTimer: ReturnType<typeof setTimeout> | null = null
+  // The deadline promise's resolver, held alongside its timer handle so that
+  // tearing the timer down can also settle the race parked on it (#263).
+  // In the composable's closure, not module scope: one player's teardown must
+  // not settle another instance's run.
+  let resolveStreamDeadline: ((outcome: typeof STREAM_DETECT_SUPERSEDED) => void) | null = null
   let streamFailureTimer: ReturnType<typeof setTimeout> | null = null
   let unsubSignatureUpdated: Unsubscribe | null = null
 
@@ -230,6 +241,17 @@ export function useSkipMarkers(deps: {
       clearTimeout(streamDeadlineTimer)
       streamDeadlineTimer = null
     }
+    // #263. `clearTimeout` drops the callback, and that callback was the
+    // deadline promise's only resolver — so clearing alone leaves a run that is
+    // still awaiting `Promise.race([<the IPC>, deadline])` with nothing left
+    // that can settle either side (the IPC is unbounded; that is why the
+    // deadline exists). Its returned promise, its closure and the pending IPC
+    // promise would then be retained for the rest of the session, one per
+    // restart. Settle the race here instead; the run is retired either way.
+    if (resolveStreamDeadline) {
+      resolveStreamDeadline(STREAM_DETECT_SUPERSEDED)
+      resolveStreamDeadline = null
+    }
     if (streamFailureTimer) {
       clearTimeout(streamFailureTimer)
       streamFailureTimer = null
@@ -288,21 +310,33 @@ export function useSkipMarkers(deps: {
     if (requestId !== streamSkipRequestId) return
     streamSkipStatus.value = 'detecting'
 
-    const deadline = new Promise<typeof STREAM_DETECT_TIMEOUT>((resolve) => {
-      streamDeadlineTimer = setTimeout(
-        () => resolve(STREAM_DETECT_TIMEOUT),
-        STREAM_DETECT_TIMEOUT_MS
-      )
-    })
+    const deadline = new Promise<typeof STREAM_DETECT_TIMEOUT | typeof STREAM_DETECT_SUPERSEDED>(
+      (resolve) => {
+        streamDeadlineTimer = setTimeout(
+          () => resolve(STREAM_DETECT_TIMEOUT),
+          STREAM_DETECT_TIMEOUT_MS
+        )
+        resolveStreamDeadline = resolve
+      }
+    )
     const ownDeadlineTimer = streamDeadlineTimer
+    const ownResolveDeadline = resolveStreamDeadline
     try {
       // A genuine race, not a side-effect-only timer: the promise this function
       // returns has to settle at the deadline too, or every caller awaiting it
-      // inherits the unbounded wait.
+      // inherits the unbounded wait. `clearStreamTimers()` settles `deadline`
+      // early when a restart or teardown retires this run (#263), so that
+      // holds even when the deadline never gets to fire.
       const outcome = await Promise.race([
         window.api.skipDetectorDetectStream(animeId, epInt, deps.activeStreamUrl.value),
         deadline
       ])
+      // Checked ahead of the generation guard rather than behind it: every path
+      // that settles the race this way does bump the generation today, so the
+      // guard would also catch it — but that makes the *ordering* of two
+      // unrelated bookkeeping fields load-bearing. This sentinel says on its own
+      // that the run was retired from outside.
+      if (outcome === STREAM_DETECT_SUPERSEDED) return
       if (requestId !== streamSkipRequestId) return
       if (outcome === STREAM_DETECT_TIMEOUT) {
         // Returning here is what retires the run: the IPC promise is still
@@ -323,6 +357,10 @@ export function useSkipMarkers(deps: {
     } finally {
       if (ownDeadlineTimer) clearTimeout(ownDeadlineTimer)
       if (streamDeadlineTimer === ownDeadlineTimer) streamDeadlineTimer = null
+      // Same ownership test as the timer above: a superseded run must not null
+      // the newer run's resolver on its way out, or the newer run becomes
+      // exactly the leak this pairing exists to close.
+      if (resolveStreamDeadline === ownResolveDeadline) resolveStreamDeadline = null
     }
   }
 

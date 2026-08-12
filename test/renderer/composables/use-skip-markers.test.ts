@@ -829,6 +829,99 @@ describe('useSkipMarkers — stream detection deadline (#222)', () => {
     expect(s.streamSkipStatus.value).toBe('idle')
   })
 
+  // #263 — the promise contract behind the toast contract. A run that is parked
+  // on `Promise.race([<the IPC>, deadline])` when its deadline timer is torn
+  // down has nothing left that can settle either side: the IPC is unbounded (a
+  // stalled host is the whole scenario) and `clearTimeout` drops the deadline's
+  // only resolver without resolving it.
+  //
+  // Asserted as "the promise *does* settle", not as the absence of a hang: the
+  // flag is read after the supersession has been driven to quiescence under
+  // fake timers, so on the unfixed code it is simply still `false` — the test
+  // fails rather than hanging the suite.
+  //
+  // Both entry points are covered because they are separate cross-generation
+  // clears: a newer run's top-of-function `clearStreamTimers()` here, and
+  // `cancelStreamDetection()` — the stream→local flip and `onBeforeUnmount` —
+  // below. A fix that only scoped the first would leave the second parking a
+  // closure that outlives the composable.
+  it("settles a superseded run's promise instead of parking it forever", async () => {
+    setApi({ skipDetectorDetectStream: vi.fn().mockImplementation(neverSettles) })
+    const { s, deps } = streaming()
+    await settle()
+
+    let settledA = false
+    const runA = s.refreshStreamSkipDetection()
+    void runA.then(() => {
+      settledA = true
+    })
+    // Past the pre-run cancel round-trip: A owns the generation and has armed
+    // its own deadline.
+    await settle()
+    expect(s.streamSkipStatus.value).toBe('detecting')
+    expect(settledA).toBe(false)
+
+    // Quality switch while main is still stalled: B's clearStreamTimers() drops
+    // A's deadline before arming its own.
+    deps.activeStreamUrl.value = 'https://cdn.example/anime/ep1_720.mp4'
+    await settle()
+    expect(settledA).toBe(true)
+    // Settling A must not have let it write anything: B owns the toast.
+    expect(s.streamSkipStatus.value).toBe('detecting')
+    expect(s.streamSkipDetection.value).toBeNull()
+
+    // Settling A early also left B's own bookkeeping intact: B is the run that
+    // now owns the deadline, and it still reaches it.
+    await vi.advanceTimersByTimeAsync(STREAM_DETECT_TIMEOUT_MS_TEST)
+    expect(s.streamSkipStatus.value).toBe('failed')
+  })
+
+  it("settles an in-flight run's promise when cancelStreamDetection tears it down", async () => {
+    setApi({ skipDetectorDetectStream: vi.fn().mockImplementation(neverSettles) })
+    const { s } = streaming()
+    await settle()
+
+    let settled = false
+    const run = s.refreshStreamSkipDetection()
+    void run.then(() => {
+      settled = true
+    })
+    await settle()
+    expect(s.streamSkipStatus.value).toBe('detecting')
+    expect(settled).toBe(false)
+
+    // The stream→local flip / unmount path. The parked closure retains the
+    // composable past unmount if this never settles.
+    s.cancelStreamDetection()
+    await settle()
+    expect(settled).toBe(true)
+    expect(s.streamSkipStatus.value).toBe('idle')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  // The mirror of `tolerates a rejected cancel on the failure path`, for the
+  // teardown cancel. Same reasoning for the plain rejecting function over a
+  // `vi.fn()`: the spy wrapper would mark the rejection handled.
+  it('tolerates a rejected cancel on the teardown path', async () => {
+    let cancelCalls = 0
+    setApi({
+      skipDetectorCancelStreamDetect: () => {
+        cancelCalls++
+        return cancelCalls === 1 ? Promise.resolve() : Promise.reject(new Error('main is gone'))
+      },
+      skipDetectorDetectStream: vi.fn().mockImplementation(neverSettles)
+    })
+    const { s } = streaming()
+
+    await settle()
+    expect(s.streamSkipStatus.value).toBe('detecting')
+
+    s.cancelStreamDetection()
+    expect(cancelCalls).toBe(2)
+    expect(s.streamSkipStatus.value).toBe('idle')
+    await settle()
+  })
+
   // What `onBeforeUnmount` does. Nothing may be left armed to fire into a torn
   // down player.
   it('leaves no timer armed after cancelStreamDetection tears a run down', async () => {

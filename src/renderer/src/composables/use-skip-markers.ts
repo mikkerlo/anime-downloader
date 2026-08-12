@@ -330,7 +330,10 @@ export function useSkipMarkers(deps: {
     streamSkipRequestId++
     clearStreamTimers()
     streamSkipStatus.value = 'idle'
-    void window.api.skipDetectorCancelStreamDetect()
+    // Same reason as the failure path's cancel: a stream→local flip or an
+    // unmount while main is wedged enough to reject the cancel would put an
+    // `unhandledrejection` on the renderer. Best-effort either way.
+    void window.api.skipDetectorCancelStreamDetect().catch(() => {})
   }
 
   // Stream-mode reactivity: when the streaming inputs or the show signature

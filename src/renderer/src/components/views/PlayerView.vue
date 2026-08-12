@@ -257,7 +257,7 @@ const skipMarkers = useSkipMarkers({
 const {
   showSkipDetections,
   streamSkipDetection,
-  streamSkipDetecting,
+  streamSkipStatus,
   skipButtonVisible,
   currentEpisodeSkip,
   activeSkipRange,
@@ -269,6 +269,16 @@ const {
 // fields (kept for template/use-site consumers).
 void showSkipDetections;
 void streamSkipDetection;
+
+// #222: one element inside the <transition>, text bound to a computed — the
+// same shape as the resume/prefetch/syncplay toasts. Two sibling v-if/v-else
+// divs would need distinct keys or the detecting→failed swap wouldn't animate.
+// This is the only place the status enum is turned into user-facing words.
+const streamSkipToast = computed(() => {
+  if (streamSkipStatus.value === 'detecting') return 'Detecting OP/ED markers…';
+  if (streamSkipStatus.value === 'failed') return 'OP/ED markers unavailable';
+  return '';
+});
 
 // Reset the per-range "already skipped" guard when the episode changes so the
 // button appears for the new episode's OP/ED. Detections themselves come from
@@ -2060,7 +2070,7 @@ const bufferedProgress = computed(() => {
     </transition>
 
     <transition name="fade">
-      <div v-if="streamSkipDetecting" class="stream-skip-toast">Detecting OP/ED markers…</div>
+      <div v-if="streamSkipToast" class="stream-skip-toast">{{ streamSkipToast }}</div>
     </transition>
 
     <!-- Resume toast -->

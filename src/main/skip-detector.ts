@@ -88,6 +88,18 @@ const SEARCH_REGION_SECONDS = 8 * 60
 // Streamed playback should only surface ranges when multiple locally-derived
 // episodes agree on the match; a single episode is too noisy to trust.
 const MIN_STREAM_MATCHES = 2
+// #222. AVIO-level socket read timeout (microseconds) for the *remote* inputs
+// in the stream path. ffbinaries pins ffmpeg/ffprobe at 6.1
+// (`src/main/ffmpeg-binaries.ts`), well past the point where `rw_timeout`
+// became a microsecond AVIO option honored by the http/tcp protocols, so no
+// version fallback is needed. It bounds an *idle* socket, not a slow one — a
+// CDN dribbling bytes never trips it, which is why the renderer keeps its own
+// deadline.
+const STREAM_RW_TIMEOUT_US = 20_000_000
+
+function isRemoteSource(source: string): boolean {
+  return /^https?:\/\//i.test(source)
+}
 // Strict per-hash threshold used to tighten edges INWARD after the coarse
 // window match. Chromaprint distances for the same audio are typically 0–3;
 // 4 catches true matches while rejecting coincidental window-average matches.
@@ -713,19 +725,20 @@ async function probeDurationSec(
   signal?.addEventListener('abort', onAbort, { once: true })
   try {
     return await new Promise<number | null>((resolve, reject) => {
-      proc = spawn(
-        ffprobePath,
-        [
-          '-v',
-          'error',
-          '-show_entries',
-          'format=duration',
-          '-of',
-          'default=noprint_wrappers=1:nokey=1',
-          sourcePath
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] }
-      )
+      const args = [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration',
+        '-of',
+        'default=noprint_wrappers=1:nokey=1'
+      ]
+      // ffprobe takes no `-i`: the source is the trailing positional argument,
+      // so the input option goes immediately before it. Misplaced, ffmpeg tools
+      // treat `-rw_timeout` as an output option and it silently does nothing.
+      if (isRemoteSource(sourcePath)) args.push('-rw_timeout', String(STREAM_RW_TIMEOUT_US))
+      args.push(sourcePath)
+      proc = spawn(ffprobePath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
       let stdout = ''
       let stderr = ''
       proc.stdout?.on('data', (chunk) => {
@@ -777,6 +790,9 @@ async function fingerprintStreamClip(
       // This works for direct MP4 CDN URLs but would fail silently for HLS/m3u8 sources.
       args.push('-sseof', `-${clipLengthSec}`)
     }
+    // Input option — must precede `-i` or ffmpeg reads it as an output option
+    // and silently ignores it.
+    if (isRemoteSource(streamUrl)) args.push('-rw_timeout', String(STREAM_RW_TIMEOUT_US))
     args.push(
       '-i',
       streamUrl,

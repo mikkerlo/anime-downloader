@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   createSkipAnalysisService,
   type SkipAnalysisService,
+  type SkipAnalysisServiceDeps,
   type SkipAnalysisFileCheckResult
 } from '../../src/main/services/skip-analysis'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
-import type { ShowSkipDetections } from '../../src/main/skip-detector'
+import type { ShowSkipDetections, EpisodeSkipDetection } from '../../src/main/skip-detector'
 
 function mkDetections(per: Record<string, unknown>, source?: 'local'): ShowSkipDetections {
   return {
@@ -151,6 +152,96 @@ describe('SkipAnalysisService', () => {
     it('skips entries whose folder name does not match', () => {
       scanResult = { 'other - 01': [{ type: 'mp4', filePath: '/x/other - 01.mp4' }] }
       expect(svc.buildAutoSkipEpisodes('show')).toEqual([])
+    })
+  })
+
+  // #222 leak backstop. The shared `beforeEach` builds the service with empty
+  // binary paths, which makes `runStreamSkipDetection` reject before any
+  // deadline can arm — so this nests its own service with non-empty paths and
+  // an injected `detectStream` that only settles when its signal aborts.
+  describe('runStreamSkipDetection deadline', () => {
+    const DEADLINE_MS = 120_000
+
+    function makeService(
+      detectStream: (
+        animeId: number,
+        episodeInt: string,
+        streamUrl: string,
+        detections: ShowSkipDetections,
+        opts: { signal?: AbortSignal }
+      ) => Promise<EpisodeSkipDetection | null>
+    ): SkipAnalysisService {
+      return createSkipAnalysisService({
+        store,
+        scanEpisodeFiles: () => scanResult,
+        sanitizeFilename: (s) => s,
+        broadcast: (channel, ...args) => broadcasts.push({ channel, args }),
+        signatureUpdatedChannel: 'sig-updated',
+        analyzeProgressChannel: 'analyze-progress',
+        getFpcalcPath: () => '/fake/fpcalc',
+        getFfmpegPath: () => '/fake/ffmpeg',
+        getFfprobePath: () => '/fake/ffprobe',
+        detectStream: detectStream as unknown as SkipAnalysisServiceDeps['detectStream']
+      })
+    }
+
+    /** Resolves `null` the moment its signal aborts — how the real `detectStream` behaves. */
+    function abortAware(seen: {
+      signal?: AbortSignal
+    }): (
+      ...args: [number, string, string, ShowSkipDetections, { signal?: AbortSignal }]
+    ) => Promise<EpisodeSkipDetection | null> {
+      return (_a, _e, _u, _d, opts) => {
+        seen.signal = opts.signal
+        return new Promise<EpisodeSkipDetection | null>((resolve) => {
+          opts.signal?.addEventListener('abort', () => resolve(null), { once: true })
+        })
+      }
+    }
+
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('aborts a run that outlives the deadline', async () => {
+      // Muted because the deadline genuinely fires here; the spy doubles as the
+      // assertion that it logged rather than aborting silently.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const seen: { signal?: AbortSignal } = {}
+      const svc2 = makeService(abortAware(seen))
+      const run = svc2.runStreamSkipDetection(
+        1,
+        42,
+        '1',
+        'https://cdn/x.mp4',
+        mkDetections({}, 'local')
+      )
+
+      expect(seen.signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1)
+      expect(seen.signal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(seen.signal?.aborted).toBe(true)
+      await expect(run).resolves.toBeNull()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('stream detection deadline hit'))
+      warn.mockRestore()
+    })
+
+    // `controller.abort()` is captured by reference, so a timer left armed past
+    // a normal resolution would kill whichever run is live 120 s later.
+    it('clears the deadline timer on normal resolution so it cannot abort a later run', async () => {
+      const seen: { signal?: AbortSignal } = {}
+      const svc2 = makeService((_a, _e, _u, _d, opts) => {
+        seen.signal = opts.signal
+        return Promise.resolve(null)
+      })
+      await svc2.runStreamSkipDetection(1, 42, '1', 'https://cdn/x.mp4', mkDetections({}, 'local'))
+      // Let the `.finally` cleanup run before checking what is still armed.
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(0)
+
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS * 2)
+      expect(seen.signal?.aborted).toBe(false)
     })
   })
 })

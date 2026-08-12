@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { defineComponent, ref } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { useSyncplayClient } from '../../../src/renderer/src/composables/use-syncplay-client'
@@ -1310,5 +1310,190 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
     s.onLocalPause()
 
     expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// The renderer half of main's session-vs-socket split (#227). `tearDown()`
+// clears main's `snapshot`/`lastRoomState`/`playbackAdopted` and the reconnect
+// path skips it; the renderer's own intent refs had no such rule, so room A's
+// intent and its in-flight markers rode into room B inside one player mount.
+//
+// Every case here drives the status watcher through a real terminal state and
+// then back to `ready`, which no other test in this file does. Two mechanics
+// they all respect: the watcher is a pre-flush `watch`, so the write has to be
+// followed by `nextTick()`; and the vacuity guard is the element's own
+// `paused: false` — `intentOr()` falls back to `v.paused`, so a paused fake
+// would report `paused: true` with `intendedPaused` deleted outright.
+describe('useSyncplayClient — session-scoped state resets on disconnect (#227)', () => {
+  // Drives one full session end and re-join without unmounting the player.
+  const cycle = async (client: Client, via: 'disconnected' | 'idle' | 'reconnecting') => {
+    client.syncplayStatus.value = { state: via }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+  }
+
+  it('clears the user intent, so the next session reports the element again', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // Room A: the user pauses, latching intent.
+    client.onLocalPause()
+    await cycle(client, 'disconnected')
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+
+    // Room B has been told nothing yet, so the element is the best answer —
+    // and it is playing. Room A's `true` would pause the new room.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: false })
+  })
+
+  it("does not swallow the next session's first real pause", async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // A buffer refill marked a pause whose event never arrived — `appliedPaused`
+    // is latched at the moment the session dies.
+    client.markProgrammaticPlayback(true)
+    await cycle(client, 'disconnected')
+
+    sendLocalState.mockClear()
+    client.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 50, cause: 'pause' })
+  })
+
+  it("does not swallow the next session's first real seek", async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // A programmatic write that moved the element but whose `seeked` never
+    // arrived (an aborted load) — the residual latch the 15 s TTL backstops.
+    client.markProgrammaticSeek(120)
+    await cycle(client, 'disconnected')
+
+    // Well inside APPLIED_SEEK_TTL_MS, so only the reset can disarm it.
+    vi.advanceTimersByTime(2000)
+    ;(v as { currentTime: number }).currentTime = 42
+    sendLocalState.mockClear()
+    client.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 42, cause: 'seek' })
+  })
+
+  it('re-opens the send gate and the pausedBy attribution for the next session', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    // Paused element + paused room: the apply needs a seek but no play/pause,
+    // so it arms `suppressNextLocalEventUntil` and leaves `appliedPaused` null.
+    // That isolation is the point — with `appliedPaused` set, `onLocalPause`
+    // returns at its own guard and the case would pass for the wrong reason.
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    await cycle(client, 'disconnected')
+
+    // Still inside the dead session's 1500 ms window.
+    sendLocalState.mockClear()
+    client.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'pause' })
+    // The same gate guards the room bookkeeping, so a leaked window also costs
+    // the next session's first `pausedBy` attribution. This is the race the
+    // reset deliberately widens (an echo pause arriving after it now runs the
+    // bookkeeping) — asserted rather than left to chance.
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  it("lets the next session's first timeupdate snapshot through", async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The 1 s interval is live in a mounted test: one tick stamps
+    // `lastSnapshotPushAt` with no explicit push anywhere in the case.
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalled()
+    await cycle(client, 'disconnected')
+
+    // The reconnect lands inside SNAPSHOT_MIN_INTERVAL_MS of that stamp.
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: false })
+  })
+
+  // The other half of the rule, and the one that keeps the reset honest: a
+  // socket drop that auto-reconnects goes `ready` → `reconnecting` → `ready`
+  // without ever passing through `disconnected`, and it is the same room, the
+  // same player and the same user — main skips `tearDown()` there for exactly
+  // this reason. Only the per-socket remote-state tracking resets on this path
+  // (covered by 'does not latch across a reconnect' above).
+  it('keeps the user intent across a reconnect', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.onLocalPause()
+    await cycle(client, 'reconnecting')
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+
+    // The element is playing — the machinery moved it, not the user — so this
+    // `true` can only come from the intent that survived the reconnect.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: true })
+  })
+
+  // A user-initiated disconnect ends at `idle`, a failure at `disconnected`.
+  // Both are session ends and both must reset; only one of them is on the
+  // branch's obvious path.
+  it('resets on a user-initiated disconnect too, not only on a failure', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.onLocalPause()
+    await cycle(client, 'idle')
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: false })
   })
 })

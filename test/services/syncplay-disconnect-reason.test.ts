@@ -444,6 +444,99 @@ describe('SyncplayClient stale status.error hygiene (#215)', () => {
   })
 })
 
+// The renderer clears its session-scoped intent on `idle`/`disconnected` and
+// keeps it on `reconnecting` (#227), so which of those a mid-session socket
+// drop emits is now load-bearing on the other side of the IPC boundary. Every
+// assertion here reads the *whole* status array rather than its tail: a
+// `disconnected` on the way to `reconnecting` would wipe the user's intent just
+// as thoroughly as a terminal one, and the tail cannot see it.
+describe('SyncplayClient reconnect path never passes through disconnected (#227)', () => {
+  let client: SyncplayClient
+  let statuses: Array<{ state: string; error?: string }>
+
+  beforeEach(() => {
+    lastSocket = null
+    lastTlsSocket = null
+    client = new SyncplayClient()
+    statuses = []
+    client.on('connection-status', (s) => statuses.push(s as { state: string; error?: string }))
+  })
+
+  it('goes straight to reconnecting when a live session drops with retries left', () => {
+    vi.useFakeTimers()
+    try {
+      client.connect({
+        host: 'example.test',
+        port: 8999,
+        room: 'r',
+        username: 'u',
+        autoReconnect: true
+      })
+      reachPhase('ready')
+      expect(statuses[statuses.length - 1].state).toBe('ready')
+
+      lastTlsSocket!.emit('close')
+
+      expect(statuses[statuses.length - 1].state).toBe('reconnecting')
+      expect(statuses.every((s) => s.state !== 'disconnected')).toBe(true)
+    } finally {
+      client.disconnect()
+      vi.useRealTimers()
+    }
+  })
+
+  // The claim is scoped to that path, not to "mid-session" in general.
+  // handleError()'s ban/version/password branch is a genuine mid-session
+  // `disconnected`, and it is a correct place for the renderer to reset: main
+  // runs tearDown() in the same breath (via disconnectInternal, which emits
+  // `idle` first — so the renderer branch runs twice, idempotently).
+  it('still reaches disconnected mid-session on an escalating server Error', () => {
+    client.connect({
+      host: 'example.test',
+      port: 8999,
+      room: 'r',
+      username: 'u',
+      autoReconnect: true
+    })
+    reachPhase('ready')
+    statuses.length = 0
+
+    lastTlsSocket!.emit('data', '{"Error":{"message":"You are banned from this server"}}\r\n')
+
+    expect(statuses.map((s) => s.state)).toEqual(['idle', 'disconnected'])
+    expect(statuses[statuses.length - 1].error).toBe('You are banned from this server')
+  })
+
+  // The other mid-session route: a *reconnect attempt* whose handshake fails
+  // after a live session. failHandshake() emits `disconnected` directly, and it
+  // too has torn the session down by then.
+  it('reaches disconnected when a reconnect attempt fails its handshake', async () => {
+    vi.useFakeTimers()
+    try {
+      client.connect({
+        host: 'example.test',
+        port: 8999,
+        room: 'r',
+        username: 'u',
+        autoReconnect: true
+      })
+      reachPhase('ready')
+      lastTlsSocket!.emit('close')
+      expect(statuses[statuses.length - 1].state).toBe('reconnecting')
+
+      // The retry opens, then the server answers the probe with garbage.
+      await vi.advanceTimersByTimeAsync(1000)
+      lastSocket!.emit('connect')
+      lastSocket!.emit('data', 'not json at all\r\n'.repeat(64))
+
+      expect(statuses[statuses.length - 1].state).toBe('disconnected')
+    } finally {
+      client.disconnect()
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('SyncplayClient.getRoomUsers (#213)', () => {
   it('returns a snapshot of the current room users', () => {
     const client = new SyncplayClient()

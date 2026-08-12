@@ -219,9 +219,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // carry that alone: backgroundThrottling is on, and Chromium stretches timers
   // in a muted or occluded window toward 1/min, which would silently demote an
   // active viewer. `timeupdate` is a media event — not timer-throttled while
-  // playing — so it keeps the pushes alive; the 1 s floor keeps its ~4 Hz rate
-  // from becoming IPC spam, and the interval still covers a paused player,
-  // where timeupdate doesn't fire and a stale snapshot is harmless anyway.
+  // playing — so it keeps the pushes alive, and the 1 s floor keeps its ~4 Hz
+  // rate from becoming IPC spam.
+  //
+  // Known gap, pinned rather than closed (#227): a *paused* player fires no
+  // `timeupdate`, so the throttled interval is all it has, and a window hidden
+  // for minutes therefore does cross PLAYBACK_STALE_MS (5 s) and get demoted to
+  // the spectator mirror. Benign for the room — the mirror makes no pause claim
+  // and never reports below the room position — but not free: spectating alone
+  // in a paused room the server's own delay compensation walks `lastRoomState`
+  // forward, so drift can pass ADOPT_TOLERANCE_S and the first post-unhide
+  // action is dropped until a remote apply seeks us back. Fixing it means a
+  // snapshot source that survives background throttling while paused; see
+  // the "Known consequence" note on `buildPlaystate()` in syncplay.ts for
+  // the forward-compensation mechanism (its "nobody is watching in that
+  // state" framing predates this issue — a live paused player reaches it
+  // too), and test/services/syncplay-room-presence.test.ts,
+  // "a paused hidden player goes stale and recovers".
   function pushSyncplaySnapshot(): void {
     if (syncplayStatus.value.state !== 'ready') return
     const v = deps.getVideoEl()
@@ -637,10 +651,45 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       pushSyncplayFile()
     }
     if (status.state === 'idle' || status.state === 'disconnected') {
+      // Session-scoped, cleared with the session — the renderer half of main's
+      // own split (`tearDown()` in syncplay.ts, which clears `snapshot`,
+      // `lastRoomState` and `playbackAdopted` and which the reconnect path
+      // deliberately skips). A *reconnect* keeps every ref below: same room,
+      // same player, same user, and the element writes those markers stand for
+      // may still be in flight. A session end keeps none of them, because room B
+      // must not inherit room A's intent (#227).
+      //
+      // The one exception is the remote-state tracking, which is per-*socket*
+      // and so resets here and on `reconnecting` alike — it is a receipt for
+      // "the room has told us where it is", not the user's own intent, and its
+      // issuer goes away on either. See the `reconnecting` branch below.
       syncplayLocalReady = true
       syncplayLastRemotePlaying = false
       syncplayLastAppliedPaused = null
       syncplayPausedBy.value = null
+      // Intent, and the markers that gate it. Left set, a stale `intendedPaused`
+      // reports room A's play state into room B, `appliedPaused` swallows
+      // exactly one real play/pause of the next session, `appliedSeekPosition`
+      // swallows its first real seek for the rest of the 15 s TTL,
+      // `suppressNextLocalEventUntil` eats both the send and the `pausedBy`
+      // attribution of the first intent recorded inside the dead session's
+      // window, and `lastSnapshotPushAt` drops the first `timeupdate` snapshot
+      // when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
+      //
+      // Tradeoff, the twin of the widening #227 notes for the suppression
+      // window: `appliedPaused` and `appliedSeekPosition` are also armed by
+      // machinery that is *not* scoped to the syncplay session — the buffer
+      // refill and the resume-from-middle land in `use-mse-player`, and
+      // `PlayerView`'s saved-position restores. A session end landing between
+      // one of those arms and the element's event un-marks it, so that echo
+      // reaches the next room as a user action. One event, and the alternative
+      // is the swallowed-event bug above — but it is the room-dragging
+      // direction, so it is written down rather than discovered.
+      intendedPaused = null
+      appliedPaused = null
+      appliedSeekPosition = null
+      suppressNextLocalEventUntil = 0
+      lastSnapshotPushAt = 0
       resetRemoteStateTracking()
       if (syncplayWaitingTimer) {
         clearTimeout(syncplayWaitingTimer)
@@ -652,9 +701,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // and we may come back alone, so the tracking must unlatch here too or the
       // saved position is eaten on every later episode open — the failure the
       // reset exists to prevent, and what `docs/syncplay.md` already claims.
-      // Only this tracking: `syncplayLastRemotePlaying` and the ready flag
+      // Only this tracking: it is per-socket, and this is the socket ending.
+      // The user's intent is not — `intendedPaused`, `appliedPaused`,
+      // `appliedSeekPosition`, `suppressNextLocalEventUntil`,
+      // `lastSnapshotPushAt`, `syncplayLastRemotePlaying` and the ready flag all
       // deliberately survive a reconnect, unlike the `idle`/`disconnected`
-      // branch above, which is a genuine session end.
+      // branch above, which is a genuine session end. The two rules are not in
+      // tension: a reconnect keeps what the *user* wants and drops what the
+      // *room* told us, exactly as main keeps `roomUsers`/`ownIsReady` through
+      // `resetTransportState()` while `tearDown()` clears them (#227, #240).
       resetRemoteStateTracking()
       showSyncplayToast('Reconnecting to Syncplay server…', 8000)
     } else if (status.state === 'disconnected') {

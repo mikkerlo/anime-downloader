@@ -3,6 +3,7 @@ import { inject } from 'vue';
 import { storeToRefs } from 'pinia';
 import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
 import { useShikimoriStore } from '../../stores/shikimori';
+import { useLibraryStore } from '../../stores/library';
 import { ShikimoriKey } from './keys';
 
 const props = defineProps<{
@@ -27,7 +28,8 @@ const {
   triggerSyncNow
 } = shikimori;
 
-const { offlineQueueLength } = storeToRefs(useShikimoriStore());
+const { offlineQueueLength, sessionExpired } = storeToRefs(useShikimoriStore());
+const libraryStore = useLibraryStore();
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   { value: 'planned', label: 'Planned' },
@@ -133,9 +135,29 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
           {{ shikiSaving ? 'Saving…' : 'Save' }}
         </button>
       </template>
-      <div v-if="shikiError" class="shiki-error">{{ shikiError }}</div>
+      <!-- Expiry replaces both the raw error string and the "working offline"
+           chip: the edit is queued either way, but only one of them is
+           actionable and only one is true (#244). -->
+      <div v-if="sessionExpired" class="shiki-expired">
+        <div class="shiki-expired-title">Shikimori session expired</div>
+        <p class="shiki-expired-body">
+          Shikimori rejected the saved sign-in. Your changes are kept and will sync once you sign in
+          again.
+          <template v-if="offlineQueueLength > 0">
+            {{ offlineQueueLength }} change{{ offlineQueueLength > 1 ? 's' : '' }} pending.
+          </template>
+        </p>
+        <button
+          type="button"
+          class="shiki-expired-btn"
+          @click="libraryStore.navigateToSettingsTab('connectors')"
+        >
+          Sign in again
+        </button>
+      </div>
+      <div v-else-if="shikiError" class="shiki-error">{{ shikiError }}</div>
       <div
-        v-if="offlineQueueLength > 0"
+        v-if="offlineQueueLength > 0 && !sessionExpired"
         class="shiki-offline"
         :class="{ 'shiki-syncing': syncState === 'syncing' }"
         :title="lastSyncError || ''"
@@ -407,6 +429,42 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   margin-top: 8px;
   font-size: 0.8rem;
   color: var(--st-red);
+}
+
+.shiki-expired {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--st-red);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--st-red) 10%, transparent);
+}
+
+.shiki-expired-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--st-red);
+}
+
+.shiki-expired-body {
+  margin: 4px 0 8px;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.shiki-expired-btn {
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--st-red);
+  cursor: pointer;
+}
+
+.shiki-expired-btn:hover {
+  filter: brightness(1.1);
 }
 
 .shiki-offline {

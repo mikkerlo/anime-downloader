@@ -20,6 +20,17 @@ export type LibraryView =
   | 'watch-together'
   | 'settings'
 
+/** Tab ids of the Settings view's strip — mirrored by `SettingsShell.vue`. */
+export type SettingsTab =
+  | 'general'
+  | 'storage'
+  | 'player'
+  | 'connectors'
+  | 'merging'
+  | 'shortcuts'
+  | 'watch-together'
+  | 'debug'
+
 // Views that have an inline AnimeDetailView overlay (open an anime within the
 // view, keep a back-stack per view). `downloads`/`watch-together`/`settings`
 // are top-level only.
@@ -63,6 +74,7 @@ export const useLibraryStore = defineStore('library', () => {
   const animeByView = ref<Record<StackedView, number | null>>(emptyStacks())
   const animeHistoryByView = ref<Record<StackedView, number[]>>(emptyHistory())
   const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
+  const pendingSettingsTab = ref<SettingsTab | null>(null)
 
   function isStackedView(view: LibraryView): view is StackedView {
     return (STACKED_VIEWS as readonly string[]).includes(view)
@@ -80,6 +92,20 @@ export const useLibraryStore = defineStore('library', () => {
 
   function navigate(view: LibraryView): void {
     currentView.value = view
+  }
+
+  // Deep-link target for the Settings view's tab strip. SettingsShell owns
+  // `activeTab` locally, so a caller that needs a specific tab (the Shikimori
+  // "sign in again" affordance, #244) parks it here and the shell consumes it.
+  function navigateToSettingsTab(tab: SettingsTab): void {
+    pendingSettingsTab.value = tab
+    currentView.value = 'settings'
+  }
+
+  function consumePendingSettingsTab(): SettingsTab | null {
+    const tab = pendingSettingsTab.value
+    pendingSettingsTab.value = null
+    return tab
   }
 
   function openAnime(id: number, focusEpisodeInt?: string): void {
@@ -113,9 +139,12 @@ export const useLibraryStore = defineStore('library', () => {
     animeByView,
     animeHistoryByView,
     focusEpisodeIntForAnime,
+    pendingSettingsTab,
     activeAnimeId,
     activeFocusEpisodeInt,
     navigate,
+    navigateToSettingsTab,
+    consumePendingSettingsTab,
     openAnime,
     closeAnime,
     clearFocusEpisode

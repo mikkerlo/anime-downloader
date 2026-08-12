@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
+import { useLibraryStore, type SettingsTab } from '../../stores/library';
 import GeneralTab from './GeneralTab.vue';
 import StorageTab from './StorageTab.vue';
 import ConnectorsTab from './ConnectorsTab.vue';
@@ -10,15 +11,7 @@ import ShortcutsTab from './ShortcutsTab.vue';
 import WatchTogetherTab from './WatchTogetherTab.vue';
 import DebugTab from './DebugTab.vue';
 
-type TabName =
-  | 'general'
-  | 'storage'
-  | 'player'
-  | 'connectors'
-  | 'merging'
-  | 'shortcuts'
-  | 'watch-together'
-  | 'debug';
+type TabName = SettingsTab;
 
 type TabDef = { id: TabName; label: string; icon: string; badge?: string };
 
@@ -67,8 +60,21 @@ const TABS: TabDef[] = [
   }
 ];
 
-const activeTab = ref<TabName>('general');
+// A deep link parked by another view (e.g. the Shikimori "sign in again"
+// affordance, #244) wins over the default tab, and is consumed so a later
+// manual visit to Settings still opens on General.
+const libraryStore = useLibraryStore();
+const activeTab = ref<TabName>(libraryStore.consumePendingSettingsTab() ?? 'general');
 const { savedVisible } = useSettingsAutosave();
+
+// A deep link raised while Settings is already open doesn't remount the shell,
+// so watch it too rather than only reading it at setup.
+watch(
+  () => libraryStore.pendingSettingsTab,
+  (tab) => {
+    if (tab) activeTab.value = libraryStore.consumePendingSettingsTab()!;
+  }
+);
 
 const activeComponent = computed(() => {
   switch (activeTab.value) {

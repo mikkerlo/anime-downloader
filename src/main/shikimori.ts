@@ -63,11 +63,82 @@ export interface ShikiAnimeRateEntry {
 export class ShikiApiError extends Error {
   constructor(
     message: string,
-    public status: number
+    public status: number,
+    /** Scrubbed + truncated response body, `''` when it could not be read. */
+    public body: string = ''
   ) {
     super(message)
     this.name = 'ShikiApiError'
   }
+}
+
+/**
+ * The stored OAuth session is unusable: either the refresh token was rejected
+ * by `/oauth/token` (`400 invalid_grant` — invalid, expired or revoked), or
+ * there are no credentials at all.
+ *
+ * Discriminated by *call site*, never by status or URL: `exchangeCode` POSTs
+ * the same `/oauth/token` and a mistyped authorization code also answers
+ * `400 invalid_grant`, so keying on the response would "expire" a session that
+ * was never established. Only `refreshToken`'s own failure maps here (#244).
+ *
+ * Subclasses `ShikiApiError`, so `isNetworkError` still reports `false` for it
+ * — callers that want the offline-queue path must test `instanceof
+ * ShikiAuthError` explicitly.
+ */
+export class ShikiAuthError extends ShikiApiError {
+  constructor(message: string, status = 401, body = '') {
+    super(message, status, body)
+    this.name = 'ShikiAuthError'
+  }
+}
+
+export const SESSION_EXPIRED_MESSAGE =
+  'Shikimori session expired — sign in again in Settings → Connectors'
+
+// Keys whose values must never reach a log line or the renderer. A Doorkeeper
+// error body carries none of these (token material rides the 200, which never
+// reaches the throw site below) — this is cheap hygiene against any other
+// endpoint echoing a request back in its error payload.
+const SECRET_BODY_KEYS = ['access_token', 'refresh_token', 'code', 'client_secret']
+const ERROR_BODY_MAX_CHARS = 200
+
+/** Replaces the value of every secret-bearing key, JSON- or form-encoded. */
+export function scrubErrorBody(body: string): string {
+  let out = body
+  for (const key of SECRET_BODY_KEYS) {
+    out = out.replace(new RegExp(`("${key}"\\s*:\\s*")[^"]*(")`, 'g'), '$1[redacted]$2')
+    out = out.replace(new RegExp(`(\\b${key}=)[^&\\s"]*`, 'g'), '$1[redacted]')
+  }
+  return out
+}
+
+/**
+ * One-line, secret-free summary of an error response body.
+ *
+ * OAuth errors are the case that matters: a blind head-truncation of the raw
+ * JSON would cut off `error_description`, which is the half that tells the
+ * user what to do. Pull `error` + `error_description` out first, then cap.
+ */
+export function summarizeErrorBody(body: string): string {
+  const scrubbed = scrubErrorBody(body.trim())
+  if (!scrubbed) return ''
+  try {
+    const parsed = JSON.parse(scrubbed) as { error?: unknown; error_description?: unknown }
+    const code = typeof parsed.error === 'string' ? parsed.error : null
+    const desc = typeof parsed.error_description === 'string' ? parsed.error_description : null
+    if (code) return truncate(desc ? `${code}: ${desc}` : code)
+  } catch {
+    // Not JSON (an HTML error page, a plain string) — fall through to the raw cap.
+  }
+  return truncate(scrubbed)
+}
+
+function truncate(text: string): string {
+  const collapsed = text.replace(/\s+/g, ' ')
+  return collapsed.length <= ERROR_BODY_MAX_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, ERROR_BODY_MAX_CHARS - 1)}…`
 }
 
 export function getAuthUrl(): string {
@@ -97,7 +168,19 @@ async function shikiFetch(path: string, options: RequestInit = {}): Promise<Resp
   }
 
   if (!response.ok) {
-    throw new ShikiApiError(`Shikimori API error: ${response.status}`, response.status)
+    // Read the body before throwing: a bare status is indistinguishable between
+    // a dead refresh token (`invalid_grant`) and a genuine validation failure,
+    // and this message reaches the user verbatim via `String(err)` (#244).
+    // Best-effort — a body that cannot be read must not mask the status.
+    const raw = await response.text().catch(() => '')
+    const summary = summarizeErrorBody(raw)
+    throw new ShikiApiError(
+      summary
+        ? `Shikimori API error: ${response.status} (${summary})`
+        : `Shikimori API error: ${response.status}`,
+      response.status,
+      summary
+    )
   }
 
   return response
@@ -132,17 +215,94 @@ async function refreshToken(token: string): Promise<ShikiCredentials> {
   return response.json() as Promise<ShikiCredentials>
 }
 
+/** True for the response shape Doorkeeper returns on a rejected grant. */
+function isInvalidGrant(err: unknown): boolean {
+  if (!(err instanceof ShikiApiError)) return false
+  if (err.status === 401) return true
+  return err.status === 400 && err.body.includes('invalid_grant')
+}
+
+/**
+ * Notified once per expiry transition, so the renderer learns about it wherever
+ * the dead token is discovered. This module knows only about `StorageService` —
+ * `src/main/index.ts` wires the sync service's `broadcastSyncStatus` in.
+ *
+ * Without it only the two catch sites that already broadcast would deliver, and
+ * the background helpers that usually discover expiry first (details refresh,
+ * details prefetch) are `.catch(console.warn)` — silent (#244 §6a).
+ */
+let onSessionExpired: (() => void) | undefined
+
+export function setOnSessionExpired(fn: (() => void) | undefined): void {
+  onSessionExpired = fn
+}
+
+/**
+ * In-flight refresh, shared by every concurrent caller.
+ *
+ * `/oauth/token` rotates the refresh token, so two callers racing with the same
+ * stored one means the loser gets `400 invalid_grant` — manufacturing the exact
+ * failure this issue is about out of nothing but concurrency (#244 §5).
+ */
+let inFlightRefresh: Promise<ShikiCredentials> | null = null
+
+/** Test seam: the single-flight promise is module state and must not leak. */
+export function __resetRefreshStateForTests(): void {
+  inFlightRefresh = null
+  onSessionExpired = undefined
+}
+
+/**
+ * The single point every Shikimori request converges on, and therefore the only
+ * place session expiry can be detected without auditing 11 call sites — four of
+ * which are fire-and-forget helpers whose `.catch(console.warn)` would swallow
+ * it (#244).
+ *
+ * On a rejected refresh: clear the credentials, persist the expiry flag, and
+ * throw `ShikiAuthError`. Only `shikimoriCredentials` is cleared — the queued
+ * updates, the rate cache and `shikimoriUser` are the state a reconnect needs,
+ * and wiping them is what makes `SHIKIMORI_LOGOUT` the wrong tool here.
+ *
+ * A non-`invalid_grant` failure (a Shikimori outage, a network error) is
+ * re-thrown untouched: it is not evidence the session is over, and expiring on
+ * it would sign the user out every time the API has a bad afternoon.
+ */
 export async function ensureFreshToken(store: StorageService): Promise<string> {
   const creds = store.get('shikimoriCredentials') as ShikiCredentials | null
-  if (!creds) throw new Error('Not logged in to Shikimori')
+  if (!creds) throw new ShikiAuthError(SESSION_EXPIRED_MESSAGE)
 
   const expiresAt = (creds.created_at + creds.expires_in) * 1000
   if (Date.now() < expiresAt - 60_000) {
     return creds.access_token
   }
 
-  const newCreds = await refreshToken(creds.refresh_token)
-  store.set('shikimoriCredentials', newCreds)
+  if (!inFlightRefresh) {
+    inFlightRefresh = refreshToken(creds.refresh_token).finally(() => {
+      inFlightRefresh = null
+    })
+  }
+
+  let newCreds: ShikiCredentials
+  try {
+    newCreds = await inFlightRefresh
+  } catch (err) {
+    if (!isInvalidGrant(err)) throw err
+    store.set('shikimoriCredentials', null)
+    const wasExpired = Boolean(store.get('shikimoriSessionExpired'))
+    store.set('shikimoriSessionExpired', true)
+    if (!wasExpired) onSessionExpired?.()
+    const detail = err instanceof ShikiApiError ? err.body : ''
+    throw new ShikiAuthError(
+      SESSION_EXPIRED_MESSAGE,
+      err instanceof ShikiApiError ? err.status : 401,
+      detail
+    )
+  }
+
+  // Re-read after the await: a logout (or another expiry) may have landed while
+  // this refresh was in flight, and writing the resolved credentials back would
+  // silently re-authenticate an account the user just disconnected.
+  if (store.get('shikimoriCredentials')) store.set('shikimoriCredentials', newCreds)
   return newCreds.access_token
 }
 

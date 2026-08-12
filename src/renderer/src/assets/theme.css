@@ -294,6 +294,19 @@ body {
 .user-meta .u-sync.offline {
   color: var(--st-orange);
 }
+/* Expired session — a button, not a status line: it routes to Connectors. */
+.user-meta button.u-sync.expired {
+  color: var(--st-red);
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+.user-meta button.u-sync.expired:hover {
+  text-decoration: underline;
+}
 .u-sync .dot {
   width: 6px;
   height: 6px;

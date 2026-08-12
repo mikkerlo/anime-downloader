@@ -27,8 +27,36 @@ function lastFetchUrl(): string {
   return calls[calls.length - 1][0] as string
 }
 
+/** Doorkeeper's answer to an invalid, expired or revoked refresh token. */
+const INVALID_GRANT_BODY = {
+  error: 'invalid_grant',
+  error_description:
+    'The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client.'
+}
+
+/** A store whose access token expired long ago, so a refresh is forced. */
+function expiredCredsStore(extra: Record<string, unknown> = {}): InMemoryStorage {
+  return new InMemoryStorage({
+    shikimoriCredentials: {
+      access_token: 'fake-access-token-stale',
+      refresh_token: 'fake-refresh-token-dead',
+      created_at: Math.floor(Date.now() / 1000) - 100_000,
+      expires_in: 86_400
+    },
+    ...extra
+  })
+}
+
+function ensureFresh(store: InMemoryStorage): Promise<string> {
+  return shikimori.ensureFreshToken(
+    store as unknown as Parameters<typeof shikimori.ensureFreshToken>[0]
+  )
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
+  // The single-flight promise and the expiry listener are module-level state.
+  shikimori.__resetRefreshStateForTests()
 })
 
 describe('shikimori client — fixture replay', () => {
@@ -405,13 +433,129 @@ describe('shikimori client — fixture replay', () => {
       expect(stored.access_token).toBe('fake-access-token-replaced')
     })
 
-    it('throws if not logged in', async () => {
+    it('throws a typed ShikiAuthError when there are no credentials', async () => {
       const store = new InMemoryStorage({ shikimoriCredentials: null })
-      await expect(
-        shikimori.ensureFreshToken(
-          store as unknown as Parameters<typeof shikimori.ensureFreshToken>[0]
-        )
-      ).rejects.toThrow(/Not logged in/)
+      const err = await ensureFresh(store).catch((e: unknown) => e)
+      // Was a bare `Error('Not logged in to Shikimori')` surfaced raw to the
+      // user via `String(err)` (#244 §4).
+      expect(err).toBeInstanceOf(shikimori.ShikiAuthError)
+      expect((err as Error).message).toBe(shikimori.SESSION_EXPIRED_MESSAGE)
+    })
+
+    it('does not expire the session, and issues no refresh, while the token is fresh', async () => {
+      const fetchSpy = vi.fn()
+      global.fetch = fetchSpy as unknown as typeof fetch
+      const store = new InMemoryStorage({
+        shikimoriCredentials: {
+          access_token: 'fake-access-token-live',
+          refresh_token: 'fake-refresh-token-live',
+          created_at: Math.floor(Date.now() / 1000),
+          expires_in: 86_400
+        }
+      })
+      await ensureFresh(store)
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(store.get('shikimoriSessionExpired')).toBeFalsy()
+    })
+  })
+
+  // The reported bug: a dead refresh token 400s forever, the app never notices,
+  // and the message says only "Shikimori API error: 400" (#244).
+  describe('ensureFreshToken — session expiry', () => {
+    it('a 400 invalid_grant refresh throws ShikiAuthError, clears the credentials and persists the flag', async () => {
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const store = expiredCredsStore()
+
+      const err = await ensureFresh(store).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(shikimori.ShikiAuthError)
+      expect(store.get('shikimoriCredentials')).toBeNull()
+      expect(store.get('shikimoriSessionExpired')).toBe(true)
+    })
+
+    it('keeps the queue, the rate cache and the user — expiry is not a logout', async () => {
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const store = expiredCredsStore({
+        shikimoriUpdateQueue: [{ malId: 1, queuedAt: 1 }],
+        shikimoriUserRates: [{ rate: { target_id: 1 } }],
+        shikimoriUser: { id: 7, nickname: 'me' }
+      })
+
+      await ensureFresh(store).catch(() => undefined)
+
+      expect(store.get('shikimoriUpdateQueue')).toHaveLength(1)
+      expect(store.get('shikimoriUserRates')).toHaveLength(1)
+      expect(store.get('shikimoriUser')).toMatchObject({ nickname: 'me' })
+    })
+
+    it('notifies the session-expired listener once, on the transition only', async () => {
+      const onExpired = vi.fn()
+      shikimori.setOnSessionExpired(onExpired)
+
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const store = expiredCredsStore()
+      await ensureFresh(store).catch(() => undefined)
+      expect(onExpired).toHaveBeenCalledTimes(1)
+
+      // Second discovery on an already-expired store must not re-broadcast.
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const again = expiredCredsStore({ shikimoriSessionExpired: true })
+      await ensureFresh(again).catch(() => undefined)
+      expect(onExpired).toHaveBeenCalledTimes(1)
+    })
+
+    it('a non-invalid_grant 400 from /oauth/token propagates untouched and does NOT expire the session', async () => {
+      // A Shikimori-side outage must not sign the user out. This is the guard on
+      // the whole design (#244, last Risks bullet).
+      mockFetchOnce({ error: 'server_error', error_description: 'Backend is down' }, 400)
+      const store = expiredCredsStore()
+
+      const err = await ensureFresh(store).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(shikimori.ShikiApiError)
+      expect(err).not.toBeInstanceOf(shikimori.ShikiAuthError)
+      expect(store.get('shikimoriCredentials')).not.toBeNull()
+      expect(store.get('shikimoriSessionExpired')).toBeFalsy()
+    })
+
+    it('surfaces invalid_grant in the message instead of a bare status', async () => {
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const err = (await ensureFresh(expiredCredsStore()).catch(
+        (e: unknown) => e
+      )) as shikimori.ShikiApiError
+
+      expect(err.body).toContain('invalid_grant')
+      expect(err.body).toContain(INVALID_GRANT_BODY.error_description)
+    })
+
+    it('a 400 invalid_grant from exchangeCode is a bad auth code, not an expired session', async () => {
+      // Same URL, same status, same body — discriminated by call site only.
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const err = await shikimori.exchangeCode('mistyped').catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(shikimori.ShikiApiError)
+      expect(err).not.toBeInstanceOf(shikimori.ShikiAuthError)
+    })
+
+    it('collapses concurrent refreshes into a single /oauth/token round trip', async () => {
+      mockFetchOnce(fixture('token-refresh.json'))
+      const store = expiredCredsStore()
+
+      const [a, b] = await Promise.all([ensureFresh(store), ensureFresh(store)])
+
+      expect(a).toBe(b)
+      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+    })
+
+    it('does not write refreshed credentials back into a store a logout just cleared', async () => {
+      mockFetchOnce(fixture('token-refresh.json'))
+      const store = expiredCredsStore()
+      const pending = ensureFresh(store)
+      store.set('shikimoriCredentials', null) // user hit Disconnect mid-refresh
+
+      await pending
+
+      expect(store.get('shikimoriCredentials')).toBeNull()
     })
   })
 
@@ -422,6 +566,58 @@ describe('shikimori client — fixture replay', () => {
         name: 'ShikiApiError',
         status: 404
       })
+    })
+
+    it('attaches a summarized body so 400s are distinguishable from each other', async () => {
+      mockFetchOnce({ error: 'invalid_field', error_description: 'score must be 0..10' }, 422)
+      const err = (await shikimori
+        .getUser('tok')
+        .catch((e: unknown) => e)) as shikimori.ShikiApiError
+      expect(err.message).toBe('Shikimori API error: 422 (invalid_field: score must be 0..10)')
+    })
+  })
+
+  describe('error-body scrubbing', () => {
+    it('redacts secret-bearing values in JSON and form-encoded bodies', () => {
+      expect(shikimori.scrubErrorBody('{"access_token":"abc123","error":"x"}')).toBe(
+        '{"access_token":"[redacted]","error":"x"}'
+      )
+      expect(shikimori.scrubErrorBody('{"refresh_token":"r1","client_secret":"s1"}')).toBe(
+        '{"refresh_token":"[redacted]","client_secret":"[redacted]"}'
+      )
+      expect(shikimori.scrubErrorBody('grant_type=refresh_token&refresh_token=r1&code=c1')).toBe(
+        'grant_type=refresh_token&refresh_token=[redacted]&code=[redacted]'
+      )
+    })
+
+    it('leaves non-secret keys alone', () => {
+      const body = '{"error":"invalid_grant","error_description":"expired"}'
+      expect(shikimori.scrubErrorBody(body)).toBe(body)
+    })
+
+    it('summarizes an OAuth error as "code: description"', () => {
+      expect(
+        shikimori.summarizeErrorBody('{"error":"invalid_grant","error_description":"revoked"}')
+      ).toBe('invalid_grant: revoked')
+    })
+
+    it('keeps the description when truncating, rather than cutting the JSON blind', () => {
+      // A head-truncation of the raw JSON would keep only the envelope; the
+      // half that tells the user what happened must survive (#244 §4).
+      const long = 'x'.repeat(500)
+      const summary = shikimori.summarizeErrorBody(
+        JSON.stringify({ error: 'invalid_grant', error_description: long, extra: long })
+      )
+      expect(summary.startsWith('invalid_grant: xxx')).toBe(true)
+      expect(summary).toHaveLength(200)
+      expect(summary.endsWith('…')).toBe(true)
+    })
+
+    it('falls back to a capped raw body when the response is not JSON', () => {
+      expect(shikimori.summarizeErrorBody('  <html>Bad   Gateway</html>\n')).toBe(
+        '<html>Bad Gateway</html>'
+      )
+      expect(shikimori.summarizeErrorBody('')).toBe('')
     })
   })
 })

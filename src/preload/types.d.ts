@@ -317,6 +317,7 @@ interface Api {
     queueLength: number
     lastSyncAt: number
     lastSyncError: string | null
+    sessionExpired: boolean
   }>
   shikimoriTriggerSync: () => Promise<void>
   onShikimoriSyncStatus: (
@@ -325,6 +326,7 @@ interface Api {
       queueLength: number
       lastSyncAt: number
       lastSyncError: string | null
+      sessionExpired: boolean
     }) => void
   ) => Unsubscribe
   shikimoriGetAnimeDetails: (malId: number) => Promise<ShikiAnimeDetails | null>

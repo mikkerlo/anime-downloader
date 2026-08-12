@@ -22,13 +22,16 @@ export type ShikimoriSyncStatusSnapshot = {
   queueLength: number
   lastSyncAt: number
   lastSyncError: string | null
+  /** The stored refresh token was rejected; the user must sign in again. */
+  sessionExpired: boolean
 }
 
 const EMPTY_SYNC_STATUS: ShikimoriSyncStatusSnapshot = {
   state: 'idle',
   queueLength: 0,
   lastSyncAt: 0,
-  lastSyncError: null
+  lastSyncError: null,
+  sessionExpired: false
 }
 
 export const useShikimoriStore = defineStore('shikimori', () => {
@@ -42,6 +45,10 @@ export const useShikimoriStore = defineStore('shikimori', () => {
   const offlineQueueLength = ref(0)
 
   const loggedIn = computed(() => user.value !== null)
+
+  // Persisted in the main process, so it is already true at launch for a user
+  // whose refresh token died weeks ago — see the init fetch below.
+  const sessionExpired = computed(() => syncStatus.value.sessionExpired)
 
   function rateByMalId(malId: number): ShikiAnimeRateEntry | null {
     if (!malId) return null
@@ -125,6 +132,13 @@ export const useShikimoriStore = defineStore('shikimori', () => {
     offlineQueueLength.value = data.queueLength
   })
 
+  // Pull once on init. `sessionExpired` is persisted state, and a freshly
+  // launched app makes no Shikimori request until the user acts — without this
+  // the broadcast side alone would leave the expiry banner invisible until the
+  // next failure, which is exactly the reported "restart and it looks fine"
+  // symptom (#244 §6c). Failure is non-fatal: the mirror stays at its default.
+  void refreshSyncStatus().catch(() => {})
+
   return {
     user,
     profile,
@@ -135,6 +149,7 @@ export const useShikimoriStore = defineStore('shikimori', () => {
     syncStatus,
     offlineQueueLength,
     loggedIn,
+    sessionExpired,
     rateByMalId,
     animeDetailsByMalId,
     refreshUser,

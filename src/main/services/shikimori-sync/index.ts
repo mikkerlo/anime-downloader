@@ -10,6 +10,8 @@ export interface ShikiSyncStatus {
   queueLength: number
   lastSyncAt: number
   lastSyncError: string | null
+  /** The stored refresh token was rejected; the user must sign in again. */
+  sessionExpired: boolean
 }
 
 export interface CalendarEntry {
@@ -135,7 +137,13 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       state: syncInProgress ? 'syncing' : 'idle',
       queueLength: getQueueLength(),
       lastSyncAt,
-      lastSyncError
+      lastSyncError,
+      // Read from the store, not from closure state like every field above it:
+      // expiry has to survive a restart. The reported case is an app *starting*
+      // with two-month-dead credentials and showing "connected" (#244).
+      // `Boolean(...)` because the test storage fake returns `undefined` for an
+      // unset key rather than applying STORE_DEFAULTS.
+      sessionExpired: Boolean(store.get('shikimoriSessionExpired'))
     }
   }
 
@@ -226,6 +234,11 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
         lastSyncError = err instanceof Error ? err.message : String(err)
         console.warn('[shikimori sync] auth refresh failed:', err)
       }
+      // `ensureFreshToken` has already cleared the credentials, so every later
+      // tick would return at the `!creds` guard above without ever reaching
+      // `adjustSyncTimer()` — a timer that can only spin. The queue is kept: it
+      // replays once the user signs in again (#244).
+      if (err instanceof shikimori.ShikiAuthError) stopSyncTimer()
       broadcastSyncStatus()
       return
     }

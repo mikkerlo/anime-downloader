@@ -43,7 +43,8 @@ function installApi(): void {
       state: 'idle',
       queueLength: 4,
       lastSyncAt: 1234,
-      lastSyncError: null
+      lastSyncError: null,
+      sessionExpired: false
     })),
     getOfflineQueueLength: vi.fn(async () => 7),
     triggerSync: vi.fn(async () => undefined)
@@ -185,6 +186,49 @@ describe('useShikimoriStore', () => {
     await store.refreshSyncStatus()
     expect(store.syncStatus.queueLength).toBe(4)
     expect(store.offlineQueueLength).toBe(4)
+  })
+
+  // #244: the flag is persisted in the main process, so the only thing that
+  // reaches a freshly launched app is this init pull — a broadcast-only design
+  // leaves the banner invisible until the next failed request.
+  it('pulls the sync status on init, so a persisted sessionExpired reaches the UI', async () => {
+    captured.getSyncStatus.mockResolvedValue({
+      state: 'idle',
+      queueLength: 2,
+      lastSyncAt: 0,
+      lastSyncError: null,
+      sessionExpired: true
+    })
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+
+    expect(captured.getSyncStatus).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(store.sessionExpired).toBe(true))
+    expect(store.offlineQueueLength).toBe(2)
+  })
+
+  it('sessionExpired mirrors the sync-status broadcast in both directions', async () => {
+    const { useShikimoriStore } = await import('../../../src/renderer/src/stores/shikimori')
+    const store = useShikimoriStore()
+    expect(store.sessionExpired).toBe(false)
+
+    captured.syncStatus[0]({
+      state: 'idle',
+      queueLength: 1,
+      lastSyncAt: 0,
+      lastSyncError: 'Shikimori session expired',
+      sessionExpired: true
+    })
+    expect(store.sessionExpired).toBe(true)
+
+    captured.syncStatus[0]({
+      state: 'idle',
+      queueLength: 0,
+      lastSyncAt: 1,
+      lastSyncError: null,
+      sessionExpired: false
+    })
+    expect(store.sessionExpired).toBe(false)
   })
 
   it('triggerSync forwards to the IPC bridge', async () => {

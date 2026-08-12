@@ -90,7 +90,12 @@ const userInitial = computed(() => user.value?.nickname?.charAt(0).toUpperCase()
 const fullySynced = computed(
   () => syncStatus.value.state !== 'syncing' && offlineQueueLength.value === 0
 );
+// Gated on `sessionExpired` alone, not `&& queueLength > 0`: with an empty queue
+// the drain returns immediately and never runs, so an expired user with nothing
+// pending would otherwise get no indication anywhere (#244).
+const sessionExpired = computed(() => syncStatus.value.sessionExpired);
 const syncLabel = computed(() => {
+  if (sessionExpired.value) return 'Session expired';
   if (syncStatus.value.state === 'syncing') return 'Syncing…';
   if (offlineQueueLength.value > 0) {
     return `${offlineQueueLength.value} pending`;
@@ -168,7 +173,16 @@ const syncLabel = computed(() => {
           <div v-else class="user-avatar">{{ userInitial }}</div>
           <div class="user-meta">
             <div class="u-name">{{ user.nickname }}</div>
-            <div class="u-sync" :class="{ offline: !fullySynced }">
+            <button
+              v-if="sessionExpired"
+              type="button"
+              class="u-sync expired"
+              title="Shikimori rejected the stored session — sign in again"
+              @click="libraryStore.navigateToSettingsTab('connectors')"
+            >
+              <span class="dot"></span>{{ syncLabel }}
+            </button>
+            <div v-else class="u-sync" :class="{ offline: !fullySynced }">
               <span class="dot"></span>{{ syncLabel }}
             </div>
           </div>

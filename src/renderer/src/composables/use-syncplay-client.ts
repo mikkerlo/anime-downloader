@@ -459,8 +459,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // says the room is playing, so the very next `applySyncplayReadyGate()`
     // plays it again with `syncplayPausedBy` naming nobody. Re-running here
     // costs nothing on the immediate path (it just ran, so `pausedChanged` is
-    // false) and makes the deferred apply mean what it says: the room's state,
-    // as of the moment we enact it.
+    // false) and makes the deferred apply re-assert *this bookkeeping* as of the
+    // moment we enact it. The position is not made current the same way: it
+    // carries main's one-shot `serverRtt / 2` compensation from emit time
+    // (syncplay.ts:1223) and nothing advances the parked copy, so it applies
+    // behind the room by the park's duration. Uncompensated on purpose — the
+    // 1 Hz overwrite, the 3 s apply tolerance and main's adoption gate bound the
+    // error; docs/syncplay.md, "Apply Rule".
     recordRemoteState(state)
     applyRemoteStateToElement(state, v)
   }

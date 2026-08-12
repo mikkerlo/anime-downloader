@@ -203,6 +203,9 @@ describe('SkipAnalysisService', () => {
     afterEach(() => vi.useRealTimers())
 
     it('aborts a run that outlives the deadline', async () => {
+      // Muted because the deadline genuinely fires here; the spy doubles as the
+      // assertion that it logged rather than aborting silently.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const seen: { signal?: AbortSignal } = {}
       const svc2 = makeService(abortAware(seen))
       const run = svc2.runStreamSkipDetection(
@@ -220,6 +223,8 @@ describe('SkipAnalysisService', () => {
       await vi.advanceTimersByTimeAsync(1)
       expect(seen.signal?.aborted).toBe(true)
       await expect(run).resolves.toBeNull()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('stream detection deadline hit'))
+      warn.mockRestore()
     })
 
     // `controller.abort()` is captured by reference, so a timer left armed past

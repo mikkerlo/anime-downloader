@@ -249,7 +249,10 @@ export function useSkipMarkers(deps: {
   // below depend on running after the reset rather than being independent of
   // it — the two are equivalent today only because of that statement order.
   function failStreamDetection(): void {
-    void window.api.skipDetectorCancelStreamDetect()
+    // The rejection is expected, not exceptional: this runs precisely when main
+    // has stopped answering, which is the state most likely to reject the cancel
+    // too. Without a handler that would surface as an `unhandledrejection`.
+    void window.api.skipDetectorCancelStreamDetect().catch(() => {})
     clearStreamTimers()
     streamSkipStatus.value = 'failed'
     streamFailureTimer = setTimeout(() => {

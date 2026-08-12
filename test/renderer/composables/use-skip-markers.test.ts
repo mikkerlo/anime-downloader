@@ -503,6 +503,10 @@ describe('useSkipMarkers — refreshStreamSkipDetection', () => {
     s.showSkipDetections.value = fakeShow({ '1': fakeEp('1', null) })
     await flushStreamWatcher()
     await s.refreshStreamSkipDetection()
+    // Once for the watcher's run, once for the explicit call under test — a
+    // count, not just a `toHaveBeenCalledWith`, so the explicit call becoming a
+    // no-op can't be satisfied by the watcher's call alone.
+    expect(detectSpy).toHaveBeenCalledTimes(2)
     expect(detectSpy).toHaveBeenCalledWith(42, '1', 'https://x/y.m3u8')
     expect(s.streamSkipDetection.value).toEqual(result)
     expect(s.streamSkipStatus.value).toBe('idle')
@@ -532,9 +536,16 @@ describe('useSkipMarkers — refreshStreamSkipDetection', () => {
     // retires it in the cancel gap and it never issues a request to be late.
     await flushStreamWatcher()
     const secondPromise = s.refreshStreamSkipDetection()
+    // Let the newer run land its result *before* the stale one answers.
+    // Resolving `firstP` any earlier makes the closing assertion pass on
+    // microtask ordering alone — the stale write is simply overwritten a tick
+    // later — rather than on the post-race generation guard it names.
+    await secondPromise
+    expect(s.streamSkipDetection.value?.op?.startSec).toBe(999)
+
     resolveFirst(fakeEp('1', { startSec: 1, endSec: 2 }))
-    await Promise.all([firstPromise, secondPromise])
-    // The second result (startSec: 999) wins; the first is dropped.
+    await firstPromise
+    // The second result (startSec: 999) still stands; the late one is dropped.
     expect(s.streamSkipDetection.value?.op?.startSec).toBe(999)
   })
 
@@ -637,6 +648,34 @@ describe('useSkipMarkers — stream detection deadline (#222)', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  // The failure path runs when main has stopped answering — the state most
+  // likely to reject the cancel IPC too. Vitest reports an unhandled rejection
+  // as a run-level error (non-zero exit) even when every assertion passes, so
+  // this pins the `.catch` handler and not merely the resulting status.
+  //
+  // Deliberately a plain function rather than a `vi.fn()`: the spy wrapper
+  // attaches its own `.then` to record `mock.settledResults`, which marks the
+  // rejection as handled and would make this test vacuous.
+  it('tolerates a rejected cancel on the failure path', async () => {
+    let cancelCalls = 0
+    setApi({
+      skipDetectorCancelStreamDetect: () => {
+        cancelCalls++
+        return cancelCalls === 1 ? Promise.resolve() : Promise.reject(new Error('main is gone'))
+      },
+      skipDetectorDetectStream: vi.fn().mockImplementation(neverSettles)
+    })
+    const { s } = streaming()
+
+    await settle()
+    expect(s.streamSkipStatus.value).toBe('detecting')
+
+    await vi.advanceTimersByTimeAsync(STREAM_DETECT_TIMEOUT_MS_TEST)
+    expect(s.streamSkipStatus.value).toBe('failed')
+    expect(cancelCalls).toBe(2)
+    await settle()
+  })
+
   // The warm main-side fingerprint cache case: an aborted run there still
   // resolves with real ranges. Those must not land behind the failure message.
   it('suppresses a result that arrives after the deadline', async () => {
@@ -716,6 +755,40 @@ describe('useSkipMarkers — stream detection deadline (#222)', () => {
 
     await vi.advanceTimersByTimeAsync(STREAM_DETECT_TIMEOUT_MS_TEST)
     expect(s.streamSkipStatus.value).toBe('idle')
+  })
+
+  // The post-race generation guard, at the one seam that discriminates it: the
+  // stale run has to answer *after* the newer one has already written its
+  // result, or the assertion passes on microtask ordering rather than on the
+  // guard. Without it, a quality switch mid-flight paints the previous stream's
+  // OP band over the new one.
+  it('does not let a stale run overwrite a newer result', async () => {
+    let resolveStale!: (v: EpisodeSkipDetection | null) => void
+    let call = 0
+    setApi({
+      skipDetectorDetectStream: vi.fn().mockImplementation(() => {
+        call++
+        if (call === 1) {
+          return new Promise<EpisodeSkipDetection | null>((res) => {
+            resolveStale = res
+          })
+        }
+        return Promise.resolve(fakeEp('1', { startSec: 999, endSec: 1000 }))
+      })
+    })
+    const { s, deps } = streaming()
+
+    await settle()
+    expect(s.streamSkipStatus.value).toBe('detecting')
+
+    deps.activeStreamUrl.value = 'https://cdn.example/anime/ep1_720.mp4'
+    await settle()
+    expect(s.streamSkipDetection.value?.op?.startSec).toBe(999)
+
+    // The superseded run finally answers, with the old stream's ranges.
+    resolveStale(fakeEp('1', { startSec: 111, endSec: 222 }))
+    await settle()
+    expect(s.streamSkipDetection.value?.op?.startSec).toBe(999)
   })
 
   // A hold timer left armed across a restart would silently hide the toast for a

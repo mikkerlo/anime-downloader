@@ -428,6 +428,43 @@ describe('SyncplayClient room presence on join (#220)', () => {
       ).toEqual(['me', 'mikkerlo'])
     })
 
+    // Shape 3 of the same bug, and the one that needs no `Set` frame at all:
+    // once `config.room` holds `ghost-room`, a later `List` that still carries
+    // that key as an *object* resolves through `hasOwnProperty` and seats that
+    // room's members as ours — stranger-seating, the failure #230/#242 exist
+    // to prevent, and worse than either freeze.
+    it('never seats a foreign room roster after an unusable sole-entry List', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { cinema: { mikkerlo: { isReady: true, file: {} } } } }) + '\r\n'
+        )
+      )
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(JSON.stringify({ List: { 'ghost-room': null } }) + '\r\n')
+      )
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            List: {
+              cinema: { mikkerlo: { isReady: true, file: {} } },
+              'ghost-room': { stranger: { isReady: true, file: {} } }
+            }
+          }) + '\r\n'
+        )
+      )
+
+      expect(
+        client
+          .getRoomUsers()
+          .map((u) => u.username)
+          .sort()
+      ).toEqual(['me', 'mikkerlo'])
+    })
+
     // `extractAppMeta` is fed `data.file`, never `data`, so a `features` block
     // sitting at the *entry* level is not file metadata. Well-formed on
     // purpose: a placeholder would assert `undefined` even after a refactor

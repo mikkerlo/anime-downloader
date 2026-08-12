@@ -993,11 +993,16 @@ export class SyncplayClient extends EventEmitter {
     // adopted off an entry `handleList`'s guard is about to refuse buys
     // nothing and costs `handleSet`'s filter its reference point: `config.room`
     // would hold a room we are not in, every genuine in-room `Set` would read
-    // as off-room and evict its peer, and every later `List` keyed by our real
-    // room would miss the adopted name and land back on that same guard — a
-    // freeze with no repair path under #221's poll, which is exactly what the
-    // guard traded the wipe to avoid. Deferred, not abandoned: the next reply
-    // whose sole entry *is* an object adopts as usual.
+    // as off-room and evict its peer. What happens next depends on the shape of
+    // the following `List`: one carrying >=2 rooms — the usual shape, since the
+    // reply covers every room the server knows — misses on both arms, lands back
+    // on that same guard every tick and never repairs short of a reconnect; a
+    // single-room reply keyed by our real room does re-fire this fallback and
+    // self-heals within one #221 tick, losing only the `Set` frames inside that
+    // window; and one that still carries the ghost key as an *object* seats that
+    // room's members as ours, which is worse than either freeze. The first of
+    // those is what the guard traded the wipe to avoid. Deferred, not abandoned:
+    // the next reply whose sole entry *is* an object adopts as usual.
     if (!isObject(entry)) return undefined
     if (this.config) {
       this.config = { ...this.config, room: name }

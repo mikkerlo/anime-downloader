@@ -266,6 +266,10 @@ describe('SyncplayClient reconnect after a TLS session (#216)', () => {
         autoReconnect: true
       })
       reachReady()
+      // The roster is what grants adoption since #236, and without adoption
+      // sendLocalState() returns before it can arm the counter this case is
+      // about. An entry for our room with nobody else in it is the alone case.
+      tlsSockets[0].emit('data', Buffer.from(JSON.stringify({ List: { r: {} } }) + '\r\n'))
       // An unacked local change would otherwise suppress every inbound remote
       // state on the new socket, since the server never echoes a counter it
       // has not seen.

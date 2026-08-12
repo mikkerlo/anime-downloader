@@ -245,8 +245,50 @@ describe('useSyncplayClient — pushSyncplayFile', () => {
       episodeInt: '7',
       translationId: 123,
       canonicalName: 'COTE - 7',
-      duration: 1500
+      duration: 1500,
+      newPlayer: true
     })
+  })
+
+  // `newPlayer` is main's only honest signal for "a fresh <video> is announcing
+  // itself" (#236) — the canonical name is `"{anime} - {ep}"` with no
+  // translation component, so a same-episode reopen re-pushes a byte-identical
+  // name, and main's snapshot clock still reads "live" for PLAYBACK_STALE_MS
+  // after the previous player closed. Main keys *both* of setFile()'s resets on
+  // it, so a wrong value is load-bearing in both directions: claimed on a
+  // re-push it tells peers we are ready mid-buffer; missing on a mount it lets
+  // the previous player's adoption latch yank the room to 0.
+  it('claims newPlayer on the first push of a mount and never again', () => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const s = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.pushSyncplayFile()
+    // The duration re-push and the translation-switch re-push are the same
+    // still-live player announcing itself again.
+    s.pushSyncplayFile()
+    s.pushSyncplayFile()
+
+    expect(setFile.mock.calls.map(([p]) => p.newPlayer)).toEqual([true, false, false])
+  })
+
+  // Mount-scoped, not `onMounted`-scoped: a player that mounts *before* the
+  // session is ready skips the mount push at the readiness guard, and its first
+  // announcement is then the transition-into-ready watcher's — which still has
+  // to carry the claim, or main never de-adopts for it.
+  it('claims newPlayer on the first push that actually goes out', () => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const s = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+
+    // Not ready yet: this one is dropped at the guard and must not consume it.
+    s.pushSyncplayFile()
+    s.syncplayStatus.value = { state: 'ready' }
+    s.pushSyncplayFile()
+
+    expect(setFile).toHaveBeenCalledTimes(1)
+    expect(setFile.mock.calls[0][0].newPlayer).toBe(true)
   })
 })
 
@@ -1310,6 +1352,39 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
     s.onLocalPause()
 
     expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // The third door, and the one that was still open (#236). Both cases above
+  // reach `markProgrammaticPlayback` through a caller that owns the retraction;
+  // `applyRemoteState` marked its own resume inline and then swallowed the
+  // rejection with `catch(() => {})`, so a remote resume refused by autoplay
+  // policy latched `appliedPaused = false` with no `play` event coming to
+  // consume it — and the user's next real play took the echo branch and never
+  // reached the room. The one mark site that structurally could not retract.
+  it('does not eat the user’s play after a remote resume was refused', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 30,
+      paused: true,
+      play: vi.fn().mockRejectedValue(new DOMException('blocked', 'NotAllowedError'))
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 30, paused: false, doSeek: false })
+    await flushPromises()
+    expect(v.play).toHaveBeenCalled()
+
+    // Past the 1500 ms window the apply arms, so only the marker can suppress
+    // the send — without this the case would pass for the wrong reason.
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(2000)
+    v.paused = false
+    client.onLocalPlay()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 30, cause: 'play' })
   })
 })
 

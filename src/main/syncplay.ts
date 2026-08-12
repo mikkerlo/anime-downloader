@@ -136,6 +136,14 @@ export interface SyncplayFileInfo {
   translationId: number | null
   canonicalName: string
   duration: number
+  /** Set by the renderer on the **first** file push of each composable mount
+   *  (#236). Main has no honest source for "this push comes from a new player":
+   *  `canonicalName` is stable across a re-push *and* across a same-episode
+   *  reopen, and snapshot staleness reads "live" for the whole of
+   *  PLAYBACK_STALE_MS after the previous player closed. The renderer knows it
+   *  exactly. Never reaches the wire — `sendSetFile()` builds the outbound
+   *  `Set: {file}` field by field. */
+  newPlayer?: boolean
 }
 
 export interface SyncplayRemoteState {
@@ -269,6 +277,16 @@ export class SyncplayClient extends EventEmitter {
   // opened file — its <video> reports {0, paused} until the first remote State
   // seeks it — so that startup state is never asserted at the room.
   private playbackAdopted = false
+  // Whether the server has told us who is in *our* room on this socket (#236).
+  // Deliberately not "a List frame arrived": handleList() returns early on a
+  // payload it cannot key to our room (#223), and an unkeyable reply seats us
+  // alone — as a positive adoption signal that would assert our position over
+  // a populated room. Set only past that guard. Per socket, not per session:
+  // roomUsers survives a reconnect on purpose (it is the member list), but a
+  // roster minted before an outage cannot list a peer who joined during it, so
+  // its *freshness* is cleared in resetTransportState() and re-earned from the
+  // reply to finishHandshake()'s {List: null}.
+  private rosterReceived = false
   // The last position we emitted to the renderer as a remote state, i.e. the
   // value it seeks the element to. The element reports exactly this back once
   // the seek completes — that's the echo, and it's the only reliable way to
@@ -346,18 +364,33 @@ export class SyncplayClient extends EventEmitter {
   }
 
   setFile(file: SyncplayFileInfo): void {
-    // A different file means a fresh <video> at position 0 — it has to converge
-    // on the room again before it may assert. Identity, not object equality:
-    // the player re-pushes the same file once real duration is known.
-    if (this.currentFile?.canonicalName !== file.canonicalName) this.playbackAdopted = false
+    // Both resets below mean one thing — "a *new player* is announcing itself"
+    // — and neither signal says it alone (#236). File identity catches an
+    // episode switch but not a same-episode reopen: `canonicalName` is
+    // `"{animeName} - {episode}"` with no translation component, so closing the
+    // player and picking another translation from the detail view re-pushes a
+    // byte-identical name at a brand-new <video> sitting at 0. `newPlayer` says
+    // it exactly, and its *absence* is what tells a re-push apart — the
+    // duration-known push (PlayerView's onDurationChange), the in-player
+    // translation switch and the transition-into-ready push on a reconnect all
+    // come from the same, still-live player.
+    const isNewPlayer =
+      this.currentFile?.canonicalName !== file.canonicalName || file.newPlayer === true
+    // A different <video> is back at position 0 — it has to converge on the
+    // room again before it may assert, or its startup play/pause/seeked events
+    // yank the room to 0 through a latch the previous player earned.
+    if (isNewPlayer) this.playbackAdopted = false
     this.currentFile = file
     // The renderer's readiness is player-scoped and only pushes on a change, so
     // a player closed mid-buffer leaves main stuck at isReady:false: the next
     // player starts its closure at `true`, hits the equality guard, and sends
     // nothing. That pins us as "Buffering" in every peer's roster and holds
     // their ready gate down for the rest of the session. A new player is ready
-    // until it says otherwise.
-    if (!this.ownIsReady) this.setReady(true)
+    // until it says otherwise — and only a new player: an unguarded reset let a
+    // re-push landing mid-buffer put `Set: {ready: {isReady: true}}` on the
+    // wire, telling peers we were buffered when we were not and releasing their
+    // ready gate.
+    if (isNewPlayer && !this.ownIsReady) this.setReady(true)
     if (this.status.state === 'ready') this.sendSetFile(file)
   }
 
@@ -482,10 +515,18 @@ export class SyncplayClient extends EventEmitter {
   // post-upgrade message, so we never call tls.connect() again and the retry
   // hangs in 'tls-probing' until the server times it out. Room membership and
   // the readiness toggle deliberately survive a reconnect — the server replaces
-  // them with a fresh List and finishHandshake() re-sends readiness.
+  // them with a fresh List and finishHandshake() re-sends readiness. The roster
+  // survives; its *freshness* does not (#236). A roster minted before the
+  // outage cannot list a peer who joined during it, so `rosterReceived` is
+  // cleared here: between finishHandshake()'s {List: null} and the reply,
+  // "roster known and no peers" would otherwise be true against a stale roster,
+  // and an element event through sendLocalState() would latch adoption and
+  // assert our position at that peer. Costs one round trip of ping-only frames
+  // per attempt, and self-heals because every attempt re-requests the roster.
   private resetTransportState(): void {
     this.rxBuffer = ''
     this.tlsUpgraded = false
+    this.rosterReceived = false
     this.clientIgnoreCounter = 0
     this.pendingClientAck = 0
     this.pendingServerAck = 0
@@ -1084,6 +1125,12 @@ export class SyncplayClient extends EventEmitter {
       )
       return
     }
+    // Past the guard the payload *is* keyed to our room, so this is where "the
+    // server told us who is in our room" becomes true (#236). Deliberately
+    // above the emit gate below, which returns on an unchanged roster: the
+    // first reply after a reconnect usually rebuilds the identical membership,
+    // and freshness is exactly what that reply re-establishes.
+    this.rosterReceived = true
     for (const [username, data] of Object.entries(roomEntry)) {
       if (!isObject(data)) continue
       const file = isObject(data.file)
@@ -1237,11 +1284,30 @@ export class SyncplayClient extends EventEmitter {
     // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
     // mirrored server-side in _updatePositionByAge, server.py:871-872).
     //
-    // One expression, read twice below. Branching the stored echo reference
-    // (next line) apart from the emitted value re-arms the #220 self-seek loop
-    // documented at :341-350 on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
+    // One expression, read twice below. The stored echo reference is *gated*
+    // apart from the emitted value (#236) but never *computed* apart from it:
+    // branching the two values re-arms the #220 self-seek loop documented in
+    // sendLocalState() on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
     const compensated = paused ? position : position + this.serverRtt / 2
-    this.lastAppliedRemotePosition = Math.max(0, compensated)
+    // Arm the echo target only for a state that will actually move the element
+    // (#236), under the same rule the renderer applies with (`state.doSeek ||
+    // |currentTime - position| > 3`, use-syncplay-client.ts). Armed
+    // unconditionally it sat pointing at the room's resting position after
+    // states that changed nothing — refreshed every second in a paused room —
+    // and sendLocalState() then swallowed any genuine user seek landing within
+    // ECHO_SEEK_EPSILON_S of it. A state that moves nothing fires no `seeked`,
+    // so it has no echo to suppress; a previously-armed target is deliberately
+    // left in place, since that one is still owed its event.
+    //
+    // The predictor is main's snapshot rather than the element's currentTime,
+    // so near the 3 s boundary the two can disagree by up to one snapshot
+    // cadence and main can decline to arm for a state the renderer does apply
+    // — wider still under #240, which defers the write to `loadedmetadata`. The
+    // renderer's own value-keyed guard still suppresses that echo, so the loss
+    // is main's belt, not both layers.
+    if (doSeek || Math.abs(this.snapshot.position - compensated) > ADOPT_TOLERANCE_S) {
+      this.lastAppliedRemotePosition = Math.max(0, compensated)
+    }
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -1416,26 +1482,59 @@ export class SyncplayClient extends EventEmitter {
     return room.position + elapsed
   }
 
-  // A player is driving us, but is it playing *this room's* content yet? With
-  // no room state there is nothing to contradict — the first user in a room
-  // establishes its position. Otherwise we wait until our position has
-  // converged; the renderer's apply rule seeks us there within a heartbeat or
-  // two. Latches, so ordinary drift later never demotes a live player.
+  // A player is driving us, but is it playing *this room's* content yet?
+  //
+  // Three tests, in order: latched → the roster says we are alone → drift.
+  //
+  // The roster test is a *positive* adoption signal rather than a fallback for
+  // "no room state yet" (#236), and the roster's absence is what now holds us
+  // off. Both directions of that were wrong before:
+  //
+  //  - Nothing distinguished "the roster is empty" from "the roster has not
+  //    arrived". tearDown() empties roomUsers, finishHandshake() only
+  //    *requests* the roster, and updateOwnReadinessInRoom() has already seated
+  //    *us* — so the peer filter read zero and adoption latched inside the
+  //    handshake window, on any element event that landed there.
+  //  - Nesting it under `!room` made it unreachable in the case it was written
+  //    for. A reference server's first State arrives ~100 ms after login
+  //    (server.py:737 schedules it through callLater(0.1); the LoopingCall at
+  //    :841-843 fires immediately and SERVER_STATE_INTERVAL is 1 s), while our
+  //    own heartbeat's first tick is HEARTBEAT_MS after the same Hello — both
+  //    carry the same one-way latency, so lastRoomState is set long before this
+  //    test could run. A user genuinely alone at, say, 600 s then fell through
+  //    to a drift of 600 and never adopted: buildPlaystate() mirrored the room
+  //    forever, Room.getPosition()'s min() over watchers (just us) kept the
+  //    room pinned near 0, and the next peer to join adopted at *their* drift
+  //    of 0 and dragged the first user back — the #220 yank, roles reversed.
+  //
+  // What each quadrant answers now:
+  //
+  //                  | roster: alone | roster: peers | roster: unknown
+  //   no room state  | true          | false         | false
+  //   room state     | true          | drift <= tol  | drift <= tol
+  //
+  // The drift path stays unconditional so a server that never answers
+  // {List: null} still adopts once the renderer's apply converges us. The only
+  // quadrant that returns false where head returned true is "no roster *and* no
+  // State" — a server that answers neither, where the failure is silence (a
+  // ping-only frame) rather than a wrong assertion.
+  //
+  // Latches, so ordinary drift later never demotes a live player.
   private isAdopted(): boolean {
     if (this.playbackAdopted) return true
-    const room = this.lastRoomState
-    if (!room) {
-      // Alone in the room we establish its position. With peers present and no
-      // State yet we are simply early — our heartbeat starts at
-      // finishHandshake() and can beat the server's first State — so hold off
-      // rather than guess: buildPlaystate() then falls through to the
-      // ping-only frame, which is the right answer for "a player exists but we
-      // don't know where the room is". The roster is the signal that we're not
-      // first; it's why this PR requests it.
+    if (this.rosterReceived) {
       const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
-      if (alone) this.playbackAdopted = true
-      return this.playbackAdopted
+      if (alone) {
+        this.playbackAdopted = true
+        return true
+      }
     }
+    const room = this.lastRoomState
+    // Peers are listed (or the roster has not arrived) and the room has told us
+    // nothing: drift is undefined, so hold off rather than guess.
+    // buildPlaystate() falls through to the ping-only frame, which is the right
+    // answer for "a player exists but we don't know where the room is".
+    if (!room) return false
     const drift = Math.abs(this.snapshot.position - this.projectedRoomPosition(room))
     if (drift <= ADOPT_TOLERANCE_S) this.playbackAdopted = true
     return this.playbackAdopted

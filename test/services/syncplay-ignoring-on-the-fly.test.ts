@@ -99,9 +99,16 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     )
   }
 
+  // The `List` reply is part of the fixture, not decoration: since #236 the
+  // roster is what grants adoption, so without it `isAdopted()` returns false
+  // and `armLocalSeek()` below never bumps `pendingClientAck` — the anti-vacuity
+  // assertion every guard case here rests on. An entry for our room with nobody
+  // else in it is the "alone" case, which is the shape this harness has always
+  // meant to describe.
   const handshake = (): void => {
     connectToTls()
     finishHandshake()
+    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { cinema: {} } }) + '\r\n'))
   }
 
   // A server-forced State as it actually appears on the wire: the counter and
@@ -132,9 +139,9 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ State: state }) + '\r\n'))
   }
 
-  // Arms the drop guard. 'seek' is the cause the issue names, and with an empty
-  // roster isAdopted() latches immediately, so the counter really does bump —
-  // asserted by every caller rather than assumed.
+  // Arms the drop guard. 'seek' is the cause the issue names, and the `List`
+  // reply in handshake() has latched isAdopted() by the time this runs, so the
+  // counter really does bump — asserted by every caller rather than assumed.
   const armLocalSeek = (position = 100): void => {
     client.sendLocalState({ paused: false, position, cause: 'seek' })
   }

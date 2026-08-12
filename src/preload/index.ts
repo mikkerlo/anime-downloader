@@ -460,6 +460,7 @@ const api = {
     translationId: number | null
     canonicalName: string
     duration: number
+    newPlayer?: boolean
   }) => ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_FILE, file) as Promise<void>,
   syncplaySendLocalState: (payload: {
     paused: boolean

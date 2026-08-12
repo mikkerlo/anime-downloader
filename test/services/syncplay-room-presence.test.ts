@@ -56,14 +56,22 @@ describe('SyncplayClient room presence on join (#220)', () => {
   let client: SyncplayClient
   let roomUsers: SyncplayRoomUser[][]
 
-  const handshake = (room = 'cinema'): void => {
+  const handshake = (room = 'cinema', autoReconnect = false): void => {
     client.connect({
       host: 'syncplay.test',
       port: 8999,
       room,
       username: 'me',
-      autoReconnect: false
+      autoReconnect
     })
+    driveHandshake(room)
+  }
+
+  // The TLS probe → secureConnect → Hello sequence on whatever socket pair is
+  // current. Split out of `handshake()` so a reconnect can re-drive it on the
+  // fresh pair `onSocketClose()` opened, without going through `connect()`
+  // (which calls `tearDown()`, and so is not the reconnect path at all).
+  const driveHandshake = (room = 'cinema'): void => {
     lastSocket!.emit('connect')
     lastSocket!.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
     lastTlsSocket!.emit('secureConnect')
@@ -71,6 +79,14 @@ describe('SyncplayClient room presence on join (#220)', () => {
       'data',
       Buffer.from(`{"Hello":{"username":"me","room":{"name":"${room}"},"version":"1.6.9"}}\r\n`)
     )
+  }
+
+  // A `List` reply the client can key to our room. `{}` is the alone case: the
+  // entry is present and empty, and `handleList` seats us at its tail — the
+  // state main must be able to tell apart from "no reply has arrived yet"
+  // (#236).
+  const listReply = (entries: Record<string, unknown> = {}, room = 'cinema'): void => {
+    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { [room]: entries } }) + '\r\n'))
   }
 
   // A plausible time.time() rather than 1: since #231 this key is no longer
@@ -704,6 +720,97 @@ describe('SyncplayClient room presence on join (#220)', () => {
       for (const s of statesOf(lastTlsSocket)) expect(s.playstate).toBeUndefined()
     })
 
+    // The other half of the same fact (#236). `tearDown()` empties roomUsers,
+    // `finishHandshake()` only *requests* the roster, and
+    // updateOwnReadinessInRoom() has already seated *us* — so before the reply
+    // lands the peer filter reads zero and "we are alone" was indistinguishable
+    // from "we have not been told". An element event landing in that window
+    // latched adoption and asserted the fresh {0, paused} at a room full of
+    // people.
+    it('withholds every playstate until the roster reply arrives', () => {
+      handshake()
+      client.updateSnapshot({ position: 0, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 0, paused: false, cause: 'play' })
+      vi.advanceTimersByTime(1000)
+
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate).toBeUndefined()
+    })
+
+    // The reversed yank (#236 item 1b). On a reference server the first `State`
+    // beats our first heartbeat by ~900 ms regardless of RTT, so nesting the
+    // roster-alone test under "no room state" made it unreachable: a user alone
+    // at 600 s fell through to a drift of 600, never adopted, and mirrored the
+    // room forever — pinning the room near 0 through Room.getPosition()'s min()
+    // until the next joiner adopted at 0 and dragged them back.
+    it('adopts an alone roster even after the server has sent its first State', () => {
+      handshake()
+      listReply()
+      serverState(0, true)
+      client.updateSnapshot({ position: 600, paused: false })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
+        position: 600,
+        paused: false,
+        doSeek: false
+      })
+    })
+
+    // The flag means "the server told us who is in *our* room", not "a `List`
+    // frame arrived". #223 already keeps the roster on an unkeyable payload, so
+    // this stays green either way today — it is written to pin the *placement*,
+    // inside the keying guard, because as a positive adoption signal set beside
+    // `this.roomUsers = users` it would assert our position over a populated
+    // room. Two foreign rooms, so pickOwnRoom()'s sole-entry fallback cannot
+    // rescue the payload.
+    it('does not treat a List with no entry for our room as an adoption signal', () => {
+      handshake()
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({ List: { lobby: { alice: { file: {} } }, foyer: {} } }) + '\r\n'
+        )
+      )
+      client.updateSnapshot({ position: 600, paused: false })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate).toBeUndefined()
+    })
+
+    // `rosterReceived` is per socket, not per session. `roomUsers` deliberately
+    // survives a reconnect (it is the member list), but the roster it keeps
+    // predates the outage, so a peer who joined while we were down is not in it
+    // — and between finishHandshake()'s `{List: null}` and the reply, "roster
+    // known and no peers" would be true against a roster that cannot see them.
+    it('does not adopt against the pre-outage roster after a reconnect', () => {
+      handshake('cinema', true)
+      listReply()
+
+      lastTlsSocket!.emit('close')
+      vi.advanceTimersByTime(1000)
+      driveHandshake()
+      lastTlsSocket!.write.mockClear()
+
+      // Before the fresh roster lands: an element event must still be withheld.
+      client.sendLocalState({ position: 0, paused: false, cause: 'seek' })
+      expect(statesOf(lastTlsSocket).filter((s) => s.playstate)).toHaveLength(0)
+
+      // …and the moment it does, we speak for ourselves again.
+      listReply()
+      client.sendLocalState({ position: 42, paused: false, cause: 'seek' })
+      expect(statesOf(lastTlsSocket).at(-1)!.playstate).toEqual({
+        position: 42,
+        paused: false,
+        doSeek: true
+      })
+    })
+
     // Reopening the *same* episode gets a fresh <video> at 0 with an identical
     // canonicalName, so setFile()'s identity check can't see the transition.
     it('re-converges when a new player reopens the same episode', () => {
@@ -757,8 +864,138 @@ describe('SyncplayClient room presence on join (#220)', () => {
       })
     })
 
+    // …and the other direction (#236 item 3). The readiness reset used to sit
+    // outside the identity check, so *every* re-push of the same file flipped
+    // us back to ready. Re-pushes of an unchanged canonicalName are routine —
+    // the duration-known push, an in-player translation switch (the canonical
+    // name has no translation component), the transition-into-ready push on a
+    // reconnect — and readiness is false on exactly those loads, so the frame
+    // told peers we were buffered when we were not and released their gate.
+    it('leaves readiness alone when a live player re-pushes the same file', () => {
+      handshake()
+      const file = {
+        animeId: 42,
+        malId: 7,
+        episodeInt: '2',
+        translationId: 601,
+        canonicalName: 'Show - 2',
+        duration: 1440
+      }
+      client.setFile({ ...file, newPlayer: true })
+      client.updateSnapshot({ position: 120, paused: false })
+      client.setReady(false)
+      lastTlsSocket!.write.mockClear()
+      roomUsers.length = 0
+
+      // The same player, announcing real duration now that it is known.
+      client.setFile({ ...file, duration: 1437 })
+
+      for (const f of frames(lastTlsSocket)) expect(f).not.toHaveProperty('Set.ready')
+      expect(client.getRoomUsers().find((u) => u.username === 'me')!.isReady).toBe(false)
+    })
+
+    // The adoption latch has the same blind spot the readiness reset had, from
+    // the opposite side (#236 item 5). A player closed at 600 s and reopened on
+    // the same episode *inside* PLAYBACK_STALE_MS arrives with the previous
+    // player's latch intact: setFile()'s identity check sees a byte-identical
+    // canonicalName and updateSnapshot()'s staleness gap has not opened yet, so
+    // the fresh element's startup events assert {0, doSeek} at the room. The
+    // easiest way to reach it is a translation switch made from the detail view
+    // — close, pick another translation, reopen — since buildCanonicalName()
+    // has no translation component.
+    it('de-adopts on a same-episode reopen inside the stale window', () => {
+      handshake()
+      serverState(600, false)
+      const file = {
+        animeId: 42,
+        malId: 7,
+        episodeInt: '2',
+        translationId: 601,
+        canonicalName: 'Show - 2',
+        duration: 1440
+      }
+      client.setFile(file)
+      client.updateSnapshot({ position: 600, paused: false })
+      vi.advanceTimersByTime(1000)
+
+      // Reopened well inside PLAYBACK_STALE_MS, so the snapshot clock still
+      // reads "live" and nothing but `newPlayer` can see the transition.
+      client.setFile({ ...file, translationId: 777, newPlayer: true })
+      client.updateSnapshot({ position: 0, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      const [state] = statesOf(lastTlsSocket)
+      expect(state.playstate!.position).toBeGreaterThan(600)
+      expect(state.playstate!.paused).toBeUndefined()
+    })
+
+    // The field is pinned in both directions, so a future refactor cannot
+    // quietly restore the clock: the *same* window without `newPlayer` is a
+    // re-push from a still-live player, and it must not de-adopt — that would
+    // demote an active viewer to the mirror on every duration re-push.
+    it('keeps the latch when a live player re-pushes inside the stale window', () => {
+      handshake()
+      serverState(0, true)
+      const file = {
+        animeId: 42,
+        malId: 7,
+        episodeInt: '2',
+        translationId: 601,
+        canonicalName: 'Show - 2',
+        duration: 1440
+      }
+      client.setFile({ ...file, newPlayer: true })
+      client.updateSnapshot({ position: 0, paused: true })
+      vi.advanceTimersByTime(1000)
+
+      // The user seeks well away from where the room sits, so drift can no
+      // longer re-adopt us — only the surviving latch can keep us asserting.
+      client.updateSnapshot({ position: 600, paused: false })
+      client.setFile({ ...file, duration: 1437 })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
+        position: 600,
+        paused: false,
+        doSeek: false
+      })
+    })
+
+    // The echo target is armed only for a state that would actually move the
+    // element (#236 item 2), under the same rule the renderer applies with.
+    // Armed on every inbound state it sat pointing at the room's resting
+    // position — refreshed once a second in a paused room — and swallowed any
+    // genuine user seek landing within ECHO_SEEK_EPSILON_S of it. Here the
+    // snapshot is pushed *first*, so 301 is one second from where we already
+    // are: inside the renderer's 3 s tolerance, with no doSeek, it moves
+    // nothing and therefore has no echo to suppress.
+    it('does not arm the echo target for a remote state that moves nothing', () => {
+      handshake()
+      client.updateSnapshot({ position: 300, paused: false })
+      serverState(301, false, 'mikkerlo')
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 301, paused: false, cause: 'seek' })
+
+      expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
+        position: 301,
+        paused: false,
+        doSeek: true
+      })
+    })
+
     // One applied seek yields one `seeked`, so the echo target must retire —
     // otherwise a later genuine seek onto a peer's old position is dropped.
+    //
+    // Still armed under #236's narrowed condition, but *incidentally*: the
+    // serverState below runs before the updateSnapshot, so main's snapshot is
+    // still the initial 0 when the arming condition is evaluated and the diff
+    // clears ADOPT_TOLERANCE_S. Tidying the two lines into snapshot-first would
+    // silently disarm this case and leave it green for the wrong reason.
     it('retires the echo target so a later seek to the same spot still sends', () => {
       handshake()
       serverState(309.229, false, 'mikkerlo')
@@ -773,8 +1010,14 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(statesOf(lastTlsSocket)[0].playstate!.doSeek).toBe(true)
     })
 
-    it('asserts immediately when no room state exists yet — the first user sets it', () => {
+    // The "first user sets it" behaviour survives #236, but its evidence moved:
+    // it is the *roster* that says we are alone, not the absence of a `State`.
+    // Before, an unanswered `{List: null}` read identically to an empty room, so
+    // this asserted inside the handshake window against a roster that had not
+    // arrived — the latch the withheld-roster case above now pins shut.
+    it('asserts immediately once the roster says we are alone — the first user sets it', () => {
       handshake()
+      listReply()
       client.updateSnapshot({ position: 12.5, paused: false })
       lastTlsSocket!.write.mockClear()
 
@@ -980,6 +1223,10 @@ describe('SyncplayClient room presence on join (#220)', () => {
 
     it('still propagates a local seek', () => {
       handshake()
+      // Adoption is what lets a local state reach the wire, and since #236 the
+      // roster is what grants it here — the subject of this case is the seek,
+      // not the pre-roster latch it used to ride in on.
+      listReply()
       client.updateSnapshot({ position: 12.5, paused: false })
       lastTlsSocket!.write.mockClear()
 

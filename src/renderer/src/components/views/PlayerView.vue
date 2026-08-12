@@ -2646,7 +2646,19 @@ const bufferedProgress = computed(() => {
   background: rgba(255, 255, 255, 0.25);
 }
 
-/* Controls bar */
+/* Controls bar.
+ *
+ * z-index is load-bearing (#220), not decoration. `z-index` + `position`
+ * makes this bar a *stacking context*, so the four `.preset-menu` dropdowns
+ * that pop up out of it (Anime4K / Sync / Translation / Quality, all styled
+ * by assets/player-menus.css) are trapped at the bar's level no matter what
+ * z-index they declare for themselves — the bar is the only lever. At the
+ * old `5` they painted under `.skip-button-overlay` (12), which covered
+ * menu rows and stole clicks meant for them. See the overlay stacking table
+ * in docs/player.md before changing this number: it must stay above the
+ * skip button (12) and below `.auto-advance-overlay` (15) / `.remux-overlay`
+ * (20). Sitting above the skip button is also why the button is offset to
+ * clear this bar's box — see `.skip-button-overlay`. */
 .controls-bar {
   position: absolute;
   bottom: 0;
@@ -2654,7 +2666,7 @@ const bufferedProgress = computed(() => {
   right: 0;
   background: linear-gradient(0deg, rgba(0, 0, 0, 0.82) 0%, transparent 100%);
   padding: 40px 24px 20px;
-  z-index: 5;
+  z-index: 13;
 }
 
 /* Seek bar */
@@ -2740,11 +2752,24 @@ const bufferedProgress = computed(() => {
 }
 
 /* Skip OP/ED overlay button — anchored bottom-right of the player so it
-   doesn't obscure the seek bar but is still mouse-reachable while paused. */
+   doesn't obscure the seek bar but is still mouse-reachable while paused.
+
+   `bottom` must clear the controls bar's whole box, not just look like it
+   does (#220). Both boxes are `position: absolute` children of
+   `.player-overlay`, so the two `bottom` values measure from the same edge,
+   and the bar is 130px tall: 40 top padding + 16 seek-container height + 16
+   seek margin + 38 controls-row (the `.ctrl-btn.big` play button: 4px
+   padding around a 30px svg) + 20 bottom padding. At the old 120px the bar
+   overlapped the button's lower ~10px. That cost nothing while the bar was
+   below the button, but the bar now paints *above* it, and `.controls-bar`
+   carries `@click.stop` with no `pointer-events: none` — the overlap would
+   be an invisible dead strip on a live button (the gradient is ~0.06 alpha
+   up there). 145px leaves 15px of clearance. The
+   `player-overlay-stacking` test pins both the ordering and this sum. */
 .skip-button-overlay {
   position: absolute;
   right: 32px;
-  bottom: 120px;
+  bottom: 145px;
   z-index: 12;
   display: inline-flex;
   align-items: center;

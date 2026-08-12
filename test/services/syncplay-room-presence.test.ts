@@ -1686,4 +1686,115 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomUsers.at(-1)!.find((u) => u.username === 'mikkerlo')!.isReady).toBeUndefined()
     })
   })
+
+  // #224 added `timeupdate`-driven snapshot pushes so a background-throttled
+  // timer could not demote an active viewer — but `timeupdate` does not fire
+  // while *paused*, so a paused player in a hidden window has only the 1 s
+  // interval, which Chromium clamps toward 1/min after minutes hidden. It
+  // therefore does cross PLAYBACK_STALE_MS and get demoted to the spectator
+  // mirror. Characterization only: no production change, and the recovery
+  // branches below are the reason the "harmless" framing is only half true.
+  describe('a paused hidden player goes stale and recovers (#227)', () => {
+    // Takes a converged, adopted player into the stale gap. Returns with the
+    // heartbeat already demoted and the write log cleared.
+    const hideWhilePaused = (roomPos: number, roomPaused: boolean, ourPos: number): void => {
+      handshake()
+      serverState(roomPos, roomPaused)
+      // Converge first — at a large drift the client mirrors because it never
+      // adopted, and every assertion below would pass with the staleness rule
+      // deleted outright.
+      client.updateSnapshot({ position: ourPos, paused: false })
+      vi.advanceTimersByTime(1000)
+      // The user pauses and hides the window. This is the last push there is:
+      // paused means no `timeupdate`, hidden means the interval is throttled.
+      client.updateSnapshot({ position: ourPos, paused: true })
+      lastTlsSocket!.write.mockClear()
+      vi.advanceTimersByTime(10_000)
+    }
+
+    // The delta over 'reverts to mirroring when the player stops pushing
+    // snapshots', which pins the same demotion against a *playing* room: with
+    // the room paused, projectedRoomPosition() returns it unchanged, so the
+    // mirror is exactly the room's position rather than a forward projection.
+    it('mirrors the room position unchanged while the room is paused', () => {
+      hideWhilePaused(600, true, 600)
+
+      const last = statesOf(lastTlsSocket).at(-1)!
+      // Demoted: our own `paused: true` claim is gone from the wire even though
+      // a live player is sitting right here holding it.
+      expect(last.playstate!.paused).toBeUndefined()
+      expect(last.playstate!.position).toBe(600)
+    })
+
+    // The de-adoption is a *second*, later step: it lives only in
+    // updateSnapshot(), which by construction cannot run during the gap. So
+    // `playbackAdopted` is still latched while we sit demoted, and an event
+    // arriving before the first post-unhide push goes out unimpeded. This is
+    // what makes the ordering in the two drop cases below load-bearing rather
+    // than incidental.
+    it('still asserts an event that arrives before the first post-unhide push', () => {
+      hideWhilePaused(600, false, 600)
+      // Drop the gap's own heartbeat frames — the assertion is about the event.
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 600, paused: false, cause: 'play' })
+
+      const [state] = statesOf(lastTlsSocket)
+      expect(state.playstate).toEqual({ position: 600, paused: false, doSeek: false })
+    })
+
+    // Recovery (a): the room is where we left it, so the push that de-adopts us
+    // re-adopts on the very next check — drift is 0 — and the user's first
+    // action after unhiding reaches the room.
+    it('re-adopts on the first post-unhide push when the room has not moved', () => {
+      hideWhilePaused(600, true, 600)
+
+      // Unhide: the renderer resumes pushing, and this one clears the adoption
+      // latch because it arrives after a stale gap.
+      client.updateSnapshot({ position: 600, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 600, paused: false, cause: 'play' })
+
+      const [state] = statesOf(lastTlsSocket)
+      expect(state.playstate).toEqual({ position: 600, paused: false, doSeek: false })
+    })
+
+    // Recovery (b): the room played on while we sat paused-hidden, so by the
+    // time we de-adopt the drift has grown past ADOPT_TOLERANCE_S and the first
+    // post-unhide action is dropped until a remote apply seeks us back.
+    it('drops the first post-unhide action when the room played on without us', () => {
+      hideWhilePaused(600, false, 600)
+
+      client.updateSnapshot({ position: 600, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 600, paused: false, cause: 'play' })
+
+      expect(statesOf(lastTlsSocket)).toEqual([])
+    })
+
+    // Recovery (c): the same drop, from a *paused* room — which is the case the
+    // "harmless today" framing misses. Our position-only mirror carries no
+    // `paused`, and the reference server reads a missing paused as not-paused in
+    // _updatePositionByAge too, so it advances the position it stores for us on
+    // every heartbeat. Alone in the room, Room.getPosition()'s min() is us, so
+    // that crept value comes straight back as the room state. Main records it
+    // and returns on the setBy-less frame, so nothing corrects the element and
+    // the drift is invisible until the user acts.
+    it('drops it too when the room merely crept forward under our own mirror', () => {
+      hideWhilePaused(600, true, 600)
+
+      // What the server hands back after minutes of forward-compensating a
+      // stationary paused player: a room state ahead of where we actually are.
+      serverState(640, true)
+
+      client.updateSnapshot({ position: 600, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 600, paused: false, cause: 'play' })
+
+      expect(statesOf(lastTlsSocket)).toEqual([])
+    })
+  })
 })

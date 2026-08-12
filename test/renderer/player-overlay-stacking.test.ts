@@ -96,6 +96,9 @@ describe('player overlay stacking order (#220)', () => {
       rule(PLAYER_VIEW, '.controls-bar')
     )
     expect(padding, '.controls-bar padding is no longer a 3-value px shorthand').not.toBeNull()
+    // `.ctrl-btn`'s padding is doubled below, so the sum is only correct while
+    // it stays a single-value shorthand.
+    expect(rule(PLAYER_VIEW, '.ctrl-btn')).toMatch(/padding:\s*[\d.]+px\s*;/)
 
     const barHeight =
       Number(padding![1]) +

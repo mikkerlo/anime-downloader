@@ -741,4 +741,139 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     }
   )
+
+  // #240: on an MSE session this land is the *only* thing that moves the
+  // playhead for a resume — `resumeFromSavedPosition`'s MKV branch deliberately
+  // writes no `currentTime` (#198) and only toasts. So the "the room outranks
+  // the saved position" rule has to be enforced here, not just at the toast:
+  // the syncplay apply has already put the element on the room's position by
+  // `loadedmetadata`, and landing on the saved target over it is silent — the
+  // land arms `markProgrammaticSeek`, so the room never hears the move, and the
+  // next 1 Hz state (diff > 3) seeks us back. Two unbuffered seeks, two ffmpeg
+  // respawns, and a playhead that bounces room → saved → room.
+  describe('resume land vs. a syncplay room (#240)', () => {
+    function landHarness(opts: { at: number; resumeTarget: number; roomOwns: boolean }): {
+      video: { currentTime: number }
+      markProgrammaticSeek: ReturnType<typeof vi.fn>
+      fakeSb: FakeSourceBuffer
+      m: ReturnType<typeof useMsePlayer>
+    } {
+      const fakeSb = new FakeSourceBuffer()
+      const fakeMs = new FakeMediaSource(fakeSb)
+      ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+      const video = {
+        currentTime: opts.at,
+        paused: true,
+        error: null,
+        play: vi.fn(async () => {}),
+        pause: vi.fn(() => {})
+      }
+      const markProgrammaticSeek = vi.fn()
+      const m = useMsePlayer(
+        makeDeps({
+          getVideoEl: () => video as unknown as HTMLVideoElement,
+          markProgrammaticSeek,
+          hasRemoteStateApplied: () => opts.roomOwns
+        })
+      )
+      // The common case: 23 min of saved progress on a local .mkv, joined to a
+      // room that just started. main probed keyframe 1395 for the copy run.
+      m.startMseSession({
+        sessionId: 's1',
+        generation: 0,
+        duration: 1421,
+        mimeType: 'video/mp4',
+        resumeTarget: opts.resumeTarget,
+        timestampOffset: 1395
+      })
+      fakeMs.dispatchEvent(new Event('sourceopen'))
+      return { video, markProgrammaticSeek, fakeSb, m }
+    }
+
+    it('cancels the land when a remote state already owns the playhead', () => {
+      // The parked state applied at `loadedmetadata` put us on the room's 120 s.
+      const { video, markProgrammaticSeek, fakeSb, m } = landHarness({
+        at: 120,
+        resumeTarget: 1400,
+        roomOwns: true
+      })
+
+      fakeSb.buffered.ranges = [[115.08, 180.0]]
+      fakeSb.dispatchEvent(new Event('updateend'))
+
+      // The room's position survives, and nothing is marked — there is no write
+      // to mark, and a latched mark would swallow the user's next real seek.
+      expect(video.currentTime).toBe(120)
+      expect(markProgrammaticSeek).not.toHaveBeenCalled()
+
+      m.resetMseState()
+    })
+
+    it('consumes the pending land rather than retrying it on a later append', () => {
+      // Once-per-session, like the write it replaces: leaving the flag armed
+      // would land on the saved position at whatever append happens to follow a
+      // reset of the room tracking (a disconnect mid-open), long after the
+      // element settled — the same silent overwrite, just later.
+      let roomOwns = true
+      const fakeSb = new FakeSourceBuffer()
+      const fakeMs = new FakeMediaSource(fakeSb)
+      ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+      const video = {
+        currentTime: 120,
+        paused: true,
+        error: null,
+        play: vi.fn(async () => {}),
+        pause: vi.fn(() => {})
+      }
+      const markProgrammaticSeek = vi.fn()
+      const m = useMsePlayer(
+        makeDeps({
+          getVideoEl: () => video as unknown as HTMLVideoElement,
+          markProgrammaticSeek,
+          hasRemoteStateApplied: () => roomOwns
+        })
+      )
+      m.startMseSession({
+        sessionId: 's1',
+        generation: 0,
+        duration: 1421,
+        mimeType: 'video/mp4',
+        resumeTarget: 1400,
+        timestampOffset: 1395
+      })
+      fakeMs.dispatchEvent(new Event('sourceopen'))
+
+      fakeSb.buffered.ranges = [[115.08, 180.0]]
+      fakeSb.dispatchEvent(new Event('updateend'))
+      expect(video.currentTime).toBe(120)
+
+      roomOwns = false
+      fakeSb.buffered.ranges = [[115.08, 240.0]]
+      fakeSb.dispatchEvent(new Event('updateend'))
+
+      expect(video.currentTime).toBe(120)
+      expect(markProgrammaticSeek).not.toHaveBeenCalled()
+
+      m.resetMseState()
+    })
+
+    it('still lands when no room owns the playhead', () => {
+      // The negative control: outside a room (and alone in one, where main emits
+      // no `remote-state` at all) the land is exactly as before.
+      const { video, markProgrammaticSeek, fakeSb, m } = landHarness({
+        at: 0,
+        resumeTarget: 1400,
+        roomOwns: false
+      })
+
+      fakeSb.buffered.ranges = [[1395.08, 1401.0]]
+      fakeSb.dispatchEvent(new Event('updateend'))
+
+      expect(video.currentTime).toBe(1400)
+      expect(markProgrammaticSeek).toHaveBeenCalledWith(1400)
+
+      m.resetMseState()
+    })
+  })
 })

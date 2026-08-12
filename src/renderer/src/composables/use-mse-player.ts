@@ -46,6 +46,10 @@ export function useMsePlayer(deps: {
   /** Flags the resume land's `currentTime` write, so syncplay doesn't read it
    *  as the user seeking (which would drag every peer to our resume point). */
   markProgrammaticSeek?: (target: number) => void
+  /** True when a syncplay room already owns the playhead — a remote state has
+   *  been applied (or is parked) in a live session (#240). The resume land is
+   *  cancelled then: the room outranks the saved position. */
+  hasRemoteStateApplied?: () => boolean
 }): {
   // Reactive state
   mseSrcUrl: Ref<string>
@@ -207,8 +211,21 @@ export function useMsePlayer(deps: {
       // sits inside the buffered range that starts at a keyframe) so it decodes
       // from the leading keyframe and plays the correct content in sync, instead
       // of stalling at 0. Done once, on the first append that exposes the buffer.
+      //
+      // #240: the room outranks the saved position, and on this path the land
+      // *is* the resume — `resumeFromSavedPosition` writes no `currentTime` for
+      // an MSE session, it only toasts. So the guard it grew for syncplay has to
+      // be enforced here too, or the room's position (already written by the
+      // apply at `loadedmetadata`) is silently overwritten by the saved one:
+      // `markProgrammaticSeek` swallows the echo so the room never hears the
+      // move, and the next 1 Hz state seeks us back — two unbuffered seeks, two
+      // ffmpeg respawns, and a playhead that bounces room → saved → room.
+      // The pending flag is consumed either way: the land is a once-per-session
+      // affair, not something to retry on the next append.
       if (initialLandPending && v) {
-        if (t < resumeLandTarget) {
+        if (deps.hasRemoteStateApplied?.()) {
+          console.log('[player] resume land cancelled — the syncplay room owns the playhead')
+        } else if (t < resumeLandTarget) {
           try {
             deps.markProgrammaticSeek?.(resumeLandTarget)
             v.currentTime = resumeLandTarget

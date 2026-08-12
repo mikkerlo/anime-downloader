@@ -81,6 +81,9 @@ type Deps = Parameters<typeof useSyncplayClient>[0]
 function makeDeps(
   overrides: {
     video?: HTMLVideoElement | null
+    /** Live getter, for the cases where the element appears (or is swapped)
+     *  after the composable is already running — `video` above is fixed. */
+    getVideo?: () => HTMLVideoElement | null
     duration?: number
     animeId?: number
     malId?: number | null
@@ -93,7 +96,7 @@ function makeDeps(
   } = {}
 ): Deps {
   return {
-    getVideoEl: () => overrides.video ?? null,
+    getVideoEl: overrides.getVideo ?? (() => overrides.video ?? null),
     getDuration: () => overrides.duration ?? 0,
     getAnimeId: () => overrides.animeId ?? 1,
     getMalId: () => overrides.malId ?? null,
@@ -156,15 +159,19 @@ async function mountWithRemoteState(
   }
 }
 
-// NEEDS `readyState: 1` UNDER #240. That issue forks applyRemoteState on
-// `v.readyState >= 1` and parks the state below it; with no readyState here
-// `undefined >= 1` is false, so every remote apply in this file would defer and
-// the apply-rule and 1.5s-window tests go red at once. Default it to 1 there.
+// `readyState: 1` (HAVE_METADATA) by default, because that is the state the
+// apply rule is written for: #240 forks applyRemoteState on `v.readyState >= 1`
+// and parks the state below it, so a fake without the field (`undefined >= 1`
+// is false) would defer *every* apply in this file and take the apply-rule and
+// 1.5s-window blocks with it. The deferral tests pass `readyState: 0`
+// explicitly — a real happy-dom <video> is no help there either, since its
+// readyState is pinned at 0 and silently ignores assignment.
 function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement {
   const v: Record<string, unknown> = {
     currentTime: 0,
     duration: 1440,
     paused: true,
+    readyState: 1,
     play: vi.fn().mockResolvedValue(undefined),
     pause: vi.fn(),
     ...overrides
@@ -824,30 +831,12 @@ describe('useSyncplayClient — applyRemoteState', () => {
     expect(client.syncplayToast.value).toBe('peer seeked to 2:05')
   })
 
-  // The room saying "playing" is not enough on its own: a peer still buffering
-  // holds the gate down, and applying the room's play there would resume a
-  // client the rest of the room is waiting for.
-  //
-  // REPLACE WITH #240. Not because it goes red — the `readyState: 1` default
-  // that issue adds to `fakeVideo` keeps it on the immediate path — but because
-  // it can only ever pass through the `!needsSeek && !needsPlayPause` early
-  // return (`use-syncplay-client.ts:263`): position matches and the element is
-  // already paused, so it never observes *when* effectivePaused was computed.
-  // #240 replaces it with the live-roster case: park at an explicit
-  // `readyState: 0` with every peer ready, flip one to not-ready, fire
-  // loadedmetadata, assert no play(). effectivePaused is recomputed at apply
-  // time precisely so that case fails on a park-time snapshot.
-  it('keeps the element paused while a peer is not ready, even on a playing room', async () => {
-    const v = fakeVideo({ currentTime: 10, paused: true } as Partial<HTMLVideoElement>)
-    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
-      state: 'ready'
-    })
-    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
-
-    emitRemoteState({ position: 10, paused: false, doSeek: false })
-
-    expect(v.play).not.toHaveBeenCalled()
-  })
+  // (The "keeps the element paused while a peer is not ready" case that used to
+  // sit here is gone: it could only ever pass through the `!needsSeek &&
+  // !needsPlayPause` early return — position matched and the element was already
+  // paused — so it never observed *when* effectivePaused was computed and stayed
+  // green on a park-time snapshot. #240 replaces it with the live-roster case in
+  // the deferral block below.)
 
   // The other half of the same fold, and the more interesting one: we are
   // already playing when a peer starts buffering. effectivePaused flips to
@@ -864,6 +853,377 @@ describe('useSyncplayClient — applyRemoteState', () => {
 
     expect(v.pause).toHaveBeenCalled()
     expect(v.play).not.toHaveBeenCalled()
+  })
+})
+
+// #240. At HAVE_NOTHING a `currentTime` write becomes the *default playback
+// start position* — it fires nothing and is re-targeted by whatever writes
+// `currentTime` next, which on every episode open is the local resume or an MSE
+// land. So the remote position has to be held until the element can honor it,
+// and the bookkeeping has to survive that wait.
+describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
+  it('parks the write below HAVE_METADATA and applies it once on loadedmetadata', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true, setBy: 'peer' })
+    expect(v.currentTime).toBe(0)
+    expect(client.syncplayToast.value).toBe('')
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+    expect(v.currentTime).toBe(300)
+    expect(client.syncplayToast.value).toBe('peer seeked to 5:00')
+
+    // Once applied, the state is consumed: a second metadata event (a source
+    // swap, a reload) must not re-seek us to a position the room has moved on
+    // from — and on the MSE path every extra write costs an ffmpeg respawn.
+    v.currentTime = 42
+    client.onVideoLoadedMetadata()
+    expect(v.currentTime).toBe(42)
+  })
+
+  // The regression guard against a `loadedmetadata`-only implementation: the
+  // common case is joining a room with the element already loaded, where a
+  // listener-only apply would never fire at all.
+  it('writes synchronously at HAVE_METADATA, without waiting for loadedmetadata', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    expect(v.currentTime).toBe(300)
+  })
+
+  // The second bug of the same class: `if (!v) return` at the top of
+  // applyRemoteState dropped the state *and* all its bookkeeping.
+  it('parks a state that arrives with no element at all', async () => {
+    let el: HTMLVideoElement | null = null
+    const { emitRemoteState, client } = await mountWithRemoteState(
+      makeDeps({ getVideo: () => el }),
+      { state: 'ready' }
+    )
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    el = fakeVideo({ currentTime: 0, paused: true, readyState: 1 } as Partial<HTMLVideoElement>)
+    client.onVideoLoadedMetadata()
+
+    expect(el.currentTime).toBe(300)
+  })
+
+  it('keeps the room bookkeeping when the state arrives with no element', async () => {
+    let el: HTMLVideoElement | null = null
+    const { emitRemoteState, client } = await mountWithRemoteState(
+      makeDeps({ getVideo: () => el }),
+      { state: 'ready' }
+    )
+
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    // …and the ready gate sees the play intent the moment a player appears,
+    // rather than acting on a stale one.
+    emitRemoteState({ position: 0, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    el = fakeVideo({ currentTime: 0, paused: true, readyState: 1 } as Partial<HTMLVideoElement>)
+    client.applySyncplayReadyGate()
+    expect(el.play).toHaveBeenCalled()
+  })
+
+  it('applies only the freshest parked state, and toasts only for that one', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true, setBy: 'stale' })
+    emitRemoteState({ position: 600, paused: true, doSeek: true, setBy: 'fresh' })
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(600)
+    expect(client.syncplayToast.value).toBe('fresh seeked to 10:00')
+  })
+
+  // effectivePaused reads the *live* roster, so it belongs to the write and not
+  // to the park: a peer that went not-ready during the wait would otherwise be
+  // resumed over.
+  it('computes effectivePaused at apply time, not at park time', async () => {
+    const v = fakeVideo({
+      currentTime: 10,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
+
+    emitRemoteState({ position: 10, paused: false, doSeek: false })
+
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // The deferred write fires arbitrarily far outside the 1500 ms window, so the
+  // applied-seek marker is the only thing standing between it and the wire —
+  // and it has to be armed at the write, not at the park.
+  it('does not let the deferred write escape as a local seek', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    // Metadata arrives long after the wall-clock window — and after the marker's
+    // own 15 s TTL, which is what makes this fail on an implementation that arms
+    // the marker at park time: that mark would already be stale when the write
+    // finally happens, and the echo escapes as the user's seek.
+    vi.advanceTimersByTime(20000)
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+    expect(v.currentTime).toBe(300)
+
+    client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // #226's no-clamp decision, pinned. The room's position is the `min()` over
+  // watchers on the reference server and is re-broadcast every second, so
+  // reporting a frontier-shortened position is an unsignalled room seek that
+  // drags every peer back — at 1 Hz, through the snapshot heartbeat.
+  //
+  // Coverage caveats, twice over. (a) `fakeVideo.currentTime` is a plain
+  // property, so this proves only that *our code* writes the room's position
+  // verbatim. That the *element* does not clamp it on a growing `.part` rests on
+  // the `seekable` span the protocol handler advertises (full `totalBytes`
+  // denominator + tail stream), and is covered by manual scenario (a) alone.
+  // (b) What it pins is a clamp applied *inside* `applyRemoteStateToElement`. It
+  // is not a proof against every reintroduction: bringing the clamp back the way
+  // #240 originally specified — an optional `clampSeekTarget` on `SyncplayDeps` —
+  // leaves `makeDeps` free to default it to `(t) => t`, and this test then passes
+  // unchanged. Adding that hook means adding a test that exercises it with a real
+  // frontier clamp.
+  it('writes a position past the download frontier unclamped, and reports it', async () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    // A `.part` with ~2 minutes on disk; the room is 40 minutes in.
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 2400, paused: true, doSeek: true })
+    expect(v.currentTime).toBe(2400)
+
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 2400, paused: true })
+
+    client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('drops a parked state when the episode changes under it', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    deps.activeEpisodeIndex.value = 1
+    await flushPromises()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(0)
+  })
+
+  it('drops a parked state on disconnect', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    client.syncplayStatus.value = { state: 'disconnected' }
+    await flushPromises()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(0)
+  })
+
+  // Splitting the halves let them disagree: the bookkeeping ran at park time,
+  // a local play during the wait overwrote it, and the deferred apply then
+  // paused the element while `syncplayLastRemotePlaying` still said "playing" —
+  // so the next ready-gate pass played it straight back, with `pausedBy` naming
+  // nobody. Re-asserting the bookkeeping at write time is what keeps the two
+  // consistent; `main` never had the gap because the halves were one function.
+  it('re-asserts the room bookkeeping when a local play beat the parked state', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+
+    // The user hits play before metadata arrives.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    expect(client.syncplayPausedBy.value).toBeNull()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    // The parked state pauses the element…
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+    // …and the room bookkeeping agrees with it, so the gate leaves it paused
+    // and the popover names the peer that paused rather than nobody.
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    client.applySyncplayReadyGate()
+    expect(v.play).not.toHaveBeenCalled()
+  })
+})
+
+// The predicate PlayerView's resumeFromSavedPosition reads. Its *reset* is the
+// load-bearing half: main stops emitting `remote-state` the moment we are alone
+// in a room, so a session-scoped latch would eat the user's saved position on
+// every later episode open, forever.
+describe('useSyncplayClient — hasRemoteStateApplied (#240)', () => {
+  it('is false before any remote state arrives', async () => {
+    const { client } = await mountWithRemoteState(makeDeps({ video: fakeVideo() }), {
+      state: 'ready'
+    })
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  it('is true while a state is parked, before anything has been written', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+
+    expect(v.currentTime).toBe(0)
+    expect(client.hasRemoteStateApplied()).toBe(true)
+  })
+
+  // A state whose position and play state already match ours still reaches the
+  // element half and still means "the room has told us where it is" — resuming
+  // to the saved position on top of it would drag the room.
+  it('is true after a state that needed no write at all', async () => {
+    const v = fakeVideo({
+      currentTime: 10,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 10, paused: true, doSeek: false })
+
+    expect(client.hasRemoteStateApplied()).toBe(true)
+  })
+
+  it('does not latch across an episode switch', async () => {
+    const deps = makeDeps({ video: fakeVideo() })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    deps.activeEpisodeIndex.value = 1
+    await flushPromises()
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  it('does not latch across a disconnect', async () => {
+    const { emitRemoteState, client } = await mountWithRemoteState(
+      makeDeps({ video: fakeVideo() }),
+      { state: 'ready' }
+    )
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    client.syncplayStatus.value = { state: 'disconnected' }
+    await flushPromises()
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  // `reconnecting` is neither an episode switch nor a disconnect, but it has the
+  // same shape: main stops emitting `remote-state` while we are out of the room
+  // and we may come back to it alone. Leaving the flag armed biases toward
+  // suppressing the resume — safe in the moment, but it is exactly the latch the
+  // reset exists to prevent, and `docs/syncplay.md` claims it unlatches here.
+  it('does not latch across a reconnect', async () => {
+    const { emitRemoteState, client } = await mountWithRemoteState(
+      makeDeps({ video: fakeVideo() }),
+      { state: 'ready' }
+    )
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    client.syncplayStatus.value = { state: 'reconnecting' }
+    await flushPromises()
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
   })
 })
 

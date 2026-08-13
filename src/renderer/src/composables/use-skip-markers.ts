@@ -331,11 +331,17 @@ export function useSkipMarkers(deps: {
         window.api.skipDetectorDetectStream(animeId, epInt, deps.activeStreamUrl.value),
         deadline
       ])
-      // Checked ahead of the generation guard rather than behind it: every path
-      // that settles the race this way does bump the generation today, so the
-      // guard would also catch it — but that makes the *ordering* of two
-      // unrelated bookkeeping fields load-bearing. This sentinel says on its own
-      // that the run was retired from outside.
+      // Checked ahead of the generation guard rather than behind it: the two
+      // `clearStreamTimers()` callers that can retire someone *else's* run — a
+      // restart of this function and `cancelStreamDetection()` (which is also
+      // the unmount and stream→local path) — bump the generation first, so the
+      // guard below would catch those too. Leaning on that would make the
+      // *ordering* of two unrelated bookkeeping fields load-bearing. The third
+      // caller, `failStreamDetection()`, does not bump — and does not need to:
+      // it runs only from inside a run that has already left this race and is
+      // still the current generation, so the resolver it reaches is that same
+      // run's own, already-settled deadline, never a parked one. This sentinel
+      // says on its own that the run was retired from outside.
       if (outcome === STREAM_DETECT_SUPERSEDED) return
       if (requestId !== streamSkipRequestId) return
       if (outcome === STREAM_DETECT_TIMEOUT) {

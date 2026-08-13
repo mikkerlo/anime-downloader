@@ -469,6 +469,12 @@ export function register({
     store.set('shikimoriCredentials', creds)
     const user = await shikimori.getUser(creds.access_token)
     store.set('shikimoriUser', user)
+    // A fresh session ends the expired state, and the queue the expiry retained
+    // can drain now (#244).
+    store.set('shikimoriSessionExpired', false)
+    sync.startSyncTimer()
+    void sync.syncShikimoriQueue()
+    sync.broadcastSyncStatus()
     return user
   })
 
@@ -481,6 +487,8 @@ export function register({
     store.set('shikimoriProfile', null)
     store.set('shikimoriFriends', [])
     store.set('shikimoriRecommendations', [])
+    // Or disconnecting while expired would leave a sticky flag with no user.
+    store.set('shikimoriSessionExpired', false)
     sync.abortPrefetch()
     sync.invalidateCalendarCache()
     sync.stopSyncTimer()
@@ -638,7 +646,14 @@ export function register({
         void sync.syncShikimoriQueue()
         return updatedRate
       } catch (err) {
-        if (!isNetworkError(err) || idx === -1) throw err
+        // An expired session joins the offline path rather than bypassing it:
+        // the edit that discovered the dead token is exactly the one we must not
+        // lose, and it replays on reconnect like any queued update (#244).
+        // Deliberately `ShikiAuthError`, not `ShikiApiError` — a genuine 400/422
+        // from `user_rates` must keep dropping, or one malformed entry would jam
+        // the drain forever.
+        const isExpiredSession = err instanceof shikimori.ShikiAuthError
+        if ((!isNetworkError(err) && !isExpiredSession) || idx === -1) throw err
 
         const cachedEntry = cached[idx]
         const rateId = typeof cachedEntry.rate.id === 'number' ? cachedEntry.rate.id : null
@@ -670,7 +685,12 @@ export function register({
         invalidateRecommendations()
         broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
         broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
-        sync.startSyncTimer()
+        // Without this the expiry banner never appears on the path that
+        // discovers expiry most often: this branch broadcasts the queue change
+        // but nothing else here reports sync status, and the renderer polls it
+        // from exactly one view (#244).
+        sync.broadcastSyncStatus()
+        if (!isExpiredSession) sync.startSyncTimer()
         void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
 
         return {

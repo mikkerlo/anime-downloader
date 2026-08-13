@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import Sidebar from '../../../src/renderer/src/components/shared/Sidebar.vue'
 import { useLibraryStore } from '../../../src/renderer/src/stores/library'
@@ -9,8 +9,23 @@ import { useSettingsStore } from '../../../src/renderer/src/stores/settings'
 
 beforeEach(() => {
   // The downloads + shikimori stores subscribe to `window.api.on*` at setup.
-  // A permissive stub returns a no-op unsubscribe handle for any access.
-  ;(window as unknown as { api: unknown }).api = new Proxy({}, { get: () => () => () => {} })
+  // A permissive stub returns a no-op unsubscribe handle for any access —
+  // except the sync-status getter, which the Shikimori store now awaits on init
+  // (#244) and whose resolved snapshot lands in state.
+  ;(window as unknown as { api: unknown }).api = new Proxy(
+    {
+      shikimoriGetSyncStatus: async () => ({
+        state: 'idle',
+        queueLength: 0,
+        lastSyncAt: 0,
+        lastSyncError: null,
+        sessionExpired: false
+      })
+    } as Record<string, unknown>,
+    {
+      get: (target, prop) => target[prop as string] ?? (() => () => {})
+    }
+  )
   setActivePinia(createPinia())
 })
 
@@ -48,6 +63,8 @@ describe('Sidebar', () => {
     const shiki = useShikimoriStore()
     shiki.user = { id: 1, nickname: 'mikkerlo', avatar: '' }
     const wrapper = mount(Sidebar)
+    // Let the store's init sync-status pull land before driving state (#244).
+    await flushPromises()
 
     // Empty offline queue → green "Synced".
     expect(wrapper.find('.u-sync').text()).toBe('Synced')
@@ -58,6 +75,34 @@ describe('Sidebar', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.u-sync').classes()).toContain('offline')
     expect(wrapper.find('.u-sync').text()).toContain('2 pending')
+  })
+
+  it('surfaces an expired session on the chip even with an empty queue', async () => {
+    // Gated on `sessionExpired` alone: the drain returns immediately on an
+    // empty queue, so an expired user with nothing pending would otherwise see
+    // a green "Synced" and no indication anywhere (#244).
+    const shiki = useShikimoriStore()
+    const library = useLibraryStore()
+    shiki.user = { id: 1, nickname: 'mikkerlo', avatar: '' }
+    const wrapper = mount(Sidebar)
+    await flushPromises()
+
+    shiki.syncStatus = {
+      state: 'idle',
+      queueLength: 0,
+      lastSyncAt: 0,
+      lastSyncError: null,
+      sessionExpired: true
+    }
+    await wrapper.vm.$nextTick()
+
+    const chip = wrapper.find('.u-sync')
+    expect(chip.classes()).toContain('expired')
+    expect(chip.text()).toContain('Session expired')
+
+    await chip.trigger('click')
+    expect(library.currentView).toBe('settings')
+    expect(library.pendingSettingsTab).toBe('connectors')
   })
 
   it('shows the update banner even when logged out (it is not gated on login)', () => {

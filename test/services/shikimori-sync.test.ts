@@ -22,7 +22,7 @@ vi.mock('../../src/main/shikimori', async () => {
 })
 
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
-import { ShikiApiError } from '../../src/main/shikimori'
+import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
 
 const CHANNELS = {
   syncStatus: 'shikimori:sync-status',
@@ -83,8 +83,17 @@ describe('ShikimoriSyncService — sync status accessors', () => {
       state: 'idle',
       queueLength: 0,
       lastSyncAt: 0,
-      lastSyncError: null
+      lastSyncError: null,
+      sessionExpired: false
     })
+  })
+
+  it('reports sessionExpired from the store, so it survives a restart', () => {
+    // Every other field is closure state and resets on launch. The reported
+    // case is an app *starting* with two-month-dead credentials, so this one
+    // must be read back from the store on a freshly constructed service (#244).
+    const { svc } = makeService({ shikimoriSessionExpired: true })
+    expect(svc.getSyncStatus().sessionExpired).toBe(true)
   })
 
   it('reports the queue length from store', () => {
@@ -315,6 +324,87 @@ describe('ShikimoriSyncService — syncShikimoriQueue happy path', () => {
     getUserRate.mockRejectedValue(new Error('weird unparseable error'))
     await svc.syncShikimoriQueue()
     expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+  })
+
+  // The guard on widening the update-rate queue predicate to `ShikiAuthError`
+  // (#244 §3): a *genuine* validation failure from `user_rates` must keep being
+  // dropped, or one malformed entry jams the drain forever. The case above
+  // throws a plain Error, so it never exercised the ShikiApiError branch.
+  it.each([400, 422])(
+    'still drops the queued item on a %i ShikiApiError from user_rates',
+    async (status) => {
+      const { svc, store } = makeService({
+        shikimoriUpdateQueue: [
+          {
+            malId: 1,
+            queuedAt: 1,
+            before: { episodes: 0, status: 'watching', score: 0 },
+            after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+          }
+        ]
+      })
+      getUserRate.mockRejectedValue(
+        new ShikiApiError(`Shikimori API error: ${status} (score is invalid)`, status)
+      )
+
+      await svc.syncShikimoriQueue()
+
+      expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+    }
+  )
+})
+
+describe('ShikimoriSyncService — expired session', () => {
+  function queuedService(initial: Record<string, unknown> = {}) {
+    return makeService({
+      shikimoriUpdateQueue: [
+        {
+          malId: 1,
+          queuedAt: 1,
+          before: { episodes: 0, status: 'watching', score: 0 },
+          after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+        }
+      ],
+      ...initial
+    })
+  }
+
+  it('keeps the queue and broadcasts sessionExpired when the refresh is rejected', async () => {
+    const { svc, store, broadcast } = queuedService({ shikimoriSessionExpired: true })
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+
+    await svc.syncShikimoriQueue()
+
+    expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(1)
+    expect(getUserRate).not.toHaveBeenCalled()
+    expect(broadcast).toHaveBeenLastCalledWith(
+      CHANNELS.syncStatus,
+      expect.objectContaining({ sessionExpired: true, lastSyncError: SESSION_EXPIRED_MESSAGE })
+    )
+  })
+
+  it('stops the sync timer instead of spinning against cleared credentials', async () => {
+    // `ensureFreshToken` has already nulled the credentials, so every later tick
+    // returns at the `!creds` guard *before* `adjustSyncTimer()` — a timer that
+    // can only ever no-op (#244 Risks).
+    vi.useFakeTimers()
+    try {
+      const { svc, store } = queuedService()
+      ensureFreshToken.mockRejectedValue(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+      svc.startSyncTimer()
+
+      await svc.syncShikimoriQueue()
+      expect(ensureFreshToken).toHaveBeenCalledTimes(1)
+
+      // Credentials are gone in production; keep them here so a surviving timer
+      // would provably tick again rather than bailing at the `!creds` guard.
+      store.set('shikimoriCredentials', { access_token: 'tok', refresh_token: 'r' })
+      await vi.advanceTimersByTimeAsync(120_000)
+
+      expect(ensureFreshToken).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

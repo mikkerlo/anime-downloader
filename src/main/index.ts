@@ -128,6 +128,7 @@ const STORE_DEFAULTS = {
   }[],
   shikimoriUserRates: [] as unknown[],
   shikimoriUpdateQueue: [] as unknown[],
+  shikimoriSessionExpired: false,
   shikimoriAnimeDetails: {} as Record<
     string,
     { details: shikimori.ShikiAnimeDetails; fetchedAt: number }
@@ -363,6 +364,11 @@ const shikimoriSyncService = createShikimoriSyncService({
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
   animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
 })
+// `ensureFreshToken` is where a dead refresh token is detected, but that module
+// only knows about the store. Give it a way to push the transition out so the
+// banner appears wherever expiry is discovered — including the fire-and-forget
+// background refreshes that would otherwise swallow it (#244).
+shikimori.setOnSessionExpired(() => shikimoriSyncService.broadcastSyncStatus())
 let downloadManager: DownloadManager
 
 const skipAnalysisService = createSkipAnalysisService({

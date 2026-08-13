@@ -7,7 +7,7 @@ import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
 
 const shikimoriStore = useShikimoriStore();
-const { user: shikimoriUser } = storeToRefs(shikimoriStore);
+const { user: shikimoriUser, sessionExpired, offlineQueueLength } = storeToRefs(shikimoriStore);
 const { autoSave } = useSettingsAutosave();
 
 const loaded = ref(false);
@@ -119,6 +119,9 @@ watch(token, (val) => {
     </SettingsGroup>
 
     <SettingsGroup title="Shikimori" desc="Connect your Shikimori account to sync watch progress.">
+      <!-- Expiry is not a logout: the account, its caches and the queued updates
+           are all still here, so the card keeps its identity and only swaps the
+           chip and the primary action (#244). -->
       <div v-if="shikimoriUser" class="conn-card">
         <div class="conn-logo" style="background: var(--st-blue)">
           <img v-if="shikimoriUser.avatar" :src="shikimoriUser.avatar" />
@@ -126,15 +129,35 @@ watch(token, (val) => {
         </div>
         <div class="conn-info">
           <div class="ci-name">
-            {{ shikimoriUser.nickname
-            }}<span class="chip green"><span class="dot"></span>Connected</span>
+            {{ shikimoriUser.nickname }}
+            <span v-if="sessionExpired" class="chip red"
+              ><span class="dot"></span>Session expired</span
+            >
+            <span v-else class="chip green"><span class="dot"></span>Connected</span>
           </div>
-          <div class="ci-meta">Shikimori account</div>
+          <div v-if="sessionExpired" class="ci-meta">
+            Shikimori rejected the saved sign-in.
+            <template v-if="offlineQueueLength > 0">
+              {{ offlineQueueLength }} pending update{{ offlineQueueLength > 1 ? 's' : '' }} will
+              sync after you reconnect.
+            </template>
+          </div>
+          <div v-else class="ci-meta">Shikimori account</div>
         </div>
-        <button class="btn btn-sm btn-outline" @click="shikimoriDisconnect">Disconnect</button>
+        <button
+          v-if="sessionExpired"
+          class="btn btn-sm btn-primary"
+          :disabled="Boolean(shikimoriAuthUrl)"
+          @click="shikimoriConnect"
+        >
+          Reconnect
+        </button>
+        <button v-else class="btn btn-sm btn-outline" @click="shikimoriDisconnect">
+          Disconnect
+        </button>
       </div>
 
-      <SettingsRow v-else stack>
+      <SettingsRow v-if="!shikimoriUser || (sessionExpired && shikimoriAuthUrl)" stack>
         <div v-if="!shikimoriAuthUrl">
           <button class="btn btn-sm btn-primary" @click="shikimoriConnect">
             Connect Shikimori

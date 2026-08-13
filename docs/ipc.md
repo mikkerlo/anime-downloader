@@ -121,9 +121,9 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:anime-details-updated` | send | Single anime details payload cached/refreshed by prefetch worker; AnimeDetailView hydrates `shikiDetails` for the matching MAL ID |
 | `shikimori:get-offline-queue-length` | invoke | Returns the number of rate updates currently queued for later sync (for initial UI hydration) |
 | `shikimori:offline-queue-changed` | send | Queue length changed; renderers update the "Working offline" indicator |
-| `shikimori:get-sync-status` | invoke | Returns `{ state, queueLength, lastSyncAt, lastSyncError }` for initial UI hydration of the sync indicator |
+| `shikimori:get-sync-status` | invoke | Returns `{ state, queueLength, lastSyncAt, lastSyncError, sessionExpired }` for initial UI hydration of the sync indicator. `sessionExpired` is read from the store, not closure state, so it survives a restart; the renderer's Shikimori store pulls this on init because a freshly launched app makes no Shikimori request until the user acts (#244) |
 | `shikimori:trigger-sync` | invoke | Manually kicks off a drain attempt (fire-and-forget); powers the "Retry now" button |
-| `shikimori:sync-status` | send | Sync worker state changed (idle ↔ syncing) or a drain just finished; renderers swap offline/syncing chip variants |
+| `shikimori:sync-status` | send | Sync worker state changed (idle ↔ syncing), a drain just finished, or the OAuth session expired; renderers swap offline/syncing chip variants and raise the "session expired" banner. Same payload as `shikimori:get-sync-status` |
 | `shikimori:get-anime-details` | invoke | Returns cached `ShikiAnimeDetails` for a MAL ID (or `null`); on cache miss fires the prefetch worker without blocking |
 | `shikimori:trigger-detail-prefetch` | invoke | Manually kicks the detail prefetch worker (fire-and-forget) |
 | `shikimori:get-friends` | invoke | Returns the cached `ShikiFriendCard[]` (friend list + presence + per-friend titles/mean/mutual + current watch) instantly (if available) + triggers a background refresh; first call fetches per-friend rates (batched, concurrency 2). `null` when logged out. Powers the Friends grid (#179) |

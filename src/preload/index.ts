@@ -424,6 +424,7 @@ const api = {
       queueLength: number
       lastSyncAt: number
       lastSyncError: string | null
+      sessionExpired: boolean
     }>,
   shikimoriTriggerSync: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_TRIGGER_SYNC) as Promise<void>,
   onShikimoriSyncStatus: subscribe<{
@@ -431,6 +432,7 @@ const api = {
     queueLength: number
     lastSyncAt: number
     lastSyncError: string | null
+    sessionExpired: boolean
   }>(EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS),
   shikimoriGetAnimeDetails: (malId: number) =>
     ipcRenderer.invoke(

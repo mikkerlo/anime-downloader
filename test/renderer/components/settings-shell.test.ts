@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SettingsShell from '../../../src/renderer/src/components/settings/SettingsShell.vue'
+import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 
 // Each tab is stubbed with an identifiable marker so we can assert the panel
 // swaps without standing up every tab's window.api plumbing. The shell only
@@ -10,10 +11,10 @@ import SettingsShell from '../../../src/renderer/src/components/settings/Setting
 // <component :is> binding tracks the rail.
 const tabStub = (name: string) => ({ template: `<div class="stub-${name}" />` })
 
-function mountShell() {
+function mountShell(pinia = createPinia()) {
   return mount(SettingsShell, {
     global: {
-      plugins: [createPinia()],
+      plugins: [pinia],
       stubs: {
         GeneralTab: tabStub('general'),
         StorageTab: tabStub('storage'),
@@ -83,6 +84,36 @@ describe('SettingsShell', () => {
     // Panel swapped from General to Storage.
     expect(wrapper.find('.stub-general').exists()).toBe(false)
     expect(wrapper.find('.stub-storage').exists()).toBe(true)
+  })
+
+  // The Shikimori "sign in again" affordances deep-link straight to Connectors
+  // (#244); the shell owns `activeTab` locally, so the target is parked on the
+  // library store and consumed here.
+  it('opens on the tab a deep link parked before mount, then forgets it', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const library = useLibraryStore()
+    library.navigateToSettingsTab('connectors')
+
+    const wrapper = mountShell(pinia)
+
+    expect(wrapper.find('.stub-connectors').exists()).toBe(true)
+    expect(library.pendingSettingsTab).toBeNull()
+    // A later manual visit still opens on General.
+    expect(mountShell(pinia).find('.stub-general').exists()).toBe(true)
+  })
+
+  it('switches tabs on a deep link raised while Settings is already open', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const library = useLibraryStore()
+    const wrapper = mountShell(pinia)
+    expect(wrapper.find('.stub-general').exists()).toBe(true)
+
+    library.navigateToSettingsTab('connectors')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.stub-connectors').exists()).toBe(true)
   })
 
   it('shows the in-development badge only on Watch Together', () => {

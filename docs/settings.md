@@ -33,7 +33,8 @@
 | `prefetchNextEpisode` | string | `'progress-50'` | Trigger for the player's next-episode pre-fetch: `off`, `open` (on player open), `time-5min` (after 5 min of real playback), `progress-50` (at 50% of duration). Skipped silently when the next episode is already on disk, in the queue, or — for auto-download-subscribed shows — strictly newer than the subscription's frozen `initialEpisodesAired` snapshot (so older/pre-subscription episodes still pre-fetch) |
 | `watchProgress` | object | `{}` | Per-episode playback position + watched flag + last-used translationId (key: `animeId:episodeInt`) |
 | `shikimoriUserRates` | array | `[]` | Cached Shikimori anime rate entries (served cache-first, background-refreshed) |
-| `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error (for later sync) |
+| `shikimoriUpdateQueue` | array | `[]` | Pending rate updates queued when the `update-rate` IPC failed due to a network error, or because the OAuth session expired (for later sync) |
+| `shikimoriSessionExpired` | boolean | `false` | Shikimori rejected the stored refresh token (`400 invalid_grant`); the user must sign in again. Persisted so the banner survives a restart — see [`shikimori.md`](shikimori.md). Set by `ensureFreshToken`, cleared on a successful `exchange-code` and on logout. Only `shikimoriCredentials` is cleared alongside it: the queue and caches are what a reconnect replays |
 | `shikimoriAnimeDetails` | object | `{}` | Pre-fetched per-anime Shikimori details (description, genres, studios) keyed by MAL ID; populated by the throttled background worker |
 | `skipDetections` | object | `{}` | Per-anime OP/ED boundaries from local Chromaprint analysis, keyed by `animeId`; `algorithm.source` is always `'local'` |
 | `skipFingerprintCache` | object | `{}` | Per-file Chromaprint fingerprint cache, keyed by `animeId:episodeInt:fileSize:mtime` |

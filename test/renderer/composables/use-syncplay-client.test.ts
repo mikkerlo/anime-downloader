@@ -1581,3 +1581,570 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: false })
   })
 })
+
+// #228. A user pause made in the pre-adoption window — player mounted, still
+// converging on the room — used to undo itself: the next inbound playing state
+// resumed the element through the apply, and the ready gate resumed it through
+// a room mirror the user's own pause could not reach (its write was gated on a
+// wall-clock window every apply re-armed at ~1 Hz). `pendingUserPause` makes the
+// pause outrank the room until it has had its chance to reach the room.
+describe('useSyncplayClient — a pending user pause outranks the room (#228)', () => {
+  const PENDING = 'Pausing once synced with the room…'
+  const FAILED = "The room kept playing — your pause didn't stick"
+
+  // Press pause on a playing element, the way the element reports it: the
+  // `pause` event fires with `v.paused` already true.
+  const pressPause = (client: Client, v: HTMLVideoElement): void => {
+    client.onLocalPause()
+    ;(v as unknown as { paused: boolean }).paused = true
+  }
+
+  // The gate's second entry point is `setSyncplayLocalReady`, and reaching it
+  // takes the setup trap the ready-gate tests all share: `syncplayLocalReady`
+  // starts `true` and the setter early-returns on no change, so it has to be
+  // driven *down* through the 600 ms `waiting` debounce first. Needs fake timers.
+  const driveGateEntry = (client: Client): void => {
+    client.onVideoWaiting()
+    vi.advanceTimersByTime(601)
+    client.onLocalCanPlay()
+  }
+
+  // 1. The apply half: the seek still lands (withholding it would stall the very
+  // adoption the hold waits for — main's drift test reads the element position),
+  // but nothing resumes the element and the room's intent is not adopted.
+  it('holds a playing remote state: it seeks, but neither resumes nor clobbers intent', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.currentTime).toBe(200)
+    expect(v.play).not.toHaveBeenCalled()
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
+  })
+
+  // 2. The other resume path, and the one the wall-clock window kept open: the
+  // room mirror says "playing", every user is ready, and the gate plays us.
+  it('the ready gate does not resume a held pause', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // A seek-only apply, which is what re-arms the 1500 ms window at ~1 Hz
+    // through the whole convergence window — on head that window is what shut
+    // the user's own mirror write out.
+    // `paused: false` matches the element, so this apply is seek-only: it leaves
+    // `appliedPaused` unset and the pause below reaches the bookkeeping instead
+    // of the echo branch.
+    emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
+    vi.advanceTimersByTime(200)
+    pressPause(client, v)
+
+    // A peer's playing state crosses the press. It is held — but the mirror
+    // above it is not, so the room really does read as "playing" while the
+    // pause stands, and only the gate's own `!pendingUserPause` term stops it
+    // resuming us.
+    emitRemoteState({ position: 320, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+
+    driveGateEntry(client)
+
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // 3. The clear lives in `recordRemoteState`, which #240 guarantees runs for
+  // every inbound state — this one's element half returns at the no-op early-out,
+  // so a clear placed there would never fire.
+  it('clears the hold on a paused state whose element half early-outs', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    // Paused element, paused room, within the 3 s tolerance: no seek, no
+    // play/pause, straight out at the early-out.
+    emitRemoteState({ position: 101, paused: true, doSeek: false, setBy: 'peer' })
+
+    emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 4. Keyed on `state.paused`, not on the element half's `effectivePaused`: a
+  // playing room we happen to be gating locally is still a playing room, and
+  // clearing there would end the hold on a state that asserted no pause at all.
+  it('does not clear on a playing state that local readiness turned into a pause', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    client.onVideoWaiting()
+    vi.advanceTimersByTime(601)
+
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    // Held, not cleared: the toast is the observable side of "a playing state
+    // was held", and the element is still where the hold left it.
+    expect(client.syncplayToast.value).toBe(PENDING)
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // 5. The backstop fires and hands the room back, with the failure message the
+  // reference client's own "ready-to-unpause" notification is the precedent for.
+  it('expires after 8 s, toasting the failure and applying the next state normally', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe(PENDING)
+
+    vi.advanceTimersByTime(8000)
+    expect(client.syncplayToast.value).toBe(FAILED)
+
+    emitRemoteState({ position: 300, paused: false, doSeek: false })
+    expect(v.play).toHaveBeenCalled()
+    expect(v.currentTime).toBe(300)
+    // The seek toast would have overwritten the failure message; this state
+    // carries no `setBy`, so what is on screen is still the failure.
+    expect(client.syncplayToast.value).toBe(FAILED)
+  })
+
+  // 6. The user changing their mind ends the hold — and must not leave the gate
+  // holding a stale mirror that re-pauses the resume (the R8 half of decision 2).
+  it('ends the hold on a real play, leaving the element playing', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe(PENDING)
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    expect(v.pause).not.toHaveBeenCalled()
+    expect(client.syncplayToast.value).toBe('')
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: false })
+  })
+
+  // 7. Decision 2's pause half, isolated from the hold (post-adoption, so
+  // nothing arms): a pause classified as real by the `appliedPaused` echo check
+  // moves the room mirror even inside the 1500 ms window an apply just re-armed.
+  // Red on head, where the window shut both the mirror write and the badge.
+  it('writes room-mirror state for a real pause inside the suppression window', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    // Seek-only apply: it arms the window and leaves `appliedPaused` unset, so
+    // the pause below reaches the bookkeeping instead of the echo branch.
+    emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
+    vi.advanceTimersByTime(200)
+
+    pressPause(client, v)
+
+    expect(client.syncplayPausedBy.value).toBe('me')
+    // `syncplayLastRemotePlaying` has no accessor — the gate is how it is
+    // observed. A stale `true` there resumes the element the user just paused.
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+    driveGateEntry(client)
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // 8. R7's prerequisite: with the mirror gates relaxed, an *unmarked* pause
+  // moves room state, so PlayerView's teardown pause has to be marked. Asserted
+  // through the marker rather than through the absence of a send, which passes
+  // vacuously whenever `getVideoEl()` is null.
+  it('lets a marked teardown pause pass without touching intent', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.onLocalPlay()
+
+    // PlayerView.onBeforeUnmount: mark, then pause, then swap the source.
+    client.markProgrammaticPlayback(true)
+    client.onLocalPause()
+    ;(v as { paused: boolean }).paused = true
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    // The pre-teardown intent, not the element's flag — the marked pause was
+    // consumed and changed nothing.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: false })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  // 9. The whole happy path end to end: the state crossing the press on the wire
+  // is held, the room going paused ends the hold, and the room owns us again.
+  it('holds the state crossing the press and applies the next one after the clear', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: true }
+    await nextTick()
+
+    emitRemoteState({ position: 250, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+    expect(v.currentTime).toBe(250)
+  })
+
+  // 10. The parked path (#240): "a playing state was held" is recorded when the
+  // apply is *enacted*, not when the state arrived — a parked state has held
+  // nothing yet, and counting it at arrival would toast for a hold that never
+  // happened.
+  it('records a parked state as held at unpark, not at arrival', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
+    // Metadata has landed on the element (so the pause can arm) but our
+    // `loadedmetadata` handler has not run yet.
+    ;(v as { readyState: number }).readyState = 1
+    pressPause(client, v)
+    expect(client.syncplayToast.value).toBe('')
+
+    client.onVideoLoadedMetadata()
+
+    expect(client.syncplayToast.value).toBe(PENDING)
+    expect(v.currentTime).toBe(300)
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // 11. The pairing decision 2 insists on, in the order that goes red: pause and
+  // play back to back with no apply in between. Green on head, red with the
+  // pause-side relaxation alone (the gate reads a stale `false` and re-pauses
+  // the user's own resume), green with both halves.
+  it('does not re-pause a play pressed immediately after a pause', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // Arms the 1500 ms window and leaves the mirror saying "the room is playing".
+    emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
+    vi.advanceTimersByTime(200)
+
+    pressPause(client, v)
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    expect(v.pause).not.toHaveBeenCalled()
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 300, paused: false })
+  })
+
+  // 12. Why the hold skips the *whole* play/pause block: skipping only the
+  // `v.play()` would latch `appliedPaused = false` with no event left to consume
+  // it, and the user's next real play would be eaten as that echo.
+  it('leaves no applied-pause latch behind, so a real play still reaches intent', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: false })
+  })
+
+  // 13. The badge: it appears on the press (decision 2 opened that write), the
+  // held state does not clear it, and the handoff to a peer rides the ordinary
+  // `pausedChanged` path once the clear falls through.
+  it('keeps "paused by you" through a held state and hands it to the peer on the clear', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    emitRemoteState({ position: 200, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 14. A new episode deliberately auto-resumes the binge through the gate, so a
+  // hold surviving the switch would sit on that resume until it expired.
+  it('clears the hold on an episode change', async () => {
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 100, paused: false }) })
+    const v = deps.getVideoEl()!
+    const { client, emitRemoteState } = await mountWithRemoteState(deps, {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+
+    emitRemoteState({ position: 0, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 15. Decision 5's arming guard, which is what keeps every reload-shaped
+  // implicit pause out without any PlayerView plumbing: the load algorithm
+  // resets `readyState` synchronously and delivers its `pause` — if the engine
+  // fires one at all — afterwards.
+  it('never arms for a pause delivered at HAVE_NOTHING, and lets the state apply', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The quality/translation switch: `pause()` + `src` swap, then a restore
+    // `play()` once the new source is loaded.
+    pressPause(client, v)
+    ;(v as { readyState: number }).readyState = 1
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    emitRemoteState({ position: 200, paused: false, doSeek: true, setBy: 'peer' })
+
+    expect(v.currentTime).toBe(200)
+    expect(client.syncplayToast.value).toBe('peer seeked to 3:20')
+  })
+
+  it('stays silent for a HAVE_NOTHING pause with no restore behind it', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The failed-remux shape: the source went away and nothing ever resumes.
+    pressPause(client, v)
+    vi.advanceTimersByTime(8000)
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // 16. An expiry that held nothing is not a failure the user can see, so it
+  // says nothing.
+  it('expires silently when no playing state was ever held', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    vi.advanceTimersByTime(8000)
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // 17a. The falsifier, and the reason the hold's lifetime cannot be shortened
+  // to the latch flip (decision 4). Written first, before any of the above
+  // existed, in exactly this shape minus the timer advance — and it passed,
+  // confirming that on unmodified apply code adoption is no protection at all:
+  // a pause made pre-adoption never armed main's `pendingClientAck` (a
+  // pre-adoption `sendLocalState()` returns before the bump, on purpose), and
+  // post-adoption only the heartbeat asserts it, which reads that counter but
+  // never writes it. So the moment the hold ends for any reason other than the
+  // room actually pausing, the playing state already on the wire wins.
+  it('is not protected by adoption once the hold ends', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    client.syncplayStatus.value = { state: 'ready', username: 'me', playbackAdopted: true }
+    await nextTick()
+
+    vi.advanceTimersByTime(8000)
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 17b. The pin: adoption flipping true clears nothing. Red against any
+  // revision that adds a clear on the latch.
+  it('keeps holding across the adoption flip', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    client.syncplayStatus.value = { state: 'ready', username: 'me', playbackAdopted: true }
+    await nextTick()
+
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).not.toHaveBeenCalled()
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
+  })
+
+  // 18. The normal terminator, and the repair it has to carry: the hold *masked*
+  // the room mirror, it did not undo it, so a bare clear hands the next gate
+  // entry a `true` and it resumes the pause we just confirmed had landed.
+  it('clears on the roomPaused edge and repairs the mirror it was masking', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    // One held playing state, so the mirror says "the room is playing" again.
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe(PENDING)
+
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: true }
+    await nextTick()
+    expect(client.syncplayToast.value).toBe('')
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+
+    driveGateEntry(client)
+    expect(v.play).not.toHaveBeenCalled()
+
+    sendSnapshot.mockClear()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
+
+    // …and the room owns us again from the next state on.
+    emitRemoteState({ position: 260, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 19. An edge, not a level: a hold armed while the room is *already* reported
+  // paused (we are locally gated, say) would be cleared by its very first status
+  // emit under a level test, before it ever held anything.
+  it('clears on the false→true transition of roomPaused, not on the level', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      roomPaused: true
+    })
+
+    pressPause(client, v)
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: true }
+    await nextTick()
+
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+    expect(client.syncplayToast.value).toBe(PENDING)
+
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: false }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: true }
+    await nextTick()
+
+    emitRemoteState({ position: 260, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 20. "Held" is recorded below the no-op early-out: a state that moved nothing
+  // held nothing, so the window can expire on it in silence. Distinct from the
+  // silent-expiry case above, where no state arrived at all.
+  it('does not count a state that early-outs as held', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    // A peer is buffering, so `effectivePaused` matches the element and the
+    // position matches too — the apply returns at the early-out.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+
+    vi.advanceTimersByTime(8000)
+    expect(client.syncplayToast.value).toBe('')
+  })
+})

@@ -41,6 +41,20 @@ interface SyncplayStatus {
   username?: string
   tls?: boolean
   error?: string
+  /** Projection of main's `playbackAdopted` latch (#228) — "our local playback
+   *  has converged with the room, so what we assert now reaches the wire".
+   *  Never a stored field on the status object: it is overlaid in `setStatus()`
+   *  / `getStatus()` from the latch itself, because `tearDown()` clears the
+   *  latch without emitting a status and a mirrored copy would leak session 1's
+   *  `true` into session 2's whole pre-adoption window. */
+  playbackAdopted?: boolean
+  /** Projection of `lastRoomState.paused` (#228) — the room's own pause flag as
+   *  the server last reported it, recorded *above* `handleState()`'s echo
+   *  guards. The renderer almost never sees the echo of its own pause (self-
+   *  `setBy` and `setBy`-null states are dropped), so this is how it learns its
+   *  pending pause has reached the room. Session-scoped by construction:
+   *  `tearDown()` nulls `lastRoomState`. */
+  roomPaused?: boolean
 }
 
 interface SyncplayRemoteState {

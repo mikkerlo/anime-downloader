@@ -2072,4 +2072,116 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(statesOf(lastTlsSocket)).toEqual([])
     })
   })
+
+  // #228. Two facts the renderer needs and had no way to read: whether main's
+  // adoption latch has flipped (which scopes the renderer's pending-pause hold
+  // to the window where main asserts nothing) and whether the *room* is paused
+  // (which is how a held pause learns it has landed). Both are projected onto
+  // `SyncplayStatus` rather than stored on it, and a change detector announces
+  // a flip that no status transition would otherwise carry.
+  describe('projected status fields (#228)', () => {
+    const file = {
+      animeId: 42,
+      malId: 7,
+      episodeInt: '2',
+      translationId: 601,
+      canonicalName: 'Show - 2',
+      duration: 1440
+    }
+
+    // The premise the whole renderer-side fix rests on: holding the pause
+    // locally does not starve adoption, because `isAdopted()` latches on the
+    // *position* the renderer reports, and a held apply keeps seeking. So the
+    // room is playing, our snapshot is converged and paused — and main both
+    // latches and asserts the pause.
+    it('adopts a converged player that reports paused while the room plays', () => {
+      const statuses: SyncplayStatus[] = []
+      client.on('connection-status', (s) => statuses.push(s as SyncplayStatus))
+      handshake()
+      listReply({ mikkerlo: { isReady: true, file: {} } })
+      serverState(742.5, false)
+      client.setFile(file)
+      client.updateSnapshot({ position: 742.5, paused: true })
+      lastTlsSocket!.write.mockClear()
+
+      vi.advanceTimersByTime(1000)
+
+      expect(statesOf(lastTlsSocket)[0].playstate).toEqual({
+        position: 742.5,
+        paused: true,
+        doSeek: false
+      })
+      // …and it is announced on the same tick as that assertion, because the
+      // detector runs after sendStateMessage() rather than before it.
+      expect(statuses.at(-1)!.playbackAdopted).toBe(true)
+    })
+
+    it('emits the latch back to false when a new player announces itself', () => {
+      const statuses: SyncplayStatus[] = []
+      client.on('connection-status', (s) => statuses.push(s as SyncplayStatus))
+      handshake()
+      listReply({ mikkerlo: { isReady: true, file: {} } })
+      serverState(742.5, false)
+      client.setFile(file)
+      client.updateSnapshot({ position: 742.5, paused: false })
+      vi.advanceTimersByTime(1000)
+      expect(statuses.at(-1)!.playbackAdopted).toBe(true)
+
+      // A fresh <video> at 0 announcing itself — same episode, so only
+      // `newPlayer` says so.
+      client.setFile({ ...file, newPlayer: true })
+      client.updateSnapshot({ position: 0, paused: true })
+      vi.advanceTimersByTime(1000)
+
+      expect(statuses.at(-1)!.playbackAdopted).toBe(false)
+    })
+
+    // The reason both fields are projections. `tearDown()` clears the latch and
+    // the room state with no `setStatus()` call anywhere on that path, so a
+    // mirrored copy would keep announcing session 1's `true` through the whole
+    // of session 2's pre-adoption window — exactly the window the renderer reads
+    // it in.
+    it('starts the next session at playbackAdopted false', () => {
+      handshake()
+      listReply()
+      client.updateSnapshot({ position: 600, paused: false })
+      vi.advanceTimersByTime(1000)
+
+      const statuses: SyncplayStatus[] = []
+      client.on('connection-status', (s) => statuses.push(s as SyncplayStatus))
+      client.disconnect()
+      client.connect({
+        host: 'syncplay.test',
+        port: 8999,
+        room: 'cinema',
+        username: 'me',
+        autoReconnect: false
+      })
+
+      expect(statuses[0].playbackAdopted).toBe(false)
+      expect(statuses.every((s) => s.playbackAdopted === false)).toBe(true)
+    })
+
+    // The field's whole reason to exist: during a hold we are the lagging
+    // watcher, so the server's min() re-election keeps `setBy` ours and
+    // handleState() drops the frame for `remote-state` purposes. The room state
+    // is recorded *above* that guard, and the detector fires there too.
+    it('projects roomPaused from a state the remote-state guards drop', () => {
+      const statuses: SyncplayStatus[] = []
+      const remoteStates: unknown[] = []
+      handshake()
+      client.on('connection-status', (s) => statuses.push(s as SyncplayStatus))
+      client.on('remote-state', (s) => remoteStates.push(s))
+
+      serverState(742.5, true, 'me')
+
+      expect(remoteStates).toEqual([])
+      expect(statuses.at(-1)!.roomPaused).toBe(true)
+
+      // And back, on the room's own resume — the renderer keys on the edge, so
+      // the level has to be honest in both directions.
+      serverState(742.5, false, 'me')
+      expect(statuses.at(-1)!.roomPaused).toBe(false)
+    })
+  })
 })

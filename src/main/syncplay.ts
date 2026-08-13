@@ -342,6 +342,13 @@ export class SyncplayClient extends EventEmitter {
   private watchdogTimer: NodeJS.Timeout | null = null
   private watchdogDetail: { long: string; short: string } | null = null
   private watchdogFired = false
+  // What the last emitted `connection-status` carried for the two projected
+  // fields (#228) — the detector's reference, and the reason it costs at most
+  // one extra emit per real flip rather than one per heartbeat.
+  private lastEmittedProjection: { playbackAdopted: boolean; roomPaused: boolean } | null = null
+  // Re-entry guard: `setStatus()` is called from the detector, and anything
+  // that reached back into the detector from there would recurse.
+  private emittingProjection = false
 
   connect(config: SyncplayConfig): void {
     this.disconnectInternal(false)
@@ -356,7 +363,64 @@ export class SyncplayClient extends EventEmitter {
   }
 
   getStatus(): SyncplayStatus {
-    return { ...this.status }
+    return { ...this.status, ...this.statusProjection() }
+  }
+
+  // The two renderer-visible facts that live in fields of their own rather than
+  // in `status` (#228), overlaid on every emit and every read:
+  //
+  //  - `playbackAdopted` scopes the renderer's pending-pause hold to the window
+  //    where main's own ack protection is off (`sendLocalState()` returns
+  //    pre-adoption, so nothing bumps `pendingClientAck` and `handleState()`
+  //    drops nothing).
+  //  - `roomPaused` is `lastRoomState.paused`, recorded *above* handleState()'s
+  //    `setBy`-null / self-`setBy` / unacked guards. The renderer almost never
+  //    sees the echo of its own pause — during a hold we are the lagging
+  //    watcher by construction, so the server's min() re-election keeps `setBy`
+  //    ours and the state is dropped as self — so this projection is the only
+  //    deterministic way it learns its pause reached the room.
+  //
+  // Projections, never stored fields. `tearDown()` clears both underlying
+  // values with no `setStatus()` call anywhere on that path, so a mirrored copy
+  // would keep announcing session 1's `true` through the whole of session 2's
+  // pre-adoption window — the exact window the renderer's arming condition
+  // reads.
+  private statusProjection(): { playbackAdopted: boolean; roomPaused: boolean } {
+    return {
+      playbackAdopted: this.playbackAdopted,
+      roomPaused: this.lastRoomState?.paused === true
+    }
+  }
+
+  // Neither projection has a setter to hook: `playbackAdopted` is written at
+  // five sites and `lastRoomState` inside handleState(), none of which is a
+  // status transition, so without this the renderer would only learn about a
+  // flip on the next unrelated `setStatus()` — which in a steady session never
+  // comes. Compare against what was last *emitted* and re-emit on a difference.
+  //
+  // Called from the heartbeat tick **after** `sendStateMessage()`, so the latch
+  // that call's own `buildPlaystate()` → `isAdopted()` just flipped announces on
+  // the same tick rather than a second later, and from `handleState()` right
+  // after the `lastRoomState` write.
+  private emitStatusIfProjectionChanged(): void {
+    if (this.emittingProjection) return
+    const next = this.statusProjection()
+    const last = this.lastEmittedProjection
+    if (
+      last &&
+      last.playbackAdopted === next.playbackAdopted &&
+      last.roomPaused === next.roomPaused
+    ) {
+      return
+    }
+    this.emittingProjection = true
+    try {
+      // Empty patch: `setStatus` merges, so `state`/`error`/room identity are
+      // preserved and only the overlay changes.
+      this.setStatus({})
+    } finally {
+      this.emittingProjection = false
+    }
   }
 
   getRoomUsers(): SyncplayRoomUser[] {
@@ -1279,6 +1343,11 @@ export class SyncplayClient extends EventEmitter {
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
+    // Announce a change to the room's pause flag from *here*, above the guards
+    // below (#228): the frame that tells us our own pending pause reached the
+    // room is normally one the self-`setBy` guard drops, so a detector further
+    // down would never see it.
+    this.emitStatusIfProjectionChanged()
 
     if (setBy === null) return
     if (this.config && setBy.toLowerCase() === this.config.username.toLowerCase()) return
@@ -1700,6 +1769,11 @@ export class SyncplayClient extends EventEmitter {
     this.stopHeartbeat()
     this.heartbeatTimer = setInterval(() => {
       this.sendStateMessage({ doSeek: false })
+      // After the send, not before (#228): `sendStateMessage()` →
+      // `buildPlaystate()` → `isAdopted()` is the call that latches adoption in
+      // the ordinary case, so running the detector first would announce the
+      // flip a whole heartbeat after the assertion it belongs to.
+      this.emitStatusIfProjectionChanged()
     }, HEARTBEAT_MS)
   }
 
@@ -1865,7 +1939,11 @@ export class SyncplayClient extends EventEmitter {
       this.lastAttemptPhase = patch.state as AttemptPhase
     }
     this.status = { ...this.status, ...patch }
-    this.emit('connection-status', { ...this.status })
+    // Overlaid on the way out, never merged into `this.status` — see
+    // statusProjection() for why a stored copy leaks across sessions.
+    const projection = this.statusProjection()
+    this.lastEmittedProjection = projection
+    this.emit('connection-status', { ...this.status, ...projection })
   }
 }
 

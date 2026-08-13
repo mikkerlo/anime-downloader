@@ -1955,6 +1955,13 @@ onBeforeUnmount(() => {
   // Pause and release video
   const video = videoRef.value;
   if (video) {
+    // Mark it: since #228 an *unmarked* pause moves room-mirror state (and,
+    // post-adoption, sends a pause) before the composable dies, so closing the
+    // player would pause the room on the way out. Guarded on `!paused` by the
+    // rule marks follow everywhere — marking a pause() on an already-paused
+    // element fires no event, leaves the flag latched and swallows the next
+    // real one.
+    if (!video.paused) syncplay.markProgrammaticPlayback(true);
     video.pause();
     video.src = '';
     video.load();

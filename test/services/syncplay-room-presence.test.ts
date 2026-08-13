@@ -988,6 +988,34 @@ describe('SyncplayClient room presence on join (#220)', () => {
       })
     })
 
+    // The other half of the same condition, which nothing else here can reach:
+    // `serverState()` hardcodes `doSeek: false`, so without this case dropping
+    // `doSeek ||` from the arming condition leaves every syncplay suite green.
+    // A `doSeek` state is applied by the renderer whatever the diff, so it
+    // *does* fire a `seeked` and its echo still needs a target — even when it
+    // lands inside ADOPT_TOLERANCE_S of where we already are, which is the only
+    // place the two disjuncts disagree.
+    it('arms the echo target for a doSeek state that lands inside the tolerance', () => {
+      handshake()
+      client.updateSnapshot({ position: 300, paused: false })
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            State: {
+              ping: { latencyCalculation: 1_770_000_000.25 },
+              playstate: { position: 301, paused: false, doSeek: true, setBy: 'mikkerlo' }
+            }
+          }) + '\r\n'
+        )
+      )
+      lastTlsSocket!.write.mockClear()
+
+      client.sendLocalState({ position: 301, paused: false, cause: 'seek' })
+
+      for (const s of statesOf(lastTlsSocket)) expect(s.playstate).toBeUndefined()
+    })
+
     // One applied seek yields one `seeked`, so the echo target must retire —
     // otherwise a later genuine seek onto a peer's old position is dropped.
     //

@@ -523,6 +523,17 @@ export class SyncplayClient extends EventEmitter {
   // and an element event through sendLocalState() would latch adoption and
   // assert our position at that peer. Costs one round trip of ping-only frames
   // per attempt, and self-heals because every attempt re-requests the roster.
+  //
+  // Scope, because the sentence above overstates on its own: this guards the
+  // *unlatched* client only. `playbackAdopted` is session-scoped — cleared in
+  // tearDown() alone, so a reconnect keeps it on purpose (same player, same
+  // room, #227) and isAdopted() returns on its first line without ever
+  // consulting `rosterReceived`. A client already adopted before the outage
+  // therefore still asserts at a peer who joined during it; that hole is #227's
+  // deliberate trade, not something this reset closes. What it does close is
+  // the shape where nothing has latched yet: connected, alone-roster, no live
+  // player, socket drops, a peer joins, and a freshly opened player's first
+  // element event lands before the new List reply.
   private resetTransportState(): void {
     this.rxBuffer = ''
     this.tlsUpgraded = false

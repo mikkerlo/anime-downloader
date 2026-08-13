@@ -1385,6 +1385,15 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
     client.onLocalPlay()
 
     expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 30, cause: 'play' })
+
+    // …and the mark was *retracted*, not flipped. A mark left at `true` lets
+    // this same play through — `onLocalPlay`'s echo branch tests
+    // `appliedPaused === false` — and swallows the user's next real pause
+    // instead, which is exactly the edit a refactor of `markProgrammaticPlayback`
+    // could make. Only the second half of the pair tells the two apart.
+    v.paused = true
+    client.onLocalPause()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 30, cause: 'pause' })
   })
 })
 

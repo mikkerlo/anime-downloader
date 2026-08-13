@@ -453,15 +453,8 @@ const api = {
     autoReconnect: boolean
   }) => ipcRenderer.invoke(CHANNELS.SYNCPLAY_CONNECT, cfg) as Promise<void>,
   syncplayDisconnect: () => ipcRenderer.invoke(CHANNELS.SYNCPLAY_DISCONNECT) as Promise<void>,
-  syncplaySetFile: (file: {
-    animeId: number
-    malId: number | null
-    episodeInt: string
-    translationId: number | null
-    canonicalName: string
-    duration: number
-    newPlayer?: boolean
-  }) => ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_FILE, file) as Promise<void>,
+  syncplaySetFile: (file: SyncplayFilePayload) =>
+    ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_FILE, file) as Promise<void>,
   syncplaySendLocalState: (payload: {
     paused: boolean
     position: number

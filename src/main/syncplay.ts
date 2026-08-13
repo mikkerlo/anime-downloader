@@ -525,8 +525,8 @@ export class SyncplayClient extends EventEmitter {
   // per attempt, and self-heals because every attempt re-requests the roster.
   //
   // Scope, because the sentence above overstates on its own: this guards the
-  // *unlatched* client only. `playbackAdopted` is session-scoped — cleared in
-  // tearDown() alone, so a reconnect keeps it on purpose (same player, same
+  // *unlatched* client only. `playbackAdopted` is session-scoped — no socket
+  // path clears it, so a reconnect keeps it on purpose (same player, same
   // room, #227) and isAdopted() returns on its first line without ever
   // consulting `rosterReceived`. A client already adopted before the outage
   // therefore still asserts at a peer who joined during it; that hole is #227's

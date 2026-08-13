@@ -57,6 +57,9 @@ const api = {
       Record<number, { starred: boolean; downloaded: boolean }>
     >,
   libraryIsDownloaded: (id: number) => ipcRenderer.invoke(CHANNELS.LIBRARY_IS_DOWNLOADED, id),
+  libraryGetPriority: () => ipcRenderer.invoke(CHANNELS.LIBRARY_GET_PRIORITY) as Promise<string[]>,
+  librarySetPriority: (anime: unknown, priority: boolean) =>
+    ipcRenderer.invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime, priority) as Promise<string[]>,
   downloadedAnimeAdd: (anime: unknown) => ipcRenderer.invoke(CHANNELS.DOWNLOADED_ANIME_ADD, anime),
   downloadedAnimeDelete: (animeId: number, animeName: string) =>
     ipcRenderer.invoke(CHANNELS.DOWNLOADED_ANIME_DELETE, animeId, animeName),

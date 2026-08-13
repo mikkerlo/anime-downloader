@@ -60,6 +60,7 @@ let unsubSkipDetectorSignatureUpdated: Unsubscribe | null = null;
 let unsubChapterInjectProgress: Unsubscribe | null = null;
 
 const isStarred = ref(false);
+const isPrioritized = ref(false);
 const autoDlSubscription = ref<AutoDownloadSubscription | null>(null);
 const autoDlSaving = ref(false);
 const isDownloaded = ref(false);
@@ -200,6 +201,12 @@ onMounted(async () => {
     })
     .catch(() => {});
   window.api
+    .libraryGetPriority()
+    .then((ids) => {
+      isPrioritized.value = ids.includes(String(props.animeId));
+    })
+    .catch(() => {});
+  window.api
     .autoDlGetSubscription(props.animeId)
     .then((s) => {
       autoDlSubscription.value = s;
@@ -336,9 +343,11 @@ function applyDownloadedTranslationDefault(): void {
   });
 }
 
-async function toggleStar(): Promise<void> {
-  if (!anime.value) return;
-  const stripped: AnimeSearchResult = {
+// The library snapshot is deliberately a trimmed `AnimeSearchResult` — the full
+// detail payload carries fields the grids never render.
+function strippedAnime(): AnimeSearchResult | null {
+  if (!anime.value) return null;
+  return {
     id: anime.value.id,
     title: anime.value.title,
     titles: anime.value.titles,
@@ -349,7 +358,28 @@ async function toggleStar(): Promise<void> {
     year: anime.value.year,
     season: anime.value.season
   };
+}
+
+async function toggleStar(): Promise<void> {
+  const stripped = strippedAnime();
+  if (!stripped) return;
   isStarred.value = await window.api.libraryToggle(JSON.parse(JSON.stringify(stripped)));
+  // Un-starring drops the id from the priority list main-side; mirror it here
+  // so the two buttons cannot disagree without a reload.
+  if (!isStarred.value) isPrioritized.value = false;
+}
+
+async function togglePriority(): Promise<void> {
+  const stripped = strippedAnime();
+  if (!stripped) return;
+  const next = await window.api.librarySetPriority(
+    JSON.parse(JSON.stringify(stripped)),
+    !isPrioritized.value
+  );
+  isPrioritized.value = next.includes(String(stripped.id));
+  // Prioritizing an unstarred title stars it too (priority ⊆ library), so the
+  // star must fill in the same tick rather than after the next mount.
+  if (isPrioritized.value) isStarred.value = true;
 }
 
 const isShowFinished = computed<boolean>(() => {
@@ -564,6 +594,32 @@ const genreTags = computed<{ key: string; label: string }[]>(() => {
                   />
                 </svg>
                 {{ isStarred ? 'In library' : 'Add to library' }}
+              </button>
+              <button
+                class="btn priority-toggle"
+                :class="isPrioritized ? 'btn-primary' : 'btn-outline'"
+                :title="
+                  isPrioritized
+                    ? 'Remove from the Priority list'
+                    : 'Add to the Priority list (also adds to your library)'
+                "
+                @click="togglePriority"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  :fill="isPrioritized ? 'currentColor' : 'none'"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  width="16"
+                  height="16"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M3 21V4.5l2.77-.693a9 9 0 016.208.682l.108.054a9 9 0 006.086.71l3.114-.732a48.524 48.524 0 00-.005 10.499l-3.11.732a9 9 0 01-6.085-.711l-.108-.054a9 9 0 00-6.208-.682L3 15"
+                  />
+                </svg>
+                {{ isPrioritized ? 'Prioritized' : 'Prioritize' }}
               </button>
               <button
                 v-if="canAutoDl || autoDlSubscription"

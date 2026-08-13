@@ -47,6 +47,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `library-has` | invoke | Check if anime is starred |
 | `library-is-downloaded` | invoke | Check if anime has downloads |
 | `library-get-status` | invoke | Batch check starred + downloaded status for multiple anime IDs |
+| `library-get-priority` | invoke | Locally prioritized smotret-anime IDs (as strings) in promote order; IDs that no longer resolve in `library ∪ downloadedAnime` are pruned from the response without writing back |
+| `library-set-priority` | invoke | `(anime, priority)` — promote/demote. Promoting also writes the `library` entry if missing (the priority ⊆ library invariant, enforced main-side so the two writes cannot interleave) — deliberately stricter than the read's `library ∪ downloadedAnime` test, since `downloadedAnime` is file-derived and volatile while `library` is the durable record of user intent; demoting leaves `library` alone. Returns the resulting ordered ID list — pruned the same way as `library-get-priority`, so the two returns can't disagree — letting a caller refresh membership *and* ordering in one round-trip |
 | `downloaded-anime-add` | invoke | Mark anime as having downloads |
 | `downloaded-anime-delete` | invoke | Remove anime + delete folder |
 | `cleanup:get-size` | invoke | Sum bytes + file count for a show across hot+cold dirs (.mkv/.mp4/.ass/.srt) |

@@ -37,7 +37,8 @@ describe('SearchView', () => {
         .fn()
         .mockResolvedValue({ data: [anime(1, 'TV'), anime(2, 'TV'), anime(3, 'Movie')] }),
       libraryHas: vi.fn().mockResolvedValue(false),
-      libraryToggle: vi.fn().mockResolvedValue(true)
+      libraryToggle: vi.fn().mockResolvedValue(true),
+      libraryGetPriority: vi.fn().mockResolvedValue([])
     })
     const wrapper = mount(SearchView)
     await wrapper.find('input.search-input').setValue('x')
@@ -53,8 +54,42 @@ describe('SearchView', () => {
     expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
   })
 
+  it('reflects the priority flag on result cards and promotes through librarySetPriority', async () => {
+    // The overlay must work outside LibraryView too — a title is usually
+    // prioritized the moment it is found, not after a trip to the library.
+    const librarySetPriority = vi.fn().mockResolvedValue(['2'])
+    stubApi({
+      searchAnime: vi.fn().mockResolvedValue({ data: [anime(1, 'TV'), anime(2, 'TV')] }),
+      libraryHas: vi.fn().mockResolvedValue(false),
+      libraryGetPriority: vi.fn().mockResolvedValue(['1']),
+      librarySetPriority
+    })
+    const wrapper = mount(SearchView)
+    await wrapper.find('input.search-input').setValue('x')
+    await wrapper.find('form.search-wrap').trigger('submit')
+    await flushPromises()
+
+    const flags = wrapper.findAll('.poster-grid .priority-btn')
+    expect(flags).toHaveLength(2)
+    expect(flags[0].classes()).toContain('active')
+    expect(flags[1].classes()).not.toContain('active')
+
+    await flags[1].trigger('click')
+    await flushPromises()
+
+    expect(librarySetPriority).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }), true)
+    // The returned list is authoritative: id 1 was demoted elsewhere, id 2 is on.
+    const after = wrapper.findAll('.poster-grid .priority-btn')
+    expect(after[0].classes()).not.toContain('active')
+    expect(after[1].classes()).toContain('active')
+  })
+
   it('shows the empty state when a search returns nothing', async () => {
-    stubApi({ searchAnime: vi.fn().mockResolvedValue({ data: [] }), libraryHas: vi.fn() })
+    stubApi({
+      searchAnime: vi.fn().mockResolvedValue({ data: [] }),
+      libraryHas: vi.fn(),
+      libraryGetPriority: vi.fn().mockResolvedValue([])
+    })
     const wrapper = mount(SearchView)
     await wrapper.find('input.search-input').setValue('zzz')
     await wrapper.find('form.search-wrap').trigger('submit')
@@ -85,7 +120,8 @@ describe('LibraryView', () => {
   it('renders the saved library and filters by Shikimori status', async () => {
     stubApi({
       libraryGet: vi.fn().mockResolvedValue([anime(1, 'TV'), anime(2, 'TV'), anime(3, 'TV')]),
-      libraryGetStatus: vi.fn().mockResolvedValue({ 1: { starred: true, downloaded: true } })
+      libraryGetStatus: vi.fn().mockResolvedValue({ 1: { starred: true, downloaded: true } }),
+      libraryGetPriority: vi.fn().mockResolvedValue([])
     })
     const shiki = useShikimoriStore()
     shiki.rates = [rate(1, 'watching'), rate(2, 'completed')] as unknown as typeof shiki.rates
@@ -108,7 +144,9 @@ describe('LibraryView', () => {
   it('hides the status tabs when no library entry has a Shikimori status', async () => {
     stubApi({
       libraryGet: vi.fn().mockResolvedValue([anime(9, 'TV')]),
-      libraryGetStatus: vi.fn().mockResolvedValue({})
+      libraryGetStatus: vi.fn().mockResolvedValue({}),
+      // Empty priority list, so this case still isolates the Shikimori gate.
+      libraryGetPriority: vi.fn().mockResolvedValue([])
     })
     // Rates exist but for a show NOT in the library — tabs must stay hidden
     // (regression: gating on rate count alone showed empty non-"All" tabs).

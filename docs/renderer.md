@@ -21,7 +21,9 @@ src/renderer/src/
       PlayerView.vue
       SettingsView.vue         (thin wrapper around settings/SettingsShell.vue)
     shared/                    Reusable atoms used across views
-      AnimeCard.vue
+      AnimeCard.vue             props { anime, starred, prioritized? }; emits toggleStar, togglePriority.
+                                Both toggles are poster overlays inside .poster-wrap (star top-right,
+                                priority flag stacked below it) so they can never collide with the title/meta.
       CleanupModal.vue
       Sidebar.vue
       SidebarUpdateBanner.vue   Update prompt pinned above the profile chip (reads settings store updateStatus)

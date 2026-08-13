@@ -76,6 +76,9 @@ function installApi(overrides: ApiOverrides = {}): Record<string, ReturnType<typ
     probeEmbedQuality: vi.fn().mockResolvedValue(null),
     getSetting: vi.fn().mockResolvedValue(false),
     libraryHas: vi.fn().mockResolvedValue(false),
+    // Must be a real stub: the Proxy fallback returns a thenable that resolves
+    // to `undefined`, and `undefined.includes(...)` throws.
+    libraryGetPriority: vi.fn().mockResolvedValue([]),
     libraryIsDownloaded: vi.fn().mockResolvedValue(false),
     autoDlGetSubscription: vi.fn().mockResolvedValue(null),
     shikimoriGetUser: vi.fn().mockResolvedValue(null),

@@ -14,6 +14,7 @@ const loading = ref(false);
 const error = ref('');
 const statusFilter = ref<string>('to_watch');
 const starredIds = ref(new Set<number>());
+const priorityIds = ref(new Set<number>());
 const refreshing = ref(false);
 
 // Presentation for the Shikimori list statuses — labels + swatch colors for the
@@ -90,12 +91,16 @@ const statusCounts = computed(() => {
 async function refreshStarredFromEntries(list: ShikiAnimeRateEntry[]): Promise<void> {
   const ids = list.filter((e) => e.smotretAnime).map((e) => e.smotretAnime!.id);
   if (ids.length === 0) return;
-  const statuses = await window.api.libraryGetStatus(ids);
+  const [statuses, priority] = await Promise.all([
+    window.api.libraryGetStatus(ids),
+    window.api.libraryGetPriority()
+  ]);
   const starred = new Set<number>();
   for (const [id, s] of Object.entries(statuses)) {
     if (s.starred) starred.add(Number(id));
   }
   starredIds.value = starred;
+  priorityIds.value = new Set(priority.map(Number));
 }
 
 async function loadRates(): Promise<void> {
@@ -120,10 +125,27 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
   await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
   if (starredIds.value.has(anime.id)) {
     starredIds.value.delete(anime.id);
+    // Un-starring drops the id from the priority list main-side.
+    if (priorityIds.value.delete(anime.id)) {
+      priorityIds.value = new Set(priorityIds.value);
+    }
   } else {
     starredIds.value.add(anime.id);
   }
   starredIds.value = new Set(starredIds.value);
+}
+
+async function togglePriority(anime: AnimeSearchResult): Promise<void> {
+  const next = await window.api.librarySetPriority(
+    JSON.parse(JSON.stringify(anime)),
+    !priorityIds.value.has(anime.id)
+  );
+  priorityIds.value = new Set(next.map(Number));
+  // Prioritizing also stars, so the star fills in the same tick.
+  if (priorityIds.value.has(anime.id) && !starredIds.value.has(anime.id)) {
+    starredIds.value.add(anime.id);
+    starredIds.value = new Set(starredIds.value);
+  }
 }
 
 function selectList(status: string): void {
@@ -441,7 +463,9 @@ onMounted(() => {
               <AnimeCard
                 :anime="entry.smotretAnime"
                 :starred="starredIds.has(entry.smotretAnime.id)"
+                :prioritized="priorityIds.has(entry.smotretAnime.id)"
                 @toggle-star="toggleStar"
+                @toggle-priority="togglePriority"
                 @click="libraryStore.openAnime(entry.smotretAnime.id)"
               />
             </template>

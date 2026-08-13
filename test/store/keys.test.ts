@@ -58,7 +58,8 @@ describe('PERSISTED_STORE_KEYS', () => {
     'dismissedContinueWatching',
     'shikimoriProfile',
     'shikimoriFriends',
-    'shikimoriRecommendations'
+    'shikimoriRecommendations',
+    'priorityAnimeIds'
   ] as const
 
   it('matches the frozen expected key set exactly (order and content)', () => {

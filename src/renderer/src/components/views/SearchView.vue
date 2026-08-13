@@ -18,6 +18,7 @@ const results = ref<AnimeSearchResult[]>([]);
 const loading = ref(false);
 const searched = ref(false);
 const starredIds = reactive(new Set<number>());
+const priorityIds = reactive(new Set<number>());
 
 // Client-side type filter over the current result set (distinct typeTitles).
 const typeFilter = ref('all');
@@ -42,6 +43,11 @@ async function search(): Promise<void> {
   try {
     const response = await window.api.searchAnime(q);
     results.value = response.data;
+    // One call for the whole result set — cheaper than the N sequential
+    // `libraryHas` round-trips below, which predate it.
+    const priority = await window.api.libraryGetPriority();
+    priorityIds.clear();
+    for (const id of priority) priorityIds.add(Number(id));
     for (const anime of results.value) {
       if (await window.api.libraryHas(anime.id)) {
         starredIds.add(anime.id);
@@ -63,7 +69,20 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
     starredIds.add(anime.id);
   } else {
     starredIds.delete(anime.id);
+    // Un-starring drops the id from the priority list main-side.
+    priorityIds.delete(anime.id);
   }
+}
+
+async function togglePriority(anime: AnimeSearchResult): Promise<void> {
+  const next = await window.api.librarySetPriority(
+    JSON.parse(JSON.stringify(anime)),
+    !priorityIds.has(anime.id)
+  );
+  priorityIds.clear();
+  for (const id of next) priorityIds.add(Number(id));
+  // Prioritizing also stars, so the star fills in the same tick.
+  if (priorityIds.has(anime.id)) starredIds.add(anime.id);
 }
 </script>
 
@@ -125,7 +144,9 @@ async function toggleStar(anime: AnimeSearchResult): Promise<void> {
           :key="anime.id"
           :anime="anime"
           :starred="starredIds.has(anime.id)"
+          :prioritized="priorityIds.has(anime.id)"
           @toggle-star="toggleStar"
+          @toggle-priority="togglePriority"
           @click="libraryStore.openAnime(anime.id)"
         />
       </div>

@@ -87,13 +87,18 @@ describe('SyncplayClient ping.latencyCalculation echo (#231)', () => {
       'data',
       Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.6.9"}}\r\n')
     )
+    // Part of the fixture since #236: the roster — an entry for our room with
+    // nobody else in it — is what grants adoption, so without it `sendNow()`
+    // below is dropped at the adoption gate and never reaches the wire.
+    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { cinema: {} } }) + '\r\n'))
   }
 
   // A ping-only server State — which is also the shape that proves the pair is
   // recorded above handleState()'s `if (!ps) return` guard. It deliberately
-  // carries no playstate, so `lastRoomState` stays null and isAdopted() latches
-  // on the first sendLocalState(), letting tests that need an immediate send
-  // pick the hold exactly instead of riding the heartbeat's phase.
+  // carries no playstate, so `lastRoomState` stays null and adoption rests
+  // entirely on the alone-roster from handshake() above, letting tests that
+  // need an immediate send pick the hold exactly instead of riding the
+  // heartbeat's phase.
   const serverPing = (ping: Record<string, unknown>): void => {
     lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ State: { ping } }) + '\r\n'))
   }

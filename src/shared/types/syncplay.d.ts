@@ -17,6 +17,12 @@ interface SyncplayFilePayload {
   translationId: number | null
   canonicalName: string
   duration: number
+  /** True on the **first** file push of each `useSyncplayClient` mount (#236).
+   *  Tells main "a new player is announcing itself", which neither the
+   *  canonical name (stable across a same-episode reopen) nor snapshot
+   *  staleness (a clock, wrong for `PLAYBACK_STALE_MS` after a close) can say.
+   *  Renderer→main only — it never reaches the Syncplay wire. */
+  newPlayer?: boolean
 }
 
 interface SyncplayStatus {

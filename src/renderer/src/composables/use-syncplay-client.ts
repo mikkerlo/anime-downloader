@@ -181,16 +181,38 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     return ep ? `${deps.getAnimeName()} - ${ep}` : deps.getAnimeName()
   }
 
+  // "This push comes from a new player" (#236). Main keys both of `setFile()`'s
+  // resets — the adoption latch and the stale readiness flag — on it, and the
+  // renderer is the only honest source: `buildCanonicalName()` is
+  // `"{animeName} - {ep}"` with no translation component, so a same-episode
+  // reopen re-pushes a byte-identical name at a brand-new element, and main's
+  // other candidate (snapshot staleness) still reads "live" for
+  // `PLAYBACK_STALE_MS` after the previous player closed — precisely the window
+  // a close-and-reopen lands in.
+  //
+  // Mount-scoped rather than tied to the `onMounted` push: a player that mounts
+  // *before* the session is `ready` skips that push at the guard below, and its
+  // first announcement is then the transition-into-ready watcher's. Consumed
+  // only by a push that actually goes out, for the same reason.
+  //
+  // Wrong in either direction is load-bearing: claiming it on a re-push tells
+  // peers we are ready mid-buffer, and failing to claim it on a mount lets the
+  // previous player's adoption latch yank the room to 0.
+  let announcedThisMount = false
+
   function pushSyncplayFile(): void {
     if (syncplayStatus.value.state !== 'ready') return
     const dur = deps.getVideoEl()?.duration || deps.getDuration() || 0
+    const newPlayer = !announcedThisMount
+    announcedThisMount = true
     window.api.syncplaySetFile({
       animeId: deps.getAnimeId(),
       malId: deps.getMalId(),
       episodeInt: deps.getCurrentEpisodeInt() || deps.getActiveEpisodeLabel() || '',
       translationId: deps.activeTranslationId.value ?? null,
       canonicalName: buildCanonicalName(),
-      duration: dur
+      duration: dur,
+      newPlayer
     })
   }
 
@@ -425,7 +447,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (needsPlayPause) {
       appliedPaused = effectivePaused
       if (effectivePaused) v.pause()
-      else v.play().catch(() => {})
+      // Retracted like every other failed call (#236). Swallowing the rejection
+      // here latched `appliedPaused = false` for good: a remote resume refused
+      // by autoplay policy fires no `play` event to consume its mark, and
+      // `onLocalPlay()` then read the user's next real play as this echo, so it
+      // never reached the room. This was the one mark site that structurally
+      // could not retract — the same door the ready gate and useMsePlayer's
+      // two `v.play()` sites already close, through the same function.
+      else v.play().catch(() => markProgrammaticPlayback(null))
     }
     if (state.setBy && needsSeek) {
       showSyncplayToast(`${state.setBy} seeked to ${deps.formatTime(state.position)}`)

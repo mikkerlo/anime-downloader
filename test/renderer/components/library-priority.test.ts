@@ -142,6 +142,32 @@ describe('LibraryView — Priority tab', () => {
     expect(tabLabels(wrapper)).toEqual(['All', 'Priority', 'Watching', 'Planned', 'Completed'])
   })
 
+  it('falls back to the onboarding copy when the last entry leaves an empty library', async () => {
+    // Un-starring the last (prioritized) entry from the Priority tab empties the
+    // library while `statusFilter` stays on 'priority' — and `showFilterRow`
+    // goes false with it, so the user cannot switch back. The empty-library
+    // branch has to win over the priority one or a first-run-looking library
+    // reads "Nothing prioritized yet".
+    stubApi({
+      libraryGet: vi
+        .fn()
+        .mockResolvedValueOnce([anime(1)])
+        .mockResolvedValue([]),
+      libraryGetStatus: vi.fn().mockResolvedValue({}),
+      libraryGetPriority: vi.fn().mockResolvedValueOnce(['1']).mockResolvedValue([]),
+      libraryToggle: vi.fn().mockResolvedValue(false)
+    })
+    const wrapper = mount(LibraryView)
+    await flushPromises()
+
+    await wrapper.findAll('.pill-tab')[1].trigger('click')
+    await wrapper.find('.poster-grid .star-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.pill-tabs').exists()).toBe(false)
+    expect(wrapper.find('.status-text').text()).toContain('No saved anime yet')
+  })
+
   it('drops a title from the priority list when it is un-starred', async () => {
     // Main-side, LIBRARY_TOGGLE demotes on un-star; the view must reload rather
     // than keep showing a flag for a title that left the library.

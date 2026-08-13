@@ -194,13 +194,17 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
           </button>
         </div>
       </div>
+      <!-- Empty-library first: un-starring the last (prioritized) entry from the
+           Priority tab empties the library while `statusFilter` stays on
+           'priority', and onboarding copy beats "Nothing prioritized yet" for a
+           user who has saved nothing at all. -->
+      <div v-else-if="library.length === 0" class="status-text">
+        No saved anime yet. Use the star button on search results to add anime here.
+      </div>
       <div v-else-if="statusFilter === 'priority'" class="status-text">
         Nothing prioritized yet — use the flag on a card, or “Prioritize” on an anime’s page.
       </div>
-      <div v-else-if="library.length > 0" class="status-text">No anime with this status.</div>
-      <div v-else class="status-text">
-        No saved anime yet. Use the star button on search results to add anime here.
-      </div>
+      <div v-else class="status-text">No anime with this status.</div>
     </div>
   </main>
 </template>

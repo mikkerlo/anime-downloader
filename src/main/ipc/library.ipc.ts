@@ -65,21 +65,33 @@ export function register({ store, animeCacheService }: AppDeps): void {
     return result
   })
 
-  // Locally prioritized titles, in promote order. Priority persists ids only —
-  // the metadata home stays `library` / `downloadedAnime` — so ids that no
-  // longer resolve there are pruned from the *response* without writing back:
-  // a read handler that repaired the store would destroy data if `library` were
-  // ever transiently empty.
-  ipcMain.handle(CHANNELS.LIBRARY_GET_PRIORITY, () => {
+  // A priority id is renderable only while some metadata home still holds it.
+  // Both priority handlers judge that the same way and prune their *response*
+  // without writing back: a handler that repaired the store would destroy data
+  // if `library` were ever transiently empty. Callers assign `priorityIds` from
+  // the read *and* the write return, so a raw write return would resurrect a
+  // dangling id the load had already hidden — and in `LibraryView` it would
+  // consume a rank slot, making the badges read `1, 3, 4` until the next reload.
+  const resolvable = (): ((key: string) => boolean) => {
     const lib = readLib()
     const downloaded = readDownloaded()
-    return readPriority().filter((key) => !!lib[key] || !!downloaded[key])
-  })
+    return (key) => !!lib[key] || !!downloaded[key]
+  }
+
+  // Locally prioritized titles, in promote order. Priority persists ids only —
+  // the metadata home stays `library` / `downloadedAnime`.
+  ipcMain.handle(CHANNELS.LIBRARY_GET_PRIORITY, () => readPriority().filter(resolvable()))
 
   // Promote/demote in one round-trip, returning the resulting ordered list so
   // the caller refreshes membership *and* ordering without a second call.
-  // Promoting also stars the title if it is not already starred — the priority
-  // ⊆ library invariant, enforced main-side so the two writes cannot interleave.
+  //
+  // Promoting stars the title whenever `library` lacks it — deliberately
+  // stricter than the read's `library ∪ downloadedAnime` test. `downloadedAnime`
+  // is file-derived and volatile ("Remove files", the cleanup sweep), so
+  // anchoring only there would let a file deletion silently evaporate a
+  // prioritization; `library` is the durable record of user intent, and the flag
+  // is user intent. The read is a non-writing display backstop and so stays as
+  // permissive as possible; the write is where the anchor gets established.
   ipcMain.handle(
     CHANNELS.LIBRARY_SET_PRIORITY,
     (_event, anime: AnimeSearchResult, priority: boolean) => {
@@ -91,15 +103,15 @@ export function register({ store, animeCacheService }: AppDeps): void {
           lib[key] = anime
           store.set('library', lib)
         }
-        if (current.includes(key)) return current
+        if (current.includes(key)) return current.filter(resolvable())
         const next = [...current, key]
         store.set('priorityAnimeIds', next)
-        return next
+        return next.filter(resolvable())
       }
-      if (!current.includes(key)) return current
+      if (!current.includes(key)) return current.filter(resolvable())
       const next = current.filter((id) => id !== key)
       store.set('priorityAnimeIds', next)
-      return next
+      return next.filter(resolvable())
     }
   )
 }

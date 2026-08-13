@@ -94,6 +94,43 @@ describe('library IPC — library-set-priority', () => {
     expect(store.get('priorityAnimeIds')).toEqual(['3', '1'])
   })
 
+  it('stars a title that lives only in downloadedAnime when promoting it', async () => {
+    // Deliberately stricter than the read's `library ∪ downloadedAnime` test:
+    // `downloadedAnime` is file-derived and volatile (a "Remove files" click
+    // drops it), so anchoring a prioritization only there would let a file
+    // deletion silently evaporate it. `library` is the durable record of intent.
+    const { invoke, store } = registerRouter({ downloadedAnime: { '7': anime(7) } })
+
+    const result = await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(7), true)
+
+    expect(lib(store)['7']).toMatchObject({ id: 7 })
+    expect(result).toEqual(['7'])
+  })
+
+  it('prunes unresolvable ids from its return, matching library-get-priority', async () => {
+    // Regression: the write returned the raw stored array while the read pruned
+    // it, and every renderer assigns `priorityIds` from *both* — so a dangling
+    // id invisible on load came back on the next toggle, and in `LibraryView`
+    // consumed a rank slot (badges reading `1, 3, 4`) until the next reload.
+    const { invoke, store } = registerRouter({
+      library: { '1': anime(1) },
+      downloadedAnime: { '2': anime(2) },
+      priorityAnimeIds: ['404', '1']
+    })
+
+    // Promote: the new id is appended, the dangling one is dropped from the view.
+    expect(await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(2), true)).toEqual(['1', '2'])
+    // Repeat promote (the early-return branch) agrees.
+    expect(await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(2), true)).toEqual(['1', '2'])
+    // Demote, and the no-op demote of an absent id, likewise.
+    expect(await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(2), false)).toEqual(['1'])
+    expect(await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(99), false)).toEqual(['1'])
+    // Pruning stays display-only — the dangling id is never written away.
+    expect(store.get('priorityAnimeIds')).toEqual(['404', '1'])
+    // ...and matches what a fresh load would report.
+    expect(await invoke(CHANNELS.LIBRARY_GET_PRIORITY)).toEqual(['1'])
+  })
+
   it('demotes without touching library membership, and no-ops on an absent id', async () => {
     const { invoke, store } = registerRouter({
       library: { '3': anime(3), '1': anime(1) },

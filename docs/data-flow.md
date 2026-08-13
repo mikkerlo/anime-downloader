@@ -319,7 +319,9 @@ Overlaid on top of the merge, a local priority list:
     library-set-priority(anime, true)  stars the title if it is not starred
     library-toggle (un-star)           drops the id from priorityAnimeIds
     library-get-priority               prunes unresolvable ids from the
-                                       response (no write-back)
+    and library-set-priority's return  response (no write-back); both judge
+                                       "resolvable" identically, so the read
+                                       and the write return cannot disagree
 
   LibraryView renders it as a "Priority" pill in the tab strip, in stored
   (promote) order with a rank badge. The strip is gated on

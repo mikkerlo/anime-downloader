@@ -173,7 +173,8 @@ const STORE_DEFAULTS = {
   dismissedContinueWatching: [] as string[],
   shikimoriProfile: null as ShikimoriProfile | null,
   shikimoriFriends: [] as ShikiFriendCard[],
-  shikimoriRecommendations: [] as RecommendationEntry[]
+  shikimoriRecommendations: [] as RecommendationEntry[],
+  priorityAnimeIds: [] as string[]
 }
 
 const store = createStorageService(STORE_DEFAULTS, {

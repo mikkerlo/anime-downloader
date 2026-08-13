@@ -13,6 +13,10 @@ const { rates } = storeToRefs(shikimoriStore);
 const library = ref<AnimeSearchResult[]>([]);
 const starredIds = ref(new Set<number>());
 const downloadedIds = ref(new Set<number>());
+// Local priority list: ordered smotret-anime ids (promote order), plus a
+// derived rank map so the Priority tab can render as a queue. Purely local —
+// it has no Shikimori dependency and survives logout.
+const priorityIds = ref<number[]>([]);
 
 // Join Shikimori rates onto library entries by smotret-anime id, so the
 // status tabs can filter the saved library by watch status.
@@ -28,22 +32,57 @@ const statusBySmotretId = computed(() => {
 // would surface tabs whose non-"All" options are all empty).
 const hasStatuses = computed(() => library.value.some((a) => statusBySmotretId.value.has(a.id)));
 
-const statusTabs: { id: string; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'watching', label: 'Watching' },
-  { id: 'planned', label: 'Planned' },
-  { id: 'completed', label: 'Completed' }
-];
+const prioritySet = computed(() => new Set(priorityIds.value));
+const priorityRank = computed(() => {
+  const map = new Map<number, number>();
+  priorityIds.value.forEach((id, i) => map.set(id, i + 1));
+  return map;
+});
+const hasPriority = computed(() => priorityIds.value.length > 0);
+
 const statusFilter = ref('all');
+
+// Built dynamically: "All" always, "Priority" whenever the list is non-empty
+// *or* the user is standing on it (so demoting the last entry cannot strand
+// `statusFilter` on a tab that just vanished), and the three Shikimori status
+// pills only when a library entry actually resolved to a status.
+const statusTabs = computed<{ id: string; label: string }[]>(() => {
+  const tabs = [{ id: 'all', label: 'All' }];
+  if (hasPriority.value || statusFilter.value === 'priority') {
+    tabs.push({ id: 'priority', label: 'Priority' });
+  }
+  if (hasStatuses.value) {
+    tabs.push(
+      { id: 'watching', label: 'Watching' },
+      { id: 'planned', label: 'Planned' },
+      { id: 'completed', label: 'Completed' }
+    );
+  }
+  return tabs;
+});
+
+// Derived from the tab list rather than restated, so the strip can never be
+// hidden while `statusFilter` still points at one of its tabs: an "All"-only
+// strip is noise, anything more is a real choice.
+const showFilterRow = computed(() => statusTabs.value.length > 1 && library.value.length > 0);
 
 function matchesFilter(anime: AnimeSearchResult): boolean {
   if (statusFilter.value === 'all') return true;
+  if (statusFilter.value === 'priority') return prioritySet.value.has(anime.id);
   const status = statusBySmotretId.value.get(anime.id);
   if (statusFilter.value === 'watching') return status === 'watching' || status === 'rewatching';
   return status === statusFilter.value;
 }
 
-const filteredLibrary = computed(() => library.value.filter(matchesFilter));
+const filteredLibrary = computed(() => {
+  const matched = library.value.filter(matchesFilter);
+  // The Priority tab reads as a queue, so it renders in stored (promote) order
+  // rather than the merged-map order every other tab inherits from LIBRARY_GET.
+  if (statusFilter.value !== 'priority') return matched;
+  return [...matched].sort(
+    (a, b) => priorityIds.value.indexOf(a.id) - priorityIds.value.indexOf(b.id)
+  );
+});
 
 onMounted(async () => {
   await loadLibrary();
@@ -58,7 +97,11 @@ onMounted(async () => {
 async function loadLibrary(): Promise<void> {
   library.value = await window.api.libraryGet();
   const ids = library.value.map((a) => a.id);
-  const statuses = await window.api.libraryGetStatus(ids);
+  const [statuses, priority] = await Promise.all([
+    window.api.libraryGetStatus(ids),
+    window.api.libraryGetPriority()
+  ]);
+  priorityIds.value = priority.map(Number);
   const starred = new Set<number>();
   const downloaded = new Set<number>();
   for (const [id, s] of Object.entries(statuses)) {
@@ -72,6 +115,16 @@ async function loadLibrary(): Promise<void> {
 async function toggleStar(anime: AnimeSearchResult): Promise<void> {
   await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
   await loadLibrary();
+}
+
+async function togglePriority(anime: AnimeSearchResult): Promise<void> {
+  // The handler returns the resulting ordered list, so membership *and*
+  // ordering come back from the one round-trip.
+  const next = await window.api.librarySetPriority(
+    JSON.parse(JSON.stringify(anime)),
+    !prioritySet.value.has(anime.id)
+  );
+  priorityIds.value = next.map(Number);
 }
 
 async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
@@ -88,7 +141,7 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
       <span v-if="library.length > 0" class="sub">· {{ library.length }} shows</span>
     </header>
     <div class="body">
-      <div v-if="hasStatuses && library.length > 0" class="filter-row">
+      <div v-if="showFilterRow" class="filter-row">
         <div class="pill-tabs">
           <button
             v-for="tab in statusTabs"
@@ -107,9 +160,16 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
           <AnimeCard
             :anime="anime"
             :starred="starredIds.has(anime.id)"
+            :prioritized="prioritySet.has(anime.id)"
             @toggle-star="toggleStar"
+            @toggle-priority="togglePriority"
             @click="libraryStore.openAnime(anime.id)"
           />
+          <span
+            v-if="statusFilter === 'priority' && priorityRank.has(anime.id)"
+            class="rank-badge"
+            >{{ priorityRank.get(anime.id) }}</span
+          >
           <button
             v-if="downloadedIds.has(anime.id)"
             class="delete-folder-btn"
@@ -133,6 +193,9 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
             Remove files
           </button>
         </div>
+      </div>
+      <div v-else-if="statusFilter === 'priority'" class="status-text">
+        Nothing prioritized yet — use the flag on a card, or “Prioritize” on an anime’s page.
       </div>
       <div v-else-if="library.length > 0" class="status-text">No anime with this status.</div>
       <div v-else class="status-text">
@@ -193,6 +256,27 @@ async function deleteAnime(anime: AnimeSearchResult): Promise<void> {
   position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* Queue position on the Priority tab. Anchored to `.card-wrap` (not inside
+   AnimeCard) so the shared atom stays free of tab-specific decoration. */
+.rank-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 88%, black);
+  color: #fff;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
 }
 
 .delete-folder-btn {

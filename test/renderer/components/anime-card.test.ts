@@ -37,4 +37,34 @@ describe('AnimeCard', () => {
     expect(wrapper.emitted('toggleStar')).toBeTruthy()
     expect(wrapper.emitted('toggleStar')![0]).toEqual([anime])
   })
+
+  it('anchors the priority button inside the poster wrapper too', () => {
+    // Same regression as the star (#269 adds a *second* overlay): both must
+    // live inside `.poster-wrap` so neither can collide with the title/meta.
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false, prioritized: false } })
+    expect(wrapper.find('.poster-wrap .priority-btn').exists()).toBe(true)
+    expect(wrapper.find('.acard > .priority-btn').exists()).toBe(false)
+  })
+
+  it('reflects the prioritized state and emits togglePriority on click', async () => {
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false, prioritized: true } })
+    expect(wrapper.find('.priority-btn').classes()).toContain('active')
+
+    await wrapper.find('.priority-btn').trigger('click')
+    expect(wrapper.emitted('togglePriority')).toBeTruthy()
+    expect(wrapper.emitted('togglePriority')![0]).toEqual([anime])
+    // The two overlays are independent — priority must not fire star.
+    expect(wrapper.emitted('toggleStar')).toBeFalsy()
+  })
+
+  it('still mounts when `prioritized` and its listener are omitted', async () => {
+    // `prioritized` is optional, so a caller that has not been wired renders an
+    // inert flag rather than throwing.
+    const wrapper = mount(AnimeCard, { props: { anime, starred: false } })
+    const flag = wrapper.find('.priority-btn')
+    expect(flag.exists()).toBe(true)
+    expect(flag.classes()).not.toContain('active')
+    await flag.trigger('click')
+    expect(wrapper.emitted('togglePriority')).toBeTruthy()
+  })
 })

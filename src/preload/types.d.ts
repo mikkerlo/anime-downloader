@@ -58,6 +58,8 @@ interface Api {
     ids: number[]
   ) => Promise<Record<number, { starred: boolean; downloaded: boolean }>>
   libraryIsDownloaded: (id: number) => Promise<boolean>
+  libraryGetPriority: () => Promise<string[]>
+  librarySetPriority: (anime: AnimeSearchResult, priority: boolean) => Promise<string[]>
   downloadedAnimeAdd: (anime: AnimeSearchResult) => Promise<void>
   downloadedAnimeDelete: (animeId: number, animeName: string) => Promise<void>
   cleanupGetSize: (animeId: number, animeName: string) => Promise<{ bytes: number; files: number }>

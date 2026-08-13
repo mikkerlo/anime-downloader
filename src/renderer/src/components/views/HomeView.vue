@@ -68,11 +68,15 @@ const recentlyAdded = computed<AnimeSearchResult[]>(() =>
 );
 
 const starredIds = reactive(new Set<number>());
+const priorityIds = reactive(new Set<number>());
 
 async function refreshStars(): Promise<void> {
   const cards = recentlyAdded.value;
   try {
-    const inLibrary = await Promise.all(cards.map((a) => window.api.libraryHas(a.id)));
+    const [inLibrary, priority] = await Promise.all([
+      Promise.all(cards.map((a) => window.api.libraryHas(a.id))),
+      window.api.libraryGetPriority()
+    ]);
     // Bail if the list changed while we were awaiting, so two interleaved
     // refreshes can't clear the set and apply stale results.
     if (cards !== recentlyAdded.value) return;
@@ -80,6 +84,8 @@ async function refreshStars(): Promise<void> {
     cards.forEach((a, i) => {
       if (inLibrary[i]) starredIds.add(a.id);
     });
+    priorityIds.clear();
+    for (const id of priority) priorityIds.add(Number(id));
   } catch (err) {
     console.error('Failed to load library status for Home:', err);
   }
@@ -88,7 +94,22 @@ async function refreshStars(): Promise<void> {
 async function toggleStar(anime: AnimeSearchResult): Promise<void> {
   const inLibrary = await window.api.libraryToggle(JSON.parse(JSON.stringify(anime)));
   if (inLibrary) starredIds.add(anime.id);
-  else starredIds.delete(anime.id);
+  else {
+    starredIds.delete(anime.id);
+    // Un-starring drops the id from the priority list main-side.
+    priorityIds.delete(anime.id);
+  }
+}
+
+async function togglePriority(anime: AnimeSearchResult): Promise<void> {
+  const next = await window.api.librarySetPriority(
+    JSON.parse(JSON.stringify(anime)),
+    !priorityIds.has(anime.id)
+  );
+  priorityIds.clear();
+  for (const id of next) priorityIds.add(Number(id));
+  // Prioritizing also stars, so the star fills in the same tick.
+  if (priorityIds.has(anime.id)) starredIds.add(anime.id);
 }
 
 watch(recentlyAdded, () => void refreshStars(), { immediate: true });
@@ -291,7 +312,9 @@ onUnmounted(() => {
               :key="a.id"
               :anime="a"
               :starred="starredIds.has(a.id)"
+              :prioritized="priorityIds.has(a.id)"
               @toggle-star="toggleStar"
+              @toggle-priority="togglePriority"
               @click="libraryStore.openAnime(a.id)"
             />
           </div>

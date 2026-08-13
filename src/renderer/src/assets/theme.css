@@ -405,6 +405,42 @@ body {
   width: 17px;
   height: 17px;
 }
+/* Second poster overlay, stacked *below* the star rather than beside it: the
+   poster is 2/3, so vertical room is the plentiful axis and the two buttons
+   cannot collide on the narrowest --poster-grid track. */
+.acard .priority-btn {
+  position: absolute;
+  top: 46px;
+  right: 8px;
+  z-index: 3;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  color: rgba(255, 255, 255, 0.78);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+  transition: all 0.15s;
+  opacity: 0;
+}
+.acard:hover .priority-btn {
+  opacity: 1;
+}
+.acard .priority-btn:hover {
+  transform: scale(1.12);
+  color: var(--accent);
+}
+.acard .priority-btn.active {
+  opacity: 1;
+  color: var(--accent);
+}
+.acard .priority-btn svg {
+  width: 16px;
+  height: 16px;
+}
 .acard .score-badge {
   position: absolute;
   bottom: 8px;

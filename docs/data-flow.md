@@ -311,4 +311,20 @@ Two sources merged and deduplicated:
 LibraryView shows both with indicators:
   Starred anime: star toggle
   Downloaded anime: "Remove files" button (deletes folder + store entry)
+
+Overlaid on top of the merge, a local priority list:
+  priorityAnimeIds - ordered ids the user flagged "high priority" (#269)
+
+  Ids only; metadata is read from the merge above, so priority ⊆ library:
+    library-set-priority(anime, true)  stars the title if it is not starred
+    library-toggle (un-star)           drops the id from priorityAnimeIds
+    library-get-priority               prunes unresolvable ids from the
+                                       response (no write-back)
+
+  LibraryView renders it as a "Priority" pill in the tab strip, in stored
+  (promote) order with a rank badge. The strip is gated on
+  (hasStatuses || hasPriority), so it shows for signed-out users too — the
+  other three pills are Shikimori-status filters and stay hidden without rates.
+  AnimeCard carries the flag toggle in all four grids (Library, Search, Home,
+  Shikimori); AnimeDetailView has a "Prioritize" button beside the star.
 ```

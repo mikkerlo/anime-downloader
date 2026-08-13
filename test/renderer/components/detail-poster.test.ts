@@ -51,6 +51,7 @@ function stubApi(): void {
       getAnime: vi.fn().mockResolvedValue({ source: 'api', data: detail() }),
       getSetting: vi.fn().mockResolvedValue(null),
       libraryHas: vi.fn().mockResolvedValue(false),
+      libraryGetPriority: vi.fn().mockResolvedValue([]),
       libraryIsDownloaded: vi.fn().mockResolvedValue(false),
       autoDlGetSubscription: vi.fn().mockResolvedValue(null),
       shikimoriGetUser: vi.fn().mockResolvedValue(null),

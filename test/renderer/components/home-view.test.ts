@@ -37,6 +37,10 @@ function stubApi(
     shikimoriGetAnimeRates: vi.fn().mockResolvedValue([]),
     libraryHas: vi.fn().mockResolvedValue(false),
     libraryToggle: vi.fn().mockResolvedValue(true),
+    // Must be a real stub: the Proxy fallback returns a *function*, and
+    // `new Set(fn)` / `for (const id of fn)` throws "not iterable".
+    libraryGetPriority: vi.fn().mockResolvedValue([]),
+    librarySetPriority: vi.fn().mockResolvedValue([]),
     getSetting: vi
       .fn()
       .mockImplementation((key: string) =>

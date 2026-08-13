@@ -54,6 +54,10 @@ function stubApi(opts: {
     shikimoriGetProfile: vi.fn().mockResolvedValue(opts.profile ?? null),
     libraryGetStatus: vi.fn().mockResolvedValue({}),
     libraryToggle: vi.fn().mockResolvedValue(true),
+    // Must be a real stub: the Proxy fallback returns a *function*, and
+    // `new Set(fn)` throws "not iterable".
+    libraryGetPriority: vi.fn().mockResolvedValue([]),
+    librarySetPriority: vi.fn().mockResolvedValue([]),
     shellOpenExternal: vi.fn().mockResolvedValue(true)
   }
   ;(window as unknown as { api: unknown }).api = new Proxy(real, {

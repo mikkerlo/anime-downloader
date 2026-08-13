@@ -60,4 +60,10 @@ export function register({ store }: AppDeps): void {
   ipcMain.handle(CHANNELS.SYNCPLAY_GET_STATUS, () => syncplay.getStatus())
 
   ipcMain.handle(CHANNELS.SYNCPLAY_GET_ROOM_USERS, () => syncplay.getRoomUsers())
+
+  // A dedicated channel rather than a field on SYNCPLAY_GET_STATUS (#262):
+  // `SyncplayStatus` is the connection-state shape the lifetime-scoped
+  // `useSyncplayStore` caches for UI hydration, and a per-open, time-sensitive
+  // playhead read served from that cache would be stale by construction.
+  ipcMain.handle(CHANNELS.SYNCPLAY_GET_ROOM_POSITION, () => syncplay.getRoomPosition())
 }

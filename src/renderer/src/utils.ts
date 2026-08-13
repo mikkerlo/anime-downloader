@@ -120,6 +120,53 @@ export function waitingToastVisible(waitingForDownload: boolean, downloadDead: b
   return waitingForDownload && !downloadDead
 }
 
+// Where to spawn the MKV/MSE ffmpeg session (#262). The room outranks the saved
+// position here for the same reason it outranks it at the playhead (#240) — but
+// one layer earlier, because by the time `roomOwnsPlayhead()` runs the session
+// has already been spawned. Spawned at the local target while the room sits
+// elsewhere, the remote apply at `loadedmetadata` seeks outside the buffer and
+// costs a second ffmpeg spawn plus its buffer-ahead wait, and the readiness gate
+// holds every peer in the room for the duration.
+//
+// `roomPosition` is main's projection (`syncplay:get-room-position`), already
+// null unless the session is `ready` *and* a non-self state has been seen for
+// the current file — so a solo room, a dead session and a fresh file all fall
+// through to the saved record, and a null must never be read as 0.
+//
+// The 1 s pre-roll is unchanged from the saved-position path: it absorbs
+// keyframe alignment, and here also the residual projection error.
+//
+// `fromRoom` is what suppresses the "Resumed at …" toast, in place of a live
+// `roomOwnsPlayhead()` reading: if the session drops between the spawn and
+// `loadedmetadata`, the predicate goes false while the playhead is still landing
+// on the room's position, and the toast would name a position we are not at.
+export function resolveMkvSpawnTarget(
+  saved: { position: number; duration: number; watched?: boolean } | null,
+  roomPosition: number | null
+): { initialSeek: number; resumeTarget: number; fromRoom: boolean } {
+  if (typeof roomPosition === 'number' && Number.isFinite(roomPosition) && roomPosition >= 0) {
+    return {
+      initialSeek: Math.max(0, roomPosition - 1),
+      resumeTarget: roomPosition,
+      fromRoom: true
+    }
+  }
+  if (
+    saved &&
+    !saved.watched &&
+    saved.position > 5 &&
+    saved.duration > 0 &&
+    saved.position / saved.duration < 0.95
+  ) {
+    return {
+      initialSeek: Math.max(0, saved.position - 1),
+      resumeTarget: saved.position,
+      fromRoom: false
+    }
+  }
+  return { initialSeek: 0, resumeTarget: 0, fromRoom: false }
+}
+
 // Guards the one write to `PlayerView`'s `duration` ref (#237). The HTML load
 // algorithm sets `duration` to `NaN` and fires `durationchange` on every
 // element reload, and `NaN` slips past the `<= 0` guards the seek bar's

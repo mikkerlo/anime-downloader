@@ -273,6 +273,16 @@ export class SyncplayClient extends EventEmitter {
   // compensation — this goes back out on the wire). Lets a spectator echo the
   // room instead of asserting a position it doesn't have.
   private lastRoomState: { position: number; paused: boolean; at: number } | null = null
+  // The last room state that made it *past* the echo guards in handleState() —
+  // the same frame we hand the renderer as a `remote-state`, carrying the same
+  // RTT compensation. Deliberately a second field rather than a read of
+  // `lastRoomState` above: that one is recorded above the guards on purpose, so
+  // a user alone in a room has one (their own reported position echoed back),
+  // and seeding a spawn from it would re-break the solo-room case
+  // `roomOwnsPlayhead()` exists to protect. Session-scoped like `lastRoomState`,
+  // plus cleared when *our* file identity changes — the room's position belongs
+  // to the file it was reported for (#262).
+  private lastRemoteRoomState: { position: number; paused: boolean; at: number } | null = null
   // Whether local playback has converged with the room. False for a freshly
   // opened file — its <video> reports {0, paused} until the first remote State
   // seeks it — so that startup state is never asserted at the room.
@@ -427,6 +437,25 @@ export class SyncplayClient extends EventEmitter {
     return this.roomUsers.map((u) => ({ ...u }))
   }
 
+  // Where the room is *right now*, or null when the room does not own the
+  // playhead: no live session, or no non-self state seen for the current file
+  // (#262). The MKV/MSE open reads this to seed the ffmpeg spawn, which is a
+  // decision the renderer cannot make — `useSyncplayClient` is player-scoped
+  // and subscribes to `remote-state` behind two IPC round-trips, while
+  // `prepareMkvForPlayback` runs behind one, so on the dominant path (join a
+  // room, open a local .mkv) the renderer has nothing parked yet.
+  //
+  // Projected, not raw: a spawn is corrected only by another spawn — the very
+  // respawn this exists to remove — where an *apply* is corrected by the next
+  // 1 Hz state. The renderer never holds the value long enough to go stale
+  // either, since main computes it at reply time.
+  getRoomPosition(): number | null {
+    if (this.status.state !== 'ready') return null
+    const room = this.lastRemoteRoomState
+    if (!room) return null
+    return this.projectedRoomPosition(room)
+  }
+
   setFile(file: SyncplayFileInfo): void {
     // Both resets below mean one thing — "a *new player* is announcing itself"
     // — and neither signal says it alone (#236). File identity catches an
@@ -438,8 +467,15 @@ export class SyncplayClient extends EventEmitter {
     // duration-known push (PlayerView's onDurationChange), the in-player
     // translation switch and the transition-into-ready push on a reconnect all
     // come from the same, still-live player.
-    const isNewPlayer =
-      this.currentFile?.canonicalName !== file.canonicalName || file.newPlayer === true
+    const identityChanged = this.currentFile?.canonicalName !== file.canonicalName
+    const isNewPlayer = identityChanged || file.newPlayer === true
+    // The room's position was reported for the file we were on. Handing it to
+    // the next episode's ffmpeg spawn would be worse than the saved position it
+    // replaces, so it is dropped on an identity change and re-earned from the
+    // next inbound state (~1 Hz). Keyed on identity alone, not `isNewPlayer`: a
+    // same-episode reopen is the same content, and the room's position is still
+    // the right seed for it (#262).
+    if (identityChanged) this.lastRemoteRoomState = null
     // A different <video> is back at position 0 — it has to converge on the
     // room again before it may assert, or its startup play/pause/seeked events
     // yank the room to 0 through a latch the previous player earned.
@@ -568,6 +604,7 @@ export class SyncplayClient extends EventEmitter {
     this.snapshot = { position: 0, paused: true }
     this.lastSnapshotAt = 0
     this.lastRoomState = null
+    this.lastRemoteRoomState = null
     this.playbackAdopted = false
     this.lastAppliedRemotePosition = null
   }
@@ -1388,6 +1425,10 @@ export class SyncplayClient extends EventEmitter {
     if (doSeek || Math.abs(this.snapshot.position - compensated) > ADOPT_TOLERANCE_S) {
       this.lastAppliedRemotePosition = Math.max(0, compensated)
     }
+    // Recorded here, on the value we are about to emit, so `getRoomPosition()`
+    // answers with exactly what the renderer would have applied — clamped like
+    // the echo target above, so a projection can only walk it forward (#262).
+    this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {
       paused,

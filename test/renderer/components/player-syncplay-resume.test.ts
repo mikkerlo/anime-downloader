@@ -30,7 +30,10 @@ function resumeBody(): string {
   return SOURCE.slice(start, end)
 }
 
-const GUARD = 'if (roomOwnsPlayhead()) return;'
+// #262 widened this guard: the ffmpeg session may have been spawned at the
+// room's position even though the session has since dropped, in which case the
+// live predicate reads false while the playhead still lands where the room was.
+const GUARD = 'if (roomOwnsPlayhead() || mkvSessionSeededFromRoom()) return;'
 
 describe('PlayerView — remote state outranks the saved position (#240)', () => {
   it('guards the resume on a ready session with a remote state applied or pending', () => {
@@ -78,5 +81,64 @@ describe('PlayerView — remote state outranks the saved position (#240)', () =>
     // Without this the parked state is never applied at all: the composable owns
     // no element listeners, it is driven by PlayerView's bindings.
     expect(FLAT).toContain('@loadedmetadata="syncplay.onVideoLoadedMetadata"')
+  })
+})
+
+// #262: the room outranks the saved position one layer earlier too — at the
+// ffmpeg *spawn*, which happens before either guard above can run. The decision
+// itself lives in `resolveMkvSpawnTarget` and is tested for real in
+// `test/renderer/utils.test.ts`; these assertions pin the wiring that feeds it,
+// each keyed to one edit that would silently restore the old behavior.
+describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
+  function prepareBody(): string {
+    const start = SOURCE.indexOf('async function prepareMkvForPlayback')
+    const end = SOURCE.indexOf('async function prepareHevcTranscode')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return SOURCE.slice(start, end).replace(/\s+/g, ' ')
+  }
+
+  it('reads the room position before spawning the session', () => {
+    const body = prepareBody()
+    const read = body.indexOf('window.api.syncplayGetRoomPosition()')
+    const spawn = body.indexOf('window.api.playerRemuxMkvStream(filePath, initialSeek)')
+    expect(read).toBeGreaterThan(-1)
+    expect(spawn).toBeGreaterThan(-1)
+    // Dropping the read, or letting it land after the spawn, is exactly the bug:
+    // the position ffmpeg starts at is chosen at the spawn call.
+    expect(read).toBeLessThan(spawn)
+  })
+
+  it('issues the room read concurrently with the saved-progress read', () => {
+    // Sequential awaits put a second round trip in front of the spawn for no
+    // freshness gain — main projects the position at reply time.
+    const body = prepareBody()
+    expect(body).toContain('const [saved, roomPosition] = await Promise.all([')
+    expect(body).toContain('window.api.watchProgressGet(props.animeId, epInt)')
+  })
+
+  it('feeds both the spawn target and the resume target through the helper', () => {
+    // `resumeTarget` is the MSE land target and the value handed to
+    // `prepareHevcTranscode`; seeding only `initialSeek` from the room would
+    // leave the land pulling the playhead back to the saved position.
+    const body = prepareBody()
+    expect(body).toContain('const target = resolveMkvSpawnTarget(saved, roomPosition);')
+    expect(body).toContain('initialSeek = target.initialSeek;')
+    expect(body).toContain('resumeTarget = target.resumeTarget;')
+    expect(body).toContain('mkvSpawnFromRoom = target.fromRoom;')
+  })
+
+  it('does not let a failed room read cost the saved position', () => {
+    // A shared catch around both reads would drop the saved record whenever the
+    // syncplay channel rejects, silently resuming every MKV open at 0.
+    expect(prepareBody()).toContain('window.api.syncplayGetRoomPosition().catch(() => null)')
+  })
+
+  it('pairs the room-seeded flag with the live stream session', () => {
+    // Otherwise a flag left true by an MKV open would suppress the resume of a
+    // later direct-file or CDN open, which never consults the room.
+    expect(FLAT).toContain(
+      "function mkvSessionSeededFromRoom(): boolean { return mkvSpawnFromRoom && streamSessionId.value !== ''; }"
+    )
   })
 })

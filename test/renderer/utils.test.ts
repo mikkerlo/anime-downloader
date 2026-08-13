@@ -3,6 +3,7 @@ import {
   previewSeek,
   commitSeek,
   resolveSeekTarget,
+  resolveMkvSpawnTarget,
   sanitizeDuration,
   waitingToastVisible
 } from '../../src/renderer/src/utils'
@@ -169,5 +170,87 @@ describe('waitingToastVisible', () => {
   it('leaves the slot free whenever nothing is waiting', () => {
     expect(waitingToastVisible(false, false)).toBe(false)
     expect(waitingToastVisible(false, true)).toBe(false)
+  })
+})
+
+// #262: the MKV ffmpeg session is spawned before either #240 guard can run, so
+// the room has to outrank the saved position here too — one layer earlier than
+// `roomOwnsPlayhead()`. `PlayerView` has no mount harness (see
+// `player-syncplay-resume.test.ts`), which is why the decision lives in this
+// pure helper: these are the real behavioral assertions for it, and the SFC side
+// is a source scan keyed to the call that feeds it.
+describe('resolveMkvSpawnTarget', () => {
+  const saved = { position: 120, duration: 1440, watched: false }
+
+  // The discriminating case, and the one that fails on the old behavior: a
+  // joiner with a stale saved record opening a local .mkv while the room sits
+  // mid-episode used to spawn ffmpeg at 119, take the room's seek at
+  // `loadedmetadata`, land outside the buffer and respawn at 600 — one wasted
+  // spawn plus a second buffer-ahead wait, with the readiness gate holding
+  // every peer in the room for the duration.
+  it('seeds the spawn from the room, not the saved record', () => {
+    expect(resolveMkvSpawnTarget(saved, 600)).toEqual({
+      initialSeek: 599,
+      resumeTarget: 600,
+      fromRoom: true
+    })
+  })
+
+  it('keeps the 1 s pre-roll and never goes negative', () => {
+    expect(resolveMkvSpawnTarget(null, 0.4)).toEqual({
+      initialSeek: 0,
+      resumeTarget: 0.4,
+      fromRoom: true
+    })
+  })
+
+  // A room position of ~0 with a saved position of 120 is not a tie the saved
+  // record wins: the room owns the playhead, so the apply would seek us to 0
+  // anyway and a spawn at 119 is the wasted one.
+  it('prefers a room position of zero over a saved record', () => {
+    expect(resolveMkvSpawnTarget(saved, 0)).toEqual({
+      initialSeek: 0,
+      resumeTarget: 0,
+      fromRoom: true
+    })
+  })
+
+  // The negatives. Main answers `null` for a session that is not ready, for a
+  // solo room (no non-self state), and for a file it has no state for — and a
+  // `null` must fall through to the saved record, never to 0.
+  it('falls back to the saved record when the room has no position', () => {
+    expect(resolveMkvSpawnTarget(saved, null)).toEqual({
+      initialSeek: 119,
+      resumeTarget: 120,
+      fromRoom: false
+    })
+  })
+
+  it('spawns at 0 with neither a room position nor a usable saved record', () => {
+    expect(resolveMkvSpawnTarget(null, null)).toEqual({
+      initialSeek: 0,
+      resumeTarget: 0,
+      fromRoom: false
+    })
+  })
+
+  it("keeps the saved record's own eligibility rules", () => {
+    const at = (o: Partial<typeof saved>): ReturnType<typeof resolveMkvSpawnTarget> =>
+      resolveMkvSpawnTarget({ ...saved, ...o }, null)
+    // Watched, under the 5 s floor, past the 95% mark, or no known duration.
+    expect(at({ watched: true }).resumeTarget).toBe(0)
+    expect(at({ position: 3 }).resumeTarget).toBe(0)
+    expect(at({ position: 1430 }).resumeTarget).toBe(0)
+    expect(at({ duration: 0 }).resumeTarget).toBe(0)
+  })
+
+  // A rejected IPC read arrives as `null` through the call site's own catch, but
+  // a garbage number must not become a spawn target either — ffmpeg would be
+  // handed `NaN`.
+  it('ignores a non-finite or negative room position', () => {
+    expect(resolveMkvSpawnTarget(saved, NaN).fromRoom).toBe(false)
+    expect(resolveMkvSpawnTarget(saved, Infinity).fromRoom).toBe(false)
+    expect(resolveMkvSpawnTarget(saved, -3).fromRoom).toBe(false)
+    expect(resolveMkvSpawnTarget(saved, -3).resumeTarget).toBe(120)
   })
 })

@@ -96,6 +96,14 @@ export class ShikiAuthError extends ShikiApiError {
 export const SESSION_EXPIRED_MESSAGE =
   'Shikimori session expired — sign in again in Settings → Connectors'
 
+/**
+ * The other reason there are no credentials: the account was never connected,
+ * or the user disconnected it deliberately. Same class as the expiry message,
+ * so the offline-queue predicate in `SHIKIMORI_UPDATE_RATE` is unaffected —
+ * only the wording the UI shows verbatim via `String(err)` differs.
+ */
+export const NOT_CONNECTED_MESSAGE = 'Not connected to Shikimori — connect in Settings → Connectors'
+
 // Keys whose values must never reach a log line or the renderer. A Doorkeeper
 // error body carries none of these (token material rides the 200, which never
 // reaches the throw site below) — this is cheap hygiene against any other
@@ -269,7 +277,15 @@ export function __resetRefreshStateForTests(): void {
  */
 export async function ensureFreshToken(store: StorageService): Promise<string> {
   const creds = store.get('shikimoriCredentials') as ShikiCredentials | null
-  if (!creds) throw new ShikiAuthError(SESSION_EXPIRED_MESSAGE)
+  if (!creds) {
+    // Both causes land here — expiry cleared the credentials below, or the user
+    // never connected / disconnected. The persisted flag is what tells them
+    // apart (expiry sets it in the same breath as clearing; `SHIKIMORI_LOGOUT`
+    // clears it), so key on that rather than telling a never-connected user
+    // their session "expired".
+    const expired = Boolean(store.get('shikimoriSessionExpired'))
+    throw new ShikiAuthError(expired ? SESSION_EXPIRED_MESSAGE : NOT_CONNECTED_MESSAGE)
+  }
 
   const expiresAt = (creds.created_at + creds.expires_in) * 1000
   if (Date.now() < expiresAt - 60_000) {
@@ -277,7 +293,20 @@ export async function ensureFreshToken(store: StorageService): Promise<string> {
   }
 
   if (!inFlightRefresh) {
-    inFlightRefresh = refreshToken(creds.refresh_token).finally(() => {
+    inFlightRefresh = (async () => {
+      const refreshed = await refreshToken(creds.refresh_token)
+      // Persist *before* the guard is released, not after the `await` below: a
+      // caller entering in between would find `inFlightRefresh` already null
+      // and the store still holding the token this call just rotated away, and
+      // re-POST it — which Doorkeeper answers with `400 invalid_grant`, which
+      // this change turns into a sign-out. That is the race §5 exists to close.
+      //
+      // Re-read first: a logout (or another expiry) may have landed while the
+      // refresh was in flight, and writing the resolved credentials back would
+      // silently re-authenticate an account the user just disconnected.
+      if (store.get('shikimoriCredentials')) store.set('shikimoriCredentials', refreshed)
+      return refreshed
+    })().finally(() => {
       inFlightRefresh = null
     })
   }
@@ -299,10 +328,6 @@ export async function ensureFreshToken(store: StorageService): Promise<string> {
     )
   }
 
-  // Re-read after the await: a logout (or another expiry) may have landed while
-  // this refresh was in flight, and writing the resolved credentials back would
-  // silently re-authenticate an account the user just disconnected.
-  if (store.get('shikimoriCredentials')) store.set('shikimoriCredentials', newCreds)
   return newCreds.access_token
 }
 

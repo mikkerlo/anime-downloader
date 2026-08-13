@@ -8,18 +8,19 @@ function fixture(name: string): unknown {
   return JSON.parse(readFileSync(resolve(__dirname, '../fixtures/shikimori', name), 'utf8'))
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    headers: new Headers(),
+    json: async () => body,
+    text: async () => JSON.stringify(body)
+  } as unknown as Response
+}
+
 function mockFetchOnce(body: unknown, status = 200): void {
-  global.fetch = vi.fn(
-    async () =>
-      ({
-        ok: status >= 200 && status < 300,
-        status,
-        statusText: status === 200 ? 'OK' : 'Error',
-        headers: new Headers(),
-        json: async () => body,
-        text: async () => JSON.stringify(body)
-      }) as unknown as Response
-  )
+  global.fetch = vi.fn(async () => jsonResponse(body, status))
 }
 
 function lastFetchUrl(): string {
@@ -439,6 +440,26 @@ describe('shikimori client — fixture replay', () => {
       // Was a bare `Error('Not logged in to Shikimori')` surfaced raw to the
       // user via `String(err)` (#244 §4).
       expect(err).toBeInstanceOf(shikimori.ShikiAuthError)
+    })
+
+    it('says "not connected", not "session expired", when the user never connected', async () => {
+      // Both causes reach the same branch, and the message goes to the UI
+      // verbatim through `String(err)`. Keyed on the persisted flag so it does
+      // not depend on `SHIKIMORI_LOGOUT` happening to clear the rate cache.
+      const store = new InMemoryStorage({ shikimoriCredentials: null })
+      const err = await ensureFresh(store).catch((e: unknown) => e)
+      expect((err as Error).message).toBe(shikimori.NOT_CONNECTED_MESSAGE)
+    })
+
+    it('still says "session expired" once expiry has cleared the credentials', async () => {
+      // The repeat-edit path after an expiry: credentials gone, flag set. This
+      // is the case the offline queue relies on, so the class must not change.
+      const store = new InMemoryStorage({
+        shikimoriCredentials: null,
+        shikimoriSessionExpired: true
+      })
+      const err = await ensureFresh(store).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(shikimori.ShikiAuthError)
       expect((err as Error).message).toBe(shikimori.SESSION_EXPIRED_MESSAGE)
     })
 
@@ -545,6 +566,53 @@ describe('shikimori client — fixture replay', () => {
 
       expect(a).toBe(b)
       expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
+    })
+
+    it('holds the single-flight guard until the rotated credentials are persisted', async () => {
+      // Regression: the guard used to be released in `.finally()` on the HTTP
+      // call, one microtask before the store write. A caller entering in that
+      // window re-POSTed the refresh token the winner had already rotated away
+      // — and after #244 that `400 invalid_grant` is a destructive sign-out.
+      //
+      // `collapses concurrent refreshes` starts both callers in the same tick,
+      // which is the one arrival time that was already safe, so this walks the
+      // second caller's arrival across the whole window instead of guessing it.
+      for (let depth = 0; depth <= 8; depth++) {
+        shikimori.__resetRefreshStateForTests()
+        const store = expiredCredsStore()
+
+        // Doorkeeper's actual behaviour: /oauth/token rotates the refresh token
+        // and rejects any token it has already rotated away.
+        let live = 'fake-refresh-token-dead'
+        let rotations = 0
+        const fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {
+          const sent = (JSON.parse(String(init.body)) as { refresh_token: string }).refresh_token
+          if (sent !== live) return jsonResponse(INVALID_GRANT_BODY, 400)
+          rotations += 1
+          live = `fake-refresh-token-rotated-${rotations}`
+          return jsonResponse({
+            access_token: `fake-access-token-rotated-${rotations}`,
+            refresh_token: live,
+            created_at: Math.floor(Date.now() / 1000),
+            expires_in: 86_400
+          })
+        })
+        global.fetch = fetchSpy as unknown as typeof fetch
+
+        const first = ensureFresh(store)
+        for (let tick = 0; tick < depth; tick++) await Promise.resolve()
+        const second = ensureFresh(store)
+        const settled = await Promise.allSettled([first, second])
+
+        const label = `second caller entering ${depth} microtask(s) in`
+        expect(
+          settled.map((r) => r.status),
+          label
+        ).toEqual(['fulfilled', 'fulfilled'])
+        expect(fetchSpy.mock.calls, label).toHaveLength(1)
+        expect(store.get('shikimoriSessionExpired'), label).toBeFalsy()
+        expect(store.get('shikimoriCredentials'), label).not.toBeNull()
+      }
     })
 
     it('does not write refreshed credentials back into a store a logout just cleared', async () => {

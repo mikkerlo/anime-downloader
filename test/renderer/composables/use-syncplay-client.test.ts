@@ -1965,16 +1965,18 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       username: 'me'
     })
 
-    // The quality/translation switch: `pause()` + `src` swap, then a restore
-    // `play()` once the new source is loaded.
+    // The quality/translation switch: `pause()` + `src` swap. The restore
+    // `play()` is deliberately *not* driven here — `onLocalPlay()` clears the
+    // hold by itself, so with it in place this case passes whether or not the
+    // arming guard exists.
     pressPause(client, v)
     ;(v as { readyState: number }).readyState = 1
-    ;(v as { paused: boolean }).paused = false
-    client.onLocalPlay()
 
     emitRemoteState({ position: 200, paused: false, doSeek: true, setBy: 'peer' })
 
+    // Nothing armed, so the state applies in full — seek, resume and toast.
     expect(v.currentTime).toBe(200)
+    expect(v.play).toHaveBeenCalled()
     expect(client.syncplayToast.value).toBe('peer seeked to 3:20')
   })
 
@@ -1997,6 +1999,50 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     expect(client.syncplayToast.value).toBe('')
   })
 
+  // 15c. The other half of decision 5's arming condition: post-adoption the
+  // hold is redundant (main's ack protection is on) and arming would toast a
+  // failure nobody earned.
+  it('never arms once adoption has latched', async () => {
+    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // 15d. The third term, matching the `syncplayPausedBy` write beside it: with
+  // no session there is no room to outrank. Without it an idle pause arms the
+  // flag and the 8 s timer, and a join inside that window starts the new
+  // session already mid-hold — holding the room's first states against a pause
+  // that predates the room.
+  it('does not arm for a pause made outside a Syncplay session', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'idle'
+    })
+
+    pressPause(client, v)
+
+    // "Join & watch", well inside the 8 s the idle pause would have armed.
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    vi.advanceTimersByTime(1000)
+
+    // The room owns us from its very first state: nothing from before the
+    // session is holding anything.
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+    expect(client.syncplayToast.value).not.toBe(PENDING)
+  })
+
   // 16. An expiry that held nothing is not a failure the user can see, so it
   // says nothing.
   it('expires silently when no playing state was ever held', async () => {
@@ -2011,6 +2057,28 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     vi.advanceTimersByTime(8000)
 
     expect(client.syncplayToast.value).toBe('')
+  })
+
+  // 16b. …and it leaves the badge alone. The reachable case: a hold armed while
+  // the room is *already* reported paused never produces the `roomPaused`
+  // false→true edge test 19 pins, so it runs to the backstop having held
+  // nothing — and "Paused by you" was true the whole time.
+  it('leaves a correct "paused by you" badge alone when the expiry held nothing', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      roomPaused: true
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    vi.advanceTimersByTime(8000)
+
+    expect(client.syncplayToast.value).toBe('')
+    expect(client.syncplayPausedBy.value).toBe('me')
   })
 
   // 17a. The falsifier, and the reason the hold's lifetime cannot be shortened

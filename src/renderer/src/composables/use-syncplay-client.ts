@@ -250,16 +250,24 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // The backstop. Reaching it with `roomPaused` in place means the room
   // genuinely never went paused inside the window, so the pause did not stick —
   // say so, and hand the badge back, since "Paused by you" is no longer true of
-  // a room that kept playing. Silent when nothing was held: no remote state
-  // ever contradicted the pause, so there is nothing to report.
+  // a room that kept playing. Silent — and the badge stands — when nothing was
+  // held: no remote state ever contradicted the pause, so there is nothing to
+  // report and nothing to correct.
   function expirePendingUserPause(): void {
     pendingPauseTimer = null
     const held = pendingPauseHeldAny
     pendingUserPause = false
     pendingPauseHeldAny = false
-    syncplayPausedBy.value = null
-    if (held) showSyncplayToast(PENDING_PAUSE_FAILED_TOAST)
-    else clearPendingPauseToast()
+    if (held) {
+      // Only a hold that held something can have failed visibly — and only then
+      // is "Paused by you" no longer true. An expiry that held nothing may well
+      // be sitting on a correct badge (a room already reported paused never
+      // produces the `roomPaused` edge, so that hold runs to the backstop).
+      syncplayPausedBy.value = null
+      showSyncplayToast(PENDING_PAUSE_FAILED_TOAST)
+    } else {
+      clearPendingPauseToast()
+    }
   }
 
   // Called from the element half, below its no-op early-out: a state that
@@ -816,8 +824,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
       syncplayPausedBy.value = syncplayStatus.value.username
     }
-    // Arm the hold: pre-adoption only, and only for an element that has at
-    // least metadata (#228).
+    // Arm the hold: inside a session only, pre-adoption only, and only for an
+    // element that has at least metadata (#228).
+    //
+    // `state === 'ready'` matches the `syncplayPausedBy` write above. Without
+    // it every pause outside a session arms the flag and an 8 s timer; nothing
+    // observable follows while there is no session (the gate early-outs, no
+    // remote states arrive), but a join inside that window would start the new
+    // session already mid-hold, holding the room's first states against a pause
+    // that predates the room.
     //
     // `playbackAdopted !== true` scopes it to the window where main's ack
     // protection is off. Post-adoption the flag is redundant for anything that
@@ -830,7 +845,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // pause before a `src` swap) queues is delivered after that reset. The
     // residual is a real user pause on an element reporting HAVE_NOTHING, where
     // inbound states are parked anyway and pre-#228 behavior holds.
-    if (syncplayStatus.value.playbackAdopted !== true && (deps.getVideoEl()?.readyState ?? 0) > 0) {
+    if (
+      syncplayStatus.value.state === 'ready' &&
+      syncplayStatus.value.playbackAdopted !== true &&
+      (deps.getVideoEl()?.readyState ?? 0) > 0
+    ) {
       armPendingUserPause()
     }
     sendSyncplayLocalState('pause')

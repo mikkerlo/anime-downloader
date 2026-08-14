@@ -69,6 +69,19 @@ export const ADOPT_TOLERANCE_S = 3
 // somewhere else, and a real seek to within half a second of the room's own
 // position is a no-op for everyone anyway.
 export const ECHO_SEEK_EPSILON_S = 0.5
+// How long a non-self room state may be projected forward before
+// `getRoomPosition()` stops trusting it (#262 review). Unlike `lastRoomState`,
+// which every periodic refreshes, `lastRemoteRoomState` is refreshed only by a
+// state that clears handleState()'s guards — so "nothing has refreshed it" is
+// the normal steady state of a room nobody else is driving, and the projection
+// would otherwise walk a frozen value forward for the life of the session. A
+// peer that is driving produces one such state per second (the server's own
+// `SERVER_STATE_INTERVAL`, re-broadcast with `setBy` naming them), so 15 s is
+// 15 missed refreshes: far past a lost frame or a re-election blip, far short
+// of a spawn target that has drifted anywhere interesting. It also bounds the
+// error of the one shape the roster test below cannot see — a room *we* paused,
+// whose echo dies at the self-guard with `paused: false` still stored.
+const ROOM_POSITION_MAX_AGE_MS = 15000
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -273,6 +286,16 @@ export class SyncplayClient extends EventEmitter {
   // compensation — this goes back out on the wire). Lets a spectator echo the
   // room instead of asserting a position it doesn't have.
   private lastRoomState: { position: number; paused: boolean; at: number } | null = null
+  // The last room state that made it *past* the echo guards in handleState() —
+  // the same frame we hand the renderer as a `remote-state`, carrying the same
+  // RTT compensation. Deliberately a second field rather than a read of
+  // `lastRoomState` above: that one is recorded above the guards on purpose, so
+  // a user alone in a room has one (their own reported position echoed back),
+  // and seeding a spawn from it would re-break the solo-room case
+  // `roomOwnsPlayhead()` exists to protect. Session-scoped like `lastRoomState`,
+  // plus cleared when *our* file identity changes — the room's position belongs
+  // to the file it was reported for (#262).
+  private lastRemoteRoomState: { position: number; paused: boolean; at: number } | null = null
   // Whether local playback has converged with the room. False for a freshly
   // opened file — its <video> reports {0, paused} until the first remote State
   // seeks it — so that startup state is never asserted at the room.
@@ -427,6 +450,61 @@ export class SyncplayClient extends EventEmitter {
     return this.roomUsers.map((u) => ({ ...u }))
   }
 
+  // Where the room is *right now*, or null when the room does not own the
+  // playhead: no live session, or no non-self state seen for the current file
+  // (#262). The MKV/MSE open reads this to seed the ffmpeg spawn, which is a
+  // decision the renderer cannot make — `useSyncplayClient` is player-scoped
+  // and subscribes to `remote-state` behind two IPC round-trips, while
+  // `prepareMkvForPlayback` runs behind one, so on the dominant path (join a
+  // room, open a local .mkv) the renderer has nothing parked yet.
+  //
+  // Projected, not raw: a spawn is corrected only by another spawn — the very
+  // respawn this exists to remove — where an *apply* is corrected by the next
+  // 1 Hz state. The renderer never holds the value long enough to go stale
+  // either, since main computes it at reply time.
+  // Bounded on two axes, because the field this projects is refreshed *only* by
+  // a non-self state (#262 review). It therefore stops being refreshed the
+  // moment the last peer leaves the room, and its `paused` flag stops tracking
+  // the room whenever the server elects *us* as the `setBy` — our own pause
+  // comes back self-`setBy` and dies at handleState()'s guard, leaving
+  // `paused: false` stored for a room that is standing still. Unbounded, the
+  // projection walked both forward with wall time for as long as the session
+  // lived (a room at 600 answered 2400 after half an hour alone, and 900 after
+  // five minutes paused), and that number reaches ffmpeg's `-ss` — a target
+  // past the end of the file is a run that emits nothing and an MSE session
+  // that buffers forever. `null` is the safe answer: it is only the saved
+  // position, i.e. the pre-#262 behaviour.
+  //
+  // The roster test is `isAdopted()`'s idiom, *including* its `rosterReceived`
+  // guard: "the roster is empty" and "the roster has not arrived" are different
+  // answers (#236), and on a server whose `List` reply we cannot key to our room
+  // (#223) the second one is permanent. Reading an unknown roster as "alone"
+  // would disable this outright there; a *fresh* non-self state is its own proof
+  // that a peer exists — only a peer can set it — so the age cap carries that
+  // case alone.
+  //
+  // Scoped to the caller's file rather than merely ordered against it (#272
+  // review). `setFile()`'s identity clear does drop the previous episode's
+  // position, but "the clear has already run" was a property of *ordering* — on
+  // a fresh mount for a different episode it rests on `useSyncplayClient`'s
+  // `onMounted` push landing ahead of `PlayerView`'s own `onMounted`, which it
+  // does today only by the two `getSetting` awaits in front of this read.
+  // Removing one of those inverts it silently and episode 2 spawns at episode
+  // 1's position. Answering only for the file the caller names makes that
+  // structural: the clear becomes belt rather than the load-bearing part.
+  getRoomPosition(canonicalName: string): number | null {
+    if (this.status.state !== 'ready') return null
+    if (!this.currentFile || this.currentFile.canonicalName !== canonicalName) return null
+    const room = this.lastRemoteRoomState
+    if (!room) return null
+    if (this.rosterReceived) {
+      const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
+      if (alone) return null
+    }
+    if (Date.now() - room.at > ROOM_POSITION_MAX_AGE_MS) return null
+    return this.projectedRoomPosition(room)
+  }
+
   setFile(file: SyncplayFileInfo): void {
     // Both resets below mean one thing — "a *new player* is announcing itself"
     // — and neither signal says it alone (#236). File identity catches an
@@ -438,8 +516,15 @@ export class SyncplayClient extends EventEmitter {
     // duration-known push (PlayerView's onDurationChange), the in-player
     // translation switch and the transition-into-ready push on a reconnect all
     // come from the same, still-live player.
-    const isNewPlayer =
-      this.currentFile?.canonicalName !== file.canonicalName || file.newPlayer === true
+    const identityChanged = this.currentFile?.canonicalName !== file.canonicalName
+    const isNewPlayer = identityChanged || file.newPlayer === true
+    // The room's position was reported for the file we were on. Handing it to
+    // the next episode's ffmpeg spawn would be worse than the saved position it
+    // replaces, so it is dropped on an identity change and re-earned from the
+    // next inbound state (~1 Hz). Keyed on identity alone, not `isNewPlayer`: a
+    // same-episode reopen is the same content, and the room's position is still
+    // the right seed for it (#262).
+    if (identityChanged) this.lastRemoteRoomState = null
     // A different <video> is back at position 0 — it has to converge on the
     // room again before it may assert, or its startup play/pause/seeked events
     // yank the room to 0 through a latch the previous player earned.
@@ -568,6 +653,7 @@ export class SyncplayClient extends EventEmitter {
     this.snapshot = { position: 0, paused: true }
     this.lastSnapshotAt = 0
     this.lastRoomState = null
+    this.lastRemoteRoomState = null
     this.playbackAdopted = false
     this.lastAppliedRemotePosition = null
   }
@@ -1388,6 +1474,10 @@ export class SyncplayClient extends EventEmitter {
     if (doSeek || Math.abs(this.snapshot.position - compensated) > ADOPT_TOLERANCE_S) {
       this.lastAppliedRemotePosition = Math.max(0, compensated)
     }
+    // Recorded here, on the value we are about to emit, so `getRoomPosition()`
+    // answers with exactly what the renderer would have applied — clamped like
+    // the echo target above, so a projection can only walk it forward (#262).
+    this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
     log('remote-state', { paused, position: compensated, setBy, doSeek })
     this.emit('remote-state', {
       paused,

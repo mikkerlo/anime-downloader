@@ -17,6 +17,7 @@ import {
   previewSeek,
   commitSeek,
   resolveSeekTarget,
+  resolveMkvSpawnTarget,
   sanitizeDuration,
   waitingToastVisible
 } from '../../utils';
@@ -295,6 +296,13 @@ let cumulativePlayTime = 0;
 let lastTimeUpdateAt = 0;
 let lastSaveAt = 0;
 let watchedReported = false;
+// #262: the MKV ffmpeg session for this open was spawned at the room's position
+// rather than the saved one. Read by `resumeFromSavedPosition` instead of a live
+// `roomOwnsPlayhead()`: if the session drops between the spawn and
+// `loadedmetadata`, the predicate goes false while the MSE land still puts the
+// playhead on the room's position, and "Resumed at …" would name a position we
+// are not at — exactly what #240 suppressed the toast for.
+let mkvSpawnFromRoom = false;
 let episodeOpenedAt = Date.now();
 let pendingPrevEpisodeInt = '';
 const resumeToast = ref('');
@@ -616,6 +624,11 @@ function resetEpisodeTracking(): void {
   lastTimeUpdateAt = 0;
   lastSaveAt = 0;
   watchedReported = false;
+  // Belongs to one open (#262). `prepareMkvForPlayback` re-decides it on every
+  // MKV open and `mkvSessionSeededFromRoom()` pairs it with the live session id,
+  // so this is belt rather than braces — but an episode switch is exactly the
+  // boundary the flag must not cross.
+  mkvSpawnFromRoom = false;
   episodeOpenedAt = Date.now();
 }
 
@@ -796,6 +809,17 @@ function roomOwnsPlayhead(): boolean {
   return syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied();
 }
 
+// #262: this open's MSE session was spawned at the room's position, so its
+// buffer starts one second ahead of it and the saved position is guaranteed to
+// be outside it. Deliberately *not* the live `roomOwnsPlayhead()` reading — a
+// session that drops between the spawn and `loadedmetadata` flips that
+// predicate false while the playhead is still landing where the room was.
+// Paired with the live session id so the flag can never outlive the session it
+// describes and suppress a later direct-file resume.
+function mkvSessionSeededFromRoom(): boolean {
+  return mkvSpawnFromRoom && streamSessionId.value !== '';
+}
+
 async function resumeFromSavedPosition(): Promise<void> {
   const video = videoRef.value;
   if (!video) return;
@@ -818,7 +842,11 @@ async function resumeFromSavedPosition(): Promise<void> {
     // predicate cancels the composable's initial land: that branch performs no
     // seek of its own, so suppressing its toast is the whole of its share of the
     // rule and the land is where the room's position would otherwise be lost.
-    if (roomOwnsPlayhead()) return;
+    // The second half is #262's: the room may no longer own the playhead by the
+    // time this runs, but the ffmpeg session was already spawned at its
+    // position, so the saved one is both unreachable (outside the buffer) and
+    // false as a toast.
+    if (roomOwnsPlayhead() || mkvSessionSeededFromRoom()) return;
     const d = video.duration || saved.duration;
     if (!d) return;
     // For MSE MKV streams the composable lands the playhead on the saved position
@@ -879,21 +907,28 @@ async function prepareMkvForPlayback(
 
   let initialSeek = 0;
   let resumeTarget = 0;
+  mkvSpawnFromRoom = false;
   try {
     const epInt = currentEpisodeInt.value;
-    if (props.animeId && epInt) {
-      const saved = await window.api.watchProgressGet(props.animeId, epInt);
-      if (
-        saved &&
-        !saved.watched &&
-        saved.position > 5 &&
-        saved.duration > 0 &&
-        saved.position / saved.duration < 0.95
-      ) {
-        resumeTarget = saved.position;
-        initialSeek = Math.max(0, saved.position - 1);
-      }
-    }
+    // Both reads are issued together, not in sequence (#262): main projects the
+    // room position at reply time, so a concurrent read is no staler, and this
+    // sits on the open path in front of the ffmpeg spawn.
+    const [saved, roomPosition] = await Promise.all([
+      props.animeId && epInt ? window.api.watchProgressGet(props.animeId, epInt) : null,
+      // Scoped to the file we are opening, not merely ordered after the push
+      // that announced it: main answers null unless the room's position was
+      // reported for this same canonical name, so a fresh mount for a different
+      // episode cannot inherit the previous episode's position if the two
+      // `onMounted` hooks ever reorder.
+      //
+      // Fail-soft on its own: a rejected room read must not cost us the saved
+      // position, which is what a shared `catch` around both would do.
+      window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)
+    ]);
+    const target = resolveMkvSpawnTarget(saved, roomPosition);
+    initialSeek = target.initialSeek;
+    resumeTarget = target.resumeTarget;
+    mkvSpawnFromRoom = target.fromRoom;
   } catch {
     /* ignore */
   }

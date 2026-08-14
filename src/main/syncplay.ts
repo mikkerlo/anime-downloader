@@ -82,6 +82,28 @@ export const ECHO_SEEK_EPSILON_S = 0.5
 // error of the one shape the roster test below cannot see — a room *we* paused,
 // whose echo dies at the self-guard with `paused: false` still stored.
 const ROOM_POSITION_MAX_AGE_MS = 15000
+// How far the room has to be from us before a pending seek is re-asserted
+// (#252). The reference uses SEEK_THRESHOLD = 1 s (constants.py:70), but ours
+// has to survive our own measurement noise: `snapshot` refreshes on the
+// renderer's 1 s push while `projectedRoomPosition()` advances by wall time, so
+// a room that *has* adopted us still reads up to ~1 s of divergence — at 1 s we
+// would re-assert forever against a room that already agrees. ADOPT_TOLERANCE_S
+// is the number the rest of the system already calls "converged": under it
+// `isAdopted()` latches and the renderer's apply rule declines to move anyone,
+// so a difference the re-assert could recover is a difference nobody would act
+// on. Cost of the choice: a user seek shorter than 3 s that crosses a forced
+// update is not recovered.
+export const SEEK_REASSERT_TOLERANCE_S = ADOPT_TOLERANCE_S
+// Bounds on a pending seek intent (#252). Recovery normally lands on the first
+// attempt — the frame right behind the ack that lifts the server's ignore flag
+// — so three is "the first try plus two forced updates crossing us", and 5 s is
+// five heartbeats, well past any RTT on which the deaf window exists at all.
+// Both exist because an *unbounded* sticky doSeek is a permanent fight with the
+// renderer's 3 s apply rule: a room that will never adopt us (a peer holding
+// the min(), a paused controller) would otherwise get a doSeek every second for
+// the rest of the session.
+const SEEK_REASSERT_MAX_ATTEMPTS = 3
+const SEEK_REASSERT_TTL_MS = 5000
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -315,6 +337,19 @@ export class SyncplayClient extends EventEmitter {
   // the seek completes — that's the echo, and it's the only reliable way to
   // tell it apart from a user seek.
   private lastAppliedRemotePosition: number | null = null
+  // An unresolved user seek (#252): the user moved the playhead and the room
+  // has not come with us yet. Session-scoped, like `playbackAdopted` — a seek
+  // is *more* likely to be unresolved after a reconnect, not less, so
+  // resetTransportState() deliberately does not touch it.
+  //
+  // Deliberately holds no position. The re-assert reads the live snapshot at
+  // send time, exactly as the reference does (client.py:261, :331 both pass
+  // getPlayerPosition()): by the time recovery fires the user has played on
+  // from the seek target, and replaying the target would seek the room — and,
+  // through the broadcast, the user — backwards by the elapsed playback, with
+  // Room.getPosition()'s min() over watchers amplifying the stale value into
+  // the room's own position.
+  private seekIntent: { at: number; attempts: number } | null = null
   private currentFile: SyncplayFileInfo | null = null
   private serverMotd = ''
   private tlsUpgraded = false
@@ -529,6 +564,10 @@ export class SyncplayClient extends EventEmitter {
     // room again before it may assert, or its startup play/pause/seeked events
     // yank the room to 0 through a latch the previous player earned.
     if (isNewPlayer) this.playbackAdopted = false
+    // The intent belonged to the player that made the seek (#252). A different
+    // <video> at 0 has no unresolved seek of its own, and re-asserting the old
+    // one would stamp doSeek on the new element's startup position.
+    if (isNewPlayer) this.seekIntent = null
     this.currentFile = file
     // The renderer's readiness is player-scoped and only pushes on a change, so
     // a player closed mid-buffer leaves main stuck at isReady:false: the next
@@ -604,6 +643,15 @@ export class SyncplayClient extends EventEmitter {
     // target: leaving it armed would silently drop a later, genuine seek that
     // happened to land on a peer's old position.
     this.lastAppliedRemotePosition = null
+    // Below both silent exits above on purpose (#252): a seek the adoption gate
+    // or the echo guard dropped was never asserted at the room, so it carries
+    // no intent to re-assert. A second seek simply re-arms — last write wins,
+    // and since the re-assert reads the live snapshot rather than a parked
+    // target, "the newest seek" and "where the user is now" are the same value.
+    // A play/pause deliberately does *not* clear it: the playhead is still
+    // where the user put it, the room still has not taken it, and the recovery
+    // frame carries the current `paused` anyway.
+    if (payload.cause === 'seek') this.seekIntent = { at: Date.now(), attempts: 0 }
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     log(
@@ -622,7 +670,13 @@ export class SyncplayClient extends EventEmitter {
     // one continuing: reopening the same episode gets a fresh element at 0 and
     // setFile()'s identity check can't see it (same canonicalName). Re-converge
     // before asserting; a false positive re-adopts on the next tick.
-    if (!this.hasLivePlayback()) this.playbackAdopted = false
+    if (!this.hasLivePlayback()) {
+      this.playbackAdopted = false
+      // Same reasoning as setFile()'s clear (#252), for the case setFile()
+      // cannot see: reopening the same episode gets a fresh element under a
+      // byte-identical canonicalName.
+      this.seekIntent = null
+    }
     this.snapshot = snap
     this.lastSnapshotAt = Date.now()
   }
@@ -656,6 +710,11 @@ export class SyncplayClient extends EventEmitter {
     this.lastRemoteRoomState = null
     this.playbackAdopted = false
     this.lastAppliedRemotePosition = null
+    // Session-scoped, and here rather than in resetTransportState() (#252): the
+    // reconnect path runs that one, and it is exactly the path where the user's
+    // seek is *most* likely to be the one that never landed. A new session is a
+    // different room, where the old intent is meaningless.
+    this.seekIntent = null
   }
 
   // State that belongs to one socket, not to the session. The reconnect path in
@@ -1429,15 +1488,89 @@ export class SyncplayClient extends EventEmitter {
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
+    // "This frame is one we are about to hand the renderer." The two drop guards
+    // below read these same two consts, so the retraction's gate *is* their
+    // conjunction textually rather than by coincidence (#274 review) — and that
+    // identity is the correctness argument: retire the intent iff the peer seek
+    // that supersedes it is on a frame the renderer actually applies. Retiring
+    // for a frame we then drop restores the silent permanent divergence #252
+    // exists to close. A new drop rule added anywhere between here and the
+    // `emit('remote-state')` below therefore has to join this conjunction, not
+    // just add a fourth `return` past it.
+    //
+    // Hoisting is value-preserving, which is what lets one const stand for all
+    // three reads: `isForeignSetBy()` is pure, and the only writers of
+    // `pendingClientAck` and `config` are sendLocalState(), resetTransportState()
+    // and handleState()'s own counter block above — none of them reachable from
+    // the maybeReassertSeek() / emitStatusIfProjectionChanged() calls in
+    // between, whose `emit()`s are forwarded to the renderer over IPC rather
+    // than re-entering this object.
+    const isForeignState = this.isForeignSetBy(setBy)
+    // Defensive rather than observed (#274 review): every forced update carries
+    // `ignoringOnTheFly.server` and the #232 arm above zeroes the counter on any
+    // frame that has one, so by the time this runs it is always true on the
+    // wire. The only route to false is a counter-less synthetic frame — which is
+    // exactly what `is not retracted by a peer seek this client drops as
+    // unacked` delivers. Kept because it is what makes the identity above true.
+    const localChangeAcked = this.pendingClientAck === 0
+    const willApplyRemoteState = isForeignState && localChangeAcked
+    // A peer's *own* seek, landing while ours is still unresolved, supersedes it
+    // (#274 review). maybeReassertSeek()'s drift test answers "the room is not
+    // where I am", which is a superset of "my seek was discarded": it also fires
+    // when a peer seeked somewhere else while ours was in flight, and there the
+    // recovery cross-fires — we hand the renderer the peer's position and the
+    // server ours off the same frame, and `doSeek` bypasses the renderer's 3 s
+    // tolerance on *every* peer, so the room is dragged back for a round trip
+    // before the live-position rule converges it. Syncplay is last-write-wins
+    // and the server has already ruled: it accepted their seek and discarded
+    // ours, so theirs is the newer intent and ours is retired, not recovered.
+    // Nothing #252 buys is given up — the *discarded* case never reaches here.
+    //
+    // The signal is the frame: `willApplyRemoteState` — the same predicate the
+    // drop guards below return on, so "a peer seek superseded ours" can never
+    // outrun "the renderer was handed the peer's position" — plus
+    // `doSeek`, which is the wire's only "someone seeked" bit, set on a forced
+    // update by a seek and not by a pause change. Deliberately *not* the echo
+    // target's full arming rule below (`doSeek || |snapshot − position| > 3`):
+    // its second disjunct is true in the discarded case too, because there the
+    // element is far from the room precisely by the seek we are trying to
+    // recover, so gating on it would retract exactly the intents #252 exists to
+    // keep.
+    //
+    // Above maybeReassertSeek(), not at the arming site: the harmful frame is
+    // the *first* re-assert, which goes out on this same tick, so a retraction
+    // ordered after it would stop attempt 2 and still ship the yank.
+    if (this.seekIntent && doSeek && willApplyRemoteState) {
+      log('retiring seek intent — superseded by a peer seek', { setBy, position })
+      this.seekIntent = null
+    }
+    // Above the guards below, and below the lastRoomState write it reads
+    // (#252). The self-`setBy` guard is the *dominant* path for the frame this
+    // recovery exists to answer — the server broadcasts its forced update back
+    // to the setter too (server.py:180-186, no sender filter), so the scrubbing
+    // user's own connection is the deaf one — and a call placed under that
+    // guard would be dead code for the whole bug.
+    this.maybeReassertSeek()
     // Announce a change to the room's pause flag from *here*, above the guards
     // below (#228): the frame that tells us our own pending pause reached the
     // room is normally one the self-`setBy` guard drops, so a detector further
     // down would never see it.
+    //
+    // After the re-assert above, not before, for the same reason the heartbeat
+    // runs it after `sendStateMessage()`: `maybeReassertSeek()` reaches
+    // `isAdopted()` both directly and through its own `sendStateMessage()` →
+    // `buildPlaystate()`, so it is a call that can latch adoption, and running
+    // the detector first would announce that flip a frame after the assertion it
+    // belongs to. The two are otherwise independent — the re-assert neither
+    // reads nor writes `lastRoomState.paused`.
     this.emitStatusIfProjectionChanged()
 
-    if (setBy === null) return
-    if (this.config && setBy.toLowerCase() === this.config.username.toLowerCase()) return
-    if (this.pendingClientAck !== 0) {
+    // Each guard keeps its own `return` so the drop log below survives and the
+    // order of the two is unchanged; they read the conjuncts of
+    // `willApplyRemoteState` rather than re-deriving them, which is what makes
+    // the retraction's gate above provably the same predicate.
+    if (!isForeignState) return
+    if (!localChangeAcked) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')
       return
     }
@@ -1645,6 +1778,18 @@ export class SyncplayClient extends EventEmitter {
     }
   }
 
+  // "This state came from somebody else." One definition, called once per frame
+  // into handleState()'s `isForeignState` (#274 review), which both the
+  // self-`setBy` drop guard and the supersede retraction above it read. Sharing
+  // it is the point — the retraction means "a state we are about to apply", so
+  // if the two ever disagreed the retraction would either fire on our own
+  // reflected seek or miss a peer's.
+  private isForeignSetBy(setBy: string | null): boolean {
+    if (setBy === null) return false
+    if (!this.config) return true
+    return setBy.toLowerCase() !== this.config.username.toLowerCase()
+  }
+
   // Where the room is *now*: its last reported position, advanced by wall time
   // if it kept playing. Mirroring a stale position would read as lag.
   private projectedRoomPosition(room: { position: number; paused: boolean; at: number }): number {
@@ -1819,6 +1964,101 @@ export class SyncplayClient extends EventEmitter {
     }
     this.pendingServerAck = 0
     this.sendJson({ State: msg })
+  }
+
+  // Re-assert a user seek the server threw away (#252).
+  //
+  // The window is real and ~1 RTT wide: every *forced* update increments the
+  // server's per-connection `serverIgnoringOnTheFly` (protocols.py:753) and is
+  // sent regardless of the flag (:761), while `handleState()` skips
+  // `updateState()` outright until a client frame echoes the matching counter
+  // (:788-789, cleared at :776-777 *above* that gate). Every playstate we
+  // assert in between is discarded. The commonest instance is self-inflicted:
+  // scrub twice, and the second seek crosses the forced update the first one
+  // caused. Nothing recovers it today — `doSeek` is one-shot, the next
+  // heartbeat re-sends the same position with `doSeek: false`, and the server
+  // forces a room update only on `doSeek` or a pause change.
+  //
+  // Why a re-assert rather than the reference's answer: mpv's client *applies*
+  // the forced state back to its own player (`updateGlobalState()` →
+  // `_changePlayerStateAccordingToGlobalState()` → `_serverSeeked()`,
+  // client.py:454-484, :416-447, with no self-`setBy` filter anywhere), so
+  // there the discarded seek is undone on the seeker's screen too and the two
+  // sides never diverge. We deliberately drop our own reflected states at the
+  // self-`setBy` guard, which is the better UX — the user's scrub sticks — but
+  // it is what turns "discarded" into a silent, permanent divergence, so the
+  // recovery has to be ours. (The re-derivation of `doSeek` some readings
+  // attribute to the reference does not survive the pin: `getLocalState()`
+  // passes `getPlayerPosition()` straight into `_determinePlayerStateChange()`
+  // (client.py:326-336, :199-204), so `_playerDiff` is 0 and the `and` at :203
+  // makes `seeked` False on every reply frame.)
+  //
+  // Ordering: this runs after sendAck()'s frame in the same tick, never packed
+  // into it. Two ordered frames give the identical server-side outcome — the
+  // ack clears the flag at protocols.py:776-777, this frame's playstate is then
+  // accepted at :788 — while keeping the ack playstate-free, which #232 settled
+  // deliberately (on the tick the counter lands the renderer has not applied
+  // the forced state, so an ack carrying a playstate would assert the *stale*
+  // pre-seek position and min() over watchers would drag the room back).
+  private maybeReassertSeek(): void {
+    const intent = this.seekIntent
+    if (!intent) return
+    if (this.status.state !== 'ready') return
+    // A spectator must never re-assert (#220): with no live playback or before
+    // adoption, buildPlaystate() returns the room's own mirror, and stamping
+    // doSeek on that hands the room its own position back as a seek. There is
+    // nothing to recover in that state, so drop the intent rather than hold it.
+    //
+    // Belt, and knowingly so: an intent can only be armed past sendLocalState()'s
+    // adoption gate, which also refreshes `lastSnapshotAt`, so reaching here
+    // needs PLAYBACK_STALE_MS of silence — and since that equals
+    // SEEK_REASSERT_TTL_MS, the check below would catch the same case today.
+    // The two are independent knobs, and #220 must not quietly come to depend
+    // on their being equal, so this stays above it. (Mutating it out leaves the
+    // suite green for exactly that reason; the property it guards is asserted
+    // as an observable in the spectator case rather than as this branch.)
+    if (!this.hasLivePlayback() || !this.isAdopted()) {
+      this.seekIntent = null
+      return
+    }
+    if (Date.now() - intent.at > SEEK_REASSERT_TTL_MS) {
+      this.seekIntent = null
+      return
+    }
+    // Our own assertion is still in flight, so this frame left the server
+    // before it could have processed it — the divergence below would be an
+    // artefact of the round trip, not evidence the seek was discarded. Never
+    // blocks the case this exists for: the deaf window only opens on a *forced*
+    // update, every forced update carries `ignoringOnTheFly.server`, and the
+    // #232 arm above zeroes this counter on any frame that has one. Outside
+    // that window it costs at most one frame of delay, because the server
+    // echoes our `client` counter on its very next State (protocols.py:
+    // 758-760, :779).
+    if (this.pendingClientAck !== 0) return
+    const room = this.lastRoomState
+    if (!room) return
+    // The reference's own condition, in the only form available to us: not
+    // "the server is ignoring me" — which no local variable can express, since
+    // the lost seek is issued *before* the forced State that would tell us —
+    // but the divergence that outlives it.
+    const drift = Math.abs(this.snapshot.position - this.projectedRoomPosition(room))
+    if (drift <= SEEK_REASSERT_TOLERANCE_S) {
+      // The room came to us. Nothing left to recover, and holding the intent
+      // any longer is how a sticky doSeek becomes a fight with the renderer.
+      this.seekIntent = null
+      return
+    }
+    if (intent.attempts >= SEEK_REASSERT_MAX_ATTEMPTS) {
+      this.seekIntent = null
+      return
+    }
+    intent.attempts += 1
+    log('re-asserting unresolved seek', 'attempt=', intent.attempts, 'drift=', drift)
+    // Deliberately no clientIgnoreCounter bump. The counter suppresses inbound
+    // states that would override a *new* local intent; this frame carries no
+    // new intent, and re-arming the drop guard here would starve exactly the
+    // inbound convergence #232 opened this window to preserve.
+    this.sendStateMessage({ doSeek: true })
   }
 
   private sendStateMessage(opts: { doSeek: boolean }): void {

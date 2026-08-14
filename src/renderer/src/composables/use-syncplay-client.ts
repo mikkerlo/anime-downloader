@@ -27,6 +27,17 @@ import { useSyncplayStore } from '../stores/syncplay'
 
 const WAITING_DEBOUNCE_MS = 600
 
+// How long a user pause made before adoption outranks the room (#228).
+//
+// Budget: <= 3 s to adopt + <= 1 s for the heartbeat that first asserts the
+// pause + one RTT + <= 1 s for the server's own periodic State + one
+// detector/IPC hop — about 5 s plus RTT worst case, so this leaves ~2.5 s of
+// slack. The timer is the backstop, not the normal terminator: the `roomPaused`
+// projection ends the hold as soon as the room actually goes paused.
+const PENDING_PAUSE_MAX_MS = 8000
+const PENDING_PAUSE_TOAST = 'Pausing once synced with the room…'
+const PENDING_PAUSE_FAILED_TOAST = "The room kept playing — your pause didn't stick"
+
 export type SyncplayDeps = {
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
@@ -153,6 +164,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function intentOr(v: HTMLVideoElement): boolean {
     return intendedPaused ?? v.paused
   }
+  // A user pause made *before* main's adoption latch flipped (#228). It
+  // outranks the room until it has had its chance to reach the room, and
+  // nothing else in this file may resume the element while it is set.
+  //
+  // Why it has to exist at all: pre-adoption `sendLocalState()` sends nothing
+  // and bumps no ignore counter (deliberately — a bump starves the very
+  // convergence we are waiting for), so the pause inherits none of main's
+  // `pendingClientAck` protection, and the next inbound playing state resumes
+  // the element on two independent paths (the apply's `v.play()` and the ready
+  // gate's). Adoption flipping true is *not* a clear path: the pause never
+  // armed that counter and never will — post-adoption it is asserted only by
+  // the heartbeat, which reads the counter but never writes it — so a playing
+  // state already on the wire replays the same undo one RTT later.
+  let pendingUserPause = false
+  let pendingPauseTimer: ReturnType<typeof setTimeout> | null = null
+  // Whether at least one *playing* remote state was actually held. Only a hold
+  // that held something can have failed visibly, so this gates the expiry
+  // toast — an expiry that held nothing is silent.
+  let pendingPauseHeldAny = false
+  let pendingPauseArmedAt = 0
+
   let syncplayLocalReady = true
   let syncplayLastRemotePlaying = false
   let syncplayLastAppliedPaused: boolean | null = null
@@ -174,6 +206,79 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     syncplayToastTimer = setTimeout(() => {
       syncplayToast.value = ''
     }, ms)
+  }
+
+  // The pending toast is the only one this composable ever retracts, because it
+  // describes a state of affairs rather than an event: once the hold is over,
+  // "Pausing once synced…" is a false statement on screen.
+  function clearPendingPauseToast(): void {
+    if (syncplayToast.value !== PENDING_PAUSE_TOAST) return
+    syncplayToast.value = ''
+    if (syncplayToastTimer) {
+      clearTimeout(syncplayToastTimer)
+      syncplayToastTimer = null
+    }
+  }
+
+  // Arming (re)starts the window from scratch — a second press is a second
+  // pause, with its own budget — and with it the "held something" record, so
+  // the expiry toast can only ever describe the window it fires for.
+  function armPendingUserPause(): void {
+    pendingUserPause = true
+    pendingPauseHeldAny = false
+    pendingPauseArmedAt = Date.now()
+    if (pendingPauseTimer) clearTimeout(pendingPauseTimer)
+    pendingPauseTimer = setTimeout(expirePendingUserPause, PENDING_PAUSE_MAX_MS)
+  }
+
+  // Every ordinary end of the hold: the user changed their mind, the room went
+  // paused (either observed directly through an inbound state or through the
+  // `roomPaused` projection), the episode changed, or the session ended. Flag,
+  // timer and pending toast go together — a surviving timer would toast a
+  // failure for a hold that succeeded.
+  function clearPendingUserPause(): void {
+    if (!pendingUserPause && !pendingPauseTimer) return
+    pendingUserPause = false
+    pendingPauseHeldAny = false
+    if (pendingPauseTimer) {
+      clearTimeout(pendingPauseTimer)
+      pendingPauseTimer = null
+    }
+    clearPendingPauseToast()
+  }
+
+  // The backstop. Reaching it with `roomPaused` in place means the room
+  // genuinely never went paused inside the window, so the pause did not stick —
+  // say so, and hand the badge back, since "Paused by you" is no longer true of
+  // a room that kept playing. Silent — and the badge stands — when nothing was
+  // held: no remote state ever contradicted the pause, so there is nothing to
+  // report and nothing to correct.
+  function expirePendingUserPause(): void {
+    pendingPauseTimer = null
+    const held = pendingPauseHeldAny
+    pendingUserPause = false
+    pendingPauseHeldAny = false
+    if (held) {
+      // Only a hold that held something can have failed visibly — and only then
+      // is "Paused by you" no longer true. An expiry that held nothing may well
+      // be sitting on a correct badge (a room already reported paused never
+      // produces the `roomPaused` edge, so that hold runs to the backstop).
+      syncplayPausedBy.value = null
+      showSyncplayToast(PENDING_PAUSE_FAILED_TOAST)
+    } else {
+      clearPendingPauseToast()
+    }
+  }
+
+  // Called from the element half, below its no-op early-out: a state that
+  // early-outs moved nothing and so held nothing. The toast rides the remaining
+  // window rather than the 3500 ms default, so it cannot outlive the hold it
+  // describes.
+  function notePendingPauseHeldState(): void {
+    if (pendingPauseHeldAny) return
+    pendingPauseHeldAny = true
+    const remaining = Math.max(0, pendingPauseArmedAt + PENDING_PAUSE_MAX_MS - Date.now())
+    showSyncplayToast(PENDING_PAUSE_TOAST, remaining)
   }
 
   function buildCanonicalName(): string {
@@ -374,7 +479,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (syncplayStatus.value.state !== 'ready') return
     const v = deps.getVideoEl()
     if (!v) return
-    const shouldPlay = syncplayLastRemotePlaying && syncplayAllUsersReady()
+    // The pending pause is honored *at the action*, not by suppressing the
+    // mirror write that feeds this (#228). Falsifying `syncplayLastRemotePlaying`
+    // instead would flip the *pause* branch below against the user's own later
+    // resume: the room really is playing, and the mirror's other consumers need
+    // that truth.
+    const shouldPlay = syncplayLastRemotePlaying && syncplayAllUsersReady() && !pendingUserPause
     // The gate moves the element on the room's behalf, never the user's — mark
     // it like a remote apply so the resulting event isn't mistaken for intent
     // however late the element gets around to firing it.
@@ -403,10 +513,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // fills. `syncplayPausedBy` is the same class: it is UI state about the room,
   // not about our element.
   function recordRemoteState(state: SyncplayRemoteState): void {
+    // The room went paused: whatever the pending pause was waiting for has
+    // happened (ours landed, or a peer's did), so the hold ends here and the
+    // rest of this function runs normally — that fall-through is what hands the
+    // badge over through the ordinary `pausedChanged` path below.
+    //
+    // Keyed on `state.paused`, never on the element half's `effectivePaused`: a
+    // playing room we happen to be gating locally is still a playing room. And
+    // placed here rather than in the element half because #240 guarantees *this*
+    // function runs for every inbound state, parked or not, and re-runs at
+    // unpark — the element half's early-outs can swallow a state entirely.
+    if (state.paused) clearPendingUserPause()
     syncplayLastRemotePlaying = !state.paused
     const pausedChanged = syncplayLastAppliedPaused !== state.paused
     syncplayLastAppliedPaused = state.paused
-    if (pausedChanged) {
+    // The badge body is held while a pause is pending — the mirror writes above
+    // are not, because their consumers need the room's truth. Otherwise the
+    // first held playing state would clear "Paused by you" off a pause the user
+    // can still see the element honoring.
+    if (pausedChanged && !pendingUserPause) {
       if (state.paused && state.setBy) syncplayPausedBy.value = state.setBy
       else if (!state.paused) syncplayPausedBy.value = null
     }
@@ -432,9 +557,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (!needsSeek && !needsPlayPause) return
     suppressNextLocalEventUntil = Date.now() + 1500
 
+    // A playing state arriving while the user's pre-adoption pause is still
+    // pending (#228). The seek half is applied anyway — withholding it would
+    // stall the very adoption the hold is waiting for, since main's drift test
+    // latches on the position the element reports — while the intent clobber,
+    // the play/pause block and the seek toast are all skipped.
+    //
+    // The *whole* play/pause block, not just the `v.play()`: skipping only the
+    // call would latch `appliedPaused = false` with no event left to consume
+    // it, and the user's next real play would then be read as that echo and
+    // never reach the room (the latch family `docs/syncplay.md` documents).
+    //
+    // The seek toast goes with it because during a hold the element is
+    // deliberately behind, so `needsSeek` is true on essentially every apply and
+    // "X seeked to …" would describe a seek nobody made, over the message that
+    // matters.
+    const holding = pendingUserPause && !state.paused
+    if (holding) notePendingPauseHeldState()
+
     // Adopting the room's intent as our own — a later heartbeat must report
     // this, not whatever the buffer machinery has done to the element since.
-    intendedPaused = state.paused
+    if (!holding) intendedPaused = state.paused
     if (needsSeek) {
       const target = Math.max(0, state.position)
       appliedSeekPosition = {
@@ -444,7 +587,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       }
       v.currentTime = target
     }
-    if (needsPlayPause) {
+    if (needsPlayPause && !holding) {
       appliedPaused = effectivePaused
       if (effectivePaused) v.pause()
       // Retracted like every other failed call (#236). Swallowing the rejection
@@ -456,7 +599,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // two `v.play()` sites already close, through the same function.
       else v.play().catch(() => markProgrammaticPlayback(null))
     }
-    if (state.setBy && needsSeek) {
+    if (state.setBy && needsSeek && !holding) {
       showSyncplayToast(`${state.setBy} seeked to ${deps.formatTime(state.position)}`)
     }
   }
@@ -544,6 +687,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // fills — by design, so a remote "next episode" or local prev/next
   // auto-resumes the binge instead of pausing.
   watch([deps.activeEpisodeIndex, deps.activeTranslationId], () => {
+    // A new episode deliberately auto-resumes the binge through the gate (see
+    // above), and a hold surviving the switch would sit on that resume until it
+    // expired into a failure toast for a pause the user made an episode ago.
+    clearPendingUserPause()
     resetRemoteStateTracking()
     pushSyncplayFile()
   })
@@ -640,11 +787,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // "playing" while the element sat paused — the heartbeat then asserted
     // play and the next remote apply resumed it, so the pause "didn't work".
     intendedPaused = false
-    if (Date.now() >= suppressNextLocalEventUntil) {
-      syncplayLastRemotePlaying = true
-      syncplayLastAppliedPaused = false
-      syncplayPausedBy.value = null
-    }
+    // The user changed their mind — clear before the gate call below, or it
+    // would pause the element they just resumed.
+    clearPendingUserPause()
+    // Unconditional since #228, like the pause half below: anything reaching
+    // here is past the `appliedPaused` echo check, and by #224's classification
+    // rule that makes it the user. The wall-clock window that used to gate this
+    // is re-armed by *every* apply for 1500 ms, at ~1 Hz through the whole
+    // convergence window, so it was shut for exactly the presses this issue is
+    // about. It still gates sending (`sendSyncplayLocalState`), which is all it
+    // was ever able to say something true about.
+    //
+    // This half ships with the pause half or not at all: relaxing the pause
+    // side alone leaves a stale `false` here that the gate call below reads,
+    // and "press play right after pausing" re-pauses itself.
+    syncplayLastRemotePlaying = true
+    syncplayLastAppliedPaused = false
+    syncplayPausedBy.value = null
     sendSyncplayLocalState('play')
     applySyncplayReadyGate()
   }
@@ -655,12 +814,43 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       return
     }
     intendedPaused = true
-    if (Date.now() >= suppressNextLocalEventUntil) {
-      syncplayLastRemotePlaying = false
-      syncplayLastAppliedPaused = true
-      if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
-        syncplayPausedBy.value = syncplayStatus.value.username
-      }
+    // See onLocalPlay: the wall-clock gate that used to sit here was shut for
+    // the whole convergence window, so the room mirror kept saying "playing"
+    // through the user's own pause and the ready gate resumed the element a
+    // beat later. Past the echo check this is the user, so the mirror follows
+    // them — which also makes "Paused by you" appear on the press.
+    syncplayLastRemotePlaying = false
+    syncplayLastAppliedPaused = true
+    if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
+      syncplayPausedBy.value = syncplayStatus.value.username
+    }
+    // Arm the hold: inside a session only, pre-adoption only, and only for an
+    // element that has at least metadata (#228).
+    //
+    // `state === 'ready'` matches the `syncplayPausedBy` write above. Without
+    // it every pause outside a session arms the flag and an 8 s timer; nothing
+    // observable follows while there is no session (the gate early-outs, no
+    // remote states arrive), but a join inside that window would start the new
+    // session already mid-hold, holding the room's first states against a pause
+    // that predates the room.
+    //
+    // `playbackAdopted !== true` scopes it to the window where main's ack
+    // protection is off. Post-adoption the flag is redundant for anything that
+    // reaches the wire, and alone in a room — where the roster test adopts
+    // instantly — it would guarantee a failure toast nobody earned.
+    //
+    // `readyState > 0` is what excludes every reload-shaped implicit pause
+    // without any PlayerView plumbing: the media load algorithm resets
+    // `readyState` synchronously, and the `pause` event it (or the teardown
+    // pause before a `src` swap) queues is delivered after that reset. The
+    // residual is a real user pause on an element reporting HAVE_NOTHING, where
+    // inbound states are parked anyway and pre-#228 behavior holds.
+    if (
+      syncplayStatus.value.state === 'ready' &&
+      syncplayStatus.value.playbackAdopted !== true &&
+      (deps.getVideoEl()?.readyState ?? 0) > 0
+    ) {
+      armPendingUserPause()
     }
     sendSyncplayLocalState('pause')
   }
@@ -678,6 +868,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     console.log('[syncplay] status:', status.state, status.error ? `error=${status.error}` : '')
     if (status.state === 'ready' && !wasReady) {
       pushSyncplayFile()
+    }
+    // The room went paused (#228) — the pending pause has reached the room, or a
+    // peer paused it, either of which ends the hold. This is the *normal*
+    // terminator; the 8 s timer is only the backstop.
+    //
+    // An **edge**, not a level: a hold armed while the room is already paused
+    // (we are locally gated, say) would be cleared on its very first status
+    // emit by a level test, and the whole point is to wait for a *transition*.
+    //
+    // It carries the mirror repair, atomically. `syncplayLastRemotePlaying` is
+    // whatever the last inbound playing state left behind — the hold masked it,
+    // it did not undo it — so a bare clear hands the very next ready-gate entry
+    // a `true` and it resumes the pause we just confirmed had landed.
+    if (status.roomPaused === true && prev?.roomPaused !== true && pendingUserPause) {
+      syncplayLastRemotePlaying = false
+      syncplayLastAppliedPaused = true
+      clearPendingUserPause()
     }
     if (status.state === 'idle' || status.state === 'disconnected') {
       // Session-scoped, cleared with the session — the renderer half of main's
@@ -717,6 +924,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       intendedPaused = null
       appliedPaused = null
       appliedSeekPosition = null
+      // Room B must not inherit room A's pending pause — nor its 8 s timer,
+      // which would toast a failure into a session that never held anything.
+      clearPendingUserPause()
       suppressNextLocalEventUntil = 0
       lastSnapshotPushAt = 0
       resetRemoteStateTracking()
@@ -817,6 +1027,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (syncplayWaitingTimer) {
       clearTimeout(syncplayWaitingTimer)
       syncplayWaitingTimer = null
+    }
+    if (pendingPauseTimer) {
+      clearTimeout(pendingPauseTimer)
+      pendingPauseTimer = null
     }
   })
 

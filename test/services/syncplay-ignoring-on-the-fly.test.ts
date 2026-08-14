@@ -744,6 +744,71 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(remoteStates).toHaveLength(0)
         expect(seekIntent()).not.toBeNull()
       })
+
+      // The identity itself, rather than the three fixtures above that happen to
+      // instantiate it (#274 review). Each case above pins one conjunct against
+      // one hand-built frame; none of them notices if the retraction and the
+      // drop guards stop agreeing, because every one of them delivers a frame
+      // that is applied. This sweeps the frame axes that decide whether
+      // handleState() reaches `emit('remote-state')` and asserts the implication
+      // over all of them: **if the intent was retired, the renderer was handed
+      // that frame.** A fourth drop rule added between the retraction and the
+      // emit — the dangerous direction, since it silently restores the permanent
+      // divergence #252 closes — goes red here as soon as it drops any frame in
+      // this space, which no other case in the file would report.
+      //
+      // A single frame is delivered per case so the retraction is the *only*
+      // route from a pending intent to null: every swept position sits further
+      // than SEEK_REASSERT_TOLERANCE_S from the element, so maybeReassertSeek()
+      // cannot clear it as converged, and neither the TTL nor the attempt
+      // ceiling can be reached in one frame.
+      it('never retires the intent for a frame the renderer is not handed', () => {
+        const positions = [ROOM_POSITION, SEEK_TARGET + 8 * SEEK_REASSERT_TOLERANCE_S]
+        let retired = 0
+        let dropped = 0
+
+        for (const setBy of ['me', 'peer']) {
+          for (const doSeek of [true, false]) {
+            for (const server of [7, undefined]) {
+              for (const paused of [false, true]) {
+                for (const position of positions) {
+                  // A fresh client per case: the sweep is over first frames, and
+                  // an intent already retired by a previous one proves nothing.
+                  client.disconnect()
+                  client = new SyncplayClient()
+                  remoteStates = []
+                  client.on('remote-state', (s) =>
+                    remoteStates.push(s as { position: number; setBy: string })
+                  )
+
+                  handshake()
+                  armForwardSeek()
+                  clearWrites()
+
+                  forcedState({ server, setBy, position, paused, doSeek })
+
+                  const frame = { setBy, doSeek, server, paused, position }
+                  if (remoteStates.length === 0) dropped += 1
+                  if (seekIntent() === null) {
+                    retired += 1
+                    expect(
+                      { ...frame, remoteStatesEmitted: remoteStates.length },
+                      'intent retired for a frame the renderer never received'
+                    ).toMatchObject({ remoteStatesEmitted: 1 })
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Anti-vacuity, both halves: the sweep really does contain frames that
+        // retire the intent and frames that never reach the renderer, so the
+        // implication above is not satisfied by an empty antecedent or by a
+        // space in which everything is applied.
+        expect(retired).toBeGreaterThan(0)
+        expect(dropped).toBeGreaterThan(0)
+      })
     })
 
     describe('scope', () => {

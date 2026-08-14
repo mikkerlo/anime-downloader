@@ -1488,6 +1488,32 @@ export class SyncplayClient extends EventEmitter {
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
+    // "This frame is one we are about to hand the renderer." The two drop guards
+    // below read these same two consts, so the retraction's gate *is* their
+    // conjunction textually rather than by coincidence (#274 review) — and that
+    // identity is the correctness argument: retire the intent iff the peer seek
+    // that supersedes it is on a frame the renderer actually applies. Retiring
+    // for a frame we then drop restores the silent permanent divergence #252
+    // exists to close. A new drop rule added anywhere between here and the
+    // `emit('remote-state')` below therefore has to join this conjunction, not
+    // just add a fourth `return` past it.
+    //
+    // Hoisting is value-preserving, which is what lets one const stand for all
+    // three reads: `isForeignSetBy()` is pure, and the only writers of
+    // `pendingClientAck` and `config` are sendLocalState(), resetTransportState()
+    // and handleState()'s own counter block above — none of them reachable from
+    // the maybeReassertSeek() / emitStatusIfProjectionChanged() calls in
+    // between, whose `emit()`s are forwarded to the renderer over IPC rather
+    // than re-entering this object.
+    const isForeignState = this.isForeignSetBy(setBy)
+    // Defensive rather than observed (#274 review): every forced update carries
+    // `ignoringOnTheFly.server` and the #232 arm above zeroes the counter on any
+    // frame that has one, so by the time this runs it is always true on the
+    // wire. The only route to false is a counter-less synthetic frame — which is
+    // exactly what `is not retracted by a peer seek this client drops as
+    // unacked` delivers. Kept because it is what makes the identity above true.
+    const localChangeAcked = this.pendingClientAck === 0
+    const willApplyRemoteState = isForeignState && localChangeAcked
     // A peer's *own* seek, landing while ours is still unresolved, supersedes it
     // (#274 review). maybeReassertSeek()'s drift test answers "the room is not
     // where I am", which is a superset of "my seek was discarded": it also fires
@@ -1500,10 +1526,10 @@ export class SyncplayClient extends EventEmitter {
     // ours, so theirs is the newer intent and ours is retired, not recovered.
     // Nothing #252 buys is given up — the *discarded* case never reaches here.
     //
-    // The signal is the frame, under the same conditions that decide we are
-    // about to apply it: a foreign `setBy` (our own reflected forced update
-    // returns at the self-guard below) that clears the unacked drop guard, and
-    // `doSeek` — which is the wire's only "someone seeked" bit, set on a forced
+    // The signal is the frame: `willApplyRemoteState` — the same predicate the
+    // drop guards below return on, so "a peer seek superseded ours" can never
+    // outrun "the renderer was handed the peer's position" — plus
+    // `doSeek`, which is the wire's only "someone seeked" bit, set on a forced
     // update by a seek and not by a pause change. Deliberately *not* the echo
     // target's full arming rule below (`doSeek || |snapshot − position| > 3`):
     // its second disjunct is true in the discarded case too, because there the
@@ -1514,7 +1540,7 @@ export class SyncplayClient extends EventEmitter {
     // Above maybeReassertSeek(), not at the arming site: the harmful frame is
     // the *first* re-assert, which goes out on this same tick, so a retraction
     // ordered after it would stop attempt 2 and still ship the yank.
-    if (this.seekIntent && doSeek && this.isForeignSetBy(setBy) && this.pendingClientAck === 0) {
+    if (this.seekIntent && doSeek && willApplyRemoteState) {
       log('retiring seek intent — superseded by a peer seek', { setBy, position })
       this.seekIntent = null
     }
@@ -1539,8 +1565,12 @@ export class SyncplayClient extends EventEmitter {
     // reads nor writes `lastRoomState.paused`.
     this.emitStatusIfProjectionChanged()
 
-    if (!this.isForeignSetBy(setBy)) return
-    if (this.pendingClientAck !== 0) {
+    // Each guard keeps its own `return` so the drop log below survives and the
+    // order of the two is unchanged; they read the conjuncts of
+    // `willApplyRemoteState` rather than re-deriving them, which is what makes
+    // the retraction's gate above provably the same predicate.
+    if (!isForeignState) return
+    if (!localChangeAcked) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')
       return
     }
@@ -1748,11 +1778,12 @@ export class SyncplayClient extends EventEmitter {
     }
   }
 
-  // "This state came from somebody else." One definition, two readers (#274
-  // review): handleState()'s self-`setBy` guard and the supersede retraction
-  // above it. Sharing it is the point — the retraction means "a state we are
-  // about to apply", so if the two ever disagreed the retraction would either
-  // fire on our own reflected seek or miss a peer's.
+  // "This state came from somebody else." One definition, called once per frame
+  // into handleState()'s `isForeignState` (#274 review), which both the
+  // self-`setBy` drop guard and the supersede retraction above it read. Sharing
+  // it is the point — the retraction means "a state we are about to apply", so
+  // if the two ever disagreed the retraction would either fire on our own
+  // reflected seek or miss a peer's.
   private isForeignSetBy(setBy: string | null): boolean {
     if (setBy === null) return false
     if (!this.config) return true

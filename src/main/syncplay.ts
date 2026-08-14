@@ -1488,6 +1488,36 @@ export class SyncplayClient extends EventEmitter {
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
+    // A peer's *own* seek, landing while ours is still unresolved, supersedes it
+    // (#274 review). maybeReassertSeek()'s drift test answers "the room is not
+    // where I am", which is a superset of "my seek was discarded": it also fires
+    // when a peer seeked somewhere else while ours was in flight, and there the
+    // recovery cross-fires — we hand the renderer the peer's position and the
+    // server ours off the same frame, and `doSeek` bypasses the renderer's 3 s
+    // tolerance on *every* peer, so the room is dragged back for a round trip
+    // before the live-position rule converges it. Syncplay is last-write-wins
+    // and the server has already ruled: it accepted their seek and discarded
+    // ours, so theirs is the newer intent and ours is retired, not recovered.
+    // Nothing #252 buys is given up — the *discarded* case never reaches here.
+    //
+    // The signal is the frame, under the same conditions that decide we are
+    // about to apply it: a foreign `setBy` (our own reflected forced update
+    // returns at the self-guard below) that clears the unacked drop guard, and
+    // `doSeek` — which is the wire's only "someone seeked" bit, set on a forced
+    // update by a seek and not by a pause change. Deliberately *not* the echo
+    // target's full arming rule below (`doSeek || |snapshot − position| > 3`):
+    // its second disjunct is true in the discarded case too, because there the
+    // element is far from the room precisely by the seek we are trying to
+    // recover, so gating on it would retract exactly the intents #252 exists to
+    // keep.
+    //
+    // Above maybeReassertSeek(), not at the arming site: the harmful frame is
+    // the *first* re-assert, which goes out on this same tick, so a retraction
+    // ordered after it would stop attempt 2 and still ship the yank.
+    if (this.seekIntent && doSeek && this.isForeignSetBy(setBy) && this.pendingClientAck === 0) {
+      log('retiring seek intent — superseded by a peer seek', { setBy, position })
+      this.seekIntent = null
+    }
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
@@ -1509,8 +1539,7 @@ export class SyncplayClient extends EventEmitter {
     // reads nor writes `lastRoomState.paused`.
     this.emitStatusIfProjectionChanged()
 
-    if (setBy === null) return
-    if (this.config && setBy.toLowerCase() === this.config.username.toLowerCase()) return
+    if (!this.isForeignSetBy(setBy)) return
     if (this.pendingClientAck !== 0) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')
       return
@@ -1717,6 +1746,17 @@ export class SyncplayClient extends EventEmitter {
       position: this.projectedRoomPosition(room),
       doSeek: false
     }
+  }
+
+  // "This state came from somebody else." One definition, two readers (#274
+  // review): handleState()'s self-`setBy` guard and the supersede retraction
+  // above it. Sharing it is the point — the retraction means "a state we are
+  // about to apply", so if the two ever disagreed the retraction would either
+  // fire on our own reflected seek or miss a peer's.
+  private isForeignSetBy(setBy: string | null): boolean {
+    if (setBy === null) return false
+    if (!this.config) return true
+    return setBy.toLowerCase() !== this.config.username.toLowerCase()
   }
 
   // Where the room is *now*: its last reported position, advanced by wall time

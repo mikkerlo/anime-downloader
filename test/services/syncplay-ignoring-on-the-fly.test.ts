@@ -50,7 +50,7 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient } from '../../src/main/syncplay'
+import { SyncplayClient, SEEK_REASSERT_TOLERANCE_S } from '../../src/main/syncplay'
 
 const HEARTBEAT_MS = 1000
 
@@ -115,12 +115,19 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
   // the playstate ride the *same* frame (protocols.py:748-760). Writing them as
   // two frames would let an implementation that zeroes after the playstate block
   // pass while still shipping the bug.
+  //
+  // `doSeek` is an option rather than a constant because the server forces a
+  // room update on a seek *or* a pause change (server.py:180-186), and the two
+  // are different frames on the wire: only the seek carries `doSeek: true`, and
+  // only the seek is a claim that somebody moved the room. Hardcoding it made
+  // every fixture here a peer *seek* whether it meant to be one or not.
   const forcedState = (opts: {
     server?: number
     client?: number
     setBy?: string | null
     position?: number
     paused?: boolean
+    doSeek?: boolean
     withPlaystate?: boolean
   }): void => {
     const state: Record<string, unknown> = { ping: { latencyCalculation: 1_770_000_000.25 } }
@@ -132,7 +139,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       state.playstate = {
         position: opts.position ?? 500,
         paused: opts.paused ?? false,
-        doSeek: true,
+        doSeek: opts.doSeek !== false,
         setBy: opts.setBy === undefined ? 'peer' : opts.setBy
       }
     }
@@ -193,16 +200,16 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
 
     forcedState({ server: 7, setBy: 'peer', position: 500 })
 
-    // Two frames since #252, not one: this fixture is 400 s divergent (snapshot
-    // 100, room 500) with a seek intent pending, so the recovery frame follows
-    // the ack. The property under test is unchanged and is about frame [0] —
-    // the *ack* never carries a playstate, whatever rides behind it.
+    // One frame. `forcedState()` defaults to `doSeek: true`, so on the wire this
+    // is a peer seeking to 500 while our seek to 100 is unresolved — which
+    // supersedes ours (#274 review), and no recovery frame follows. The property
+    // under test is unchanged and is about frame [0]: the *ack* never carries a
+    // playstate, whatever does or does not ride behind it.
     const acks = outboundStates(lastTlsSocket)
-    expect(acks).toHaveLength(2)
+    expect(acks).toHaveLength(1)
     expect(acks[0].ignoringOnTheFly).toEqual({ server: 7 })
     expect(acks[0]).not.toHaveProperty('playstate')
     expect(acks[0].ping).toBeDefined()
-    expect(acks[1].playstate?.doSeek).toBe(true)
 
     // The anti-vacuity half: the very next heartbeat does carry a playstate, so
     // its absence above is a property of the ack, not of the fixture.
@@ -381,19 +388,48 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     const doSeekFrames = (): StateFrame[] =>
       outboundStates(lastTlsSocket).filter((s) => s.playstate?.doSeek === true)
 
-    // The forced update our own seek caused, reflected back with the room still
-    // at its pre-seek position. `setBy: 'me'` is the default because that is the
-    // dominant shape of this bug: broadcastRoom() has no sender filter
-    // (server.py:180-186), so the scrubbing user's own connection is the deaf
-    // one — and it is the shape that proves the recovery sits *above*
-    // handleState()'s self-`setBy` guard rather than below it, where it would be
-    // dead code.
+    // The room's resting position and where the user scrubs to. The gap is
+    // expressed in SEEK_REASSERT_TOLERANCE_S rather than hardcoded (#274
+    // review): every fixture below means "the room never took our seek", which
+    // is only a real divergence while the gap exceeds that tolerance, so a
+    // hardcoded one would quietly stop testing anything the day the constant
+    // grows past it. The converged fixtures below are derived from it too, from
+    // the other side.
+    const ROOM_POSITION = 100
+    const SEEK_TARGET = ROOM_POSITION + 4 * SEEK_REASSERT_TOLERANCE_S
+
+    // The forced update the room sent while it was still at its pre-seek
+    // position. `setBy: 'me'` is the default because that is the dominant shape
+    // of this bug: broadcastRoom() has no sender filter (server.py:180-186), so
+    // the scrubbing user's own connection is the deaf one — and it is the shape
+    // that proves the recovery sits *above* handleState()'s self-`setBy` guard
+    // rather than below it, where it would be dead code.
+    //
+    // `doSeek: false` throughout: a forced update whose playstate still shows
+    // the room where it was is by construction not a report that somebody
+    // seeked it there. The server forces the same update on a pause change, and
+    // that is the frame this describes (#274 review). The seek-carrying shape is
+    // its own case in the supersede block below, where it means something else
+    // entirely.
     const roomStillAt = (position: number, opts: { server?: number; setBy?: string } = {}): void =>
       forcedState({
         server: opts.server ?? 7,
         setBy: opts.setBy ?? 'me',
         position,
-        paused: false
+        paused: false,
+        doSeek: false
+      })
+
+    // A peer really seeked, and the server took it: `doSeek` set, a foreign
+    // `setBy`, and a position that is the peer's target rather than the room's
+    // old resting place.
+    const peerSeeksTo = (position: number, opts: { server?: number } = {}): void =>
+      forcedState({
+        server: opts.server ?? 7,
+        setBy: 'peer',
+        position,
+        paused: false,
+        doSeek: true
       })
 
     // Seek forward, deliberately: a *backward* seek converges by coincidence on
@@ -402,8 +438,8 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     // the seeker happens to be the min. A regression test built on one would
     // pass against the bug.
     const armForwardSeek = (): void => {
-      client.updateSnapshot({ position: 100, paused: false })
-      armLocalSeek(400)
+      client.updateSnapshot({ position: ROOM_POSITION, paused: false })
+      armLocalSeek(SEEK_TARGET)
       expect(pendingClientAck()).toBeGreaterThan(0)
     }
 
@@ -412,14 +448,14 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       armForwardSeek()
       clearWrites()
 
-      roomStillAt(100)
+      roomStillAt(ROOM_POSITION)
 
       // Fails on the old code: the ack goes out and nothing else ever does,
       // because `doSeek` is one-shot and the next heartbeat re-sends the same
       // position with `doSeek: false`.
       const seeks = doSeekFrames()
       expect(seeks).toHaveLength(1)
-      expect(seeks[0].playstate?.position).toBe(400)
+      expect(seeks[0].playstate?.position).toBe(SEEK_TARGET)
     })
 
     it('orders the recovery behind the ack and leaves the ack playstate-free', () => {
@@ -427,7 +463,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       armForwardSeek()
       clearWrites()
 
-      roomStillAt(100, { server: 11 })
+      roomStillAt(ROOM_POSITION, { server: 11 })
 
       // Two ordered frames, never one packed frame: the ack clears the server's
       // flag at protocols.py:776-777, *above* the :788 gate, so the playstate on
@@ -437,7 +473,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(states).toHaveLength(2)
       expect(states[0].ignoringOnTheFly).toEqual({ server: 11 })
       expect(states[0]).not.toHaveProperty('playstate')
-      expect(states[1].playstate).toMatchObject({ position: 400, doSeek: true })
+      expect(states[1].playstate).toMatchObject({ position: SEEK_TARGET, doSeek: true })
       // No counter bump on the recovery: it carries no *new* intent, and
       // re-arming the drop guard here would starve the inbound convergence #232
       // opened this window to preserve.
@@ -445,14 +481,22 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(pendingClientAck()).toBe(0)
     })
 
+    // The placement claim, on a frame the self-`setBy` guard does not swallow:
+    // recovery has to fire off a peer-`setBy` forced update too. Pause-driven on
+    // purpose (#274 review) — `roomStillAt()` sends `doSeek: false`, so this is
+    // "a peer paused and the room reported it is still at 100", not "a peer
+    // seeked to 100". The seek-carrying version of the same frame is the
+    // supersede case below and has the opposite outcome, which is exactly why
+    // this one must not borrow its shape.
     it('also recovers when the forced State comes from a peer', () => {
       handshake()
       armForwardSeek()
       clearWrites()
 
-      roomStillAt(100, { setBy: 'peer' })
+      roomStillAt(ROOM_POSITION, { setBy: 'peer' })
 
       expect(doSeekFrames()).toHaveLength(1)
+      expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET)
     })
 
     it('re-asserts where the user is now, never the position the seek targeted', () => {
@@ -462,12 +506,12 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // Replaying the parked target here would seek the room — and, through the
       // broadcast, the user — backwards by the elapsed playback, with min() over
       // watchers amplifying the stale value into the room's own position.
-      client.updateSnapshot({ position: 412, paused: false })
+      client.updateSnapshot({ position: SEEK_TARGET + 12, paused: false })
       clearWrites()
 
-      roomStillAt(100)
+      roomStillAt(ROOM_POSITION)
 
-      expect(doSeekFrames()[0].playstate?.position).toBe(412)
+      expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET + 12)
     })
 
     it('sends no recovery once the room has taken our position', () => {
@@ -475,11 +519,30 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       armForwardSeek()
       clearWrites()
 
-      roomStillAt(400)
+      roomStillAt(SEEK_TARGET)
 
       expect(doSeekFrames()).toHaveLength(0)
       expect(seekIntent()).toBeNull()
       // Non-vacuous: the frame was processed, it just resolved the intent.
+      expect(outboundStates(lastTlsSocket)).toHaveLength(1)
+    })
+
+    // The other side of the tolerance, and the second half of what makes
+    // importing the constant worth anything: a room that stopped *within* it has
+    // converged as far as the rest of the system is concerned (`isAdopted()`
+    // latches, the renderer's apply rule declines to move anyone), so there is
+    // nothing left for a `doSeek` to recover and holding the intent would only
+    // start a fight. Shrink SEEK_REASSERT_TOLERANCE_S and this fixture becomes
+    // divergent, which is precisely the coupling the hardcoded gap hid.
+    it('sends no recovery for a room that came within the re-assert tolerance', () => {
+      handshake()
+      armForwardSeek()
+      clearWrites()
+
+      roomStillAt(SEEK_TARGET - SEEK_REASSERT_TOLERANCE_S / 2)
+
+      expect(doSeekFrames()).toHaveLength(0)
+      expect(seekIntent()).toBeNull()
       expect(outboundStates(lastTlsSocket)).toHaveLength(1)
     })
 
@@ -488,7 +551,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       armForwardSeek()
       clearWrites()
 
-      for (let i = 0; i < 6; i += 1) roomStillAt(100, { server: 20 + i })
+      for (let i = 0; i < 6; i += 1) roomStillAt(ROOM_POSITION, { server: 20 + i })
 
       // The bound. Unbounded stickiness is a permanent fight with the renderer's
       // 3 s apply rule against a room that will never adopt us.
@@ -503,11 +566,11 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // spectator guard, not the TTL, is what this would be testing.
       for (let i = 1; i <= 6; i += 1) {
         vi.advanceTimersByTime(1000)
-        client.updateSnapshot({ position: 400 + i, paused: false })
+        client.updateSnapshot({ position: SEEK_TARGET + i, paused: false })
       }
       clearWrites()
 
-      roomStillAt(100)
+      roomStillAt(ROOM_POSITION)
 
       expect(doSeekFrames()).toHaveLength(0)
       expect(seekIntent()).toBeNull()
@@ -522,7 +585,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       vi.advanceTimersByTime(6000)
       clearWrites()
 
-      roomStillAt(100)
+      roomStillAt(ROOM_POSITION)
 
       expect(doSeekFrames()).toHaveLength(0)
       expect(seekIntent()).toBeNull()
@@ -548,7 +611,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(seekIntent()?.attempts).toBe(0)
         clearWrites()
 
-        roomStillAt(100)
+        roomStillAt(ROOM_POSITION)
 
         expect(doSeekFrames()[0].playstate?.position).toBe(700)
       })
@@ -559,17 +622,127 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         // The playhead is still where the user put it and the room still has not
         // taken it, so the intent stands — and the recovery frame carries the
         // pause too, since it asserts the current snapshot.
-        client.sendLocalState({ paused: true, position: 400, cause: 'pause' })
+        client.sendLocalState({ paused: true, position: SEEK_TARGET, cause: 'pause' })
         expect(seekIntent()).not.toBeNull()
         clearWrites()
 
-        roomStillAt(100)
+        roomStillAt(ROOM_POSITION)
 
         expect(doSeekFrames()[0].playstate).toMatchObject({
-          position: 400,
+          position: SEEK_TARGET,
           paused: true,
           doSeek: true
         })
+      })
+    })
+
+    // The #239 interaction the issue's Risks section asks for, and the answer to
+    // "the drift test cannot tell a discarded seek from a superseded one" (#274
+    // review).
+    //
+    // Syncplay is last-write-wins. A peer seek that the server took while ours
+    // was in flight is genuinely the newer intent, so ours is retired rather
+    // than recovered — otherwise the recovery frame and the frame we hand the
+    // renderer disagree off the same tick, and since `doSeek` bypasses the
+    // renderer's 3 s tolerance the whole room is yanked back to our position for
+    // a round trip before the live-position rule converges it.
+    //
+    // Both directions are pinned here on purpose: a retraction that also killed
+    // the *discarded* case would be a silent revert of #252, and only the pair
+    // can tell the two apart.
+    describe("a peer's seek supersedes ours (#239)", () => {
+      it('retires the intent instead of re-asserting over the peer', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        peerSeeksTo(900)
+
+        // No cross-fire: the server is not told to go back to SEEK_TARGET while
+        // the renderer is being told to go to 900.
+        expect(doSeekFrames()).toHaveLength(0)
+        expect(seekIntent()).toBeNull()
+        // Non-vacuous, and the two halves of "this frame was really applied":
+        // the ack went out, and the peer's state reached the renderer.
+        const states = outboundStates(lastTlsSocket)
+        expect(states).toHaveLength(1)
+        expect(states[0].ignoringOnTheFly).toEqual({ server: 7 })
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].setBy).toBe('peer')
+      })
+
+      // The renderer's suppression window, walked end to end. The apply arms
+      // main's echo reference, the element's `seeked` comes back as a local
+      // 'seek' at the applied value, and sendLocalState()'s echo guard swallows
+      // it — so the peer's own position is never re-armed as a fresh intent and
+      // handed back to them with `doSeek`.
+      it('does not re-arm an intent from the echo of the applied peer seek', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        peerSeeksTo(900)
+        // What the renderer applied, reported back by the element.
+        client.sendLocalState({ paused: false, position: 900, cause: 'seek' })
+
+        expect(seekIntent()).toBeNull()
+        expect(doSeekFrames()).toHaveLength(0)
+      })
+
+      // The discarded case, unchanged. Same foreign `setBy`, same server
+      // counter, same "the element is 12 s from the room" divergence that arms
+      // the echo target below — and still recovered, because the frame carries
+      // no claim that anyone seeked. This is the case a retraction gated on the
+      // echo target's own arming rule (`doSeek || |snapshot − position| > 3`)
+      // would swallow.
+      it('still recovers when the peer frame is a pause, not a seek', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        forcedState({
+          server: 7,
+          setBy: 'peer',
+          position: ROOM_POSITION,
+          paused: true,
+          doSeek: false
+        })
+
+        expect(doSeekFrames()).toHaveLength(1)
+        expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET)
+      })
+
+      // Our own reflected forced update is a `doSeek` frame with a `setBy` too.
+      // Retracting on it would kill the dominant shape of the bug outright,
+      // which is what makes the foreign-`setBy` half of the gate load-bearing
+      // rather than decoration.
+      it('is not retracted by our own seek reflected back with doSeek', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        forcedState({ server: 7, setBy: 'me', position: ROOM_POSITION, doSeek: true })
+
+        expect(doSeekFrames()).toHaveLength(1)
+        expect(seekIntent()).not.toBeNull()
+      })
+
+      // The ack guard, the third condition. A peer seek arriving while our own
+      // change is still unacked is dropped by handleState() — the renderer never
+      // sees it, so it has not superseded anything on our side, and the intent
+      // has to survive to be recovered off the frame that does land.
+      it('is not retracted by a peer seek this client drops as unacked', () => {
+        handshake()
+        armForwardSeek()
+        expect(pendingClientAck()).toBeGreaterThan(0)
+        clearWrites()
+
+        // No server counter, so the #232 arm does not zero pendingClientAck and
+        // the drop guard is still up.
+        forcedState({ setBy: 'peer', position: 900, doSeek: true })
+
+        expect(remoteStates).toHaveLength(0)
+        expect(seekIntent()).not.toBeNull()
       })
     })
 

@@ -128,11 +128,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // itself is exact, however long the element takes to get there.
   //
   // Two kinds, differing only in how they are consumed (#239):
-  // - `anyValue: false` — a remote apply. Matched by value within
-  //   APPLIED_SEEK_EPSILON. Deliberately strict: it is the only renderer-side
-  //   echo guard an apply gets, and a value-agnostic one would swallow the
-  //   user's first real seek after every apply.
-  // - `anyValue: true` — a write this app made on the user's behalf
+  // - `anyValue: false` — matched by value within APPLIED_SEEK_EPSILON.
+  //   Deliberately strict: for a remote apply it is the only renderer-side echo
+  //   guard the apply gets, and a value-agnostic one would swallow the user's
+  //   first real seek after every apply. `markProgrammaticSeek` also arms this
+  //   kind for its post-metadata same-value write (#258), where the target is
+  //   by construction the position the element already holds — see there.
+  // - `anyValue: true` — the ordinary write this app made on the user's behalf
   //   (`markProgrammaticSeek`). Consumes the next `seeked` whatever position it
   //   reports, because the write often lands on an element at `readyState 0`:
   //   it becomes the *default playback start position*, fires no `seeked` then,
@@ -411,54 +413,80 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // position). The user's own paths (`seek()`, the scrubber's `commitSeek`)
   // deliberately do not.
   //
-  // Value-agnostic, TTL-bounded — see the AppliedSeek comment above.
+  // TTL-bounded, and value-agnostic for the ordinary write — see the
+  // AppliedSeek comment above.
   //
-  // Only armed when the write can actually move the element, the same rule
-  // markProgrammaticPlayback states for an already-paused element: a write that
-  // fires no `seeked` has nothing to consume its mark, so it latches for the
-  // whole TTL and swallows the user's *next* real seek. Writing the position
-  // the element already reports is exactly that case — and it is the normal
-  // case for the two episode-nav rewinds, which run in a `nextTick` *after* the
-  // `src` rebind, so the element has already reloaded to `readyState 0` at 0:
-  // the write there only sets the *default playback start position*, which
-  // fires nothing then and, being zero, is not seeked to when metadata arrives
-  // either. The sites that do move the element still arm — including the same
-  // rewind on the MSE/remux path, where `mseSrcUrl` has not been rebound yet so
-  // the element still holds the old source at a non-zero position. Guarded here
-  // rather than at the seven call sites so an eighth cannot forget it.
+  // A mark is only worth arming the way its write can actually be observed, the
+  // same rule markProgrammaticPlayback states for an already-paused element.
+  // Writing the position the element *already reports* is the case that forks,
+  // and which way depends entirely on `readyState`. Decided here rather than at
+  // the seven call sites so an eighth cannot forget it.
   //
-  // The assumption that buys that: a write to the position the element already
-  // reports fires no `seeked`. True at `readyState 0`, where five of the seven
-  // current callers sit — the restores/rewinds, which run in a `nextTick` after
-  // the `src` rebind. It is not true in general: the HTML seek algorithm has no
-  // same-position early-out, so at `readyState >= HAVE_METADATA` a same-value
-  // write still queues `seeking`/`seeked`. A future caller arming from a loaded
-  // element would see that `seeked` arrive unmarked, send it as intent at the
-  // position we are already at, and have `forcePositionUpdate` push it to every
-  // watcher.
+  // At `readyState 0` that write fires nothing: it only sets the *default
+  // playback start position*, which — being zero — is not seeked to when
+  // metadata arrives either. That is the normal case for the two episode-nav
+  // rewinds, which run in a `nextTick` *after* the `src` rebind, so the element
+  // has already reloaded to `readyState 0` at 0. A mark armed there has no
+  // event to consume it, latches for the whole 15 s TTL and swallows the user's
+  // *next* real seek — next episode → OP → Skip OP, which is #239's own defect
+  // at a new site. So: arm nothing. Five of the seven current callers sit here,
+  // the restores/rewinds behind the `src` rebind. The sites that do move the
+  // element still arm normally, including the same rewind on the MSE/remux
+  // path, where `mseSrcUrl` has not been rebound yet so the element still holds
+  // the old source at a non-zero position.
   //
-  // The other two current callers are already post-metadata, and are safe for
-  // their own reasons rather than this one. The MSE land runs from
-  // `onSourceBufferUpdateEnd` under `sb.buffered.length > 0`, by which point
-  // MSE's init-segment-received algorithm has taken the element to
-  // `HAVE_METADATA`; its strict `t < resumeLandTarget` makes a same-value write
-  // unreachable at any `readyState`, which is the stronger property.
-  // `resumeFromSavedPosition` runs behind `readyState >= 1` (else on
-  // `loadedmetadata`) and is gated on `saved.position > 5` while the element
-  // sits at 0, so the two values cannot coincide.
+  // At `readyState >= HAVE_METADATA` the same write is *not* silent: the HTML
+  // seek algorithm has no same-position early-out, so it queues
+  // `seeking`/`seeked` like any other seek. Arming nothing there would let that
+  // echo go out as intent at the position we are already at, and
+  // `forcePositionUpdate` would push it to every watcher. So: arm, but key the
+  // mark on the value (#258). Both engine behaviours are then bounded — a
+  // spec-compliant engine lands its `seeked` at exactly `target`, well inside
+  // APPLIED_SEEK_EPSILON, and the mark is consumed; an engine that
+  // short-circuits the seek without firing anything leaves the mark latched for
+  // the TTL, but a *value-keyed* mark can only swallow a later seek landing
+  // within 0.5 s of where we already are, rather than the user's next real seek
+  // anywhere on the timeline. That is strictly cheaper than either alternative
+  // weighed in #254: a bare `return` leaks intent on a spec-compliant engine,
+  // and an `anyValue: true` mark re-opens the wide latch on a short-circuiting
+  // one.
   //
-  // Kept broad rather than `&& v.readyState === 0`, which would confine it to
-  // the pre-metadata case above: narrowing re-opens the latch on any engine
-  // that short-circuits a same-value seek without firing events, and a latch
-  // swallowing the user's real seek for 15 s is the defect this exists to fix,
-  // while a redundant update at our own position is not.
+  // Value-keying is safe *here specifically*, against the standing reason
+  // programmatic marks are value-agnostic — a `readyState 0` write is clamped
+  // into `seekable` once metadata arrives, so a keyed mark would mismatch
+  // exactly when the new release is shorter than `savedTime`. That objection
+  // cannot reach this branch: it only fires when `target === v.currentTime`, so
+  // the target is by construction already inside `seekable` and cannot be
+  // clamped.
+  //
+  // The cost, paid knowingly: this used to be the one arming site that never
+  // touched the slot, and it is now a writer, so it widens the set of paths
+  // that can hit the single-marker residual (`docs/syncplay.md`). Deliberately
+  // *not* guarded by "skip when a live mark already occupies the slot" — that
+  // guard is strictly worse, because the un-armed same-value `seeked` then
+  // either consumes the other mark (and the real echo it was holding escapes)
+  // or goes out as intent itself, which is the hole this branch closes.
+  //
+  // Neither post-metadata caller can reach the branch today: the MSE land's
+  // strict `t < resumeLandTarget` makes a same-value write unreachable at any
+  // `readyState`, and `resumeFromSavedPosition` runs behind `readyState >= 1`
+  // (else on `loadedmetadata`) gated on `saved.position > 5` while the element
+  // sits at 0. This is for caller number eight.
   //
   // The residual latch is a write that does move the element but whose `seeked`
   // never arrives (an aborted load); the TTL is the backstop for that, and a
   // retraction path must not be added without a test for it.
   function markProgrammaticSeek(target: number): void {
     const v = deps.getVideoEl()
-    if (v && v.currentTime === target) return
+    if (v && v.currentTime === target) {
+      if (v.readyState < 1) return
+      appliedSeekPosition = {
+        value: target,
+        expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
+        anyValue: false
+      }
+      return
+    }
     appliedSeekPosition = {
       value: target,
       expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,

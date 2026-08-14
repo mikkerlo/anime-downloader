@@ -494,7 +494,7 @@ export class SyncplayClient extends EventEmitter {
   // structural: the clear becomes belt rather than the load-bearing part.
   getRoomPosition(canonicalName: string): number | null {
     if (this.status.state !== 'ready') return null
-    if (this.currentFile?.canonicalName !== canonicalName) return null
+    if (!this.currentFile || this.currentFile.canonicalName !== canonicalName) return null
     const room = this.lastRemoteRoomState
     if (!room) return null
     if (this.rosterReceived) {

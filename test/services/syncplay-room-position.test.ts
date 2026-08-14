@@ -60,7 +60,9 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
 
   const position = (canonicalName = OPEN): number | null => client.getRoomPosition(canonicalName)
 
-  const handshake = (room = 'cinema', announce = OPEN): void => {
+  // `announce: null` handshakes without the file push at all — main is connected
+  // but has never been told what we are playing.
+  const handshake = (room = 'cinema', announce: string | null = OPEN): void => {
     client.connect({
       host: 'syncplay.test',
       port: 8999,
@@ -77,7 +79,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     )
     // `useSyncplayClient`'s onMounted push, which is what makes main's
     // `currentFile` the file the reads below name.
-    file(announce)
+    if (announce !== null) file(announce)
   }
 
   // A `List` reply keyed to our room — the only thing that makes `rosterReceived`
@@ -328,6 +330,23 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       expect(position('Some Anime - 2')).toBeNull()
       // ...and the file it *does* know about is unaffected.
       expect(position()).toBeCloseTo(600, 3)
+    })
+
+    // The one shape `setFile()`'s clear can never cover, because it never ran
+    // (#272 review). With no `currentFile` at all, `this.currentFile?.canonicalName`
+    // is `undefined`, so an optional-chained comparison against a nullish
+    // argument reads as equal and the gate passes — "main has not been told about
+    // any file" is the state where answering with the room's position is least
+    // defensible. Unreachable through the typed preload path (`PlayerView` always
+    // hands over `buildCanonicalName()`, always a string), which is exactly why
+    // the guard has to be structural rather than incidental.
+    it('answers null when main has no current file at all, for any name shape', () => {
+      handshake('cinema', null)
+      serverState(600, true, 'mikkerlo')
+
+      expect(client.getRoomPosition(undefined as never)).toBeNull()
+      expect(position('')).toBeNull()
+      expect(position()).toBeNull()
     })
   })
 })

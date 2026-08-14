@@ -69,6 +69,19 @@ export const ADOPT_TOLERANCE_S = 3
 // somewhere else, and a real seek to within half a second of the room's own
 // position is a no-op for everyone anyway.
 export const ECHO_SEEK_EPSILON_S = 0.5
+// How long a non-self room state may be projected forward before
+// `getRoomPosition()` stops trusting it (#262 review). Unlike `lastRoomState`,
+// which every periodic refreshes, `lastRemoteRoomState` is refreshed only by a
+// state that clears handleState()'s guards — so "nothing has refreshed it" is
+// the normal steady state of a room nobody else is driving, and the projection
+// would otherwise walk a frozen value forward for the life of the session. A
+// peer that is driving produces one such state per second (the server's own
+// `SERVER_STATE_INTERVAL`, re-broadcast with `setBy` naming them), so 15 s is
+// 15 missed refreshes: far past a lost frame or a re-election blip, far short
+// of a spawn target that has drifted anywhere interesting. It also bounds the
+// error of the one shape the roster test below cannot see — a room *we* paused,
+// whose echo dies at the self-guard with `paused: false` still stored.
+const ROOM_POSITION_MAX_AGE_MS = 15000
 
 function watchdogWording(phase: AttemptPhase): { long: string; short: string } {
   // In `connecting` nothing has been written to the socket yet (the probe goes
@@ -449,10 +462,46 @@ export class SyncplayClient extends EventEmitter {
   // respawn this exists to remove — where an *apply* is corrected by the next
   // 1 Hz state. The renderer never holds the value long enough to go stale
   // either, since main computes it at reply time.
-  getRoomPosition(): number | null {
+  // Bounded on two axes, because the field this projects is refreshed *only* by
+  // a non-self state (#262 review). It therefore stops being refreshed the
+  // moment the last peer leaves the room, and its `paused` flag stops tracking
+  // the room whenever the server elects *us* as the `setBy` — our own pause
+  // comes back self-`setBy` and dies at handleState()'s guard, leaving
+  // `paused: false` stored for a room that is standing still. Unbounded, the
+  // projection walked both forward with wall time for as long as the session
+  // lived (a room at 600 answered 2400 after half an hour alone, and 900 after
+  // five minutes paused), and that number reaches ffmpeg's `-ss` — a target
+  // past the end of the file is a run that emits nothing and an MSE session
+  // that buffers forever. `null` is the safe answer: it is only the saved
+  // position, i.e. the pre-#262 behaviour.
+  //
+  // The roster test is `isAdopted()`'s idiom, *including* its `rosterReceived`
+  // guard: "the roster is empty" and "the roster has not arrived" are different
+  // answers (#236), and on a server whose `List` reply we cannot key to our room
+  // (#223) the second one is permanent. Reading an unknown roster as "alone"
+  // would disable this outright there; a *fresh* non-self state is its own proof
+  // that a peer exists — only a peer can set it — so the age cap carries that
+  // case alone.
+  //
+  // Scoped to the caller's file rather than merely ordered against it (#272
+  // review). `setFile()`'s identity clear does drop the previous episode's
+  // position, but "the clear has already run" was a property of *ordering* — on
+  // a fresh mount for a different episode it rests on `useSyncplayClient`'s
+  // `onMounted` push landing ahead of `PlayerView`'s own `onMounted`, which it
+  // does today only by the two `getSetting` awaits in front of this read.
+  // Removing one of those inverts it silently and episode 2 spawns at episode
+  // 1's position. Answering only for the file the caller names makes that
+  // structural: the clear becomes belt rather than the load-bearing part.
+  getRoomPosition(canonicalName: string): number | null {
     if (this.status.state !== 'ready') return null
+    if (this.currentFile?.canonicalName !== canonicalName) return null
     const room = this.lastRemoteRoomState
     if (!room) return null
+    if (this.rosterReceived) {
+      const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
+      if (alone) return null
+    }
+    if (Date.now() - room.at > ROOM_POSITION_MAX_AGE_MS) return null
     return this.projectedRoomPosition(room)
   }
 

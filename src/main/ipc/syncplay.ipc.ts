@@ -65,5 +65,11 @@ export function register({ store }: AppDeps): void {
   // `SyncplayStatus` is the connection-state shape the lifetime-scoped
   // `useSyncplayStore` caches for UI hydration, and a per-open, time-sensitive
   // playhead read served from that cache would be stale by construction.
-  ipcMain.handle(CHANNELS.SYNCPLAY_GET_ROOM_POSITION, () => syncplay.getRoomPosition())
+  // The `canonicalName` argument scopes the answer to the file the caller is
+  // opening (#272 review): main answers `null` unless the room's position was
+  // reported for that same file, so a fresh mount for a different episode cannot
+  // inherit the previous one's position through a push that has not landed yet.
+  ipcMain.handle(CHANNELS.SYNCPLAY_GET_ROOM_POSITION, (_event, canonicalName: string) =>
+    syncplay.getRoomPosition(canonicalName)
+  )
 }

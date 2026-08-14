@@ -100,7 +100,7 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
 
   it('reads the room position before spawning the session', () => {
     const body = prepareBody()
-    const read = body.indexOf('window.api.syncplayGetRoomPosition()')
+    const read = body.indexOf('window.api.syncplayGetRoomPosition(')
     const spawn = body.indexOf('window.api.playerRemuxMkvStream(filePath, initialSeek)')
     expect(read).toBeGreaterThan(-1)
     expect(spawn).toBeGreaterThan(-1)
@@ -131,7 +131,22 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
   it('does not let a failed room read cost the saved position', () => {
     // A shared catch around both reads would drop the saved record whenever the
     // syncplay channel rejects, silently resuming every MKV open at 0.
-    expect(prepareBody()).toContain('window.api.syncplayGetRoomPosition().catch(() => null)')
+    expect(prepareBody()).toContain(
+      'window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)'
+    )
+  })
+
+  // #272 review: the read is scoped to the file being opened, not merely ordered
+  // after the push that announced it. Without the argument the "belongs to the
+  // current file" property rests on `useSyncplayClient`'s onMounted landing ahead
+  // of PlayerView's — true today only by the two `getSetting` awaits in front of
+  // this read, and a removed await inverts it silently. The name must come from
+  // the composable's own builder, since a second spelling of it in PlayerView
+  // would fail main's comparison on a difference nothing else tests.
+  it('scopes the room read to the file it is opening', () => {
+    expect(prepareBody()).toContain(
+      'window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName())'
+    )
   })
 
   it('pairs the room-seeded flag with the live stream session', () => {

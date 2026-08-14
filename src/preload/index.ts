@@ -473,8 +473,10 @@ const api = {
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_STATUS) as Promise<SyncplayStatus>,
   syncplayGetRoomUsers: () =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_ROOM_USERS) as Promise<SyncplayRoomUser[]>,
-  syncplayGetRoomPosition: () =>
-    ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_ROOM_POSITION) as Promise<number | null>,
+  syncplayGetRoomPosition: (canonicalName: string) =>
+    ipcRenderer.invoke(CHANNELS.SYNCPLAY_GET_ROOM_POSITION, canonicalName) as Promise<
+      number | null
+    >,
   syncplaySetPassword: (password: string) =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_PASSWORD, password) as Promise<void>,
   syncplayHasPassword: () => ipcRenderer.invoke(CHANNELS.SYNCPLAY_HAS_PASSWORD) as Promise<boolean>,

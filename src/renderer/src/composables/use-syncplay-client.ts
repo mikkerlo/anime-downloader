@@ -70,6 +70,11 @@ export type SyncplayClient = {
   syncplayToast: Ref<string>
   syncplayPausedBy: Ref<string | null>
   showSyncplayToast: (text: string, ms?: number) => void
+  /** The `"{animeName} - {ep}"` the `setFile()` push announces, so a caller can
+   *  scope a room read to the file it is opening (#262). Exposed rather than
+   *  rebuilt at the call site: two spellings of the canonical name would fail
+   *  main's comparison on a difference nothing tests for. */
+  buildCanonicalName: () => string
   pushSyncplayFile: () => void
   setSyncplayLocalReady: (ready: boolean) => void
   /** Flag a pause/play this app performs itself (buffer refill), so the
@@ -1070,6 +1075,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     syncplayToast,
     syncplayPausedBy,
     showSyncplayToast,
+    // Exposed so `prepareMkvForPlayback` can scope its room-position read to the
+    // file it is opening (#272 review). Deliberately the *same* function the
+    // `setFile()` push uses rather than a second construction of the string in
+    // PlayerView: two spellings of the canonical name would fail the comparison
+    // in main on a difference nothing tests for.
+    buildCanonicalName,
     pushSyncplayFile,
     setSyncplayLocalReady,
     markProgrammaticPlayback,

@@ -253,4 +253,28 @@ describe('resolveMkvSpawnTarget', () => {
     expect(resolveMkvSpawnTarget(saved, -3).fromRoom).toBe(false)
     expect(resolveMkvSpawnTarget(saved, -3).resumeTarget).toBe(120)
   })
+
+  // #272 review: Syncplay shares one position across peers whose files need not
+  // match, so a room position can legitimately exceed *our* file's length — and
+  // `initialSeek` reaches ffmpeg's `-ss`, where a target past the end is a run
+  // that emits nothing and an MSE session that buffers forever. The saved
+  // record's duration is the only one in reach at this point in the open, and it
+  // bounds the room the way `< 0.95` bounds the saved position below it.
+  it('refuses a room position past the end of our own file', () => {
+    const past = resolveMkvSpawnTarget(saved, 1500)
+    expect(past.fromRoom).toBe(false)
+    expect(past.resumeTarget).toBe(120)
+    // The boundary itself is out: `-ss` at exactly the duration is the same
+    // empty run.
+    expect(resolveMkvSpawnTarget(saved, 1440).fromRoom).toBe(false)
+    expect(resolveMkvSpawnTarget(saved, 1439).fromRoom).toBe(true)
+  })
+
+  // The bound is only as good as the duration behind it. With no saved record,
+  // or one carrying no usable duration, there is nothing to compare against and
+  // nothing better to fall through to — the room still wins.
+  it('keeps the room position when no duration is known to bound it', () => {
+    expect(resolveMkvSpawnTarget(null, 99999).fromRoom).toBe(true)
+    expect(resolveMkvSpawnTarget({ ...saved, duration: 0 }, 99999).fromRoom).toBe(true)
+  })
 })

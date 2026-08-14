@@ -144,7 +144,22 @@ export function resolveMkvSpawnTarget(
   saved: { position: number; duration: number; watched?: boolean } | null,
   roomPosition: number | null
 ): { initialSeek: number; resumeTarget: number; fromRoom: boolean } {
-  if (typeof roomPosition === 'number' && Number.isFinite(roomPosition) && roomPosition >= 0) {
+  if (
+    typeof roomPosition === 'number' &&
+    Number.isFinite(roomPosition) &&
+    roomPosition >= 0 &&
+    // A known duration bounds the room position the way `< 0.95` bounds the
+    // saved record below. Syncplay shares *one* position across peers whose
+    // files need not match — a peer on a different release, or on a version with
+    // the extras attached, can legitimately be parked past the end of ours — and
+    // main hands `initialSeek` to ffmpeg's `-ss` unclamped (player.ipc.ts), where
+    // a target past the end is a run that emits nothing and an MSE session that
+    // buffers forever. `saved.duration` is the only duration in reach here
+    // (main's probe has not run yet), so this can only bound the case where a
+    // saved record exists — which is also the only case with somewhere better to
+    // fall through to.
+    (!saved || !(saved.duration > 0) || roomPosition < saved.duration)
+  ) {
     return {
       initialSeek: Math.max(0, roomPosition - 1),
       resumeTarget: roomPosition,

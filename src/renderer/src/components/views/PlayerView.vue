@@ -915,9 +915,15 @@ async function prepareMkvForPlayback(
     // sits on the open path in front of the ffmpeg spawn.
     const [saved, roomPosition] = await Promise.all([
       props.animeId && epInt ? window.api.watchProgressGet(props.animeId, epInt) : null,
+      // Scoped to the file we are opening, not merely ordered after the push
+      // that announced it: main answers null unless the room's position was
+      // reported for this same canonical name, so a fresh mount for a different
+      // episode cannot inherit the previous episode's position if the two
+      // `onMounted` hooks ever reorder.
+      //
       // Fail-soft on its own: a rejected room read must not cost us the saved
       // position, which is what a shared `catch` around both would do.
-      window.api.syncplayGetRoomPosition().catch(() => null)
+      window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)
     ]);
     const target = resolveMkvSpawnTarget(saved, roomPosition);
     initialSeek = target.initialSeek;

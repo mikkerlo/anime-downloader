@@ -479,7 +479,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function markProgrammaticSeek(target: number): void {
     const v = deps.getVideoEl()
     if (v && v.currentTime === target) {
-      if (v.readyState === 0) return
+      if (v.readyState < 1) return
       appliedSeekPosition = {
         value: target,
         expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,

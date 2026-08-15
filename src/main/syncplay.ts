@@ -497,12 +497,15 @@ export class SyncplayClient extends EventEmitter {
   // respawn this exists to remove — where an *apply* is corrected by the next
   // 1 Hz state. The renderer never holds the value long enough to go stale
   // either, since main computes it at reply time.
-  // Bounded on two axes, because the field this projects is refreshed *only* by
-  // a non-self state (#262 review). It therefore stops being refreshed the
-  // moment the last peer leaves the room, and its `paused` flag stops tracking
-  // the room whenever the server elects *us* as the `setBy` — our own pause
-  // comes back self-`setBy` and dies at handleState()'s guard, leaving
-  // `paused: false` stored for a room that is standing still. Unbounded, the
+  // Bounded on two axes, because the field this projects is refreshed only by a
+  // state that reaches handleState()'s emit (#262 review) — a non-self state,
+  // or since #277 a pre-adoption mirror-sourced one. It therefore stops being
+  // refreshed the moment the last peer leaves the room, and its `paused` flag
+  // stops tracking the room whenever the server elects *us* as the `setBy` and
+  // we are adopted — our own pause comes back self-`setBy` and dies at
+  // handleState()'s guard, leaving `paused: false` stored for a room that is
+  // standing still. (Adopted is the production shape for that one: the user who
+  // paused the room has a player and has converged, by construction.) Unbounded, the
   // projection walked both forward with wall time for as long as the session
   // lived (a room at 600 answered 2400 after half an hour alone, and 900 after
   // five minutes paused), and that number reaches ffmpeg's `-ss` — a target
@@ -514,9 +517,14 @@ export class SyncplayClient extends EventEmitter {
   // guard: "the roster is empty" and "the roster has not arrived" are different
   // answers (#236), and on a server whose `List` reply we cannot key to our room
   // (#223) the second one is permanent. Reading an unknown roster as "alone"
-  // would disable this outright there; a *fresh* non-self state is its own proof
-  // that a peer exists — only a peer can set it — so the age cap carries that
-  // case alone.
+  // would disable this outright there, so the age cap carries that case alone —
+  // no longer on the grounds that "only a peer can set a non-self state", which
+  // #277 ends: a pre-adoption mirror-sourced state refreshes this field too, and
+  // the server elected *us* onto it. It still carries it because that class is
+  // itself gated on `rosterReceived && peers > 0` (`isRoomVoice()`), so on
+  // exactly the #223 server nothing but a genuinely foreign state ever reaches
+  // the emit — and a *fresh* foreign state is still its own proof that a peer
+  // exists.
   //
   // Scoped to the caller's file rather than merely ordered against it (#272
   // review). `setFile()`'s identity clear does drop the previous episode's
@@ -1565,11 +1573,36 @@ export class SyncplayClient extends EventEmitter {
     // reads nor writes `lastRoomState.paused`.
     this.emitStatusIfProjectionChanged()
 
+    // "The room is speaking back through our own mirror" (#277). Pre-adoption
+    // we assert nothing of our own — sendLocalState() returns at the adoption
+    // gate — so a self-`setBy` periodic is not our player's echo: it is the
+    // room's position, re-elected onto our watcher by Room.getPosition()'s
+    // min() over watchers (server.py:597-604), which an unadopted client with a
+    // file announced wins on every election over a link with real latency (the
+    // mirror is anchored on the frame's *arrival*, so it is one one-way delay
+    // behind the room, and once it wins the room is re-derived from it). Every
+    // periodic then arrives `setBy` us and dies at the guard below, so a joiner
+    // received nothing at all while the room played.
+    //
+    // Evaluated *here*, at the guard site, and never hoisted to the
+    // `isForeignState` const above (#277 review). This reads `playbackAdopted`,
+    // and `maybeReassertSeek()` a few lines up reaches `isAdopted()`, which
+    // latches it — so the value-preserving argument that licenses the hoist is
+    // not available to this predicate. Reading it after the latch is strictly
+    // the conservative direction: if adoption lands on this tick, the frame is
+    // dropped.
+    //
+    // A second predicate rather than a widening of `isForeignSetBy()`, which
+    // stays "somebody else set this" (#274). Widening it would widen
+    // `willApplyRemoteState` with it, so a self-`setBy` `doSeek` frame could
+    // retire a live `seekIntent` — a meaning the retraction's correctness
+    // argument is not written in.
+    const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)
     // Each guard keeps its own `return` so the drop log below survives and the
     // order of the two is unchanged; they read the conjuncts of
     // `willApplyRemoteState` rather than re-deriving them, which is what makes
     // the retraction's gate above provably the same predicate.
-    if (!isForeignState) return
+    if (!isForeignState && !isRoomVoice) return
     if (!localChangeAcked) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')
       return
@@ -1611,11 +1644,20 @@ export class SyncplayClient extends EventEmitter {
     // answers with exactly what the renderer would have applied — clamped like
     // the echo target above, so a projection can only walk it forward (#262).
     this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
-    log('remote-state', { paused, position: compensated, setBy, doSeek })
+    // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
+    // on the wire is our own username, and the renderer would spend it on two
+    // statements that would both be false: a "<me> seeked to 10:06" toast for a
+    // move nobody made (use-syncplay-client.ts:635-637) and a "Paused by me"
+    // badge for a pause we did not press (`syncplayPausedBy`, :567-569). `null`
+    // is the existing "the room moved, nobody in particular" value — the type
+    // already allows it and both renderer reads are already null-guarded — so
+    // no flag and no renderer change is needed to say it.
+    const emittedSetBy = isRoomVoice ? null : setBy
+    log('remote-state', { paused, position: compensated, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
       position: compensated,
-      setBy,
+      setBy: emittedSetBy,
       doSeek
     })
   }
@@ -1766,12 +1808,23 @@ export class SyncplayClient extends EventEmitter {
     //
     // Known consequence: the server reads a missing paused as not-paused in
     // _updatePositionByAge too, so it forward-delay-compensates the mirrored
-    // position even while the room is paused. Invisible with peers present (we
-    // land ahead, never the min()), but spectating *alone* in a paused room our
-    // own crept value comes back as lastRoomState and compounds at ~one forward
-    // delay per second. Nobody is watching in that state and adopting a player
-    // resets it — documented rather than fixed, so it isn't rediscovered as
-    // "the room moved while I was away".
+    // position even while the room is paused. Spectating *alone* in a paused
+    // room our own crept value comes back as lastRoomState and compounds at
+    // ~one forward delay per second. Nobody is watching in that state and
+    // adopting a player resets it — documented rather than fixed, so it isn't
+    // rediscovered as "the room moved while I was away".
+    //
+    // This used to add "invisible with peers present (we land ahead, never the
+    // min())". That parenthesis is false, and #277 is what it cost. The mirror
+    // is anchored on the frame's *arrival* while the number inside it was
+    // computed at the server's send, so while the room **plays** the mirror
+    // sits one one-way delay *behind* the room and wins Room.getPosition()'s
+    // min() on every election — measured against reference server 1.7.6 over a
+    // 50 ms/direction link: every election, with the deficit compounding
+    // 0.038 s → 0.186 s as the room is re-derived from our own already-lagged
+    // value. Landing *ahead* is the paused-room creep above and nothing else,
+    // which is why a de-adopted hidden player (#227) still cannot drag the room:
+    // a crept mirror in a paused room is above it and loses every election.
     return {
       position: this.projectedRoomPosition(room),
       doSeek: false
@@ -1788,6 +1841,38 @@ export class SyncplayClient extends EventEmitter {
     if (setBy === null) return false
     if (!this.config) return true
     return setBy.toLowerCase() !== this.config.username.toLowerCase()
+  }
+
+  // "This self-`setBy` state is the *room* talking, not our own echo" (#277).
+  // Only ever consulted for a frame `isForeignSetBy()` already called ours, and
+  // deliberately separate from it: `isForeignSetBy()` means "somebody else set
+  // this" and is shared with #274's supersede retraction, which must keep
+  // meaning exactly that.
+  //
+  // Each conjunct is load-bearing:
+  //  - `setBy !== null` — a `setBy`-less frame carries no claim about who moved
+  //    the room, and the pre-#277 guard dropped it. Nothing here makes it a
+  //    better source than it was.
+  //  - `!playbackAdopted` — read raw, never through `isAdopted()`, which
+  //    latches. Past adoption a self-`setBy` frame really *is* our own echo,
+  //    and applying it re-opens the #220 self-seek loop. Adoption latches
+  //    within a heartbeat of converging, so the relaxed window is short by
+  //    construction.
+  //  - `rosterReceived && peers > 0` — `isAdopted()`'s idiom, for its reason
+  //    (#236): "the roster is empty" and "the roster has not arrived" are
+  //    different answers. A user *alone* in a room has their own position
+  //    echoed back once a second; emitting that would make
+  //    `hasRemoteStateApplied()` true, let `roomOwnsPlayhead()` eat the saved
+  //    position on every solo episode open, and make `getRoomPosition()` answer
+  //    from our own echo. On a server whose `List` reply we cannot key to our
+  //    room (#223) `rosterReceived` is permanently false and this is inert —
+  //    deliberately, since reading an unknown roster as "peers present" is the
+  //    reading that re-opens the solo-room regression.
+  private isRoomVoice(setBy: string | null): boolean {
+    if (setBy === null) return false
+    if (this.playbackAdopted) return false
+    if (!this.rosterReceived) return false
+    return this.roomUsers.filter((u) => u.username !== this.config?.username).length > 0
   }
 
   // Where the room is *now*: its last reported position, advanced by wall time

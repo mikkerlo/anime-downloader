@@ -44,13 +44,16 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient, ADOPT_TOLERANCE_S } from '../../src/main/syncplay'
+import { SyncplayClient, ADOPT_TOLERANCE_S, ECHO_SEEK_EPSILON_S } from '../../src/main/syncplay'
 import { MinElectionServer } from '../helpers/syncplay-min-election-server'
-import type { SyncplayRemoteState } from '../../src/main/syncplay'
+import type { SyncplayRemoteState, SyncplaySnapshot } from '../../src/main/syncplay'
 
 const ROOM_START = 600
 const DELAY_MS = 50
 const OPEN = 'Some Anime - 7'
+
+/** The playstate as it appears on an outbound `State` frame. */
+type JsonPlaystate = { position: number; paused?: boolean; doSeek?: boolean }
 
 describe('SyncplayClient — the room speaking back through our own mirror (#277)', () => {
   let server: MinElectionServer
@@ -99,10 +102,11 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
 
   // Run the session forward, pushing each client's renderer snapshot at the
   // composable's 1 Hz cadence. `snapshotOf` returns the element position for a
-  // client, or `null` for one with no player driving it at all.
+  // client — or a whole snapshot, for the one case where the element is paused —
+  // or `null` for a client with no player driving it at all.
   const run = (
     seconds: number,
-    snapshotOf: (client: SyncplayClient) => number | null,
+    snapshotOf: (client: SyncplayClient) => number | SyncplaySnapshot | null,
     stepMs = 50
   ): void => {
     const steps = Math.round((seconds * 1000) / stepMs)
@@ -113,8 +117,9 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       if (sinceSnapshot >= 1000) {
         sinceSnapshot = 0
         for (const client of clients) {
-          const position = snapshotOf(client)
-          if (position !== null) client.updateSnapshot({ position, paused: false })
+          const snap = snapshotOf(client)
+          if (snap === null) continue
+          client.updateSnapshot(typeof snap === 'number' ? { position: snap, paused: false } : snap)
         }
       }
     }
@@ -284,6 +289,93 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThan(
       ADOPT_TOLERANCE_S
     )
+  })
+
+  it('recovers the room onto the pauser’s playhead, and every election after it', () => {
+    const { host, joiner, frames } = joinAPlayingRoom()
+    run(8, unconvergedJoiner(host))
+
+    // The ratchet is live first: the mirror owns the room and has dragged it
+    // below where the host actually is.
+    expect(server.roomState().setBy).toBe('joinuser')
+    expect(server.roomState().position).toBeLessThan(trueRoomPosition())
+    const electionsBefore = server.elections.length
+    frames.length = 0
+
+    // "we synchronized only when he paused" — the other half of the user report,
+    // and the only path that bypasses the election entirely: `updateState` sees
+    // `pausedChanged`, and `forcePositionUpdate` takes the *setter's* position,
+    // re-seats every watcher onto it (`Room.setPosition`) and broadcasts it to
+    // everyone including the setter, carrying the `ignoringOnTheFly.server`
+    // counter no other path emits. Without this case none of that ran: nothing
+    // else in this file pauses or seeks (#282 review).
+    const pausedAt = trueRoomPosition()
+    host.sendLocalState({ paused: true, position: pausedAt, cause: 'pause' })
+    run(4, (c) => (c === host ? { position: pausedAt, paused: true } : 0))
+
+    // The joiner hears the pause, attributed to the host — and hears it at the
+    // host's own playhead rather than one forward delay past it, because
+    // `_updatePositionByAge` leaves a frame with an explicit `paused: true`
+    // uncompensated.
+    const pauseFrame = frames.find((f) => f.paused)
+    expect(pauseFrame).toBeDefined()
+    expect(pauseFrame!.setBy).toBe('hostuser')
+    expect(pauseFrame!.position).toBeCloseTo(pausedAt, 2)
+
+    // It keeps hearing the room while the room stands still…
+    expect(frames.filter((f) => f.paused).length).toBeGreaterThanOrEqual(3)
+    // …and the room stays where the pause put it, because the re-seat moved
+    // every watcher onto that point: the mirror no longer holds the `min()`, so
+    // every election from here names the host. Skip the re-seat and the joiner
+    // keeps its own drifted value and takes the room straight back on the very
+    // next election — which is the instant #278 and #279 are both asking about.
+    const after = server.elections.slice(electionsBefore)
+    expect(after.length).toBeGreaterThanOrEqual(3)
+    expect(after.every((e) => e.setBy === 'hostuser')).toBe(true)
+    expect(server.roomState().paused).toBe(true)
+    expect(server.roomState().position).toBeCloseTo(pausedAt, 2)
+    expect(joiner.getStatus().playbackAdopted).toBe(false)
+  })
+
+  it('keeps a room seek the mirror would otherwise be elected over', () => {
+    const { host, joiner, frames } = joinAPlayingRoom()
+    run(8, unconvergedJoiner(host))
+
+    // Off the tick, so the forced update does not coincide with a periodic.
+    vi.advanceTimersByTime(500)
+    const electionsBefore = server.elections.length
+    frames.length = 0
+
+    // A real seek, 5 minutes on. The host's element goes there and keeps
+    // playing; the joiner's is still parked at 0 and still not adopted.
+    const seekTo = trueRoomPosition() + 300
+    const seekedAt = Date.now()
+    host.sendLocalState({ paused: false, position: seekTo, cause: 'seek' })
+    run(4, (c) => (c === host ? seekTo + (Date.now() - seekedAt) / 1000 : 0))
+
+    // The joiner hears it, with `doSeek` set and the host's name on it.
+    const seekFrame = frames.find((f) => f.doSeek)
+    expect(seekFrame).toBeDefined()
+    expect(seekFrame!.setBy).toBe('hostuser')
+    expect(seekFrame!.position).toBeGreaterThan(seekTo - 1)
+
+    // And the room stays where the seek put it, rather than being elected back
+    // to the mirror's 300-s-stale value. Two things close that window and this
+    // case measures them together: `Room.setPosition()` re-seats every watcher
+    // onto the new position immediately, and the joiner's own mirror re-anchors
+    // it one heartbeat later. In *this* fixture the second is what carries the
+    // assertion — the forced update resets the room's age, so the next election
+    // is at least a second out and the mirror always lands first (measured: the
+    // joiner is already at the post-seek position on the first election after
+    // the seek, with the re-seat removed). Both are modelled because the
+    // redundancy is an artefact of every watcher here running *our* client; a
+    // real Syncplay peer asserts its own player position and is re-seated by
+    // nothing else, which is the shape #278 is about.
+    const after = server.elections.slice(electionsBefore)
+    expect(after.length).toBeGreaterThanOrEqual(3)
+    expect(after.every((e) => e.positions.joinuser > seekTo)).toBe(true)
+    expect(server.roomState().position).toBeGreaterThan(seekTo)
+    expect(joiner.getStatus().playbackAdopted).toBe(false)
   })
 
   it('stays deaf to its own echo when we are alone in the room', () => {
@@ -489,5 +581,59 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
 
     expect(frames).toHaveLength(1)
     expect(frames[0].setBy).toBe('peer')
+  })
+
+  // The one Implementation Plan box #277 opened and nothing else here closes:
+  // what the new frame class does to `lastAppliedRemotePosition`'s arming rule
+  // (#282 review). It lands benign, and this is the case that keeps it that way.
+  it('arms the echo target from a mirror frame and swallows only the convergence seek', () => {
+    handshake()
+    roster({ me: { isReady: true, file: {} }, peer: { isReady: true, file: {} } })
+
+    const seeksSent = (): Array<{ position: number }> =>
+      vi
+        .mocked(tls().write)
+        .mock.calls.flatMap(([data]) => String(data).split('\r\n'))
+        .filter((line) => line.trim() !== '')
+        .map((line) => JSON.parse(line) as { State?: { playstate?: JsonPlaystate } })
+        .map((f) => f.State?.playstate)
+        .filter((p): p is JsonPlaystate => p?.doSeek === true)
+
+    // The mirror-sourced periodic #277 makes reachable pre-adoption: 606 against
+    // an element still at 0, so it clears `ADOPT_TOLERANCE_S` and arms
+    // `lastAppliedRemotePosition` under #236's rule. These arrive at ~1 Hz with a
+    // large diff, so the arming fires on every one of them.
+    selfState(606)
+    expect(frames).toHaveLength(1)
+
+    // Pre-adoption that arming has no consumer: the echo gate in
+    // `sendLocalState()` sits *below* the adoption gate, so a freshly opened
+    // element's spurious `seeked` at ~0 returns above it — nothing on the wire,
+    // and the armed target deliberately left in place for the seek that will
+    // genuinely echo it.
+    vi.mocked(tls().write).mockClear()
+    client.sendLocalState({ paused: false, position: 0.2, cause: 'seek' })
+    expect(seeksSent()).toEqual([])
+
+    // Converge and latch, the way the renderer does: the applied state moves the
+    // element onto the room, the snapshot follows, one heartbeat adopts.
+    client.updateSnapshot({ position: 606, paused: false })
+    vi.advanceTimersByTime(1000)
+    expect(client.getStatus().playbackAdopted).toBe(true)
+
+    // Now the gate is reachable, and the first thing through it is the `seeked`
+    // for that convergence write — within `ECHO_SEEK_EPSILON_S` of the value
+    // main handed the renderer, so it is swallowed. That is the whole cost of
+    // arming from a mirror frame: one echo suppressed, the one that is an echo.
+    vi.mocked(tls().write).mockClear()
+    client.sendLocalState({ paused: false, position: 606 + ECHO_SEEK_EPSILON_S / 2, cause: 'seek' })
+    expect(seeksSent()).toEqual([])
+
+    // And only that one — the target is consumed on the swallow, so the user's
+    // own next seek reaches the room.
+    client.sendLocalState({ paused: false, position: 900, cause: 'seek' })
+    const sent = seeksSent()
+    expect(sent).toHaveLength(1)
+    expect(sent[0].position).toBeCloseTo(900, 3)
   })
 })

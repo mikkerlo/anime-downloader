@@ -1496,15 +1496,20 @@ export class SyncplayClient extends EventEmitter {
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
     this.lastRoomState = { position, paused, at: Date.now() }
-    // "This frame is one we are about to hand the renderer." The two drop guards
-    // below read these same two consts, so the retraction's gate *is* their
-    // conjunction textually rather than by coincidence (#274 review) — and that
-    // identity is the correctness argument: retire the intent iff the peer seek
-    // that supersedes it is on a frame the renderer actually applies. Retiring
-    // for a frame we then drop restores the silent permanent divergence #252
-    // exists to close. A new drop rule added anywhere between here and the
-    // `emit('remote-state')` below therefore has to join this conjunction, not
-    // just add a fourth `return` past it.
+    // "This frame is one we are about to hand the renderer" — a *sufficient*
+    // condition for that, no longer a transcription of the drop guards. Both
+    // guards below read these same two consts, but since #277 the first one also
+    // passes `isRoomVoice`, so what reaches the emit is
+    // `(isForeignState || isRoomVoice) && localChangeAcked` and this const is a
+    // strict **subset** of it. That one-way implication is the whole of what the
+    // retraction's correctness argument needs (#274 review): retire the intent
+    // only for a peer seek carried on a frame the renderer actually applies,
+    // because retiring for a frame we then drop restores the silent permanent
+    // divergence #252 exists to close — and widening the *handed* set while the
+    // *retired* set stays narrow keeps "retired ⇒ handed" true. A new drop rule
+    // added anywhere between here and the `emit('remote-state')` below therefore
+    // has to narrow **both** sides, not just add a fourth `return` past it:
+    // narrowing only the emit is what would break the implication.
     //
     // Hoisting is value-preserving, which is what lets one const stand for all
     // three reads: `isForeignSetBy()` is pure, and the only writers of
@@ -1599,9 +1604,13 @@ export class SyncplayClient extends EventEmitter {
     // argument is not written in.
     const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)
     // Each guard keeps its own `return` so the drop log below survives and the
-    // order of the two is unchanged; they read the conjuncts of
-    // `willApplyRemoteState` rather than re-deriving them, which is what makes
-    // the retraction's gate above provably the same predicate.
+    // order of the two is unchanged. The first is no longer a conjunct of
+    // `willApplyRemoteState`, though: with `isRoomVoice` in it what reaches the
+    // emit is `(isForeignState || isRoomVoice) && localChangeAcked`, a strict
+    // superset of the retraction's gate above. #274 needs only "retired ⇒
+    // handed" and a widening of the handed set keeps that true — but it is an
+    // implication now, not the identity claimed at the hoist, and a new drop
+    // rule between here and the emit still has to narrow *both* sides.
     if (!isForeignState && !isRoomVoice) return
     if (!localChangeAcked) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')

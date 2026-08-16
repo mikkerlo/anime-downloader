@@ -15,17 +15,27 @@
 //    one one-way delay) and stamps `_lastUpdatedOn` at **receipt**
 //    (`server.py:875-884`). Those are two different axes, which is why the
 //    compensation does not cancel the mirror's deficit.
-//  - `Watcher.getPosition()` advances the stored value with wall time unless
-//    that watcher is paused. A mirror sends no `paused` key at all, so the
-//    server reads it as playing and creeps it forward even in a paused room
-//    (`_updatePositionByAge`, `server.py:870-873`).
+//  - `Watcher.getPosition()` advances the stored value with wall time iff **the
+//    room** is playing (`server.py:780-787`) — not iff that watcher is paused.
+//    A watcher that claimed `paused: true` into a playing room still walks
+//    forward with everyone else, and a paused room advances nobody.
+//  - The paused-room creep is a *receipt*-side effect rather than a wall-time
+//    one: `_updatePositionByAge` adds `messageAge` to any frame whose `paused`
+//    is falsy or absent (`server.py:870-873`), a mirror sends no `paused` key at
+//    all, and the room is re-derived from the value it just stored — so the
+//    stored position gains one forward delay per turn round the election loop
+//    even while the room stands still.
 //  - `Watcher.__lt__` excludes a watcher whose file is `None`
 //    (`server.py:834-839`) — which is why a joiner with no player open still
 //    hears the room, and why `Set: {file}` is the moment the deafness starts.
 //  - `Room.getPosition()` re-elects `min(watchers)` whenever the room state is
 //    over a second old, and sets **both** `_position` and `_setBy` from it.
 //  - A `doSeek` or a pause change forces a room update (`server.py:180-187`)
-//    broadcast to everyone including the setter (no sender filter).
+//    broadcast to everyone including the setter (no sender filter), and
+//    `Room.setPosition()` re-seats every watcher onto that position
+//    (`server.py:615-620`) without refreshing their `_lastUpdatedOn`. That is
+//    the moment the room stops being the laggard's, and the reason a pause
+//    "fixes" a session that was drifting.
 //
 // Deliberately **not** modelled: the `ignoringOnTheFly` ignore window (the
 // server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
@@ -175,7 +185,10 @@ export class MinElectionServer {
   // --- the election ------------------------------------------------------
 
   private watcherPosition(w: Watcher): number {
-    return w.paused ? w.position : w.position + (Date.now() - w.lastUpdatedOn) / 1000
+    // `Watcher.getPosition()` (server.py:780-787) advances by wall time iff the
+    // **room** is playing, not iff this watcher is paused — a watcher that
+    // claimed `paused: true` in a playing room still walks with the room.
+    return this.roomPaused ? w.position : w.position + (Date.now() - w.lastUpdatedOn) / 1000
   }
 
   private projectedRoom(): number {
@@ -215,10 +228,38 @@ export class MinElectionServer {
   }
 
   private forcePositionUpdate(w: Watcher, doSeek: boolean): void {
-    this.roomPosition = this.watcherPosition(w)
+    // Reference order: `updateState` flips the room's pause flag
+    // (`Room.setPaused`) and only then does the forced update read
+    // `watcher.getPosition()` (`server.py:180-187`) — so on a pause frame the
+    // setter's stored value is taken raw. It cannot change a number as things
+    // stand, since `applyState()` stamps `lastUpdatedOn` immediately above this
+    // call and the wall-time term is therefore zero whichever flag
+    // `watcherPosition()` reads; it is written this way so it stays right if a
+    // caller ever forces an update from a watcher that is not the one that just
+    // spoke.
     this.roomPaused = w.paused
+    this.roomPosition = this.watcherPosition(w)
     this.roomSetBy = w.username
     this.roomLastUpdate = Date.now()
+    // `Room.setPosition()` re-seats **every** watcher onto the new room position
+    // (`server.py:615-620`) and deliberately leaves their `_lastUpdatedOn`
+    // alone, so each one then projects forward from its own stale stamp.
+    // Modelled literally, stale stamp included: this is the instant the room
+    // stops being the laggard's — the recovery the user reported as "we
+    // synchronized only when he paused".
+    //
+    // No case can currently tell it from its absence, and that is worth knowing
+    // rather than hiding (#282 review). The forced update resets the room's age,
+    // so the next election is a full `electionAgeMs` out, and every watcher in
+    // this repo's fixtures is *our* client — whose pre-adoption mirror re-anchors
+    // it on the new room position a heartbeat later anyway
+    // (`buildPlaystate()`'s spectator branch exists for that exact reason). The
+    // two are redundant only while that stays true: a real Syncplay peer asserts
+    // its own player position and nothing else re-seats it, so a model without
+    // this line answers "does the room survive a seek with a stale peer in it"
+    // with a confident no. Keep it, and do not read a green suite as evidence
+    // that it does nothing.
+    for (const other of this.watchers.values()) other.position = this.roomPosition
     this.serverCounter += 1
     const playstate = {
       position: this.roomPosition,
@@ -302,8 +343,11 @@ export class MinElectionServer {
     const hasPaused = typeof ps.paused === 'boolean'
     const pausedChanged = hasPaused && ps.paused !== this.roomPaused
     // `+ forwardDelay` on store, `lastUpdatedOn` at receipt: the two axes that
-    // make the correction land somewhere other than the error.
-    w.position = position + w.delayMs / 1000
+    // make the correction land somewhere other than the error. Only for a frame
+    // whose `paused` is falsy or absent, as in `_updatePositionByAge`
+    // (`server.py:870-873`) — `not None` is true, so a mirror is compensated and
+    // an explicit `paused: true` is stored raw.
+    w.position = position + (ps.paused === true ? 0 : w.delayMs / 1000)
     if (hasPaused) w.paused = ps.paused as boolean
     w.lastUpdatedOn = Date.now()
     if (ps.doSeek === true || pausedChanged) this.forcePositionUpdate(w, ps.doSeek === true)

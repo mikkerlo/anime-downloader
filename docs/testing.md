@@ -31,8 +31,11 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   decides it. It stores `reported + forwardDelay`, stamps receipt on a separate
   axis, excludes file-less watchers from the election, and re-elects once a
   second — so "who the server says set the room" is a *result* rather than an
-  input. Drives real `SyncplayClient`s through the `net`/`tls` mocks
-  (`test/services/syncplay-mirror-election.test.ts`, #277).
+  input. A `doSeek` or a pause change takes the reference's other path instead:
+  a forced update that bypasses the election, carries the `ignoringOnTheFly`
+  server counter and re-seats every watcher on the new position
+  (`Room.setPosition`). Drives real `SyncplayClient`s through the `net`/`tls`
+  mocks (`test/services/syncplay-mirror-election.test.ts`, #277).
 - **Integration** (`test/integration/`) — multi-service flows (auto-download
   tick, Shikimori offline-queue drain) wired through `test/helpers/app-harness.ts`
   (in-memory store + broadcast spy + stub HTTP/download seams). Not a full `App`

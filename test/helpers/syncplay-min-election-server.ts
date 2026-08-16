@@ -230,14 +230,8 @@ export class MinElectionServer {
   private forcePositionUpdate(w: Watcher, doSeek: boolean): void {
     // Reference order: `updateState` flips the room's pause flag
     // (`Room.setPaused`) and only then does the forced update read
-    // `watcher.getPosition()` (`server.py:180-187`) — so on a pause frame the
-    // setter's stored value is taken raw. It cannot change a number as things
-    // stand, since `applyState()` stamps `lastUpdatedOn` immediately above this
-    // call and the wall-time term is therefore zero whichever flag
-    // `watcherPosition()` reads; it is written this way so it stays right if a
-    // caller ever forces an update from a watcher that is not the one that just
-    // spoke.
-    this.roomPaused = w.paused
+    // `watcher.getPosition()` (`server.py:180-187`) — so the flag is already
+    // flipped by the time we read the position, and nothing here writes it.
     this.roomPosition = this.watcherPosition(w)
     this.roomSetBy = w.username
     this.roomLastUpdate = Date.now()
@@ -349,6 +343,13 @@ export class MinElectionServer {
     // an explicit `paused: true` is stored raw.
     w.position = position + (ps.paused === true ? 0 : w.delayMs / 1000)
     if (hasPaused) w.paused = ps.paused as boolean
+    // `Room.setPaused` only on a change (`server.py:880-882`); the forced update
+    // reads `room.isPaused()` and never writes it. Unconditionally mirroring the
+    // watcher's flag from inside the forced update would let a `doSeek` frame
+    // that carries no `paused` key overwrite the room's flag with that watcher's
+    // last stored one — `__hasPauseChanged(None)` is `False` in the reference, so
+    // the room's flag survives such a frame untouched.
+    if (pausedChanged) this.roomPaused = ps.paused as boolean
     w.lastUpdatedOn = Date.now()
     if (ps.doSeek === true || pausedChanged) this.forcePositionUpdate(w, ps.doSeek === true)
   }

@@ -1524,7 +1524,9 @@ export class SyncplayClient extends EventEmitter {
     // frame that has one, so by the time this runs it is always true on the
     // wire. The only route to false is a counter-less synthetic frame — which is
     // exactly what `is not retracted by a peer seek this client drops as
-    // unacked` delivers. Kept because it is what makes the identity above true.
+    // unacked` delivers. Kept because it is what makes the implication above
+    // true: the conjunct sits on *both* sides, so keeping it in both is what
+    // preserves the subset relation.
     const localChangeAcked = this.pendingClientAck === 0
     const willApplyRemoteState = isForeignState && localChangeAcked
     // A peer's *own* seek, landing while ours is still unresolved, supersedes it
@@ -1539,9 +1541,11 @@ export class SyncplayClient extends EventEmitter {
     // ours, so theirs is the newer intent and ours is retired, not recovered.
     // Nothing #252 buys is given up — the *discarded* case never reaches here.
     //
-    // The signal is the frame: `willApplyRemoteState` — the same predicate the
-    // drop guards below return on, so "a peer seek superseded ours" can never
-    // outrun "the renderer was handed the peer's position" — plus
+    // The signal is the frame: `willApplyRemoteState` — since #277 a strict
+    // subset of what the drop guards below let through rather than the same
+    // predicate, which is the direction that matters: it *implies* the frame
+    // reaches the emit, so "a peer seek superseded ours" can never outrun "the
+    // renderer was handed the peer's position" — plus
     // `doSeek`, which is the wire's only "someone seeked" bit, set on a forced
     // update by a seek and not by a pause change. Deliberately *not* the echo
     // target's full arming rule below (`doSeek || |snapshot − position| > 3`):

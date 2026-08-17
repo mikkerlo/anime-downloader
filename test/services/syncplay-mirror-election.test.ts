@@ -360,22 +360,52 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     expect(seekFrame!.position).toBeGreaterThan(seekTo - 1)
 
     // And the room stays where the seek put it, rather than being elected back
-    // to the mirror's 300-s-stale value. Two things close that window and this
-    // case measures them together: `Room.setPosition()` re-seats every watcher
-    // onto the new position immediately, and the joiner's own mirror re-anchors
-    // it one heartbeat later. In *this* fixture the second is what carries the
-    // assertion — the forced update resets the room's age, so the next election
-    // is at least a second out and the mirror always lands first (measured: the
-    // joiner is already at the post-seek position on the first election after
-    // the seek, with the re-seat removed). Both are modelled because the
-    // redundancy is an artefact of every watcher here running *our* client; a
-    // real Syncplay peer asserts its own player position and is re-seated by
-    // nothing else, which is the shape #278 is about.
+    // to the mirror's 300-s-stale value. Two things close that window: the
+    // `Room.setPosition()` re-seat lands every watcher on the new position
+    // immediately, and the joiner's own mirror re-anchors it one heartbeat
+    // later. The re-seat is what carries the assertion, because the forced
+    // update does *not* reset the room's age — the next election fires 449 ms
+    // after the seek, well inside the mirror's 1 Hz heartbeat, and it is the
+    // re-seat alone that keeps the joiner from winning it. Measured: remove the
+    // re-seat and this case and the pause-recovery one both go red.
     const after = server.elections.slice(electionsBefore)
     expect(after.length).toBeGreaterThanOrEqual(3)
     expect(after.every((e) => e.positions.joinuser > seekTo)).toBe(true)
     expect(server.roomState().position).toBeGreaterThan(seekTo)
     expect(joiner.getStatus().playbackAdopted).toBe(false)
+  })
+
+  it('reads a playing room ahead of the playhead a forced update just set (#279)', () => {
+    const { host } = joinAPlayingRoom()
+    run(8, unconvergedJoiner(host))
+
+    // Off the tick, so the room already carries a measurable age when the forced
+    // update lands mid-second.
+    vi.advanceTimersByTime(500)
+    const lastElectionAt = server.elections[server.elections.length - 1].at
+
+    const seekTo = trueRoomPosition() + 300
+    host.sendLocalState({ paused: false, position: seekTo, cause: 'seek' })
+    // One link delay: the seek frame arrives and `forcePositionUpdate` runs. No
+    // periodic fires inside this window, so the last election is still the one
+    // sampled above.
+    vi.advanceTimersByTime(DELAY_MS + 1)
+
+    // `Room.setPosition` writes `_position` and leaves `_lastUpdate` alone
+    // (`server.py:615-620`), so `getPosition()` projects that fresh value from
+    // the *last election's* stamp (`server.py:606`): the room now reads a whole
+    // room-age ahead of the playhead the seek set. This is the artefact #279
+    // measures, and it is the assertion that fails if the harness ever goes back
+    // to resetting the room's age inside the forced update — that reset would
+    // leave only the forward delay, an order of magnitude smaller.
+    const roomAgeS = (Date.now() - lastElectionAt) / 1000
+    expect(roomAgeS).toBeGreaterThan(0.5)
+    const readAhead = server.roomState().position - seekTo
+    expect(readAhead).toBeGreaterThan(roomAgeS)
+    // And no more than that age plus the single forward delay
+    // `_updatePositionByAge` added on store — the error is one room-age, not a
+    // compounding one.
+    expect(readAhead).toBeLessThan(roomAgeS + DELAY_MS / 1000 + 0.01)
   })
 
   it('stays deaf to its own echo when we are alone in the room', () => {

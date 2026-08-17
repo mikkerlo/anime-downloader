@@ -36,6 +36,12 @@
 //    (`server.py:615-620`) without refreshing their `_lastUpdatedOn`. That is
 //    the moment the room stops being the laggard's, and the reason a pause
 //    "fixes" a session that was drifting.
+//  - That forced update does **not** touch the room's `_lastUpdate` — only
+//    `Room.__init__` (`server.py:547`) and the election branch (`:603`) do. So
+//    the room's age, and with it the next re-election, runs from the last
+//    *election* rather than the last write, and a playing room reads ahead of
+//    the position a seek or a pause just set (`:606`). Both artefacts are #279's
+//    subject; see `forcePositionUpdate()` for the measurements.
 //
 // Deliberately **not** modelled: the `ignoringOnTheFly` ignore window (the
 // server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
@@ -234,25 +240,38 @@ export class MinElectionServer {
     // flipped by the time we read the position, and nothing here writes it.
     this.roomPosition = this.watcherPosition(w)
     this.roomSetBy = w.username
-    this.roomLastUpdate = Date.now()
+    // `_lastUpdate` is deliberately **not** written here. The reference writes it
+    // in exactly two places — `Room.__init__` (`server.py:547`) and
+    // `Room.getPosition()`'s election branch (`:603`) — while `Room.setPosition`
+    // (`615-620`) sets `_position`, re-seats the watchers and sets `_setBy`, and
+    // `forcePositionUpdate` (`180-187`) touches nothing else (#282 review). Two
+    // artefacts follow, and both are the point rather than a rough edge:
+    //  - the age gating re-election is measured from the last *election*, so a
+    //    seek or a pause buys no protection from the next one. Measured on the
+    //    seek case: the first election after the forced update lands 449 ms
+    //    later, not the 1449 ms a reset here manufactures.
+    //  - `getPosition()` then projects the freshly written `_position` from that
+    //    stale stamp (`:606`), so a *playing* room reads ahead of the playhead
+    //    the forced update just set, by the room's age — 0.601 s on that same
+    //    case, against the 0.051 s of forward delay alone that a reset leaves.
+    //    #279 is the room ratcheting through exactly this loop, so a harness
+    //    that reset the age would report that error as ~0 and answer #279
+    //    confidently and wrongly.
+    //
     // `Room.setPosition()` re-seats **every** watcher onto the new room position
     // (`server.py:615-620`) and deliberately leaves their `_lastUpdatedOn`
     // alone, so each one then projects forward from its own stale stamp.
     // Modelled literally, stale stamp included: this is the instant the room
     // stops being the laggard's — the recovery the user reported as "we
-    // synchronized only when he paused".
-    //
-    // No case can currently tell it from its absence, and that is worth knowing
-    // rather than hiding (#282 review). The forced update resets the room's age,
-    // so the next election is a full `electionAgeMs` out, and every watcher in
-    // this repo's fixtures is *our* client — whose pre-adoption mirror re-anchors
-    // it on the new room position a heartbeat later anyway
-    // (`buildPlaystate()`'s spectator branch exists for that exact reason). The
-    // two are redundant only while that stays true: a real Syncplay peer asserts
-    // its own player position and nothing else re-seats it, so a model without
-    // this line answers "does the room survive a seek with a stale peer in it"
-    // with a confident no. Keep it, and do not read a green suite as evidence
-    // that it does nothing.
+    // synchronized only when he paused" — and with the room's age no longer
+    // reset, it is what *holds* the room. Delete this loop and the pause-recovery
+    // and seek-retention cases both go red: the mirror keeps its stale value and
+    // takes the room straight back on the election 449 ms later. Under the old
+    // reset the same mutation was invisible, because the manufactured second let
+    // our own mirror re-anchor first — a redundancy that only ever existed
+    // because every watcher in these fixtures is *our* client, where a real
+    // Syncplay peer asserts its own player position and is re-seated by nothing
+    // else.
     for (const other of this.watchers.values()) other.position = this.roomPosition
     this.serverCounter += 1
     const playstate = {
@@ -343,7 +362,7 @@ export class MinElectionServer {
     // an explicit `paused: true` is stored raw.
     w.position = position + (ps.paused === true ? 0 : w.delayMs / 1000)
     if (hasPaused) w.paused = ps.paused as boolean
-    // `Room.setPaused` only on a change (`server.py:880-882`); the forced update
+    // `Room.setPaused` only on a change (`server.py:876-879`); the forced update
     // reads `room.isPaused()` and never writes it. Unconditionally mirroring the
     // watcher's flag from inside the forced update would let a `doSeek` frame
     // that carries no `paused` key overwrite the room's flag with that watcher's

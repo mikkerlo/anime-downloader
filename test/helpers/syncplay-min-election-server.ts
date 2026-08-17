@@ -240,16 +240,18 @@ export class MinElectionServer {
     // flipped by the time we read the position, and nothing here writes it.
     this.roomPosition = this.watcherPosition(w)
     this.roomSetBy = w.username
-    // `_lastUpdate` is deliberately **not** written here. The reference writes it
-    // in exactly two places — `Room.__init__` (`server.py:547`) and
-    // `Room.getPosition()`'s election branch (`:603`) — while `Room.setPosition`
-    // (`615-620`) sets `_position`, re-seats the watchers and sets `_setBy`, and
-    // `forcePositionUpdate` (`180-187`) touches nothing else (#282 review). Two
-    // artefacts follow, and both are the point rather than a rough edge:
+    // `_lastUpdate` is deliberately **not** written here. On the plain `Room` the
+    // reference writes it in exactly two places — `Room.__init__` (`server.py:547`)
+    // and `Room.getPosition()`'s election branch (`:603`); the managed-room
+    // subclass we do not model adds a third (`ControlledRoom.getPosition`, `:686`).
+    // Meanwhile `Room.setPosition` (`615-620`) sets `_position`, re-seats the
+    // watchers and sets `_setBy`, and `forcePositionUpdate` (`180-187`) touches
+    // nothing else (#282 review). Two artefacts follow, and both are the point
+    // rather than a rough edge:
     //  - the age gating re-election is measured from the last *election*, so a
     //    seek or a pause buys no protection from the next one. Measured on the
-    //    seek case: the first election after the forced update lands 449 ms
-    //    later, not the 1449 ms a reset here manufactures.
+    //    seek case: the first election after the forced update lands 450 ms
+    //    later, not the 1450 ms a reset here manufactures.
     //  - `getPosition()` then projects the freshly written `_position` from that
     //    stale stamp (`:606`), so a *playing* room reads ahead of the playhead
     //    the forced update just set, by the room's age — 0.601 s on that same
@@ -266,7 +268,7 @@ export class MinElectionServer {
     // synchronized only when he paused" — and with the room's age no longer
     // reset, it is what *holds* the room. Delete this loop and the pause-recovery
     // and seek-retention cases both go red: the mirror keeps its stale value and
-    // takes the room straight back on the election 449 ms later. Under the old
+    // takes the room straight back on the election 450 ms later. Under the old
     // reset the same mutation was invisible, because the manufactured second let
     // our own mirror re-anchor first — a redundancy that only ever existed
     // because every watcher in these fixtures is *our* client, where a real

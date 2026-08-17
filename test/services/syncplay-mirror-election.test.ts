@@ -364,10 +364,11 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // `Room.setPosition()` re-seat lands every watcher on the new position
     // immediately, and the joiner's own mirror re-anchors it one heartbeat
     // later. The re-seat is what carries the assertion, because the forced
-    // update does *not* reset the room's age — the next election fires 449 ms
-    // after the seek, well inside the mirror's 1 Hz heartbeat, and it is the
-    // re-seat alone that keeps the joiner from winning it. Measured: remove the
-    // re-seat and this case and the pause-recovery one both go red.
+    // update does *not* reset the room's age — the next election fires 450 ms
+    // after the forced update lands (500 ms after the seek call), well inside
+    // the mirror's 1 Hz heartbeat, and it is the re-seat alone that keeps the
+    // joiner from winning it. Measured: remove the re-seat and this case and the
+    // pause-recovery one both go red.
     const after = server.elections.slice(electionsBefore)
     expect(after.length).toBeGreaterThanOrEqual(3)
     expect(after.every((e) => e.positions.joinuser > seekTo)).toBe(true)

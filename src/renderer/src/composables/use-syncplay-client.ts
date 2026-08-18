@@ -38,6 +38,11 @@ const PENDING_PAUSE_MAX_MS = 8000
 const PENDING_PAUSE_TOAST = 'Pausing once synced with the room…'
 const PENDING_PAUSE_FAILED_TOAST = "The room kept playing — your pause didn't stick"
 
+// Shown when we refuse a room position that lies past the end of our own file
+// (#281). It describes a state of affairs rather than an event, and it is
+// emitted on the *transition into* that state only — see `refusedToastShown`.
+const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
+
 export type SyncplayDeps = {
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
@@ -201,6 +206,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // resetRemoteStateTracking.
   let pendingRemoteState: SyncplayRemoteState | null = null
   let remoteStateApplied = false
+  // The out-of-file refusal is emitted on the *transition into* the refusal, not
+  // per refused state (#281). `showSyncplayToast` is not a debounce: it assigns
+  // the single toast slot and *re-arms* the 3500 ms clear timer on every call,
+  // so a refusal emitted per inbound state at 1 Hz would never expire, and
+  // last-writer-wins would swallow every other syncplay toast for the whole
+  // divergence — the pending-pause pair, the reconnect notice and all
+  // `room-event` text. Cleared where a state applies in range, alongside
+  // `remoteStateApplied`, and deliberately nowhere else: clearing it in
+  // `resetRemoteStateTracking()` would let the refusal re-fire straight over the
+  // reconnect notice that follows it.
+  let refusedToastShown = false
 
   let unsubRemoteState: Unsubscribe | null = null
   let unsubRoomEvent: Unsubscribe | null = null
@@ -581,9 +597,46 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   //   adopting it while the element still sits at 0 would report an intent we
   //   have not enacted.
   function applyRemoteStateToElement(state: SyncplayRemoteState, v: HTMLVideoElement): void {
-    remoteStateApplied = true
+    // A room position past the end of *our* file is refused, not clamped (#281).
+    // Clamping is measurably a no-op — Chromium's seek algorithm already clamps
+    // to the seekable end, so a pre-clamped write and the raw write land on the
+    // identical final frame — and clamping what the *room* initiates is a
+    // documented non-goal (docs/syncplay.md, "Apply Rule"): a shortened position
+    // we report back is an unsignalled room seek repeated at 1 Hz.
+    //
+    // Read at write time, from the element, per docs/syncplay.md's rule for the
+    // element half. On the MSE path `v.duration` is `ms.duration` — main's
+    // `probe.duration`, the same quantity #275 bounds the spawn against — and
+    // after a mid-file respawn `endOfStream()` re-derives it from the buffered
+    // ranges, which is `<=` the probe's and so can only refuse a position we
+    // could not have reached anyway.
+    //
+    // Fail-open on a duration we do not have: a moov-at-end MP4 reports
+    // `NaN`/`Infinity` until it is complete, and refusing on an unknown duration
+    // would refuse every legitimate position on such a file. A growing `.part`
+    // is *not* this case — it reports the finished container's duration, so a
+    // position past the download frontier is still followed and still stalls on
+    // purpose.
+    const outOfFile = Number.isFinite(v.duration) && v.duration > 0 && state.position >= v.duration
+    if (!outOfFile) {
+      remoteStateApplied = true
+      refusedToastShown = false
+    } else if (!refusedToastShown) {
+      // Ahead of the no-op early-out below: a refused position whose paused flag
+      // already matches moves nothing, but the user still has to be told why the
+      // room and their playhead have parted company.
+      refusedToastShown = true
+      showSyncplayToast(OUT_OF_FILE_TOAST)
+    }
     const diff = Math.abs(v.currentTime - state.position)
-    const needsSeek = state.doSeek || diff > 3.0
+    // Folded into `needsSeek` rather than applied below it, so all five
+    // seek-keyed effects fall away together: the no-op early-out, the
+    // `suppressNextLocalEventUntil` arming, the `appliedSeekPosition` echo
+    // guard, the write itself and the "X seeked to …" toast — which would
+    // otherwise announce a seek to a timestamp that does not exist in our file.
+    // `needsPlayPause` is computed independently, so a room *pause* carried on
+    // an out-of-file state is still honored.
+    const needsSeek = !outOfFile && (state.doSeek || diff > 3.0)
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     const needsPlayPause = effectivePaused !== v.paused
 

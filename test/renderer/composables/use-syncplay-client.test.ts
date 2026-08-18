@@ -2419,4 +2419,52 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     vi.advanceTimersByTime(8000)
     expect(client.syncplayToast.value).toBe('')
   })
+
+  // 21. The stream this hold now actually runs against (#277). Until that fix a
+  // *playing* pre-adoption frame essentially never reached the renderer — main's
+  // self-`setBy` guard ate the lot, and this whole path was exercised only by
+  // main's own `roomPaused` status projection. Since #277 the mirror-sourced
+  // class is emitted at ~1 Hz, unattributed (`setBy: null`), with the room
+  // playing and the element paused — so `needsPlayPause` is true on **every**
+  // one of them and the hold is asked the same question seven times in a row
+  // instead of once.
+  //
+  // Two things have to survive that. The window is anchored at
+  // `pendingPauseArmedAt` and the "held" record is one-shot, so re-holding must
+  // not restart the budget (early expiry into the failure toast) and must not
+  // leak a `v.play()` on any frame. The seek half keeps landing throughout, by
+  // design: it is what lets main's drift test latch adoption and end the hold
+  // the honest way.
+  it('holds against a 1 Hz stream of mirror-sourced playing frames (#277)', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 600, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+
+    // Seven mirror frames, one a second, each carrying the room a second
+    // further on and none of them naming an author.
+    for (let i = 1; i <= 7; i++) {
+      emitRemoteState({ position: 600 + i, paused: false, doSeek: false, setBy: null })
+      expect(v.play).not.toHaveBeenCalled()
+      expect(client.syncplayToast.value).toBe(PENDING)
+      expect(client.syncplayPausedBy.value).toBe('me')
+      vi.advanceTimersByTime(1000)
+    }
+
+    // The budget ran from the press, not from the latest frame: the backstop
+    // fires at 8 s and only then.
+    vi.advanceTimersByTime(1000)
+    expect(client.syncplayToast.value).toBe(FAILED)
+    expect(v.play).not.toHaveBeenCalled()
+
+    // The seek half was never withheld — the element moved on the one frame
+    // whose drift cleared the renderer's 3 s apply tolerance (604 against a
+    // playhead parked at 600). That write is what lets main's drift test latch
+    // adoption and end the hold the honest way.
+    expect(v.currentTime).toBe(604)
+  })
 })

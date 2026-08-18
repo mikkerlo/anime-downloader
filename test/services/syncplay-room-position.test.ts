@@ -101,6 +101,16 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     )
   }
 
+  // Latch `playbackAdopted` the way production does — a renderer push that has
+  // converged on the room, then one heartbeat, since `sendStateMessage()` →
+  // `buildPlaystate()` → `isAdopted()` is the only call that flips it. Costs one
+  // heartbeat of wall time, which the projections in the cases below account
+  // for. Needed since #277: unadopted is no longer the same client.
+  const adopt = (roomPosition: number): void => {
+    client.updateSnapshot({ position: roomPosition, paused: false })
+    vi.advanceTimersByTime(1000)
+  }
+
   const serverState = (position: number, paused: boolean, setBy: string | null): void => {
     lastTlsSocket!.emit(
       'data',
@@ -236,13 +246,31 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // us and dropped, so the stored `paused: false` never flips and the
     // projection keeps walking a room that is standing still. Unbounded this
     // answered 900 after five minutes of a room parked at 600.
+    //
+    // Adoption is **pinned**, not incidental (#277 review). The user who paused
+    // the room is adopted by construction — they have a player and it has
+    // converged — and since #277 that is the difference between this case
+    // modelling what it names and modelling a *spectator*: unadopted, the same
+    // echo is `isRoomVoice()` and is applied, storing `paused: true`, and the
+    // projection freezes at 600 instead of walking. The case would still pass
+    // (the age cap kills it either way) while pinning nothing about the frozen
+    // flag, so the walk is asserted directly below rather than left to the cap.
     it('stops answering after our own pause has frozen the stored paused flag', () => {
       handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
+      adopt(600)
       // The echo of our own pause: real frame, real pause, dropped at the
       // self-guard — so `lastRemoteRoomState` still reads `paused: false`.
       serverState(600, true, 'me')
+
+      // The frozen flag itself, inside the age cap: the room is paused at 600
+      // and the answer walks with wall time anyway. This is the defect the
+      // bound exists for, and it is what makes the `null` below a *bound*
+      // rather than a correctly-projected paused room.
+      vi.advanceTimersByTime(5000)
+      expect(position()!).toBeCloseTo(606, 1)
+
       vi.advanceTimersByTime(5 * 60 * 1000)
       expect(position()).toBeNull()
     })

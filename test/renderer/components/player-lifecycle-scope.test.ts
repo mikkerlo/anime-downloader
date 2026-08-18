@@ -473,3 +473,47 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
     expect(guarded).toBe(4)
   })
 })
+
+describe('#280 (3) — the diagnostic element listeners are removed at teardown', () => {
+  const TYPES = ['waiting', 'stalled', 'error', 'timeupdate', 'seeking', 'seeked']
+
+  it('registers all six from one table and removes the same table', () => {
+    // One table drives both directions, so an added listener cannot be
+    // registered without also being removed.
+    const table = slice('const DIAGNOSTIC_LISTENERS', 'onMounted(')
+    for (const type of TYPES) expect(table).toContain(`['${type}',`)
+    expect(mountedBody()).toContain(
+      'for (const [type, handler] of DIAGNOSTIC_LISTENERS) v.addEventListener(type, handler);'
+    )
+    expect(unmountedBody()).toContain(
+      'for (const [type, handler] of DIAGNOSTIC_LISTENERS) video.removeEventListener(type, handler);'
+    )
+  })
+
+  it('removes them before the teardown pause', () => {
+    // The pause can otherwise fire a final `waiting`/`seeking` into
+    // `maybeRespawnForUnbufferedPosition()` after `resetMseState()` is queued.
+    const body = unmountedBody()
+    const remove = body.indexOf('video.removeEventListener(type, handler)')
+    const pause = body.indexOf('video.pause();')
+    expect(remove).toBeGreaterThan(-1)
+    expect(pause).toBeGreaterThan(remove)
+  })
+
+  it('reads the element off e.currentTarget, never videoRef.value', () => {
+    // Going through the ref would make removal ordering versus Vue's
+    // ref-nulling load-bearing for no reason.
+    const handlers = stripComments(slice('const videoOf = (e: Event)', 'onMounted('))
+    expect(handlers).toContain('e.currentTarget as HTMLVideoElement')
+    expect(handlers).not.toContain('videoRef.value')
+  })
+
+  it('empties the element with removeAttribute, not src = ""', () => {
+    const body = unmountedBody()
+    expect(body).toContain("video.removeAttribute('src');")
+    expect(body).not.toContain("video.src = '';")
+    expect(body.indexOf("video.removeAttribute('src');")).toBeLessThan(
+      body.indexOf('video.load();')
+    )
+  })
+})

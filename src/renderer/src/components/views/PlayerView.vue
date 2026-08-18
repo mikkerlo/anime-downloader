@@ -1890,6 +1890,49 @@ function onPrefetchSettingChanged(ev: Event): void {
   }
 }
 
+// Diagnostic + pump listeners installed on the `<video>` element. Lifted out of
+// the watch callback so `onBeforeUnmount` can remove them (#280).
+//
+// They read the element off `e.currentTarget`, NOT `videoRef.value`: the
+// inline versions closed over the watch callback's `v`, and routing through the
+// ref instead would make removal ordering versus Vue's ref-nulling load-bearing
+// for no reason.
+const videoOf = (e: Event): HTMLVideoElement => e.currentTarget as HTMLVideoElement;
+
+const onDiagWaiting = (e: Event): void => {
+  const v = videoOf(e);
+  console.warn(`[player] video 'waiting' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`);
+};
+const onDiagStalled = (e: Event): void => {
+  const v = videoOf(e);
+  console.warn(`[player] video 'stalled' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`);
+};
+const onDiagError = (e: Event): void => {
+  const v = videoOf(e);
+  const err = v.error;
+  console.error(
+    `[player] video element error: code=${err?.code} message=${err?.message} networkState=${v.networkState} readyState=${v.readyState}`
+  );
+};
+const onDiagTimeUpdate = (): void => msePlayer.pumpAppendQueue();
+// Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
+// so a burst collapses into one respawn at the final target — native seeks
+// inside the buffered range are filtered out in the debounced callback.
+const onDiagSeeking = (): void => {
+  msePlayer.maybeRespawnForUnbufferedPosition();
+  pausePrefetchForSeek();
+};
+const onDiagSeeked = (): void => scheduleResumePrefetchAfterSeek();
+
+const DIAGNOSTIC_LISTENERS: [string, EventListener][] = [
+  ['waiting', onDiagWaiting],
+  ['stalled', onDiagStalled],
+  ['error', onDiagError],
+  ['timeupdate', onDiagTimeUpdate],
+  ['seeking', onDiagSeeking],
+  ['seeked', onDiagSeeked]
+];
+
 onMounted(async () => {
   // The document-level keydown listener is owned by usePlayerKeyboard
   // (lifecycle wired inside the composable).
@@ -1928,37 +1971,13 @@ onMounted(async () => {
   // the 1s snapshot timer are owned by useSyncplayClient's onMounted.
 
   // Diagnostic listeners on the video element to see why MSE playback stalls.
+  // Registered from one table so `onBeforeUnmount`'s removal cannot drift out
+  // of sync with the registration (#280).
   watch(
     videoRef,
     (v) => {
       if (!v) return;
-      v.addEventListener('waiting', () =>
-        console.warn(
-          `[player] video 'waiting' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`
-        )
-      );
-      v.addEventListener('stalled', () =>
-        console.warn(
-          `[player] video 'stalled' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`
-        )
-      );
-      v.addEventListener('error', () => {
-        const e = v.error;
-        console.error(
-          `[player] video element error: code=${e?.code} message=${e?.message} networkState=${v.networkState} readyState=${v.readyState}`
-        );
-      });
-      v.addEventListener('timeupdate', () => msePlayer.pumpAppendQueue());
-      // Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
-      // so a burst collapses into one respawn at the final target — native seeks
-      // inside the buffered range are filtered out in the debounced callback.
-      v.addEventListener('seeking', () => {
-        msePlayer.maybeRespawnForUnbufferedPosition();
-        pausePrefetchForSeek();
-      });
-      v.addEventListener('seeked', () => {
-        scheduleResumePrefetchAfterSeek();
-      });
+      for (const [type, handler] of DIAGNOSTIC_LISTENERS) v.addEventListener(type, handler);
     },
     { immediate: true }
   );
@@ -2113,6 +2132,10 @@ onBeforeUnmount(() => {
   // Pause and release video
   const video = videoRef.value;
   if (video) {
+    // BEFORE the pause below (#280): the teardown pause can otherwise fire a
+    // final `waiting`/`seeking` into `maybeRespawnForUnbufferedPosition()`
+    // after `resetMseState()` is already queued.
+    for (const [type, handler] of DIAGNOSTIC_LISTENERS) video.removeEventListener(type, handler);
     // Mark it: since #228 an *unmarked* pause moves room-mirror state (and,
     // post-adoption, sends a pause) before the composable dies, so closing the
     // player would pause the room on the way out. Guarded on `!paused` by the
@@ -2121,7 +2144,14 @@ onBeforeUnmount(() => {
     // real one.
     if (!video.paused) syncplay.markProgrammaticPlayback(true);
     video.pause();
-    video.src = '';
+    // `src = ''` does not clear the source: an empty `src` attribute resolves
+    // against the document URL, so `load()` selects the app's own index.html as
+    // a media resource and fails it. `removeAttribute` is the form that
+    // actually empties it. The template owns this attribute (`:src="videoSrc ||
+    // undefined"`), so removing it imperatively is only safe because no patch
+    // follows the teardown — a later `videoSrc` watcher must not quietly re-add
+    // it here.
+    video.removeAttribute('src');
     video.load();
   }
   // Release the player lock (#63) — lets a deferred .part rename + merge run.

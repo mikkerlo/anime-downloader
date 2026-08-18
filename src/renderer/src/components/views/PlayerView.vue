@@ -1806,23 +1806,20 @@ onMounted(async () => {
   window.addEventListener('mouseup', onAuxMouseUp, true);
   window.addEventListener('mousedown', onAuxMouseDown, true);
   window.addEventListener('prefetch-setting-changed', onPrefetchSettingChanged as EventListener);
-  const savedShortcuts = (await window.api.getSetting('keyboardShortcuts')) as Record<
-    string,
-    string
-  > | null;
-  playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) };
 
-  const savedPrefetch = (await window.api.getSetting(
-    'prefetchNextEpisode'
-  )) as PrefetchSetting | null;
-  if (
-    savedPrefetch === 'off' ||
-    savedPrefetch === 'open' ||
-    savedPrefetch === 'time-5min' ||
-    savedPrefetch === 'progress-50'
-  ) {
-    prefetchSetting.value = savedPrefetch;
-  }
+  // Everything from here to the `getSetting` await below is deliberately
+  // hoisted ABOVE the first await (#280). Two reasons, both load-bearing:
+  //   1. `watch()` only binds to the component's effect scope when it is called
+  //      while that scope is active — i.e. synchronously, before any await.
+  //      Created after an await it escapes the scope and is never stopped.
+  //   2. `onBeforeUnmount` nulls `unsubPlayerStreamSubtitles`/`unsubPlayerStream`.
+  //      A close landing during those awaits ran the hook against `null` and the
+  //      resumed continuation then registered both subscriptions on a dead
+  //      instance, leaking them into the preload listener list for the life of
+  //      the process.
+  // Nothing here reads a value the two `getSetting` awaits produce, and nothing
+  // here awaits, so the hoist adds no await ahead of `prepareMkvForPlayback` —
+  // which is what keeps `docs/syncplay.md`'s ordering rule intact.
 
   // useSkipMarkers already wires the signature-updated subscription via its
   // own onMounted hook — we just need to kick off the initial load.
@@ -1874,6 +1871,24 @@ onMounted(async () => {
     },
     { immediate: true }
   );
+
+  const savedShortcuts = (await window.api.getSetting('keyboardShortcuts')) as Record<
+    string,
+    string
+  > | null;
+  playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) };
+
+  const savedPrefetch = (await window.api.getSetting(
+    'prefetchNextEpisode'
+  )) as PrefetchSetting | null;
+  if (
+    savedPrefetch === 'off' ||
+    savedPrefetch === 'open' ||
+    savedPrefetch === 'time-5min' ||
+    savedPrefetch === 'progress-50'
+  ) {
+    prefetchSetting.value = savedPrefetch;
+  }
 
   // Start MKV remux stream (or fall back to legacy full remux)
   if (isMkv.value && props.filePath) {

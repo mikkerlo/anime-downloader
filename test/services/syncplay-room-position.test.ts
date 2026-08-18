@@ -60,9 +60,30 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
 
   const position = (canonicalName = OPEN): number | null => client.getRoomPosition(canonicalName)
 
-  // `announce: null` handshakes without the file push at all — main is connected
-  // but has never been told what we are playing.
-  const handshake = (room = 'cinema', announce: string | null = OPEN): void => {
+  // Connect only — **no file push** (#276). Production order is
+  // state-then-push: main is connected with no player open when the room's ~1 Hz
+  // periodics start arriving, and `useSyncplayClient`'s onMounted push announces
+  // our file afterwards. This helper used to end with that push, so every case
+  // in the file ran backwards relative to the app — which is the one ordering in
+  // which the pre-#276 seed worked, and why a feature that was structurally dead
+  // on every first open shipped green. Each case now pushes its own file, where
+  // the case wants it.
+  //
+  // **Invariant: at least two cases stay push-then-state**, marked in place —
+  // `keeps answering while a seated peer is still driving the room` and
+  // `re-earns the position from the next state after a switch`. Everything else
+  // reaches `lastRemoteRoomState` through `setFile()`'s adoption of an *unkeyed*
+  // state, so without them the **direct** stamp in `handleState()` (the
+  // `this.currentFile?.canonicalName ?? null` write with a `currentFile` that is
+  // not null) would lose its coverage. Measured: mutating that stamp to
+  // `canonicalName: null` unconditionally failed 14 cases against the
+  // pre-reorder fixture and fails 4 against this one — the two named above plus
+  // `leaves an episode switch unseeded until the next state re-earns it` and
+  // `answers again for a revisited episode inside the age cap`, both of which
+  // are push-then-state by construction rather than by decision. That collapse
+  // from 14 to 4 is exactly what the invariant buys back, so do not "tidy" the
+  // two named cases into production order.
+  const handshake = (room = 'cinema'): void => {
     client.connect({
       host: 'syncplay.test',
       port: 8999,
@@ -77,9 +98,6 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       'data',
       Buffer.from(`{"Hello":{"username":"me","room":{"name":"${room}"},"version":"1.6.9"}}\r\n`)
     )
-    // `useSyncplayClient`'s onMounted push, which is what makes main's
-    // `currentFile` the file the reads below name.
-    if (announce !== null) file(announce)
   }
 
   // A `List` reply keyed to our room — the only thing that makes `rosterReceived`
@@ -141,6 +159,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('reports the room position after a state set by a peer', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
       expect(position()).toBeCloseTo(600, 3)
     })
 
@@ -153,17 +172,20 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('returns null when the only states seen were set by us', () => {
       handshake()
       serverState(600, true, 'me')
+      file(OPEN)
       expect(position()).toBeNull()
     })
 
     it('returns null for a state carrying no setBy at all', () => {
       handshake()
       serverState(600, true, null)
+      file(OPEN)
       expect(position()).toBeNull()
     })
 
     it('returns null before any state has arrived', () => {
       handshake()
+      file(OPEN)
       expect(position()).toBeNull()
     })
 
@@ -177,6 +199,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('returns null after the session is torn down', () => {
       handshake()
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       expect(position()).not.toBeNull()
       client.disconnect()
       expect(position()).toBeNull()
@@ -187,6 +210,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('advances with wall time while the room is playing', () => {
       handshake()
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       vi.advanceTimersByTime(4000)
       expect(position()!).toBeCloseTo(604, 1)
     })
@@ -196,6 +220,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('does not advance while the room is paused', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
       vi.advanceTimersByTime(4000)
       expect(position()!).toBeCloseTo(600, 3)
     })
@@ -203,6 +228,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('never reports a negative position', () => {
       handshake()
       serverState(-5, true, 'mikkerlo')
+      file(OPEN)
       expect(position()).toBe(0)
     })
   })
@@ -223,6 +249,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       expect(position()!).toBeCloseTo(600, 1)
 
       peerLeaves('mikkerlo')
@@ -237,6 +264,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       peerLeaves('mikkerlo')
       vi.advanceTimersByTime(2000)
       expect(position()).toBeNull()
@@ -259,6 +287,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       adopt(600)
       // The echo of our own pause: real frame, real pause, dropped at the
       // self-guard — so `lastRemoteRoomState` still reads `paused: false`.
@@ -282,6 +311,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
       vi.advanceTimersByTime(20 * 60 * 1000)
       expect(position()).toBeNull()
     })
@@ -289,8 +319,18 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // The bound must not cost the feature on the path it exists for: a peer is
     // seated and driving at ~1 Hz, so the value is fresh and the room owns the
     // spawn.
+    //
+    // **Push-then-state, deliberately, and one of the two cases the reorder
+    // invariant on `handshake()` names (#276).** The file is announced *before*
+    // any state arrives, so both states are stamped directly from a non-null
+    // `currentFile` and nothing here goes through `setFile()`'s adoption of an
+    // unkeyed state. This is what keeps the direct stamp covered now that the
+    // rest of the file runs in production order. It is also the shape it models:
+    // a player already open while a peer drives the room. Do not "tidy" the
+    // order.
     it('keeps answering while a seated peer is still driving the room', () => {
       handshake()
+      file(OPEN)
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
       vi.advanceTimersByTime(4000)
@@ -308,6 +348,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('still answers from a fresh peer state when no roster has arrived', () => {
       handshake()
       serverState(600, false, 'mikkerlo')
+      file(OPEN)
       vi.advanceTimersByTime(4000)
       expect(position()!).toBeCloseTo(604, 1)
     })
@@ -323,6 +364,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('drops the position when our canonical name changes', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
       expect(position()).toBeCloseTo(600, 3)
 
       file('Some Anime - 2')
@@ -335,13 +377,22 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('keeps the position across a same-episode reopen', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
 
       file(OPEN, true)
       expect(position()).toBeCloseTo(600, 3)
     })
 
+    // **Push-then-state, deliberately — the second case the reorder invariant on
+    // `handshake()` names (#276).** Here it is push-then-state by *construction*
+    // as well: the second `serverState` necessarily lands while `currentFile` is
+    // already episode 2, so this one keeps the direct stamp covered even through
+    // a naive wholesale reorder. The leading `file(OPEN)` is the deliberate half
+    // — it is what makes the *first* state a direct stamp too, so the case reads
+    // as "a player was open the whole time and the episode changed under it".
     it('re-earns the position from the next state after a switch', () => {
       handshake()
+      file(OPEN)
       serverState(600, true, 'mikkerlo')
       file('Some Anime - 2')
       serverState(12, true, 'mikkerlo')
@@ -356,6 +407,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     it('answers null for a file main has not been told about yet', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
+      file(OPEN)
       expect(position('Some Anime - 2')).toBeNull()
       // ...and the file it *does* know about is unaffected.
       expect(position()).toBeCloseTo(600, 3)
@@ -370,7 +422,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // hands over `buildCanonicalName()`, always a string), which is exactly why
     // the guard has to be structural rather than incidental.
     it('answers null when main has no current file at all, for any name shape', () => {
-      handshake('cinema', null)
+      handshake()
       serverState(600, true, 'mikkerlo')
 
       expect(client.getRoomPosition(undefined as never)).toBeNull()
@@ -443,12 +495,12 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     const serverRttOf = (): number => (client as unknown as { serverRtt: number }).serverRtt
   })
 
-  // The bug (#276), in **production order**: a peer state arrives while main is
-  // connected with no player, and *then* `useSyncplayClient`'s onMounted push
-  // announces our file. Every case above this block ran the inverse order, which
-  // is the one ordering in which the pre-#276 code worked — so the seed was dead
-  // on the path it exists for and nothing here saw it. The block below is the
-  // ordering the app actually produces.
+  // The bug (#276) and the semantics that replace it. Every case in this file
+  // now runs in production order — `handshake()` connects and nothing else, and
+  // the file push lands where the case wants it — but before #276 the helper
+  // ended with the push, so the whole suite ran the one ordering in which the
+  // seed worked and a feature that was dead on every first open shipped green.
+  // These are the cases about that ordering specifically.
   describe('the first open', () => {
     // On `main` the push that makes the read legal is the push that wipes the
     // field: `currentFile` is `null` on a first open, so `identityChanged` is
@@ -456,7 +508,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // milliseconds later, far inside the ~1 s before another foreign state can
     // re-earn it, and the MKV spawn goes to 0 while the room sits at 600.
     it('seeds a first open from a state seen before we announced anything', () => {
-      handshake('cinema', null)
+      handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
       file(OPEN)
@@ -470,7 +522,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // only come from ep 2's own next state. Bounded by the server's ~1 Hz
     // cadence, not closed here.
     it('leaves an episode switch unseeded until the next state re-earns it', () => {
-      handshake('cinema', null)
+      handshake()
       roster({ mikkerlo: { isReady: true, file: {} } })
       serverState(600, false, 'mikkerlo')
       file(OPEN)
@@ -490,7 +542,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // this passes on `main` too, so it is a guard-preservation test rather than
     // a behaviour delta.
     it('answers null for a file we have left, even though the state matches it', () => {
-      handshake('cinema', null)
+      handshake()
       serverState(600, false, 'mikkerlo')
       file(OPEN)
       file('Some Anime - 2')
@@ -503,7 +555,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // on. Ungated this answers 600 — somebody else's episode position, handed to
     // our ffmpeg spawn.
     it('refuses to adopt an unkeyed state when a peer is on different content', () => {
-      handshake('cinema', null)
+      handshake()
       roster({
         mikkerlo: {
           isReady: true,
@@ -521,7 +573,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // and two peers on different translations of the same episode share a
     // playhead legitimately.
     it('adopts an unkeyed state when a peer is on the same episode, any translation', () => {
-      handshake('cinema', null)
+      handshake()
       roster({
         mikkerlo: {
           isReady: true,
@@ -542,7 +594,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     // have moved on meanwhile, so the value can be stale by up to the cap, and
     // the **age cap is now the sole bound on this path**.
     it('answers again for a revisited episode inside the age cap, and not past it', () => {
-      handshake('cinema', null)
+      handshake()
       file(OPEN)
       serverState(600, true, 'mikkerlo')
       file('Some Anime - 2')

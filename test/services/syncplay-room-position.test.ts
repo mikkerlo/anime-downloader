@@ -316,9 +316,10 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
   describe('file identity', () => {
     // The room's position was reported for the file we were on. Handed to the
     // next episode's spawn it would be worse than the saved position it
-    // replaces. Asked for under the *new* name, so the `setFile()` clear is the
-    // only thing that can answer null here — the caller-scope guard below would
-    // otherwise cover for its removal.
+    // replaces. Asked for under the *new* name, and main is already on that name
+    // — so the caller-scope guard passes and the **key match** is the only thing
+    // that can answer null here (#276). It used to be the `setFile()` clear;
+    // that line is gone, and this case is what pins its replacement.
     it('drops the position when our canonical name changes', () => {
       handshake()
       serverState(600, true, 'mikkerlo')
@@ -440,5 +441,117 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     })
 
     const serverRttOf = (): number => (client as unknown as { serverRtt: number }).serverRtt
+  })
+
+  // The bug (#276), in **production order**: a peer state arrives while main is
+  // connected with no player, and *then* `useSyncplayClient`'s onMounted push
+  // announces our file. Every case above this block ran the inverse order, which
+  // is the one ordering in which the pre-#276 code worked — so the seed was dead
+  // on the path it exists for and nothing here saw it. The block below is the
+  // ordering the app actually produces.
+  describe('the first open', () => {
+    // On `main` the push that makes the read legal is the push that wipes the
+    // field: `currentFile` is `null` on a first open, so `identityChanged` is
+    // unconditionally true and the blind clear fires. The renderer's read lands
+    // milliseconds later, far inside the ~1 s before another foreign state can
+    // re-earn it, and the MKV spawn goes to 0 while the room sits at 600.
+    it('seeds a first open from a state seen before we announced anything', () => {
+      handshake('cinema', null)
+      roster({ mikkerlo: { isReady: true, file: {} } })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()!).toBeCloseTo(600, 1)
+    })
+
+    // Answer (A), recorded. The keyed design fixes the first open and
+    // deliberately leaves the episode *switch* answering `null`, exactly as
+    // `main` does: `handleState()` can only stamp what **we** were playing, and
+    // Syncplay's `State` frames carry no file identity at all, so ep 2's key can
+    // only come from ep 2's own next state. Bounded by the server's ~1 Hz
+    // cadence, not closed here.
+    it('leaves an episode switch unseeded until the next state re-earns it', () => {
+      handshake('cinema', null)
+      roster({ mikkerlo: { isReady: true, file: {} } })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()!).toBeCloseTo(600, 1)
+
+      file('Some Anime - 2')
+      expect(position('Some Anime - 2')).toBeNull()
+      serverState(12, true, 'mikkerlo')
+      expect(position('Some Anime - 2')).toBeCloseTo(12, 3)
+    })
+
+    // The direction the key does **not** cover, so the caller-scope guard has
+    // to. The state is stored under ep 1 and the caller *names* ep 1, so
+    // `room.canonicalName === canonicalName` matches: only
+    // `currentFile.canonicalName !== canonicalName` answers null here. Dropping
+    // that line in favour of the key answers 600 for a file we have left — and
+    // this passes on `main` too, so it is a guard-preservation test rather than
+    // a behaviour delta.
+    it('answers null for a file we have left, even though the state matches it', () => {
+      handshake('cinema', null)
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      file('Some Anime - 2')
+      expect(position('Some Anime - 1')).toBeNull()
+    })
+
+    // Adoption of the unkeyed state is **checked against the roster**, not
+    // assumed: the flow this seeds (sit in a room with no player, then open
+    // something) is also the flow most likely to open content the room is not
+    // on. Ungated this answers 600 — somebody else's episode position, handed to
+    // our ffmpeg spawn.
+    it('refuses to adopt an unkeyed state when a peer is on different content', () => {
+      handshake('cinema', null)
+      roster({
+        mikkerlo: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 999, episodeInt: '7' } } }
+        }
+      })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()).toBeNull()
+    })
+
+    // The gate compares *content*, not "does any peer publish meta at all". A
+    // peer on the same episode confirms the premise. `translationId` is
+    // deliberately not compared: `canonicalName` has no translation component,
+    // and two peers on different translations of the same episode share a
+    // playhead legitimately.
+    it('adopts an unkeyed state when a peer is on the same episode, any translation', () => {
+      handshake('cinema', null)
+      roster({
+        mikkerlo: {
+          isReady: true,
+          file: {
+            features: { animeDlAppMeta: { animeId: 1, episodeInt: '1', translationId: 77 } }
+          }
+        }
+      })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()!).toBeCloseTo(600, 1)
+    })
+
+    // The new way *in*, and the reason `docs/syncplay.md`'s freeze-shape
+    // analysis had to be rewritten rather than edited. With the `setFile()`
+    // clear gone, ep 1 → ep 2 → back to ep 1 reads ep 1's stored state again,
+    // because its key still matches — where `main` answers `null`. The room may
+    // have moved on meanwhile, so the value can be stale by up to the cap, and
+    // the **age cap is now the sole bound on this path**.
+    it('answers again for a revisited episode inside the age cap, and not past it', () => {
+      handshake('cinema', null)
+      file(OPEN)
+      serverState(600, true, 'mikkerlo')
+      file('Some Anime - 2')
+      file(OPEN)
+
+      vi.advanceTimersByTime(5000)
+      expect(position()!).toBeCloseTo(600, 1)
+      vi.advanceTimersByTime(20000)
+      expect(position()).toBeNull()
+    })
   })
 })

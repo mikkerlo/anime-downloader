@@ -50,7 +50,12 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient, SEEK_REASSERT_TOLERANCE_S } from '../../src/main/syncplay'
+import {
+  SyncplayClient,
+  ADOPT_TOLERANCE_S,
+  ECHO_SEEK_EPSILON_S,
+  SEEK_REASSERT_TOLERANCE_S
+} from '../../src/main/syncplay'
 
 const HEARTBEAT_MS = 1000
 
@@ -71,7 +76,17 @@ const outboundStates = (sock: FakeSocket | null): StateFrame[] =>
 
 describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
   let client: SyncplayClient
-  let remoteStates: Array<{ position: number; setBy: string }>
+  // `paused` and `doSeek` are projected as well as `position`/`setBy` since
+  // #278: the rewrite rule substitutes *only* the position, and "the other three
+  // fields pass through unchanged" is the half of it that keeps #228's pause
+  // projection and the renderer's "X seeked to …" gating intact.
+  type EmittedState = {
+    position: number
+    setBy: string | null
+    paused: boolean
+    doSeek: boolean
+  }
+  let remoteStates: EmittedState[]
 
   const pendingClientAck = (): number =>
     (client as unknown as { pendingClientAck: number }).pendingClientAck
@@ -163,7 +178,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     lastTlsSocket = null
     client = new SyncplayClient()
     remoteStates = []
-    client.on('remote-state', (s) => remoteStates.push(s as { position: number; setBy: string }))
+    client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
   })
 
   afterEach(() => {
@@ -456,6 +471,11 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       const seeks = doSeekFrames()
       expect(seeks).toHaveLength(1)
       expect(seeks[0].playstate?.position).toBe(SEEK_TARGET)
+      // The read half of the same tick (#278). Here the self-`setBy` guard is
+      // what keeps the room's stale 100 away from the renderer, so the
+      // assertion is that nothing was handed over at all; the peer-`setBy`
+      // sibling below is where the rewrite itself carries it.
+      expect(remoteStates).toHaveLength(0)
     })
 
     it('orders the recovery behind the ack and leaves the ack playstate-free', () => {
@@ -479,6 +499,8 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // opened this window to preserve.
       expect(states[1]).not.toHaveProperty('ignoringOnTheFly')
       expect(pendingClientAck()).toBe(0)
+      // Both halves of the tick (#278): two frames out, nothing in.
+      expect(remoteStates).toHaveLength(0)
     })
 
     // The placement claim, on a frame the self-`setBy` guard does not swallow:
@@ -497,6 +519,14 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
 
       expect(doSeekFrames()).toHaveLength(1)
       expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET)
+      // **The regression assertion for #278.** This is the frame that reaches
+      // the renderer, and on `main` before the fix it carried ROOM_POSITION:
+      // the recovery told the *server* the room was wrong at 112 and the same
+      // tick told the *renderer* to go to 100, which the renderer applies at
+      // |112 − 100| = 12 > 3 and the user sees as being yanked backwards. One
+      // line, and it has been failing silently on every run since #224.
+      expect(remoteStates).toHaveLength(1)
+      expect(remoteStates[0].position).toBe(SEEK_TARGET)
     })
 
     it('re-asserts where the user is now, never the position the seek targeted', () => {
@@ -512,6 +542,9 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       roomStillAt(ROOM_POSITION)
 
       expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET + 12)
+      // Both halves again (#278): the self-`setBy` guard drops this one, so the
+      // room's 100 never reaches the renderer here either.
+      expect(remoteStates).toHaveLength(0)
     })
 
     it('sends no recovery once the room has taken our position', () => {
@@ -777,9 +810,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
                   client.disconnect()
                   client = new SyncplayClient()
                   remoteStates = []
-                  client.on('remote-state', (s) =>
-                    remoteStates.push(s as { position: number; setBy: string })
-                  )
+                  client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
 
                   handshake()
                   armForwardSeek()
@@ -808,6 +839,375 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         // space in which everything is applied.
         expect(retired).toBeGreaterThan(0)
         expect(dropped).toBeGreaterThan(0)
+      })
+    })
+
+    // #278 — the *read* half of the same tick. maybeReassertSeek() above tells
+    // the server the room is wrong; execution then falls past the drop guards
+    // and hands the renderer that same contradicted position, which the
+    // renderer applies because the difference exceeds its 3 s tolerance
+    // (use-syncplay-client.ts:585-586). Two quick arrow presses is the user
+    // report: the second lands inside the server's ignore window and is
+    // discarded, and the periodic that closes the window carries the room still
+    // at the first press.
+    //
+    // The rule is one sentence — *while a local seek intent is live,
+    // handleState() hands the renderer our position instead of the room's* —
+    // and it is a **rewrite, never a drop**: recordRemoteState() runs
+    // unconditionally at the top of applyRemoteState() and owns the
+    // pending-pause release and the "Paused by …" badge (#228), so a drop would
+    // lose the pause half to save the position half.
+    describe('the room does not move our playhead while our own seek is unresolved (#278)', () => {
+      const OPEN = 'Show - 1'
+
+      const openFile = (canonicalName = OPEN): void =>
+        client.setFile({
+          animeId: 1,
+          malId: null,
+          episodeInt: '1',
+          translationId: null,
+          canonicalName,
+          duration: 1440,
+          newPlayer: true
+        })
+
+      // A roster with somebody else in it. `getRoomPosition()` answers `null`
+      // while the roster says we are alone, so the two bookkeeping cases below
+      // need a peer — and adoption has to have latched *before* it arrives,
+      // since with a peer listed `isAdopted()` stops taking the alone shortcut.
+      const withPeerInRoom = (): void =>
+        lastTlsSocket!.emit(
+          'data',
+          Buffer.from(
+            JSON.stringify({
+              List: {
+                cinema: {
+                  me: { isReady: true, position: 0 },
+                  peer: { isReady: true, position: 0 }
+                }
+              }
+            }) + '\r\n'
+          )
+        )
+
+      // Latch adoption while the roster still says we are alone, with a file
+      // open so `getRoomPosition()` has something to key on.
+      const openAndAdopt = (): void => {
+        openFile()
+        client.updateSnapshot({ position: ROOM_POSITION, paused: false })
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        withPeerInRoom()
+      }
+
+      // The frame class the harness never distinguished: a periodic, `doSeek:
+      // false`, at the room's stale resting position, whose `setBy` has been
+      // re-elected to a peer by Room.getPosition()'s min() over watchers
+      // (server.py:597-604). `roomStillAt()`'s block comment frames the same
+      // shape as a pause-driven forced update, which is why the retraction's
+      // `doSeek` gate was never pressured by it.
+      it('hands the renderer our own position for a re-elected foreign periodic', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        // Both halves of the tick, and they now agree: the server is told 112
+        // and so is the renderer.
+        expect(doSeekFrames()).toHaveLength(1)
+        expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET)
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(SEEK_TARGET)
+        // Only the position is ours. `setBy` and `doSeek` ride through, which is
+        // what keeps the renderer's own attribution and apply rules working.
+        expect(remoteStates[0].setBy).toBe('peer')
+        expect(remoteStates[0].doSeek).toBe(false)
+      })
+
+      // The interaction that makes "rewrite, never drop" load-bearing (#228).
+      // The room genuinely paused at a position we contradict: the pause has to
+      // reach recordRemoteState() — it releases a pending pause and hands over
+      // the "Paused by …" badge — while the element stays put.
+      it('passes the room’s pause and its author through, substituting only the position', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        forcedState({
+          server: 7,
+          setBy: 'peer',
+          position: ROOM_POSITION,
+          paused: true,
+          doSeek: false
+        })
+
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0]).toMatchObject({
+          paused: true,
+          setBy: 'peer',
+          doSeek: false,
+          position: SEEK_TARGET
+        })
+        // The recovery still goes out, carrying the pause it was handed.
+        expect(doSeekFrames()).toHaveLength(1)
+        expect(doSeekFrames()[0].playstate?.position).toBe(SEEK_TARGET)
+      })
+
+      // The ordering claim: the flag is captured *above* maybeReassertSeek(), so
+      // the tick the intent dies is still the last tick it protects. Read it
+      // after the call instead and this goes red on the ceiling tick.
+      //
+      // …and the honest bound, as a characterisation (#278 review). The
+      // protection is exactly one tick wide: tick 4 has no intent left to read,
+      // so the room's 100 goes out unrewritten and the renderer applies it at
+      // |112 − 100| = 12 > 3. In symptom 1's real shape that never happens —
+      // the re-assert is accepted once the ignore window closes and the room
+      // comes to us — but the user's console capture is of exactly this
+      // exhausted-ceiling shape, where the fix turns four excursions into one
+      // rather than none. Do not promote this to a guarantee in docs.
+      it('still rewrites on the tick the attempt ceiling retires the intent — and not the tick after', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        for (let i = 0; i < 4; i += 1) {
+          roomStillAt(ROOM_POSITION, { setBy: 'peer', server: 20 + i })
+        }
+
+        expect(doSeekFrames()).toHaveLength(3)
+        expect(seekIntent()).toBeNull()
+        // Four inbound ticks, four rewritten frames — the fourth is the ceiling
+        // tick, where maybeReassertSeek() nulled the intent and asserted nothing.
+        expect(remoteStates.map((s) => s.position)).toEqual([
+          SEEK_TARGET,
+          SEEK_TARGET,
+          SEEK_TARGET,
+          SEEK_TARGET
+        ])
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer', server: 24 })
+
+        expect(remoteStates).toHaveLength(5)
+        expect(remoteStates[4].position).toBe(ROOM_POSITION)
+      })
+
+      it('still rewrites on the tick the TTL retires the intent', () => {
+        handshake()
+        armForwardSeek()
+        // Keep pushing snapshots so the player stays live — otherwise the
+        // spectator branch below, not the TTL, is what this would exercise.
+        for (let i = 1; i <= 6; i += 1) {
+          vi.advanceTimersByTime(1000)
+          client.updateSnapshot({ position: SEEK_TARGET + i, paused: false })
+        }
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        expect(doSeekFrames()).toHaveLength(0)
+        expect(seekIntent()).toBeNull()
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(SEEK_TARGET + 6)
+      })
+
+      // The third terminal exit, and the frame that uses the oldest snapshot the
+      // rule will ever substitute: hasLivePlayback() has just gone false at
+      // PLAYBACK_STALE_MS, so the reading is 5 s old. It is still a reading of a
+      // *stopped* element — nothing pushed, so nothing moved — which is the
+      // whole staleness argument, asserted rather than left to it.
+      it('still rewrites on the tick the spectator guard retires the intent, with the oldest snapshot it will use', () => {
+        handshake()
+        armForwardSeek()
+        vi.advanceTimersByTime(6000)
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        expect(doSeekFrames()).toHaveLength(0)
+        expect(seekIntent()).toBeNull()
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(SEEK_TARGET)
+      })
+
+      // The substituted value is flat `this.snapshot.position`, never a forward
+      // projection, and the residual is one push interval: ~0.9 s of
+      // SNAPSHOT_MIN_INTERVAL_MS floor plus `timeupdate`'s own ~250 ms cadence.
+      // The element only advances while it is firing `timeupdate`, so that is
+      // also the widest the reading can be wrong by — comfortably inside the
+      // renderer's 3 s apply tolerance.
+      it('keeps the substituted value inside the renderer’s tolerance as the snapshot ages', () => {
+        handshake()
+        armForwardSeek()
+        // One push interval of playback with no push landing.
+        vi.advanceTimersByTime(1150)
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        const whereTheElementActuallyIs = SEEK_TARGET + 1.15
+        expect(remoteStates).toHaveLength(1)
+        expect(Math.abs(remoteStates[0].position - whereTheElementActuallyIs)).toBeLessThan(
+          ADOPT_TOLERANCE_S
+        )
+      })
+
+      // The escape hatch, and it costs no branch: the #274 retraction runs above
+      // the capture, so a peer's genuine seek has already nulled the intent by
+      // the time the flag is read. Reorder those two and this is what breaks.
+      it('does not rewrite a peer’s genuine seek — the retraction runs above the capture', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        peerSeeksTo(900)
+
+        expect(seekIntent()).toBeNull()
+        expect(doSeekFrames()).toHaveLength(0)
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(900)
+        expect(remoteStates[0].doSeek).toBe(true)
+      })
+
+      // `doSeek` is provably false on every rewritten tick — a `doSeek` frame
+      // that would apply retired the intent above, and one that would not apply
+      // never reaches the emit — so it is passed through and the invariant is
+      // asserted rather than hardcoded. Sweeping both axes is what makes it
+      // break loudly if the retraction and the capture are ever reordered.
+      it('only ever rewrites a frame that carries doSeek: false', () => {
+        let rewritten = 0
+        let passedThrough = 0
+
+        for (const doSeek of [true, false]) {
+          for (const paused of [false, true]) {
+            client.disconnect()
+            client = new SyncplayClient()
+            remoteStates = []
+            client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
+
+            handshake()
+            armForwardSeek()
+            clearWrites()
+
+            forcedState({ server: 7, setBy: 'peer', position: ROOM_POSITION, paused, doSeek })
+
+            expect(remoteStates, JSON.stringify({ doSeek, paused })).toHaveLength(1)
+            if (remoteStates[0].position === SEEK_TARGET) {
+              rewritten += 1
+              expect(remoteStates[0].doSeek, 'a rewritten frame must carry doSeek: false').toBe(
+                false
+              )
+            } else {
+              passedThrough += 1
+              expect(remoteStates[0].position).toBe(ROOM_POSITION)
+            }
+          }
+        }
+
+        // Anti-vacuity, both halves: the sweep really contains rewritten frames
+        // and frames that pass straight through.
+        expect(rewritten).toBe(2)
+        expect(passedThrough).toBe(2)
+      })
+
+      // Bookkeeping, half one. The echo target is what sendLocalState() compares
+      // the next local seek against within ECHO_SEEK_EPSILON_S; armed at the
+      // room's stale position it swallows a genuine user seek landing near it
+      // and that seek never reaches the room. Evaluating the arming test on the
+      // *emitted* value answers "this state moves nothing" for exactly the
+      // frames we rewrite, so no special case is needed.
+      it('does not arm the echo target at the room’s stale position', () => {
+        handshake()
+        armForwardSeek()
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+        expect(remoteStates[0].position).toBe(SEEK_TARGET)
+        clearWrites()
+
+        // A genuine user seek that happens to land next to where the room was.
+        const target = ROOM_POSITION + ECHO_SEEK_EPSILON_S / 2
+        client.sendLocalState({ paused: false, position: target, cause: 'seek' })
+
+        const seeks = doSeekFrames()
+        expect(seeks).toHaveLength(1)
+        expect(seeks[0].playstate?.position).toBe(target)
+      })
+
+      // Bookkeeping, half two. `lastRemoteRoomState` is skipped rather than
+      // written from the emitted value: that value is ours, and
+      // `getRoomPosition()` answering our own position is the regression class
+      // syncplay-room-position.test.ts pins. The previous value stands and ages
+      // out under ROOM_POSITION_MAX_AGE_MS.
+      it('leaves getRoomPosition() on the room’s last real value', () => {
+        handshake()
+        openAndAdopt()
+        // A foreign frame with no intent live seeds the room position.
+        forcedState({ server: 5, setBy: 'peer', position: 50, paused: false, doSeek: false })
+        expect(client.getRoomPosition(OPEN)).toBeCloseTo(50, 5)
+
+        armForwardSeek()
+        clearWrites()
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        expect(remoteStates[remoteStates.length - 1].position).toBe(SEEK_TARGET)
+        // Not SEEK_TARGET (ours) and not ROOM_POSITION (the contradicted claim):
+        // the seed stands.
+        expect(client.getRoomPosition(OPEN)).toBeCloseTo(50, 5)
+      })
+
+      // The other end of the same skip, as a characterisation of the risk (#278
+      // review): if the session's *first* foreign frame lands inside the window,
+      // `lastRemoteRoomState` is never seeded at all and `getRoomPosition()`
+      // answers `null` for the life of the intent — read by the MKV spawn seed
+      // (#262) and #276's join seed through src/main/ipc/syncplay.ipc.ts:73.
+      // Bounded by SEEK_REASSERT_TTL_MS, and a spawn needs a new player, which
+      // clears the intent — but it is "never seeded", not "ages".
+      it('leaves getRoomPosition() null when the window covers the first foreign frame', () => {
+        handshake()
+        openAndAdopt()
+        expect(client.getRoomPosition(OPEN)).toBeNull()
+
+        armForwardSeek()
+        clearWrites()
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        expect(remoteStates[remoteStates.length - 1].position).toBe(SEEK_TARGET)
+        expect(client.getRoomPosition(OPEN)).toBeNull()
+      })
+
+      // The window inherits `seekIntent`'s retirements exactly, because it *is*
+      // `seekIntent`: no new field, no new timer, nothing extra to retire. These
+      // two are the routes a rewritten frame could otherwise outlive its player.
+      it('does not rewrite once a new player has retired the intent', () => {
+        handshake()
+        armForwardSeek()
+
+        openFile('Show - 2')
+        expect(seekIntent()).toBeNull()
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(ROOM_POSITION)
+      })
+
+      it('does not rewrite once the stale-gap re-converge has retired the intent', () => {
+        handshake()
+        armForwardSeek()
+
+        // The same-episode reopen setFile() cannot see: a fresh <video> at 0.
+        vi.advanceTimersByTime(6000)
+        client.updateSnapshot({ position: 0, paused: true })
+        expect(seekIntent()).toBeNull()
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        // Non-vacuous: had the window survived the swap, the emitted value would
+        // be the fresh element's 0 rather than the room's 100.
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].position).toBe(ROOM_POSITION)
       })
     })
 

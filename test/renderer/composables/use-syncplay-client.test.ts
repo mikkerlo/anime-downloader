@@ -1152,6 +1152,48 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     expect(v.currentTime).toBe(300)
   })
 
+  // #278's rewritten frame meets #240's park, as a **characterisation** (#278
+  // review). While a local seek intent is live main substitutes *our* position
+  // for the room's, and this path stores that frame and writes it to whatever
+  // element exists at metadata time — so a mid-session source swap can land our
+  // own position on a fresh element rather than the room's. `seekIntent`'s own
+  // retirements (new player, stale gap) cover the ordinary route into that
+  // state, and the write itself is benign: it puts a fresh element back where
+  // the user actually was.
+  //
+  // **What is not benign, and what #278's plan got wrong.** The plan argued the
+  // "X seeked to …" toast cannot fire for a rewritten frame because it is gated
+  // on `needsSeek`, which is false once the position is ours. That holds only
+  // while the element is *at* our position. On the park path it is at 0, so the
+  // gate opens and the toast names a peer for a move they never made. Fixing it
+  // would need main to tell the renderer the frame was rewritten — a new field
+  // on `SyncplayRemoteState`, which #278 explicitly rules out — so the wart is
+  // pinned here rather than papered over. It is bounded by the intent's own 5 s
+  // TTL and needs a source swap inside it.
+  it('parks a rewritten frame and writes our own position at metadata time (#278)', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // What main emits on a rewritten tick: our position, the room's `setBy` and
+    // `paused`, and `doSeek` provably false.
+    emitRemoteState({ position: 112, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(0)
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    // Our position lands on the fresh element, not the room's.
+    expect(v.currentTime).toBe(112)
+    // …and the misattributed toast, asserted so it goes red the day anyone
+    // teaches the renderer to tell a rewritten frame apart.
+    expect(client.syncplayToast.value).toBe('peer seeked to 1:52')
+  })
+
   // The second bug of the same class: `if (!v) return` at the top of
   // applyRemoteState dropped the state *and* all its bookkeeping.
   it('parks a state that arrives with no element at all', async () => {

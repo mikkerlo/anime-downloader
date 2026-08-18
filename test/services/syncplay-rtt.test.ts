@@ -218,4 +218,33 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
     expect(room!.position).toBe(120)
     expect(remoteStates[0].position).not.toBe(120)
   })
+
+  // Case 6 — the two records take the same half-RTT on *different axes*, and
+  // exactly one each (#279).
+  //
+  // `lastRoomState` is compensated on the **time** axis: its `at` is back-dated
+  // to the server's send, so `projectedRoomPosition()` reads the room where it
+  // is now instead of one one-way delay behind — the anchor the spectator
+  // mirror puts back on the wire, where `Room.getPosition()`'s `min()` used to
+  // re-derive the room from it once a second. `lastRemoteRoomState` is
+  // compensated on the **position** axis, by `compensated` above it, and its
+  // `at` stays the arrival time. Giving either one both is a double
+  // compensation of the value that seeds ffmpeg's `-ss` (#275).
+  it('back-dates lastRoomState’s anchor and leaves lastRemoteRoomState’s alone', () => {
+    handshake()
+    const arrivedAt = Date.now()
+    serverState({ position: 120, paused: false, rtt: 0.4 })
+
+    const internals = client as unknown as {
+      lastRoomState: { position: number; at: number } | null
+      lastRemoteRoomState: { position: number; at: number } | null
+    }
+    // Half of 0.4 s, under MAX_ROOM_ANCHOR_LAG_S so the clamp is not what is
+    // being measured here.
+    expect(arrivedAt - internals.lastRoomState!.at).toBeCloseTo(200, 0)
+    expect(internals.lastRoomState!.position).toBe(120)
+
+    expect(internals.lastRemoteRoomState!.at).toBe(arrivedAt)
+    expect(internals.lastRemoteRoomState!.position).toBeCloseTo(120.2, 2)
+  })
 })

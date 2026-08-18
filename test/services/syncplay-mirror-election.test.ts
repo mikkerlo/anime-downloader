@@ -46,6 +46,7 @@ vi.mock('tls', () => ({
 
 import { SyncplayClient, ADOPT_TOLERANCE_S, ECHO_SEEK_EPSILON_S } from '../../src/main/syncplay'
 import { MinElectionServer } from '../helpers/syncplay-min-election-server'
+import type { MinElectionServerOptions } from '../helpers/syncplay-min-election-server'
 import type { SyncplayRemoteState, SyncplaySnapshot } from '../../src/main/syncplay'
 
 const ROOM_START = 600
@@ -135,6 +136,33 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     server = new MinElectionServer({ position: ROOM_START, paused: false })
   })
 
+  // Re-seat the fixture on a differently-configured server. Only legal before
+  // the first `seat()`, which `beforeEach` has not reached.
+  //
+  // Needed since #279, which is the other half of this mechanism and removes
+  // its trigger on a *reference* server: with the room's arrival stamp
+  // back-dated by one one-way delay, our mirror reports the room's own
+  // projection exactly, the server's `+ fd` exactly cancels its receipt
+  // stamping, and the two compose to a dead heat — a mirror that can no longer
+  // drag the room even when it wins the election. The cases below still need it
+  // to *win*, so they drive the server class where a deficit survives #279:
+  // `forwardDelay: 0`, i.e. a server we have not echoed to yet. That is not a
+  // hypothetical server — the reference derives `_forwardDelay` from *our* echo
+  // of its `latencyCalculation` (`docs/syncplay.md:157`), which is absent for
+  // the first round trips of every session and permanently whenever
+  // `consumeServerLatencyEcho()`'s hold guard drops the pair. `echoHold
+  // Correction: true` is the same server's *other*, independent half, and is
+  // set here because it is the reference's actual behaviour: without it this
+  // client's `serverRtt` reads the broadcast interval rather than the network
+  // RTT and #279's clamp — correctly — refuses to trust it.
+  const rebuildServer = (opts: Partial<MinElectionServerOptions>): void => {
+    server.stop()
+    server = new MinElectionServer({ position: ROOM_START, paused: false, ...opts })
+  }
+
+  /** The server class in which #279's ratchet survives, per `rebuildServer`. */
+  const NO_FORWARD_DELAY = { forwardDelay: 0, echoHoldCorrection: true } as const
+
   afterEach(() => {
     server.stop()
     for (const client of clients) client.disconnect()
@@ -170,6 +198,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       c === host ? trueRoomPosition() : 0
 
   it('reproduces the ratchet: the unadopted joiner wins the election once it announces a file', () => {
+    rebuildServer(NO_FORWARD_DELAY)
     const { host, joiner } = joinAPlayingRoom()
     run(8, unconvergedJoiner(host))
 
@@ -211,6 +240,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   })
 
   it('names nobody as the setter of a mirror-sourced frame', () => {
+    rebuildServer(NO_FORWARD_DELAY)
     const { host, frames } = joinAPlayingRoom()
     run(8, unconvergedJoiner(host))
 
@@ -292,6 +322,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   })
 
   it('recovers the room onto the pauser’s playhead, and every election after it', () => {
+    rebuildServer(NO_FORWARD_DELAY)
     const { host, joiner, frames } = joinAPlayingRoom()
     run(8, unconvergedJoiner(host))
 

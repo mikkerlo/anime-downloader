@@ -377,4 +377,63 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       expect(position()).toBeNull()
     })
   })
+
+  // Characterisation, and deliberately a no-op: #279 back-dates `lastRoomState`'s
+  // arrival stamp by up to `MAX_ROOM_ANCHOR_LAG_S` to stop the spectator mirror
+  // ratcheting the room backwards, and this record — a *different* one — must
+  // not move with it.
+  //
+  // `lastRemoteRoomState` is written from `compensated`, which already carries
+  // `+ serverRtt / 2` on the **position** axis under the same pause gate. Shift
+  // its `at` as well and the same half-RTT is applied twice, on both axes, to
+  // the value that becomes `initialSeek` and reaches ffmpeg's `-ss` (#275) —
+  // and the 15 s freshness cap starts expiring early, from a stamp that is no
+  // longer "when this frame arrived". Anyone later "unifying the anchor" for
+  // tidiness breaks these two cases and nothing else, which is the point of
+  // writing them down.
+  describe('the #279 anchor shift does not reach this record', () => {
+    // Seeds `serverRtt` by echoing a stale `clientLatencyCalculation`: the
+    // client takes `now / 1000 - myTs` inside the `0 < rtt < 5` window.
+    const peerState = (pos: number, paused: boolean, rtt: number): void => {
+      lastTlsSocket!.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            State: {
+              ping: { clientLatencyCalculation: Date.now() / 1000 - rtt },
+              playstate: { position: pos, paused, doSeek: false, setBy: 'mikkerlo' }
+            }
+          }) + '\r\n'
+        )
+      )
+    }
+
+    it('compensates on the position axis once, not on both axes', () => {
+      handshake()
+      // An RTT whose half is well past MAX_ROOM_ANCHOR_LAG_S, so a leaked
+      // anchor shift would be visible as its clamped 0.25 s rather than lost in
+      // rounding.
+      peerState(600, false, 2)
+      expect(serverRttOf()).toBeGreaterThan(1.9)
+
+      // 600 + serverRtt / 2, and nothing else. A doubled compensation reads
+      // ~601.25 here.
+      expect(position()!).toBeCloseTo(600 + serverRttOf() / 2, 3)
+      vi.advanceTimersByTime(4000)
+      expect(position()!).toBeCloseTo(604 + serverRttOf() / 2, 3)
+    })
+
+    it('runs the 15 s freshness cap from arrival, not from a back-dated anchor', () => {
+      handshake()
+      peerState(600, true, 2)
+      // Just inside the cap. A back-dated `at` would have expired this by
+      // MAX_ROOM_ANCHOR_LAG_S already.
+      vi.advanceTimersByTime(14_900)
+      expect(position()).not.toBeNull()
+      vi.advanceTimersByTime(200)
+      expect(position()).toBeNull()
+    })
+
+    const serverRttOf = (): number => (client as unknown as { serverRtt: number }).serverRtt
+  })
 })

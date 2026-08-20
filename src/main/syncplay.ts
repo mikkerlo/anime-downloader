@@ -1744,9 +1744,10 @@ export class SyncplayClient extends EventEmitter {
     // only the position is ours. `doSeek` is provably `false` there, in two
     // steps. A foreign, acked `doSeek` frame retired the intent at the
     // retraction above; and the only other route to this emit — the
-    // `isRoomVoice` branch, which #277 made a strict superset of
-    // `willApplyRemoteState` — cannot coincide with a live intent at all:
-    // isRoomVoice() is gated on `!playbackAdopted` (:1971), sendLocalState()
+    // `isRoomVoice` branch, which #277 added beside the foreign path so that
+    // what reaches the emit (:1663) is a strict superset of
+    // `willApplyRemoteState` (:1539) — cannot coincide with a live intent:
+    // isRoomVoice() is gated on `!playbackAdopted` (:1972), sendLocalState()
     // arms the intent only below the isAdopted() gate (:627, :662), and every
     // writer of `playbackAdopted = false` (:574, :682, :719) nulls the intent
     // beside it. So it is an invariant to assert rather than a value to

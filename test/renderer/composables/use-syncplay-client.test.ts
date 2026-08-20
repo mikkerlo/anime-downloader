@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
 import { defineComponent, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -1952,15 +1954,17 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
   })
 })
 
-// The flag outliving `resetRemoteStateTracking()` is right for exactly one of
-// its three callers. A *reconnect* keeps it — same room, same file, and clearing
-// it would let the refusal re-fire straight over the reconnect notice (pinned
-// above by "does not swallow the reconnect notice that follows it"). The
-// episode/translation watcher and the `idle`/`disconnected` session end are the
-// opposite case: the file or the session has changed under the flag, so it is
-// stale state about something we no longer have open, and leaving it set makes
-// the *next* refusal silent — the next episode of a differently-cut release
-// being exactly where that recurs.
+// `resetRemoteStateTracking()` clears the flag by default, and a *reconnect* is
+// the one caller that opts out with `{ keepRefusalNotice: true }` — same room,
+// same file, and clearing it would let the refusal re-fire straight over the
+// reconnect notice (pinned above by "does not swallow the reconnect notice that
+// follows it"). The two tests below drive callers that take the default: the
+// file or the session has changed under the flag, so it is stale state about
+// something we no longer have open, and leaving it set makes the *next* refusal
+// silent — the next episode of a differently-cut release being exactly where
+// that recurs. They fail if the clear is lifted back out of the function, which
+// is what makes them the behavioural pin on the default rather than on two
+// hand-written assignments.
 describe('useSyncplayClient — the refusal toast re-arms on a new file or session (#281)', () => {
   it('re-arms across an episode change', async () => {
     const v = fakeVideo({
@@ -2007,6 +2011,73 @@ describe('useSyncplayClient — the refusal toast re-arms on a new file or sessi
 
     emitRemoteState({ position: 3000, paused: true, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+})
+
+// The two tests above pin the *behaviour* of the default through the only two
+// callers that take it. What they cannot reach is the property the default
+// exists for: that a caller added tomorrow inherits the clear rather than the
+// reconnect's keep. `resetRemoteStateTracking` is a closure over module-private
+// state and is not exported, so there is no hypothetical fourth caller to
+// construct from a test — driving one would mean re-implementing the function,
+// and such a test would pass no matter what the source did.
+//
+// So this guard reads the source instead, in the same spirit as
+// `theme-tokens.test.ts` and `player-overlay-stacking.test.ts`: it asserts the
+// clear lives *inside* the function and that every call site either takes the
+// default or opts out in the one spelling, with the opt-out count pinned at one
+// and located in the reconnect branch. Lift the clear back out to the call
+// sites, or add a second silent opt-out, and this goes red.
+describe('useSyncplayClient — the refusal clear defaults on, exception is explicit (#281)', () => {
+  const SOURCE = readFileSync(
+    resolve(__dirname, '../../../src/renderer/src/composables/use-syncplay-client.ts'),
+    'utf8'
+  )
+  // Comments name the function and the opt-out verbatim; only real code counts.
+  const CODE = SOURCE.split('\n')
+    .filter((l) => {
+      const t = l.trim()
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+    })
+    .join('\n')
+
+  it('clears the flag inside resetRemoteStateTracking, not at its call sites', () => {
+    const body = CODE.match(
+      /function resetRemoteStateTracking\([^)]*\)[^{]*\{([\s\S]*?)\n {2}\}/
+    )?.[1]
+    expect(body, 'resetRemoteStateTracking declaration not found').toBeTruthy()
+    expect(body).toMatch(/keepRefusalNotice.*refusedToastShown = false/s)
+  })
+
+  it('has every call site take the default or opt out in the one spelling', () => {
+    const callSites = CODE.split('\n')
+      .filter((l) => l.includes('resetRemoteStateTracking(') && !l.includes('function '))
+      .map((l) => l.trim())
+
+    // Non-vacuity: the three known callers must actually be found.
+    expect(callSites.length).toBeGreaterThanOrEqual(3)
+
+    for (const site of callSites) {
+      expect(
+        site === 'resetRemoteStateTracking()' ||
+          site === 'resetRemoteStateTracking({ keepRefusalNotice: true })',
+        `unrecognized call form — a new caller must take the default or opt out explicitly: ${site}`
+      ).toBe(true)
+    }
+
+    const optOuts = callSites.filter((s) => s.includes('keepRefusalNotice'))
+    expect(optOuts, 'exactly one caller may keep the refusal notice').toHaveLength(1)
+  })
+
+  it('places the sole opt-out in the reconnect branch', () => {
+    const start = CODE.indexOf("if (status.state === 'reconnecting') {")
+    const end = CODE.indexOf("} else if (status.state === 'disconnected')", start)
+    expect(start, 'reconnecting branch not found').toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+
+    expect(CODE.slice(start, end)).toContain(
+      'resetRemoteStateTracking({ keepRefusalNotice: true })'
+    )
   })
 })
 

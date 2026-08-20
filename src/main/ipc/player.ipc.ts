@@ -434,6 +434,22 @@ export function register({
       }
 
       const contentStart = await offsetPromise
+      // Re-read at the reply (#280). The check above the spawn closes the
+      // "no ffmpeg is spawned behind a sweep" hole, but the window reopens
+      // below it: the `Ffmpeg.ffprobe` promise and `await offsetPromise` are
+      // two more suspension points, and a cleanup landing in either one DOES
+      // find the session and sweeps it — yet the handler would still return a
+      // full success payload naming a dead, deregistered `sessionId`, leaving
+      // the renderer on a `MediaSource` that never receives a byte. Reading
+      // the generation once more here is what makes the invariant
+      // `docs/player.md` states — *no reply ever describes a swept session* —
+      // true rather than merely aspirational. `cleanupSession` is idempotent
+      // (the sweep already deregistered it), so calling it again is safe and
+      // covers the case where only the sweep's `unlinkSync` half has run.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       console.log(
         `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
       )
@@ -556,6 +572,12 @@ export function register({
       }
 
       const contentStart = await anchorPromise
+      // Same reply-time re-read as the copy handler (#280) — the suspension
+      // points below the spawn reopen the window the check above it closed.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       console.log(
         `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
       )

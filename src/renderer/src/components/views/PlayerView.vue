@@ -495,11 +495,22 @@ let unsubPlayerStream: Unsubscribe | null = null;
 // successor player's sessions, and `startMseSession` — which is not a
 // `window.api` call at all but still leaks an object URL.
 let unmounted = false;
-// Set for the whole of `prepareMkvForPlayback`. Widens the unmount cleanup
+// Held for the whole of `prepareMkvForPlayback`. Widens the unmount cleanup
 // condition: main may have registered (and spawned) a session before the reply
 // that lets us assign `streamSessionId`, in which case the old
 // `remuxedPath || hadActiveStream` test read false and the ffmpeg was orphaned.
-let mkvPrepareInFlight = false;
+//
+// A COUNTER, not a boolean latch. Nothing serialises the three call sites and
+// the MSE open sits behind no blocking overlay (`remuxing` covers only the
+// legacy full-remux path; `mkvBuffering` is a toast), so while `onMounted`'s
+// open is parked in main's `probeMkvForMse` the user can pick another
+// downloaded `.mkv` translation. A boolean's inner `finally` would clear the
+// flag out from under the still-in-flight outer open, and if that inner call
+// set neither `streamSessionId` nor `remuxedPath` (early `{ error }`, failed
+// legacy remux, external-open or cancel arms) a close at that moment read all
+// three terms of the unmount condition false and orphaned the outer ffmpeg —
+// the exact case this term exists for.
+let mkvPreparesInFlight = 0;
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -939,8 +950,8 @@ async function prepareMkvForPlayback(
 
   // The `finally` must wrap the WHOLE body, not just the spawn: there are ten
   // early returns below (two `emit('close')` pairs, the external-open failure,
-  // and the `unmounted` bails) and every one of them has to clear the flag.
-  mkvPrepareInFlight = true;
+  // and the `unmounted` bails) and every one of them has to release the count.
+  mkvPreparesInFlight++;
   try {
     let initialSeek = 0;
     let resumeTarget = 0;
@@ -976,10 +987,23 @@ async function prepareMkvForPlayback(
     // Everything reachable from here without another `await` runs on a dead
     // instance if the close landed inside that call: the transcode spawn, the
     // MSE session, and the blanket `playerCleanupRemux` below. Bailing leaks
-    // nothing — the unmount's own cleanup (widened by `mkvPrepareInFlight`) has
+    // nothing — the unmount's own cleanup (widened by `mkvPreparesInFlight`) has
     // either already killed the session main registered, or main's own
     // generation self-reap converted this reply into `{ error: 'cancelled' }`.
     if (unmounted) return PLAYER_CLOSED_BAIL;
+    // `cancelled` means main reaped this open because a cleanup overtook it
+    // (#280). Unwind — never fall through to the legacy full-file remux below,
+    // which is the one spawn nothing can kill once issued. Without this it is
+    // indistinguishable from a genuine open failure, and the worst available
+    // response to "a cleanup overtook your open" is to issue the
+    // uninterruptible full-file remux. Unreachable on a live component today
+    // only because three separate facts hold it up (the bump comes only from
+    // `player:cleanup-remux`, every live call site awaits that before opening,
+    // and the unmount path returns at the bail above) — none of which this
+    // function owns.
+    if ('error' in streamResult && streamResult.error === 'cancelled') {
+      return { ok: false, error: 'stream cancelled' };
+    }
     // `hevcTranscodeOnPlay === 'always'` forces the transcode (clean re-encoded
     // timeline) even when the browser CAN decode HEVC natively — an escape hatch
     // for HEVC stream-copy seek/sync issues on some platforms (#198). Main
@@ -1077,7 +1101,7 @@ async function prepareMkvForPlayback(
     }
     return { ok: true };
   } finally {
-    mkvPrepareInFlight = false;
+    mkvPreparesInFlight--;
   }
 }
 
@@ -1603,6 +1627,15 @@ async function selectTranslation(tr: {
         tr.id,
         friendlyLabel
       );
+      // The ladder does not stop at `prepareMkvForPlayback`'s boundary (#280).
+      // `playerCleanupRemux()` below is a BLANKET kill of every registered
+      // session plus an `unlinkSync` sweep of the shared tmpDir, and its guard
+      // condition survives unmount: `resetMseState()` clears `streamSessionId`,
+      // but nothing clears `remuxedPath` — `onBeforeUnmount` never calls
+      // `clearRemux()`. So on the legacy-remux population this continuation
+      // would resume on a dead instance and kill a *successor* `PlayerView`'s
+      // session. Bail on the whole continuation, not just the kill.
+      if (unmounted) return;
       if (localResult) {
         activeTranslationId.value = tr.id;
         persistSelectedTranslation(tr.id);
@@ -1652,6 +1685,9 @@ async function selectTranslation(tr: {
 
     // Fall back to streaming
     const result = await window.api.playerGetStreamUrl(tr.id, tr.height);
+    // Same blanket-kill guard as the local-file branch (#280); the window is
+    // wider here because `playerGetStreamUrl` is a network round trip.
+    if (unmounted) return;
     if (!result) {
       switchingTranslation.value = false;
       return;
@@ -1706,6 +1742,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
   // Persist current episode progress before leaving
   await saveProgress(true);
+  // A close landing in that write resumes here on a dead instance, and the
+  // blanket `playerCleanupRemux()` below would kill a successor player's
+  // session (#280) — `remuxedPath` is not cleared at unmount.
+  if (unmounted) return;
   const prevEpisodeInt = currentEpisodeInt.value;
 
   cancelAutoAdvance();
@@ -1790,6 +1830,9 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         resolvedTr.id,
         targetEp.episodeFull
       );
+      // Guards the second blanket `playerCleanupRemux()` in this function
+      // (#280), the one inside the `.mkv` branch below.
+      if (unmounted) return;
       if (localResult) {
         activeFilePath.value = localResult.filePath;
         activeStreamUrl.value = '';
@@ -2170,14 +2213,16 @@ onBeforeUnmount(() => {
   // whether to ask main to tear down the active stream session.
   const hadActiveStream = !!streamSessionId.value;
   msePlayer.resetMseState();
-  // `mkvPrepareInFlight` (#280) covers the window where main has already
+  // `mkvPreparesInFlight` (#280) covers the window where main has already
   // registered and spawned a session but the reply that assigns
   // `streamSessionId` has not landed — without it both other terms read false
-  // and the ffmpeg was orphaned until the next `.mkv` open. Safe as a blanket
-  // kill only because it fires SYNCHRONOUSLY here, before any successor
+  // and the ffmpeg was orphaned until the next `.mkv` open. A count, not a
+  // flag: overlapping opens are reachable (see its declaration), and a boolean
+  // would read false here while an outer open was still in flight. Safe as a
+  // blanket kill only because it fires SYNCHRONOUSLY here, before any successor
   // `PlayerView` can mount: `playerCleanupRemux` kills every registered
   // session, so a post-`await` compensator would SIGKILL the next player's.
-  if (remuxedPath.value || hadActiveStream || mkvPrepareInFlight) {
+  if (remuxedPath.value || hadActiveStream || mkvPreparesInFlight > 0) {
     window.api.playerCleanupRemux();
   }
 });

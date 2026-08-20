@@ -81,6 +81,10 @@ function mkStreamingService(tmpDir: string) {
   const killed: string[] = []
   const spawned: string[] = []
   let probeGate: Promise<void> = Promise.resolve()
+  // The content-start probe is a SECOND suspension point, below the pre-spawn
+  // generation check and above the reply. Gating it separately is what lets a
+  // cleanup land in the window the pre-spawn check does not cover.
+  let offsetGate: Promise<void> = Promise.resolve()
   return {
     handle: {
       tmpDir,
@@ -88,8 +92,14 @@ function mkStreamingService(tmpDir: string) {
         await probeGate
         return mkProbe()
       }),
-      probeCopyTimestampOffset: vi.fn().mockResolvedValue(0),
-      probeSeekAnchor: vi.fn().mockResolvedValue(0),
+      probeCopyTimestampOffset: vi.fn(async () => {
+        await offsetGate
+        return 0
+      }),
+      probeSeekAnchor: vi.fn(async () => {
+        await offsetGate
+        return 0
+      }),
       pickH264Encoder: vi.fn().mockResolvedValue({ name: 'libx264' }),
       registerSession: vi.fn((id: string, s: MseSession) => sessions.set(id, s)),
       getSession: (id: string): MseSession | undefined => sessions.get(id),
@@ -108,6 +118,9 @@ function mkStreamingService(tmpDir: string) {
     spawned,
     gate(p: Promise<void>): void {
       probeGate = p
+    },
+    gateOffset(p: Promise<void>): void {
+      offsetGate = p
     }
   }
 }
@@ -159,7 +172,7 @@ describe('player.ipc — session reaping across a close (#280)', () => {
 
     // Characterization: `player:closed` only releases the download lock. The
     // renderer MUST issue `player:cleanup-remux` itself, which is why the
-    // unmount condition had to be widened with `mkvPrepareInFlight`.
+    // unmount condition had to be widened with `mkvPreparesInFlight`.
     expect(closedFiles).toEqual([mkvPath])
     expect(svc.sessions.size).toBe(1)
     expect(svc.killed).toEqual([])
@@ -195,6 +208,48 @@ describe('player.ipc — session reaping across a close (#280)', () => {
     expect(await open).toEqual({ error: 'cancelled' })
     expect(svc.sessions.size).toBe(0)
     expect(svc.spawned).toEqual([])
+  })
+
+  it('never replies describing a session a cleanup swept BELOW the pre-spawn check', async () => {
+    // The window the pre-spawn self-reap does not cover. Between it and the
+    // reply there are two more suspension points — the `Ffmpeg.ffprobe`
+    // subtitle probe and `await offsetPromise`. A cleanup landing in either one
+    // DOES find the session and sweeps it, but before the reply-time re-read
+    // the handler kept going and returned a full success payload naming a dead,
+    // deregistered `sessionId`; a renderer acting on it would sit on a
+    // `MediaSource` that never receives a byte.
+    //
+    // Fails without the re-read: the payload comes back with a `sessionId` and
+    // no `error`, while `svc.sessions.size` is already 0.
+    let releaseOffset: () => void = () => {}
+    svc.gateOffset(new Promise<void>((res) => (releaseOffset = res)))
+
+    // `initialSeek > 0` is what routes through `probeCopyTimestampOffset`
+    // rather than the `Promise.resolve(0)` short-circuit.
+    const open = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath, 42)
+    await new Promise((r) => setTimeout(r, 5))
+    // The session is registered and spawned by now — the sweep reaches it.
+    expect(svc.spawned).toHaveLength(1)
+    await handlers.get(CHANNELS.PLAYER_CLEANUP_REMUX)!(mkEvent())
+    expect(svc.killed).toHaveLength(1)
+    releaseOffset()
+
+    expect(await open).toEqual({ error: 'cancelled' })
+    expect(svc.sessions.size).toBe(0)
+  })
+
+  it('does the same at the transcode handler reply', async () => {
+    let releaseOffset: () => void = () => {}
+    svc.gateOffset(new Promise<void>((res) => (releaseOffset = res)))
+
+    const open = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE)!(mkEvent(), mkvPath, 42)
+    await new Promise((r) => setTimeout(r, 5))
+    expect(svc.spawned).toHaveLength(1)
+    await handlers.get(CHANNELS.PLAYER_CLEANUP_REMUX)!(mkEvent())
+    releaseOffset()
+
+    expect(await open).toEqual({ error: 'cancelled' })
+    expect(svc.sessions.size).toBe(0)
   })
 
   it('does NOT misfire on a legitimate cleanup-then-open sequence', async () => {

@@ -66,6 +66,21 @@ const PREPARE_HEVC = stripComments(
   slice('async function prepareHevcTranscode', 'async function cancelHevcTranscode')
 )
 
+/**
+ * The ladder does not stop at `prepareMkvForPlayback`'s boundary: these two
+ * continuations issue blanket `playerCleanupRemux()` calls of their own, each
+ * after a suspension point. `cancelHevcTranscode` is deliberately NOT here —
+ * its cleanup is the function's first statement with no preceding await, so
+ * there is no window to guard.
+ */
+const CONTINUATIONS: [string, string][] = [
+  [
+    'selectTranslation',
+    stripComments(slice('async function selectTranslation', 'async function goToEpisode'))
+  ],
+  ['goToEpisode', stripComments(slice('async function goToEpisode', 'function cancelAutoAdvance'))]
+]
+
 const BAIL = 'if (unmounted) return'
 
 /**
@@ -329,7 +344,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // it only fires if a resolver is already installed. A close during the
     // `playerCleanupRemux`/`getSetting` awaits leaves it null, so a prompt
     // opened afterwards is settled by nobody: `prepareMkvForPlayback` never
-    // returns, its `finally` never runs, and `mkvPrepareInFlight` stays latched.
+    // returns, its `finally` never runs, and `mkvPreparesInFlight` stays held.
     const choiceDecl = PREPARE_MKV.indexOf('let choice: HevcPromptChoice')
     const bailAboveChoice = PREPARE_MKV.lastIndexOf(BAIL, choiceDecl)
     const getSetting = PREPARE_MKV.indexOf("window.api.getSetting('hevcTranscodeOnPlay')")
@@ -352,6 +367,33 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     )
   })
 
+  it("unwinds on { error: 'cancelled' } instead of falling through to the legacy remux", () => {
+    // `cancelled` is main's self-reap answer: a cleanup overtook this open. It
+    // is NOT an open failure, and without this arm it is indistinguishable from
+    // one — it would reach the `MSE stream open failed, falling back to legacy
+    // remux` warn and then `runLegacyRemuxIpc`, the one spawn nothing in the
+    // codebase can kill once issued. Answering "a cleanup overtook you" with
+    // the uninterruptible full-file remux is the worst available reaction.
+    //
+    // Unreachable on a live component today only because three separate facts
+    // hold it up — the bump comes only from `player:cleanup-remux`, every live
+    // call site awaits that before opening, and the unmount path returns at the
+    // bail above — none of which `prepareMkvForPlayback` owns, and none of
+    // which `player-ipc-session-cleanup-race.test.ts` pins.
+    const cancelled = PREPARE_MKV.indexOf("streamResult.error === 'cancelled'")
+    const fallbackWarn = PREPARE_MKV.indexOf('MSE stream open failed, falling back to legacy remux')
+    const legacy = PREPARE_MKV.indexOf('runLegacyRemuxIpc(')
+    expect(cancelled).toBeGreaterThan(-1)
+    expect(fallbackWarn).toBeGreaterThan(cancelled)
+    expect(legacy).toBeGreaterThan(cancelled)
+    // It must return, not merely warn — and nothing may await between the test
+    // and the return, or the unwind itself becomes a suspension point.
+    const ret = PREPARE_MKV.indexOf('return', cancelled)
+    expect(ret).toBeGreaterThan(-1)
+    expect(ret).toBeLessThan(fallbackWarn)
+    expect(PREPARE_MKV.slice(cancelled, ret)).not.toContain('await ')
+  })
+
   it('bails with { ok: false } so the callers skip initSubtitles on the way out', () => {
     // `{ ok: true }` would fall through to the `initSubtitles(video)` calls in
     // `selectTranslation` / `goToEpisode` and construct an orphan worker.
@@ -360,18 +402,16 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     )
   })
 
-  it('wraps the whole prepareMkvForPlayback body in a finally that clears mkvPrepareInFlight', () => {
+  it('wraps the whole prepareMkvForPlayback body in a finally that releases mkvPreparesInFlight', () => {
     // Ten early returns — two `emit('close')` pairs, the external-open failure,
-    // and the bails — every one of which has to clear the flag.
-    const set = PREPARE_MKV.indexOf('mkvPrepareInFlight = true')
+    // and the bails — every one of which has to release the count.
+    const set = PREPARE_MKV.indexOf('mkvPreparesInFlight++')
     const tryIdx = PREPARE_MKV.indexOf('try {', set)
     const finallyIdx = PREPARE_MKV.indexOf('} finally {')
     expect(set).toBeGreaterThan(-1)
     expect(tryIdx).toBeGreaterThan(set)
     expect(finallyIdx).toBeGreaterThan(tryIdx)
-    expect(PREPARE_MKV.indexOf('mkvPrepareInFlight = false', finallyIdx)).toBeGreaterThan(
-      finallyIdx
-    )
+    expect(PREPARE_MKV.indexOf('mkvPreparesInFlight--', finallyIdx)).toBeGreaterThan(finallyIdx)
     // The `finally` must be the last thing in the function, i.e. no return sits
     // outside it.
     expect(PREPARE_MKV.indexOf('return', finallyIdx)).toBe(-1)
@@ -387,13 +427,33 @@ describe('#280 (4) — the unmount side of the compensating cleanup', () => {
     expect(save).toBeGreaterThan(flag)
   })
 
-  it('widens the teardown cleanup with mkvPrepareInFlight', () => {
+  it('widens the teardown cleanup with the mkvPreparesInFlight COUNT, not a boolean latch', () => {
     // Covers the window where main registered and spawned a session but the
     // reply that assigns `streamSessionId` has not landed — both other terms
     // read false there and the ffmpeg was orphaned.
+    //
+    // A counter because nothing serialises `prepareMkvForPlayback`'s three call
+    // sites and the MSE open is behind no blocking overlay (`remuxing` covers
+    // only the legacy full-remux path, `mkvBuffering` is a toast). While
+    // `onMounted`'s open is parked in main's `probeMkvForMse` the user can pick
+    // another downloaded `.mkv` translation; the inner call's `finally` would
+    // clear a boolean out from under the still-in-flight outer open, and if it
+    // set neither `streamSessionId` nor `remuxedPath` (early `{ error }`,
+    // failed legacy remux, external-open or cancel arms) a close at that moment
+    // read all three terms false and orphaned the outer ffmpeg.
+    //
+    // Pinned as shape, not as behavior: `prepareMkvForPlayback` is a closure
+    // inside `<script setup>` with no mount harness (see this file's header),
+    // so there is no way to hold two of them open at once from a test. The four
+    // assertions below are chosen to be jointly sufficient — a boolean cannot
+    // satisfy all of them.
     expect(unmountedBody()).toContain(
-      'if (remuxedPath.value || hadActiveStream || mkvPrepareInFlight) {'
+      'if (remuxedPath.value || hadActiveStream || mkvPreparesInFlight > 0) {'
     )
+    // The declaration is a number, and nothing anywhere assigns it a boolean.
+    expect(SOURCE).toContain('let mkvPreparesInFlight = 0;')
+    expect(SOURCE).not.toContain('mkvPreparesInFlight = true')
+    expect(SOURCE).not.toContain('mkvPreparesInFlight = false')
   })
 
   it('keeps the blanket cleanup synchronous in the hook, never after an await', () => {
@@ -471,6 +531,62 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
       }
     }
     expect(guarded).toBe(4)
+  })
+})
+
+describe('#280 (4) — the ladder extends to the continuations own blanket cleanups', () => {
+  // The third slice. `prepareMkvForPlayback` / `prepareHevcTranscode` are not
+  // the only places a resumed continuation can reach `playerCleanupRemux()`:
+  // `selectTranslation` and `goToEpisode` issue four of their own, every one of
+  // them after a suspension point.
+  //
+  // Why it is reachable, and why the `initSubtitles` guards did not cover it:
+  // `resetMseState()` clears `streamSessionId` at unmount, so for the MSE
+  // population the `if (remuxedPath.value || streamSessionId.value)` condition
+  // reads false and nothing fires. `remuxedPath` is NOT cleared — nothing in
+  // `onBeforeUnmount` calls `clearRemux()` — so on the legacy-remux population
+  // the condition is still true on a dead instance and the blanket kill fires
+  // from a resumed continuation, SIGKILLing a successor `PlayerView`'s session
+  // and `unlinkSync`ing its tmpDir out from under it. That is precisely the
+  // post-`await` blanket kill the unmount hook is written to avoid.
+  const CLEANUP_RE = /window\.api\.playerCleanupRemux\(/g
+
+  it('pins the closed set: two blanket cleanups in each continuation', () => {
+    // A fifth site added to either function without a bail fails the rule
+    // below; this assertion is what stops the *inventory* decaying quietly, the
+    // same closed-set discipline the `prepareMkvForPlayback` scan uses.
+    for (const [name, body] of CONTINUATIONS) {
+      expect([...body.matchAll(CLEANUP_RE)], `${name} cleanup site count`).toHaveLength(2)
+    }
+  })
+
+  it.each(CONTINUATIONS)(
+    'guards every blanket playerCleanupRemux in %s against the preceding await',
+    (_name, body) => {
+      // Delete any one of the four bails and this goes red naming its site.
+      for (const site of [...body.matchAll(CLEANUP_RE)]) {
+        const lastAwait = precedingAwait(body, site.index!)
+        const lastBail = body.lastIndexOf(BAIL, site.index!)
+        expect(lastAwait, 'expected a suspension point before the cleanup').toBeGreaterThan(-1)
+        expect(
+          lastBail,
+          `no \`${BAIL}\` between the preceding await and the blanket playerCleanupRemux at ${site.index}`
+        ).toBeGreaterThan(lastAwait)
+      }
+    }
+  )
+
+  it('leaves cancelHevcTranscode out of scope — its cleanup precedes every await', () => {
+    // It looks like the same shape but is not: the cleanup is the function's
+    // FIRST statement, so no continuation can resume into it. Pinning that here
+    // stops a future author "fixing" it by reflex, and fails if an await is
+    // ever introduced above the cleanup.
+    const body = stripComments(slice('async function cancelHevcTranscode', 'function formatTime'))
+    const cleanup = body.indexOf('window.api.playerCleanupRemux(')
+    expect(cleanup).toBeGreaterThan(-1)
+    // `precedingAwait` excludes the cleanup's own `await` — -1 means there is
+    // no earlier suspension point at all, so no continuation resumes into it.
+    expect(precedingAwait(body, cleanup)).toBe(-1)
   })
 })
 

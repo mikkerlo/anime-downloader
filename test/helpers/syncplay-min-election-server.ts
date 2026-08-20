@@ -52,9 +52,10 @@
 // same model (#277 review) — they are the cross-fire and the room-slides-
 // backwards halves of the same election.
 //
-// #279 adds three knobs on top, all additive and all defaulting to what #277
-// merged with: `forwardDelay` (the `fd` in `reported + fd`, so `2d − fd` can be
-// pinned as a *relationship* rather than read off one measurement),
+// #279 adds three knobs on top, all additive and all defaulting to the
+// reference's own behaviour: `forwardDelay` (the `fd` in `reported + fd`, so
+// `2d − fd` can be pinned as a *relationship* rather than read off one
+// measurement),
 // `echoHoldCorrection` (whether the server corrects the echo of our
 // `clientLatencyCalculation` for its own hold, which is what decides whether
 // the client's `serverRtt` is a network RTT or a broadcast interval), and the
@@ -102,15 +103,18 @@ export interface MinElectionServerOptions {
    * our own echo correction exists to spare the server — and it is the sample
    * #279's clamp on `serverRtt / 2` is sized for.
    *
-   * **Default `false`, deliberately, and it is not the reference.** The knob
-   * arrived with #279; the #277 fixture was written and merged against the
-   * uncorrected echo, and one of its cases ("lets the joiner converge and
-   * adopt") sits *on* `ADOPT_TOLERANCE_S` under the correction — it passes at
-   * 2.5 s of residual with the inflated `serverRtt` over-compensating
-   * `handleState()`'s `position + serverRtt / 2`, and reads 3.0000000477 s
-   * without it. Flipping the default would move a merged assertion rather than
-   * add to it, so it stays where #277 left it and #279 opts in explicitly.
-   * Anything measuring what the *client* asserts should pass `true`.
+   * **Default `true`: this shared harness models the reference.** The knob
+   * arrived with #279 defaulting to `false`, because the #277 fixture had been
+   * written and merged against the uncorrected echo and one of its cases ("lets
+   * the joiner converge and adopt") sat *on* `ADOPT_TOLERANCE_S` under the
+   * correction — 3.0000000477 s against a 3 s bound, with the inflated
+   * `serverRtt` over-compensating `handleState()`'s `position + serverRtt / 2`
+   * in the other direction. #279's own anchor back-dating changed that
+   * arithmetic (the same fixture now reads 3.10 s corrected, 3.15 s with the
+   * fix reverted), so the constraint that bought the `false` default is gone
+   * and the default is the reference's rule. A case that wants the verbatim
+   * echo — #279's clamp, which is *sized* for that sample — opts out with
+   * `echoHoldCorrection: false`.
    */
   echoHoldCorrection?: boolean
 }
@@ -206,7 +210,7 @@ export class MinElectionServer {
     this.stateIntervalMs = opts.stateIntervalMs ?? 1000
     this.electionAgeMs = opts.electionAgeMs ?? 1000
     this.forwardDelay = opts.forwardDelay ?? 'avrRtt/2'
-    this.echoHoldCorrection = opts.echoHoldCorrection ?? false
+    this.echoHoldCorrection = opts.echoHoldCorrection ?? true
     this.roomLastUpdate = Date.now()
     this.timer = setInterval(() => this.broadcastPeriodicState(), this.stateIntervalMs)
   }

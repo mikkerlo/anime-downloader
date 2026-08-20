@@ -150,18 +150,18 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // hypothetical server — the reference derives `_forwardDelay` from *our* echo
   // of its `latencyCalculation` (`docs/syncplay.md:157`), which is absent for
   // the first round trips of every session and permanently whenever
-  // `consumeServerLatencyEcho()`'s hold guard drops the pair. `echoHold
-  // Correction: true` is the same server's *other*, independent half, and is
-  // set here because it is the reference's actual behaviour: without it this
-  // client's `serverRtt` reads the broadcast interval rather than the network
-  // RTT and #279's clamp — correctly — refuses to trust it.
+  // `consumeServerLatencyEcho()`'s hold guard drops the pair. The echo's hold
+  // correction — the same server's *other*, independent half — is left at the
+  // harness default, which is `true`, the reference's actual behaviour: without
+  // it this client's `serverRtt` reads the broadcast interval rather than the
+  // network RTT and #279's clamp — correctly — refuses to trust it.
   const rebuildServer = (opts: Partial<MinElectionServerOptions>): void => {
     server.stop()
     server = new MinElectionServer({ position: ROOM_START, paused: false, ...opts })
   }
 
   /** The server class in which #279's ratchet survives, per `rebuildServer`. */
-  const NO_FORWARD_DELAY = { forwardDelay: 0, echoHoldCorrection: true } as const
+  const NO_FORWARD_DELAY = { forwardDelay: 0 } as const
 
   afterEach(() => {
     server.stop()
@@ -256,6 +256,12 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   })
 
   it('keeps getRoomPosition() honest past the 15 s age cap', () => {
+    // On the reference server #279's back-dating lands the seed within tolerance
+    // whether or not the mirror is heard, so this case passes on a mutated
+    // `handleState()` too — it stops being a #277 net (review of #279). The
+    // deficit-bearing server is what makes the refresh observable, so it is
+    // driven here for the same reason the three cases above drive it.
+    rebuildServer(NO_FORWARD_DELAY)
     const { host, joiner } = joinAPlayingRoom()
     run(20, unconvergedJoiner(host))
 

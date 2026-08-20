@@ -72,12 +72,11 @@ const ROOM_START = 600
 const DELAY_MS = 50
 const OPEN = 'Some Anime - 7'
 
-// A server that reports the round trip honestly, which is the reference's own
-// behaviour (`Watcher.getLatencyCalculation()` adds its hold) and the only
-// setting under which this client's `serverRtt` is a network RTT at all. The
-// harness still defaults to the uncorrected echo for #277's sake; see the
-// option's doc comment.
-const HONEST_RTT = { echoHoldCorrection: true } as const
+// Every server below reports the round trip honestly — the reference's own
+// behaviour (`Watcher.getLatencyCalculation()` adds its hold), the harness
+// default, and the only setting under which this client's `serverRtt` is a
+// network RTT at all. The one case that needs the verbatim echo, the clamp,
+// opts out at its own call site.
 
 describe('SyncplayClient — the room ratcheting backwards through our mirror (#279)', () => {
   let server: MinElectionServer
@@ -165,12 +164,7 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
     tlsSockets.length = 0
     clients = []
     t0 = Date.now()
-    server = new MinElectionServer({
-      position: ROOM_START,
-      paused: false,
-      ...HONEST_RTT,
-      ...opts
-    })
+    server = new MinElectionServer({ position: ROOM_START, paused: false, ...opts })
     if (phaseMs > 0) vi.advanceTimersByTime(phaseMs)
     const host = seat('hostuser', delayMs)
     announceFile(host)
@@ -214,7 +208,7 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
     tlsSockets.length = 0
     clients = []
     t0 = Date.now()
-    server = new MinElectionServer({ position: ROOM_START, paused: false, ...HONEST_RTT })
+    server = new MinElectionServer({ position: ROOM_START, paused: false })
   })
 
   afterEach(() => {
@@ -325,7 +319,7 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
       tlsSockets.length = 0
       clients = []
       t0 = Date.now()
-      server = new MinElectionServer({ position: ROOM_START, paused: true, ...HONEST_RTT })
+      server = new MinElectionServer({ position: ROOM_START, paused: true })
       const host = seat('hostuser')
       announceFile(host)
       const ghost = seat('ghostuser')

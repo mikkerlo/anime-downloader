@@ -41,17 +41,17 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   (`test/services/syncplay-mirror-election.test.ts`, #277;
   `test/services/syncplay-mirror-drift.test.ts`, #279).
 
-  Three knobs on top, all added by #279 and all defaulting to what #277 merged
-  with. `forwardDelay` sets the `fd` in `reported + fd` to `'avrRtt/2'` (the
+  Three knobs on top, all added by #279 and all defaulting to the reference's
+  own behaviour. `forwardDelay` sets the `fd` in `reported + fd` to `'avrRtt/2'` (the
   reference's rule), `0`, or a fixed number of seconds — the mirror's deficit is
   `2d − fd` per election, and a single measurement at the reference's own rule
   cannot tell that apart from a bare `d`. `echoHoldCorrection` says whether the
   echo of a client's `clientLatencyCalculation` carries the server's hold
-  correction; the reference's does, and **the default here is `false`** because
-  #277's fixture was written against the uncorrected echo (under which a
-  client's `serverRtt` reads ~1 s rather than the network RTT, which is the
-  sample #279's clamp is sized for). And `wire` is the readout of every outbound
-  playstate stamped at *send*, alongside where the room read at that instant —
+  correction; the reference's does, so **the default here is `true`**, and the
+  one case that wants the uncorrected echo — under which a client's `serverRtt`
+  reads ~1 s rather than the network RTT, which is the sample #279's clamp is
+  sized for — opts out at its own call site. And `wire` is the readout of every
+  outbound playstate stamped at *send*, alongside where the room read at that instant —
   `elections` reports what the server made of a frame one delay after the fact,
   which is not the same quantity.
 - **Integration** (`test/integration/`) — multi-service flows (auto-download

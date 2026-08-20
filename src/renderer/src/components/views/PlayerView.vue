@@ -1142,7 +1142,11 @@ async function prepareHevcTranscode(
   if (unmounted) return PLAYER_CLOSED_BAIL;
   if ('error' in r) {
     msePlayer.setTranscoding(false);
-    return { ok: false, error: r.error };
+    // `cancelled` is main's self-reap, not a decode failure (#280). No
+    // fall-through hazard on this path — unlike the copy path there is nothing
+    // below to fall into — so this is only about not surfacing a bare
+    // `cancelled` in `remuxError`.
+    return { ok: false, error: r.error === 'cancelled' ? 'stream cancelled' : r.error };
   }
   const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(r.mimeType);
   if (!mseOk) {

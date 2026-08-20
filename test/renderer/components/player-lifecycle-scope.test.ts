@@ -394,6 +394,32 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     expect(PREPARE_MKV.slice(cancelled, ret)).not.toContain('await ')
   })
 
+  it("renames 'cancelled' on the transcode path too, so no bare string reaches remuxError", () => {
+    // The transcode handler answers `{ error: 'cancelled' }` as well, from the
+    // reply-time generation re-read in `player:remux-mkv-stream-transcode`.
+    // There is no fall-through hazard on this path — the arm returns and there
+    // is nothing below it to fall into — so this is purely user-facing: every
+    // caller assigns `prep.error` straight to `remuxError.value`, so a bare
+    // `cancelled` would be shown verbatim in the player's error UI where the
+    // copy path deliberately says `stream cancelled`.
+    const arm = PREPARE_HEVC.indexOf("if ('error' in r)")
+    const mseOk = PREPARE_HEVC.indexOf('const mseOk')
+    expect(arm).toBeGreaterThan(-1)
+    expect(mseOk).toBeGreaterThan(arm)
+    const body = PREPARE_HEVC.slice(arm, mseOk)
+    // Reverting to the pass-through turns this red.
+    expect(body).toMatch(/r\.error === 'cancelled' \? 'stream cancelled' : r\.error/)
+    expect(body).not.toMatch(/return \{ ok: false, error: r\.error \}/)
+    // Both paths must surface the SAME string — a rename on one side only is
+    // the regression this pins, so the copy path's literal is read from the
+    // source rather than repeated here.
+    const copyCancelled = PREPARE_MKV.indexOf("streamResult.error === 'cancelled'")
+    const copyReturn = PREPARE_MKV.slice(copyCancelled, PREPARE_MKV.indexOf('}', copyCancelled))
+    const copyString = copyReturn.match(/error: '([^']+)'/)?.[1]
+    expect(copyString).toBeTruthy()
+    expect(body).toContain(`'${copyString}'`)
+  })
+
   it('bails with { ok: false } so the callers skip initSubtitles on the way out', () => {
     // `{ ok: true }` would fall through to the `initSubtitles(video)` calls in
     // `selectTranslation` / `goToEpisode` and construct an orphan worker.

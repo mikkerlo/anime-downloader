@@ -443,9 +443,13 @@ export function register({
       // the renderer on a `MediaSource` that never receives a byte. Reading
       // the generation once more here is what makes the invariant
       // `docs/player.md` states — *no reply ever describes a swept session* —
-      // true rather than merely aspirational. `cleanupSession` is idempotent
-      // (the sweep already deregistered it), so calling it again is safe and
-      // covers the case where only the sweep's `unlinkSync` half has run.
+      // true rather than merely aspirational. The `cleanupSession` call here is
+      // defence in depth, not load-bearing: the generation only moves from
+      // `player:cleanup-remux`, whose bump + sweep + unlink are one synchronous
+      // block, so by the time we read a moved generation this session has
+      // already been deregistered and the call is the `if (!session) return`
+      // no-op. It stays so the `return` is never the only thing standing
+      // between a moved generation and a live registration.
       if (cleanupGeneration !== openedAtGeneration) {
         streamingService.cleanupSession(sessionId)
         return { error: 'cancelled' }

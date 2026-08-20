@@ -1741,10 +1741,16 @@ export class SyncplayClient extends EventEmitter {
     // no flag and no renderer change is needed to say it.
     const emittedSetBy = isRoomVoice ? null : setBy
     // `paused`, `setBy` and `doSeek` pass through unchanged on a rewritten tick:
-    // only the position is ours. `doSeek` is provably `false` there — a `doSeek`
-    // frame that would apply retired the intent at the retraction above, and one
-    // that would not apply never reaches this emit — so it is an invariant to
-    // assert rather than a value to hardcode.
+    // only the position is ours. `doSeek` is provably `false` there, in two
+    // steps. A foreign, acked `doSeek` frame retired the intent at the
+    // retraction above; and the only other route to this emit — the
+    // `isRoomVoice` branch, which #277 made a strict superset of
+    // `willApplyRemoteState` — cannot coincide with a live intent at all:
+    // isRoomVoice() is gated on `!playbackAdopted` (:1971), sendLocalState()
+    // arms the intent only below the isAdopted() gate (:627, :662), and every
+    // writer of `playbackAdopted = false` (:574, :682, :719) nulls the intent
+    // beside it. So it is an invariant to assert rather than a value to
+    // hardcode, and what carries it is adoption rather than the drop guards.
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,

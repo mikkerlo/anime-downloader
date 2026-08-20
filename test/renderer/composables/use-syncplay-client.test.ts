@@ -1885,6 +1885,129 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     emitRemoteState({ position: 3000, paused: true, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
   })
+
+  // The regression the refusal shipped with, and the reason the emit is gated on
+  // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
+  // *also* true at the ordinary end of an episode where every peer holds the
+  // same file: main emits `position + serverRtt / 2` for a playing room
+  // (`src/main/syncplay.ts:1636`), so the last state or two before our own end
+  // already read past `duration`. Nothing is refused that the user can see — the
+  // room is well inside the 3 s tolerance, so no seek was suppressed — and the
+  // message would land in the middle of the 5 s next-episode countdown, on every
+  // episode of a room that is working perfectly.
+  it('stays silent at the natural end of a playing episode', async () => {
+    const v = fakeVideo({
+      currentTime: 1439.6,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 1440.05, paused: false, doSeek: false })
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // …and the `ended` side of the same moment: once we are `ended` the room's
+  // min() over its watchers sits at exactly `duration`, which `>=` catches too.
+  it('stays silent once our own element has ended', async () => {
+    const v = fakeVideo({
+      currentTime: 1440,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // A periodic, not a seek: main's heartbeat sends `doSeek: false`
+    // (`syncplay.ts:2199`), and only a genuine room seek sets the bit.
+    emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // The other half of the gate, so it does not widen into "never explain a
+  // near-duration refusal": a room *seek* to a position past our end is refused
+  // whether or not it is within the tolerance, and a refused seek is exactly
+  // what the message exists to explain.
+  it('still explains a refused room seek that lands inside the tolerance', async () => {
+    const v = fakeVideo({
+      currentTime: 1439.6,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 1440.05, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+})
+
+// The flag outliving `resetRemoteStateTracking()` is right for exactly one of
+// its three callers. A *reconnect* keeps it — same room, same file, and clearing
+// it would let the refusal re-fire straight over the reconnect notice (pinned
+// above by "does not swallow the reconnect notice that follows it"). The
+// episode/translation watcher and the `idle`/`disconnected` session end are the
+// opposite case: the file or the session has changed under the flag, so it is
+// stale state about something we no longer have open, and leaving it set makes
+// the *next* refusal silent — the next episode of a differently-cut release
+// being exactly where that recurs.
+describe('useSyncplayClient — the refusal toast re-arms on a new file or session (#281)', () => {
+  it('re-arms across an episode change', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    deps.activeEpisodeIndex.value = 1
+    await flushPromises()
+    client.syncplayToast.value = ''
+
+    // The same refusal, but about a file the user has only just opened.
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+
+  it('re-arms across a session end', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    // Room A ends, room B begins. Room B must not inherit room A's explanation.
+    client.syncplayStatus.value = { state: 'idle' }
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready' }
+    await flushPromises()
+    client.syncplayToast.value = ''
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
 })
 
 // Live sessions (#220) kept surfacing the same class of bug: the app's own

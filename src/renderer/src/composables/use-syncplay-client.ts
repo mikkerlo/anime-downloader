@@ -213,9 +213,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // last-writer-wins would swallow every other syncplay toast for the whole
   // divergence — the pending-pause pair, the reconnect notice and all
   // `room-event` text. Cleared where a state applies in range, alongside
-  // `remoteStateApplied`, and deliberately nowhere else: clearing it in
-  // `resetRemoteStateTracking()` would let the refusal re-fire straight over the
-  // reconnect notice that follows it.
+  // `remoteStateApplied`, and at the two places the *file* or the *session*
+  // changes — the episode/translation watcher and the `idle`/`disconnected`
+  // branch — where the flag is stale state about a file we no longer have open
+  // and a genuinely new refusal deserves its explanation. The one exclusion is
+  // the *reconnect* specifically: it also runs `resetRemoteStateTracking()`, but
+  // clearing the flag there would let the refusal re-fire straight over the
+  // reconnect notice that follows it. Same room, same file — nothing new to say.
   let refusedToastShown = false
 
   let unsubRemoteState: Unsubscribe | null = null
@@ -618,16 +622,6 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // position past the download frontier is still followed and still stalls on
     // purpose.
     const outOfFile = Number.isFinite(v.duration) && v.duration > 0 && state.position >= v.duration
-    if (!outOfFile) {
-      remoteStateApplied = true
-      refusedToastShown = false
-    } else if (!refusedToastShown) {
-      // Ahead of the no-op early-out below: a refused position whose paused flag
-      // already matches moves nothing, but the user still has to be told why the
-      // room and their playhead have parted company.
-      refusedToastShown = true
-      showSyncplayToast(OUT_OF_FILE_TOAST)
-    }
     const diff = Math.abs(v.currentTime - state.position)
     // Folded into `needsSeek` rather than applied below it, so all five
     // seek-keyed effects fall away together: the no-op early-out, the
@@ -636,7 +630,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // otherwise announce a seek to a timestamp that does not exist in our file.
     // `needsPlayPause` is computed independently, so a room *pause* carried on
     // an out-of-file state is still honored.
-    const needsSeek = !outOfFile && (state.doSeek || diff > 3.0)
+    const wouldSeek = state.doSeek || diff > 3.0
+    if (!outOfFile) {
+      remoteStateApplied = true
+      refusedToastShown = false
+    } else if (wouldSeek && !refusedToastShown) {
+      // Ahead of the no-op early-out below: a refused position whose paused flag
+      // already matches moves nothing, but the user still has to be told why the
+      // room and their playhead have parted company. Gated on `wouldSeek` and
+      // not on `outOfFile` alone, because a position inside the 3 s tolerance
+      // suppressed no seek — which is the ordinary end of the file, where the
+      // room's own position crosses our duration on identical files.
+      refusedToastShown = true
+      showSyncplayToast(OUT_OF_FILE_TOAST)
+    }
+    const needsSeek = !outOfFile && wouldSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     const needsPlayPause = effectivePaused !== v.paused
 
@@ -777,6 +785,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // above), and a hold surviving the switch would sit on that resume until it
     // expired into a failure toast for a pause the user made an episode ago.
     clearPendingUserPause()
+    // A new file is a new state of affairs: the flag is a receipt for a refusal
+    // we already explained about the *previous* episode, and left set it would
+    // silently swallow the explanation for a refusal on this one — the next
+    // episode of a differently-cut release being exactly where that recurs.
+    refusedToastShown = false
     resetRemoteStateTracking()
     pushSyncplayFile()
   })
@@ -1010,6 +1023,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       intendedPaused = null
       appliedPaused = null
       appliedSeekPosition = null
+      // …and room B must not inherit room A's *explanation* either: an identical
+      // refusal in the next session is news to the user, and a flag left set
+      // from the dead one would silently swallow it. Unlike the `reconnecting`
+      // branch below, which keeps it — same room, same file, nothing new to say.
+      refusedToastShown = false
       // Room B must not inherit room A's pending pause — nor its 8 s timer,
       // which would toast a failure into a session that never held anything.
       clearPendingUserPause()

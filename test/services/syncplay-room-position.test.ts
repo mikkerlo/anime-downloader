@@ -605,5 +605,57 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       vi.advanceTimersByTime(20000)
       expect(position()).toBeNull()
     })
+
+    // A refusal leaves the state **unkeyed**, not nulled, so a later announce
+    // that does match the roster may still adopt it inside the age cap — open
+    // the wrong episode first, then the one the room is on. Without this the
+    // refusal arm is free to null the field instead and the suite stays green.
+    it('adopts a refused state on a later announce that does match', () => {
+      handshake()
+      roster({
+        mikkerlo: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 1, episodeInt: '2' } } }
+        }
+      })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()).toBeNull()
+
+      file('Some Anime - 2')
+      expect(position('Some Anime - 2')!).toBeCloseTo(600, 1)
+    })
+
+    // The peer scan excludes *us*, and that is not cosmetic: a refusal sets
+    // `currentFile`, the server echoes our own `Set: {file}` back into the
+    // roster, and our own entry then publishes meta matching what we announce.
+    // Without the self-exclusion the very next re-push — PlayerView's
+    // duration-known one — finds a "peer" agreeing with us and adopts the state
+    // the gate just refused.
+    it('does not let our own roster entry confirm a refusal on the next re-push', () => {
+      handshake()
+      roster({
+        mikkerlo: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 999, episodeInt: '7' } } }
+        }
+      })
+      serverState(600, false, 'mikkerlo')
+      file(OPEN)
+      expect(position()).toBeNull()
+
+      roster({
+        me: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 1, episodeInt: '1' } } }
+        },
+        mikkerlo: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 999, episodeInt: '7' } } }
+        }
+      })
+      file(OPEN, false)
+      expect(position()).toBeNull()
+    })
   })
 })

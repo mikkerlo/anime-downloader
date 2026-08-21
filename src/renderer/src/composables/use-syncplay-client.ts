@@ -607,11 +607,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function applyRemoteStateToElement(
     state: SyncplayRemoteState,
     v: HTMLVideoElement,
-    deferred = false
+    // Required, not defaulted: both call sites pass it, so a default would only
+    // ever be exercised by a *third* one — and a second deferred unpark site
+    // added later would silently take `false` ("immediate"), which is exactly
+    // the misattribution the guard below removes. Required makes that caller a
+    // typecheck error instead of a wrong toast (#289).
+    deferred: boolean
   ): void {
     // Read before the `remoteStateApplied = true` below, which this same call
-    // performs: "has the room ever placed *this* element" is only answerable
-    // from the value on entry. See the seek-toast guard for what it decides.
+    // performs: "has the room placed us yet, on this socket" is only answerable
+    // from the value on entry. Per socket, not per element — `remoteStateApplied`
+    // resets on `reconnecting` too. See the seek-toast guard for what it decides.
     const firstApply = !remoteStateApplied
     // A room position past the end of *our* file is refused, not clamped (#281).
     // Clamping is measurably a no-op — Chromium's seek algorithm already clamps
@@ -684,10 +690,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // *deferred* — parked below `HAVE_METADATA` and written from
     // `onVideoLoadedMetadata()` — starts from an element at 0, so `diff` is the
     // room's whole position and `needsSeek` is true for any room past 3 s. So
-    // does the *first* apply on an element the room has not placed yet, which
-    // takes the immediate path when we join with the file already loaded. In
-    // both, we did not move: we arrived. The toast would name a peer for a
-    // placement, at whatever position the room happened to be at.
+    // does the *first* apply of a socket, which takes the immediate path when we
+    // join with the file already loaded. In both, we did not move: we arrived.
+    // The toast would name a peer for a placement, at whatever position the room
+    // happened to be at.
     //
     // Neither test subsumes the other, so the guard is their disjunction rather
     // than either alone. `remoteStateApplied` is not per-element — it is reset
@@ -697,6 +703,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // element with no episode or translation change, dropping it to
     // `readyState 0` and parking states with the flag still set. That mid-session
     // source swap is a placement `firstApply` cannot see and `deferred` can.
+    //
+    // `firstApply` is therefore per-*socket*, not per-element, and a **reconnect
+    // is a socket ending** — which is the same reason the flag resets there at
+    // all. So the first state after the socket returns is silent even though the
+    // element was never touched: still loaded, still at the user's real position.
+    // That is the right answer, not a leak. Across the gap we cannot tell "a peer
+    // scrubbed" from "the room simply played on while we were down" — main's own
+    // `doSeek` is one-shot, so a peer's scrub during the outage reaches us as a
+    // plain heartbeat re-sending the position — and naming a peer for the second
+    // is the same class of lie this guard removes. One frame of silence, and a
+    // peer's *next* real move toasts normally.
     //
     // `state.doSeek` re-admits the toast on both paths, and is why this is a
     // suppression of *attribution* and not of the message: a `doSeek` frame is

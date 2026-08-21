@@ -1576,6 +1576,62 @@ describe('useSyncplayClient — placement is not a peer’s move (#289)', () => 
     expect(client.syncplayToast.value).toBe('')
   })
 
+  // The third placement shape, and the one the element half cannot see at all:
+  // the element is untouched across it — still loaded, still at the user's real
+  // position — and only the *socket* changed. `resetRemoteStateTracking({
+  // keepRefusalNotice: true })` runs on `reconnecting` and clears
+  // `remoteStateApplied`, so the first state after the socket returns is a
+  // `firstApply` and is silent. That is the rule being per-socket rather than
+  // per-element, and it is deliberate: across the gap we cannot tell "a peer
+  // scrubbed" from "the room simply played on while we were down", and main's
+  // `doSeek` is one-shot — the next heartbeat re-sends the position with
+  // `doSeek: false` — so a peer's scrub during the outage really does reach us
+  // as a plain frame. Naming a peer for the far more common second case is the
+  // same class of lie #289 removes. On `main` this frame says
+  // `peer seeked to 15:00`.
+  it('does not name a peer for the first placement after a reconnect', async () => {
+    const v = fakeVideo({
+      currentTime: 500,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // An ordinary in-sync apply first: this is what arms `remoteStateApplied`,
+    // so the reset on `reconnecting` below has something to clear.
+    emitRemoteState({ position: 500, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+    expect(client.syncplayToast.value).toBe('')
+
+    client.syncplayStatus.value = { state: 'reconnecting' }
+    await flushPromises()
+    expect(client.hasRemoteStateApplied()).toBe(false)
+    client.syncplayStatus.value = { state: 'ready' }
+    await flushPromises()
+    // The reconnect notice itself is not what this case is about; drop it so the
+    // assertion below reads only what the apply said.
+    client.syncplayToast.value = ''
+
+    // The room moved on while we were down. The element never left
+    // HAVE_METADATA and is still exactly where the user left it.
+    expect(v.readyState).toBe(1)
+    expect(v.currentTime).toBe(500)
+    emitRemoteState({ position: 900, paused: true, doSeek: false, setBy: 'peer' })
+
+    // The write still happens — we follow the room…
+    expect(v.currentTime).toBe(900)
+    // …and nobody is named for a 400 s gap we cannot attribute.
+    expect(client.syncplayToast.value).toBe('')
+
+    // Anti-vacuity, and the cost of the rule stated exactly: one frame. The
+    // socket has now placed us once, so the peer's next real move speaks.
+    emitRemoteState({ position: 1200, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(1200)
+    expect(client.syncplayToast.value).toBe('peer seeked to 20:00')
+  })
+
   // The discriminating anti-vacuity case. The obvious one — a live element at
   // HAVE_METADATA taking a `doSeek: true` frame — survives *every* candidate
   // guard, including a blanket suppression of the deferred path, so it proves

@@ -410,6 +410,10 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
 
     it('compensates on the position axis once, not on both axes', () => {
       handshake()
+      // Explicit, and not redundant: `handshake()` pushes the file here but
+      // stops doing so under #276, and `position()` answers `null` for a file
+      // main was never told about. Keep the push at the case, not in the helper.
+      file(OPEN)
       // An RTT whose half is well past MAX_ROOM_ANCHOR_LAG_S, so a leaked
       // anchor shift would be visible as its clamped 0.25 s rather than lost in
       // rounding.
@@ -425,6 +429,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
 
     it('runs the 15 s freshness cap from arrival, not from a back-dated anchor', () => {
       handshake()
+      file(OPEN) // As above — the cap can't be exercised against an unannounced file.
       peerState(600, true, 2)
       // Just inside the cap. A back-dated `at` would have expired this by
       // MAX_ROOM_ANCHOR_LAG_S already.

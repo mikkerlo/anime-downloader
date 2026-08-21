@@ -38,6 +38,11 @@ const PENDING_PAUSE_MAX_MS = 8000
 const PENDING_PAUSE_TOAST = 'Pausing once synced with the room…'
 const PENDING_PAUSE_FAILED_TOAST = "The room kept playing — your pause didn't stick"
 
+// Shown when we refuse a room position that lies past the end of our own file
+// (#281). It describes a state of affairs rather than an event, and it is
+// emitted on the *transition into* that state only — see `refusedToastShown`.
+const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
+
 export type SyncplayDeps = {
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
@@ -201,6 +206,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // resetRemoteStateTracking.
   let pendingRemoteState: SyncplayRemoteState | null = null
   let remoteStateApplied = false
+  // The out-of-file refusal is emitted on the *transition into* the refusal, not
+  // per refused state (#281). `showSyncplayToast` is not a debounce: it assigns
+  // the single toast slot and *re-arms* the 3500 ms clear timer on every call,
+  // so a refusal emitted per inbound state at 1 Hz would never expire, and
+  // last-writer-wins would swallow every other syncplay toast for the whole
+  // divergence — the pending-pause pair, the reconnect notice and all
+  // `room-event` text. Cleared in two places: where a state applies in range,
+  // alongside `remoteStateApplied`, and — by default — inside
+  // `resetRemoteStateTracking()`, which every file, session and socket change
+  // runs. The default is the clear rather than the keep on purpose: the flag is
+  // a receipt for a refusal already explained about a file we may no longer have
+  // open, so a caller that forgets to think about it fails towards a redundant
+  // toast instead of towards an explanation the user never sees. The single
+  // opt-out is `resetRemoteStateTracking({ keepRefusalNotice: true })` on the
+  // *reconnect* branch: same room, same file, nothing new to say, and clearing
+  // it there would let the refusal re-fire straight over the reconnect notice
+  // that follows it. Any second opt-out needs the same argument (and will fail
+  // the guard test that counts them).
+  let refusedToastShown = false
 
   let unsubRemoteState: Unsubscribe | null = null
   let unsubRoomEvent: Unsubscribe | null = null
@@ -581,9 +605,50 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   //   adopting it while the element still sits at 0 would report an intent we
   //   have not enacted.
   function applyRemoteStateToElement(state: SyncplayRemoteState, v: HTMLVideoElement): void {
-    remoteStateApplied = true
+    // A room position past the end of *our* file is refused, not clamped (#281).
+    // Clamping is measurably a no-op — Chromium's seek algorithm already clamps
+    // to the seekable end, so a pre-clamped write and the raw write land on the
+    // identical final frame — and clamping what the *room* initiates is a
+    // documented non-goal (docs/syncplay.md, "Apply Rule"): a shortened position
+    // we report back is an unsignalled room seek repeated at 1 Hz.
+    //
+    // Read at write time, from the element, per docs/syncplay.md's rule for the
+    // element half. On the MSE path `v.duration` is `ms.duration` — main's
+    // `probe.duration`, the same quantity #275 bounds the spawn against — and
+    // after a mid-file respawn `endOfStream()` re-derives it from the buffered
+    // ranges, which is `<=` the probe's and so can only refuse a position we
+    // could not have reached anyway.
+    //
+    // Fail-open on a duration we do not have: a moov-at-end MP4 reports
+    // `NaN`/`Infinity` until it is complete, and refusing on an unknown duration
+    // would refuse every legitimate position on such a file. A growing `.part`
+    // is *not* this case — it reports the finished container's duration, so a
+    // position past the download frontier is still followed and still stalls on
+    // purpose.
+    const outOfFile = Number.isFinite(v.duration) && v.duration > 0 && state.position >= v.duration
     const diff = Math.abs(v.currentTime - state.position)
-    const needsSeek = state.doSeek || diff > 3.0
+    // Folded into `needsSeek` rather than applied below it, so all five
+    // seek-keyed effects fall away together: the no-op early-out, the
+    // `suppressNextLocalEventUntil` arming, the `appliedSeekPosition` echo
+    // guard, the write itself and the "X seeked to …" toast — which would
+    // otherwise announce a seek to a timestamp that does not exist in our file.
+    // `needsPlayPause` is computed independently, so a room *pause* carried on
+    // an out-of-file state is still honored.
+    const wouldSeek = state.doSeek || diff > 3.0
+    if (!outOfFile) {
+      remoteStateApplied = true
+      refusedToastShown = false
+    } else if (wouldSeek && !refusedToastShown) {
+      // Ahead of the no-op early-out below: a refused position whose paused flag
+      // already matches moves nothing, but the user still has to be told why the
+      // room and their playhead have parted company. Gated on `wouldSeek` and
+      // not on `outOfFile` alone, because a position inside the 3 s tolerance
+      // suppressed no seek — which is the ordinary end of the file, where the
+      // room's own position crosses our duration on identical files.
+      refusedToastShown = true
+      showSyncplayToast(OUT_OF_FILE_TOAST)
+    }
+    const needsSeek = !outOfFile && wouldSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     const needsPlayPause = effectivePaused !== v.paused
 
@@ -696,9 +761,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // latched flag would eat the user's saved position on every later episode
   // open, forever. Resetting inside a live room costs at most a sub-second flash
   // at the saved position before the next 1 Hz state seeks us to the room.
-  function resetRemoteStateTracking(): void {
+  // `refusedToastShown` is cleared here too, by default and deliberately: every
+  // caller of this function is a point where the file, the room or the socket
+  // has changed under the flag, and a stale receipt makes the *next* refusal
+  // silent. Defaulting to the clear means a caller added later fails towards a
+  // redundant toast rather than towards an explanation the user never sees —
+  // silence being the strictly worse failure, since it leaves the room and the
+  // playhead sitting apart with no reason given. `keepRefusalNotice` is the one
+  // documented exception (#281); see the reconnect branch for why it opts out.
+  function resetRemoteStateTracking(opts: { keepRefusalNotice?: boolean } = {}): void {
     pendingRemoteState = null
     remoteStateApplied = false
+    if (!opts.keepRefusalNotice) refusedToastShown = false
   }
 
   // Read-only view of the tracking above. Note what it does *not* promise: a
@@ -724,6 +798,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // above), and a hold surviving the switch would sit on that resume until it
     // expired into a failure toast for a pause the user made an episode ago.
     clearPendingUserPause()
+    // A new file is a new state of affairs, so the refusal receipt must not
+    // survive it — left set it would silently swallow the explanation for a
+    // refusal on *this* episode, the next episode of a differently-cut release
+    // being exactly where that recurs. That is the default of the reset below,
+    // not something this call site has to remember.
     resetRemoteStateTracking()
     pushSyncplayFile()
   })
@@ -962,6 +1041,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       clearPendingUserPause()
       suppressNextLocalEventUntil = 0
       lastSnapshotPushAt = 0
+      // Takes room A's refusal receipt with it, by this function's default: an
+      // identical refusal in room B is news to the user, and a flag inherited
+      // from the dead session would silently swallow it. The `reconnecting`
+      // branch below is the one caller that opts out of that.
       resetRemoteStateTracking()
       if (syncplayWaitingTimer) {
         clearTimeout(syncplayWaitingTimer)
@@ -982,7 +1065,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // tension: a reconnect keeps what the *user* wants and drops what the
       // *room* told us, exactly as main keeps `roomUsers`/`ownIsReady` through
       // `resetTransportState()` while `tearDown()` clears them (#227, #240).
-      resetRemoteStateTracking()
+      //
+      // `keepRefusalNotice` is the sole opt-out from that function's default
+      // clear, and belongs to this branch alone: it is the same room and the
+      // same file on the other side of the socket, so the refusal is not news —
+      // and clearing it here would let the very next state re-fire the refusal
+      // straight over the reconnect notice on the line below, which is the more
+      // useful of the two messages while the socket is down (#281).
+      resetRemoteStateTracking({ keepRefusalNotice: true })
       showSyncplayToast('Reconnecting to Syncplay server…', 8000)
     } else if (status.state === 'disconnected') {
       showSyncplayToast(

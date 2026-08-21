@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
 import { defineComponent, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -166,6 +168,18 @@ async function mountWithRemoteState(
 // 1.5s-window blocks with it. The deferral tests pass `readyState: 0`
 // explicitly — a real happy-dom <video> is no help there either, since its
 // readyState is pinned at 0 and silently ignores assignment.
+//
+// `currentTime` is an accessor that clamps the written value to `[0, duration]`
+// the way Chromium's seek algorithm clamps to the seekable range (#281). Without
+// it a write past the end of the file is indistinguishable from a write inside
+// it, and the out-of-file cases below would all read back the raw value and pass
+// on `main`. `rawCurrentTimeWrites` keeps the unclamped value for the cases that
+// need to separate "our code wrote X" from "the element landed on X". The clamp
+// is live against `duration`, so a fake given a longer duration accepts a longer
+// write — which is what makes the growing-`.part` case at "writes a position
+// past the download frontier unclamped" still legible.
+const rawCurrentTimeWrites = new WeakMap<object, number[]>()
+
 function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement {
   const v: Record<string, unknown> = {
     currentTime: 0,
@@ -176,6 +190,20 @@ function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement 
     pause: vi.fn(),
     ...overrides
   }
+  let position = Number(v.currentTime) || 0
+  const raw: number[] = []
+  rawCurrentTimeWrites.set(v, raw)
+  Object.defineProperty(v, 'currentTime', {
+    configurable: true,
+    enumerable: true,
+    get: () => position,
+    set: (t: number) => {
+      raw.push(t)
+      const d = Number(v.duration)
+      const end = Number.isFinite(d) && d > 0 ? d : Infinity
+      position = Math.min(Math.max(0, t), end)
+    }
+  })
   return v as unknown as HTMLVideoElement
 }
 
@@ -1309,11 +1337,15 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
   // reporting a frontier-shortened position is an unsignalled room seek that
   // drags every peer back — at 1 Hz, through the snapshot heartbeat.
   //
-  // Coverage caveats, twice over. (a) `fakeVideo.currentTime` is a plain
-  // property, so this proves only that *our code* writes the room's position
-  // verbatim. That the *element* does not clamp it on a growing `.part` rests on
-  // the `seekable` span the protocol handler advertises (full `totalBytes`
-  // denominator + tail stream), and is covered by manual scenario (a) alone.
+  // Coverage caveats, twice over. (a) `fakeVideo.currentTime` clamps to
+  // `[0, duration]` (#281), so what the element does with a write inside the
+  // file *is* modelled — but the `duration` it clamps against is the finished
+  // container's, which is the whole point of this case: a growing `.part`
+  // reports the full duration in its header, so 2400 is inside the file even
+  // with ~2 minutes on disk. That the element does not clamp to the *download
+  // frontier* rests on the `seekable` span the protocol handler advertises (full
+  // `totalBytes` denominator + tail stream), and is covered by manual scenario
+  // (a) alone — the fake has no frontier of its own to clamp to.
   // (b) What it pins is a clamp applied *inside* `applyRemoteStateToElement`. It
   // is not a proof against every reintroduction: bringing the clamp back the way
   // #240 originally specified — an optional `clampSeekTarget` on `SyncplayDeps` —
@@ -1324,9 +1356,15 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     const sendLocalState = vi.fn()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
-    // A `.part` with ~2 minutes on disk; the room is 40 minutes in.
+    // A `.part` with ~2 minutes on disk; the room is 40 minutes in. `duration`
+    // is the **finished** file's (45 minutes), because that is what the
+    // container header of a growing `.part` already reports — the helper's 1440
+    // default described a 24-minute episode and contradicted this scenario's own
+    // comment, which made the case read as an out-of-file position rather than
+    // the past-the-frontier one it is about (#281).
     const v = fakeVideo({
       currentTime: 0,
+      duration: 2700,
       paused: true,
       readyState: 1
     } as Partial<HTMLVideoElement>)
@@ -1512,6 +1550,534 @@ describe('useSyncplayClient — hasRemoteStateApplied (#240)', () => {
     await flushPromises()
 
     expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+})
+
+// #281. Peers in a room need not hold the same file — a different release, a
+// re-encode, a different cut — so the room's single shared position can land
+// past the end of *ours*. Following it parks the playhead on the final frame
+// (Chromium clamps the seek to the seekable end, which is why a clamp of our
+// own is a measured no-op), spawns an `-ss` at the duration, reaches `ended`
+// and auto-advances us to the next episode — while the toast announces a seek
+// to a timestamp that does not exist in our file. The rule is to refuse the
+// position, not to clamp it: `docs/syncplay.md`'s "Apply Rule" forbids clamping
+// what the *room* initiates, because a shortened position we report back is an
+// unsignalled room seek repeated at 1 Hz.
+const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
+
+describe('useSyncplayClient — a room position past the end of our file (#281)', () => {
+  // The immediate apply. On `main` the raw write is 3000, the element clamps it
+  // to `duration` and we sit on the last frame of a 24-minute episode.
+  it('refuses a position past our duration instead of parking on the last frame', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true, setBy: 'peer' })
+
+    // The symptom first, and it is the assertion the clamping setter exists for:
+    // on `main` the element lands on `duration` — the last frame — which is what
+    // spawns the `-ss` at the end, reaches `ended` and auto-advances. Against a
+    // plain `currentTime` property the read-back would be a harmless-looking
+    // 3000 and this would pass while the bug was fully present.
+    expect(v.currentTime).not.toBe(1440)
+    expect(v.currentTime).toBe(0)
+    // Not merely clamped-and-discarded: nothing was written at all, so the
+    // echo-guard arming and the suppression window never fire either.
+    expect(rawCurrentTimeWrites.get(v as unknown as object)).toEqual([])
+  })
+
+  // The primary case, not an extra: joining a room already parked past our end
+  // is the shape that reaches the deferral at all, because the element is at
+  // HAVE_NOTHING while the room's 1 Hz state is already arriving. The unpark
+  // path runs the identical function, so it carried the identical bug.
+  it('refuses it on the unpark path too, not just the immediate one', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true, setBy: 'peer' })
+    expect(v.currentTime).toBe(0)
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(0)
+    expect(rawCurrentTimeWrites.get(v as unknown as object)).toEqual([])
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  // The phantom toast: `"peer seeked to 50:00"` on a 24-minute episode. It goes
+  // away by construction, because the toast keys off the same `needsSeek` the
+  // refusal folds into — and the refusal takes its place rather than sitting
+  // beside it.
+  it('replaces the phantom seek toast with the refusal', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+    expect(client.syncplayToast.value).not.toMatch(/seeked to/)
+  })
+
+  // Q2. `roomOwnsPlayhead()` reads this to cancel the user's saved-position
+  // resume, and the rule it encodes is "something is going to move the playhead
+  // to the room's position". A refusal is the statement that nothing will, so
+  // the saved position has to win — otherwise, composed with #275's spawn
+  // bound, the user sits at 0 with no resume for the whole episode.
+  it('does not count a refused state as the room having told us where it is', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true })
+
+    expect(client.hasRemoteStateApplied()).toBe(false)
+  })
+
+  // …and it stays a latch: an earlier in-range state that set the flag is not
+  // un-set by a later refusal. The flag means "the room has told us where it
+  // is", and it has.
+  it('leaves an earlier in-range apply latched', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 600, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+  })
+
+  // The control: the refusal must be the loosest rule that fixes the bug, so an
+  // ordinary in-file position is untouched.
+  it('still follows a legitimate in-file position', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 600, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(v.currentTime).toBe(600)
+    expect(client.syncplayToast.value).toBe('peer seeked to 10:00')
+  })
+
+  // Q5's independence: the refusal is folded into `needsSeek`, and
+  // `needsPlayPause` is computed separately — so a room that pauses while its
+  // position is out of our file still pauses us. Refusing to go somewhere is
+  // not refusing to stop.
+  it('still honors a room pause carried on an out-of-file state', async () => {
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(v.pause).toHaveBeenCalled()
+    expect(v.currentTime).toBe(300)
+  })
+
+  // Fail-open, matching #275's renderer copy. A moov-at-end MP4 reports
+  // `NaN`/`Infinity` for `duration` until it is complete; refusing on a duration
+  // we do not have would refuse every legitimate position on such a file.
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['0', 0]
+  ])('follows the room when duration is %s (fail-open)', async (_label, duration) => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: true })
+
+    expect(v.currentTime).toBe(3000)
+  })
+
+  // The boundary. `>= duration` exactly: unlike #275, whose quantity has already
+  // had the 1 s pre-roll subtracted, `state.position` is the room's position raw
+  // and there is no window to accept.
+  it('refuses exactly at the duration and follows just below it', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 1439.9, paused: true, doSeek: true })
+    expect(v.currentTime).toBe(1439.9)
+
+    v.currentTime = 0
+    emitRemoteState({ position: 1440, paused: true, doSeek: true })
+    expect(v.currentTime).toBe(0)
+  })
+})
+
+// `showSyncplayToast` is not a debounce — it assigns the single toast slot and
+// *re-arms* its 3500 ms clear timer on every call. So a refusal emitted per
+// inbound state at 1 Hz would never expire, and last-writer-wins would swallow
+// every other syncplay toast for the whole divergence: the pending-pause pair,
+// the reconnect notice and all `room-event` text. The refusal is therefore
+// emitted on the transition *into* the refusal only.
+describe('useSyncplayClient — the refusal toast fires on the transition only (#281)', () => {
+  it('emits once across a 1 Hz stream of refused states', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    // Four more seconds of the room's periodic. Under a re-armed timer the
+    // message would still be on screen at the end of this; under a
+    // transition-only emit it expires on schedule and stays gone.
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersByTime(1000)
+      emitRemoteState({ position: 3000 + i, paused: true, doSeek: false })
+    }
+    expect(client.syncplayToast.value).toBe('')
+
+    vi.advanceTimersByTime(4000)
+    emitRemoteState({ position: 3010, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  it('does not swallow the reconnect notice that follows it', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    client.syncplayStatus.value = { state: 'reconnecting' }
+    await flushPromises()
+    expect(client.syncplayToast.value).toBe('Reconnecting to Syncplay server…')
+
+    // The room is still out of our file when the states resume. The reconnect
+    // notice must survive them — this is the assertion that fails if the flag
+    // is cleared in `resetRemoteStateTracking()`, which the reconnect path runs.
+    client.syncplayStatus.value = { state: 'ready' }
+    await flushPromises()
+    emitRemoteState({ position: 3001, paused: true, doSeek: false })
+    emitRemoteState({ position: 3002, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe('Reconnecting to Syncplay server…')
+  })
+
+  it('does not swallow a room event that follows it', async () => {
+    let emitRoomEvent: ((e: SyncplayRoomEvent) => void) | null = null
+    setApi({
+      onSyncplayRoomEvent: (fn: (e: SyncplayRoomEvent) => void) => {
+        emitRoomEvent = fn
+        return () => {}
+      }
+    })
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+    ;(emitRoomEvent as unknown as (e: SyncplayRoomEvent) => void)({
+      level: 'info',
+      text: 'peer joined'
+    })
+    expect(client.syncplayToast.value).toBe('peer joined')
+
+    emitRemoteState({ position: 3001, paused: true, doSeek: false })
+    emitRemoteState({ position: 3002, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe('peer joined')
+  })
+
+  // The flag is cleared where `remoteStateApplied` becomes conditional — on a
+  // state that applies in range — so a room that leaves our file, comes back and
+  // leaves again is announced both times. This is the convergence direction Q2
+  // relies on, seen from the toast.
+  it('re-arms once a state has applied in range again', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    emitRemoteState({ position: 600, paused: true, doSeek: true })
+    expect(v.currentTime).toBe(600)
+
+    client.syncplayToast.value = ''
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+
+  // The regression the refusal shipped with, and the reason the emit is gated on
+  // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
+  // *also* true at the ordinary end of an episode where every peer holds the
+  // same file: main emits `position + serverRtt / 2` for a playing room
+  // (`src/main/syncplay.ts:1636`), so the last state or two before our own end
+  // already read past `duration`. Nothing is refused that the user can see — the
+  // room is well inside the 3 s tolerance, so no seek was suppressed — and the
+  // message would land in the middle of the 5 s next-episode countdown, on every
+  // episode of a room that is working perfectly.
+  it('stays silent at the natural end of a playing episode', async () => {
+    const v = fakeVideo({
+      currentTime: 1439.6,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 1440.05, paused: false, doSeek: false })
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // …and the `ended` side of the same moment: once we are `ended` the room's
+  // min() over its watchers sits at exactly `duration`, which `>=` catches too.
+  it('stays silent once our own element has ended', async () => {
+    const v = fakeVideo({
+      currentTime: 1440,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // A periodic, not a seek: main's heartbeat sends `doSeek: false`
+    // (`syncplay.ts:2199`), and only a genuine room seek sets the bit.
+    emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
+
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // The other half of the gate, so it does not widen into "never explain a
+  // near-duration refusal": a room *seek* to a position past our end is refused
+  // whether or not it is within the tolerance, and a refused seek is exactly
+  // what the message exists to explain.
+  it('still explains a refused room seek that lands inside the tolerance', async () => {
+    const v = fakeVideo({
+      currentTime: 1439.6,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 1440.05, paused: true, doSeek: true, setBy: 'peer' })
+
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+})
+
+// `resetRemoteStateTracking()` clears the flag by default, and a *reconnect* is
+// the one caller that opts out with `{ keepRefusalNotice: true }` — same room,
+// same file, and clearing it would let the refusal re-fire straight over the
+// reconnect notice (pinned above by "does not swallow the reconnect notice that
+// follows it"). The two tests below drive callers that take the default: the
+// file or the session has changed under the flag, so it is stale state about
+// something we no longer have open, and leaving it set makes the *next* refusal
+// silent — the next episode of a differently-cut release being exactly where
+// that recurs. They fail if the clear is lifted back out of the function, which
+// is what makes them the behavioural pin on the default rather than on two
+// hand-written assignments.
+describe('useSyncplayClient — the refusal toast re-arms on a new file or session (#281)', () => {
+  it('re-arms across an episode change', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    deps.activeEpisodeIndex.value = 1
+    await flushPromises()
+    client.syncplayToast.value = ''
+
+    // The same refusal, but about a file the user has only just opened.
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+
+  it('re-arms across a session end', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: 1440,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+
+    // Room A ends, room B begins. Room B must not inherit room A's explanation.
+    client.syncplayStatus.value = { state: 'idle' }
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready' }
+    await flushPromises()
+    client.syncplayToast.value = ''
+
+    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+})
+
+// The two tests above pin the *behaviour* of the default through the only two
+// callers that take it. What they cannot reach is the property the default
+// exists for: that a caller added tomorrow inherits the clear rather than the
+// reconnect's keep. `resetRemoteStateTracking` is a closure over module-private
+// state and is not exported, so there is no hypothetical fourth caller to
+// construct from a test — driving one would mean re-implementing the function,
+// and such a test would pass no matter what the source did.
+//
+// So this guard reads the source instead, in the same spirit as
+// `theme-tokens.test.ts` and `player-overlay-stacking.test.ts`: it asserts the
+// clear lives *inside* the function and that every call site either takes the
+// default or opts out in the one spelling, with the opt-out count pinned at one
+// and located in the reconnect branch. Lift the clear back out to the call
+// sites, or add a second silent opt-out, and this goes red.
+describe('useSyncplayClient — the refusal clear defaults on, exception is explicit (#281)', () => {
+  const SOURCE = readFileSync(
+    resolve(__dirname, '../../../src/renderer/src/composables/use-syncplay-client.ts'),
+    'utf8'
+  )
+  // Comments name the function and the opt-out verbatim; only real code counts.
+  const CODE = SOURCE.split('\n')
+    .filter((l) => {
+      const t = l.trim()
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+    })
+    .join('\n')
+
+  it('clears the flag inside resetRemoteStateTracking, not at its call sites', () => {
+    const body = CODE.match(
+      /function resetRemoteStateTracking\([^)]*\)[^{]*\{([\s\S]*?)\n {2}\}/
+    )?.[1]
+    expect(body, 'resetRemoteStateTracking declaration not found').toBeTruthy()
+    expect(body).toMatch(/!\s*opts\.keepRefusalNotice[\s\S]*?refusedToastShown = false/)
+  })
+
+  it('has every call site take the default or opt out in the one spelling', () => {
+    const callSites = CODE.split('\n')
+      .filter((l) => l.includes('resetRemoteStateTracking(') && !l.includes('function '))
+      .map((l) => l.trim())
+
+    // Non-vacuity: the three known callers must actually be found.
+    expect(callSites.length).toBeGreaterThanOrEqual(3)
+
+    for (const site of callSites) {
+      expect(
+        site === 'resetRemoteStateTracking()' ||
+          site === 'resetRemoteStateTracking({ keepRefusalNotice: true })',
+        `unrecognized call form — a new caller must take the default or opt out explicitly: ${site}`
+      ).toBe(true)
+    }
+
+    const optOuts = callSites.filter((s) => s.includes('keepRefusalNotice'))
+    expect(optOuts, 'exactly one caller may keep the refusal notice').toHaveLength(1)
+  })
+
+  it('places the sole opt-out in the reconnect branch', () => {
+    const start = CODE.indexOf("if (status.state === 'reconnecting') {")
+    const end = CODE.indexOf("} else if (status.state === 'disconnected')", start)
+    expect(start, 'reconnecting branch not found').toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+
+    expect(CODE.slice(start, end)).toContain(
+      'resetRemoteStateTracking({ keepRefusalNotice: true })'
+    )
   })
 })
 

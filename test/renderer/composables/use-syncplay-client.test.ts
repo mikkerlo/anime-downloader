@@ -1625,10 +1625,59 @@ describe('useSyncplayClient — placement is not a peer’s move (#289)', () => 
     // …and nobody is named for a 400 s gap we cannot attribute.
     expect(client.syncplayToast.value).toBe('')
 
-    // Anti-vacuity, and the cost of the rule stated exactly: one frame. The
-    // socket has now placed us once, so the peer's next real move speaks.
+    // Anti-vacuity, and the cost of the rule stated exactly: one *applying*
+    // frame. The socket has now placed us once, so the peer's next real move
+    // speaks.
     emitRemoteState({ position: 1200, paused: true, doSeek: false, setBy: 'peer' })
     expect(v.currentTime).toBe(1200)
+    expect(client.syncplayToast.value).toBe('peer seeked to 20:00')
+  })
+
+  // #292 review: "one frame" is one *applying* frame, and the two differ on a
+  // reachable shape. `remoteStateApplied` is armed on the `!outOfFile` branch
+  // only, so frames naming a position past our duration arm nothing and
+  // `firstApply` survives them — the silence then spans more than one frame on
+  // the wire. The behaviour is still right (an out-of-file frame could not have
+  // toasted a seek anyway, `needsSeek` being false under `outOfFile`), but the
+  // count in the comment above is load-bearing enough to pin.
+  it('counts applying frames, not wire frames, when the room is past our end', async () => {
+    const v = fakeVideo({
+      currentTime: 500,
+      paused: true,
+      readyState: 1,
+      duration: 1440
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 500, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    client.syncplayStatus.value = { state: 'reconnecting' }
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready' }
+    await flushPromises()
+    client.syncplayToast.value = ''
+
+    // Frame one: out of file. Refused, so the write does not happen and the
+    // toast it raises is the refusal, not an attribution. (That this frame arms
+    // nothing is pinned by #281's "does not count a refused state as the room
+    // having told us where it is" — asserted there, not restated here, so the
+    // toast claim below is what carries this case.)
+    emitRemoteState({ position: 3000, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(500)
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+    client.syncplayToast.value = ''
+
+    // Frame two: back inside the file. This is the socket's first *placement*,
+    // so it is still the silent one — two wire frames after the reconnect.
+    emitRemoteState({ position: 900, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(900)
+    expect(client.syncplayToast.value).toBe('')
+
+    // And the frame after it speaks, so the silence is still bounded.
+    emitRemoteState({ position: 1200, paused: true, doSeek: false, setBy: 'peer' })
     expect(client.syncplayToast.value).toBe('peer seeked to 20:00')
   })
 

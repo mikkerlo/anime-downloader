@@ -712,8 +712,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // scrubbed" from "the room simply played on while we were down" — main's own
     // `doSeek` is one-shot, so a peer's scrub during the outage reaches us as a
     // plain heartbeat re-sending the position — and naming a peer for the second
-    // is the same class of lie this guard removes. One frame of silence, and a
-    // peer's *next* real move toasts normally.
+    // is the same class of lie this guard removes. One *applying* frame of
+    // silence: `remoteStateApplied` is armed on the `!outOfFile` branch only, so
+    // a room past our duration when the socket returns keeps `firstApply` true
+    // until the first in-file apply — which is still that socket's first
+    // placement, so it is still the right answer. A peer's *next* real move
+    // toasts normally.
     //
     // `state.doSeek` re-admits the toast on both paths, and is why this is a
     // suppression of *attribution* and not of the message: a `doSeek` frame is

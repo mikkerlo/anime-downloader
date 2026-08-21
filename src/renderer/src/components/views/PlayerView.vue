@@ -996,11 +996,13 @@ async function prepareMkvForPlayback(
     // which is the one spawn nothing can kill once issued. Without this it is
     // indistinguishable from a genuine open failure, and the worst available
     // response to "a cleanup overtook your open" is to issue the
-    // uninterruptible full-file remux. Unreachable on a live component today
-    // only because three separate facts hold it up (the bump comes only from
-    // `player:cleanup-remux`, every live call site awaits that before opening,
-    // and the unmount path returns at the bail above) — none of which this
-    // function owns.
+    // uninterruptible full-file remux. Reachable on a live component in the
+    // #291 overlap: an earlier open parked in `probeMkvForMse` while
+    // `selectTranslation` / `goToEpisode` awaits its own blanket
+    // `playerCleanupRemux()` and opens again — awaiting the cleanup before
+    // opening protects the *new* open, not the concurrent earlier one, whose
+    // reply-time re-read then answers `cancelled` with the component still
+    // mounted. On the unmount path the bail above returns first.
     if ('error' in streamResult && streamResult.error === 'cancelled') {
       return { ok: false, error: 'stream cancelled' };
     }

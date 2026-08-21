@@ -408,7 +408,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     expect(mseOk).toBeGreaterThan(arm)
     const body = PREPARE_HEVC.slice(arm, mseOk)
     // Reverting to the pass-through turns this red.
-    expect(body).toMatch(/r\.error === 'cancelled' \? 'stream cancelled' : r\.error/)
+    expect(body).toMatch(/r\.error === 'cancelled' \? '[^']+' : r\.error/)
     expect(body).not.toMatch(/return \{ ok: false, error: r\.error \}/)
     // Both paths must surface the SAME string — a rename on one side only is
     // the regression this pins, so the copy path's literal is read from the

@@ -482,6 +482,36 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
 let unsubPlayerStreamSubtitles: Unsubscribe | null = null;
 let unsubPlayerStream: Unsubscribe | null = null;
 
+// #280 teardown coordination. Both live on the component rather than inside
+// `onMounted`, which is what extends the guarantee to `prepareMkvForPlayback`'s
+// other two callers (`selectTranslation`, `goToEpisode`) for free.
+//
+// `unmounted` is set FIRST in `onBeforeUnmount` and consulted after every
+// surviving `await` in `prepareMkvForPlayback` / `prepareHevcTranscode` and in
+// `onMounted`'s tail. The rule is deliberately "after every await" rather than
+// "above every `window.api.*` call": the continuation that resumes on a dead
+// instance reaches ffmpeg spawns (`player:remux-mkv-stream-transcode`,
+// `player:remux-mkv`), a *blanket* `player:cleanup-remux` that would kill a
+// successor player's sessions, and `startMseSession` — which is not a
+// `window.api` call at all but still leaks an object URL.
+let unmounted = false;
+// Held for the whole of `prepareMkvForPlayback`. Widens the unmount cleanup
+// condition: main may have registered (and spawned) a session before the reply
+// that lets us assign `streamSessionId`, in which case the old
+// `remuxedPath || hadActiveStream` test read false and the ffmpeg was orphaned.
+//
+// A COUNTER, not a boolean latch. Nothing serialises the three call sites and
+// the MSE open sits behind no blocking overlay (`remuxing` covers only the
+// legacy full-remux path; `mkvBuffering` is a toast), so while `onMounted`'s
+// open is parked in main's `probeMkvForMse` the user can pick another
+// downloaded `.mkv` translation. A boolean's inner `finally` would clear the
+// flag out from under the still-in-flight outer open, and if that inner call
+// set neither `streamSessionId` nor `remuxedPath` (early `{ error }`, failed
+// legacy remux, external-open or cancel arms) a close at that moment read all
+// three terms of the unmount condition false and orphaned the outer ffmpeg —
+// the exact case this term exists for.
+let mkvPreparesInFlight = 0;
+
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
 const SAVE_INTERVAL_MS = 5000;
@@ -898,116 +928,187 @@ const videoSrc = computed(() => {
   return activeStreamUrl.value;
 });
 
+// #280: the bail value every `unmounted` checkpoint below returns. `{ ok: false }`
+// rather than `{ ok: true }` on purpose — the `!prep.ok` arms in
+// `selectTranslation` / `goToEpisode` / `onMounted` return early, which on the
+// way out also skips the `initSubtitles(video)` calls that would otherwise
+// construct an orphan `SubtitlesOctopus` worker. The `remuxError.value` write
+// those arms do lands on discarded component state; harmless, but it can show
+// up in a log.
+const PLAYER_CLOSED_BAIL = { ok: false, error: 'player closed' } as const;
+
 async function prepareMkvForPlayback(
   filePath: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Entry checkpoint. The two other callers (`selectTranslation`,
+  // `goToEpisode`) reach here from their own resumed continuations, so the
+  // component can already be gone before the first await below.
+  if (unmounted) return PLAYER_CLOSED_BAIL;
   msePlayer.resetMseState();
   clearRemux();
   remuxError.value = '';
 
-  let initialSeek = 0;
-  let resumeTarget = 0;
-  mkvSpawnFromRoom = false;
+  // The `finally` must wrap the WHOLE body, not just the spawn: there are ten
+  // early returns below (two `emit('close')` pairs, the external-open failure,
+  // and the `unmounted` bails) and every one of them has to release the count.
+  mkvPreparesInFlight++;
   try {
-    const epInt = currentEpisodeInt.value;
-    // Both reads are issued together, not in sequence (#262): main projects the
-    // room position at reply time, so a concurrent read is no staler, and this
-    // sits on the open path in front of the ffmpeg spawn.
-    const [saved, roomPosition] = await Promise.all([
-      props.animeId && epInt ? window.api.watchProgressGet(props.animeId, epInt) : null,
-      // Scoped to the file we are opening, not merely ordered after the push
-      // that announced it: main answers null unless the room's position was
-      // reported for this same canonical name, so a fresh mount for a different
-      // episode cannot inherit the previous episode's position if the two
-      // `onMounted` hooks ever reorder.
-      //
-      // Fail-soft on its own: a rejected room read must not cost us the saved
-      // position, which is what a shared `catch` around both would do.
-      window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)
-    ]);
-    const target = resolveMkvSpawnTarget(saved, roomPosition);
-    initialSeek = target.initialSeek;
-    resumeTarget = target.resumeTarget;
-    mkvSpawnFromRoom = target.fromRoom;
-  } catch {
-    /* ignore */
-  }
-
-  const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek);
-  // `hevcTranscodeOnPlay === 'always'` forces the transcode (clean re-encoded
-  // timeline) even when the browser CAN decode HEVC natively — an escape hatch
-  // for HEVC stream-copy seek/sync issues on some platforms (#198). Main
-  // short-circuits before spawning anything, so there is no copy session to
-  // clean up here.
-  if ('requiresTranscode' in streamResult) {
-    console.log('[player] forcing HEVC→H.264 transcode (hevcTranscodeOnPlay=always)');
-    return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
-  }
-  if (!('error' in streamResult)) {
-    const mseOk =
-      typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType);
-    console.log(`[player] MSE negotiate mime="${streamResult.mimeType}" supported=${mseOk}`);
-    if (mseOk) {
-      msePlayer.startMseSession({
-        sessionId: streamResult.sessionId,
-        generation: streamResult.generation,
-        duration: streamResult.duration,
-        mimeType: streamResult.mimeType,
-        resumeTarget,
-        timestampOffset: streamResult.initialSeek
-      });
-      mkvBuffering.value = true;
-      return { ok: true };
+    let initialSeek = 0;
+    let resumeTarget = 0;
+    mkvSpawnFromRoom = false;
+    try {
+      const epInt = currentEpisodeInt.value;
+      // Both reads are issued together, not in sequence (#262): main projects the
+      // room position at reply time, so a concurrent read is no staler, and this
+      // sits on the open path in front of the ffmpeg spawn.
+      const [saved, roomPosition] = await Promise.all([
+        props.animeId && epInt ? window.api.watchProgressGet(props.animeId, epInt) : null,
+        // Scoped to the file we are opening, not merely ordered after the push
+        // that announced it: main answers null unless the room's position was
+        // reported for this same canonical name, so a fresh mount for a different
+        // episode cannot inherit the previous episode's position if the two
+        // `onMounted` hooks ever reorder.
+        //
+        // Fail-soft on its own: a rejected room read must not cost us the saved
+        // position, which is what a shared `catch` around both would do.
+        window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)
+      ]);
+      const target = resolveMkvSpawnTarget(saved, roomPosition);
+      initialSeek = target.initialSeek;
+      resumeTarget = target.resumeTarget;
+      mkvSpawnFromRoom = target.fromRoom;
+    } catch {
+      /* ignore */
     }
-    console.warn('[player] MSE does not support codecs:', streamResult.mimeType);
-    await window.api.playerCleanupRemux();
 
-    if (/hvc1|hev1/i.test(streamResult.mimeType)) {
-      const pref =
-        ((await window.api.getSetting('hevcTranscodeOnPlay')) as
-          | 'ask'
-          | 'always'
-          | 'never'
-          | undefined) ?? 'ask';
-      let choice: HevcPromptChoice;
-      if (pref === 'always') choice = 'transcode';
-      else if (pref === 'never') choice = 'external';
-      else choice = await askHevcChoice();
-      if (choice === 'external') {
-        const res = await window.api.shellOpenExternalFile(filePath);
-        if (res.ok) {
+    // Nothing has been spawned yet on this path, so there is nothing to reap.
+    if (unmounted) return PLAYER_CLOSED_BAIL;
+    const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek);
+    // Everything reachable from here without another `await` runs on a dead
+    // instance if the close landed inside that call: the transcode spawn, the
+    // MSE session, and the blanket `playerCleanupRemux` below. Bailing leaks
+    // nothing — the unmount's own cleanup (widened by `mkvPreparesInFlight`) has
+    // either already killed the session main registered, or main's own
+    // generation self-reap converted this reply into `{ error: 'cancelled' }`.
+    if (unmounted) return PLAYER_CLOSED_BAIL;
+    // `cancelled` means main reaped this open because a cleanup overtook it
+    // (#280). Unwind — never fall through to the legacy full-file remux below,
+    // which is the one spawn nothing can kill once issued. Without this it is
+    // indistinguishable from a genuine open failure, and the worst available
+    // response to "a cleanup overtook your open" is to issue the
+    // uninterruptible full-file remux. Reachable on a live component in the
+    // #291 overlap: an earlier open parks in `probeMkvForMse` and some *other*
+    // path bumps the generation before it resumes — the unguarded
+    // `playerCleanupRemux()` on the unsupported-codecs branch below, or a later
+    // `selectTranslation` / `goToEpisode` once a concurrent open has re-set
+    // `streamSessionId` (their own kills sit behind `remuxedPath.value ||
+    // streamSessionId.value`, which the parked open's own caller just cleared,
+    // so the immediate next action does not bump). Awaiting the cleanup before
+    // opening protects the *new* open, not the concurrent earlier one, whose
+    // reply-time re-read then answers `cancelled` with the component still
+    // mounted. On the unmount path the bail above returns first.
+    if ('error' in streamResult && streamResult.error === 'cancelled') {
+      return { ok: false, error: 'stream cancelled' };
+    }
+    // `hevcTranscodeOnPlay === 'always'` forces the transcode (clean re-encoded
+    // timeline) even when the browser CAN decode HEVC natively — an escape hatch
+    // for HEVC stream-copy seek/sync issues on some platforms (#198). Main
+    // short-circuits before spawning anything, so there is no copy session to
+    // clean up here.
+    if ('requiresTranscode' in streamResult) {
+      console.log('[player] forcing HEVC→H.264 transcode (hevcTranscodeOnPlay=always)');
+      return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
+    }
+    if (!('error' in streamResult)) {
+      const mseOk =
+        typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(streamResult.mimeType);
+      console.log(`[player] MSE negotiate mime="${streamResult.mimeType}" supported=${mseOk}`);
+      if (mseOk) {
+        // `startMseSession` allocates a `MediaSource` + object URL whose only
+        // revoke is `resetMseState()`, which already ran at unmount.
+        if (unmounted) return PLAYER_CLOSED_BAIL;
+        msePlayer.startMseSession({
+          sessionId: streamResult.sessionId,
+          generation: streamResult.generation,
+          duration: streamResult.duration,
+          mimeType: streamResult.mimeType,
+          resumeTarget,
+          timestampOffset: streamResult.initialSeek
+        });
+        mkvBuffering.value = true;
+        return { ok: true };
+      }
+      console.warn('[player] MSE does not support codecs:', streamResult.mimeType);
+      await window.api.playerCleanupRemux();
+      if (unmounted) return PLAYER_CLOSED_BAIL;
+
+      if (/hvc1|hev1/i.test(streamResult.mimeType)) {
+        const pref =
+          ((await window.api.getSetting('hevcTranscodeOnPlay')) as
+            | 'ask'
+            | 'always'
+            | 'never'
+            | undefined) ?? 'ask';
+        // Above the choice resolution, not merely above `askHevcChoice()`: this
+        // one checkpoint covers the prompt, the external-player launch and the
+        // `setSetting` write. It is also what stops the resolver deadlock — the
+        // unmount's `hevcPromptResolver` unblock is conditional, so a close
+        // during the two awaits above leaves it null and a prompt opened here
+        // would never be settled by anyone.
+        if (unmounted) return PLAYER_CLOSED_BAIL;
+        let choice: HevcPromptChoice;
+        if (pref === 'always') choice = 'transcode';
+        else if (pref === 'never') choice = 'external';
+        else choice = await askHevcChoice();
+        if (unmounted) return PLAYER_CLOSED_BAIL;
+        if (choice === 'external') {
+          const res = await window.api.shellOpenExternalFile(filePath);
+          if (unmounted) return PLAYER_CLOSED_BAIL;
+          if (res.ok) {
+            emit('close');
+            return { ok: true };
+          }
+          // Keep the player open so the error can surface in remuxError UI.
+          return { ok: false, error: res.error || 'Failed to open externally' };
+        }
+        if (choice === 'cancel') {
           emit('close');
           return { ok: true };
         }
-        // Keep the player open so the error can surface in remuxError UI.
-        return { ok: false, error: res.error || 'Failed to open externally' };
-      }
-      if (choice === 'cancel') {
-        emit('close');
-        return { ok: true };
-      }
-      if (choice === 'always-transcode') {
-        try {
-          await window.api.setSetting('hevcTranscodeOnPlay', 'always');
-        } catch {
-          /* ignore */
+        if (choice === 'always-transcode') {
+          try {
+            await window.api.setSetting('hevcTranscodeOnPlay', 'always');
+          } catch {
+            /* ignore */
+          }
         }
+        if (unmounted) return PLAYER_CLOSED_BAIL;
+        return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
       }
-      return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
+    } else {
+      console.warn(
+        '[player] MSE stream open failed, falling back to legacy remux:',
+        streamResult.error
+      );
     }
-  } else {
-    console.warn(
-      '[player] MSE stream open failed, falling back to legacy remux:',
-      streamResult.error
-    );
-  }
 
-  const legacy = await runLegacyRemuxIpc(filePath);
-  if (!legacy.ok) return legacy;
-  if (!activeSubtitleContent.value && legacy.subtitleContent) {
-    activeSubtitleContent.value = legacy.subtitleContent;
+    // The most important checkpoint of the ladder. `player:remux-mkv` never
+    // registers a session, so `playerCleanupRemux` cannot kill it — not at
+    // unmount, not on the next open, not ever. It is a full-file `ffmpeg -c
+    // copy` that runs to completion writing an `.mp4` a later sweep unlinks out
+    // from under it. This check is the only thing in the codebase that can stop
+    // it.
+    if (unmounted) return PLAYER_CLOSED_BAIL;
+    const legacy = await runLegacyRemuxIpc(filePath);
+    if (unmounted) return PLAYER_CLOSED_BAIL;
+    if (!legacy.ok) return legacy;
+    if (!activeSubtitleContent.value && legacy.subtitleContent) {
+      activeSubtitleContent.value = legacy.subtitleContent;
+    }
+    return { ok: true };
+  } finally {
+    mkvPreparesInFlight--;
   }
-  return { ok: true };
 }
 
 function askHevcChoice(): Promise<HevcPromptChoice> {
@@ -1032,16 +1133,32 @@ async function prepareHevcTranscode(
   initialSeek: number,
   resumeTarget: number
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // First statement of the function, above `setTranscoding(true)` — this one
+  // site covers the transcode spawn from BOTH entries (the `requiresTranscode`
+  // short-circuit and the `always-transcode` prompt choice) and from any future
+  // third caller. A check at either call site instead would leave the other
+  // open, and putting it below `setTranscoding(true)` would latch that flag on
+  // a dead instance.
+  if (unmounted) return PLAYER_CLOSED_BAIL;
   msePlayer.setTranscoding(true);
   const r = await window.api.playerRemuxMkvStreamTranscode(filePath, initialSeek);
+  // Guards the blanket `playerCleanupRemux` below as much as the MSE session:
+  // on a dead instance that call kills every registered session — including a
+  // successor `PlayerView`'s — and unlinks the whole temp dir.
+  if (unmounted) return PLAYER_CLOSED_BAIL;
   if ('error' in r) {
     msePlayer.setTranscoding(false);
-    return { ok: false, error: r.error };
+    // `cancelled` is main's self-reap, not a decode failure (#280). No
+    // fall-through hazard on this path — unlike the copy path there is nothing
+    // below to fall into — so this is only about not surfacing a bare
+    // `cancelled` in `remuxError`.
+    return { ok: false, error: r.error === 'cancelled' ? 'stream cancelled' : r.error };
   }
   const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(r.mimeType);
   if (!mseOk) {
     msePlayer.setTranscoding(false);
     await window.api.playerCleanupRemux();
+    if (unmounted) return PLAYER_CLOSED_BAIL;
     return { ok: false, error: `Browser rejected transcoded mime: ${r.mimeType}` };
   }
   msePlayer.startMseSession({
@@ -1520,6 +1637,15 @@ async function selectTranslation(tr: {
         tr.id,
         friendlyLabel
       );
+      // The ladder does not stop at `prepareMkvForPlayback`'s boundary (#280).
+      // `playerCleanupRemux()` below is a BLANKET kill of every registered
+      // session plus an `unlinkSync` sweep of the shared tmpDir, and its guard
+      // condition survives unmount: `resetMseState()` clears `streamSessionId`,
+      // but nothing clears `remuxedPath` — `onBeforeUnmount` never calls
+      // `clearRemux()`. So on the legacy-remux population this continuation
+      // would resume on a dead instance and kill a *successor* `PlayerView`'s
+      // session. Bail on the whole continuation, not just the kill.
+      if (unmounted) return;
       if (localResult) {
         activeTranslationId.value = tr.id;
         persistSelectedTranslation(tr.id);
@@ -1547,7 +1673,11 @@ async function selectTranslation(tr: {
 
         // Update subtitles
         destroySubtitles();
-        if (activeSubtitleContent.value && video) {
+        // `video` is the const captured at the top of this function — still
+        // non-null after unmount even though `videoRef.value` is not — and
+        // `SubtitlesOctopus` is a Web Worker + canvas whose only disposer,
+        // `destroySubtitles()`, already ran at unmount (#280).
+        if (activeSubtitleContent.value && video && !unmounted) {
           initSubtitles(video);
         }
 
@@ -1565,6 +1695,9 @@ async function selectTranslation(tr: {
 
     // Fall back to streaming
     const result = await window.api.playerGetStreamUrl(tr.id, tr.height);
+    // Same blanket-kill guard as the local-file branch (#280); the window is
+    // wider here because `playerGetStreamUrl` is a network round trip.
+    if (unmounted) return;
     if (!result) {
       switchingTranslation.value = false;
       return;
@@ -1592,7 +1725,9 @@ async function selectTranslation(tr: {
 
     // Update subtitles
     destroySubtitles();
-    if (result.subtitleContent && video) {
+    // Same orphan-worker guard as the local-file branch above (#280). The
+    // window here is wider: `playerGetStreamUrl` is a network round trip.
+    if (result.subtitleContent && video && !unmounted) {
       initSubtitles(video);
     }
 
@@ -1617,6 +1752,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
   // Persist current episode progress before leaving
   await saveProgress(true);
+  // A close landing in that write resumes here on a dead instance, and the
+  // blanket `playerCleanupRemux()` below would kill a successor player's
+  // session (#280) — `remuxedPath` is not cleared at unmount.
+  if (unmounted) return;
   const prevEpisodeInt = currentEpisodeInt.value;
 
   cancelAutoAdvance();
@@ -1701,6 +1840,9 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         resolvedTr.id,
         targetEp.episodeFull
       );
+      // Guards the second blanket `playerCleanupRemux()` in this function
+      // (#280), the one inside the `.mkv` branch below.
+      if (unmounted) return;
       if (localResult) {
         activeFilePath.value = localResult.filePath;
         activeStreamUrl.value = '';
@@ -1721,7 +1863,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         }
 
         destroySubtitles();
-        if (activeSubtitleContent.value && video) initSubtitles(video);
+        // Orphan-`SubtitlesOctopus` guard (#280) — see `selectTranslation`.
+        if (activeSubtitleContent.value && video && !unmounted) initSubtitles(video);
 
         nextTick(() => {
           const v = videoRef.value;
@@ -1754,7 +1897,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     }
 
     destroySubtitles();
-    if (result.subtitleContent && video) initSubtitles(video);
+    // Orphan-`SubtitlesOctopus` guard (#280), after a network round trip.
+    if (result.subtitleContent && video && !unmounted) initSubtitles(video);
 
     nextTick(() => {
       const v = videoRef.value;
@@ -1799,6 +1943,49 @@ function onPrefetchSettingChanged(ev: Event): void {
   }
 }
 
+// Diagnostic + pump listeners installed on the `<video>` element. Lifted out of
+// the watch callback so `onBeforeUnmount` can remove them (#280).
+//
+// They read the element off `e.currentTarget`, NOT `videoRef.value`: the
+// inline versions closed over the watch callback's `v`, and routing through the
+// ref instead would make removal ordering versus Vue's ref-nulling load-bearing
+// for no reason.
+const videoOf = (e: Event): HTMLVideoElement => e.currentTarget as HTMLVideoElement;
+
+const onDiagWaiting = (e: Event): void => {
+  const v = videoOf(e);
+  console.warn(`[player] video 'waiting' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`);
+};
+const onDiagStalled = (e: Event): void => {
+  const v = videoOf(e);
+  console.warn(`[player] video 'stalled' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`);
+};
+const onDiagError = (e: Event): void => {
+  const v = videoOf(e);
+  const err = v.error;
+  console.error(
+    `[player] video element error: code=${err?.code} message=${err?.message} networkState=${v.networkState} readyState=${v.readyState}`
+  );
+};
+const onDiagTimeUpdate = (): void => msePlayer.pumpAppendQueue();
+// Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
+// so a burst collapses into one respawn at the final target — native seeks
+// inside the buffered range are filtered out in the debounced callback.
+const onDiagSeeking = (): void => {
+  msePlayer.maybeRespawnForUnbufferedPosition();
+  pausePrefetchForSeek();
+};
+const onDiagSeeked = (): void => scheduleResumePrefetchAfterSeek();
+
+const DIAGNOSTIC_LISTENERS: [string, EventListener][] = [
+  ['waiting', onDiagWaiting],
+  ['stalled', onDiagStalled],
+  ['error', onDiagError],
+  ['timeupdate', onDiagTimeUpdate],
+  ['seeking', onDiagSeeking],
+  ['seeked', onDiagSeeked]
+];
+
 onMounted(async () => {
   // The document-level keydown listener is owned by usePlayerKeyboard
   // (lifecycle wired inside the composable).
@@ -1806,23 +1993,20 @@ onMounted(async () => {
   window.addEventListener('mouseup', onAuxMouseUp, true);
   window.addEventListener('mousedown', onAuxMouseDown, true);
   window.addEventListener('prefetch-setting-changed', onPrefetchSettingChanged as EventListener);
-  const savedShortcuts = (await window.api.getSetting('keyboardShortcuts')) as Record<
-    string,
-    string
-  > | null;
-  playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) };
 
-  const savedPrefetch = (await window.api.getSetting(
-    'prefetchNextEpisode'
-  )) as PrefetchSetting | null;
-  if (
-    savedPrefetch === 'off' ||
-    savedPrefetch === 'open' ||
-    savedPrefetch === 'time-5min' ||
-    savedPrefetch === 'progress-50'
-  ) {
-    prefetchSetting.value = savedPrefetch;
-  }
+  // Everything from here to the `getSetting` await below is deliberately
+  // hoisted ABOVE the first await (#280). Two reasons, both load-bearing:
+  //   1. `watch()` only binds to the component's effect scope when it is called
+  //      while that scope is active — i.e. synchronously, before any await.
+  //      Created after an await it escapes the scope and is never stopped.
+  //   2. `onBeforeUnmount` nulls `unsubPlayerStreamSubtitles`/`unsubPlayerStream`.
+  //      A close landing during those awaits ran the hook against `null` and the
+  //      resumed continuation then registered both subscriptions on a dead
+  //      instance, leaking them into the preload listener list for the life of
+  //      the process.
+  // Nothing here reads a value the two `getSetting` awaits produce, and nothing
+  // here awaits, so the hoist adds no await ahead of `prepareMkvForPlayback` —
+  // which is what keeps `docs/syncplay.md`'s ordering rule intact.
 
   // useSkipMarkers already wires the signature-updated subscription via its
   // own onMounted hook — we just need to kick off the initial load.
@@ -1840,40 +2024,37 @@ onMounted(async () => {
   // the 1s snapshot timer are owned by useSyncplayClient's onMounted.
 
   // Diagnostic listeners on the video element to see why MSE playback stalls.
+  // Registered from one table so `onBeforeUnmount`'s removal cannot drift out
+  // of sync with the registration (#280).
   watch(
     videoRef,
     (v) => {
       if (!v) return;
-      v.addEventListener('waiting', () =>
-        console.warn(
-          `[player] video 'waiting' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`
-        )
-      );
-      v.addEventListener('stalled', () =>
-        console.warn(
-          `[player] video 'stalled' t=${v.currentTime.toFixed(2)} readyState=${v.readyState}`
-        )
-      );
-      v.addEventListener('error', () => {
-        const e = v.error;
-        console.error(
-          `[player] video element error: code=${e?.code} message=${e?.message} networkState=${v.networkState} readyState=${v.readyState}`
-        );
-      });
-      v.addEventListener('timeupdate', () => msePlayer.pumpAppendQueue());
-      // Fires on every seek attempt (slider drag, arrow-key auto-repeat). Debounce
-      // so a burst collapses into one respawn at the final target — native seeks
-      // inside the buffered range are filtered out in the debounced callback.
-      v.addEventListener('seeking', () => {
-        msePlayer.maybeRespawnForUnbufferedPosition();
-        pausePrefetchForSeek();
-      });
-      v.addEventListener('seeked', () => {
-        scheduleResumePrefetchAfterSeek();
-      });
+      for (const [type, handler] of DIAGNOSTIC_LISTENERS) v.addEventListener(type, handler);
     },
     { immediate: true }
   );
+
+  const savedShortcuts = (await window.api.getSetting('keyboardShortcuts')) as Record<
+    string,
+    string
+  > | null;
+  playerShortcuts.value = { ...DEFAULT_PLAYER_SHORTCUTS, ...(savedShortcuts || {}) };
+
+  const savedPrefetch = (await window.api.getSetting(
+    'prefetchNextEpisode'
+  )) as PrefetchSetting | null;
+  if (
+    savedPrefetch === 'off' ||
+    savedPrefetch === 'open' ||
+    savedPrefetch === 'time-5min' ||
+    savedPrefetch === 'progress-50'
+  ) {
+    prefetchSetting.value = savedPrefetch;
+  }
+  // From here on the hook is checkpointed after every await (#280): a close
+  // landing in any of these windows resumes on a dead instance.
+  if (unmounted) return;
 
   // Start MKV remux stream (or fall back to legacy full remux)
   if (isMkv.value && props.filePath) {
@@ -1888,6 +2069,7 @@ onMounted(async () => {
       return;
     }
   }
+  if (unmounted) return;
 
   // Initialize quality from available streams
   if (props.streamUrl && props.availableStreams.length > 0) {
@@ -1897,26 +2079,35 @@ onMounted(async () => {
 
   // Load saved preset
   const savedPreset = (await window.api.getSetting('anime4kPreset')) as string;
+  if (unmounted) return;
   if (savedPreset && ['off', 'mode-a', 'mode-b', 'mode-c'].includes(savedPreset)) {
     anime4kPreset.value = savedPreset as typeof anime4kPreset.value;
   }
 
   // Restore saved volume + mute
   const savedVolume = (await window.api.getSetting('playerVolume')) as number | null;
+  if (unmounted) return;
   if (typeof savedVolume === 'number' && savedVolume >= 0 && savedVolume <= 1) {
     volume.value = savedVolume;
   }
   const savedMuted = (await window.api.getSetting('playerMuted')) as boolean | null;
+  if (unmounted) return;
   if (typeof savedMuted === 'boolean') {
     muted.value = savedMuted;
   }
   await nextTick();
   suppressVolumePersist = false;
 
+  // BEFORE `initWebGPU()`, never after: it allocates a `GPUDevice` whose only
+  // release is `a4k.destroy()`, which already ran in `onBeforeUnmount`. A check
+  // placed below this line leaks the device for the life of the process.
+  if (unmounted) return;
   await a4k.initWebGPU();
+  if (unmounted) return;
 
   // Wait for video to be ready, then start pipeline if needed
   await nextTick();
+  if (unmounted) return;
   const video = videoRef.value;
   if (video) {
     video.volume = volume.value;
@@ -1946,6 +2137,10 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  // FIRST, before anything that can await or throw (#280): every checkpoint in
+  // `onMounted` / `prepareMkvForPlayback` / `prepareHevcTranscode` reads this,
+  // and `saveProgress(true)` below is async.
+  unmounted = true;
   // Stream-skip detection cancel + signature-updated unsub + grace timer
   // cleanup all live inside useSkipMarkers' onBeforeUnmount.
   saveProgress(true);
@@ -1990,6 +2185,10 @@ onBeforeUnmount(() => {
   // Pause and release video
   const video = videoRef.value;
   if (video) {
+    // BEFORE the pause below (#280): the teardown pause can otherwise fire a
+    // final `waiting`/`seeking` into `maybeRespawnForUnbufferedPosition()`
+    // after `resetMseState()` is already queued.
+    for (const [type, handler] of DIAGNOSTIC_LISTENERS) video.removeEventListener(type, handler);
     // Mark it: since #228 an *unmarked* pause moves room-mirror state (and,
     // post-adoption, sends a pause) before the composable dies, so closing the
     // player would pause the room on the way out. Guarded on `!paused` by the
@@ -1998,7 +2197,14 @@ onBeforeUnmount(() => {
     // real one.
     if (!video.paused) syncplay.markProgrammaticPlayback(true);
     video.pause();
-    video.src = '';
+    // `src = ''` does not clear the source: an empty `src` attribute resolves
+    // against the document URL, so `load()` selects the app's own index.html as
+    // a media resource and fails it. `removeAttribute` is the form that
+    // actually empties it. The template owns this attribute (`:src="videoSrc ||
+    // undefined"`), so removing it imperatively is only safe because no patch
+    // follows the teardown — a later `videoSrc` watcher must not quietly re-add
+    // it here.
+    video.removeAttribute('src');
     video.load();
   }
   // Release the player lock (#63) — lets a deferred .part rename + merge run.
@@ -2017,7 +2223,16 @@ onBeforeUnmount(() => {
   // whether to ask main to tear down the active stream session.
   const hadActiveStream = !!streamSessionId.value;
   msePlayer.resetMseState();
-  if (remuxedPath.value || hadActiveStream) {
+  // `mkvPreparesInFlight` (#280) covers the window where main has already
+  // registered and spawned a session but the reply that assigns
+  // `streamSessionId` has not landed — without it both other terms read false
+  // and the ffmpeg was orphaned until the next `.mkv` open. A count, not a
+  // flag: overlapping opens are reachable (see its declaration), and a boolean
+  // would read false here while an outer open was still in flight. Safe as a
+  // blanket kill only because it fires SYNCHRONOUSLY here, before any successor
+  // `PlayerView` can mount: `playerCleanupRemux` kills every registered
+  // session, so a post-`await` compensator would SIGKILL the next player's.
+  if (remuxedPath.value || hadActiveStream || mkvPreparesInFlight > 0) {
     window.api.playerCleanupRemux();
   }
 });

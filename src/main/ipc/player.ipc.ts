@@ -54,6 +54,19 @@ async function extractFirstSubtitle(
   }
 }
 
+/**
+ * Bumped by every `player:cleanup-remux` sweep (#280). The two MSE open
+ * handlers capture it at entry and self-reap if it moved by the time they have
+ * registered their session — that is the only thing that closes the window
+ * where a cleanup issued at unmount *overtakes* a registration still stuck
+ * behind `probeMkvForMse`: the sweep finds no session, the registration lands
+ * behind it, and the ffmpeg it spawns survives until the next `.mkv` open.
+ *
+ * Module-local rather than a `register` local so it is unambiguously one
+ * counter for the whole router; `register` is called once per app boot.
+ */
+let cleanupGeneration = 0
+
 export function register({
   store,
   smotretApi,
@@ -314,6 +327,11 @@ export function register({
       mkvPath: string,
       initialSeek?: number
     ): Promise<MseOpenResult | { requiresTranscode: true } | { error: string }> => {
+      // Captured at handler *entry*, not module load: every legitimate
+      // cleanup-then-open sequence in the renderer awaits `playerCleanupRemux`
+      // before opening the next session, so the bump always lands before this
+      // read and a `!==` comparison against the captured value never misfires.
+      const openedAtGeneration = cleanupGeneration
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
@@ -352,6 +370,17 @@ export function register({
         h264Encoder: null
       }
       streamingService.registerSession(sessionId, session)
+      // Self-reap (#280). The check belongs here — directly under
+      // `registerSession`, above `spawnFfmpegForSession` — because at this
+      // point nothing has been spawned: `cleanupSession` is pure
+      // deregistration and the `return` is what makes the ffmpeg process never
+      // exist at all. It also skips the subtitle extraction below. Placed
+      // after the spawn it would buy a spawn-then-kill where a never-spawn was
+      // available.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       const requestedSeek =
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
@@ -405,6 +434,26 @@ export function register({
       }
 
       const contentStart = await offsetPromise
+      // Re-read at the reply (#280). The check above the spawn closes the
+      // "no ffmpeg is spawned behind a sweep" hole, but the window reopens
+      // below it: the `Ffmpeg.ffprobe` promise and `await offsetPromise` are
+      // two more suspension points, and a cleanup landing in either one DOES
+      // find the session and sweeps it — yet the handler would still return a
+      // full success payload naming a dead, deregistered `sessionId`, leaving
+      // the renderer on a `MediaSource` that never receives a byte. Reading
+      // the generation once more here is what makes the invariant
+      // `docs/player.md` states — *no reply ever describes a swept session* —
+      // true rather than merely aspirational. The `cleanupSession` call here is
+      // defence in depth, not load-bearing: the generation only moves from
+      // `player:cleanup-remux`, whose bump + sweep + unlink are one synchronous
+      // block, so by the time we read a moved generation this session has
+      // already been deregistered and the call is the `if (!session) return`
+      // no-op. It stays so the `return` is never the only thing standing
+      // between a moved generation and a live registration.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       console.log(
         `[remux-stream] open session ${sessionId.slice(0, 8)} codec=${probe.videoCodec} mime="${streamCopyMime}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
       )
@@ -430,6 +479,7 @@ export function register({
       mkvPath: string,
       initialSeek?: number
     ): Promise<MseOpenResult | { error: string }> => {
+      const openedAtGeneration = cleanupGeneration
       const ffmpegPath = getFfmpegPath()
       const ffprobePath = getFfprobePath()
       if (!ffmpegPath) return { error: 'ffmpeg not available' }
@@ -471,6 +521,12 @@ export function register({
         h264Encoder: encoder.name
       }
       streamingService.registerSession(sessionId, session)
+      // Same self-reap as the copy handler (#280) — directly under
+      // `registerSession`, above the spawn.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       const requestedSeek =
         typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
           ? initialSeek
@@ -520,6 +576,12 @@ export function register({
       }
 
       const contentStart = await anchorPromise
+      // Same reply-time re-read as the copy handler (#280) — the suspension
+      // points below the spawn reopen the window the check above it closed.
+      if (cleanupGeneration !== openedAtGeneration) {
+        streamingService.cleanupSession(sessionId)
+        return { error: 'cancelled' }
+      }
       console.log(
         `[remux-stream] open TRANSCODE session ${sessionId.slice(0, 8)} encoder=${encoder.name} audio=${probe.audioStrategy} mime="${mimeType}" requested=${requestedSeek.toFixed(2)} contentStart=${contentStart.toFixed(2)}`
       )
@@ -617,6 +679,9 @@ export function register({
   })
 
   ipcMain.handle(CHANNELS.PLAYER_CLEANUP_REMUX, async () => {
+    // Bump first, before the sweep: an open handler whose `registerSession`
+    // lands *after* this sweep must still see the move and self-reap (#280).
+    cleanupGeneration++
     for (const sessionId of streamingService.allSessionIds()) {
       streamingService.cleanupSession(sessionId)
     }

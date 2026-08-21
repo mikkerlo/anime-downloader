@@ -275,7 +275,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   })
 
   it('lets the joiner converge and adopt once its element can honour a write', () => {
-    const { host, joiner } = joinAPlayingRoom()
+    const { host, joiner, frames } = joinAPlayingRoom()
 
     // The joiner's element, with the one piece of production timing that
     // decides whether a *single* frame is enough: it cannot honour a
@@ -325,6 +325,11 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThan(
       ADOPT_TOLERANCE_S
     )
+    // Anti-vacuity: adoption here is driven by the mirror frames rather than
+    // incidental to them. The bounds above hold on a reference server whether or
+    // not the mirror is heard (review of #279), so this is what keeps the case
+    // honest to its own name.
+    expect(frames.some((f) => f.setBy === null)).toBe(true)
   })
 
   it('recovers the room onto the pauser’s playhead, and every election after it', () => {

@@ -2046,7 +2046,7 @@ describe('useSyncplayClient — the refusal clear defaults on, exception is expl
       /function resetRemoteStateTracking\([^)]*\)[^{]*\{([\s\S]*?)\n {2}\}/
     )?.[1]
     expect(body, 'resetRemoteStateTracking declaration not found').toBeTruthy()
-    expect(body).toMatch(/keepRefusalNotice.*refusedToastShown = false/s)
+    expect(body).toMatch(/!\s*opts\.keepRefusalNotice[\s\S]*?refusedToastShown = false/)
   })
 
   it('has every call site take the default or opt out in the one spelling', () => {

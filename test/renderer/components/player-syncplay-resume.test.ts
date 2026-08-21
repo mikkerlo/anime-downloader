@@ -179,3 +179,32 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     )
   })
 })
+
+// #275 review: bounding the spawn also zeroes `mseInitialSeek`, so on a refused
+// open `resumeFromSavedPosition` no longer takes its toast-only MSE branch
+// (gated `mseInitialSeek.value > 0`) and falls through to the branch below it —
+// the one that actually writes `video.currentTime = saved.position`. Writing the
+// out-of-file saved position straight to the element is the original symptom
+// arriving through a second door.
+//
+// It is inert today, but only via a two-step argument spanning two files, and
+// neither step is local to this function.
+//
+// Step 2 — the room path — is already pinned above: `mkvSessionSeededFromRoom()`
+// returns before either branch, and #240's "guard before both toasts" assertion
+// subsumes "guard before the MSE branch", so every edit that breaks the ordering
+// breaks that test first. Only step 1 is unguarded, and it is what this adds.
+describe('PlayerView — a refused open does not resume through the generic branch (#275)', () => {
+  it('keeps the write behind the fraction guard that a refused open fails', () => {
+    // Step 1, the non-room path. A refused open means main bounded the spawn,
+    // i.e. `saved.position - 1 >= duration` — so `saved.position / d` is above
+    // 1 and this guard is false. Drop it, or widen it to a bare
+    // `saved.position > 5`, and the refused position is written to the element.
+    const body = resumeBody().replace(/\s+/g, ' ')
+    const guard = body.indexOf('if (saved.position > 5 && saved.position / d < 0.95) {')
+    const write = body.indexOf('video.currentTime = saved.position;')
+
+    expect(guard).toBeGreaterThan(-1)
+    expect(write).toBeGreaterThan(guard)
+  })
+})

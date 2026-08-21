@@ -1583,18 +1583,18 @@ export class SyncplayClient extends EventEmitter {
     //    to apply has already nulled the intent and this reads `false`. That is
     //    the escape hatch, for free and with no second branch.
     //  - above the call, so the tick the intent *dies* is still the last tick it
-    //    protects. maybeReassertSeek() has three terminal exits that null the
-    //    intent and return without asserting — the spectator/de-adopted branch
-    //    (:2118-2121), the TTL (:2122-2125) and the attempt ceiling
-    //    (:2149-2152) — and all three fall straight through to the emit below.
-    //    Reading after the call would ship a yank on each of them.
+    //    protects. maybeReassertSeek() has four terminal exits that null the
+    //    intent and return without asserting; three — the spectator/de-adopted
+    //    branch, the TTL and the attempt ceiling — fall straight through to the
+    //    emit below, so reading after the call would ship a yank on each. The
+    //    fourth, the drift-converged exit, is benign: see below.
     //
     // The protection is exactly one tick wide at the ceiling, and no wider
     // (#278 review): the tick after the give-up has no intent to read, so it is
     // an ordinary frame and the room's position goes out unrewritten. In
     // symptom 1's real shape that never bites — the re-assert is accepted once
-    // the ignore window closes and :2143-2148 retires the intent with the room
-    // already where we are — but in the exhausted-ceiling shape the fix turns
+    // the ignore window closes and the drift-converged exit retires the intent with
+    // the room already where we are — but in the exhausted-ceiling shape the fix turns
     // four excursions into one rather than none. Pinned as a characterisation.
     //
     // Nothing is *dropped*. This substitutes a value on a frame that is emitted

@@ -604,7 +604,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // - `intendedPaused` is the room intent we assert on the next heartbeat;
   //   adopting it while the element still sits at 0 would report an intent we
   //   have not enacted.
-  function applyRemoteStateToElement(state: SyncplayRemoteState, v: HTMLVideoElement): void {
+  function applyRemoteStateToElement(
+    state: SyncplayRemoteState,
+    v: HTMLVideoElement,
+    deferred = false
+  ): void {
+    // Read before the `remoteStateApplied = true` below, which this same call
+    // performs: "has the room ever placed *this* element" is only answerable
+    // from the value on entry. See the seek-toast guard for what it decides.
+    const firstApply = !remoteStateApplied
     // A room position past the end of *our* file is refused, not clamped (#281).
     // Clamping is measurably a no-op — Chromium's seek algorithm already clamps
     // to the seekable end, so a pre-clamped write and the raw write land on the
@@ -670,6 +678,31 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // deliberately behind, so `needsSeek` is true on essentially every apply and
     // "X seeked to …" would describe a seek nobody made, over the message that
     // matters.
+    //
+    // That same argument reaches two shapes that have nothing to do with a hold,
+    // and the seek toast's guard below carries it (#289). An apply that is
+    // *deferred* — parked below `HAVE_METADATA` and written from
+    // `onVideoLoadedMetadata()` — starts from an element at 0, so `diff` is the
+    // room's whole position and `needsSeek` is true for any room past 3 s. So
+    // does the *first* apply on an element the room has not placed yet, which
+    // takes the immediate path when we join with the file already loaded. In
+    // both, we did not move: we arrived. The toast would name a peer for a
+    // placement, at whatever position the room happened to be at.
+    //
+    // Neither test subsumes the other, so the guard is their disjunction rather
+    // than either alone. `remoteStateApplied` is not per-element — it is reset
+    // only by `resetRemoteStateTracking()`, i.e. on the episode/translation
+    // watch, on `idle`/`disconnected` and on `reconnecting` — while
+    // `selectQuality()` in PlayerView rebinds the stream URL on the *same*
+    // element with no episode or translation change, dropping it to
+    // `readyState 0` and parking states with the flag still set. That mid-session
+    // source swap is a placement `firstApply` cannot see and `deferred` can.
+    //
+    // `state.doSeek` re-admits the toast on both paths, and is why this is a
+    // suppression of *attribution* and not of the message: a `doSeek` frame is
+    // the server relaying a peer's actual seek, which is a real event to report
+    // even if we happened to be loading when it landed. Only the inferred
+    // `diff > 3.0` arm invents a mover.
     const holding = pendingUserPause && !state.paused
     if (holding) notePendingPauseHeldState()
 
@@ -697,7 +730,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // two `v.play()` sites already close, through the same function.
       else v.play().catch(() => markProgrammaticPlayback(null))
     }
-    if (state.setBy && needsSeek && !holding) {
+    const describesAMove = (!deferred && !firstApply) || state.doSeek
+    if (state.setBy && needsSeek && !holding && describesAMove) {
       showSyncplayToast(`${state.setBy} seeked to ${deps.formatTime(state.position)}`)
     }
   }
@@ -726,7 +760,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       return
     }
     pendingRemoteState = null
-    applyRemoteStateToElement(state, v)
+    applyRemoteStateToElement(state, v, false)
   }
 
   function onVideoLoadedMetadata(): void {
@@ -751,7 +785,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // 1 Hz overwrite, the 3 s apply tolerance and main's adoption gate bound the
     // error; docs/syncplay.md, "Apply Rule".
     recordRemoteState(state)
-    applyRemoteStateToElement(state, v)
+    applyRemoteStateToElement(state, v, true)
   }
 
   // A remote episode change swaps the <video> source, and a state parked for the

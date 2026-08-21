@@ -1189,15 +1189,17 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
   // state, and the write itself is benign: it puts a fresh element back where
   // the user actually was.
   //
-  // **What is not benign, and what #278's plan got wrong.** The plan argued the
+  // **What was not benign, and what #278's plan got wrong.** The plan argued the
   // "X seeked to …" toast cannot fire for a rewritten frame because it is gated
   // on `needsSeek`, which is false once the position is ours. That holds only
   // while the element is *at* our position. On the park path it is at 0, so the
-  // gate opens and the toast names a peer for a move they never made. Fixing it
-  // would need main to tell the renderer the frame was rewritten — a new field
-  // on `SyncplayRemoteState`, which #278 explicitly rules out — so the wart is
-  // pinned here rather than papered over. It is bounded by the intent's own 5 s
-  // TTL and needs a source swap inside it.
+  // gate opened and the toast named a peer for a move they never made. #278
+  // pinned that as a wart on the reasoning that fixing it needs main to tell the
+  // renderer the frame was rewritten — a new field on `SyncplayRemoteState`,
+  // which #278 rules out. #289 closed it without one: the toast never had to
+  // know *whether main rewrote the frame*, only whether **this** apply describes
+  // a move rather than a placement, which is answerable in the renderer alone.
+  // So the silence below is now the fix's, and the write is still #278's.
   it('parks a rewritten frame and writes our own position at metadata time (#278)', async () => {
     const v = fakeVideo({
       currentTime: 0,
@@ -1217,9 +1219,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
 
     // Our position lands on the fresh element, not the room's.
     expect(v.currentTime).toBe(112)
-    // …and the misattributed toast, asserted so it goes red the day anyone
-    // teaches the renderer to tell a rewritten frame apart.
-    expect(client.syncplayToast.value).toBe('peer seeked to 1:52')
+    // …and no peer is named for putting it there (#289 flipped this assertion
+    // from `'peer seeked to 1:52'`).
+    expect(client.syncplayToast.value).toBe('')
   })
 
   // The second bug of the same class: `if (!v) return` at the top of
@@ -1454,6 +1456,177 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     expect(client.syncplayPausedBy.value).toBe('peer')
     client.applySyncplayReadyGate()
     expect(v.play).not.toHaveBeenCalled()
+  })
+})
+
+// #289. The seek toast reads `needsSeek`, which answers "does the element have
+// to move" — not "did a peer move". Those come apart on every *placement*: an
+// apply that puts a fresh or freshly-rebound element where the room already was.
+// `diff` is then the room's whole position, `needsSeek` is true for any room
+// past 3 s, and the toast names a peer for a move nobody performed.
+//
+// Two placement shapes, and neither predicate sees both. `deferred` catches the
+// park (#240), including the mid-session source swap where `remoteStateApplied`
+// is still set. `firstApply` catches the join with the file already loaded,
+// which takes the immediate path and so is not deferred at all. Hence the
+// disjunction. `state.doSeek` re-admits the toast on both, because a `doSeek`
+// frame is the server relaying a peer's actual seek — a real event even if we
+// happened to be loading when it landed. The writes are untouched throughout:
+// this is a fix to what we *say*, not to what we do.
+describe('useSyncplayClient — placement is not a peer’s move (#289)', () => {
+  it('writes a parked position without naming a peer for it', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // The room simply *is* at 112 while our element loads. `doSeek: false`:
+    // nobody seeked, this is the 1 Hz state.
+    emitRemoteState({ position: 112, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(0)
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    // The write is load-bearing and stays — it puts us where the room is…
+    expect(v.currentTime).toBe(112)
+    // …and on `main` it came with `'peer seeked to 1:52'`.
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  it('does not name a peer for the first placement on an already-loaded element', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // Joining a room mid-episode with the file already loaded: nothing parks,
+    // the immediate path runs, and the element is still at 0. `deferred` is
+    // false here, so `firstApply` is the only thing standing between this and
+    // the same invented attribution.
+    emitRemoteState({ position: 112, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.currentTime).toBe(112)
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  it('names the peer on the *next* move after the placement', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 112, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+
+    // The room has placed this element once, so it is no longer arriving — it is
+    // being moved. Anti-vacuity for the `firstApply` arm: a suppression that
+    // latched for the session would kill the feature and still pass above.
+    emitRemoteState({ position: 400, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(400)
+    expect(client.syncplayToast.value).toBe('peer seeked to 6:40')
+  })
+
+  // The case that pins the disjunction rather than `firstApply` alone.
+  // `remoteStateApplied` is not per-element: `resetRemoteStateTracking()` is its
+  // only writer back to false, and `selectQuality()` in PlayerView rebinds the
+  // stream URL on the *same* element without touching `activeEpisodeIndex` or
+  // `activeTranslationId` — so the element drops to `readyState 0` with the flag
+  // still true. A placement predicate built on `firstApply` alone reads this as
+  // an ordinary mid-session apply and toasts; `deferred` is what sees it.
+  it('does not name a peer after a mid-session source swap on the same element', async () => {
+    const v = fakeVideo({
+      currentTime: 40,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
+
+    // The room places us once, normally. This is what sets `remoteStateApplied`.
+    emitRemoteState({ position: 40, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+    expect(client.hasRemoteStateApplied()).toBe(true)
+
+    // A quality switch: same <video>, new source, back to HAVE_NOTHING at 0.
+    // Deliberately no episode or translation change — that is the whole point,
+    // since the watch that resets the flag never fires.
+    ;(v as { readyState: number }).readyState = 0
+    v.currentTime = 0
+    expect(deps.activeEpisodeIndex.value).toBe(0)
+    expect(deps.activeTranslationId.value).toBe(1)
+
+    emitRemoteState({ position: 112, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(0)
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(112)
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  // The discriminating anti-vacuity case. The obvious one — a live element at
+  // HAVE_METADATA taking a `doSeek: true` frame — survives *every* candidate
+  // guard, including a blanket suppression of the deferred path, so it proves
+  // nothing. A **deferred** `doSeek: true` is the one that separates them: it is
+  // a placement by position and a peer's real move by provenance, and only the
+  // `state.doSeek` disjunct keeps it speaking.
+  it('still names the peer for a genuine seek that arrives while we load', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(300)
+    expect(client.syncplayToast.value).toBe('peer seeked to 5:00')
+  })
+
+  // `state.setBy &&` is still the first term, and the new one must not have
+  // become the only guard: #277's mirror-sourced emits carry no author, and an
+  // unattributed frame has nobody to name on either path.
+  it('stays silent for an unattributed frame on both paths', async () => {
+    const parked = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const deferred = await mountWithRemoteState(makeDeps({ video: parked }), { state: 'ready' })
+    deferred.emitRemoteState({ position: 300, paused: true, doSeek: true, setBy: null })
+    ;(parked as { readyState: number }).readyState = 1
+    deferred.client.onVideoLoadedMetadata()
+    expect(parked.currentTime).toBe(300)
+    expect(deferred.client.syncplayToast.value).toBe('')
+
+    const live = fakeVideo({
+      currentTime: 600,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const immediate = await mountWithRemoteState(makeDeps({ video: live }), { state: 'ready' })
+    immediate.emitRemoteState({ position: 300, paused: true, doSeek: true, setBy: null })
+    immediate.emitRemoteState({ position: 900, paused: true, doSeek: true, setBy: null })
+    expect(live.currentTime).toBe(900)
+    expect(immediate.client.syncplayToast.value).toBe('')
   })
 })
 

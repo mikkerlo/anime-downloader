@@ -152,9 +152,12 @@ export function resolveMkvSpawnTarget(
     // saved record below. Syncplay shares *one* position across peers whose
     // files need not match — a peer on a different release, or on a version with
     // the extras attached, can legitimately be parked past the end of ours — and
-    // main hands `initialSeek` to ffmpeg's `-ss` unclamped (player.ipc.ts), where
-    // a target past the end is a run that emits nothing and an MSE session that
-    // buffers forever. `saved.duration` is the only duration in reach here
+    // main bounds `initialSeek` against the probed duration before it reaches
+    // ffmpeg's `-ss` (#275), refusing a target at or past the end and opening at
+    // 0 instead. Unbounded, such a target does not fail: ffmpeg's Matroska
+    // demuxer clamps the input seek to the last keyframe and emits the final
+    // GOP, so the session opens parked at the last frame and auto-advances to
+    // the next episode. `saved.duration` is the only duration in reach here
     // (main's probe has not run yet), so this can only bound the case where a
     // saved record exists — which is also the only case with somewhere better to
     // fall through to.

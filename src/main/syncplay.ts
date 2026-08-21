@@ -550,10 +550,13 @@ export class SyncplayClient extends EventEmitter {
   // paused the room has a player and has converged, by construction.) Unbounded, the
   // projection walked both forward with wall time for as long as the session
   // lived (a room at 600 answered 2400 after half an hour alone, and 900 after
-  // five minutes paused), and that number reaches ffmpeg's `-ss` — a target
-  // past the end of the file is a run that emits nothing and an MSE session
-  // that buffers forever. `null` is the safe answer: it is only the saved
-  // position, i.e. the pre-#262 behaviour.
+  // five minutes paused), and that number reaches ffmpeg's `-ss`. Since #275
+  // main refuses a target at or past the probed duration and opens at 0, but
+  // that is a floor, not a reason to hand it garbage: unbounded, such a target
+  // does not fail — ffmpeg's Matroska demuxer clamps the input seek to the last
+  // keyframe and emits the final GOP, so the session opens parked at the last
+  // frame and auto-advances to the next episode. `null` is the safe answer: it
+  // is only the saved position, i.e. the pre-#262 behaviour.
   //
   // The roster test is `isAdopted()`'s idiom, *including* its `rosterReceived`
   // guard: "the roster is empty" and "the roster has not arrived" are different

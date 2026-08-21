@@ -1033,7 +1033,10 @@ async function prepareMkvForPlayback(
           duration: streamResult.duration,
           mimeType: streamResult.mimeType,
           resumeTarget,
-          timestampOffset: streamResult.initialSeek
+          timestampOffset: streamResult.contentStart,
+          // The value we asked main for, so the composable makes the same
+          // out-of-file comparison main made (#275). Not `contentStart`.
+          requestedSpawnSeek: initialSeek
         });
         mkvBuffering.value = true;
         return { ok: true };
@@ -1167,7 +1170,9 @@ async function prepareHevcTranscode(
     duration: r.duration,
     mimeType: r.mimeType,
     resumeTarget,
-    timestampOffset: r.initialSeek
+    timestampOffset: r.contentStart,
+    // Same as the copy path (#275) — the value sent to main, not `contentStart`.
+    requestedSpawnSeek: initialSeek
   });
   mkvBuffering.value = true;
   return { ok: true };

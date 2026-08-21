@@ -33,6 +33,16 @@ export interface StartMseSessionOpts {
    * PTS-0-normalized fragments back onto the absolute file timeline.
    */
   timestampOffset: number
+  /**
+   * The seek the renderer *sent to main* for this open (`initialSeek`) — NOT
+   * `streamResult.contentStart`, which is what the run measured (#275).
+   *
+   * Optional and fail-open: an omitted or unknown value leaves the land exactly
+   * as it is. `test/**` sits outside both typecheck projects, so the existing
+   * call sites there pass `undefined` and the type says so rather than
+   * asserting a guarantee the build does not check.
+   */
+  requestedSpawnSeek?: number
 }
 
 export function useMsePlayer(deps: {
@@ -132,7 +142,31 @@ export function useMsePlayer(deps: {
   }
 
   function startMseSession(opts: StartMseSessionOpts): void {
-    const { sessionId, generation, duration, mimeType, resumeTarget, timestampOffset } = opts
+    const { sessionId, generation, duration, mimeType, timestampOffset, requestedSpawnSeek } = opts
+    // The open position was outside the file, so main refused it and spawned at
+    // 0 (#275). Drop the land with it: main opening at 0 while we still hold a
+    // `resumeTarget` past the end writes the playhead past the end, Chromium
+    // clamps that write to the seekable end, `ended` fires, and the player
+    // auto-advances to the next episode — the whole symptom, with the spawn
+    // already fixed.
+    //
+    // The predicate is on `requestedSpawnSeek`, not on `resumeTarget`, so it is
+    // the *same* comparison main makes on the *same* two numbers
+    // (`opts.duration` is `probe.duration` verbatim). Comparing `resumeTarget`
+    // instead would disagree with main across the 1 s pre-roll — a target in
+    // `[duration, duration + 1)` would have main spawn while we cancelled,
+    // leaving the playhead at 0 and the buffer at the last keyframe forever.
+    //
+    // Fail-open: an unknown duration, or an omitted `requestedSpawnSeek`,
+    // leaves the land untouched.
+    const outOfFile =
+      duration > 0 && requestedSpawnSeek !== undefined && requestedSpawnSeek >= duration
+    if (outOfFile) {
+      console.warn(
+        `[player] resume land cancelled — spawn seek ${requestedSpawnSeek.toFixed(2)} is at or past the file's duration ${duration.toFixed(2)}`
+      )
+    }
+    const resumeTarget = outOfFile ? 0 : opts.resumeTarget
     streamSessionId.value = sessionId
     currentStreamGen = generation
     mseInitialSeek.value = resumeTarget

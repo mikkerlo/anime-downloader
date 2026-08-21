@@ -239,7 +239,7 @@ interface Api {
         duration: number
         mimeType: string
         hasSubtitlesPending: boolean
-        initialSeek: number
+        contentStart: number
       }
     | { requiresTranscode: true }
     | { error: string }
@@ -254,7 +254,7 @@ interface Api {
         duration: number
         mimeType: string
         hasSubtitlesPending: boolean
-        initialSeek: number
+        contentStart: number
       }
     | { error: string }
   >

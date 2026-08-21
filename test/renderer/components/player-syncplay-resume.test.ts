@@ -98,6 +98,14 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     return SOURCE.slice(start, end).replace(/\s+/g, ' ')
   }
 
+  function transcodeBody(): string {
+    const start = SOURCE.indexOf('async function prepareHevcTranscode')
+    const end = SOURCE.indexOf('async function cancelHevcTranscode')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return SOURCE.slice(start, end).replace(/\s+/g, ' ')
+  }
+
   it('reads the room position before spawning the session', () => {
     const body = prepareBody()
     const read = body.indexOf('window.api.syncplayGetRoomPosition(')
@@ -147,6 +155,20 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     expect(prepareBody()).toContain(
       'window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName())'
     )
+  })
+
+  // #275: the composable bounds the resume land against the same duration main
+  // bounds the spawn against, but only if it is handed the value the renderer
+  // *sent to main*. `MseOpenResult.initialSeek` → `contentStart` makes the
+  // look-alike `requestedSpawnSeek: streamResult.initialSeek` a compile error,
+  // which is the failure mode actually observed; this scan covers the ones it
+  // does not — `requestedSpawnSeek: 0` or `: resumeTarget`, both of which
+  // typecheck and both of which silently restore the bug. Per call site: the
+  // copy path and the transcode path each wire their own, and only one of them
+  // being right is exactly the "the two paths disagree" bug.
+  it('hands the composable the seek it sent to main, at both call sites', () => {
+    expect(prepareBody()).toContain('requestedSpawnSeek: initialSeek')
+    expect(transcodeBody()).toContain('requestedSpawnSeek: initialSeek')
   })
 
   it('pairs the room-seeded flag with the live stream session', () => {

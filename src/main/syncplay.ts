@@ -1511,6 +1511,14 @@ export class SyncplayClient extends EventEmitter {
     // has to narrow **both** sides, not just add a fourth `return` past it:
     // narrowing only the emit is what would break the implication.
     //
+    // A *value substitution* is a different animal and this implication does not
+    // reach it (#278). The `seekIntentWasLive` rewrite below changes what the
+    // emitted frame carries, never whether it is emitted, so both sides of the
+    // implication are the same sets they were and neither has to move. That is
+    // the whole safety argument for it, and it is why the rule is written as a
+    // rewrite rather than a fourth `return`: the drop would trip this invariant
+    // *and* lose the pause half of the frame that #228 needs.
+    //
     // Hoisting is value-preserving, which is what lets one const stand for all
     // three reads: `isForeignSetBy()` is pure, and the only writers of
     // `pendingClientAck` and `config` are sendLocalState(), resetTransportState()
@@ -1561,6 +1569,43 @@ export class SyncplayClient extends EventEmitter {
       log('retiring seek intent — superseded by a peer seek', { setBy, position })
       this.seekIntent = null
     }
+    // "A seek of ours is still unresolved on this tick" (#278). While that is
+    // true the emit below hands the renderer *our* position instead of the
+    // room's: `maybeReassertSeek()` is about to tell the server the room is
+    // wrong, and falling through to hand the renderer that same contradicted
+    // position off the same frame is the cross-fire the user sees as "the
+    // second arrow press reverts to the first".
+    //
+    // Read **here** — below the retraction's closing brace above and above the
+    // maybeReassertSeek() call below — and that ordering is the whole design:
+    //
+    //  - below the retraction, so a peer's genuine `doSeek` that we are about
+    //    to apply has already nulled the intent and this reads `false`. That is
+    //    the escape hatch, for free and with no second branch.
+    //  - above the call, so the tick the intent *dies* is still the last tick it
+    //    protects. maybeReassertSeek() has four terminal exits that null the
+    //    intent and return without asserting; three — the spectator/de-adopted
+    //    branch, the TTL and the attempt ceiling — fall straight through to the
+    //    emit below, so reading after the call would ship a yank on each. The
+    //    fourth, the drift-converged exit, is benign: see below.
+    //
+    // The protection is exactly one tick wide at the ceiling, and no wider
+    // (#278 review): the tick after the give-up has no intent to read, so it is
+    // an ordinary frame and the room's position goes out unrewritten. In
+    // symptom 1's real shape that never bites — the re-assert is accepted once
+    // the ignore window closes and the drift-converged exit retires the intent with
+    // the room already where we are — but in the exhausted-ceiling shape the fix turns
+    // four excursions into one rather than none. Pinned as a characterisation.
+    //
+    // Nothing is *dropped*. This substitutes a value on a frame that is emitted
+    // either way, so the implication the comment at the hoist above rests on —
+    // "the intent was retired ⇒ the renderer was handed that frame" — is
+    // untouched on both sides. It is also what keeps #228: recordRemoteState()
+    // runs unconditionally at the top of applyRemoteState()
+    // (use-syncplay-client.ts:655-656) and owns the pending-pause release and
+    // the "Paused by …" badge, so dropping the frame would lose the pause half
+    // to save the position half. Rewrite, never drop.
+    const seekIntentWasLive = this.seekIntent !== null
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
@@ -1650,13 +1695,42 @@ export class SyncplayClient extends EventEmitter {
     // — wider still under #240, which defers the write to `loadedmetadata`. The
     // renderer's own value-keyed guard still suppresses that echo, so the loss
     // is main's belt, not both layers.
-    if (doSeek || Math.abs(this.snapshot.position - compensated) > ADOPT_TOLERANCE_S) {
-      this.lastAppliedRemotePosition = Math.max(0, compensated)
+    //
+    // While a seek of ours is unresolved the room does not get to move our
+    // playhead (#278), so what goes out is our own snapshot rather than the
+    // room's projection. Flat, not projected: `compensated` shifts the *room's*
+    // reading forward by half an RTT because that reading aged in flight, and
+    // our snapshot did not travel anywhere. It is also what buildPlaystate()
+    // already puts on the wire, so main asserts one value rather than two.
+    //
+    // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
+    // tolerance: the element only advances while it is firing `timeupdate`, so
+    // a reading that is seconds old is still an accurate reading of a *stopped*
+    // element (use-syncplay-client.ts:373-386, SNAPSHOT_MIN_INTERVAL_MS at
+    // :169). If the renderer ever gains a playback-rate control this bound has
+    // to be re-derived.
+    const emitted = seekIntentWasLive ? this.snapshot.position : compensated
+    if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
+      this.lastAppliedRemotePosition = Math.max(0, emitted)
     }
     // Recorded here, on the value we are about to emit, so `getRoomPosition()`
     // answers with exactly what the renderer would have applied — clamped like
     // the echo target above, so a projection can only walk it forward (#262).
-    this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
+    //
+    // Skipped entirely on a rewritten tick (#278) rather than written from
+    // `emitted`: that value is *ours*, and `getRoomPosition()` answering our own
+    // position is the regression class syncplay-room-position.test.ts pins
+    // ("returns null when the only states seen were set by us"). The previous
+    // value is left standing to age out under ROOM_POSITION_MAX_AGE_MS (:84),
+    // and if there is no previous value — the session's first foreign frame
+    // arriving inside the window — `getRoomPosition()` keeps answering `null`
+    // for the life of the intent. `lastRoomState` (:1498) is deliberately not
+    // part of this: it is written above the guards and unfiltered, so the
+    // mirror, `isAdopted()` and maybeReassertSeek()'s own drift test keep a
+    // fresh anchor on the room's real claim.
+    if (!seekIntentWasLive) {
+      this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
+    }
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two
     // statements that would both be false: a "<me> seeked to 10:06" toast for a
@@ -1666,10 +1740,22 @@ export class SyncplayClient extends EventEmitter {
     // already allows it and both renderer reads are already null-guarded — so
     // no flag and no renderer change is needed to say it.
     const emittedSetBy = isRoomVoice ? null : setBy
-    log('remote-state', { paused, position: compensated, setBy: emittedSetBy, doSeek })
+    // `paused`, `setBy` and `doSeek` pass through unchanged on a rewritten tick:
+    // only the position is ours. `doSeek` is provably `false` there, in two
+    // steps. A foreign, acked `doSeek` frame retired the intent at the
+    // retraction above; and the only other route to this emit — the
+    // `isRoomVoice` branch, which #277 added beside the foreign path so that
+    // what reaches the emit (:1663) is a strict superset of
+    // `willApplyRemoteState` (:1539) — cannot coincide with a live intent:
+    // isRoomVoice() is gated on `!playbackAdopted` (:1972), sendLocalState()
+    // arms the intent only below the isAdopted() gate (:627, :662), and every
+    // writer of `playbackAdopted = false` (:574, :682, :719) nulls the intent
+    // beside it. So it is an invariant to assert rather than a value to
+    // hardcode, and what carries it is adoption rather than the drop guards.
+    log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
-      position: compensated,
+      position: emitted,
       setBy: emittedSetBy,
       doSeek
     })

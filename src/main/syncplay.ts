@@ -340,9 +340,26 @@ export class SyncplayClient extends EventEmitter {
   // a user alone in a room has one (their own reported position echoed back),
   // and seeding a spawn from it would re-break the solo-room case
   // `roomOwnsPlayhead()` exists to protect. Session-scoped like `lastRoomState`,
-  // plus cleared when *our* file identity changes — the room's position belongs
-  // to the file it was reported for (#262).
-  private lastRemoteRoomState: { position: number; paused: boolean; at: number } | null = null
+  // plus **keyed** to the file it was reported for — the room's position belongs
+  // to that file and to no other (#262, #276).
+  //
+  // The key replaces a blind clear in `setFile()`, which was the same idea in a
+  // mechanism that destroyed the value instead of scoping it: on a *first* open
+  // `currentFile` is `null`, so the identity check fired unconditionally and the
+  // single push that makes the read legal was the push that wiped the field. The
+  // seed was dead on exactly the path it exists for. Keying it says the same
+  // thing without the destruction — episode 2 cannot read episode 1's position
+  // because the key does not match, not because something raced to null it.
+  //
+  // `canonicalName: null` means "this state arrived while no player had
+  // announced anything" — a state that describes the **room**, not any file of
+  // ours. `setFile()` adopts that one, once, gated on the roster.
+  private lastRemoteRoomState: {
+    canonicalName: string | null
+    position: number
+    paused: boolean
+    at: number
+  } | null = null
   // Whether local playback has converged with the room. False for a freshly
   // opened file — its <video> reports {0, paused} until the first remote State
   // seeks it — so that startup state is never asserted at the room.
@@ -552,19 +569,31 @@ export class SyncplayClient extends EventEmitter {
   // exists.
   //
   // Scoped to the caller's file rather than merely ordered against it (#272
-  // review). `setFile()`'s identity clear does drop the previous episode's
-  // position, but "the clear has already run" was a property of *ordering* — on
-  // a fresh mount for a different episode it rests on `useSyncplayClient`'s
-  // `onMounted` push landing ahead of `PlayerView`'s own `onMounted`, which it
-  // does today only by the two `getSetting` awaits in front of this read.
-  // Removing one of those inverts it silently and episode 2 spawns at episode
-  // 1's position. Answering only for the file the caller names makes that
-  // structural: the clear becomes belt rather than the load-bearing part.
+  // review), and since #276 that scoping is a **conjunction of two guards
+  // pointing in opposite directions**, not one guard plus a clear:
+  //
+  //  - the caller-scope guard refuses a read naming a file main is not on. It
+  //    is the one that covers a read for a file we have **left** — peer state
+  //    stored under ep 1, `setFile(ep 2)`, then a read naming ep 1: the key
+  //    below matches there, and without this line the answer is ep 1's stale
+  //    room position instead of `null`.
+  //  - the key match refuses a *state* reported for a different file. It is the
+  //    one that covers the switch — main on ep 2, state stored under ep 1.
+  //
+  // Neither subsumes the other and neither is belt. Before #276 the second job
+  // was done by `setFile()`'s blind clear, which made the property one of
+  // *ordering*: on a fresh mount for a different episode it rested on
+  // `useSyncplayClient`'s `onMounted` push landing ahead of `PlayerView`'s own
+  // `onMounted`, which it does today only by the two `getSetting` awaits in
+  // front of this read. Removing one of those inverted it silently — and worse,
+  // the clear also fired on a *first* open, where it destroyed the very value
+  // the seed exists for. The key makes both structural.
   getRoomPosition(canonicalName: string): number | null {
     if (this.status.state !== 'ready') return null
     if (!this.currentFile || this.currentFile.canonicalName !== canonicalName) return null
     const room = this.lastRemoteRoomState
     if (!room) return null
+    if (room.canonicalName !== canonicalName) return null
     if (this.rosterReceived) {
       const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
       if (alone) return null
@@ -586,13 +615,48 @@ export class SyncplayClient extends EventEmitter {
     // come from the same, still-live player.
     const identityChanged = this.currentFile?.canonicalName !== file.canonicalName
     const isNewPlayer = identityChanged || file.newPlayer === true
-    // The room's position was reported for the file we were on. Handing it to
-    // the next episode's ffmpeg spawn would be worse than the saved position it
-    // replaces, so it is dropped on an identity change and re-earned from the
-    // next inbound state (~1 Hz). Keyed on identity alone, not `isNewPlayer`: a
-    // same-episode reopen is the same content, and the room's position is still
-    // the right seed for it (#262).
-    if (identityChanged) this.lastRemoteRoomState = null
+    // Nothing is dropped here any more (#276). The room's position is keyed to
+    // the file it was reported for, so `getRoomPosition()` refuses episode 1's
+    // state for an episode 2 read on its own — and the blind clear this replaces
+    // was the bug: on a *first* open `currentFile` is `null`, so it fired
+    // unconditionally and wiped the field in the same push that made the read
+    // legal, leaving the join-time seed dead on the one path it exists for.
+    //
+    // What is left is the one key the read can never match by itself: `null`,
+    // meaning the state arrived while no player had announced anything. That
+    // state describes the **room**, and on a first open it is exactly the value
+    // we want, so the announce adopts it — once, and only while it is still the
+    // unkeyed one. Everything else is left alone; the key already answers it.
+    //
+    // Adoption is **checked, not assumed**. "The room was already on this
+    // content" is the premise, and the flow it targets — join Watch Together
+    // with no player, sit in the room, then open something — is also the flow
+    // most likely to open content the room is *not* on. The roster already
+    // carries what decides it. Compared on `animeId` + `episodeInt` only, never
+    // `translationId`: `canonicalName` has no translation component, and two
+    // peers on different translations of the same episode share a playhead
+    // legitimately. Permissive where the roster is silent — no peer publishing
+    // `animeDlAppMeta` (a vanilla Syncplay peer, or a `List` we could not key to
+    // our room, #223) means "unknown", not "contradicted" — because refusing
+    // without positive proof would disable the feature outright against
+    // non-app peers, which is the worse default. A contradicted state is left
+    // unkeyed rather than nulled: the read already refuses it, and a later
+    // announce that *does* match may still adopt it inside the age cap.
+    if (this.lastRemoteRoomState?.canonicalName === null) {
+      const peerMetas = this.roomUsers
+        .filter((u) => u.username !== this.config?.username)
+        .map((u) => u.animeDlAppMeta)
+        .filter((m): m is NonNullable<typeof m> => !!m)
+      const contradicted =
+        peerMetas.length > 0 &&
+        !peerMetas.some((m) => m.animeId === file.animeId && m.episodeInt === file.episodeInt)
+      if (!contradicted) {
+        this.lastRemoteRoomState = {
+          ...this.lastRemoteRoomState,
+          canonicalName: file.canonicalName
+        }
+      }
+    }
     // A different <video> is back at position 0 — it has to converge on the
     // room again before it may assert, or its startup play/pause/seeked events
     // yank the room to 0 through a latch the previous player earned.
@@ -1784,8 +1848,19 @@ export class SyncplayClient extends EventEmitter {
     // part of this: it is written above the guards and unfiltered, so the
     // mirror, `isAdopted()` and maybeReassertSeek()'s own drift test keep a
     // fresh anchor on the room's real claim.
+    //
+    // Keyed to the file we were playing when the state arrived (#276) — the
+    // single stamp site, and the only place the key is ever derived. `null` when
+    // no player has announced one, which is a state describing the room rather
+    // than any file of ours; `setFile()` adopts that one on the next announce.
+    // A rewritten tick stamps no key at all, because it does not write.
     if (!seekIntentWasLive) {
-      this.lastRemoteRoomState = { position: Math.max(0, compensated), paused, at: Date.now() }
+      this.lastRemoteRoomState = {
+        canonicalName: this.currentFile?.canonicalName ?? null,
+        position: Math.max(0, compensated),
+        paused,
+        at: Date.now()
+      }
     }
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two

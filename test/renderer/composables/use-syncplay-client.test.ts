@@ -806,6 +806,15 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
 
     s.markProgrammaticSeek(0)
 
+    // The load completes before the user can seek anything — which is what the
+    // narrative above already describes ("a few seconds into the new episode"),
+    // and what #284's readiness gate now requires the fixture to spell out: an
+    // element still at HAVE_NOTHING sends nothing at all, so leaving it there
+    // would make both assertions below pass or fail for the gate's reason
+    // instead of the mark's. The mark is still taken at `readyState 0`, which is
+    // the half this test pins.
+    ;(v as { readyState: number }).readyState = 1
+
     // Nothing armed at all: even a seek landing *within* APPLIED_SEEK_EPSILON of
     // the write goes out, which a value-keyed mark at 0 would have swallowed.
     vi.advanceTimersByTime(1000)
@@ -3352,5 +3361,212 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // playhead parked at 600). That write is what lets main's drift test latch
     // adoption and end the hold the honest way.
     expect(v.currentTime).toBe(604)
+  })
+})
+
+// #284. Both outbound doors — the 1 Hz snapshot and the play/pause/seek State —
+// are gated on the element having at least metadata, because a *reloading*
+// element reports `currentTime === 0` for the whole load and neither of main's
+// two de-adoption escapes fires during an in-player translation or quality
+// switch: `buildCanonicalName()` carries no translation component and
+// `newPlayer` is false, so `setFile()` does not reset the latch, and the zeros
+// themselves keep `hasLivePlayback()` true so the stale-gap reset is never
+// reached either. An adopted client announcing 0 wins the server's `min()` and
+// drags every peer to the start.
+//
+// What this does *not* buy — and what the acceptance criteria were corrected to
+// say — is "the room does not move". With both doors shut nothing refreshes
+// main's `snapshot`, so its heartbeat keeps re-asserting the frozen pre-switch
+// position at 1 Hz and the room stalls there until `PLAYBACK_STALE_MS`. The
+// property pinned here is the renderer half: no `position: 0` on the wire, and
+// pushes resuming the moment the element has metadata again.
+// `test/services/syncplay-frozen-snapshot.test.ts` carries the room half.
+describe('useSyncplayClient — a reloading element announces nothing (#284)', () => {
+  // `readyState 0` is HAVE_NOTHING — the state the media load algorithm resets
+  // to synchronously when `videoSrc` computes to `''` on a translation switch.
+  const RELOADING = 0
+  // HAVE_METADATA. The gate sits *below* this on purpose: an MSE buffer respawn
+  // drops the element to exactly here and never lower, so a stricter test would
+  // suppress real positions on every refill.
+  const RESPAWNED = 1
+
+  it('pushes no snapshot on a timer tick while the element is reloading', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: RELOADING
+    } as Partial<HTMLVideoElement>)
+    await mountWithRemoteState(makeDeps({ video: v }), { state: 'ready', username: 'me' })
+
+    // Five seconds of the awaited round trip, at the composable's own cadence.
+    vi.advanceTimersByTime(5000)
+
+    expect(sendSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('sends no State for the implicit pause the reload queues', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: RELOADING
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.onLocalPause()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // Deliberate, and called out so it does not read as an accidental behaviour
+  // change: PlayerView's restore `nextTick` calls `v.play()` while the element
+  // is still at HAVE_NOTHING, and `play` is dispatched regardless of
+  // `readyState`. Ungated that puts `paused: false, position: 0` on the wire.
+  // The intent is not lost — the case below shows it arriving on the first
+  // post-load snapshot, carried by `intentOr(v)`.
+  it('swallows the auto-resume play, and the intent still reaches the room after the load', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: RELOADING
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The restore resumes an element that has not loaded yet.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // …the load then completes at the restored position.
+    ;(v as { readyState: number }).readyState = RESPAWNED
+    v.currentTime = 612
+    vi.advanceTimersByTime(1000)
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
+  })
+
+  it('carries currentTime on both doors once the element has metadata', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 612,
+      paused: false,
+      readyState: RESPAWNED
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 612, cause: 'pause' })
+  })
+
+  // The boundary case, and the one that separates "HAVE_NOTHING" from "not
+  // ready": an MSE respawn removes the buffered range and drops the element to
+  // HAVE_METADATA with `currentTime` still on the real position. Suppressing
+  // there would stop the pushes for the length of a refill and make
+  // `PLAYBACK_STALE_MS` reachable — de-adoption *and* a dropped `seekIntent` in
+  // `maybeReassertSeek()` — through a path that is working correctly.
+  it('keeps pushing through an MSE respawn, which never goes below HAVE_METADATA', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 845,
+      paused: false,
+      readyState: 4
+    } as Partial<HTMLVideoElement>)
+    await mountWithRemoteState(makeDeps({ video: v }), { state: 'ready', username: 'me' })
+
+    // `sb.remove()` over the full range: the data is gone, the seek stays
+    // pending, and `currentTime` sits on the target.
+    ;(v as { readyState: number }).readyState = RESPAWNED
+    vi.advanceTimersByTime(1000)
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 845, paused: false })
+  })
+
+  // The scenario end to end, at the composable's real cadence: an adopted
+  // client mid-episode switches translation, the element reloads and sits at
+  // HAVE_NOTHING across the awaited round trip, and the restore then writes the
+  // saved position. Nothing this client puts on the wire ever claims 0 — which
+  // is the whole defect — and the first post-load push is a normal one.
+  it('puts no position 0 on the wire across a translation switch, and resumes after it', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 612,
+      paused: false,
+      readyState: 4
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { client } = await mountWithRemoteState(deps, { state: 'ready', username: 'me' })
+
+    // Two seconds of ordinary playback first, so the "no 0 on the wire"
+    // assertion below has real frames to be true about.
+    vi.advanceTimersByTime(2000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
+
+    // `selectTranslation()` → `resetMseState()` → `videoSrc` becomes `''`. The
+    // element reloads: HAVE_NOTHING, playhead 0, and the teardown queues a
+    // `pause`.
+    ;(v as { readyState: number }).readyState = RELOADING
+    ;(v as { paused: boolean }).paused = true
+    v.currentTime = 0
+    client.onLocalPause()
+
+    // The awaited `playerFindLocalFile` / `prepareMkvForPlayback` /
+    // `playerGetStreamUrl` round trip, with the 1 Hz interval running through
+    // all of it.
+    deps.activeTranslationId.value = 2
+    await flushPromises()
+    vi.advanceTimersByTime(4000)
+
+    // The restore `nextTick`: seek back to the saved position, then resume —
+    // both still on an element that has not loaded.
+    client.markProgrammaticSeek(612)
+    v.currentTime = 612
+    client.onVideoSeeked()
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    const positions = [
+      ...sendSnapshot.mock.calls.map((c) => (c[0] as { position: number }).position),
+      ...sendLocalState.mock.calls.map((c) => (c[0] as { position: number }).position)
+    ]
+    expect(positions).not.toContain(0)
+    // Nor anything else below where we were when the switch began: a peer that
+    // applied any of these frames is never dragged backwards.
+    expect(Math.min(...positions)).toBeGreaterThanOrEqual(612)
+
+    // The load completes and the pushes resume, unchanged.
+    sendSnapshot.mockClear()
+    ;(v as { readyState: number }).readyState = 4
+    client.onVideoLoadedMetadata()
+    vi.advanceTimersByTime(1000)
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
   })
 })

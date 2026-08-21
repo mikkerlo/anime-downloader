@@ -51,6 +51,17 @@
 // Shared rather than file-local because #278 and #279 are written against the
 // same model (#277 review) — they are the cross-fire and the room-slides-
 // backwards halves of the same election.
+//
+// #279 adds three knobs on top, all additive and all defaulting to the
+// reference's own behaviour: `forwardDelay` (the `fd` in `reported + fd`, so
+// `2d − fd` can be pinned as a *relationship* rather than read off one
+// measurement),
+// `echoHoldCorrection` (whether the server corrects the echo of our
+// `clientLatencyCalculation` for its own hold, which is what decides whether
+// the client's `serverRtt` is a network RTT or a broadcast interval), and the
+// `wire` readout — every outbound playstate stamped at *send*, which is the
+// quantity #279 is about and the one `elections` cannot show, since it reports
+// what the server made of a frame one delay after the fact.
 
 import type { EventEmitter } from 'events'
 
@@ -69,6 +80,43 @@ export interface MinElectionServerOptions {
   stateIntervalMs?: number
   /** `Room.getPosition()` re-elects when the room state is older than this. */
   electionAgeMs?: number
+  /**
+   * The `fd` rule in `Watcher.updateState`'s `position + forwardDelay` store
+   * (`server.py:875-884`). `'avrRtt/2'` — the default — is the reference's own
+   * rule, i.e. one one-way delay for a symmetric link. A number is a fixed
+   * value in **seconds**: `0` models a server whose RTT estimate never
+   * converged (no echo ever reaches it), and a larger constant models one that
+   * over-compensates. #279 is written against the `2d − fd` relationship this
+   * knob is the free variable of.
+   */
+  forwardDelay?: 'avrRtt/2' | number
+  /**
+   * Whether the echo of `clientLatencyCalculation` carries the server's own
+   * hold correction. `true` is the reference's rule — `Watcher.getLatency
+   * Calculation()` adds the time the server sat on our stamp waiting for its
+   * next 1 Hz broadcast, the mirror image of our `consumeServerLatencyEcho()`
+   * — and makes the client's `serverRtt` read the network RTT (`2d`).
+   *
+   * `false` models a server that echoes our stamp **verbatim**, billing the
+   * hold to the network: measured here, a client's `serverRtt` reads ~1.05 s
+   * against a 100 ms link. That is not hypothetical — it is exactly the failure
+   * our own echo correction exists to spare the server — and it is the sample
+   * #279's clamp on `serverRtt / 2` is sized for.
+   *
+   * **Default `true`: this shared harness models the reference.** The knob
+   * arrived with #279 defaulting to `false`, because the #277 fixture had been
+   * written and merged against the uncorrected echo and one of its cases ("lets
+   * the joiner converge and adopt") sat *on* `ADOPT_TOLERANCE_S` under the
+   * correction — 3.0000000477 s against a 3 s bound, with the inflated
+   * `serverRtt` over-compensating `handleState()`'s `position + serverRtt / 2`
+   * in the other direction. #279's own anchor back-dating changed that
+   * arithmetic (the same fixture now reads 3.10 s corrected, 3.15 s with the
+   * fix reverted), so the constraint that bought the `false` default is gone
+   * and the default is the reference's rule. A case that wants the verbatim
+   * echo — #279's clamp, which is *sized* for that sample — opts out with
+   * `echoHoldCorrection: false`.
+   */
+  echoHoldCorrection?: boolean
 }
 
 export interface SeatOptions {
@@ -91,6 +139,28 @@ export interface Election {
   positions: Record<string, number>
 }
 
+/**
+ * One outbound playstate, as the client put it on the wire — stamped at *send*
+ * rather than at receipt, so it can be read against ground truth without the
+ * link delay folded in. `elections` says what the server made of these; this
+ * says what we asserted, which is the quantity #279 is about.
+ */
+export interface WireFrame {
+  at: number
+  username: string
+  position: number
+  /** Absent exactly when the frame made no pause claim — i.e. a spectator mirror. */
+  paused?: boolean
+  doSeek?: boolean
+  /**
+   * Where the server's room read at that same instant. `position - room` is the
+   * quantity #279 turns on: negative is a mirror below the room (it wins the
+   * election and the room is re-derived from it), zero is a mirror that agrees,
+   * positive is one that has over-corrected past it.
+   */
+  room: number
+}
+
 interface Watcher {
   username: string
   socket: ModelSocket
@@ -106,6 +176,8 @@ interface Watcher {
   lastUpdatedOn: number
   /** The client's own timestamp, echoed back so its RTT calibration works. */
   latencyEcho: number | null
+  /** When that timestamp arrived, for the hold correction on the way out. */
+  latencyEchoArrivedAt: number
 }
 
 type JsonRecord = Record<string, unknown>
@@ -115,10 +187,14 @@ const isRecord = (v: unknown): v is JsonRecord => typeof v === 'object' && v !==
 export class MinElectionServer {
   /** Every re-election, in order — the fixture's window onto the mechanism. */
   readonly elections: Election[] = []
+  /** Every outbound playstate, in order, as its client sent it. */
+  readonly wire: WireFrame[] = []
 
   private readonly room: string
   private readonly stateIntervalMs: number
   private readonly electionAgeMs: number
+  private readonly forwardDelay: 'avrRtt/2' | number
+  private readonly echoHoldCorrection: boolean
   private readonly watchers = new Map<string, Watcher>()
   private roomPosition: number
   private roomPaused: boolean
@@ -133,6 +209,8 @@ export class MinElectionServer {
     this.roomPaused = opts.paused ?? false
     this.stateIntervalMs = opts.stateIntervalMs ?? 1000
     this.electionAgeMs = opts.electionAgeMs ?? 1000
+    this.forwardDelay = opts.forwardDelay ?? 'avrRtt/2'
+    this.echoHoldCorrection = opts.echoHoldCorrection ?? true
     this.roomLastUpdate = Date.now()
     this.timer = setInterval(() => this.broadcastPeriodicState(), this.stateIntervalMs)
   }
@@ -150,6 +228,11 @@ export class MinElectionServer {
   /** The elections that named `username` as the `min()` watcher. */
   electionsSetBy(username: string): Election[] {
     return this.elections.filter((e) => e.setBy === username)
+  }
+
+  /** Every playstate `username` put on the wire, in send order. */
+  wireOf(username: string): WireFrame[] {
+    return this.wire.filter((f) => f.username === username)
   }
 
   /**
@@ -174,7 +257,8 @@ export class MinElectionServer {
       file: null,
       ready: true,
       lastUpdatedOn: now,
-      latencyEcho: null
+      latencyEcho: null,
+      latencyEchoArrivedAt: now
     }
     this.watchers.set(opts.username, watcher)
 
@@ -189,6 +273,11 @@ export class MinElectionServer {
   }
 
   // --- the election ------------------------------------------------------
+
+  /** `Watcher.updateState`'s `forwardDelay`, in seconds, for this watcher. */
+  private forwardDelayFor(w: Watcher): number {
+    return this.forwardDelay === 'avrRtt/2' ? w.delayMs / 1000 : this.forwardDelay
+  }
 
   private watcherPosition(w: Watcher): number {
     // `Watcher.getPosition()` (server.py:780-787) advances by wall time iff the
@@ -321,6 +410,24 @@ export class MinElectionServer {
         const state = msg.State
         const w = this.watchers.get(username)
         if (!w) continue
+        // The wire readout is taken *here*, at send time, before the frame pays
+        // the delay: #279 measures what we asserted against where the room
+        // truly was at that instant, and stamping it at receipt would fold one
+        // of the two delays under test into the measurement.
+        const sent = isRecord(state.playstate) ? state.playstate : null
+        if (sent) {
+          this.wire.push({
+            at: Date.now(),
+            username,
+            position: typeof sent.position === 'number' ? sent.position : 0,
+            ...(typeof sent.paused === 'boolean' ? { paused: sent.paused } : {}),
+            ...(typeof sent.doSeek === 'boolean' ? { doSeek: sent.doSeek } : {}),
+            // Read, not elected: `projectedRoom()` rather than
+            // `electRoomPosition()`, so taking the readout can never move the
+            // room the fixture is measuring.
+            room: this.projectedRoom()
+          })
+        }
         // Inbound frames pay the link delay: the number inside was computed at
         // the client's send, and the server stamps it at arrival.
         setTimeout(() => this.applyState(username, state), w.delayMs)
@@ -351,6 +458,7 @@ export class MinElectionServer {
     if (!w) return
     if (isRecord(state.ping) && typeof state.ping.clientLatencyCalculation === 'number') {
       w.latencyEcho = state.ping.clientLatencyCalculation
+      w.latencyEchoArrivedAt = Date.now()
     }
     const ps = isRecord(state.playstate) ? state.playstate : null
     if (!ps) return
@@ -361,8 +469,11 @@ export class MinElectionServer {
     // make the correction land somewhere other than the error. Only for a frame
     // whose `paused` is falsy or absent, as in `_updatePositionByAge`
     // (`server.py:870-873`) — `not None` is true, so a mirror is compensated and
-    // an explicit `paused: true` is stored raw.
-    w.position = position + (ps.paused === true ? 0 : w.delayMs / 1000)
+    // an explicit `paused: true` is stored raw. The `fd` term is the harness's
+    // free variable (`forwardDelay`), because #279's deficit is `2d − fd` and a
+    // single measurement at the reference's own `fd = avrRtt/2` cannot tell that
+    // apart from a bare `d`.
+    w.position = position + (ps.paused === true ? 0 : this.forwardDelayFor(w))
     if (hasPaused) w.paused = ps.paused as boolean
     // `Room.setPaused` only on a change (`server.py:876-879`); the forced update
     // reads `room.isPaused()` and never writes it. Unconditionally mirroring the
@@ -390,7 +501,14 @@ export class MinElectionServer {
   private sendState(w: Watcher, playstate: JsonRecord, serverCounter?: number): void {
     const ping: JsonRecord = { latencyCalculation: Date.now() / 1000 }
     if (w.latencyEcho !== null) {
-      ping.clientLatencyCalculation = w.latencyEcho
+      // `Watcher.getLatencyCalculation()` adds the hold — the time the server
+      // sat on our stamp waiting for its next 1 Hz broadcast — so the client's
+      // `now − echo` is the network RTT and not the RTT plus a broadcast
+      // interval. Switching it off is what makes a client's `serverRtt` read
+      // ~1.1 s on a 100 ms link, which is the sample #279's clamp is sized for.
+      ping.clientLatencyCalculation = this.echoHoldCorrection
+        ? w.latencyEcho + (Date.now() - w.latencyEchoArrivedAt) / 1000
+        : w.latencyEcho
       w.latencyEcho = null
     }
     const frame: JsonRecord = { ping, playstate }

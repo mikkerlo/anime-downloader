@@ -69,6 +69,31 @@ export const ADOPT_TOLERANCE_S = 3
 // somewhere else, and a real seek to within half a second of the room's own
 // position is a no-op for everyone anyway.
 export const ECHO_SEEK_EPSILON_S = 0.5
+// Ceiling on the one-way delay `handleState()` will back-date the room's
+// arrival stamp by (#279). `serverRtt / 2` is the only clock-offset-free
+// estimate of that delay we have, and it is a *measurement*: the rig produces
+// `serverRtt = 1.05 s` on a 100 ms link the moment the server echoes our
+// `clientLatencyCalculation` verbatim instead of correcting for its own hold —
+// the mirror image of the phantom forward delay `consumeServerLatencyEcho()`
+// exists to spare the server, and precisely what a `#223`-class server does. An
+// unclamped half of that back-dates the anchor by 0.525 s and puts our mirror
+// that far *above* the room, where it cannot win min() but can defeat
+// `isAdopted()`'s drift test.
+//
+// 0.25 s is chosen against two things at once. It is one twelfth of
+// ADOPT_TOLERANCE_S, so a fully saturated clamp moves the two drift tests that
+// read this anchor by under 9 % of their tolerance and can never be the term
+// that flips one; and 0.25 s one-way is 0.5 s round trip, past which a 1 Hz
+// protocol with a 3 s apply rule has larger problems than its anchor. The
+// inflation sample sits 2.1x outside it, which is the point: the clamp has to
+// bind on that sample or it is decorative.
+//
+// Clamped *at the use site*, deliberately. The tempting one-liner is to narrow
+// the inbound acceptance window (`rtt > 0 && rtt < 5`), but `serverRtt` is also
+// the `+ serverRtt / 2` in `compensated`, hence `lastRemoteRoomState`, hence
+// the ffmpeg `-ss` seed (#275) — and the `clientRtt` we advertise to the
+// server. `serverRtt` itself is untouched by #279.
+export const MAX_ROOM_ANCHOR_LAG_S = 0.25
 // How long a non-self room state may be projected forward before
 // `getRoomPosition()` stops trusting it (#262 review). Unlike `lastRoomState`,
 // which every periodic refreshes, `lastRemoteRoomState` is refreshed only by a
@@ -1495,7 +1520,38 @@ export class SyncplayClient extends EventEmitter {
     // state is over a second old, so a periodic frame can arrive setBy *us* and
     // return at the self-guard below. Recording above the guards is what keeps
     // it fresh regardless.
-    this.lastRoomState = { position, paused, at: Date.now() }
+    // Back-dated to the server's *send*, not this frame's arrival (#279). The
+    // number inside `position` was computed one one-way delay ago, so stamping
+    // arrival makes `projectedRoomPosition()` read the room `d` low forever —
+    // and `buildPlaystate()`'s spectator mirror then puts that value back on the
+    // wire, where `Room.getPosition()`'s min() elects it and re-derives the room
+    // from it. The server's own `Watcher.updateState` compensation does not
+    // recover it: it adds `fd ≈ avrRtt/2` to the *position* while stamping
+    // `_lastUpdatedOn` at receipt (`server.py:875-884`), so per election the room
+    // loses `2d − fd` — measured at 0.05 s/election on a 50 ms/direction link,
+    // which crosses the renderer's 3 s apply rule in about a minute.
+    //
+    // The time axis rather than the position axis, and they are not the same
+    // thing: `projectedRoomPosition()` discards `at` outright when the room is
+    // paused (`elapsed = room.paused ? 0 : …`), so this shift is inert in a
+    // paused room *by construction* — for any value of it. Biasing the position
+    // instead would make the mirror creep in a room that is standing still,
+    // which is the known consequence documented at `buildPlaystate()` below and
+    // the one thing this must not make worse.
+    //
+    // Units: `at` is `Date.now()` in **ms**, `serverRtt` is in **seconds**.
+    // `serverRtt` is 0 until the ping exchange completes a round trip (#231) and
+    // is only ever written under `rtt > 0 && rtt < 5`, so the term is
+    // non-negative and degrades to exactly the old behaviour rather than to a
+    // garbage value. See MAX_ROOM_ANCHOR_LAG_S for why the clamp lives here.
+    //
+    // `lastRemoteRoomState` (below the guards) deliberately does **not** get
+    // this: it is written from `compensated`, which already carries
+    // `+ serverRtt / 2` on the position axis under the same pause gate, and it
+    // is the record `getRoomPosition()` projects into the ffmpeg `-ss` seed.
+    // Shifting both axes would compensate that seed twice.
+    const anchorLagMs = Math.min(this.serverRtt / 2, MAX_ROOM_ANCHOR_LAG_S) * 1000
+    this.lastRoomState = { position, paused, at: Date.now() - anchorLagMs }
     // "This frame is one we are about to hand the renderer" — a *sufficient*
     // condition for that, no longer a transcription of the drop guards. Both
     // guards below read these same two consts, but since #277 the first one also
@@ -1914,16 +1970,23 @@ export class SyncplayClient extends EventEmitter {
     // rediscovered as "the room moved while I was away".
     //
     // This used to add "invisible with peers present (we land ahead, never the
-    // min())". That parenthesis is false, and #277 is what it cost. The mirror
-    // is anchored on the frame's *arrival* while the number inside it was
-    // computed at the server's send, so while the room **plays** the mirror
-    // sits one one-way delay *behind* the room and wins Room.getPosition()'s
-    // min() on every election — measured against reference server 1.7.6 over a
-    // 50 ms/direction link: every election, with the deficit compounding
-    // 0.038 s → 0.186 s as the room is re-derived from our own already-lagged
-    // value. Landing *ahead* is the paused-room creep above and nothing else,
-    // which is why a de-adopted hidden player (#227) still cannot drag the room:
-    // a crept mirror in a paused room is above it and loses every election.
+    // min())". That parenthesis was false, and #277 is what it cost: the mirror
+    // was anchored on the frame's *arrival* while the number inside it had been
+    // computed at the server's send, so while the room **plays** it sat one
+    // one-way delay *behind* the room and won Room.getPosition()'s min() on
+    // every election — measured against reference server 1.7.6 over a
+    // 50 ms/direction link, with the deficit compounding 0.038 s → 0.186 s as
+    // the room was re-derived from our own already-lagged value.
+    //
+    // #279 closed that at the source rather than here: handleState() back-dates
+    // `lastRoomState.at` to the server's send, so `projectedRoomPosition()`
+    // above returns the room's own projection and the value we mirror is a
+    // dead heat with it. What that does *not* mean is "we now land ahead" — the
+    // two are level, so a tie can still elect us, it just cannot move the room.
+    // Landing genuinely *ahead* is the paused-room creep above and nothing
+    // else, which is why a de-adopted hidden player (#227) cannot drag the
+    // room: a crept mirror in a paused room is above it and loses every
+    // election.
     return {
       position: this.projectedRoomPosition(room),
       doSeek: false

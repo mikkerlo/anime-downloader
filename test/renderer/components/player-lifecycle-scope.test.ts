@@ -375,11 +375,11 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // codebase can kill once issued. Answering "a cleanup overtook you" with
     // the uninterruptible full-file remux is the worst available reaction.
     //
-    // Unreachable on a live component today only because three separate facts
-    // hold it up — the bump comes only from `player:cleanup-remux`, every live
-    // call site awaits that before opening, and the unmount path returns at the
-    // bail above — none of which `prepareMkvForPlayback` owns, and none of
-    // which `player-ipc-session-cleanup-race.test.ts` pins.
+    // Reachable on a live component in the #291 overlap: an earlier open parked
+    // in `probeMkvForMse` while some other path bumps `cleanupGeneration`, so
+    // the reply-time re-read answers `cancelled` with the component mounted.
+    // See the note on the arm itself in `prepareMkvForPlayback` for the trace —
+    // `player-ipc-session-cleanup-race.test.ts` pins main's half, not this one.
     const cancelled = PREPARE_MKV.indexOf("streamResult.error === 'cancelled'")
     const fallbackWarn = PREPARE_MKV.indexOf('MSE stream open failed, falling back to legacy remux')
     const legacy = PREPARE_MKV.indexOf('runLegacyRemuxIpc(')
@@ -408,16 +408,20 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     expect(mseOk).toBeGreaterThan(arm)
     const body = PREPARE_HEVC.slice(arm, mseOk)
     // Reverting to the pass-through turns this red.
-    expect(body).toMatch(/r\.error === 'cancelled' \? '[^']+' : r\.error/)
+    const renamed = body.match(/r\.error === 'cancelled' \? '([^']+)' : r\.error/)?.[1]
+    expect(renamed).toBeTruthy()
     expect(body).not.toMatch(/return \{ ok: false, error: r\.error \}/)
     // Both paths must surface the SAME string — a rename on one side only is
     // the regression this pins, so the copy path's literal is read from the
-    // source rather than repeated here.
+    // source rather than repeated here. Equality, not `toContain`: `body` holds
+    // the `=== 'cancelled'` test itself, so containment is vacuous for exactly
+    // the literal that must never be surfaced.
     const copyCancelled = PREPARE_MKV.indexOf("streamResult.error === 'cancelled'")
     const copyReturn = PREPARE_MKV.slice(copyCancelled, PREPARE_MKV.indexOf('}', copyCancelled))
     const copyString = copyReturn.match(/error: '([^']+)'/)?.[1]
     expect(copyString).toBeTruthy()
-    expect(body).toContain(`'${copyString}'`)
+    expect(copyString).not.toBe('cancelled')
+    expect(renamed).toBe(copyString)
   })
 
   it('bails with { ok: false } so the callers skip initSubtitles on the way out', () => {

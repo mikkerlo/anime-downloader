@@ -997,9 +997,13 @@ async function prepareMkvForPlayback(
     // indistinguishable from a genuine open failure, and the worst available
     // response to "a cleanup overtook your open" is to issue the
     // uninterruptible full-file remux. Reachable on a live component in the
-    // #291 overlap: an earlier open parked in `probeMkvForMse` while
-    // `selectTranslation` / `goToEpisode` awaits its own blanket
-    // `playerCleanupRemux()` and opens again — awaiting the cleanup before
+    // #291 overlap: an earlier open parks in `probeMkvForMse` and some *other*
+    // path bumps the generation before it resumes — the unguarded
+    // `playerCleanupRemux()` on the unsupported-codecs branch below, or a later
+    // `selectTranslation` / `goToEpisode` once a concurrent open has re-set
+    // `streamSessionId` (their own kills sit behind `remuxedPath.value ||
+    // streamSessionId.value`, which the parked open's own caller just cleared,
+    // so the immediate next action does not bump). Awaiting the cleanup before
     // opening protects the *new* open, not the concurrent earlier one, whose
     // reply-time re-read then answers `cancelled` with the component still
     // mounted. On the unmount path the bail above returns first.

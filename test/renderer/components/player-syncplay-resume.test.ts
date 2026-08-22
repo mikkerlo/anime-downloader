@@ -158,10 +158,11 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
   })
 
   // #275/#295: the composable drops the resume land on main's refusal, but only
-  // if it is handed main's answer. The failure mode survives the rewrite — a
-  // hardcoded `refusedSeek: false`, or the field simply not wired, typechecks
-  // and silently restores the bug (the type is optional and fail-open on
-  // purpose). Per call site: the copy path and the transcode path each wire
+  // if it is handed main's answer. `StartMseSessionOpts.refusedSeek` is
+  // required, so *not wiring it at all* is a compile error now — what survives
+  // the build is wiring it to the wrong thing, a hardcoded `refusedSeek: false`
+  // most obviously, which typechecks and silently restores the bug. That is the
+  // failure this scan carries. Per call site: the copy path and the transcode path each wire
   // their own, and only one of them being right is exactly the "the two paths
   // disagree" bug. The two expectations cannot share one literal — the copy
   // body destructures the reply as `streamResult`, the transcode body as `r`.

@@ -38,12 +38,19 @@ export interface StartMseSessionOpts {
    * position was outside the file, so it spawned at 0 (#275/#295). Transported
    * as a boolean rather than re-derived here from the request and the duration.
    *
-   * Optional and fail-open: an omitted value leaves the land exactly as it is.
-   * `test/**` sits outside both typecheck projects, so the existing call sites
-   * there pass `undefined` and the type says so rather than asserting a
-   * guarantee the build does not check.
+   * Required, deliberately: `MseOpenResult.refusedSeek` is required, both
+   * production call sites in `PlayerView` therefore have a value in hand, and
+   * a third open path added later that forgets to wire it is the exact
+   * regression this transport exists to prevent. Required makes that a compile
+   * error at the only two places that can get it wrong.
+   *
+   * The *runtime* handling stays fail-open — an absent value leaves the land
+   * exactly as it is. `test/**` sits outside both typecheck projects
+   * (`tsconfig.node.json` / `tsconfig.web.json` include neither), so the call
+   * sites there still pass nothing and still land; `is fail-open: an omitted
+   * refusedSeek leaves the land unchanged` pins that behaviour.
    */
-  refusedSeek?: boolean
+  refusedSeek: boolean
 }
 
 export function useMsePlayer(deps: {
@@ -156,7 +163,10 @@ export function useMsePlayer(deps: {
     // copy of the rule here to drift out of step with it — and no inference
     // that a later zeroing path in main could silently reclassify.
     //
-    // Fail-open: an omitted `refusedSeek` leaves the land untouched.
+    // Fail-open at runtime: an absent `refusedSeek` leaves the land untouched.
+    // The field is required on the type, so no typechecked caller can reach
+    // this with nothing — but `test/**` is outside both typecheck projects and
+    // does, and the degradation there is to the pre-#275 behaviour, not a stall.
     if (refusedSeek) {
       // The only renderer-side trace that the land was cancelled — main's warn
       // goes to the other process's log. Bare on purpose: the numbers behind

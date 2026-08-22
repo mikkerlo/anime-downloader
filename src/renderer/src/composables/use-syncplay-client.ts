@@ -1126,14 +1126,26 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // PENDING_PAUSE_MAX_MS and expire into PENDING_PAUSE_FAILED_TOAST before
     // the next playing state resumed the user anyway. `outOfFileUserPause`
     // takes over instead, and it holds for as long as the divergence does.
+    //
+    // The marker carries the same two guards the hold does — a pause made
+    // outside a session, and the reload-shaped implicit pause the media load
+    // algorithm queues at `readyState === 0`, are not the user's — because it
+    // stands in for the hold and inherits the reason for both. `readyState > 0`
+    // is the load-bearing one here: it is the only thing in this composable
+    // separating a user's pause from a reload-shaped one, `PlayerView.vue`
+    // calls `onLocalPause()` straight off the raw `@pause` event, and the
+    // ordering is against us across an episode switch taken during a
+    // divergence. The switch watcher runs `resetRemoteStateTracking()`
+    // synchronously and the teardown pause arrives after it, while main's
+    // `setFile()` leaves `lastRoomState` alone — so the projection still says
+    // `outOfFile`, an unguarded marker comes straight back on, and the ready
+    // gate declines the binge auto-resume that `clearPendingUserPause()` beside
+    // it is in that watcher to protect for the sibling flag.
+    const isUserPause =
+      syncplayStatus.value.state === 'ready' && (deps.getVideoEl()?.readyState ?? 0) > 0
     const roomOutOfFile = syncplayStatus.value.outOfFile === true
-    if (roomOutOfFile) outOfFileUserPause = true
-    if (
-      syncplayStatus.value.state === 'ready' &&
-      syncplayStatus.value.playbackAdopted !== true &&
-      !roomOutOfFile &&
-      (deps.getVideoEl()?.readyState ?? 0) > 0
-    ) {
+    if (roomOutOfFile && isUserPause) outOfFileUserPause = true
+    if (isUserPause && syncplayStatus.value.playbackAdopted !== true && !roomOutOfFile) {
       armPendingUserPause()
     }
     sendSyncplayLocalState('pause')

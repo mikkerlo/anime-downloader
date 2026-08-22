@@ -522,17 +522,11 @@ export class SyncplayClient extends EventEmitter {
     outOfFile: boolean
   } {
     const room = this.lastRoomState
-    const ownDuration = this.currentFile?.duration
     return {
       playbackAdopted: this.playbackAdopted,
       roomPaused: room?.paused === true,
       outOfFile:
-        !this.playbackAdopted &&
-        !this.rosterSaysAlone() &&
-        !!room &&
-        Number.isFinite(ownDuration) &&
-        (ownDuration as number) > 0 &&
-        this.projectedRoomPosition(room) >= (ownDuration as number)
+        !this.playbackAdopted && !this.rosterSaysAlone() && this.roomPastEndOfOwnFile(room) !== null
     }
   }
 
@@ -1721,9 +1715,11 @@ export class SyncplayClient extends EventEmitter {
     //     inside our file. Kept for the invariant's enumeration above, which is
     //     a claim about *every* writer, and unpinned by construction.
     //
-    // The room quantity is `projectedRoomPosition()`, not `position` off the
-    // wire: that is what :2317 re-adopts on, and the drift conjunct only
-    // composes with it if the two are the same quantity.
+    // The position half of the predicate — the duration domain rule, and the
+    // `projectedRoomPosition() >= d` comparison whose quantity is what :2317
+    // re-adopts on, so the drift conjunct below composes with it — lives in
+    // `roomPastEndOfOwnFile()`, shared with `statusProjection()`'s `outOfFile`
+    // so the two cannot drift apart. See it for both arguments.
     //
     // `rosterSaysAlone()` is the one thing this predicate has that the plan did
     // not, and it is a *derivation* rather than a new policy: do not write what
@@ -1741,28 +1737,18 @@ export class SyncplayClient extends EventEmitter {
     // *says* alone" rather than "no peers known": on a server whose `List` we
     // cannot key to our room (#223) the roster never arrives, and there the
     // de-adoption is the conservative answer.
-    //
-    // `Number.isFinite(d) && d > 0` fails **open** — no file, or a duration we
-    // cannot use, follows the room as before. It is also main's only statement
-    // about the domain of that value: `setFile()` stores the IPC payload
-    // verbatim, so `currentFile.duration` is precisely what the renderer built
-    // with `?.duration || getDuration() || 0`, which filters `NaN` and `0` but
-    // passes `Infinity` straight through. Unpinned by construction, since
-    // `roomPos >= Infinity` is false and `>=` carries it either way.
-    const ownDuration = this.currentFile?.duration
-    if (Number.isFinite(ownDuration) && (ownDuration as number) > 0 && !this.rosterSaysAlone()) {
-      const roomPos = this.projectedRoomPosition(this.lastRoomState)
-      if (
-        roomPos >= (ownDuration as number) &&
-        Math.abs(this.snapshot.position - roomPos) > ADOPT_TOLERANCE_S
-      ) {
-        log('de-adopting — the room is past the end of our file', {
-          roomPos,
-          duration: ownDuration
-        })
-        this.playbackAdopted = false
-        this.seekIntent = null
-      }
+    const roomPastEnd = this.roomPastEndOfOwnFile(this.lastRoomState)
+    if (
+      roomPastEnd !== null &&
+      !this.rosterSaysAlone() &&
+      Math.abs(this.snapshot.position - roomPastEnd) > ADOPT_TOLERANCE_S
+    ) {
+      log('de-adopting — the room is past the end of our file', {
+        roomPos: roomPastEnd,
+        duration: this.currentFile?.duration
+      })
+      this.playbackAdopted = false
+      this.seekIntent = null
     }
     // "This frame is one we are about to hand the renderer" — a *sufficient*
     // condition for that, no longer a transcription of the drop guards. Both
@@ -2269,6 +2255,38 @@ export class SyncplayClient extends EventEmitter {
   private rosterSaysAlone(): boolean {
     if (!this.rosterReceived) return false
     return this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
+  }
+
+  // "The room is past the end of the file we announced" — the projected room
+  // position when it is, `null` when it is not (#281, slice B).
+  //
+  // Extracted for the reason `rosterSaysAlone()` above it was: `handleState()`'s
+  // de-adoption and `statusProjection()`'s `outOfFile` are the *same* rule by
+  // construction — the projection means "the state the de-adoption creates",
+  // not an independently-derived predicate that happens to agree — so they
+  // cannot be allowed to drift apart. This half is the one carrying the casts
+  // and the fail-open domain rule, so it has the stronger claim of the two.
+  //
+  // `Number.isFinite(d) && d > 0` fails **open** — no file, or a duration we
+  // cannot use, follows the room as before. It is also main's only statement
+  // about the domain of that value: `setFile()` stores the IPC payload
+  // verbatim, so `currentFile.duration` is precisely what the renderer built
+  // with `?.duration || getDuration() || 0`, which filters `NaN` and `0` but
+  // passes `Infinity` straight through. Unpinned by construction, since
+  // `roomPos >= Infinity` is false and `>=` carries it either way.
+  //
+  // The room quantity is `projectedRoomPosition()`, not `position` off the
+  // wire: that is what :2317 re-adopts on, and the drift conjunct at the
+  // `handleState()` call site only composes with it if the two are the same
+  // quantity. `typeof d === 'number'` narrows the duration for both callers, so
+  // neither needs an `as number` cast.
+  private roomPastEndOfOwnFile(
+    room: { position: number; paused: boolean; at: number } | null
+  ): number | null {
+    const d = this.currentFile?.duration
+    if (!room || typeof d !== 'number' || !Number.isFinite(d) || d <= 0) return null
+    const roomPos = this.projectedRoomPosition(room)
+    return roomPos >= d ? roomPos : null
   }
 
   // Where the room is *now*: its last reported position, advanced by wall time

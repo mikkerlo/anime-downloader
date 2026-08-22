@@ -2234,6 +2234,83 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     expect(v.currentTime).toBe(600)
     expect(v.play).toHaveBeenCalled()
   })
+
+  it('does not arm the refusal for a reload-shaped pause taken at readyState 0', async () => {
+    // The marker carries the same two guards `armPendingUserPause()` does, and
+    // `readyState > 0` is the load-bearing one: `PlayerView.vue` calls
+    // `onLocalPause()` straight off the raw `@pause` event, and the media load
+    // algorithm resets `readyState` synchronously and delivers the `pause` it
+    // queued *after* that reset. Without the guard the marker arms for a pause
+    // nobody made, and refuses the resume that follows the load.
+    const v = fakeVideo({
+      currentTime: 0,
+      duration: NaN,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    // The implicit pause: HAVE_NOTHING, no duration, and no user behind it.
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    // The element finishes loading, and the room — still out of our file, since
+    // main does not clear `lastRoomState` under a reload — says it is playing.
+    ;(v as { readyState: number }).readyState = 1
+    ;(v as { duration: number }).duration = 1440
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  it('does not re-arm the refusal from the teardown pause of an episode switch', async () => {
+    // The ordering the guard actually costs us: the switch watcher runs
+    // `resetRemoteStateTracking()` synchronously — clearing the marker, exactly
+    // as `clearPendingUserPause()` beside it clears the sibling flag — and the
+    // teardown `pause` before the `src` swap arrives *after* it. Main's
+    // `setFile()` does not clear `lastRoomState`, so the `outOfFile` projection
+    // is still true across the swap (the new file's duration against the old
+    // room position), and without the guard the marker comes straight back on
+    // and refuses the resume for a pause nobody made an episode later.
+    //
+    // The refusal lands on the room's next playing state rather than on the
+    // ready gate: `onLocalPause()` falsifies `syncplayLastRemotePlaying` above
+    // everything else, so the teardown pause has already taken the gate's
+    // `shouldPlay` out on its own and the gate is not the reachable half of
+    // this ordering. `recordRemoteState()` repairs the mirror on the next
+    // inbound state, and that is where the marker bites.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { emitRemoteState, client } = await mountWithRemoteState(deps, DIVERGED)
+
+    // A divergence is already up, and the user paused inside it.
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+
+    // Next episode, taken during the divergence.
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+
+    // The teardown pause, on an element already back at HAVE_NOTHING.
+    ;(v as { readyState: number }).readyState = 0
+    ;(v as { duration: number }).duration = NaN
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    // The new episode loads, and the room says the same thing it has been
+    // saying at 1 Hz all along — still past the end of this file too.
+    ;(v as { readyState: number }).readyState = 1
+    ;(v as { duration: number }).duration = 1440
+    emitRemoteState({ position: 3100, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+  })
 })
 
 // `showSyncplayToast` is not a debounce — it assigns the single toast slot and

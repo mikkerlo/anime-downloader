@@ -93,25 +93,33 @@ describe('StreamingService session management', () => {
     // longer runs on this path. Without the unlink here every superseded open
     // leaves `${baseName}-${sessionId}.ass` behind forever.
     //
-    // `svc.tmpDir` is a REAL shared path (`os.tmpdir()/anime-dl-remux`) that the
-    // service itself never creates — only the IPC handlers `mkdirSync` it — so
-    // this test creates it and removes exactly what it wrote. Session ids are
-    // randomised so a concurrently-running test file cannot collide.
-    const preExisting = fs.existsSync(svc.tmpDir)
-    fs.mkdirSync(svc.tmpDir, { recursive: true })
-    const mineId = `mine-${Math.random().toString(36).slice(2)}`
-    const theirsId = `theirs-${Math.random().toString(36).slice(2)}`
+    // The scratch dir is INJECTED (`StreamingServiceDeps.tmpDir`), never the
+    // default `os.tmpdir()/anime-dl-remux`: that path belongs to whatever app
+    // instance is streaming on this machine, and a unit run must neither
+    // `mkdirSync` it nor `rmdirSync` it out from under a live ffmpeg. Randomised
+    // ids would only have handled a colliding *test*. The default stays covered
+    // by `exposes the backpressure watermarks + tmpDir constants` above.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streaming-svc-'))
+    const own = createStreamingService({
+      getFfmpegPath: () => '/bin/ffmpeg',
+      getFfprobePath: () => '/bin/ffprobe',
+      tmpDir,
+      channels
+    })
+    expect(own.tmpDir).toBe(tmpDir)
+    const mineId = 'mine'
+    const theirsId = 'theirs'
     // `mkSession()`'s `mkvPath` is `/tmp/show.mkv`; the second session gets a
     // distinct one so the two `.ass` names differ by base as well as by id.
-    const mine = path.join(svc.tmpDir, `show-${mineId}.ass`)
-    const theirs = path.join(svc.tmpDir, `other-${theirsId}.ass`)
+    const mine = path.join(tmpDir, `show-${mineId}.ass`)
+    const theirs = path.join(tmpDir, `other-${theirsId}.ass`)
     fs.writeFileSync(mine, '[Script Info]')
     fs.writeFileSync(theirs, '[Script Info]')
     try {
-      svc.registerSession(mineId, mkSession())
-      svc.registerSession(theirsId, mkSession({ mkvPath: '/tmp/other.mkv' }))
+      own.registerSession(mineId, mkSession())
+      own.registerSession(theirsId, mkSession({ mkvPath: '/tmp/other.mkv' }))
 
-      const ret = svc.cleanupSession(mineId)
+      const ret = own.cleanupSession(mineId)
 
       // SYNCHRONOUS. `cleanupSession` is `: void` and every caller ignores the
       // return — including the blanket sweep in `player:cleanup-remux`, which
@@ -123,23 +131,10 @@ describe('StreamingService session management', () => {
       // The other session's artifact and the shared directory both survive —
       // this is a targeted close, not the blanket sweep.
       expect(fs.existsSync(theirs)).toBe(true)
-      expect(fs.existsSync(svc.tmpDir)).toBe(true)
-      expect(svc.allSessionIds()).toEqual([theirsId])
+      expect(fs.existsSync(own.tmpDir)).toBe(true)
+      expect(own.allSessionIds()).toEqual([theirsId])
     } finally {
-      for (const f of [mine, theirs]) {
-        try {
-          fs.unlinkSync(f)
-        } catch {
-          /* already gone */
-        }
-      }
-      if (!preExisting) {
-        try {
-          fs.rmdirSync(svc.tmpDir)
-        } catch {
-          /* not empty — another test's fixture lives here too */
-        }
-      }
+      fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   })
 

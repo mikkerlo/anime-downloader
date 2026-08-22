@@ -73,6 +73,13 @@ export interface StreamingIpcEvent {
 
 export interface StreamingServiceDeps {
   /**
+   * Override the remux/transcode scratch dir. Main leaves it unset and gets
+   * `os.tmpdir()/anime-dl-remux`; tests point it at an `fs.mkdtempSync` path so
+   * a unit run never creates — or `rmdir`s — the directory a running app is
+   * streaming out of.
+   */
+  tmpDir?: string
+  /**
    * Live getter for the ffmpeg binary path. `ffmpegPath` in `index.ts` mutates
    * at runtime (post-bootstrap), so a closure-cached value would race the
    * auto-download on first launch.
@@ -204,7 +211,7 @@ export interface StreamingService {
 export function createStreamingService(deps: StreamingServiceDeps): StreamingService {
   const { getFfmpegPath, getFfprobePath, channels } = deps
 
-  const tmpDir = path.join(os.tmpdir(), 'anime-dl-remux')
+  const tmpDir = deps.tmpDir ?? path.join(os.tmpdir(), 'anime-dl-remux')
   const sessions = new Map<string, MseSession>()
   let cachedH264Encoder: string | null | undefined = undefined
 

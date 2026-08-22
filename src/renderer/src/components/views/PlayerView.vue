@@ -470,8 +470,15 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt}`);
   const dir = idx > activeEpisodeIndex.value ? 'next' : 'prev';
   // goToEpisode moves one step; step toward target in a loop.
+  //
+  // `switchingTranslation` is a stop condition alongside `navigating` (#291).
+  // A `selectTranslation` started mid-walk supersedes the in-flight step's
+  // `prepareMkvForPlayback`; that step then unwinds and releases `navigating`,
+  // and without this term the loop reads that as permission to take another
+  // step — which supersedes the translation switch in turn and drops the user's
+  // pick silently. An explicit pick outranks the room's episode walk.
   const stepTowards = async (): Promise<void> => {
-    while (activeEpisodeIndex.value !== idx && !navigating.value) {
+    while (activeEpisodeIndex.value !== idx && !navigating.value && !switchingTranslation.value) {
       await goToEpisode(dir);
     }
   };
@@ -535,6 +542,28 @@ let prepareEpoch = 0;
 function shouldBail(myPrepare: number): boolean {
   return unmounted || myPrepare !== prepareEpoch;
 }
+
+// #291, the caller side of the unwind. `switchingTranslation` and `navigating`
+// are each SET by exactly one flow (`selectTranslation` / `goToEpisode`) and
+// cleared by whoever finishes it. A superseded run resumes on a live component,
+// so its `!prep.ok` arm must not clear a flag a NEWER run of the same flow now
+// owns — that drops the winner's `:loading` mid-open and, for `navigating`,
+// re-opens the `if (navigating.value) return` re-entrancy guard while the
+// winner is still running.
+//
+// But `prep === PLAYER_CLOSED_BAIL` is the wrong test for it: it says only THAT
+// we were superseded, never BY WHOM. The two flows supersede each other freely
+// — `selectTranslation` bumps `prepareEpoch` under a running `goToEpisode` and
+// vice versa — and neither touches the other's flag. Skipping the clear on a
+// cross-flow supersede therefore strands the flag for the life of the
+// component: `navigating` stuck true disables prev/next (`:2618`, `:2636`) and
+// makes every later `goToEpisode` a no-op, and `switchingTranslation` stuck
+// true leaves `TranslationMenu`'s button on `pointer-events: none`.
+//
+// A per-flag token answers "by whom" exactly: skip only when the same flow took
+// the flag over, and it will clear it itself.
+let translationEpoch = 0;
+let navigationEpoch = 0;
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -1746,6 +1775,7 @@ async function selectTranslation(tr: {
   const wasPlaying = video ? !video.paused : false;
 
   switchingTranslation.value = true;
+  const mySwitch = ++translationEpoch;
   showTranslationMenu.value = false;
 
   try {
@@ -1788,7 +1818,10 @@ async function selectTranslation(tr: {
           const prep = await prepareMkvForPlayback(localResult.filePath);
           if (!prep.ok) {
             reportPrepareError(prep);
-            switchingTranslation.value = false;
+            // Ownership, not `prep !== PLAYER_CLOSED_BAIL` (#291): release the
+            // flag unless a later `selectTranslation` owns it, in which case it
+            // clears it in its own `nextTick`.
+            if (translationEpoch === mySwitch) switchingTranslation.value = false;
             return;
           }
         }
@@ -1882,6 +1915,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
   cancelAutoAdvance();
   navigating.value = true;
+  const myNav = ++navigationEpoch;
   const video = videoRef.value;
   const targetEp = props.allEpisodes[targetIndex];
 
@@ -1979,7 +2013,13 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           const prep = await prepareMkvForPlayback(localResult.filePath);
           if (!prep.ok) {
             reportPrepareError(prep);
-            navigating.value = false;
+            // As in `selectTranslation` (#291). Skipping this unconditionally
+            // on a superseded unwind would leave `navigating` true forever
+            // whenever the superseder was a `selectTranslation` — nothing
+            // outside this function ever clears it. The walk in
+            // `handleRemoteEpisodeChange` is stopped by its own
+            // `switchingTranslation` term instead, not by a stranded flag.
+            if (navigationEpoch === myNav) navigating.value = false;
             return;
           }
         }

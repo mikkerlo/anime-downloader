@@ -732,16 +732,31 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     }
   })
 
-  it('stops the syncplay episode walk on an in-flight translation switch', () => {
+  it('stops the syncplay episode walk at the first translation pick made after it began', () => {
     // `goToEpisode`'s unwind releases `navigating` whenever it still owns it —
     // it must, or the flag strands — so the walk needs its own term for "the
     // user superseded me". Without it the loop reads the released flag as
     // permission to take another step, that step supersedes the translation
     // switch in turn, and the user's pick is dropped silently.
+    //
+    // The term must read the MONOTONIC `translationEpoch`, not the transient
+    // `switchingTranslation` flag: a pick taking the stream fall-back is one
+    // `playerGetStreamUrl` round trip and clears the flag in its own
+    // `nextTick`, which lands before a step parked on an MSE open resumes — so
+    // the loop would re-read both flags as false and step anyway.
+    const handler = stripComments(
+      slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
+    )
+    // Sampled ONCE, in the handler and above the loop, so the compare cannot go
+    // vacuous the way a per-iteration re-sample would.
+    const sample = 'const walkTranslation = translationEpoch;'
+    expect(handler).toContain(sample)
+    expect(handler.indexOf(sample)).toBeLessThan(handler.indexOf('const stepTowards ='))
     const walk = stripComments(slice('const stepTowards =', 'stepTowards()'))
     expect(walk).toContain('activeEpisodeIndex.value !== idx')
     expect(walk).toContain('!navigating.value')
-    expect(walk).toContain('!switchingTranslation.value')
+    expect(walk).toContain('translationEpoch === walkTranslation')
+    expect(walk).not.toContain('switchingTranslation')
   })
 })
 

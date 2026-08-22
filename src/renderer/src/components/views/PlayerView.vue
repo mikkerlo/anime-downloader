@@ -1034,9 +1034,9 @@ async function prepareMkvForPlayback(
           mimeType: streamResult.mimeType,
           resumeTarget,
           timestampOffset: streamResult.contentStart,
-          // The value we asked main for, so the composable makes the same
-          // out-of-file comparison main made (#275). Not `contentStart`.
-          requestedSpawnSeek: initialSeek
+          // Main's own out-of-file decision, transported (#275/#295) — the
+          // composable reads it instead of re-deriving the comparison.
+          refusedSeek: streamResult.refusedSeek
         });
         mkvBuffering.value = true;
         return { ok: true };
@@ -1171,8 +1171,8 @@ async function prepareHevcTranscode(
     mimeType: r.mimeType,
     resumeTarget,
     timestampOffset: r.contentStart,
-    // Same as the copy path (#275) — the value sent to main, not `contentStart`.
-    requestedSpawnSeek: initialSeek
+    // Same as the copy path (#275/#295) — main's decision, not a re-derivation.
+    refusedSeek: r.refusedSeek
   });
   mkvBuffering.value = true;
   return { ok: true };

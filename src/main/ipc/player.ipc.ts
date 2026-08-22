@@ -94,21 +94,30 @@ let cleanupGeneration = 0
  * The `console.warn` is the point of the rejection being visible at all — a
  * refused seek means some caller computed a target outside the file, which is
  * otherwise entirely silent.
+ *
+ * Returns the decision (`refused`) alongside the value, because the renderer
+ * needs it too and re-deriving it there from transported numbers is what #295
+ * removes: `refused` is set by the *same* expression that takes the branch, so
+ * the callers wire a boolean rather than repeating the comparison. Note that
+ * `seek` is 0 on two different paths — the refusal here and the non-finite /
+ * `<= 0` normalisation above it — so `seek === 0` is not the decision and
+ * inferring `refused` from it (on either side of the IPC boundary) would
+ * misclassify the normalisation, and any zeroing path added later.
  */
 function boundInitialSeek(
   initialSeek: number | undefined,
   duration: number,
   sessionId: string
-): number {
+): { seek: number; refused: boolean } {
   const requested =
     typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
   if (requested >= duration) {
     console.warn(
       `[remux-stream] session ${sessionId.slice(0, 8)} refusing requested seek ${requested.toFixed(2)} — at or past the file's duration ${duration.toFixed(2)}; opening at 0`
     )
-    return 0
+    return { seek: 0, refused: true }
   }
-  return requested
+  return { seek: requested, refused: false }
 }
 
 export function register({
@@ -431,7 +440,11 @@ export function register({
       // for the same reason the #198 note below gives — bounding inside
       // `spawnFfmpegForSession` would let ffmpeg run at one seek while the
       // offset probe measured another, which is the subtitles-run-ahead desync.
-      const requestedSeek = boundInitialSeek(initialSeek, probe.duration, sessionId)
+      const { seek: requestedSeek, refused: refusedSeek } = boundInitialSeek(
+        initialSeek,
+        probe.duration,
+        sessionId
+      )
       // Seek ffmpeg at the RAW requested time — do NOT pre-snap to a keyframe. A
       // pre-snapped `-ss <keyframe>` double-snaps to the *previous* keyframe (the
       // Matroska seek deadzone), landing ~one GOP early while the renderer labels
@@ -510,7 +523,8 @@ export function register({
         duration: probe.duration,
         mimeType: streamCopyMime,
         hasSubtitlesPending,
-        contentStart
+        contentStart,
+        refusedSeek
       }
     }
   )
@@ -577,7 +591,11 @@ export function register({
       // Same bound as the copy handler (#275), in the same place: below the
       // self-reap, above `probeSeekAnchor` and the spawn, so the anchor probe
       // and ffmpeg read one value by construction.
-      const requestedSeek = boundInitialSeek(initialSeek, probe.duration, sessionId)
+      const { seek: requestedSeek, refused: refusedSeek } = boundInitialSeek(
+        initialSeek,
+        probe.duration,
+        sessionId
+      )
       // Transcode video is frame-accurate (accurate-seek discards to the exact
       // `-ss`), but a copied AAC track can't be trimmed: it starts at the seek's
       // keyframe cluster and anchors `-avoid_negative_ts make_zero` up to one GOP
@@ -638,7 +656,8 @@ export function register({
         duration: probe.duration,
         mimeType,
         hasSubtitlesPending,
-        contentStart
+        contentStart,
+        refusedSeek
       }
     }
   )

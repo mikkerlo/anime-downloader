@@ -1343,6 +1343,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       clearInterval(syncplaySnapshotTimer)
       syncplaySnapshotTimer = null
     }
+    // Tell main the player is gone rather than leaving it to infer it from
+    // silence (#288). Clearing the timer above only stops the pushes; main's
+    // snapshot clock still reads "live" for PLAYBACK_STALE_MS (5 s) after the
+    // last one, and for that whole window its heartbeat asserts the *frozen*
+    // position at 1 Hz — which wins the server's `min(watchers)` election and
+    // drags everyone still watching backwards by up to 5 s in one step.
+    //
+    // Unconditional, and not gated on `syncplayStatus`: the handler is a clear
+    // of two fields, inert when no session is up, and a status read here would
+    // only add a way to skip the signal. One emit per unmount is all there is —
+    // the hook runs once and the composable is mount-scoped — so idempotence is
+    // the handler's property, not something arranged here. A reopen mounts
+    // *after* this teardown and re-announces with `newPlayer: true`, so the two
+    // ride the same IPC queue in that order.
+    window.api.syncplayPlayerClosed()
     if (syncplayToastTimer) {
       clearTimeout(syncplayToastTimer)
       syncplayToastTimer = null

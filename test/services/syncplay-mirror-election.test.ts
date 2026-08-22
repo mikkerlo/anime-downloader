@@ -44,7 +44,12 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient, ADOPT_TOLERANCE_S, ECHO_SEEK_EPSILON_S } from '../../src/main/syncplay'
+import {
+  SyncplayClient,
+  ADOPT_TOLERANCE_S,
+  ECHO_SEEK_EPSILON_S,
+  PLAYBACK_ASSERT_STALE_MS
+} from '../../src/main/syncplay'
 import { MinElectionServer } from '../helpers/syncplay-min-election-server'
 import type { MinElectionServerOptions } from '../helpers/syncplay-min-election-server'
 import type { SyncplayRemoteState, SyncplaySnapshot } from '../../src/main/syncplay'
@@ -472,6 +477,245 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     expect(server.electionsSetBy('hostuser').length).toBeGreaterThanOrEqual(6)
     expect(frames).toEqual([])
     expect(solo.getRoomPosition(OPEN)).toBeNull()
+  })
+
+  // ------------------------------------------------------------------------
+  // #288 — a closed player keeps asserting a frozen snapshot.
+  //
+  // The same election, driven from the other end: not a joiner that has never
+  // converged, but a *converged, adopted* watcher whose player goes away. Main
+  // used to infer "the player is gone" from silence alone, on the 5 s
+  // `PLAYBACK_STALE_MS` horizon, and for that whole window `buildPlaystate()`
+  // kept asserting a **frozen** position — one that no longer advances while
+  // the room does. It wins `min(watchers)` from the moment it falls below the
+  // room, and the room is pinned to it.
+  //
+  // Two changes are under test here and they are deliberately separable:
+  //
+  //   A — a second, tighter *assert* horizon (`PLAYBACK_ASSERT_STALE_MS`),
+  //       which covers the crash / kill / hang shapes where nothing fires; and
+  //   B — `playerClosed()`, the explicit signal the composable's unmount sends,
+  //       which removes the window entirely for the ordinary close.
+  //
+  // Everything below asserts on the **server's** room state and on the peer's
+  // `remote-state` stream rather than on the closing client's internals: "who
+  // set the room" has to stay a result of the election, which is the whole
+  // reason this harness exists.
+  // ------------------------------------------------------------------------
+
+  /** One `remote-state` frame, plus how far under ground truth it landed. */
+  type HeardFrame = SyncplayRemoteState & { behind: number }
+
+  // Two watchers whose elements are both on the room and both adopted — the
+  // shape a close actually happens from, and the one `joinAPlayingRoom()` (a
+  // joiner parked at 0) cannot express.
+  const twoWatchers = (): {
+    host: SyncplayClient
+    closer: SyncplayClient
+    heard: HeardFrame[]
+  } => {
+    const host = seat('hostuser')
+    announceFile(host)
+    const closer = seat('closeruser')
+    announceFile(closer)
+    // The watching peer's ear. `behind` is stamped at *arrival* against
+    // `trueRoomPosition()`, which is where this peer's own element is — so it
+    // is exactly the `diff` the renderer's apply rule computes
+    // (`use-syncplay-client.ts`: seek on `doSeek` or `diff > 3.0`).
+    const heard: HeardFrame[] = []
+    host.on('remote-state', (s: SyncplayRemoteState) =>
+      heard.push({ ...s, behind: trueRoomPosition() - s.position })
+    )
+    run(4, () => trueRoomPosition())
+    expect(host.getStatus().playbackAdopted).toBe(true)
+    expect(closer.getStatus().playbackAdopted).toBe(true)
+    return { host, closer, heard }
+  }
+
+  // The room's structural floor, and the reason none of the bounds below is
+  // zero: main asserts the position the renderer last *pushed*, so at the
+  // composable's 1 Hz cadence a perfectly honest client is reporting a reading
+  // up to one interval old and the server ages it from receipt. The issue's own
+  // head trace starts at `deficit=1.000` for this reason. What #288 is about is
+  // everything *above* this line.
+  const PUSH_LAG_S = 1
+
+  /** The room's shortfall against ground truth, sampled once a second. */
+  const deficitsOver = (
+    seconds: number,
+    snapshotOf: (client: SyncplayClient) => number | SyncplaySnapshot | null
+  ): number[] => {
+    const out: number[] = []
+    for (let i = 0; i < seconds; i += 1) {
+      run(1, snapshotOf)
+      out.push(trueRoomPosition() - server.roomState().position)
+    }
+    return out
+  }
+
+  /** The watching peer keeps watching; the closer's renderer says nothing. */
+  const closerSilent =
+    (closer: SyncplayClient) =>
+    (c: SyncplayClient): number | null =>
+      c === closer ? null : trueRoomPosition()
+
+  // The behaviour difference, on the server the reference actually is. On head
+  // the deficit walks 1 → 2 → 3 → 4 → 5 across this window and the room stops
+  // advancing entirely from t+3s on; the bound below is the assert window plus
+  // one election period, and 5 s does not fit inside it.
+  it('caps the room’s loss at the assert window when a player stops pushing', () => {
+    const { closer } = twoWatchers()
+    // Anti-vacuity: with both players honest the room is already one push-lag
+    // behind and no more, so everything past that is the close's own cost
+    // rather than a deficit the fixture arrived with.
+    expect(trueRoomPosition() - server.roomState().position).toBeLessThan(PUSH_LAG_S + 0.5)
+
+    const deficits = deficitsOver(6, closerSilent(closer))
+
+    // Head: 1.0, 1.0, 2.0, 3.0, 4.0, 5.0. The frozen claim cannot outlive the
+    // assert window, so the loss is bounded by it plus the election period
+    // rather than by PLAYBACK_STALE_MS.
+    expect(Math.max(...deficits)).toBeLessThan(PLAYBACK_ASSERT_STALE_MS / 1000 + 1)
+    // And it stops growing: the last three samples are inside the same
+    // envelope, rather than climbing one second per second.
+    expect(deficits[5] - deficits[3]).toBeLessThan(0.5)
+  })
+
+  // The same close against a server whose forward compensation has not
+  // converged — every session's first round trips, and permanent wherever
+  // `consumeServerLatencyEcho()`'s hold guard drops the pair.
+  //
+  // The bound here is deliberately weaker, and the difference is the point:
+  // **A+B ends the step, not the walk.** A closed player still has
+  // `currentFile` set, still mirrors and still sits in the election, so against
+  // `fd = 0` the room keeps losing one one-way delay per election for as long
+  // as it sits there. What must not survive is the *step*.
+  it('ends the step, not the walk, against a server that does not forward-compensate', () => {
+    rebuildServer(NO_FORWARD_DELAY)
+    const { closer } = twoWatchers()
+
+    const deficits = deficitsOver(6, closerSilent(closer))
+
+    // Head on this server: 1.05, 1.05, 2.05, 3.05, 4.05, 5.05.
+    expect(Math.max(...deficits)).toBeLessThan(PLAYBACK_ASSERT_STALE_MS / 1000 + 1)
+    // The residual walk, stated rather than asserted away: it is measured in
+    // one-way delays, not in seconds, so six elections cannot move it far.
+    expect(deficits[5] - deficits[3]).toBeLessThan(0.5)
+  })
+
+  // The user-visible symptom, in the renderer's own units. Head sends the
+  // watching peer four identical frames ~4.5 s under its element, `setBy` the
+  // person who closed — so it is seeked backwards in one step and told
+  // somebody else did it.
+  it('never seeks the watching peer backwards when a player stops pushing', () => {
+    const { closer, heard } = twoWatchers()
+    heard.length = 0
+
+    run(6, closerSilent(closer))
+
+    // Head: 8 frames over the renderer's 3.0 apply rule. Not "no frames" —
+    // hearing the room is fine, being dragged by it is not.
+    const wouldSeek = heard.filter((f) => f.doSeek || Math.abs(f.behind) > 3.0)
+    expect(wouldSeek).toEqual([])
+  })
+
+  // The pause inverse from the issue's second trace: the live branch asserts
+  // `paused: this.snapshot.paused`, so a player closed while *playing* keeps
+  // claiming `paused: false` and the very next heartbeat unpauses a room a peer
+  // just paused.
+  it('leaves a peer’s pause standing after a player stops pushing', () => {
+    const { host, closer } = twoWatchers()
+    run(2, closerSilent(closer))
+
+    const pausedAt = trueRoomPosition()
+    host.sendLocalState({ paused: true, position: pausedAt, cause: 'pause' })
+
+    // Sampled every second rather than only at the end: on head the room is
+    // unpaused on the very next heartbeat and re-paused only when
+    // PLAYBACK_STALE_MS expires, so an end-state assertion alone would pass.
+    const pausedSamples: boolean[] = []
+    for (let i = 0; i < 4; i += 1) {
+      run(1, (c) => (c === closer ? null : { position: pausedAt, paused: true }))
+      pausedSamples.push(server.roomState().paused)
+    }
+    expect(pausedSamples).toEqual([true, true, true, true])
+  })
+
+  // B. The ordinary close: `useSyncplayClient`'s unmount says so out loud, and
+  // the fall-through is immediate rather than N ms later.
+  it('hands the room over on the next heartbeat when the player says it closed', () => {
+    const { closer, heard } = twoWatchers()
+    heard.length = 0
+
+    closer.playerClosed()
+    const deficits = deficitsOver(6, closerSilent(closer))
+
+    // No window at all — the room never loses more than the push lag it was
+    // already carrying, against A's ~N and head's 5 s. This is what B buys over
+    // A, and it is why the scope is both rather than A alone.
+    expect(Math.max(...deficits)).toBeLessThan(PUSH_LAG_S + 0.5)
+    expect(heard.filter((f) => f.doSeek || Math.abs(f.behind) > 3.0)).toEqual([])
+  })
+
+  // B's ordering, direction one — the real one. The handler clears
+  // unconditionally, so what this pins is that it does not need to be
+  // conditional: the unmount runs before the reopen mounts, so the reopen's
+  // `setFile({newPlayer: true})` is what re-establishes adoption, on its own
+  // account rather than through the handler declining to act.
+  it('lets a reopen re-adopt through setFile() after a player-closed clear', () => {
+    const { closer } = twoWatchers()
+
+    closer.playerClosed()
+    expect(closer.getStatus().playbackAdopted).toBe(false)
+    // The reopen, in the order one renderer's `invoke` queue delivers it.
+    closer.setFile({
+      animeId: 1,
+      malId: 2,
+      episodeInt: '7',
+      translationId: 3,
+      canonicalName: OPEN,
+      duration: 1440,
+      newPlayer: true
+    })
+    const sentBefore = server.wireOf('closeruser').length
+    run(3, () => trueRoomPosition())
+
+    expect(closer.getStatus().playbackAdopted).toBe(true)
+    // Adopted *and asserting*: a mirror carries no `paused` key at all, so the
+    // presence of one is what says the new player owns the wire again.
+    const after = server.wireOf('closeruser').slice(sentBefore)
+    expect(after.length).toBeGreaterThanOrEqual(2)
+    expect(after[after.length - 1].paused).toBe(false)
+  })
+
+  // B's ordering, direction two — a **characterisation**, not a requirement.
+  // Delivered after the reopen's push, the clear does de-adopt a live player.
+  // That is precisely why the design argues the renderer's unmount ordering
+  // (`PlayerView` is `v-if`-gated, no `key`, no `<KeepAlive>`, one mount site)
+  // rather than testing for it at runtime — the channel is payload-free and has
+  // nothing to feed a guard with. Nobody should "fix" this case.
+  it('de-adopts a live player if a player-closed clear arrives after its first push', () => {
+    const { closer } = twoWatchers()
+
+    closer.setFile({
+      animeId: 1,
+      malId: 2,
+      episodeInt: '7',
+      translationId: 3,
+      canonicalName: OPEN,
+      duration: 1440,
+      newPlayer: true
+    })
+    run(3, () => trueRoomPosition())
+    expect(closer.getStatus().playbackAdopted).toBe(true)
+
+    closer.playerClosed()
+
+    expect(closer.getStatus().playbackAdopted).toBe(false)
+    // Cheap rather than free: one push re-converges it, which is the whole of
+    // the exposure if that invariant ever breaks.
+    run(2, () => trueRoomPosition())
+    expect(closer.getStatus().playbackAdopted).toBe(true)
   })
 })
 

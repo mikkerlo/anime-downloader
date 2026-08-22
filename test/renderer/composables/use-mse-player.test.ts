@@ -1085,11 +1085,12 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
     })
 
     it('is fail-open: an omitted refusedSeek leaves the land unchanged', () => {
-      // Pins the contract the nine existing `startMseSession` call sites in this
-      // file rely on — `test/**` is outside both typecheck projects, so nothing
-      // in the build would catch a required field here. The direction is
-      // deliberate (#295): a wiring regression in `PlayerView` degrades to the
-      // pre-#275 behaviour, not to a stall.
+      // `refusedSeek` is *required* on `StartMseSessionOpts`, so a typechecked
+      // caller cannot omit it — but `test/**` is outside both typecheck
+      // projects, so the nine other `startMseSession` call sites in this file
+      // do omit it, and this pins that they still land. The runtime direction
+      // is deliberate (#295): were the field ever to go missing, the
+      // degradation is the pre-#275 behaviour, not a stall.
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: 600,
         timestampOffset: 595,

@@ -143,13 +143,13 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
     expect(warn).not.toHaveBeenCalled()
   })
 
-  // The boundary window `[duration, duration + 1)`. This is the input where the
-  // main-side and renderer-side predicates could drift apart in a later edit,
-  // so it is pinned here *and* at the composable seam in
-  // `use-mse-player.test.ts`. `>= duration`, not `> duration`: `duration` itself
-  // is already the point where ffmpeg stops answering the question and starts
-  // substituting the final GOP (`-ss 1420.063` and `-ss 999999` are the same
-  // 15-packet run).
+  // The boundary window `[duration, duration + 1)`. `>= duration`, not
+  // `> duration`: `duration` itself is already the point where ffmpeg stops
+  // answering the question and starts substituting the final GOP
+  // (`-ss 1420.063` and `-ss 999999` are the same 15-packet run). Since #295
+  // this is the *only* pin on the window: the renderer reads the decision off
+  // the reply, so the composable-seam rows that used to mirror this comparison
+  // retired with it.
   describe.each([
     { label: 'exactly the duration', seek: DURATION },
     { label: 'half a second past the duration', seek: DURATION + 0.5 }

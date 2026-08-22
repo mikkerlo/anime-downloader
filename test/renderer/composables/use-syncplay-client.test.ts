@@ -2311,6 +2311,45 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 
     expect(v.play).toHaveBeenCalled()
   })
+
+  it('arms the refusal for a pause taken while the socket is reconnecting', async () => {
+    // The reconnect window is the one place the marker's guards must *not*
+    // follow the hold's: `armPendingUserPause()` wants `state === 'ready'`
+    // because a hold that cannot reach the room expires into a failure toast,
+    // but the marker's whole job is to survive a socket drop —
+    // `resetRemoteStateTracking({ keepRefusalNotice: true })` on the
+    // `reconnecting` branch exists to carry one *through*, and nothing could
+    // arm one inside the window if the marker took the state guard too.
+    //
+    // Main keeps it armable there: `resetTransportState()` touches neither
+    // `lastRoomState` nor `playbackAdopted` nor `roomUsers`, so the `outOfFile`
+    // projection is still true on the status that goes out with
+    // `state: 'reconnecting'` — same room, same file, same divergence.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    // The socket drops mid-divergence, and the user pauses while it is down.
+    client.syncplayStatus.value = {
+      state: 'reconnecting',
+      username: 'me',
+      playbackAdopted: false,
+      outOfFile: true
+    }
+    pausedByUser(v, client)
+
+    // Back on the socket, still past the end of our file, and the room resumes
+    // its 1 Hz playing states.
+    client.syncplayStatus.value = DIVERGED
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).not.toHaveBeenCalled()
+    expect(v.paused).toBe(true)
+  })
 })
 
 // `showSyncplayToast` is not a debounce — it assigns the single toast slot and

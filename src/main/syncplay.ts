@@ -497,10 +497,10 @@ export class SyncplayClient extends EventEmitter {
   //
   // `outOfFile` is therefore **recomputed here** rather than storing the
   // boolean handleState()'s predicate decided on — same rule, and the other
-  // obvious source is worse: `isAdopted()` is a *mutator* (:2307 and :2317 both
-  // write the latch), which is why `isRoomVoice()` reads the raw flag rather
-  // than going through it, and a status read that silently latches adoption
-  // would be a new bug class.
+  // obvious source is worse: `isAdopted()` is a *mutator* (its roster latch and
+  // its drift latch both write the flag), which is why `isRoomVoice()` reads the
+  // raw flag rather than going through it, and a status read that silently
+  // latches adoption would be a new bug class.
   //
   // The `!playbackAdopted` conjunct is what lets this skip handleState()'s
   // drift test rather than duplicate it: at the ordinary end of an episode the
@@ -1668,7 +1668,7 @@ export class SyncplayClient extends EventEmitter {
     // `playbackAdopted = false` write, and the fourth one — not a gate term
     // inside `isAdopted()` or `buildPlaystate()`.
     //
-    // Why a genuine clear: `isRoomVoice()` reads the **raw** flag (:2243),
+    // Why a genuine clear: `isRoomVoice()` reads the **raw** flag,
     // deliberately never through `isAdopted()`. Under a gate term the flag
     // stays `true`, so `isRoomVoice` stays `false` for the whole divergence —
     // and the divergence is exactly the state where our mirror wins or ties
@@ -1678,9 +1678,9 @@ export class SyncplayClient extends EventEmitter {
     // the state that carries the room back *into* our file. Clearing it turns
     // `isRoomVoice` on, the mirror-sourced frames are emitted `setBy: null`,
     // the renderer keeps applying the room, and re-adoption happens through the
-    // drift test at :2317 *after* the renderer has converged us. That is the
-    // recovery path docs/syncplay.md already documents for the #227 gap, and it
-    // is only available to a de-adoption that genuinely clears the flag.
+    // drift latch in `isAdopted()` *after* the renderer has converged us. That
+    // is the recovery path docs/syncplay.md already documents for the #227 gap,
+    // and it is only available to a de-adoption that genuinely clears the flag.
     //
     // Here, immediately below the `lastRoomState` write, for four reasons:
     //
@@ -1696,14 +1696,17 @@ export class SyncplayClient extends EventEmitter {
     //     fractions of a second at the ordinary end of **every** episode; the
     //     renderer dodges that by gating its refusal toast on `wouldSeek`
     //     (use-syncplay-client.ts) and main has no `wouldSeek` to borrow.
-    //     `ADOPT_TOLERANCE_S` is the same quantity :2317 re-adopts on, so the
-    //     two compose instead of needing their own calibration.
+    //     `ADOPT_TOLERANCE_S` is the same quantity the drift latch in
+    //     `isAdopted()` re-adopts on, so the two compose instead of needing
+    //     their own calibration.
     //  3. Re-adoption therefore stays the ordinary drift path — no new latch,
     //     and nothing to clear when the room comes back into range.
     //  4. `seekIntent` is nulled beside the write, matching every existing
-    //     writer of this flag (:714/:718, :822/:826, :859/:865). Reported
-    //     because it stayed green rather than papered over: mutating that line
-    //     out leaves the suite passing. On every path reachable from this
+    //     writer of this flag — `setFile()`'s new-player reset,
+    //     `updateSnapshot()`'s stale-gap reset and `tearDown()` all null the
+    //     intent on the line below their own write. Reported because it stayed
+    //     green rather than papered over: mutating that line out leaves the
+    //     suite passing. On every path reachable from this
     //     harness the intent is already dead by the time the emit reads it —
     //     either the supersede retraction below nulled it (a foreign `doSeek`
     //     is how a peer takes the room out of our file in the first place) or
@@ -1716,10 +1719,11 @@ export class SyncplayClient extends EventEmitter {
     //     a claim about *every* writer, and unpinned by construction.
     //
     // The position half of the predicate — the duration domain rule, and the
-    // `projectedRoomPosition() >= d` comparison whose quantity is what :2317
-    // re-adopts on, so the drift conjunct below composes with it — lives in
-    // `roomPastEndOfOwnFile()`, shared with `statusProjection()`'s `outOfFile`
-    // so the two cannot drift apart. See it for both arguments.
+    // `projectedRoomPosition() >= d` comparison whose quantity is what the
+    // drift latch in `isAdopted()` re-adopts on, so the drift conjunct below
+    // composes with it — lives in `roomPastEndOfOwnFile()`, shared with
+    // `statusProjection()`'s `outOfFile` so the two cannot drift apart. See it
+    // for both arguments.
     //
     // `rosterSaysAlone()` is the one thing this predicate has that the plan did
     // not, and it is a *derivation* rather than a new policy: do not write what
@@ -2010,13 +2014,15 @@ export class SyncplayClient extends EventEmitter {
     // steps. A foreign, acked `doSeek` frame retired the intent at the
     // retraction above; and the only other route to this emit — the
     // `isRoomVoice` branch, which #277 added beside the foreign path so that
-    // what reaches the emit (:2020) is a strict superset of
-    // `willApplyRemoteState` (:1792) — cannot coincide with a live intent:
-    // isRoomVoice() is gated on `!playbackAdopted` (:2243), sendLocalState()
-    // arms the intent only below the isAdopted() gate (:802, gate at :767), and
-    // every writer of `playbackAdopted = false` (:714, :822, :859, :1748) nulls
-    // the intent beside it. So it is an invariant to assert rather than a value to
-    // hardcode, and what carries it is adoption rather than the drop guards.
+    // what reaches this `remote-state` emit is a strict superset of
+    // `handleState()`'s `willApplyRemoteState` — cannot coincide with a live
+    // intent: `isRoomVoice()` is gated on `!playbackAdopted`,
+    // `sendLocalState()` arms the intent only below its `isAdopted()` gate, and
+    // every writer of `playbackAdopted = false` (`setFile()`'s new-player
+    // reset, `updateSnapshot()`'s stale-gap reset, `tearDown()`, and
+    // `handleState()`'s out-of-file de-adoption) nulls the intent beside it. So
+    // it is an invariant to assert rather than a value to hardcode, and what
+    // carries it is adoption rather than the drop guards.
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -2276,10 +2282,10 @@ export class SyncplayClient extends EventEmitter {
   // `roomPos >= Infinity` is false and `>=` carries it either way.
   //
   // The room quantity is `projectedRoomPosition()`, not `position` off the
-  // wire: that is what :2317 re-adopts on, and the drift conjunct at the
-  // `handleState()` call site only composes with it if the two are the same
-  // quantity. `typeof d === 'number'` narrows the duration for both callers, so
-  // neither needs an `as number` cast.
+  // wire: that is what the drift latch in `isAdopted()` re-adopts on, and the
+  // drift conjunct at the `handleState()` call site only composes with it if
+  // the two are the same quantity. `typeof d === 'number'` narrows the
+  // duration for both callers, so neither needs an `as number` cast.
   private roomPastEndOfOwnFile(
     room: { position: number; paused: boolean; at: number } | null
   ): number | null {

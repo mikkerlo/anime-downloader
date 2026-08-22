@@ -1127,25 +1127,41 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the next playing state resumed the user anyway. `outOfFileUserPause`
     // takes over instead, and it holds for as long as the divergence does.
     //
-    // The marker carries the same two guards the hold does — a pause made
-    // outside a session, and the reload-shaped implicit pause the media load
-    // algorithm queues at `readyState === 0`, are not the user's — because it
-    // stands in for the hold and inherits the reason for both. `readyState > 0`
-    // is the load-bearing one here: it is the only thing in this composable
-    // separating a user's pause from a reload-shaped one, `PlayerView.vue`
-    // calls `onLocalPause()` straight off the raw `@pause` event, and the
-    // ordering is against us across an episode switch taken during a
-    // divergence. The switch watcher runs `resetRemoteStateTracking()`
-    // synchronously and the teardown pause arrives after it, while main's
-    // `setFile()` leaves `lastRoomState` alone — so the projection still says
-    // `outOfFile`, an unguarded marker comes straight back on, and the ready
-    // gate declines the binge auto-resume that `clearPendingUserPause()` beside
-    // it is in that watcher to protect for the sibling flag.
-    const isUserPause =
-      syncplayStatus.value.state === 'ready' && (deps.getVideoEl()?.readyState ?? 0) > 0
+    // The marker shares exactly one of the hold's two guards —
+    // `elementHasMetadata` — and deliberately not the `state === 'ready'` one.
+    // The shared one is load-bearing: it is the only thing in this composable
+    // separating a user's pause from the reload-shaped implicit pause the media
+    // load algorithm queues at `readyState === 0`, `PlayerView.vue` calls
+    // `onLocalPause()` straight off the raw `@pause` event, and the ordering is
+    // against us across an episode switch taken during a divergence. The switch
+    // watcher runs `resetRemoteStateTracking()` synchronously and the teardown
+    // pause arrives after it, while main's `setFile()` leaves `lastRoomState`
+    // alone — so the projection still says `outOfFile`, an unguarded marker
+    // comes straight back on, and the ready gate declines the binge auto-resume
+    // that `clearPendingUserPause()` beside it is in that watcher to protect
+    // for the sibling flag.
+    //
+    // `state === 'ready'` stays on the hold alone, because the marker's whole
+    // job is to survive the socket dropping: the `keepRefusalNotice` opt-out on
+    // the `reconnecting` branch exists to carry one *through* that window, and
+    // nothing could arm one inside it if this took the state guard too — a
+    // pause made while the socket is down would be resumed by the room on
+    // reconnect, which is the one thing the divergence rule is for.
+    // `roomOutOfFile` already buys what the state test would: the projection is
+    // only ever true while main holds a `lastRoomState`, is de-adopted and has
+    // peers, and `tearDown()` clears all three, so under
+    // `idle`/`disconnected` it is false anyway. `resetTransportState()` clears
+    // none of them, which is exactly why `reconnecting` is the state the two
+    // guards disagree about.
+    const elementHasMetadata = (deps.getVideoEl()?.readyState ?? 0) > 0
     const roomOutOfFile = syncplayStatus.value.outOfFile === true
-    if (roomOutOfFile && isUserPause) outOfFileUserPause = true
-    if (isUserPause && syncplayStatus.value.playbackAdopted !== true && !roomOutOfFile) {
+    if (roomOutOfFile && elementHasMetadata) outOfFileUserPause = true
+    if (
+      syncplayStatus.value.state === 'ready' &&
+      elementHasMetadata &&
+      syncplayStatus.value.playbackAdopted !== true &&
+      !roomOutOfFile
+    ) {
       armPendingUserPause()
     }
     sendSyncplayLocalState('pause')

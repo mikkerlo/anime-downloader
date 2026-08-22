@@ -2054,6 +2054,188 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
   })
 })
 
+// #281 slice B, the renderer half. Main de-adopts for the length of the
+// divergence, so `sendLocalState()` returns at its adoption gate — no
+// assertion, not even an ignore-counter bump — and a local pause can no longer
+// reach the room. The room's next 1 Hz *playing* state would then resume the
+// user, on a `needsPlayPause` that is deliberately independent of `outOfFile`.
+// We cannot tell the room anything, so it must not be able to override us
+// either: honour a room pause, refuse a room resume that would override a local
+// user pause.
+//
+// Clearing the flag makes it worse before it makes it better, which is the
+// second half of this block: the projection goes false, so `onLocalPause()`'s
+// old arming condition (`playbackAdopted !== true`) is true for the whole
+// divergence, and the hold's normal terminator — `roomPaused` going
+// `false → true` — can never fire for a peer the room cannot hear. It would run
+// the full 8 s and expire into "your pause didn't stick" before the next
+// playing state resumed the user anyway. So the hold does not arm, and
+// `outOfFileUserPause` stands in for it.
+describe('useSyncplayClient — a user pause while the room is out of our file (#281 slice B)', () => {
+  const PENDING_PAUSE_TOAST = 'Pausing once synced with the room…'
+  const PENDING_PAUSE_FAILED_TOAST = "The room kept playing — your pause didn't stick"
+
+  /** Main's projection during the divergence: de-adopted, and out of file. */
+  const DIVERGED: SyncplayStatus = {
+    state: 'ready',
+    username: 'me',
+    playbackAdopted: false,
+    outOfFile: true
+  }
+
+  const pausedByUser = (v: HTMLVideoElement, client: Client): void => {
+    // The element really does stop; the composable's own pause path then runs
+    // against it, exactly as the `pause` event would drive it.
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+  }
+
+  it('holds the pause against the room’s next playing state', async () => {
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).not.toHaveBeenCalled()
+    expect(v.paused).toBe(true)
+    // …and it keeps holding, because the room is going to say the same thing
+    // once a second for the whole divergence.
+    emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 3002, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  it('leaves no pending-pause hold armed behind the divergence', async () => {
+    // The hold's arming is only *observable* through what it does after the
+    // divergence, which is why this case runs on past it rather than stopping
+    // at the refusal: while the refusal is up the apply early-outs before
+    // `holding` is even computed, so an armed hold holds nothing and expires
+    // silently. What it does do is survive — and then hold the first state that
+    // *does* apply in range, and expire into the failure toast on a pause the
+    // room could never have been told about. Both halves are asserted below,
+    // and both are red if the `outOfFile` conjunct comes out of the arming
+    // condition.
+    vi.useFakeTimers()
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).not.toBe(PENDING_PAUSE_TOAST)
+    expect(v.play).not.toHaveBeenCalled()
+
+    // The room comes back into our file, 4 s in — inside the hold's 8 s budget.
+    vi.advanceTimersByTime(4000)
+    emitRemoteState({ position: 600, paused: false, doSeek: true, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+    expect(client.syncplayToast.value).not.toBe(PENDING_PAUSE_TOAST)
+
+    // …and nothing is left to expire.
+    vi.advanceTimersByTime(9000)
+    expect(client.syncplayToast.value).not.toBe(PENDING_PAUSE_FAILED_TOAST)
+  })
+
+  it('refuses the resume through the ready gate as well as through the apply', async () => {
+    // `recordRemoteState()` writes `syncplayLastRemotePlaying` above every
+    // refusal — deliberately, because its other consumers need the room's truth
+    // — so the gate is the apply's twin resume path. Without the marker in
+    // `shouldPlay`, a `canplay` or a roster change resumes the pause the apply
+    // just declined to.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+    client.applySyncplayReadyGate()
+
+    expect(v.play).not.toHaveBeenCalled()
+  })
+
+  it('still honors a room pause, and lets the user’s own play end the refusal', async () => {
+    // The other direction of the same rule: refusing to be moved is not
+    // refusing to stop. And the user retains the last word — pressing play
+    // clears the marker, so the room owns the transport again.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    ;(v as { paused: boolean }).paused = true
+    emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  it('is scoped to the divergence: an ordinary adopted pause is still overridden by the room', async () => {
+    // Anti-vacuity, and the "today" behaviour. Same element, same out-of-file
+    // room position, same user pause — but main has not de-adopted, so the
+    // marker is never set and the resume lands. This is what the case above
+    // measures the difference against; without the `outOfFile` conjunct in
+    // `onLocalPause()` the two would be indistinguishable.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  it('releases the refusal on the first state that applies in range', async () => {
+    // The marker is a receipt for a divergence, not a permanent veto: once the
+    // room is back inside our file, ordinary sync owns the transport again —
+    // and a survivor would silently refuse the *next* divergence's resume, one
+    // the user never paused for.
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), DIVERGED)
+
+    pausedByUser(v, client)
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+
+    emitRemoteState({ position: 600, paused: false, doSeek: true, setBy: 'peer' })
+    expect(v.currentTime).toBe(600)
+    expect(v.play).toHaveBeenCalled()
+  })
+})
+
 // `showSyncplayToast` is not a debounce — it assigns the single toast slot and
 // *re-arms* its 3500 ms clear timer on every call. So a refusal emitted per
 // inbound state at 1 Hz would never expire, and last-writer-wins would swallow

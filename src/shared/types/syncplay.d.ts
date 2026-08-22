@@ -55,6 +55,20 @@ interface SyncplayStatus {
    *  pending pause has reached the room. Session-scoped by construction:
    *  `tearDown()` nulls `lastRoomState`. */
   roomPaused?: boolean
+  /** *Which* de-adoption this is (#281) — `true` while `playbackAdopted` is
+   *  false **and** the room's projected position lies past the end of the file
+   *  we announced. `playbackAdopted: false` alone cannot tell "converging" from
+   *  "the room is somewhere I cannot go", and the renderer needs the second
+   *  answer for both halves of its pause rule: it must not arm the pending-pause
+   *  hold in this state (the hold's terminator can never fire, because main is
+   *  silent and the room will never pause for us), and it must refuse a room
+   *  resume that would override a local user pause.
+   *
+   *  A projection like the two above, recomputed on every read rather than
+   *  stored — see `statusProjection()` for why, and for why it is not read out
+   *  of `isAdopted()`, which is a mutator. Fails open: no file, or a duration
+   *  we cannot use, reads `false` and follows the room as before. */
+  outOfFile?: boolean
 }
 
 interface SyncplayRemoteState {

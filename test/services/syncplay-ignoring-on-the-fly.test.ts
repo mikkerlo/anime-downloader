@@ -633,6 +633,61 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(mirror.playstate?.doSeek).toBe(false)
     })
 
+    // #288, and a behaviour difference rather than a regression guard. The
+    // guard above tests `hasLivePlayback()`, which keeps its 5 s horizon — so
+    // between the *assert* horizon (2 s) and it, a re-assert still passes the
+    // guard and still burns an attempt. What changes is the frame it produces.
+    //
+    // On head `buildPlaystate()` took its live branch here, so the **frozen**
+    // pre-close position went out carrying `doSeek: true` — which every peer's
+    // renderer applies unconditionally instead of at its 3 s tolerance. That is
+    // a stronger arm of the drag #288 is about, and the one the election traces
+    // miss because those clients carried no unresolved intent. Since #288 the
+    // same call falls through to the mirror, whose `doSeek` is hardcoded false.
+    //
+    // A live intent is deliberately *not* exempted from the demotion: exempting
+    // it is exactly what would keep that arm alive.
+    it('re-asserts as a mirror frame, not a frozen doSeek, once the snapshot is past the assert window', () => {
+      handshake()
+      armForwardSeek()
+
+      // Silence longer than the assert window and shorter than the de-adoption
+      // one — the window this case exists for. `hasLivePlayback()` is still
+      // true, so the spectator guard above does *not* fire.
+      vi.advanceTimersByTime(3000)
+      clearWrites()
+
+      roomStillAt(ROOM_POSITION)
+
+      // On head: one frame at SEEK_TARGET with `doSeek: true`.
+      expect(doSeekFrames()).toHaveLength(0)
+      // The attempt is still burned, and the intent still lives — this is a
+      // demotion, not the guard's terminal drop.
+      expect(seekIntent()?.attempts).toBe(1)
+      // And the frame that went out in its place is the mirror: no pause claim,
+      // no doSeek, and the room's own position rather than the frozen one.
+      const emitted = outboundStates(lastTlsSocket).filter((s) => s.playstate)
+      expect(emitted).toHaveLength(1)
+      expect(emitted[0].playstate).not.toHaveProperty('paused')
+      expect(emitted[0].playstate?.doSeek).toBe(false)
+      expect(emitted[0].playstate?.position).toBeCloseTo(ROOM_POSITION, 1)
+    })
+
+    // …and it still terminates. "Attempts exhausted" no longer implies "we
+    // re-asserted", but the burn stays bounded and self-clearing, so a closed
+    // player's unresolved seek cannot sit in the intent forever.
+    it('still retires an intent that burns its attempts on mirror frames', () => {
+      handshake()
+      armForwardSeek()
+      vi.advanceTimersByTime(3000)
+      clearWrites()
+
+      for (let i = 0; i < 6; i += 1) roomStillAt(ROOM_POSITION, { server: 30 + i })
+
+      expect(doSeekFrames()).toHaveLength(0)
+      expect(seekIntent()).toBeNull()
+    })
+
     describe('a superseding local state', () => {
       it('re-arms on a second seek and recovers the newest position', () => {
         handshake()

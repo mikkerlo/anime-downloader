@@ -53,9 +53,48 @@ const WATCHDOG_MS = 8000
 // view joins a room with no player at all, and closing the player stops the
 // pushes — so our `snapshot` is not a playstate we may assert. 5× the push
 // cadence: long enough that a stuttering renderer never flips us to spectator
-// mid-playback, short enough that closing the player stops our assertions
-// within one heartbeat or two. See sendStateMessage().
+// mid-playback.
+//
+// It is *five* heartbeats, not "one or two" as this comment claimed until #288
+// — and that arithmetic was the whole of the bug: for five seconds after a
+// close the heartbeat kept asserting a frozen position, which won
+// `Room.getPosition()`'s min() and dragged every peer back by up to 5 s in one
+// step. This threshold stays what it always was — the **de-adoption /
+// new-player-detection** horizon (`updateSnapshot()`'s stale gap,
+// `maybeReassertSeek()`'s guard) — and asserting is now gated on the tighter
+// `PLAYBACK_ASSERT_STALE_MS` below. See sendStateMessage().
 const PLAYBACK_STALE_MS = 5000
+// The horizon for *asserting* a playing snapshot, distinct from the de-adoption
+// horizon above (#288). "Do not assert 'playing at P' when P has not moved
+// since the last time we said it" — a claim that is impossible for a live
+// player and is exactly what wins the election. Past this we fall through to
+// the spectator mirror instead; `hasLivePlayback()` is deliberately untouched,
+// so de-adoption and new-player detection still happen at 5 s.
+//
+// Both ends of 2000 are tight, so neither is a round number:
+//
+//  - **Ceiling ~2.5 s.** The worst frame a watching peer receives lands roughly
+//    N + one election period + one one-way delay behind its own element, and
+//    that must stay under the renderer's 3.0 s apply rule or the close still
+//    produces the yank this exists to remove. Measured over a 50 ms/direction
+//    link: at 3000 four frames cross the rule, at 2500 none do.
+//  - **Floor ~1.5 s.** The push cadence is ~1 s in every *playing* case — a
+//    playing element pushes off `timeupdate`, a media event that is not
+//    timer-throttled, behind the renderer's 900 ms floor — plus IPC and timer
+//    jitter. Below that a single dropped push demotes a live viewer.
+//
+// Why 2× the push cadence where PLAYBACK_STALE_MS picked 5× for the same class
+// of concern: since #279 the cost of a *wrong* demotion changed. A live client
+// demoted for one tick mirrors at a dead heat and moves the room by exactly
+// 0.0000 against a forward-compensating server, where before it started a
+// ratchet. The 5× margin was buying protection against a consequence #279
+// removed.
+//
+// Freshness here is *push recency*, not playhead movement: a stalled-but-
+// pushing element (buffering, MSE refill) still stamps `lastSnapshotAt` at
+// 1 Hz and keeps asserting its frozen position exactly as it does today. That
+// is #284's side of the boundary, deliberately.
+export const PLAYBACK_ASSERT_STALE_MS = 2000
 // How close to the room our local position must be before we start asserting
 // it. Same 3 s the renderer's apply rule uses to decide a seek is needed: at or
 // under it the renderer wouldn't move us anyway, so we have converged. A
@@ -824,6 +863,40 @@ export class SyncplayClient extends EventEmitter {
     }
     this.snapshot = snap
     this.lastSnapshotAt = Date.now()
+  }
+
+  // The player is gone — said out loud rather than inferred from silence
+  // (#288). `useSyncplayClient`'s onBeforeUnmount is the only emitter, and the
+  // session lives on, so this clears the same pair tearDown() does and nothing
+  // else: the snapshot clock, so buildPlaystate() falls through to the mirror on
+  // the *very next* heartbeat instead of asserting a frozen position for up to
+  // PLAYBACK_STALE_MS, and the adoption latch, so a player that reopens has to
+  // converge again before it may assert.
+  //
+  // Both, not one. Clearing `lastSnapshotAt` alone leaves the latch set for a
+  // reopen that setFile() cannot see (a same-episode reopen re-pushes a
+  // byte-identical canonicalName); clearing `playbackAdopted` alone leaves the
+  // frozen snapshot assertable the moment the drift latch re-adopts.
+  //
+  // **Unconditional — no timestamp compare, no arrival-order test**, and that
+  // rests on a renderer-side invariant rather than a runtime check: `PlayerView`
+  // is the only mount site of `useSyncplayClient` and is mounted under a plain
+  // `v-if="playerState"` (`App.vue`) with no `key` and no `<KeepAlive>`, so a
+  // close tears the component down — and runs `onBeforeUnmount` synchronously —
+  // *before* any reopen can mount the next one. The close's `invoke` and the
+  // reopen's `setFile({newPlayer: true})` are then two calls on one renderer's
+  // IPC queue, in that order. A reopen re-establishes adoption through
+  // `setFile()`'s own `isNewPlayer` path, not through this handler declining to
+  // act, which is what keeps the channel payload-free. If that mount site ever
+  // gains a `<KeepAlive>`, a `key` that swaps rather than tears down, or a second
+  // mount site, this clear can land on a live player and de-adopt it — cheap
+  // (one `setFile` re-adopts) but no longer free. The staleness threshold above
+  // is correct without this event either way, which is why it, not this, is the
+  // primary fix.
+  playerClosed(): void {
+    log('player closed — dropping the snapshot claim')
+    this.lastSnapshotAt = 0
+    this.playbackAdopted = false
   }
 
   private tearDown(): void {
@@ -2142,6 +2215,34 @@ export class SyncplayClient extends EventEmitter {
     return this.lastSnapshotAt > 0 && Date.now() - this.lastSnapshotAt <= PLAYBACK_STALE_MS
   }
 
+  // Whether the snapshot is fresh enough to *assert* into the room (#288) — a
+  // strictly narrower question than hasLivePlayback()'s "is a player driving
+  // us", and deliberately a second predicate rather than a change to that one:
+  // de-adoption, new-player detection and maybeReassertSeek()'s spectator drop
+  // all keep the 5 s horizon.
+  //
+  // The `paused` arm is the whole of the difference. A *playing* snapshot is a
+  // claim that decays — "playing at P" is false the moment P stops moving,
+  // and a frozen P is precisely what wins `Room.getPosition()`'s min() and
+  // pins the room behind everyone who is actually watching. A *paused*
+  // snapshot's position is not that kind of claim: it stays correct however
+  // old it is, so it keeps the full PLAYBACK_STALE_MS horizon.
+  //
+  // Which is a choice about the mirror, not about the pause: demoting a paused
+  // player early would push it into the paused-room creep documented at
+  // buildPlaystate() below — the mirror sends no `paused` key, the server reads
+  // a missing `paused` as not-paused in `_updatePositionByAge` too, and it then
+  // forward-delay-compensates our mirrored position even while the room stands
+  // still. So the gate keeps a paused player out of that path. The residual it
+  // deliberately leaves is a player that *crashes* while paused, which re-pauses
+  // the room for up to PLAYBACK_STALE_MS; an ordinary paused close is covered by
+  // playerClosed(), not by this threshold.
+  private canAssertSnapshot(): boolean {
+    if (!this.hasLivePlayback()) return false
+    if (this.snapshot.paused) return true
+    return Date.now() - this.lastSnapshotAt <= PLAYBACK_ASSERT_STALE_MS
+  }
+
   // The playstate to assert, or null to assert none at all.
   //
   // Without a live player our `snapshot` is the initial {position: 0, paused:
@@ -2159,7 +2260,14 @@ export class SyncplayClient extends EventEmitter {
     // stick. Withholding it here instead — an earlier attempt at the same bug
     // — meant the next heartbeat mirrored the room's "playing" back and undid
     // the user's own pause a second after they pressed it.
-    if (this.hasLivePlayback() && this.isAdopted()) {
+    //
+    // `canAssertSnapshot()` rather than `hasLivePlayback()` since #288: a
+    // *playing* snapshot older than PLAYBACK_ASSERT_STALE_MS is not evidence of
+    // anything, so it falls through to the mirror below instead of freezing the
+    // room on the position a closed (or killed, or hung) player last reported.
+    // Left first in the conjunction on purpose — `isAdopted()` is a mutator, and
+    // the short-circuit is the same one `hasLivePlayback()` provided here.
+    if (this.canAssertSnapshot() && this.isAdopted()) {
       return {
         position: this.snapshot.position,
         paused: this.snapshot.paused,
@@ -2510,6 +2618,24 @@ export class SyncplayClient extends EventEmitter {
     // adoption, buildPlaystate() returns the room's own mirror, and stamping
     // doSeek on that hands the room its own position back as a seek. There is
     // nothing to recover in that state, so drop the intent rather than hold it.
+    //
+    // That equivalence is one-way since #288 and this guard no longer states
+    // it. "No live playback ⇒ buildPlaystate() mirrors" still holds; the
+    // converse does not — a *live* playing snapshot older than
+    // PLAYBACK_ASSERT_STALE_MS mirrors too. So passing this guard buys what it
+    // always bought (a spectator's intent is dropped rather than re-asserted)
+    // and no longer implies the re-assert asserts anything: between the two
+    // thresholds the frame `sendStateMessage({doSeek: true})` builds is the
+    // mirror's, whose `doSeek` is hardcoded `false`. That is deliberate and it
+    // is the point. On head the same window shipped the *frozen* position with
+    // `doSeek: true`, which every peer's renderer applies unconditionally
+    // instead of at its 3 s tolerance — a stronger arm of the drag #288 exists
+    // to remove. A live intent is knowingly **not** exempted from the
+    // demotion, because exempting it is exactly what would keep that arm
+    // alive; `intent.attempts` still increments and the intent still terminates
+    // on SEEK_REASSERT_TTL_MS / SEEK_REASSERT_MAX_ATTEMPTS, so the burn is
+    // bounded and self-clearing. The cost: "attempts exhausted" no longer
+    // implies "we re-asserted".
     //
     // Belt, and knowingly so: an intent can only be armed past sendLocalState()'s
     // adoption gate, which also refreshes `lastSnapshotAt`, so reaching here

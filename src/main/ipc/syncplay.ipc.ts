@@ -53,6 +53,13 @@ export function register({ store }: AppDeps): void {
     }
   )
 
+  // Payload-free by design (#288): the handler clears unconditionally, so there
+  // is nothing for an emit timestamp to decide. See `playerClosed()` for the
+  // renderer-side ordering invariant that makes the unconditional clear safe.
+  ipcMain.handle(CHANNELS.SYNCPLAY_PLAYER_CLOSED, () => {
+    syncplay.playerClosed()
+  })
+
   ipcMain.handle(CHANNELS.SYNCPLAY_SET_READY, (_event, isReady: boolean) => {
     syncplay.setReady(isReady)
   })

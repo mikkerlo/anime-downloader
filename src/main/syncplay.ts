@@ -569,10 +569,13 @@ export class SyncplayClient extends EventEmitter {
     }
   }
 
-  // No projection has a setter to hook: `playbackAdopted` is written at six
-  // sites and `lastRoomState` inside handleState(), none of which is a status
-  // transition, so without this the renderer would only learn about a flip on
-  // the next unrelated `setStatus()` — which in a steady session never comes.
+  // No projection has a setter to hook: `playbackAdopted` is written at seven
+  // sites — `setFile()`'s new-player reset, `updateSnapshot()`'s stale-gap
+  // reset, `playerClosed()` (#288), `tearDown()`, `handleState()`'s out-of-file
+  // de-adoption, and `isAdopted()`'s two latching writes — and `lastRoomState`
+  // inside handleState(), none of which is a status transition, so without this
+  // the renderer would only learn about a flip on the next unrelated
+  // `setStatus()` — which in a steady session never comes.
   // Compare against what was last *emitted* and re-emit on a difference.
   //
   // Called from the heartbeat tick **after** `sendStateMessage()`, so the latch
@@ -867,16 +870,30 @@ export class SyncplayClient extends EventEmitter {
 
   // The player is gone — said out loud rather than inferred from silence
   // (#288). `useSyncplayClient`'s onBeforeUnmount is the only emitter, and the
-  // session lives on, so this clears the same pair tearDown() does and nothing
-  // else: the snapshot clock, so buildPlaystate() falls through to the mirror on
-  // the *very next* heartbeat instead of asserting a frozen position for up to
-  // PLAYBACK_STALE_MS, and the adoption latch, so a player that reopens has to
-  // converge again before it may assert.
+  // session lives on, so this clears the same three player-scoped fields
+  // tearDown() does and nothing else: the snapshot clock, so buildPlaystate()
+  // falls through to the mirror on the *very next* heartbeat instead of
+  // asserting a frozen position for up to PLAYBACK_STALE_MS; the adoption
+  // latch, so a player that reopens has to converge again before it may
+  // assert; and the seek intent, which belonged to the player that made it.
   //
-  // Both, not one. Clearing `lastSnapshotAt` alone leaves the latch set for a
-  // reopen that setFile() cannot see (a same-episode reopen re-pushes a
+  // All three, not two. Clearing `lastSnapshotAt` alone leaves the latch set
+  // for a reopen that setFile() cannot see (a same-episode reopen re-pushes a
   // byte-identical canonicalName); clearing `playbackAdopted` alone leaves the
   // frozen snapshot assertable the moment the drift latch re-adopts.
+  //
+  // `seekIntent` is cleared *here* rather than left to maybeReassertSeek()'s
+  // `!hasLivePlayback()` branch, which does drop it — but a State later, and
+  // that tick is not free. `handleState()` captures `seekIntentWasLive` above
+  // its `maybeReassertSeek()` call, so on the one frame in between the emitted
+  // position is rewritten to `this.snapshot.position` — the closed player's
+  // frozen position, the exact value this event exists to retire — and the
+  // `lastRemoteRoomState` write is skipped, which leaves `getRoomPosition()`
+  // answering a staler room for the reopen's `-ss` seed. It also keeps the
+  // invariant the emit's `doSeek` argument rests on: *every* writer of
+  // `playbackAdopted = false` nulls the intent beside it, so `isRoomVoice`
+  // (gated on `!playbackAdopted`) and a live intent cannot coincide. Clearing
+  // only the flag here would have made this the first writer to break it.
   //
   // **Unconditional — no timestamp compare, no arrival-order test**, and that
   // rests on a renderer-side invariant rather than a runtime check: `PlayerView`
@@ -897,6 +914,7 @@ export class SyncplayClient extends EventEmitter {
     log('player closed — dropping the snapshot claim')
     this.lastSnapshotAt = 0
     this.playbackAdopted = false
+    this.seekIntent = null
   }
 
   private tearDown(): void {
@@ -2092,10 +2110,10 @@ export class SyncplayClient extends EventEmitter {
     // intent: `isRoomVoice()` is gated on `!playbackAdopted`,
     // `sendLocalState()` arms the intent only below its `isAdopted()` gate, and
     // every writer of `playbackAdopted = false` (`setFile()`'s new-player
-    // reset, `updateSnapshot()`'s stale-gap reset, `tearDown()`, and
-    // `handleState()`'s out-of-file de-adoption) nulls the intent beside it. So
-    // it is an invariant to assert rather than a value to hardcode, and what
-    // carries it is adoption rather than the drop guards.
+    // reset, `updateSnapshot()`'s stale-gap reset, `playerClosed()`,
+    // `tearDown()`, and `handleState()`'s out-of-file de-adoption) nulls the
+    // intent beside it. So it is an invariant to assert rather than a value to
+    // hardcode, and what carries it is adoption rather than the drop guards.
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -2265,8 +2283,15 @@ export class SyncplayClient extends EventEmitter {
     // *playing* snapshot older than PLAYBACK_ASSERT_STALE_MS is not evidence of
     // anything, so it falls through to the mirror below instead of freezing the
     // room on the position a closed (or killed, or hung) player last reported.
-    // Left first in the conjunction on purpose — `isAdopted()` is a mutator, and
-    // the short-circuit is the same one `hasLivePlayback()` provided here.
+    // Left first in the conjunction on purpose — `isAdopted()` is a mutator, so
+    // the order decides when its latch runs. Note this short-circuit is
+    // *stronger* than the one `hasLivePlayback()` gave: between the two
+    // thresholds a playing snapshot no longer reaches `isAdopted()` at all, so
+    // the heartbeat stops latching there. Reachably inert — a snapshot that
+    // stale with `paused: false` means the pushes stopped, and those shapes are
+    // either already latched (a translation switch retains adoption) or re-latch
+    // through sendLocalState() / the first resumed updateSnapshot(), both of
+    // which stamp `lastSnapshotAt` before this gate reads it.
     if (this.canAssertSnapshot() && this.isAdopted()) {
       return {
         position: this.snapshot.position,

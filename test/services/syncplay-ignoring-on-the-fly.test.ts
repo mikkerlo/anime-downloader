@@ -1232,7 +1232,8 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
 
       // The window inherits `seekIntent`'s retirements exactly, because it *is*
       // `seekIntent`: no new field, no new timer, nothing extra to retire. These
-      // two are the routes a rewritten frame could otherwise outlive its player.
+      // three are the routes a rewritten frame could otherwise outlive its
+      // player.
       it('does not rewrite once a new player has retired the intent', () => {
         handshake()
         armForwardSeek()
@@ -1263,6 +1264,40 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         // be the fresh element's 0 rather than the room's 100.
         expect(remoteStates).toHaveLength(1)
         expect(remoteStates[0].position).toBe(ROOM_POSITION)
+      })
+
+      // The third route, added by #288's explicit close (review round 1).
+      // `playerClosed()` retires the intent *here* rather than leaving it to
+      // maybeReassertSeek()'s `!hasLivePlayback()` branch, which does drop it —
+      // but a State later, and that tick is not free. The capture sits above the
+      // call, so left to the branch this frame is rewritten to the closed
+      // player's frozen SEEK_TARGET and the `lastRemoteRoomState` write is
+      // skipped with it. Compare 'still rewrites on the tick the spectator guard
+      // retires the intent' above: identical machinery, held deliberately there
+      // because the reading is of a live-but-quiet element rather than a gone
+      // one. It also keeps the invariant the emit's pass-through `doSeek` rests
+      // on — every writer of `playbackAdopted = false` nulls the intent beside
+      // it, so `isRoomVoice` and a live intent cannot coincide.
+      it('does not rewrite once an explicit player close has retired the intent', () => {
+        handshake()
+        openAndAdopt()
+        // A foreign frame with no intent live seeds the room position, so the
+        // skipped-write half below is a *stale* value rather than a null.
+        forcedState({ server: 5, setBy: 'peer', position: 50, paused: false, doSeek: false })
+        expect(client.getRoomPosition(OPEN)).toBeCloseTo(50, 5)
+
+        armForwardSeek()
+        client.playerClosed()
+        expect(seekIntent()).toBeNull()
+        clearWrites()
+
+        roomStillAt(ROOM_POSITION, { setBy: 'peer' })
+
+        // Non-vacuous: clearing only `lastSnapshotAt` and `playbackAdopted`
+        // emits SEEK_TARGET here and leaves getRoomPosition() on the seed.
+        expect(remoteStates[remoteStates.length - 1].position).toBe(ROOM_POSITION)
+        expect(doSeekFrames()).toHaveLength(0)
+        expect(client.getRoomPosition(OPEN)).toBeCloseTo(ROOM_POSITION, 5)
       })
     })
 

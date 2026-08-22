@@ -81,7 +81,25 @@ const CONTINUATIONS: [string, string][] = [
   ['goToEpisode', stripComments(slice('async function goToEpisode', 'function cancelAutoAdvance'))]
 ]
 
+/**
+ * The continuations' own checkpoints. `selectTranslation` / `goToEpisode` have
+ * no prepare identity of their own, so theirs stay the plain unmount test.
+ */
 const BAIL = 'if (unmounted) return'
+
+/**
+ * The ladder inside `prepareMkvForPlayback` / `prepareHevcTranscode`. #291
+ * generalised those checkpoints from "unmounted" to "unmounted **or**
+ * superseded", so the literal they are matched by has to change with them.
+ *
+ * It is deliberately NOT widened to `'if (unmounted'`, which would match a
+ * checkpoint that forgot the supersede term and leave this scan silently not
+ * proving the thing #291 exists for. It names the helper instead, and
+ * `shouldBail`'s own definition is pinned separately below so the two terms
+ * cannot be quietly dropped out of it either. This scan is the only renderer
+ * verification there is — `PlayerView` has no mount harness.
+ */
+const PREPARE_BAIL = 'if (shouldBail(myPrepare))'
 
 /**
  * Everything in these two functions that reaches out of the component: the IPC
@@ -286,12 +304,17 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // A fifth main-process call added here fails this assertion until the author
     // lists it — and the guard assertion below then forces a bail with it.
     // Without the closed set the ladder is a snapshot that quietly decays.
+    // The three `playerCloseStreamSession` entries are #291's targeted unwind —
+    // one per checkpoint that can hold a `sessionId` this invocation opened.
     expect(callSites(PREPARE_MKV).map((c) => c.name)).toEqual([
       'window.api.watchProgressGet',
       'window.api.syncplayGetRoomPosition',
       'window.api.playerRemuxMkvStream',
+      'window.api.playerCloseStreamSession',
       'prepareHevcTranscode',
+      'window.api.playerCloseStreamSession',
       'msePlayer.startMseSession',
+      'window.api.playerCloseStreamSession',
       'window.api.playerCleanupRemux',
       'window.api.getSetting',
       'askHevcChoice',
@@ -306,7 +329,9 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     expect(callSites(PREPARE_HEVC).map((c) => c.name)).toEqual([
       'msePlayer.setTranscoding',
       'window.api.playerRemuxMkvStreamTranscode',
+      'window.api.playerCloseStreamSession',
       'msePlayer.setTranscoding',
+      'window.api.playerCloseStreamSession',
       'msePlayer.setTranscoding',
       'window.api.playerCleanupRemux',
       'msePlayer.startMseSession'
@@ -320,10 +345,11 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // Delete any one bail and this goes red, naming the call it uncovered.
     for (const { name, index } of callSites(body)) {
       const lastAwait = precedingAwait(body, index)
-      const lastBail = body.lastIndexOf(BAIL, index)
-      expect(lastBail, `no \`${BAIL}\` between the preceding await and ${name}(`).toBeGreaterThan(
-        lastAwait
-      )
+      const lastBail = body.lastIndexOf(PREPARE_BAIL, index)
+      expect(
+        lastBail,
+        `no \`${PREPARE_BAIL}\` between the preceding await and ${name}(`
+      ).toBeGreaterThan(lastAwait)
     }
   })
 
@@ -333,7 +359,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // choice), and a check at one of them leaves the other open. Above
     // `setTranscoding(true)`, not below, so the flag is not latched on a dead
     // instance either.
-    const bail = PREPARE_HEVC.indexOf(BAIL)
+    const bail = PREPARE_HEVC.indexOf(PREPARE_BAIL)
     const setTranscoding = PREPARE_HEVC.indexOf('msePlayer.setTranscoding(true)')
     expect(bail).toBeGreaterThan(-1)
     expect(setTranscoding).toBeGreaterThan(bail)
@@ -346,7 +372,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // opened afterwards is settled by nobody: `prepareMkvForPlayback` never
     // returns, its `finally` never runs, and `mkvPreparesInFlight` stays held.
     const choiceDecl = PREPARE_MKV.indexOf('let choice: HevcPromptChoice')
-    const bailAboveChoice = PREPARE_MKV.lastIndexOf(BAIL, choiceDecl)
+    const bailAboveChoice = PREPARE_MKV.lastIndexOf(PREPARE_BAIL, choiceDecl)
     const getSetting = PREPARE_MKV.indexOf("window.api.getSetting('hevcTranscodeOnPlay')")
     expect(getSetting).toBeGreaterThan(-1)
     expect(bailAboveChoice).toBeGreaterThan(getSetting)
@@ -362,7 +388,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // cannot reach it: not at unmount, not on the next open, not ever. This
     // renderer check is the only thing in the codebase that can stop it.
     const legacy = PREPARE_MKV.indexOf('runLegacyRemuxIpc(')
-    expect(PREPARE_MKV.lastIndexOf(BAIL, legacy)).toBeGreaterThan(
+    expect(PREPARE_MKV.lastIndexOf(PREPARE_BAIL, legacy)).toBeGreaterThan(
       precedingAwait(PREPARE_MKV, legacy)
     )
   })
@@ -445,6 +471,209 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
     // The `finally` must be the last thing in the function, i.e. no return sits
     // outside it.
     expect(PREPARE_MKV.indexOf('return', finallyIdx)).toBe(-1)
+  })
+})
+
+/**
+ * #291 — two `prepareMkvForPlayback` calls can be in flight at once on a LIVE
+ * component (one parked in main's `probeMkvForMse`, above `registerSession`,
+ * while the user picks another translation). Neither caller-side conditional
+ * fires, both handlers register and spawn, and the loser's ffmpeg is orphaned.
+ *
+ * The fix is renderer-side supersede, so main still legitimately registers two
+ * sessions — see the characterization test in
+ * `test/services/player-ipc-session-cleanup-race.test.ts`. This block is the
+ * only verification the renderer half gets: a behavioral test would have to
+ * re-implement the epoch logic and would then pass regardless of what
+ * `PlayerView` does.
+ */
+describe('#291 — supersede identity and the targeted unwind', () => {
+  /** Every `if (shouldBail(myPrepare)) { … }` block body in the two functions. */
+  function bailBlocks(body: string): string[] {
+    const out: string[] = []
+    let at = body.indexOf(PREPARE_BAIL)
+    while (at > -1) {
+      const open = body.indexOf('{', at)
+      const semi = body.indexOf(';', at)
+      // Single-statement form (`… return PLAYER_CLOSED_BAIL;`) has no block.
+      if (open > -1 && open < semi) {
+        let depth = 0
+        let i = open
+        for (; i < body.length; i++) {
+          if (body[i] === '{') depth++
+          else if (body[i] === '}' && --depth === 0) break
+        }
+        out.push(body.slice(open, i + 1))
+      } else {
+        out.push(body.slice(at, semi + 1))
+      }
+      at = body.indexOf(PREPARE_BAIL, at + 1)
+    }
+    return out
+  }
+
+  it('keeps prepareEpoch component-scope — a per-instance top-level let in <script setup>', () => {
+    // Module scope (a second plain `<script>` block, or a hoist into an imported
+    // module) would make two live `PlayerView` instances share one counter, and
+    // each would then supersede the other's opens. A top-level `let` inside
+    // `<script setup>` is per-instance, which is exactly what `unmounted` and
+    // `mkvPreparesInFlight` already rely on.
+    // A plain line scan, not a tag regex: SFC top-level blocks always start at
+    // column 0, so this cannot be satisfied by prose inside a comment — and it
+    // sidesteps CodeQL's `js/bad-tag-filter`, which reads any hand-rolled
+    // `<script…>` pattern as an HTML sanitiser missing its `<SCRIPT>` variant.
+    const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
+    expect(scripts).toEqual(['<script setup lang="ts">'])
+    const setupStart = SOURCE.indexOf('<script setup lang="ts">')
+    const setupEnd = SOURCE.indexOf('</script>', setupStart)
+    const decl = SOURCE.indexOf('let prepareEpoch = 0;')
+    expect(decl).toBeGreaterThan(setupStart)
+    expect(decl).toBeLessThan(setupEnd)
+  })
+
+  it('tests BOTH terms in shouldBail — unmounted and the epoch compare', () => {
+    // The whole point of routing every checkpoint through one helper: dropping
+    // either term here is a single-line edit that would otherwise leave 15
+    // checkpoints reading correct while proving nothing.
+    const helper = stripComments(slice('function shouldBail(', '\n}'))
+    expect(helper).toContain('unmounted')
+    expect(helper).toContain('myPrepare !== prepareEpoch')
+    expect(helper).toContain('||')
+  })
+
+  it('takes the supersede id at prepareMkvForPlayback entry, and only there', () => {
+    // `prepareHevcTranscode` is a CONTINUATION of the same prepare, so it takes
+    // `myPrepare` as a parameter. Re-taking an epoch there would make the
+    // transcode supersede its own copy-path caller.
+    expect([...SOURCE.matchAll(/\+\+prepareEpoch/g)]).toHaveLength(1)
+    expect(PREPARE_MKV).toContain('const myPrepare = ++prepareEpoch;')
+    expect(PREPARE_HEVC).not.toContain('prepareEpoch')
+    expect(PREPARE_HEVC).toMatch(/myPrepare: number/)
+    // Both call sites thread it through.
+    expect([...PREPARE_MKV.matchAll(/prepareHevcTranscode\([^)]*myPrepare\)/g)]).toHaveLength(2)
+  })
+
+  it('leaves no bare `unmounted` checkpoint behind in either function', () => {
+    // A checkpoint that kept only the unmount term would pass the guard scan's
+    // `lastAwait` ordering via a *neighbouring* bail while itself proving
+    // nothing about supersede.
+    expect(PREPARE_MKV).not.toContain(BAIL)
+    expect(PREPARE_HEVC).not.toContain(BAIL)
+  })
+
+  it.each([
+    ['prepareMkvForPlayback', PREPARE_MKV],
+    ['prepareHevcTranscode', PREPARE_HEVC]
+  ])('puts a supersede bail above every in-function blanket cleanup in %s', (_name, body) => {
+    // THE failure mode most likely to be missed. These two blanket kills are not
+    // on the "unwind path" as such — they sit inside the two functions, below
+    // several awaits, on the `!mseOk` branches. A superseded prepare falling
+    // into either reaps the WINNER's session and unlinks the shared tmpDir.
+    const sites = [...body.matchAll(/window\.api\.playerCleanupRemux\(/g)]
+    expect(sites).toHaveLength(1)
+    for (const site of sites) {
+      const lastBail = body.lastIndexOf(PREPARE_BAIL, site.index!)
+      expect(lastBail, 'no supersede bail above the blanket cleanup').toBeGreaterThan(-1)
+      expect(lastBail).toBeGreaterThan(precedingAwait(body, site.index!))
+      // …and it is THIS branch's own guard, not one inherited from the branch
+      // above. Deleting the bail that sits over the kill would otherwise leave
+      // `lastIndexOf` pointing at the `startMseSession` checkpoint on the
+      // success branch, which guards nothing here.
+      const between = body.slice(lastBail, site.index!)
+      expect(between).not.toContain('msePlayer.startMseSession')
+      // …and it is the bail that unwinds, not a fall-through: the block between
+      // the guard and the kill must contain the targeted close, never nothing.
+      expect(between).toContain('playerCloseStreamSession')
+    }
+  })
+
+  it('puts the transcode !mseOk bail above setTranscoding(false), not below it', () => {
+    // Ordering, not mere presence. Both statements on this branch belong to the
+    // WINNER once this invocation is superseded: the blanket kill would reap the
+    // winner's session and unlink the shared tmpDir, and the flag clear would
+    // switch off its live transcode overlay. So the guard is the branch's first
+    // statement, above both.
+    const branch = PREPARE_HEVC.slice(
+      PREPARE_HEVC.indexOf('if (!mseOk)'),
+      PREPARE_HEVC.indexOf('msePlayer.startMseSession')
+    )
+    const bail = branch.indexOf(PREPARE_BAIL)
+    expect(bail).toBeGreaterThan(-1)
+    expect(branch.indexOf('msePlayer.setTranscoding(false)')).toBeGreaterThan(bail)
+    expect(branch.indexOf('window.api.playerCleanupRemux(')).toBeGreaterThan(bail)
+  })
+
+  it('unwinds through the targeted close, never the blanket cleanup', () => {
+    for (const body of [PREPARE_MKV, PREPARE_HEVC]) {
+      for (const block of bailBlocks(body)) {
+        expect(block).not.toContain('playerCleanupRemux(')
+      }
+    }
+  })
+
+  it('issues the close fire-and-forget, so it is not a suspension point', () => {
+    // An AWAITED close inside a bail block becomes the `lastAwait` for the next
+    // guarded call below it while the bail literal sits above — which fails the
+    // `lastBail > lastAwait` scan at every checkpoint at once. The tempting
+    // repair is to weaken that scan, which is precisely what must not happen.
+    // Nothing runs after the unwind, so there is nothing to order against.
+    for (const body of [PREPARE_MKV, PREPARE_HEVC]) {
+      for (const block of bailBlocks(body)) {
+        if (!block.includes('playerCloseStreamSession')) continue
+        expect(block).toContain('void window.api.playerCloseStreamSession(')
+        expect(block).toContain('.catch(() => {})')
+        expect(block).not.toContain('await ')
+      }
+    }
+  })
+
+  it("narrows on 'sessionId' in …, not on !('error' in …)", () => {
+    // The copy-path reply is a THREE-way union: the `{ requiresTranscode: true }`
+    // arm carries no id (main short-circuits before spawning on it), so
+    // `!('error' in streamResult)` would try to close a session that was never
+    // opened — and would not typecheck.
+    const closes = [...PREPARE_MKV.matchAll(/playerCloseStreamSession/g)]
+    expect(closes).toHaveLength(3)
+    for (const c of closes) {
+      const bail = PREPARE_MKV.lastIndexOf(PREPARE_BAIL, c.index!)
+      const guard = PREPARE_MKV.lastIndexOf("'sessionId' in streamResult", c.index!)
+      expect(guard, 'close is not narrowed by a `sessionId` in-check').toBeGreaterThan(bail)
+      expect(guard).toBeLessThan(c.index!)
+    }
+    // The transcode reply is a two-way union, but it uses the same narrowing so
+    // there is one shape to read, not two.
+    expect(PREPARE_HEVC).toContain("if ('sessionId' in r)")
+  })
+
+  it('mutates no other shared renderer state on the unwind', () => {
+    // Both halves of the earlier draft's "clear the flags on the unwind" were
+    // wrong. `mkvBuffering` is unreachable for a loser (no await between the
+    // checkpoint above it and the assignment). `transcodingHevc` is already
+    // cleared by the superseder's own `resetMseState()` — and clearing it here
+    // would drop the WINNER's live transcode overlay, since the unwind runs
+    // strictly later than the winner's state writes.
+    for (const body of [PREPARE_MKV, PREPARE_HEVC]) {
+      for (const block of bailBlocks(body)) {
+        expect(block).not.toContain('mkvBuffering')
+        expect(block).not.toContain('setTranscoding')
+        expect(block).not.toContain('remuxError')
+      }
+    }
+  })
+
+  it('never surfaces the unwind result in remuxError at any of the three callers', () => {
+    // For the #280 unmount half the write landed on discarded state. A
+    // superseded open unwinds on a LIVE component, so `player closed` would
+    // replace the winner's video with an error banner.
+    const src = stripComments(SOURCE)
+    // Three call sites, all routed through the guard.
+    expect([...src.matchAll(/reportPrepareError\(prep\)/g)]).toHaveLength(3)
+    // The one surviving direct write is the guard's own, after the early return.
+    const writes = [...src.matchAll(/remuxError\.value = prep\.error/g)]
+    expect(writes).toHaveLength(1)
+    const guard = stripComments(slice('function reportPrepareError(', '\n}'))
+    expect(guard).toContain('if (prep === PLAYER_CLOSED_BAIL) return;')
+    expect(guard.indexOf('PLAYER_CLOSED_BAIL')).toBeLessThan(guard.indexOf('remuxError.value'))
   })
 })
 

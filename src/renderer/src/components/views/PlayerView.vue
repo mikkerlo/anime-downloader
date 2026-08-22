@@ -511,6 +511,30 @@ let unmounted = false;
 // three terms of the unmount condition false and orphaned the outer ffmpeg —
 // the exact case this term exists for.
 let mkvPreparesInFlight = 0;
+// #291 supersede. Component-scope — a top-level `let` in `<script setup>`, which
+// is per-instance, exactly like `unmounted` and `mkvPreparesInFlight` above.
+// NOT module-scope: two live `PlayerView` instances would share one counter and
+// each would supersede the other's opens.
+//
+// `prepareMkvForPlayback` had no identity and no supersede semantics — it is
+// re-entrant by accident, and the only thing that ever cleaned up a previous
+// open was a caller-side `if (remuxedPath.value || streamSessionId.value)` that
+// reads state a *parked* open has not written yet. While one open sits in main's
+// `probeMkvForMse` (above `registerSession`, so there is nothing to sweep) the
+// user can pick another translation; both handlers then register and spawn, the
+// second reply wins `startMseSession`, and the loser's ffmpeg is orphaned in
+// main until the next blanket cleanup.
+let prepareEpoch = 0;
+/**
+ * The ladder's single bail predicate: this invocation must unwind because the
+ * component is gone (#280) OR a newer `prepareMkvForPlayback` has superseded it
+ * (#291). One predicate rather than two so there is one mental model, and so
+ * the source scan in `player-lifecycle-scope.test.ts` covers both terms at
+ * every checkpoint by construction.
+ */
+function shouldBail(myPrepare: number): boolean {
+  return unmounted || myPrepare !== prepareEpoch;
+}
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -937,13 +961,37 @@ const videoSrc = computed(() => {
 // up in a log.
 const PLAYER_CLOSED_BAIL = { ok: false, error: 'player closed' } as const;
 
+/**
+ * Surface a failed prepare in the player's error UI — unless the "failure" is
+ * the ladder's own unwind.
+ *
+ * For the #280 unmount half the write was harmless (it landed on discarded
+ * component state). The #291 supersede half makes it visible: a superseded open
+ * unwinds on a **live** component, and the user did not hit an error, they
+ * picked a different translation. Writing `player closed` into `remuxError`
+ * there replaces the winner's video with an error banner.
+ *
+ * Identity against the singleton, not a string compare — a genuine open failure
+ * that happened to carry the same message could not be mistaken for an unwind.
+ */
+function reportPrepareError(prep: { ok: false; error: string }): void {
+  if (prep === PLAYER_CLOSED_BAIL) return;
+  remuxError.value = prep.error;
+}
+
 async function prepareMkvForPlayback(
   filePath: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Take the supersede id FIRST, before any early return: entering at all is
+  // what supersedes whatever open was in flight, and a bail that skipped the
+  // bump would leave a parked predecessor believing it is still current.
+  const myPrepare = ++prepareEpoch;
   // Entry checkpoint. The two other callers (`selectTranslation`,
   // `goToEpisode`) reach here from their own resumed continuations, so the
-  // component can already be gone before the first await below.
-  if (unmounted) return PLAYER_CLOSED_BAIL;
+  // component can already be gone before the first await below. The supersede
+  // term cannot fire here (we just bumped), but the ladder uses one predicate
+  // everywhere so no site can be written with only half the test.
+  if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
   msePlayer.resetMseState();
   clearRemux();
   remuxError.value = '';
@@ -982,7 +1030,13 @@ async function prepareMkvForPlayback(
     }
 
     // Nothing has been spawned yet on this path, so there is nothing to reap.
-    if (unmounted) return PLAYER_CLOSED_BAIL;
+    // The next statement issues AND awaits the open in one go: no checkpoint may
+    // ever be placed between issuing an open and awaiting it, or the unwind
+    // drops the in-flight promise on the floor and recreates the very orphan
+    // #291 is about. The rule for every ordering (A registers before B, after B,
+    // or never) collapses to one: always await the open you issued, and close
+    // whatever id comes back.
+    if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
     const streamResult = await window.api.playerRemuxMkvStream(filePath, initialSeek);
     // Everything reachable from here without another `await` runs on a dead
     // instance if the close landed inside that call: the transcode spawn, the
@@ -990,7 +1044,24 @@ async function prepareMkvForPlayback(
     // nothing — the unmount's own cleanup (widened by `mkvPreparesInFlight`) has
     // either already killed the session main registered, or main's own
     // generation self-reap converted this reply into `{ error: 'cancelled' }`.
-    if (unmounted) return PLAYER_CLOSED_BAIL;
+    //
+    // A *superseded* bail is the other half (#291), and it does leak unless it
+    // reaps: main has registered and spawned by the time this reply lands, and
+    // nothing else in the app knows this id. So close it — targeted, by id,
+    // never `playerCleanupRemux()`, which would SIGKILL the winner's session and
+    // unlink the shared tmpDir. Fire-and-forget: nothing runs after the return,
+    // so there is nothing to order against it, and an `await` here would become
+    // the preceding suspension point for every checkpoint below.
+    //
+    // `'sessionId' in streamResult`, not `!('error' in streamResult)`: this
+    // reply is a three-way union whose `{ requiresTranscode: true }` arm carries
+    // no id — main short-circuits before spawning on it, so there is nothing to
+    // close there or on the `{ error }` arm.
+    if (shouldBail(myPrepare)) {
+      if ('sessionId' in streamResult)
+        void window.api.playerCloseStreamSession(streamResult.sessionId).catch(() => {});
+      return PLAYER_CLOSED_BAIL;
+    }
     // `cancelled` means main reaped this open because a cleanup overtook it
     // (#280). Unwind — never fall through to the legacy full-file remux below,
     // which is the one spawn nothing can kill once issued. Without this it is
@@ -1017,7 +1088,7 @@ async function prepareMkvForPlayback(
     // clean up here.
     if ('requiresTranscode' in streamResult) {
       console.log('[player] forcing HEVC→H.264 transcode (hevcTranscodeOnPlay=always)');
-      return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
+      return await prepareHevcTranscode(filePath, initialSeek, resumeTarget, myPrepare);
     }
     if (!('error' in streamResult)) {
       const mseOk =
@@ -1025,8 +1096,15 @@ async function prepareMkvForPlayback(
       console.log(`[player] MSE negotiate mime="${streamResult.mimeType}" supported=${mseOk}`);
       if (mseOk) {
         // `startMseSession` allocates a `MediaSource` + object URL whose only
-        // revoke is `resetMseState()`, which already ran at unmount.
-        if (unmounted) return PLAYER_CLOSED_BAIL;
+        // revoke is `resetMseState()`, which already ran at unmount. A
+        // superseded prepare must not start it either — it would overwrite the
+        // winner's `streamSessionId` with the id of a session it is about to
+        // reap.
+        if (shouldBail(myPrepare)) {
+          if ('sessionId' in streamResult)
+            void window.api.playerCloseStreamSession(streamResult.sessionId).catch(() => {});
+          return PLAYER_CLOSED_BAIL;
+        }
         msePlayer.startMseSession({
           sessionId: streamResult.sessionId,
           generation: streamResult.generation,
@@ -1042,8 +1120,21 @@ async function prepareMkvForPlayback(
         return { ok: true };
       }
       console.warn('[player] MSE does not support codecs:', streamResult.mimeType);
+      // The failure mode most likely to be missed (#291): this blanket kill is
+      // INSIDE the function, below several awaits, and it is not on the "unwind
+      // path" as such. A superseded prepare falling into it reaps the *winner's*
+      // session and unlinks the shared tmpDir. So the supersede bail sits
+      // immediately above it, unwinding through the targeted close instead.
+      if (shouldBail(myPrepare)) {
+        if ('sessionId' in streamResult)
+          void window.api.playerCloseStreamSession(streamResult.sessionId).catch(() => {});
+        return PLAYER_CLOSED_BAIL;
+      }
       await window.api.playerCleanupRemux();
-      if (unmounted) return PLAYER_CLOSED_BAIL;
+      // Below the blanket kill there is no session of ours left to name — it
+      // reaped every registered session, this one included — so the remaining
+      // checkpoints in this function bail without a close.
+      if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
 
       if (/hvc1|hev1/i.test(streamResult.mimeType)) {
         const pref =
@@ -1058,15 +1149,15 @@ async function prepareMkvForPlayback(
         // unmount's `hevcPromptResolver` unblock is conditional, so a close
         // during the two awaits above leaves it null and a prompt opened here
         // would never be settled by anyone.
-        if (unmounted) return PLAYER_CLOSED_BAIL;
+        if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
         let choice: HevcPromptChoice;
         if (pref === 'always') choice = 'transcode';
         else if (pref === 'never') choice = 'external';
         else choice = await askHevcChoice();
-        if (unmounted) return PLAYER_CLOSED_BAIL;
+        if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
         if (choice === 'external') {
           const res = await window.api.shellOpenExternalFile(filePath);
-          if (unmounted) return PLAYER_CLOSED_BAIL;
+          if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
           if (res.ok) {
             emit('close');
             return { ok: true };
@@ -1085,8 +1176,8 @@ async function prepareMkvForPlayback(
             /* ignore */
           }
         }
-        if (unmounted) return PLAYER_CLOSED_BAIL;
-        return await prepareHevcTranscode(filePath, initialSeek, resumeTarget);
+        if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
+        return await prepareHevcTranscode(filePath, initialSeek, resumeTarget, myPrepare);
       }
     } else {
       console.warn(
@@ -1101,9 +1192,9 @@ async function prepareMkvForPlayback(
     // copy` that runs to completion writing an `.mp4` a later sweep unlinks out
     // from under it. This check is the only thing in the codebase that can stop
     // it.
-    if (unmounted) return PLAYER_CLOSED_BAIL;
+    if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
     const legacy = await runLegacyRemuxIpc(filePath);
-    if (unmounted) return PLAYER_CLOSED_BAIL;
+    if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
     if (!legacy.ok) return legacy;
     if (!activeSubtitleContent.value && legacy.subtitleContent) {
       activeSubtitleContent.value = legacy.subtitleContent;
@@ -1134,7 +1225,13 @@ function resolveHevcPrompt(choice: HevcPromptChoice): void {
 async function prepareHevcTranscode(
   filePath: string,
   initialSeek: number,
-  resumeTarget: number
+  resumeTarget: number,
+  // Threaded in from the caller rather than re-taken here (#291): the transcode
+  // is a CONTINUATION of the same prepare, not a new one. Bumping the epoch here
+  // would make this call supersede its own copy-path caller, and the id it is
+  // compared against would then be a second authority disagreeing with the
+  // first. Both call sites are `return await`, so passing it is mechanical.
+  myPrepare: number
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // First statement of the function, above `setTranscoding(true)` — this one
   // site covers the transcode spawn from BOTH entries (the `requiresTranscode`
@@ -1142,13 +1239,24 @@ async function prepareHevcTranscode(
   // third caller. A check at either call site instead would leave the other
   // open, and putting it below `setTranscoding(true)` would latch that flag on
   // a dead instance.
-  if (unmounted) return PLAYER_CLOSED_BAIL;
+  if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
   msePlayer.setTranscoding(true);
   const r = await window.api.playerRemuxMkvStreamTranscode(filePath, initialSeek);
   // Guards the blanket `playerCleanupRemux` below as much as the MSE session:
   // on a dead instance that call kills every registered session — including a
   // successor `PlayerView`'s — and unlinks the whole temp dir.
-  if (unmounted) return PLAYER_CLOSED_BAIL;
+  //
+  // On the supersede half (#291) main has already registered and spawned the
+  // transcode by now, so bailing without reaping orphans it. Close the id this
+  // invocation opened, fire-and-forget, and touch nothing else — in particular
+  // NOT `setTranscoding(false)`: by the time this runs the flag belongs to the
+  // superseder, which set it in its own `prepareHevcTranscode` (or cleared it in
+  // `resetMseState()`), and clearing it here would drop the *winner's* live
+  // transcode overlay.
+  if (shouldBail(myPrepare)) {
+    if ('sessionId' in r) void window.api.playerCloseStreamSession(r.sessionId).catch(() => {});
+    return PLAYER_CLOSED_BAIL;
+  }
   if ('error' in r) {
     msePlayer.setTranscoding(false);
     // `cancelled` is main's self-reap, not a decode failure (#280). No
@@ -1159,9 +1267,18 @@ async function prepareHevcTranscode(
   }
   const mseOk = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(r.mimeType);
   if (!mseOk) {
+    // Above `setTranscoding(false)`, not merely above the blanket kill: both are
+    // the winner's to own once this invocation is superseded. The kill would
+    // reap the winner's session and unlink the shared tmpDir; the flag clear
+    // would switch off its live transcode overlay.
+    if (shouldBail(myPrepare)) {
+      if ('sessionId' in r) void window.api.playerCloseStreamSession(r.sessionId).catch(() => {});
+      return PLAYER_CLOSED_BAIL;
+    }
     msePlayer.setTranscoding(false);
     await window.api.playerCleanupRemux();
-    if (unmounted) return PLAYER_CLOSED_BAIL;
+    // Nothing of ours survives the blanket kill, so no close below it.
+    if (shouldBail(myPrepare)) return PLAYER_CLOSED_BAIL;
     return { ok: false, error: `Browser rejected transcoded mime: ${r.mimeType}` };
   }
   msePlayer.startMseSession({
@@ -1670,7 +1787,7 @@ async function selectTranslation(tr: {
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           const prep = await prepareMkvForPlayback(localResult.filePath);
           if (!prep.ok) {
-            remuxError.value = prep.error;
+            reportPrepareError(prep);
             switchingTranslation.value = false;
             return;
           }
@@ -1861,7 +1978,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           }
           const prep = await prepareMkvForPlayback(localResult.filePath);
           if (!prep.ok) {
-            remuxError.value = prep.error;
+            reportPrepareError(prep);
             navigating.value = false;
             return;
           }
@@ -2066,7 +2183,7 @@ onMounted(async () => {
     try {
       const prep = await prepareMkvForPlayback(props.filePath);
       if (!prep.ok) {
-        remuxError.value = prep.error;
+        reportPrepareError(prep);
         return;
       }
     } catch (e) {

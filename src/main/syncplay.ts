@@ -870,7 +870,7 @@ export class SyncplayClient extends EventEmitter {
 
   // The player is gone — said out loud rather than inferred from silence
   // (#288). `useSyncplayClient`'s onBeforeUnmount is the only emitter, and the
-  // session lives on, so this clears the same three player-scoped fields
+  // session lives on, so this clears three of the player-scoped fields
   // tearDown() does and nothing else: the snapshot clock, so buildPlaystate()
   // falls through to the mirror on the *very next* heartbeat instead of
   // asserting a frozen position for up to PLAYBACK_STALE_MS; the adoption

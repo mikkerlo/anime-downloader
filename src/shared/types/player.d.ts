@@ -20,6 +20,26 @@ interface PlayerLocalFileResult {
   totalBytes?: number
 }
 
+// `player:remux-mkv-stream` / `player:remux-mkv-stream-transcode` success
+// reply. Declared once here (#294) so main, preload and the renderer share a
+// single owner — five literal copies of this shape are what let the
+// `initialSeek` collision fixed in #275 survive unnoticed.
+interface MseOpenResult {
+  sessionId: string
+  generation: number
+  duration: number
+  mimeType: string
+  hasSubtitlesPending: boolean
+  /**
+   * The true PTS the ffmpeg run starts emitting at, as measured by the offset
+   * probe — the renderer's `SourceBuffer.timestampOffset`. Named for what it
+   * is (#275): main already computes it into a local called `contentStart`,
+   * and the old `initialSeek` collided with the *request* field of the same
+   * name on the renderer side, where the wrong one compiled and read 0.
+   */
+  contentStart: number
+}
+
 interface Mp4StreamingStatsSample {
   animeId: number
   animeName: string

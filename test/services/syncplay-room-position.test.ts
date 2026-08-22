@@ -238,8 +238,10 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
   // two reachable shapes freeze it while `status.state` stays `ready` — and an
   // unbounded projection then walks the frozen value forward with wall time for
   // as long as the session lives. The number it produces becomes `initialSeek`
-  // and reaches ffmpeg's `-ss`, where a target past the end of the file is a run
-  // that emits nothing and an MSE session that buffers forever.
+  // and reaches ffmpeg's `-ss`, where a target past the end of the file does not
+  // fail: the Matroska demuxer clamps the input seek to the last keyframe and
+  // emits the final GOP, so the session opens parked at the last frame and
+  // auto-advances to the next episode.
   describe('the bound', () => {
     // Shape 1 — the last peer leaves. The roster empties, the server keeps
     // sending periodics `setBy` us (its min() re-election elects the only

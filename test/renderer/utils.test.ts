@@ -256,10 +256,12 @@ describe('resolveMkvSpawnTarget', () => {
 
   // #272 review: Syncplay shares one position across peers whose files need not
   // match, so a room position can legitimately exceed *our* file's length — and
-  // `initialSeek` reaches ffmpeg's `-ss`, where a target past the end is a run
-  // that emits nothing and an MSE session that buffers forever. The saved
-  // record's duration is the only one in reach at this point in the open, and it
-  // bounds the room the way `< 0.95` bounds the saved position below it.
+  // `initialSeek` reaches ffmpeg's `-ss`, where such a target does not fail:
+  // the Matroska demuxer clamps the input seek to the last keyframe and emits
+  // the final GOP, so the session opens parked at the last frame and
+  // auto-advances to the next episode. The saved record's duration is the only
+  // one in reach at this point in the open, and it bounds the room the way
+  // `< 0.95` bounds the saved position below it.
   it('refuses a room position past the end of our own file', () => {
     const past = resolveMkvSpawnTarget(saved, 1500)
     expect(past.fromRoom).toBe(false)

@@ -876,4 +876,255 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     })
   })
+
+  // #275: the resume land is the renderer half of "an open position that is not
+  // inside the file is not a seek". Main refuses such a seek and spawns at 0;
+  // bounding only main leaves the whole symptom intact, because the renderer
+  // still holds the out-of-range `resumeTarget` and writes it to the element.
+  // Chromium's seek algorithm clamps that write to the MSE seekable end, so the
+  // playhead lands on exactly `duration`, `ended` fires, and `onVideoEnded`
+  // starts the 5 s auto-advance — the user picks episode 7 and gets episode 8.
+  describe('resume land vs. an out-of-file open position (#275)', () => {
+    // The real Re:Zero S4 E01 [Crunchyroll] duration the #275 measurements were
+    // taken against, and the buffered range an out-of-range `-ss` actually
+    // produced on it (the final GOP: last keyframe 1419.418 → 1420.063).
+    const DURATION = 1420.063
+    const FINAL_GOP: [number, number][] = [[1419.418, DURATION]]
+
+    // `remove()` is a no-op here: the >60 s eviction branch re-dispatches
+    // `updateend` from the real fake, which loops forever once a failing
+    // expectation skips the `resetMseState()` below. These cases deliberately
+    // put the playhead far from the buffer start, so they would trip it.
+    class NoEvictSourceBuffer extends FakeSourceBuffer {
+      remove(): void {}
+    }
+
+    // Chromium clamps a `currentTime` write to the seekable range, which on an
+    // MSE element is `[0, mediaSource.duration]`. Without that clamp modelled,
+    // an out-of-range land would read back as its own out-of-range number and
+    // the `ended`-at-`duration` symptom would be invisible.
+    function clampingVideo(duration: number, at = 0): { currentTime: number } {
+      let t = at
+      return {
+        get currentTime(): number {
+          return t
+        },
+        set currentTime(v: number) {
+          t = Math.max(0, Math.min(v, duration))
+        },
+        paused: true,
+        error: null,
+        play: vi.fn(async () => {}),
+        pause: vi.fn(() => {})
+      } as unknown as { currentTime: number }
+    }
+
+    function landHarness(opts: {
+      at?: number
+      duration?: number
+      resumeTarget: number
+      requestedSpawnSeek?: number
+      timestampOffset: number
+      ranges: [number, number][]
+    }): {
+      video: { currentTime: number }
+      markProgrammaticSeek: ReturnType<typeof vi.fn>
+      m: ReturnType<typeof useMsePlayer>
+    } {
+      const duration = opts.duration ?? DURATION
+      const fakeSb = new NoEvictSourceBuffer()
+      const fakeMs = new FakeMediaSource(fakeSb)
+      ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+      // An unknown duration means an empty seekable range, so there is nothing
+      // to clamp against — the fail-open case must not be clamped to 0 by the
+      // fake and read as a cancelled land.
+      const video = clampingVideo(duration > 0 ? duration : Infinity, opts.at ?? 0)
+      const markProgrammaticSeek = vi.fn()
+      const m = useMsePlayer(
+        makeDeps({
+          getVideoEl: () => video as unknown as HTMLVideoElement,
+          markProgrammaticSeek
+        })
+      )
+      m.startMseSession({
+        sessionId: 's1',
+        generation: 0,
+        duration,
+        mimeType: 'video/mp4',
+        resumeTarget: opts.resumeTarget,
+        timestampOffset: opts.timestampOffset,
+        ...(opts.requestedSpawnSeek === undefined
+          ? {}
+          : { requestedSpawnSeek: opts.requestedSpawnSeek })
+      })
+      fakeMs.dispatchEvent(new Event('sourceopen'))
+      fakeSb.buffered.ranges = opts.ranges
+      fakeSb.dispatchEvent(new Event('updateend'))
+      return { video, markProgrammaticSeek, m }
+    }
+
+    let warn: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+      warn.mockRestore()
+    })
+
+    it('cancels the land when the spawn seek was past the end of the file', () => {
+      // The reaching input: main refused `-ss 2999` and opened at 0, so the
+      // buffer is the head of the file — but the renderer still holds
+      // `resumeTarget: 3000`.
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: 3000,
+        requestedSpawnSeek: 2999,
+        timestampOffset: 0,
+        ranges: [[0, 2]]
+      })
+
+      // Today, without the renderer half of the bound: 1420.063 — i.e. exactly
+      // `duration`, which is `ended`, which is the auto-advance.
+      expect(video.currentTime).toBe(0)
+      expect(markProgrammaticSeek).not.toHaveBeenCalled()
+      // The "Resumed at …" toast is gated on this, so a refused open must not
+      // announce a resume that did not happen.
+      expect(m.mseInitialSeek.value).toBe(0)
+
+      m.resetMseState()
+    })
+
+    // The boundary window `[duration, duration + 1)`, pinned on the same two
+    // inputs `player-ipc-seek-bound.test.ts` pins on the main side. Both sides
+    // compare `requestedSpawnSeek` against `probe.duration`, so they accept and
+    // refuse the same numbers; comparing `resumeTarget` here instead would
+    // disagree across the 1 s pre-roll and strand the playhead at 0 with the
+    // buffer at the last keyframe.
+    it.each([
+      { label: 'exactly the duration', spawn: DURATION },
+      { label: 'half a second past the duration', spawn: DURATION + 0.5 }
+    ])('cancels the land at the boundary — $label', ({ spawn }) => {
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: spawn + 1,
+        requestedSpawnSeek: spawn,
+        timestampOffset: 0,
+        ranges: [[0, 2]]
+      })
+
+      expect(video.currentTime).toBe(0)
+      expect(markProgrammaticSeek).not.toHaveBeenCalled()
+
+      m.resetMseState()
+    })
+
+    // Characterization, so the rejected `duration - 1` margin cannot come back:
+    // on this release it lands *before* the buffer start of the final GOP, and
+    // the playhead sits in a gap with nothing to decode.
+    it('characterizes the rejected `duration - 1` margin: the land falls in a gap', () => {
+      const target = DURATION - 1
+      const { video, m } = landHarness({
+        resumeTarget: target,
+        requestedSpawnSeek: target,
+        timestampOffset: FINAL_GOP[0][0],
+        ranges: FINAL_GOP
+      })
+
+      expect(video.currentTime).toBeCloseTo(1419.063, 3)
+      // Outside the only buffered range — a stall, not a resume. (On a release
+      // with a 5 s GOP the same margin lands *inside* the final GOP instead and
+      // auto-advances a second later; no fixed margin clears both.)
+      expect(video.currentTime).toBeLessThan(FINAL_GOP[0][0])
+
+      m.resetMseState()
+    })
+
+    // The other half of the boundary window, and the case that makes the choice
+    // of operand load-bearing rather than stylistic. `initialSeek = resumeTarget
+    // - 1`, so a `resumeTarget` in `[duration, duration + 1)` has a spawn seek
+    // *inside* the file: main accepts it and spawns. The renderer must accept it
+    // too. A predicate written on `resumeTarget` would cancel here instead —
+    // playhead at 0, buffer at the last keyframe, permanent stall — which is a
+    // different bug from the one this fix removes, not a stricter version of it.
+    // Landing at the end and auto-advancing is the *correct* behaviour for a
+    // position within one pre-roll of the end.
+    it('agrees with main and lands when the spawn seek was just inside the file', () => {
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: DURATION + 0.5,
+        requestedSpawnSeek: DURATION - 0.5,
+        timestampOffset: FINAL_GOP[0][0],
+        ranges: FINAL_GOP
+      })
+
+      expect(markProgrammaticSeek).toHaveBeenCalledWith(DURATION + 0.5)
+      // Chromium clamps the write to the seekable end — i.e. `ended`, i.e. the
+      // auto-advance. Deliberate: both sides accept this window, and agreeing is
+      // the property that matters.
+      expect(video.currentTime).toBe(DURATION)
+
+      m.resetMseState()
+    })
+
+    it('leaves a legitimate mid-file resume untouched', () => {
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: 600,
+        requestedSpawnSeek: 599,
+        timestampOffset: 595,
+        ranges: [[595.08, 601.0]]
+      })
+
+      expect(video.currentTime).toBe(600)
+      expect(markProgrammaticSeek).toHaveBeenCalledWith(600)
+
+      m.resetMseState()
+    })
+
+    it('leaves a legitimate near-end resume untouched', () => {
+      // ~0.95 of duration — the loosest resume `resolveMkvSpawnTarget` will
+      // hand out. It is inside the file, so it is a real resume point.
+      const target = 1349.06
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: target,
+        requestedSpawnSeek: target - 1,
+        timestampOffset: 1345.0,
+        ranges: [[1345.0, 1355.0]]
+      })
+
+      expect(video.currentTime).toBe(target)
+      expect(markProgrammaticSeek).toHaveBeenCalledWith(target)
+
+      m.resetMseState()
+    })
+
+    it('is fail-open: an omitted requestedSpawnSeek leaves the land unchanged', () => {
+      // Pins the contract the nine existing `startMseSession` call sites in this
+      // file rely on — `test/**` is outside both typecheck projects, so nothing
+      // in the build would catch a required field here.
+      const { video, markProgrammaticSeek, m } = landHarness({
+        resumeTarget: 600,
+        timestampOffset: 595,
+        ranges: [[595.08, 601.0]]
+      })
+
+      expect(video.currentTime).toBe(600)
+      expect(markProgrammaticSeek).toHaveBeenCalledWith(600)
+
+      m.resetMseState()
+    })
+
+    it('is fail-open: an unknown duration leaves the land unchanged', () => {
+      const { video, m } = landHarness({
+        duration: 0,
+        resumeTarget: 600,
+        requestedSpawnSeek: 599,
+        timestampOffset: 595,
+        ranges: [[595.08, 601.0]]
+      })
+
+      expect(video.currentTime).toBe(600)
+
+      m.resetMseState()
+    })
+  })
 })

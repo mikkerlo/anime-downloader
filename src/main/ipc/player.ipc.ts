@@ -67,6 +67,50 @@ async function extractFirstSubtitle(
  */
 let cleanupGeneration = 0
 
+/**
+ * Normalises the renderer's requested open position into the `-ss` both MSE
+ * open handlers spawn ffmpeg at (#275). Folds the long-standing non-finite /
+ * `<= 0` guard together with an upper bound against the probed duration.
+ *
+ * **Rejects at `duration`, never clamps to it.** ffmpeg's Matroska demuxer
+ * clamps an out-of-range input seek to the last keyframe and emits the final
+ * GOP, so `-ss duration`, `-ss 3000` and `-ss 999999` all produce the *same*
+ * byte-identical run — clamping the request to `duration` is provably clamping
+ * it to 999999, and the session opens parked at the last frame, hits `ended`
+ * and auto-advances to the next episode. No pre-roll margin fixes that either:
+ * the window it has to clear is the release's final GOP (measured 0.645 s to
+ * 10.428 s across three real files), so any fixed margin either lands back
+ * inside the final-GOP case or fabricates a resume point in content the user
+ * has no recorded relationship with. A position that is not inside the file is
+ * not a seek — it is a stale record — and there is nowhere correct to land, so
+ * the open starts at 0. That is the same rule `resolveMkvSpawnTarget` already
+ * applies with its `< 0.95` gate, just against the authoritative duration
+ * instead of the record's own.
+ *
+ * `duration` needs no validity check at the call sites: `probeMkvForMse`
+ * returns `null` unless it is finite and `> 0`, and both handlers bail on that
+ * before they get here.
+ *
+ * The `console.warn` is the point of the rejection being visible at all — a
+ * refused seek means some caller computed a target outside the file, which is
+ * otherwise entirely silent.
+ */
+function boundInitialSeek(
+  initialSeek: number | undefined,
+  duration: number,
+  sessionId: string
+): number {
+  const requested =
+    typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0 ? initialSeek : 0
+  if (requested >= duration) {
+    console.warn(
+      `[remux-stream] session ${sessionId.slice(0, 8)} refusing requested seek ${requested.toFixed(2)} — at or past the file's duration ${duration.toFixed(2)}; opening at 0`
+    )
+    return 0
+  }
+  return requested
+}
+
 export function register({
   store,
   smotretApi,
@@ -381,10 +425,13 @@ export function register({
         streamingService.cleanupSession(sessionId)
         return { error: 'cancelled' }
       }
-      const requestedSeek =
-        typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
-          ? initialSeek
-          : 0
+      // Below the self-reap above on purpose (#275): a cancelled open has
+      // already returned, so it never spends a `console.warn` on a seek that
+      // will never reach ffmpeg. Above `probeCopyTimestampOffset` and the spawn
+      // for the same reason the #198 note below gives — bounding inside
+      // `spawnFfmpegForSession` would let ffmpeg run at one seek while the
+      // offset probe measured another, which is the subtitles-run-ahead desync.
+      const requestedSeek = boundInitialSeek(initialSeek, probe.duration, sessionId)
       // Seek ffmpeg at the RAW requested time — do NOT pre-snap to a keyframe. A
       // pre-snapped `-ss <keyframe>` double-snaps to the *previous* keyframe (the
       // Matroska seek deadzone), landing ~one GOP early while the renderer labels
@@ -463,7 +510,7 @@ export function register({
         duration: probe.duration,
         mimeType: streamCopyMime,
         hasSubtitlesPending,
-        initialSeek: contentStart
+        contentStart
       }
     }
   )
@@ -527,10 +574,10 @@ export function register({
         streamingService.cleanupSession(sessionId)
         return { error: 'cancelled' }
       }
-      const requestedSeek =
-        typeof initialSeek === 'number' && isFinite(initialSeek) && initialSeek > 0
-          ? initialSeek
-          : 0
+      // Same bound as the copy handler (#275), in the same place: below the
+      // self-reap, above `probeSeekAnchor` and the spawn, so the anchor probe
+      // and ffmpeg read one value by construction.
+      const requestedSeek = boundInitialSeek(initialSeek, probe.duration, sessionId)
       // Transcode video is frame-accurate (accurate-seek discards to the exact
       // `-ss`), but a copied AAC track can't be trimmed: it starts at the seek's
       // keyframe cluster and anchors `-avoid_negative_ts make_zero` up to one GOP
@@ -591,7 +638,7 @@ export function register({
         duration: probe.duration,
         mimeType,
         hasSubtitlesPending,
-        initialSeek: contentStart
+        contentStart
       }
     }
   )

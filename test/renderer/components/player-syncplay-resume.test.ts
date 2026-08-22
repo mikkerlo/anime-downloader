@@ -98,6 +98,14 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     return SOURCE.slice(start, end).replace(/\s+/g, ' ')
   }
 
+  function transcodeBody(): string {
+    const start = SOURCE.indexOf('async function prepareHevcTranscode')
+    const end = SOURCE.indexOf('async function cancelHevcTranscode')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return SOURCE.slice(start, end).replace(/\s+/g, ' ')
+  }
+
   it('reads the room position before spawning the session', () => {
     const body = prepareBody()
     const read = body.indexOf('window.api.syncplayGetRoomPosition(')
@@ -149,11 +157,59 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     )
   })
 
+  // #275: the composable bounds the resume land against the same duration main
+  // bounds the spawn against, but only if it is handed the value the renderer
+  // *sent to main*. `MseOpenResult.initialSeek` → `contentStart` makes the
+  // look-alike `requestedSpawnSeek: streamResult.initialSeek` a compile error,
+  // which is the failure mode actually observed; this scan covers the ones it
+  // does not — `requestedSpawnSeek: 0` or `: resumeTarget`, both of which
+  // typecheck and both of which silently restore the bug. Per call site: the
+  // copy path and the transcode path each wire their own, and only one of them
+  // being right is exactly the "the two paths disagree" bug.
+  it('hands the composable the seek it sent to main, at both call sites', () => {
+    expect(prepareBody()).toContain('requestedSpawnSeek: initialSeek')
+    expect(transcodeBody()).toContain('requestedSpawnSeek: initialSeek')
+  })
+
   it('pairs the room-seeded flag with the live stream session', () => {
     // Otherwise a flag left true by an MKV open would suppress the resume of a
     // later direct-file or CDN open, which never consults the room.
     expect(FLAT).toContain(
       "function mkvSessionSeededFromRoom(): boolean { return mkvSpawnFromRoom && streamSessionId.value !== ''; }"
     )
+  })
+})
+
+// #275 review: bounding the spawn also zeroes `mseInitialSeek`, so on a refused
+// open `resumeFromSavedPosition` no longer takes its toast-only MSE branch
+// (gated `mseInitialSeek.value > 0`) and falls through to the branch below it —
+// the one that actually writes `video.currentTime = saved.position`. Writing the
+// out-of-file saved position straight to the element is the original symptom
+// arriving through a second door.
+//
+// It is inert today, but only via a two-step argument spanning two files, and
+// neither step is local to this function.
+//
+// Step 2 — the room path — is already pinned above: `mkvSessionSeededFromRoom()`
+// returns before either branch, and #240's "guard before both toasts" assertion
+// subsumes "guard before the MSE branch", so every edit that breaks the ordering
+// breaks that test first. Only step 1 is unguarded, and it is what this adds.
+describe('PlayerView — a refused open does not resume through the generic branch (#275)', () => {
+  it('keeps the write behind the fraction guard that a refused open fails', () => {
+    // Step 1, the non-room path. A refused open means main bounded the spawn,
+    // i.e. `saved.position - 1 >= duration` — so `saved.position / d` is above
+    // 1 and this guard is false. Drop it, or widen it to a bare
+    // `saved.position > 5`, and the refused position is written to the element.
+    const body = resumeBody().replace(/\s+/g, ' ')
+
+    // Containment rather than ordering: a write moved below the block's closing
+    // brace is unconditional again and still satisfies `write > guard`.
+    expect(body).toContain(
+      'if (saved.position > 5 && saved.position / d < 0.95) { syncplay.markProgrammaticSeek(saved.position); video.currentTime = saved.position;'
+    )
+    // The other half of the argument above: the ratio is only against the
+    // probe's duration if `d` prefers `video.duration`. Against `saved.duration`
+    // alone, a stale record's ratio against its own inflated duration passes.
+    expect(body).toContain('const d = video.duration || saved.duration;')
   })
 })

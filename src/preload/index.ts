@@ -318,7 +318,7 @@ const api = {
           duration: number
           mimeType: string
           hasSubtitlesPending: boolean
-          initialSeek: number
+          contentStart: number
         }
       | { requiresTranscode: true }
       | { error: string }
@@ -331,7 +331,7 @@ const api = {
           duration: number
           mimeType: string
           hasSubtitlesPending: boolean
-          initialSeek: number
+          contentStart: number
         }
       | { error: string }
     >,

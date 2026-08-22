@@ -631,7 +631,10 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // The copy-path reply is a THREE-way union: the `{ requiresTranscode: true }`
     // arm carries no id (main short-circuits before spawning on it), so
     // `!('error' in streamResult)` would try to close a session that was never
-    // opened — and would not typecheck.
+    // opened. It is also rejected by the typechecker — but by `vue-tsc`
+    // specifically (`npm run typecheck:web`), with TS2339 on the
+    // `{ requiresTranscode: true }` arm. Plain `tsc` does not read the SFC's
+    // `<script setup>` at all, so `npm run typecheck:node` stays green on it.
     const closes = [...PREPARE_MKV.matchAll(/playerCloseStreamSession/g)]
     expect(closes).toHaveLength(3)
     for (const c of closes) {
@@ -674,6 +677,71 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     const guard = stripComments(slice('function reportPrepareError(', '\n}'))
     expect(guard).toContain('if (prep === PLAYER_CLOSED_BAIL) return;')
     expect(guard.indexOf('PLAYER_CLOSED_BAIL')).toBeLessThan(guard.indexOf('remuxError.value'))
+  })
+
+  /** The `if (!prep.ok) { … }` arm inside one of the two continuations. */
+  function unwindArm(fnStart: string, fnEnd: string): string {
+    const body = stripComments(slice(fnStart, fnEnd))
+    const at = body.indexOf('if (!prep.ok) {')
+    expect(at, `missing !prep.ok arm in ${fnStart}`).toBeGreaterThan(-1)
+    let depth = 0
+    let i = body.indexOf('{', at)
+    for (; i < body.length; i++) {
+      if (body[i] === '{') depth++
+      else if (body[i] === '}' && --depth === 0) break
+    }
+    return body.slice(at, i + 1)
+  }
+
+  it('releases the caller-side flags on an unwind only while it still owns them', () => {
+    // The caller-side blind spot the in-function bail-block scan structurally
+    // cannot see: `reportPrepareError` covers `remuxError`, but each `!prep.ok`
+    // arm also releases its own flow's flag one frame up, and on the supersede
+    // half that arm runs on a LIVE component.
+    //
+    // The guard is an OWNERSHIP compare, deliberately NOT
+    // `prep !== PLAYER_CLOSED_BAIL`: that test says only THAT this run was
+    // superseded, never BY WHOM. `selectTranslation` and `goToEpisode`
+    // supersede each other freely and neither touches the other's flag, so
+    // skipping the clear on every superseded unwind strands the flag for the
+    // life of the component — `navigating` stuck true disables prev/next and
+    // makes every later `goToEpisode` a no-op at its own re-entrancy guard.
+    const callers = [
+      {
+        arm: unwindArm('async function selectTranslation(', '\nasync function goToEpisode('),
+        flag: 'switchingTranslation',
+        set: 'const mySwitch = ++translationEpoch;',
+        guard: 'if (translationEpoch === mySwitch) switchingTranslation.value = false;'
+      },
+      {
+        arm: unwindArm('async function goToEpisode(', '\nfunction cancelAutoAdvance('),
+        flag: 'navigating',
+        set: 'const myNav = ++navigationEpoch;',
+        guard: 'if (navigationEpoch === myNav) navigating.value = false;'
+      }
+    ]
+    for (const c of callers) {
+      expect(c.arm).toContain('reportPrepareError(prep)')
+      // Exactly one clear in the arm, and it is the guarded one.
+      expect([...c.arm.matchAll(new RegExp(`${c.flag}\\.value = false`, 'g'))]).toHaveLength(1)
+      expect(c.arm).toContain(c.guard)
+      expect(c.arm).not.toContain('PLAYER_CLOSED_BAIL')
+      // The token the compare reads is taken where the flag is SET, so the
+      // compare cannot be vacuously true.
+      expect(stripComments(SOURCE)).toContain(c.set)
+    }
+  })
+
+  it('stops the syncplay episode walk on an in-flight translation switch', () => {
+    // `goToEpisode`'s unwind releases `navigating` whenever it still owns it —
+    // it must, or the flag strands — so the walk needs its own term for "the
+    // user superseded me". Without it the loop reads the released flag as
+    // permission to take another step, that step supersedes the translation
+    // switch in turn, and the user's pick is dropped silently.
+    const walk = stripComments(slice('const stepTowards =', 'stepTowards()'))
+    expect(walk).toContain('activeEpisodeIndex.value !== idx')
+    expect(walk).toContain('!navigating.value')
+    expect(walk).toContain('!switchingTranslation.value')
   })
 })
 

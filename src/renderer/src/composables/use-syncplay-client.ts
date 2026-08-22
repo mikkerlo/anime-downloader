@@ -357,7 +357,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // `currentTime` then reads 0 for as long as the load runs — not "briefly":
   // see the note on `use-mse-player.ts`'s resume-from-middle path, where the
   // buffer begins hundreds of seconds in and Chromium stalls the element at 0
-  // rather than auto-jumping the leading gap.
+  // rather than auto-jumping the leading gap. That stall outlives this gate:
+  // such an element is at HAVE_METADATA, not HAVE_NOTHING, so what takes it off
+  // 0 is a write — the parked remote state applied from `loadedmetadata`, or,
+  // when nothing is parked, the resume land (`use-mse-player.ts:225-239`, which
+  // `:226` cancels in exactly the case where a state is). The door reopens at
+  // metadata; the first honest position rides on that write, not on this test.
   //
   // Nothing upstream covers that window during an in-player translation or
   // quality switch, because adoption is *deliberately* retained across one:

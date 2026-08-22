@@ -234,11 +234,14 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     expect(stale[stale.length - 1].position).toBeGreaterThan(stale[0].position)
 
     // What the fall-through does *not* do, pinned so the next reader does not
-    // assume it: `playbackAdopted` stays latched. Its only reset on this path
-    // is inside `updateSnapshot()` (`syncplay.ts:770-776`), which a client that
-    // has stopped pushing never calls — so what changes at the threshold is the
-    // branch `buildPlaystate()` takes, not the flag. The issue body's "de-
-    // adopting is the outcome we want" describes the announce side only.
+    // assume it: `playbackAdopted` stays latched — *while the pushes stay
+    // stopped*, which is what this case holds fixed and the recovery path does
+    // not. Its only reset on this path is inside `updateSnapshot()`
+    // (`syncplay.ts:770-776`), which a client that has stopped pushing never
+    // calls — so what changes at the threshold is the branch `buildPlaystate()`
+    // takes, not the flag. The first *resumed* push does touch it; the fourth
+    // case below owns that shape. The issue body's "de-adopting is the outcome
+    // we want" describes the announce side only.
     expect(switcher.getStatus().playbackAdopted).toBe(true)
     // Nor does the room become the peer's: our mirror is still the `min()`,
     // one one-way delay under the room it is mirroring. That deficit is #279's
@@ -261,6 +264,46 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     expect(server.wireOf('switchuser').some((f) => f.position === 0)).toBe(false)
     // The room is back on the true position — the stall was the switch's
     // length, and nothing outlives it.
+    expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThanOrEqual(1)
+  })
+
+  // The shape the third case cannot reach (it switches for 3 s) and the second
+  // deliberately stops short of: a switch that outlasts PLAYBACK_STALE_MS *and
+  // then resumes*. The latch survives the silence only because nothing runs
+  // while a client is silent; the first resumed push is what touches it. It
+  // lands in `updateSnapshot()` with `hasLivePlayback()` already false, so
+  // `syncplay.ts:770-776` clears `playbackAdopted` and nulls `seekIntent`
+  // before seating the snapshot — deliberately, since a push after a stale gap
+  // is a fresh element under a byte-identical canonicalName that `setFile()`'s
+  // identity check cannot see. So recovery here is de-adopt → spectator mirror
+  // → re-converge on the drift test, not "the latch was never touched"; and
+  // crossing a de-adoption must not cost a `position: 0` on the way back, which
+  // is the same defect #284 is about arriving by a different door.
+  it('de-adopts on the first push past the stale window, then re-converges with no 0', () => {
+    const { switcher } = twoAdoptedWatchers()
+
+    run(PLAYBACK_STALE_MS / 1000 + 3, (c) => (c === switcher ? null : trueRoomPosition()))
+    // The precondition, not the claim: still latched with the pushes stopped.
+    expect(switcher.getStatus().playbackAdopted).toBe(true)
+
+    const sentBeforeResume = server.wireOf('switchuser').length
+    // The load completes and the element announces again, at the room's real
+    // position. One push, asserted before the heartbeat can re-adopt us.
+    switcher.updateSnapshot({ position: trueRoomPosition(), paused: false })
+    expect(switcher.getStatus().playbackAdopted).toBe(false)
+
+    // And then back: the drift test re-adopts us within a tick, because the
+    // mirror kept us on the room while we were stale, so the resumed snapshot
+    // is inside ADOPT_TOLERANCE_S of it.
+    run(3, () => trueRoomPosition())
+    expect(switcher.getStatus().playbackAdopted).toBe(true)
+
+    // The far side of the de-adoption: every frame from the resumed push on
+    // carries a real position. A de-adopted client falls to the mirror, which
+    // sends the room's own position — never the element's, and never 0.
+    const after = server.wireOf('switchuser').slice(sentBeforeResume)
+    expect(after.length).toBeGreaterThanOrEqual(3)
+    expect(after.some((f) => f.position === 0)).toBe(false)
     expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThanOrEqual(1)
   })
 })

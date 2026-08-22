@@ -352,6 +352,44 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     })
   }
 
+  // An element at HAVE_NOTHING carries no position worth putting on the wire
+  // (#284). The media load algorithm resets the playhead synchronously and
+  // `currentTime` then reads 0 for as long as the load runs — not "briefly":
+  // see the note on `use-mse-player.ts`'s resume-from-middle path, where the
+  // buffer begins hundreds of seconds in and Chromium stalls the element at 0
+  // rather than auto-jumping the leading gap. That stall outlives this gate:
+  // such an element is at HAVE_METADATA, not HAVE_NOTHING, so what takes it off
+  // 0 is a write — the parked remote state applied from `loadedmetadata`, or,
+  // when nothing is parked, the resume land (`use-mse-player.ts:225-239`, which
+  // `:226` cancels in exactly the case where a state is). The door reopens at
+  // metadata; the first honest position rides on that write, not on this test.
+  //
+  // Nothing upstream covers that window during an in-player translation or
+  // quality switch, because adoption is *deliberately* retained across one:
+  // `buildCanonicalName()` carries no translation component and `newPlayer` is
+  // false on every push after a mount's first, so main's `setFile()` de-adoption
+  // never fires — and the zeros themselves keep `hasLivePlayback()` true at 1 Hz,
+  // so the stale-gap de-adoption never fires either. An adopted client
+  // announcing `position: 0` wins `Room.getPosition()`'s `min()` and every peer
+  // crosses its own `diff > 3.0` rule and is seeked to 0 — #220's "yanked
+  // everyone back to 0", through the one door the adoption gate leaves open.
+  //
+  // The test is HAVE_NOTHING and not one notch higher, on purpose. An MSE
+  // respawn drops `readyState` to HAVE_METADATA, never below, so this suppresses
+  // nothing during a buffer refill; a stricter test would drop real positions
+  // there and make PLAYBACK_STALE_MS (5 s) reachable — which costs adoption
+  // *and* drops a live `seekIntent` in `maybeReassertSeek()`.
+  //
+  // Deliberately swallowed with the rest, and not collateral: the auto-resume
+  // `v.play()` that PlayerView's restore `nextTick` fires while the element is
+  // still at HAVE_NOTHING. `play` is dispatched regardless of `readyState`, so
+  // `onLocalPlay` would otherwise send `paused: false, position: 0`. The resumed
+  // intent is not lost — `intentOr(v)` carries it to the room on the first
+  // post-load snapshot.
+  function hasAnnounceablePosition(v: HTMLVideoElement): boolean {
+    return (v.readyState ?? 0) >= 1
+  }
+
   function sendSyncplayLocalState(cause: 'play' | 'pause' | 'seek'): void {
     if (syncplayStatus.value.state !== 'ready') return
     // Seeks are keyed on the value applied, not on the clock (#239). The
@@ -365,6 +403,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (cause !== 'seek' && Date.now() < suppressNextLocalEventUntil) return
     const v = deps.getVideoEl()
     if (!v) return
+    if (!hasAnnounceablePosition(v)) return
     window.api.syncplaySendLocalState({
       paused: intentOr(v),
       position: v.currentTime,
@@ -398,6 +437,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (syncplayStatus.value.state !== 'ready') return
     const v = deps.getVideoEl()
     if (!v) return
+    // See hasAnnounceablePosition: a reloading element's 0 is not a position
+    // claim, and this door had no readiness term at all (#284).
+    if (!hasAnnounceablePosition(v)) return
     lastSnapshotPushAt = Date.now()
     window.api.syncplaySendLocalSnapshot({
       position: v.currentTime,

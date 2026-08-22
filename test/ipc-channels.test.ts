@@ -24,19 +24,28 @@ const MAIN = readdirSync(MAIN_DIR)
   .join('\n')
 const SOURCES = MAIN + '\n' + PRELOAD + '\n' + ROUTERS
 
-// #294 hoisted `MseOpenResult` into `src/shared/types/player.d.ts`. The guards
-// below get their own reads on purpose: `SOURCES` reaches none of what they
-// need — `PRELOAD` is `src/preload/index.ts` alone (not `types.d.ts`), and
-// `MAIN` is *top-level* `src/main/*.ts` only, so it never opens
-// `src/main/streaming/`, where the deleted declaration used to live.
+// #294 hoisted `MseOpenResult` into `src/shared/types/player.d.ts`. The guard
+// below gets its own read on purpose: `SOURCES` reaches none of what it needs —
+// `PRELOAD` is `src/preload/index.ts` alone (not `types.d.ts`), and `MAIN` is
+// *top-level* `src/main/*.ts` only, so it never opens `src/main/streaming/`,
+// where the deleted declaration used to live.
+//
+// The walk covers **all** of `src/` rather than just `src/main/`, minus the one
+// file that owns the declaration. The drift this guards against (#275's
+// `initialSeek` collision) was renderer-side, and the renderer's copy would be
+// written where the reply is consumed — inside a `.vue` SFC — so `.vue` is
+// walked alongside `.ts`.
 const PRELOAD_TYPES = read('src/preload/types.d.ts')
-const walkTs = (dir: string): string[] =>
+const SRC_DIR = resolve(__dirname, '..', 'src')
+const DECLARATION_OWNER = resolve(SRC_DIR, 'shared/types/player.d.ts')
+const walkSources = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const full = resolve(dir, e.name)
-    if (e.isDirectory()) return walkTs(full)
-    return e.isFile() && full.endsWith('.ts') ? [readFileSync(full, 'utf8')] : []
+    if (e.isDirectory()) return walkSources(full)
+    if (!e.isFile() || full === DECLARATION_OWNER) return []
+    return full.endsWith('.ts') || full.endsWith('.vue') ? [readFileSync(full, 'utf8')] : []
   })
-const MAIN_RECURSIVE = walkTs(MAIN_DIR).join('\n')
+const SRC_MINUS_OWNER = walkSources(SRC_DIR).join('\n')
 
 // First arg of every IPC-ish call. Post-1c every one must be a CHANNELS./
 // EVENT_CHANNELS. reference — a bare string literal here means an un-migrated
@@ -140,8 +149,12 @@ describe('MseOpenResult is declared once', () => {
     expect(shared.match(DECLARATION)?.length ?? 0).toBe(1)
     // Acceptance criterion 2: not re-exported from main, and — the
     // compile-clean failure mode `npm run typecheck` cannot see — not
-    // shadowed by a module-local `interface MseOpenResult` in any router.
-    expect(MAIN_RECURSIVE.match(DECLARATION) ?? []).toEqual([])
+    // shadowed by a module-local `interface MseOpenResult` anywhere under
+    // `src/`: a router, a preload file, the renderer, or the rest of
+    // `src/shared`. `import type { MseOpenResult }` and
+    // `export type { MseOpenResult }` do not match — only a fresh declaration
+    // does, so legitimate re-exports stay green.
+    expect(SRC_MINUS_OWNER.match(DECLARATION) ?? []).toEqual([])
   })
 
   it('is referenced by name from both preload files, with no inline copy left', () => {

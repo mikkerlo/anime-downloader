@@ -725,6 +725,32 @@ export function register({
     }
   })
 
+  // Targeted single-session reap (#291). The renderer's blanket
+  // `player:cleanup-remux` kills EVERY registered session and unlinks the whole
+  // tmpDir, which is exactly wrong for a superseded `prepareMkvForPlayback`: the
+  // open it is unwinding lost a race to a *concurrent* open whose session is
+  // live and whose tmpDir files are in use. So the unwind names the one id it
+  // owns and this handler reaps just that.
+  //
+  // Deliberately does NOT bump `cleanupGeneration`. It cannot race a parked open
+  // handler: the renderer only ever learns a `sessionId` from an open's reply, so
+  // by the time it can name a session, that session's handler has already
+  // returned. Bumping would therefore only cancel *unrelated* opens.
+  ipcMain.handle(
+    CHANNELS.PLAYER_CLOSE_STREAM_SESSION,
+    (event, sessionId: string): PlayerCloseStreamSessionResult => {
+      const session = streamingService.getSession(sessionId)
+      if (!session) return { closed: false }
+      // A close is a SIGKILL of somebody's live playback. Never let one
+      // `webContents` reap another's session — no-op rather than throw, since
+      // the caller issues this fire-and-forget and an unhandled rejection in the
+      // renderer would be the only visible effect of a raise.
+      if (session.senderId !== event.sender.id) return { closed: false }
+      streamingService.cleanupSession(sessionId)
+      return { closed: true }
+    }
+  )
+
   ipcMain.handle(CHANNELS.PLAYER_CLEANUP_REMUX, async () => {
     // Bump first, before the sweep: an open handler whose `registerSession`
     // lands *after* this sweep must still see the move and self-reap (#280).

@@ -87,6 +87,67 @@ describe('StreamingService session management', () => {
     expect(() => svc.cleanupSession('missing')).not.toThrow()
   })
 
+  it('cleanupSession unlinks its own .ass, leaving the tmpDir and other sessions alone (#291)', () => {
+    // The targeted `player:close-stream-session` reaps ONE session, so the
+    // blanket sweep — until now the only thing that unlinked the tmpDir — no
+    // longer runs on this path. Without the unlink here every superseded open
+    // leaves `${baseName}-${sessionId}.ass` behind forever.
+    //
+    // The scratch dir is INJECTED (`StreamingServiceDeps.tmpDir`), never the
+    // default `os.tmpdir()/anime-dl-remux`: that path belongs to whatever app
+    // instance is streaming on this machine, and a unit run must neither
+    // `mkdirSync` it nor `rmdirSync` it out from under a live ffmpeg. Randomised
+    // ids would only have handled a colliding *test*. The default stays covered
+    // by `exposes the backpressure watermarks + tmpDir constants` above.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'streaming-svc-'))
+    const own = createStreamingService({
+      getFfmpegPath: () => '/bin/ffmpeg',
+      getFfprobePath: () => '/bin/ffprobe',
+      tmpDir,
+      channels
+    })
+    expect(own.tmpDir).toBe(tmpDir)
+    const mineId = 'mine'
+    const theirsId = 'theirs'
+    // `mkSession()`'s `mkvPath` is `/tmp/show.mkv`; the second session gets a
+    // distinct one so the two `.ass` names differ by base as well as by id.
+    const mine = path.join(tmpDir, `show-${mineId}.ass`)
+    const theirs = path.join(tmpDir, `other-${theirsId}.ass`)
+    fs.writeFileSync(mine, '[Script Info]')
+    fs.writeFileSync(theirs, '[Script Info]')
+    try {
+      own.registerSession(mineId, mkSession())
+      own.registerSession(theirsId, mkSession({ mkvPath: '/tmp/other.mkv' }))
+
+      const ret = own.cleanupSession(mineId)
+
+      // SYNCHRONOUS. `cleanupSession` is `: void` and every caller ignores the
+      // return — including the blanket sweep in `player:cleanup-remux`, which
+      // `rmdirSync`s the tmpDir on the next line. An `async` cleanupSession
+      // would return a Promise here and the unlink would not have happened yet,
+      // which is how the sweep would silently start leaving the tmpDir behind.
+      expect(ret).toBeUndefined()
+      expect(fs.existsSync(mine)).toBe(false)
+      // The other session's artifact and the shared directory both survive —
+      // this is a targeted close, not the blanket sweep.
+      expect(fs.existsSync(theirs)).toBe(true)
+      expect(fs.existsSync(own.tmpDir)).toBe(true)
+      expect(own.allSessionIds()).toEqual([theirsId])
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('cleanupSession swallows ENOENT when the session had no subtitle track (#291)', () => {
+    // The common case: most sessions never produce an `.ass` at all, so the
+    // unlink must not throw out of a function whose callers ignore its result.
+    const s = mkSession()
+    svc.registerSession('no-subs', s)
+    expect(() => svc.cleanupSession('no-subs')).not.toThrow()
+    expect(s.done).toBe(true)
+    expect(svc.getSession('no-subs')).toBeUndefined()
+  })
+
   it('cleanupAllSessions drops every registered session', () => {
     svc.registerSession('a', mkSession())
     svc.registerSession('b', mkSession())

@@ -349,6 +349,11 @@ const api = {
       { ok: true; generation: number; timestampOffset: number } | { error: string }
     >,
   playerCleanupRemux: () => ipcRenderer.invoke(CHANNELS.PLAYER_CLEANUP_REMUX) as Promise<void>,
+  playerCloseStreamSession: (sessionId: string) =>
+    ipcRenderer.invoke(
+      CHANNELS.PLAYER_CLOSE_STREAM_SESSION,
+      sessionId
+    ) as Promise<PlayerCloseStreamSessionResult>,
   onPlayerStreamSubtitles: subscribe<{ sessionId: string; content: string }>(
     EVENT_CHANNELS.PLAYER_STREAM_SUBTITLES
   ),

@@ -38,6 +38,15 @@ interface MseOpenResult {
    * name on the renderer side, where the wrong one compiled and read 0.
    */
   contentStart: number
+  /**
+   * True when main *refused* the requested open position because it was at or
+   * past the probed duration, and spawned at 0 instead (#275). The decision
+   * itself, transported (#295): the renderer drops its resume land on it
+   * rather than re-deriving the same comparison from the numbers, which is two
+   * copies of one rule on either side of a process boundary. Not inferable
+   * from `contentStart` — a legitimate open at 0 reports the same 0.
+   */
+  refusedSeek: boolean
 }
 
 interface Mp4StreamingStatsSample {

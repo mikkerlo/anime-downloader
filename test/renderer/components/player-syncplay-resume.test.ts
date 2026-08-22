@@ -157,18 +157,17 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     )
   })
 
-  // #275: the composable bounds the resume land against the same duration main
-  // bounds the spawn against, but only if it is handed the value the renderer
-  // *sent to main*. `MseOpenResult.initialSeek` → `contentStart` makes the
-  // look-alike `requestedSpawnSeek: streamResult.initialSeek` a compile error,
-  // which is the failure mode actually observed; this scan covers the ones it
-  // does not — `requestedSpawnSeek: 0` or `: resumeTarget`, both of which
-  // typecheck and both of which silently restore the bug. Per call site: the
-  // copy path and the transcode path each wire their own, and only one of them
-  // being right is exactly the "the two paths disagree" bug.
-  it('hands the composable the seek it sent to main, at both call sites', () => {
-    expect(prepareBody()).toContain('requestedSpawnSeek: initialSeek')
-    expect(transcodeBody()).toContain('requestedSpawnSeek: initialSeek')
+  // #275/#295: the composable drops the resume land on main's refusal, but only
+  // if it is handed main's answer. The failure mode survives the rewrite — a
+  // hardcoded `refusedSeek: false`, or the field simply not wired, typechecks
+  // and silently restores the bug (the type is optional and fail-open on
+  // purpose). Per call site: the copy path and the transcode path each wire
+  // their own, and only one of them being right is exactly the "the two paths
+  // disagree" bug. The two expectations cannot share one literal — the copy
+  // body destructures the reply as `streamResult`, the transcode body as `r`.
+  it('hands the composable main’s refusal decision, at both call sites', () => {
+    expect(prepareBody()).toContain('refusedSeek: streamResult.refusedSeek')
+    expect(transcodeBody()).toContain('refusedSeek: r.refusedSeek')
   })
 
   it('pairs the room-seeded flag with the live stream session', () => {

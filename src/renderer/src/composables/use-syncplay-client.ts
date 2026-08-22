@@ -225,6 +225,32 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // that follows it. Any second opt-out needs the same argument (and will fail
   // the guard test that counts them).
   let refusedToastShown = false
+  // "The user paused while the room was out of our file" (#281, slice B).
+  //
+  // Main de-adopts for the length of that divergence, so `sendLocalState()`
+  // returns at its adoption gate and the room is never told about this pause —
+  // not even an ignore-counter bump. The room's next 1 Hz *playing* state would
+  // then resume the user, on a `needsPlayPause` that is computed independently
+  // of `outOfFile` by design (right for the pause direction, wrong for the
+  // resume direction once main has gone silent). We cannot tell the room
+  // anything, so it must not be able to override us either.
+  //
+  // Its own boolean, mirroring `refusedToastShown`, because neither existing
+  // marker survives the 1 Hz stream of refused resumes: `recordRemoteState()`
+  // runs for every inbound state, parked or not, and nulls `syncplayPausedBy`
+  // on any non-paused state — so it is already clobbered by the time the apply
+  // tests it — while `intendedPaused` is written from the apply path and
+  // conflates "the room paused us" with "the user paused". `pendingUserPause`
+  // is durable but must not arm here (see `onLocalPause`).
+  //
+  // Set in `onLocalPause()` beside the arming that is now gated off, and
+  // cleared everywhere the refusal notice clears: on a state that applies in
+  // range (the divergence is over, so ordinary sync resumes and the room wins
+  // again), in `resetRemoteStateTracking()`, and on the user's own play — they
+  // changed their mind, so there is no pause left to protect. Clearing it on
+  // the in-range apply is what stops a stale marker from silently refusing the
+  // *next* divergence's resume, which the user never paused for.
+  let outOfFileUserPause = false
 
   let unsubRemoteState: Unsubscribe | null = null
   let unsubRoomEvent: Unsubscribe | null = null
@@ -583,7 +609,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // instead would flip the *pause* branch below against the user's own later
     // resume: the room really is playing, and the mirror's other consumers need
     // that truth.
-    const shouldPlay = syncplayLastRemotePlaying && syncplayAllUsersReady() && !pendingUserPause
+    //
+    // `outOfFileUserPause` rides beside it for the same reason and on the same
+    // terms (#281, slice B): it is the marker that stands in for the hold in the
+    // one window the hold must not arm in, and the gate is the apply's twin
+    // resume path — `recordRemoteState()` writes `syncplayLastRemotePlaying`
+    // above every refusal, so without this a `canplay` or a roster change would
+    // resume the pause the apply just declined to.
+    const shouldPlay =
+      syncplayLastRemotePlaying &&
+      syncplayAllUsersReady() &&
+      !pendingUserPause &&
+      !outOfFileUserPause
     // The gate moves the element on the room's behalf, never the user's — mark
     // it like a remote apply so the resulting event isn't mistaken for intent
     // however late the element gets around to firing it.
@@ -694,6 +731,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (!outOfFile) {
       remoteStateApplied = true
       refusedToastShown = false
+      outOfFileUserPause = false
     } else if (wouldSeek && !refusedToastShown) {
       // Ahead of the no-op early-out below: a refused position whose paused flag
       // already matches moves nothing, but the user still has to be told why the
@@ -706,7 +744,19 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     }
     const needsSeek = !outOfFile && wouldSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
-    const needsPlayPause = effectivePaused !== v.paused
+    // The resume half of the same refusal (#281, slice B). A room *pause* is
+    // still honored — that direction costs the user nothing and keeps the two
+    // ends agreeing about the one thing they still can — but a resume that
+    // would undo a pause the user made while we were out of file is refused for
+    // the length of the divergence, because main is silent and that pause has
+    // no other way of holding.
+    //
+    // Folded into `needsPlayPause` rather than applied below it so the no-op
+    // early-out below still fires: `outOfFile` forces `needsSeek` false, so a
+    // refused resume would otherwise fall through and re-arm
+    // `suppressNextLocalEventUntil` once a second for the whole divergence.
+    const refusingResume = outOfFile && outOfFileUserPause && !effectivePaused && v.paused
+    const needsPlayPause = effectivePaused !== v.paused && !refusingResume
 
     if (!needsSeek && !needsPlayPause) return
     suppressNextLocalEventUntil = Date.now() + 1500
@@ -869,7 +919,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function resetRemoteStateTracking(opts: { keepRefusalNotice?: boolean } = {}): void {
     pendingRemoteState = null
     remoteStateApplied = false
-    if (!opts.keepRefusalNotice) refusedToastShown = false
+    // Under the same opt-out (#281, slice B), and for the same reason the
+    // reconnect branch takes it: same room, same file, same divergence, and the
+    // user's pause is still on the element. Every other caller — episode
+    // change, session end, file swap — has moved the ground the marker stands
+    // on, and a survivor there would refuse a resume for a pause nobody made in
+    // the state it refuses for.
+    if (!opts.keepRefusalNotice) {
+      refusedToastShown = false
+      outOfFileUserPause = false
+    }
   }
 
   // Read-only view of the tracking above. Note what it does *not* promise: a
@@ -997,8 +1056,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // play and the next remote apply resumed it, so the pause "didn't work".
     intendedPaused = false
     // The user changed their mind — clear before the gate call below, or it
-    // would pause the element they just resumed.
+    // would pause the element they just resumed. The out-of-file marker goes
+    // with it (#281): there is no local pause left for the room to override.
     clearPendingUserPause()
+    outOfFileUserPause = false
     // Unconditional since #228, like the pause half below: anything reaching
     // here is past the `appliedPaused` echo check, and by #224's classification
     // rule that makes it the user. The wall-clock window that used to gate this
@@ -1054,10 +1115,52 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // pause before a `src` swap) queues is delivered after that reset. The
     // residual is a real user pause on an element reporting HAVE_NOTHING, where
     // inbound states are parked anyway and pre-#228 behavior holds.
+    //
+    // `!outOfFile` is the fourth conjunct, and it reads the new projection
+    // rather than `playbackAdopted` (#281, slice B) — main's de-adoption makes
+    // `playbackAdopted !== true` true for the whole divergence, which is exactly
+    // the window the hold must *not* arm in. The hold exists to bridge the gap
+    // before a pause reaches the room, and here no pause ever will: its normal
+    // terminator is `roomPaused` going false → true, which cannot fire for a
+    // peer the room cannot hear, so it would run the full
+    // PENDING_PAUSE_MAX_MS and expire into PENDING_PAUSE_FAILED_TOAST before
+    // the next playing state resumed the user anyway. `outOfFileUserPause`
+    // takes over instead, and it holds for as long as the divergence does.
+    //
+    // The marker shares exactly one of the hold's two guards —
+    // `elementHasMetadata` — and deliberately not the `state === 'ready'` one.
+    // The shared one is load-bearing: it is the only thing in this composable
+    // separating a user's pause from the reload-shaped implicit pause the media
+    // load algorithm queues at `readyState === 0`, `PlayerView.vue` calls
+    // `onLocalPause()` straight off the raw `@pause` event, and the ordering is
+    // against us across an episode switch taken during a divergence. The switch
+    // watcher runs `resetRemoteStateTracking()` synchronously and the teardown
+    // pause arrives after it, while main's `setFile()` leaves `lastRoomState`
+    // alone — so the projection still says `outOfFile`, an unguarded marker
+    // comes straight back on, and the ready gate declines the binge auto-resume
+    // that `clearPendingUserPause()` beside it is in that watcher to protect
+    // for the sibling flag.
+    //
+    // `state === 'ready'` stays on the hold alone, because the marker's whole
+    // job is to survive the socket dropping: the `keepRefusalNotice` opt-out on
+    // the `reconnecting` branch exists to carry one *through* that window, and
+    // nothing could arm one inside it if this took the state guard too — a
+    // pause made while the socket is down would be resumed by the room on
+    // reconnect, which is the one thing the divergence rule is for.
+    // `roomOutOfFile` already buys what the state test would: the projection is
+    // only ever true while main holds a `lastRoomState`, is de-adopted and has
+    // peers, and `tearDown()` clears all three, so under
+    // `idle`/`disconnected` it is false anyway. `resetTransportState()` clears
+    // none of them, which is exactly why `reconnecting` is the state the two
+    // guards disagree about.
+    const elementHasMetadata = (deps.getVideoEl()?.readyState ?? 0) > 0
+    const roomOutOfFile = syncplayStatus.value.outOfFile === true
+    if (roomOutOfFile && elementHasMetadata) outOfFileUserPause = true
     if (
       syncplayStatus.value.state === 'ready' &&
+      elementHasMetadata &&
       syncplayStatus.value.playbackAdopted !== true &&
-      (deps.getVideoEl()?.readyState ?? 0) > 0
+      !roomOutOfFile
     ) {
       armPendingUserPause()
     }

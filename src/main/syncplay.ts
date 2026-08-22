@@ -442,10 +442,14 @@ export class SyncplayClient extends EventEmitter {
   private watchdogTimer: NodeJS.Timeout | null = null
   private watchdogDetail: { long: string; short: string } | null = null
   private watchdogFired = false
-  // What the last emitted `connection-status` carried for the two projected
-  // fields (#228) — the detector's reference, and the reason it costs at most
+  // What the last emitted `connection-status` carried for the projected fields
+  // (#228, #281) — the detector's reference, and the reason it costs at most
   // one extra emit per real flip rather than one per heartbeat.
-  private lastEmittedProjection: { playbackAdopted: boolean; roomPaused: boolean } | null = null
+  private lastEmittedProjection: {
+    playbackAdopted: boolean
+    roomPaused: boolean
+    outOfFile: boolean
+  } | null = null
   // Re-entry guard: `setStatus()` is called from the detector, and anything
   // that reached back into the detector from there would recurse.
   private emittingProjection = false
@@ -466,8 +470,8 @@ export class SyncplayClient extends EventEmitter {
     return { ...this.status, ...this.statusProjection() }
   }
 
-  // The two renderer-visible facts that live in fields of their own rather than
-  // in `status` (#228), overlaid on every emit and every read:
+  // The renderer-visible facts that live in fields of their own rather than in
+  // `status` (#228, #281), overlaid on every emit and every read:
   //
   //  - `playbackAdopted` scopes the renderer's pending-pause hold to the window
   //    where main's own ack protection is off (`sendLocalState()` returns
@@ -479,24 +483,58 @@ export class SyncplayClient extends EventEmitter {
   //    watcher by construction, so the server's min() re-election keeps `setBy`
   //    ours and the state is dropped as self — so this projection is the only
   //    deterministic way it learns its pause reached the room.
+  //  - `outOfFile` is *which* de-adoption this is (#281, slice B).
+  //    `playbackAdopted: false` alone cannot tell "converging" from "the room
+  //    is somewhere I cannot go", and the renderer needs the second answer for
+  //    both halves of its pause rule: the arming condition for the pending
+  //    pause, and the resume it now refuses.
   //
-  // Projections, never stored fields. `tearDown()` clears both underlying
+  // Projections, never stored fields. `tearDown()` clears all three underlying
   // values with no `setStatus()` call anywhere on that path, so a mirrored copy
   // would keep announcing session 1's `true` through the whole of session 2's
   // pre-adoption window — the exact window the renderer's arming condition
   // reads.
-  private statusProjection(): { playbackAdopted: boolean; roomPaused: boolean } {
+  //
+  // `outOfFile` is therefore **recomputed here** rather than storing the
+  // boolean handleState()'s predicate decided on — same rule, and the other
+  // obvious source is worse: `isAdopted()` is a *mutator* (its roster latch and
+  // its drift latch both write the flag), which is why `isRoomVoice()` reads the
+  // raw flag rather than going through it, and a status read that silently
+  // latches adoption would be a new bug class.
+  //
+  // The `!playbackAdopted` conjunct is what lets this skip handleState()'s
+  // drift test rather than duplicate it: at the ordinary end of an episode the
+  // drift conjunct kept us adopted, so this is inert there for free — no second
+  // calibration, and no dependence on `snapshot.position`, which keeps moving
+  // under a level read while the de-adoption is a decision taken once on a tick.
+  //
+  // `!rosterSaysAlone()` is the same conjunct the de-adoption itself carries,
+  // and it is here for the same reason plus one: this is a *level* read, so
+  // without it a solo client reports the divergence for the whole window
+  // between its first inbound `State` and the heartbeat that latches adoption
+  // on the roster-alone branch — a flip the renderer would act on in a room
+  // where nobody can override anything. Keeping the two in step is also what
+  // makes this projection mean "the state the de-adoption creates" rather than
+  // an independently-derived predicate that happens to agree most of the time.
+  private statusProjection(): {
+    playbackAdopted: boolean
+    roomPaused: boolean
+    outOfFile: boolean
+  } {
+    const room = this.lastRoomState
     return {
       playbackAdopted: this.playbackAdopted,
-      roomPaused: this.lastRoomState?.paused === true
+      roomPaused: room?.paused === true,
+      outOfFile:
+        !this.playbackAdopted && !this.rosterSaysAlone() && this.roomPastEndOfOwnFile(room) !== null
     }
   }
 
-  // Neither projection has a setter to hook: `playbackAdopted` is written at
-  // five sites and `lastRoomState` inside handleState(), none of which is a
-  // status transition, so without this the renderer would only learn about a
-  // flip on the next unrelated `setStatus()` — which in a steady session never
-  // comes. Compare against what was last *emitted* and re-emit on a difference.
+  // No projection has a setter to hook: `playbackAdopted` is written at six
+  // sites and `lastRoomState` inside handleState(), none of which is a status
+  // transition, so without this the renderer would only learn about a flip on
+  // the next unrelated `setStatus()` — which in a steady session never comes.
+  // Compare against what was last *emitted* and re-emit on a difference.
   //
   // Called from the heartbeat tick **after** `sendStateMessage()`, so the latch
   // that call's own `buildPlaystate()` → `isAdopted()` just flipped announces on
@@ -506,10 +544,17 @@ export class SyncplayClient extends EventEmitter {
     if (this.emittingProjection) return
     const next = this.statusProjection()
     const last = this.lastEmittedProjection
+    // `outOfFile` is compared here too, and it is not decoration (#281, slice
+    // B): the join-mid-episode shape is a client that is *already* de-adopted
+    // when the out-of-range room state lands, so `playbackAdopted` does not
+    // flip and `roomPaused` does not move. A third field nothing else moves
+    // would never trigger a `setStatus({})`, and the renderer's pause rule would
+    // never engage on the primary case.
     if (
       last &&
       last.playbackAdopted === next.playbackAdopted &&
-      last.roomPaused === next.roomPaused
+      last.roomPaused === next.roomPaused &&
+      last.outOfFile === next.outOfFile
     ) {
       return
     }
@@ -1619,6 +1664,96 @@ export class SyncplayClient extends EventEmitter {
     // Shifting both axes would compensate that seed twice.
     const anchorLagMs = Math.min(this.serverRtt / 2, MAX_ROOM_ANCHOR_LAG_S) * 1000
     this.lastRoomState = { position, paused, at: Date.now() - anchorLagMs }
+    // The room is somewhere our file does not reach (#281, slice B). A real
+    // `playbackAdopted = false` write, and the fourth one — not a gate term
+    // inside `isAdopted()` or `buildPlaystate()`.
+    //
+    // Why a genuine clear: `isRoomVoice()` reads the **raw** flag,
+    // deliberately never through `isAdopted()`. Under a gate term the flag
+    // stays `true`, so `isRoomVoice` stays `false` for the whole divergence —
+    // and the divergence is exactly the state where our mirror wins or ties
+    // `Room.getPosition()`'s `min()` over watchers. `_setBy` becomes us, every
+    // periodic then arrives self-`setBy` and dies at the guard below, and the
+    // renderer hears **nothing** for the length of the divergence — including
+    // the state that carries the room back *into* our file. Clearing it turns
+    // `isRoomVoice` on, the mirror-sourced frames are emitted `setBy: null`,
+    // the renderer keeps applying the room, and re-adoption happens through the
+    // drift latch in `isAdopted()` *after* the renderer has converged us. That
+    // is the recovery path docs/syncplay.md already documents for the #227 gap,
+    // and it is only available to a de-adoption that genuinely clears the flag.
+    //
+    // Here, immediately below the `lastRoomState` write, for four reasons:
+    //
+    //  1. It is above the `seekIntentWasLive` capture below, which is what
+    //     keeps the invariant comment at the emit true. Placed inside
+    //     `isAdopted()` the proof fails reachably: that capture sits *above*
+    //     the `maybeReassertSeek()` call whose `!isAdopted()` branch would null
+    //     the intent, so the tick the divergence opens would carry
+    //     `seekIntentWasLive === true` and `isRoomVoice === true` together —
+    //     the combination the comment says cannot exist.
+    //  2. The drift conjunct is what kills the end-of-episode case. On
+    //     identical files the room's projected position crosses our duration by
+    //     fractions of a second at the ordinary end of **every** episode; the
+    //     renderer dodges that by gating its refusal toast on `wouldSeek`
+    //     (use-syncplay-client.ts) and main has no `wouldSeek` to borrow.
+    //     `ADOPT_TOLERANCE_S` is the same quantity the drift latch in
+    //     `isAdopted()` re-adopts on, so the two compose instead of needing
+    //     their own calibration.
+    //  3. Re-adoption therefore stays the ordinary drift path — no new latch,
+    //     and nothing to clear when the room comes back into range.
+    //  4. `seekIntent` is nulled beside the write, matching every existing
+    //     writer of this flag — `setFile()`'s new-player reset,
+    //     `updateSnapshot()`'s stale-gap reset and `tearDown()` all null the
+    //     intent on the line below their own write. Reported because it stayed
+    //     green rather than papered over: mutating that line out leaves the
+    //     suite passing. On every path reachable from this
+    //     harness the intent is already dead by the time the emit reads it —
+    //     either the supersede retraction below nulled it (a foreign `doSeek`
+    //     is how a peer takes the room out of our file in the first place) or
+    //     `maybeReassertSeek()`'s `!isAdopted()` branch does, a few lines
+    //     further down and still above the emit. Reaching the emit with the
+    //     intent live *and* `isRoomVoice` true additionally needs a self-`setBy`
+    //     frame, which needs our own asserted position to be the room's `min()`
+    //     — and that same position is what would have dragged the room back
+    //     inside our file. Kept for the invariant's enumeration above, which is
+    //     a claim about *every* writer, and unpinned by construction.
+    //
+    // The position half of the predicate — the duration domain rule, and the
+    // `projectedRoomPosition() >= d` comparison whose quantity is what the
+    // drift latch in `isAdopted()` re-adopts on, so the drift conjunct below
+    // composes with it — lives in `roomPastEndOfOwnFile()`, shared with
+    // `statusProjection()`'s `outOfFile` so the two cannot drift apart. See it
+    // for both arguments.
+    //
+    // `rosterSaysAlone()` is the one thing this predicate has that the plan did
+    // not, and it is a *derivation* rather than a new policy: do not write what
+    // the very next `isAdopted()` call will unconditionally undo. A client alone
+    // in a room re-latches on that function's roster-alone branch, so the write
+    // is a no-op for the wire — but not for the renderer, which is handed the
+    // intermediate state by `emitStatusIfProjectionChanged()` a few lines below.
+    // The review that specified this assumed `maybeReassertSeek()` in between
+    // would have re-latched by then; it returns at its own `if (!intent)` first,
+    // so with no seek in flight — the ordinary case — nothing did, and a solo
+    // client flip-flopped its projection once a second between this write and
+    // the next heartbeat's `buildPlaystate()`. Measured, not reasoned: `announces
+    // no projection change to a client alone in a room parked past the end of
+    // its file` is red without this conjunct. It is deliberately "the roster
+    // *says* alone" rather than "no peers known": on a server whose `List` we
+    // cannot key to our room (#223) the roster never arrives, and there the
+    // de-adoption is the conservative answer.
+    const roomPastEnd = this.roomPastEndOfOwnFile(this.lastRoomState)
+    if (
+      roomPastEnd !== null &&
+      !this.rosterSaysAlone() &&
+      Math.abs(this.snapshot.position - roomPastEnd) > ADOPT_TOLERANCE_S
+    ) {
+      log('de-adopting — the room is past the end of our file', {
+        roomPos: roomPastEnd,
+        duration: this.currentFile?.duration
+      })
+      this.playbackAdopted = false
+      this.seekIntent = null
+    }
     // "This frame is one we are about to hand the renderer" — a *sufficient*
     // condition for that, no longer a transcription of the drop guards. Both
     // guards below read these same two consts, but since #277 the first one also
@@ -1879,13 +2014,15 @@ export class SyncplayClient extends EventEmitter {
     // steps. A foreign, acked `doSeek` frame retired the intent at the
     // retraction above; and the only other route to this emit — the
     // `isRoomVoice` branch, which #277 added beside the foreign path so that
-    // what reaches the emit (:1663) is a strict superset of
-    // `willApplyRemoteState` (:1539) — cannot coincide with a live intent:
-    // isRoomVoice() is gated on `!playbackAdopted` (:1972), sendLocalState()
-    // arms the intent only below the isAdopted() gate (:627, :662), and every
-    // writer of `playbackAdopted = false` (:574, :682, :719) nulls the intent
-    // beside it. So it is an invariant to assert rather than a value to
-    // hardcode, and what carries it is adoption rather than the drop guards.
+    // what reaches this `remote-state` emit is a strict superset of
+    // `handleState()`'s `willApplyRemoteState` — cannot coincide with a live
+    // intent: `isRoomVoice()` is gated on `!playbackAdopted`,
+    // `sendLocalState()` arms the intent only below its `isAdopted()` gate, and
+    // every writer of `playbackAdopted = false` (`setFile()`'s new-player
+    // reset, `updateSnapshot()`'s stale-gap reset, `tearDown()`, and
+    // `handleState()`'s out-of-file de-adoption) nulls the intent beside it. So
+    // it is an invariant to assert rather than a value to hardcode, and what
+    // carries it is adoption rather than the drop guards.
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -2115,6 +2252,49 @@ export class SyncplayClient extends EventEmitter {
     return this.roomUsers.filter((u) => u.username !== this.config?.username).length > 0
   }
 
+  // "The roster has arrived and it lists nobody but us." Positive on both
+  // halves: a roster that has not arrived is *not* an empty one (#236), which is
+  // the distinction the adoption gate was originally missing. Extracted so
+  // `isAdopted()`'s latching branch and #281's de-adoption test the identical
+  // condition — the second one exists precisely to not write what the first one
+  // would immediately undo, so they cannot be allowed to drift apart.
+  private rosterSaysAlone(): boolean {
+    if (!this.rosterReceived) return false
+    return this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
+  }
+
+  // "The room is past the end of the file we announced" — the projected room
+  // position when it is, `null` when it is not (#281, slice B).
+  //
+  // Extracted for the reason `rosterSaysAlone()` above it was: `handleState()`'s
+  // de-adoption and `statusProjection()`'s `outOfFile` are the *same* rule by
+  // construction — the projection means "the state the de-adoption creates",
+  // not an independently-derived predicate that happens to agree — so they
+  // cannot be allowed to drift apart. This half is the one carrying the casts
+  // and the fail-open domain rule, so it has the stronger claim of the two.
+  //
+  // `Number.isFinite(d) && d > 0` fails **open** — no file, or a duration we
+  // cannot use, follows the room as before. It is also main's only statement
+  // about the domain of that value: `setFile()` stores the IPC payload
+  // verbatim, so `currentFile.duration` is precisely what the renderer built
+  // with `?.duration || getDuration() || 0`, which filters `NaN` and `0` but
+  // passes `Infinity` straight through. Unpinned by construction, since
+  // `roomPos >= Infinity` is false and `>=` carries it either way.
+  //
+  // The room quantity is `projectedRoomPosition()`, not `position` off the
+  // wire: that is what the drift latch in `isAdopted()` re-adopts on, and the
+  // drift conjunct at the `handleState()` call site only composes with it if
+  // the two are the same quantity. `typeof d === 'number'` narrows the
+  // duration for both callers, so neither needs an `as number` cast.
+  private roomPastEndOfOwnFile(
+    room: { position: number; paused: boolean; at: number } | null
+  ): number | null {
+    const d = this.currentFile?.duration
+    if (!room || typeof d !== 'number' || !Number.isFinite(d) || d <= 0) return null
+    const roomPos = this.projectedRoomPosition(room)
+    return roomPos >= d ? roomPos : null
+  }
+
   // Where the room is *now*: its last reported position, advanced by wall time
   // if it kept playing. Mirroring a stale position would read as lag.
   private projectedRoomPosition(room: { position: number; paused: boolean; at: number }): number {
@@ -2162,12 +2342,9 @@ export class SyncplayClient extends EventEmitter {
   // Latches, so ordinary drift later never demotes a live player.
   private isAdopted(): boolean {
     if (this.playbackAdopted) return true
-    if (this.rosterReceived) {
-      const alone = this.roomUsers.filter((u) => u.username !== this.config?.username).length === 0
-      if (alone) {
-        this.playbackAdopted = true
-        return true
-      }
+    if (this.rosterSaysAlone()) {
+      this.playbackAdopted = true
+      return true
     }
     const room = this.lastRoomState
     // Peers are listed (or the roster has not arrived) and the room has told us

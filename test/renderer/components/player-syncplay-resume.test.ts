@@ -201,10 +201,15 @@ describe('PlayerView — a refused open does not resume through the generic bran
     // 1 and this guard is false. Drop it, or widen it to a bare
     // `saved.position > 5`, and the refused position is written to the element.
     const body = resumeBody().replace(/\s+/g, ' ')
-    const guard = body.indexOf('if (saved.position > 5 && saved.position / d < 0.95) {')
-    const write = body.indexOf('video.currentTime = saved.position;')
 
-    expect(guard).toBeGreaterThan(-1)
-    expect(write).toBeGreaterThan(guard)
+    // Containment rather than ordering: a write moved below the block's closing
+    // brace is unconditional again and still satisfies `write > guard`.
+    expect(body).toContain(
+      'if (saved.position > 5 && saved.position / d < 0.95) { syncplay.markProgrammaticSeek(saved.position); video.currentTime = saved.position;'
+    )
+    // The other half of the argument above: the ratio is only against the
+    // probe's duration if `d` prefers `video.duration`. Against `saved.duration`
+    // alone, a stale record's ratio against its own inflated duration passes.
+    expect(body).toContain('const d = video.duration || saved.duration;')
   })
 })

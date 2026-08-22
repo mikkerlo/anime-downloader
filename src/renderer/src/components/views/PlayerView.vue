@@ -471,14 +471,38 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   const dir = idx > activeEpisodeIndex.value ? 'next' : 'prev';
   // goToEpisode moves one step; step toward target in a loop.
   //
-  // `switchingTranslation` is a stop condition alongside `navigating` (#291).
-  // A `selectTranslation` started mid-walk supersedes the in-flight step's
-  // `prepareMkvForPlayback`; that step then unwinds and releases `navigating`,
-  // and without this term the loop reads that as permission to take another
-  // step — which supersedes the translation switch in turn and drops the user's
-  // pick silently. An explicit pick outranks the room's episode walk.
+  // A translation pick is a stop condition alongside `navigating` (#291). A
+  // `selectTranslation` started mid-walk supersedes the in-flight step's
+  // `prepareMkvForPlayback`; that step then unwinds and releases `navigating`
+  // — it must, or the flag strands — and without this term the loop reads that
+  // as permission to take another step, which supersedes the translation
+  // switch in turn and drops the user's pick silently. An explicit pick
+  // outranks the room's episode walk.
+  //
+  // The term reads the MONOTONIC `translationEpoch`, sampled once here, rather
+  // than the transient `switchingTranslation` flag, which is only up while a
+  // switch is in flight — and a switch can finish well inside a single step. A
+  // pick that takes the stream fall-back is one `playerGetStreamUrl` round
+  // trip and clears the flag in its own `nextTick`, which lands long before a
+  // step parked on an MSE open resumes; the step then finishes (or unwinds and
+  // releases `navigating`, which it still owns), the loop re-reads both flags
+  // as false and steps again — the exact outcome this term exists to prevent.
+  // A sampled epoch cannot be un-set.
+  //
+  // This also decides the ENTRY case on purpose, where the flag decided it by
+  // accident: a switch already in flight when the room's episode change
+  // arrives no longer suppresses the walk outright. `walkTranslation` is
+  // sampled after that pick's bump, so the walk starts and stops at the first
+  // pick made AFTER it began. A pick that predates the walk is not a response
+  // to it, and suppressing the whole walk on one left the user toasted about a
+  // room move the player then never followed.
+  const walkTranslation = translationEpoch;
   const stepTowards = async (): Promise<void> => {
-    while (activeEpisodeIndex.value !== idx && !navigating.value && !switchingTranslation.value) {
+    while (
+      activeEpisodeIndex.value !== idx &&
+      !navigating.value &&
+      translationEpoch === walkTranslation
+    ) {
       await goToEpisode(dir);
     }
   };
@@ -2017,8 +2041,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             // on a superseded unwind would leave `navigating` true forever
             // whenever the superseder was a `selectTranslation` — nothing
             // outside this function ever clears it. The walk in
-            // `handleRemoteEpisodeChange` is stopped by its own
-            // `switchingTranslation` term instead, not by a stranded flag.
+            // `handleRemoteEpisodeChange` is stopped by its own sampled
+            // `translationEpoch` term instead, not by a stranded flag.
             if (navigationEpoch === myNav) navigating.value = false;
             return;
           }

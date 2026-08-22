@@ -244,6 +244,14 @@ interface Api {
     seekSeconds: number
   ) => Promise<{ ok: true; generation: number; timestampOffset: number } | { error: string }>
   playerCleanupRemux: () => Promise<void>
+  /**
+   * Reap ONE stream session by id (#291) — the targeted counterpart to the
+   * blanket `playerCleanupRemux`. Used by a superseded `prepareMkvForPlayback`
+   * to close the session its own open registered without touching the winning
+   * open's session or the shared tmpDir. Refused (`{ closed: false }`) when the
+   * calling `webContents` does not own the session.
+   */
+  playerCloseStreamSession: (sessionId: string) => Promise<PlayerCloseStreamSessionResult>
   onPlayerStreamSubtitles: (
     callback: (data: { sessionId: string; content: string }) => void
   ) => Unsubscribe

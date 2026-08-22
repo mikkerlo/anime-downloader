@@ -804,6 +804,31 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     } catch {
       /* ignore */
     }
+    // The subtitle `extractFirstSubtitle` writes for this session (#291). Only
+    // the blanket `player:cleanup-remux` sweep used to unlink it, so the
+    // targeted close would otherwise leave `${baseName}-${sessionId}.ass`
+    // behind forever. Derived from the session's own `mkvPath` with the same
+    // `basename(…, extname(…))` the open handlers use, so nothing needs a new
+    // parameter — a `baseName` argument would touch all six call sites,
+    // `cleanupAllSessions` included.
+    //
+    // SYNCHRONOUS on purpose. `cleanupSession` is `: void` and every one of its
+    // callers ignores the return, including the blanket sweep in
+    // `player:cleanup-remux`, which `rmdirSync`s the tmpDir on the next line.
+    // Making this `async` for the unlink would silently un-await that sweep:
+    // the directory removal would race the unlinks that must precede it, fail,
+    // and be swallowed — the tmpDir surviving a blanket cleanup with no trace.
+    //
+    // Residual, accepted and documented: this reaps the *artifact*, not the
+    // *extractor*. `extractFirstSubtitle` is a second, unregistered ffmpeg that
+    // may still be writing and can recreate the file after this unlink; the
+    // next blanket sweep removes it.
+    try {
+      const baseName = path.basename(session.mkvPath, path.extname(session.mkvPath))
+      fs.unlinkSync(path.join(tmpDir, `${baseName}-${sessionId}.ass`))
+    } catch {
+      /* ENOENT is the normal case — most sessions have no subtitle track */
+    }
     sessions.delete(sessionId)
   }
 

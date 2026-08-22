@@ -49,6 +49,19 @@ interface MseOpenResult {
   refusedSeek: boolean
 }
 
+// `player:close-stream-session` reply (#291). The renderer names ONE session to
+// reap — the one a superseded `prepareMkvForPlayback` opened — instead of the
+// blanket `player:cleanup-remux`, which would SIGKILL the winning open's
+// session too and unlink the shared tmpDir out from under it.
+//
+// `closed` is false when no such session is registered *or* when the calling
+// `webContents` does not own it. The two are deliberately indistinguishable to
+// the renderer: the unwind issues this fire-and-forget and has nothing useful
+// to do with either answer.
+interface PlayerCloseStreamSessionResult {
+  closed: boolean
+}
+
 interface Mp4StreamingStatsSample {
   animeId: number
   animeName: string

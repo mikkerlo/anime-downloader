@@ -5,22 +5,6 @@ import { execFile, spawn, type ChildProcess } from 'child_process'
 import Ffmpeg from 'fluent-ffmpeg'
 import { avcCodecString, hevcCodecString, aacCodecString } from './codec-strings'
 
-export interface MseOpenResult {
-  sessionId: string
-  generation: number
-  duration: number
-  mimeType: string
-  hasSubtitlesPending: boolean
-  /**
-   * The true PTS the ffmpeg run starts emitting at, as measured by the offset
-   * probe — the renderer's `SourceBuffer.timestampOffset`. Named for what it
-   * is (#275): main already computes it into a local called `contentStart`,
-   * and the old `initialSeek` collided with the *request* field of the same
-   * name on the renderer side, where the wrong one compiled and read 0.
-   */
-  contentStart: number
-}
-
 export interface MseSession {
   proc: ChildProcess
   pendingBytes: number

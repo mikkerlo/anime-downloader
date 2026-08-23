@@ -7,7 +7,7 @@ import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { sanitizeFilename } from '../download-manager'
 import { probeMp4Faststart } from '../mp4-faststart'
-import type { MseSession, MseOpenResult } from '../streaming'
+import type { MseSession } from '../streaming'
 import type { AppDeps } from './index'
 
 /**

@@ -312,28 +312,11 @@ const api = {
     >,
   playerRemuxMkvStream: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV_STREAM, mkvPath, initialSeek) as Promise<
-      | {
-          sessionId: string
-          generation: number
-          duration: number
-          mimeType: string
-          hasSubtitlesPending: boolean
-          contentStart: number
-        }
-      | { requiresTranscode: true }
-      | { error: string }
+      MseOpenResult | { requiresTranscode: true } | { error: string }
     >,
   playerRemuxMkvStreamTranscode: (mkvPath: string, initialSeek?: number) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV_STREAM_TRANSCODE, mkvPath, initialSeek) as Promise<
-      | {
-          sessionId: string
-          generation: number
-          duration: number
-          mimeType: string
-          hasSubtitlesPending: boolean
-          contentStart: number
-        }
-      | { error: string }
+      MseOpenResult | { error: string }
     >,
   shellOpenExternalFile: (filePath: string) =>
     ipcRenderer.invoke(CHANNELS.SHELL_OPEN_EXTERNAL_FILE, filePath) as Promise<{

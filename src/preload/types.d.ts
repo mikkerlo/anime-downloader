@@ -232,32 +232,11 @@ interface Api {
   playerRemuxMkvStream: (
     mkvPath: string,
     initialSeek?: number
-  ) => Promise<
-    | {
-        sessionId: string
-        generation: number
-        duration: number
-        mimeType: string
-        hasSubtitlesPending: boolean
-        contentStart: number
-      }
-    | { requiresTranscode: true }
-    | { error: string }
-  >
+  ) => Promise<MseOpenResult | { requiresTranscode: true } | { error: string }>
   playerRemuxMkvStreamTranscode: (
     mkvPath: string,
     initialSeek?: number
-  ) => Promise<
-    | {
-        sessionId: string
-        generation: number
-        duration: number
-        mimeType: string
-        hasSubtitlesPending: boolean
-        contentStart: number
-      }
-    | { error: string }
-  >
+  ) => Promise<MseOpenResult | { error: string }>
   playerStreamStart: (sessionId: string) => Promise<void>
   playerStreamAck: (sessionId: string, bytes: number) => Promise<void>
   playerStreamSeek: (

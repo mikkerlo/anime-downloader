@@ -24,6 +24,29 @@ const MAIN = readdirSync(MAIN_DIR)
   .join('\n')
 const SOURCES = MAIN + '\n' + PRELOAD + '\n' + ROUTERS
 
+// #294 hoisted `MseOpenResult` into `src/shared/types/player.d.ts`. The guard
+// below gets its own read on purpose: `SOURCES` reaches none of what it needs —
+// `PRELOAD` is `src/preload/index.ts` alone (not `types.d.ts`), and `MAIN` is
+// *top-level* `src/main/*.ts` only, so it never opens `src/main/streaming/`,
+// where the deleted declaration used to live.
+//
+// The walk covers **all** of `src/` rather than just `src/main/`, minus the one
+// file that owns the declaration. The drift this guards against (#275's
+// `initialSeek` collision) was renderer-side, and the renderer's copy would be
+// written where the reply is consumed — inside a `.vue` SFC — so `.vue` is
+// walked alongside `.ts`.
+const PRELOAD_TYPES = read('src/preload/types.d.ts')
+const SRC_DIR = resolve(__dirname, '..', 'src')
+const DECLARATION_OWNER = resolve(SRC_DIR, 'shared/types/player.d.ts')
+const walkSources = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = resolve(dir, e.name)
+    if (e.isDirectory()) return walkSources(full)
+    if (!e.isFile() || full === DECLARATION_OWNER) return []
+    return full.endsWith('.ts') || full.endsWith('.vue') ? [readFileSync(full, 'utf8')] : []
+  })
+const SRC_MINUS_OWNER = walkSources(SRC_DIR).join('\n')
+
 // First arg of every IPC-ish call. Post-1c every one must be a CHANNELS./
 // EVENT_CHANNELS. reference — a bare string literal here means an un-migrated
 // channel bypassing the single source of truth.
@@ -111,5 +134,36 @@ describe('IPC channel contract', () => {
       return !hasMainReference || !hasSubscriber
     })
     expect(unwired).toEqual([])
+  })
+})
+
+// #294: the MSE-open reply shape existed as five literal copies (main's
+// `streaming/index.ts`, two inline in `src/preload/index.ts`, two in
+// `src/preload/types.d.ts`). That is what let the `initialSeek` field mean one
+// thing in main and another in the renderer until #275. One ambient
+// declaration owns it now; these guard against copy #6 coming back.
+describe('MseOpenResult is declared once', () => {
+  it('is declared in the shared ambient types and nowhere else', () => {
+    const DECLARATION = /\b(?:export\s+)?(?:declare\s+)?(?:interface|type)\s+MseOpenResult\b/g
+    const shared = read('src/shared/types/player.d.ts')
+    expect(shared.match(DECLARATION)?.length ?? 0).toBe(1)
+    // Acceptance criterion 2: not re-exported from main, and — the
+    // compile-clean failure mode `npm run typecheck` cannot see — not
+    // shadowed by a module-local `interface MseOpenResult` anywhere under
+    // `src/`: a router, a preload file, the renderer, or the rest of
+    // `src/shared`. `import type { MseOpenResult }` and
+    // `export type { MseOpenResult }` do not match — only a fresh declaration
+    // does, so legitimate re-exports stay green.
+    expect(SRC_MINUS_OWNER.match(DECLARATION) ?? []).toEqual([])
+  })
+
+  it('is referenced by name from both preload files, with no inline copy left', () => {
+    expect(PRELOAD).toContain('MseOpenResult')
+    expect(PRELOAD_TYPES).toContain('MseOpenResult')
+    // Scoped to the two preload strings deliberately: `player.ipc.ts` builds
+    // the reply *literals* with this key and always will, so a SOURCES-wide
+    // version of this assertion would fail permanently.
+    expect(PRELOAD).not.toContain('hasSubtitlesPending')
+    expect(PRELOAD_TYPES).not.toContain('hasSubtitlesPending')
   })
 })

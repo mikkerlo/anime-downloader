@@ -32,10 +32,18 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient, type SyncplayRoomUser } from '../../src/main/syncplay'
+import {
+  SyncplayClient,
+  PLAYBACK_ASSERT_STALE_MS,
+  type SyncplayRoomUser
+} from '../../src/main/syncplay'
 
 // Mirrors PLAYBACK_STALE_MS in the client: how long without a renderer push
-// before main decides no player is driving playback.
+// before main decides no player is driving playback — i.e. the **de-adoption**
+// horizon. Since #288 that is no longer the same number as the horizon for
+// *asserting* a playing snapshot, which is the exported
+// PLAYBACK_ASSERT_STALE_MS above; several cases below turn on the two being
+// different, so they are deliberately visible side by side.
 const PLAYBACK_STALE_MS = 5000
 
 type Frame = Record<string, unknown>
@@ -1282,6 +1290,161 @@ describe('SyncplayClient room presence on join (#220)', () => {
       const last = statesOf(lastTlsSocket).at(-1)!
       expect(last.playstate!.paused).toBeUndefined()
       expect(last.playstate!.position).toBeGreaterThan(600)
+    })
+
+    // #288. The case above jumps clean over the window this group describes —
+    // 10 s of silence, well past both thresholds — so what main did *inside* it
+    // was uncharacterised. It was asserting a frozen position at 1 Hz for the
+    // whole five seconds, which wins `Room.getPosition()`'s `min()` and pins the
+    // room on a player that is no longer there.
+    describe('the window between the two staleness thresholds (#288)', () => {
+      /** Converged, adopted, and playing — the shape a close happens from. */
+      const convergedAndPlaying = (): void => {
+        handshake()
+        serverState(600, false)
+        client.updateSnapshot({ position: 600, paused: false })
+        vi.advanceTimersByTime(1000)
+        expect(client.getStatus().playbackAdopted).toBe(true)
+        lastTlsSocket!.write.mockClear()
+      }
+
+      // The core statement, in one client: a *playing* snapshot that has stopped
+      // moving is not evidence of anything, and past the assert window we hand
+      // the room back to whoever is still watching it.
+      it('stops asserting a playing snapshot past the assert window', () => {
+        convergedAndPlaying()
+
+        vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS + 1000)
+
+        // On head every one of these is `{position: 600, paused: false}` — the
+        // frozen claim — for the full five seconds.
+        const last = statesOf(lastTlsSocket).at(-1)!
+        expect(last.playstate!.paused).toBeUndefined()
+        expect(last.playstate!.position).toBeGreaterThan(600)
+        expect(last.playstate!.doSeek).toBe(false)
+      })
+
+      // The fall-through is the mirror, and with no room to mirror it is the
+      // ping-only frame — never a `{position: 0}` assertion. That is the #220
+      // regression this whole area exists to prevent, and the mutant "return
+      // null instead of the mirror" is the one it is aimed at from the other
+      // side.
+      it('falls through to a ping-only frame when the room has reported nothing', () => {
+        handshake()
+        // Alone, so adoption latches without a room state to converge against.
+        listReply()
+        client.updateSnapshot({ position: 600, paused: false })
+        vi.advanceTimersByTime(1000)
+        expect(client.getStatus().playbackAdopted).toBe(true)
+        lastTlsSocket!.write.mockClear()
+
+        vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS + 1000)
+
+        const states = statesOf(lastTlsSocket)
+        expect(states.length).toBeGreaterThanOrEqual(2)
+        expect(states.at(-1)!.playstate).toBeUndefined()
+      })
+
+      // The `!paused` gate, and its reason. A paused snapshot's position is not
+      // a claim that decays, and demoting it early would put a paused player
+      // into the mirror — which sends no `paused` key, which the reference
+      // server reads as "not paused" in `_updatePositionByAge` too, and so walks
+      // forward even while the room stands still. So a paused claim keeps the
+      // full PLAYBACK_STALE_MS horizon on purpose.
+      it('keeps asserting a paused snapshot past the assert window', () => {
+        handshake()
+        serverState(600, false)
+        client.updateSnapshot({ position: 600, paused: true })
+        vi.advanceTimersByTime(1000)
+        lastTlsSocket!.write.mockClear()
+
+        vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS + 1000)
+
+        const last = statesOf(lastTlsSocket).at(-1)!
+        expect(last.playstate).toEqual({ position: 600, paused: true, doSeek: false })
+      })
+
+      // **Known limit, pinned as such.** The residual after both halves of
+      // #288: a player that *crashes* while paused (no unmount, so no
+      // `syncplay:player-closed`) keeps the room paused for up to
+      // PLAYBACK_STALE_MS, because the `!paused` gate above deliberately leaves
+      // it on the 5 s horizon. Bounded, and it is the *crash* shape — an
+      // ordinary paused close is covered by `playerClosed()`, so pinning that
+      // one here would pin a behaviour the signal removes.
+      it('re-pauses the room for up to PLAYBACK_STALE_MS when a paused player crashes', () => {
+        handshake()
+        serverState(600, false)
+        client.updateSnapshot({ position: 600, paused: true })
+        vi.advanceTimersByTime(1000)
+        lastTlsSocket!.write.mockClear()
+
+        // Still inside the de-adoption horizon: the pause claim stands.
+        vi.advanceTimersByTime(PLAYBACK_STALE_MS - 2000)
+        expect(statesOf(lastTlsSocket).at(-1)!.playstate!.paused).toBe(true)
+
+        // And the bound: past it, nothing of the dead player's pause survives.
+        vi.advanceTimersByTime(3000)
+        expect(statesOf(lastTlsSocket).at(-1)!.playstate!.paused).toBeUndefined()
+      })
+
+      // De-adoption timing is unchanged — the obvious wrong simplification is to
+      // collapse the two thresholds into one, and this is what catches it. What
+      // moved at PLAYBACK_ASSERT_STALE_MS is the branch `buildPlaystate()`
+      // takes; `playbackAdopted` still flips on the first push after a
+      // PLAYBACK_STALE_MS gap, and on no other schedule.
+      it('de-adopts on the first push after PLAYBACK_STALE_MS, not at the assert window', () => {
+        convergedAndPlaying()
+
+        // Past the assert window, inside the de-adoption one: still adopted.
+        vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS + 500)
+        expect(client.getStatus().playbackAdopted).toBe(true)
+        client.updateSnapshot({ position: 603, paused: false })
+        expect(client.getStatus().playbackAdopted).toBe(true)
+
+        // Past the de-adoption horizon, and only the *push* moves the flag.
+        vi.advanceTimersByTime(PLAYBACK_STALE_MS + 500)
+        expect(client.getStatus().playbackAdopted).toBe(true)
+        client.updateSnapshot({ position: 610, paused: false })
+        expect(client.getStatus().playbackAdopted).toBe(false)
+      })
+
+      // B, in one client: the composable's unmount says the player is gone, and
+      // the very next heartbeat is the mirror rather than the frozen snapshot.
+      it('mirrors on the next heartbeat once the player says it closed', () => {
+        convergedAndPlaying()
+
+        client.playerClosed()
+        expect(client.getStatus().playbackAdopted).toBe(false)
+        vi.advanceTimersByTime(1000)
+
+        const last = statesOf(lastTlsSocket).at(-1)!
+        expect(last.playstate!.paused).toBeUndefined()
+        expect(last.playstate!.position).toBeGreaterThan(600)
+      })
+
+      // …and it clears *both* fields. Either one alone leaves a door open: the
+      // latch without the clock lets the frozen snapshot go back on the wire the
+      // moment the drift test re-adopts, and the clock without the latch carries
+      // the old player's adoption into a reopen `setFile()` cannot see (a
+      // same-episode reopen re-pushes a byte-identical canonicalName).
+      it('clears the snapshot clock as well as the latch', () => {
+        convergedAndPlaying()
+
+        client.playerClosed()
+        // A fresh element's first push lands with the clock already cleared, so
+        // `updateSnapshot()`'s stale-gap branch runs and it has to re-converge
+        // rather than inheriting the closed player's latch.
+        client.updateSnapshot({ position: 0, paused: true })
+        expect(client.getStatus().playbackAdopted).toBe(false)
+        lastTlsSocket!.write.mockClear()
+
+        vi.advanceTimersByTime(1000)
+
+        // So the room is mirrored, not yanked to 0.
+        const last = statesOf(lastTlsSocket).at(-1)!
+        expect(last.playstate!.position).toBeGreaterThan(600)
+        expect(last.playstate!.paused).toBeUndefined()
+      })
     })
   })
 

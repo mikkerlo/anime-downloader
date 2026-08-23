@@ -326,6 +326,8 @@ interface Api {
     cause: 'play' | 'pause' | 'seek'
   }) => Promise<void>
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
+  /** The player was torn down (#288). No payload: main clears unconditionally. */
+  syncplayPlayerClosed: () => Promise<void>
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
   syncplayGetRoomUsers: () => Promise<SyncplayRoomUser[]>

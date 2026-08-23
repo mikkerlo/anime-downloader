@@ -10,23 +10,33 @@
 // updating**, which is the shape the gate creates and which no fixture in the
 // repo had. Adoption is deliberately retained across the switch — the
 // canonical name carries no translation component and `newPlayer` is false —
-// so `buildPlaystate()` keeps taking the `hasLivePlayback() && isAdopted()`
-// branch (`syncplay.ts:2022-2027`) and the heartbeat re-asserts the *frozen*
-// pre-switch position once a second. The modelled server re-seats
-// `w.position` on every store and only ages it forward from `lastUpdatedOn`, so
-// a value re-sent at 1 Hz never ages: we win `min()` for the whole switch.
+// so `buildPlaystate()` keeps taking its live branch and the heartbeat
+// re-asserts the *frozen* pre-switch position once a second. The modelled
+// server re-seats `w.position` on every store and only ages it forward from
+// `lastUpdatedOn`, so a value re-sent at 1 Hz never ages: we win `min()` for as
+// long as we keep asserting it.
 //
-// Hence the corrected acceptance criteria, and the three assertions below:
+// **This is also the A-only shape of #288**, and the reason its bound moved.
+// The switch gets neither of that issue's two signals: no unmount, so no
+// `syncplay:player-closed`, and no `newPlayer` (which is mount-scoped, so a
+// re-push cannot carry it) — while `setFile()`'s `canonicalName` identity check
+// cannot see the switch either. The tighter assert horizon is the only thing
+// that caps it, which is exactly why #288 keeps A primary rather than resting
+// on the event.
+//
+// Hence the corrected acceptance criteria, and the assertions below:
 //
 //   - no `position: 0` on the wire — the defect itself;
 //   - the room never goes **below** our pre-switch position, so no peer is
 //     seeked backwards past where we were when the switch began;
-//   - the stall is bounded by `PLAYBACK_STALE_MS`, after which
-//     `hasLivePlayback()` goes false, we fall through to the spectator mirror,
-//     and the room is the peer's again.
+//   - the stall is bounded by `PLAYBACK_ASSERT_STALE_MS` (#288), after which the
+//     snapshot is too old to assert, we fall through to the spectator mirror,
+//     and the room stops being pinned on us. `PLAYBACK_STALE_MS` is still the
+//     **de-adoption** horizon and still five seconds — the two thresholds are
+//     deliberately separate, and the fourth case below is what pins that.
 //
 // "The room does not move" is *not* one of them, and a switch over ~3 s costs
-// the room real time. That is the trade the fix makes: a bounded 5 s stall in
+// the room real time. That is the trade the fix makes: a bounded ~2 s stall in
 // place of a yank to 0.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -59,13 +69,18 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient } from '../../src/main/syncplay'
+import { SyncplayClient, PLAYBACK_ASSERT_STALE_MS } from '../../src/main/syncplay'
 import { MinElectionServer } from '../helpers/syncplay-min-election-server'
 
 const ROOM_START = 600
 const DELAY_MS = 50
 const OPEN = 'Some Anime - 7'
-/** `syncplay.ts:58` — not exported; mirrored here so the bound is legible. */
+/**
+ * The **de-adoption** horizon. Not exported; mirrored here so both thresholds
+ * are legible side by side, which is the point of the pair since #288:
+ * `PLAYBACK_ASSERT_STALE_MS` (imported above) bounds what we may *assert*, this
+ * one bounds when a resumed push counts as a different player.
+ */
 const PLAYBACK_STALE_MS = 5000
 
 describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () => {
@@ -181,7 +196,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   }
 
   it('never announces 0 while its pushes are stopped, and holds its last real position', () => {
-    const { switcher, frozenAt, sentBefore } = twoAdoptedWatchers()
+    const { switcher, frozenAt, lastPushAt, sentBefore } = twoAdoptedWatchers()
 
     // The switch: `resetMseState()` drops the `src`, the element reloads to
     // HAVE_NOTHING at 0, and the renderer gate sends nothing for the whole
@@ -195,57 +210,67 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     // The defect itself. Ungated, every one of these reads 0 and the room
     // follows it there.
     expect(during.some((f) => f.position === 0)).toBe(false)
-    // Every frame is the pre-switch position, held, and still making our pause
-    // claim — so no peer applying one is dragged below where we were when the
-    // switch began.
-    expect(during.every((f) => f.position === frozenAt)).toBe(true)
-    expect(during.every((f) => f.paused === false)).toBe(true)
+    // Inside the assert window every frame is the pre-switch position, held,
+    // and still making our pause claim.
+    const asserted = during.filter((f) => f.at - lastPushAt <= PLAYBACK_ASSERT_STALE_MS)
+    expect(asserted.length).toBeGreaterThanOrEqual(1)
+    expect(asserted.every((f) => f.position === frozenAt && f.paused === false)).toBe(true)
+    // And no frame at all — asserted or mirrored — is *below* it, so no peer
+    // applying one is dragged behind where we were when the switch began.
+    expect(during.every((f) => f.position >= frozenAt)).toBe(true)
 
     // The cost the corrected acceptance criteria name, asserted rather than
-    // glossed: we win `min()` throughout, so the room is stalled on us and
-    // every peer past its own 3 s apply tolerance is seeked *back* onto it.
-    // "The room does not move" is not what this fix buys.
-    expect(server.roomState().setBy).toBe('switchuser')
-    expect(server.roomState().position).toBeLessThan(trueRoomPosition() - 2)
+    // glossed: while we assert we win `min()`, so the room is stalled on us and
+    // a peer past its own 3 s apply tolerance would be seeked *back* onto it.
+    // "The room does not move" is not what this fix buys — but since #288 what
+    // the room loses is bounded by the assert window rather than by
+    // PLAYBACK_STALE_MS, so a 4 s switch no longer costs it four seconds.
+    // Measured: 3.0 s on the old single-threshold code, 1.0 s here — which is
+    // the ordinary one-push lag every honest client carries, i.e. by the end of
+    // a 4 s switch the room has stopped paying for it at all.
+    const lost = trueRoomPosition() - server.roomState().position
+    expect(lost).toBeLessThan(PLAYBACK_ASSERT_STALE_MS / 1000)
   })
 
-  it('bounds the frozen claim at PLAYBACK_STALE_MS and falls through to the mirror', () => {
+  it('bounds the frozen claim at PLAYBACK_ASSERT_STALE_MS and falls through to the mirror', () => {
     const { switcher, frozenAt, lastPushAt, sentBefore } = twoAdoptedWatchers()
 
     run(PLAYBACK_STALE_MS / 1000 + 5, (c) => (c === switcher ? null : trueRoomPosition()))
     const during = server.wireOf('switchuser').slice(sentBefore)
 
-    const live = during.filter((f) => f.at - lastPushAt <= PLAYBACK_STALE_MS)
-    const stale = during.filter((f) => f.at - lastPushAt > PLAYBACK_STALE_MS)
-    expect(live.length).toBeGreaterThanOrEqual(4)
+    const live = during.filter((f) => f.at - lastPushAt <= PLAYBACK_ASSERT_STALE_MS)
+    const stale = during.filter((f) => f.at - lastPushAt > PLAYBACK_ASSERT_STALE_MS)
+    expect(live.length).toBeGreaterThanOrEqual(1)
     expect(stale.length).toBeGreaterThanOrEqual(4)
 
-    // Inside the window `buildPlaystate()` takes the `hasLivePlayback() &&
-    // isAdopted()` branch and re-asserts the frozen snapshot, pause claim and
-    // all.
+    // Inside the window `buildPlaystate()` takes its live branch and re-asserts
+    // the frozen snapshot, pause claim and all.
     expect(live.every((f) => f.position === frozenAt && f.paused === false)).toBe(true)
 
-    // Past it `hasLivePlayback()` goes false and we announce the spectator
-    // mirror instead: no `paused` key at all, and a position that tracks the
-    // room forward again rather than standing still. That is the bound — the
-    // stall cannot outlast PLAYBACK_STALE_MS however long the switch runs.
+    // Past it the snapshot is too old to be evidence of anything (#288), so we
+    // announce the spectator mirror instead: no `paused` key at all, and a
+    // position that tracks the room forward again rather than standing still.
+    // That is the bound — the stall cannot outlast PLAYBACK_ASSERT_STALE_MS
+    // however long the switch runs, where it used to run to PLAYBACK_STALE_MS.
     expect(stale.every((f) => f.paused === undefined)).toBe(true)
     expect(stale.every((f) => f.position > frozenAt)).toBe(true)
     expect(stale[stale.length - 1].position).toBeGreaterThan(stale[0].position)
 
-    // What the fall-through does *not* do, pinned so the next reader does not
-    // assume it: `playbackAdopted` stays latched — *while the pushes stay
-    // stopped*, which is what this case holds fixed and the recovery path does
-    // not. Its only reset on this path is inside `updateSnapshot()`
-    // (`syncplay.ts:770-776`), which a client that has stopped pushing never
-    // calls — so what changes at the threshold is the branch `buildPlaystate()`
-    // takes, not the flag. The first *resumed* push does touch it; the fourth
-    // case below owns that shape. The issue body's "de-adopting is the outcome
-    // we want" describes the announce side only.
+    // **De-adoption timing is unchanged, and this is the pin for it** — the two
+    // thresholds are separate knobs and collapsing them is the obvious wrong
+    // simplification. `playbackAdopted` is still latched here, well past
+    // PLAYBACK_STALE_MS, because its only reset on this path is inside
+    // `updateSnapshot()`, which a client that has stopped pushing never calls.
+    // What changed at PLAYBACK_ASSERT_STALE_MS is the branch `buildPlaystate()`
+    // takes, not the flag; what still happens at PLAYBACK_STALE_MS is the
+    // *first resumed push* being read as a different player, which the fourth
+    // case below owns.
+    expect(Date.now() - lastPushAt).toBeGreaterThan(PLAYBACK_STALE_MS)
     expect(switcher.getStatus().playbackAdopted).toBe(true)
-    // Nor does the room become the peer's: our mirror is still the `min()`,
-    // one one-way delay under the room it is mirroring. That deficit is #279's
-    // ratchet, deliberately untouched here.
+    // Nor does the room become the peer's outright: our mirror is a dead heat
+    // with it and can still win the election, it just no longer drags it. That
+    // residual is #279's, deliberately untouched here — and it is why #288 is
+    // written as "ends the step, not the walk".
     expect(server.roomState().setBy).toBe('switchuser')
   })
 

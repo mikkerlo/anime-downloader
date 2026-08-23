@@ -16,6 +16,7 @@ type Api = {
   syncplaySetFile: (payload: SyncplayFilePayload) => void
   syncplaySendLocalState: (state: { paused: boolean; position: number; cause: string }) => void
   syncplaySendLocalSnapshot: (state: { paused: boolean; position: number }) => void
+  syncplayPlayerClosed: () => void
   syncplaySetReady: (ready: boolean) => Promise<void>
   shikimoriGetUser: () => Promise<{ nickname?: string } | null>
   getSetting: (key: string) => Promise<unknown>
@@ -46,6 +47,9 @@ const DEFAULT_API: Partial<Api> = {
   syncplaySetFile: vi.fn(),
   syncplaySendLocalState: vi.fn(),
   syncplaySendLocalSnapshot: vi.fn(),
+  // Every mount's teardown reaches for this (#288), so it belongs in the
+  // default surface rather than in the one case that asserts on it.
+  syncplayPlayerClosed: vi.fn(),
   syncplaySetReady: vi.fn().mockResolvedValue(undefined),
   shikimoriGetUser: vi.fn().mockResolvedValue({ nickname: '' }),
   getSetting: vi.fn().mockResolvedValue(null),
@@ -317,6 +321,80 @@ describe('useSyncplayClient — pushSyncplayFile', () => {
 
     expect(setFile).toHaveBeenCalledTimes(1)
     expect(setFile.mock.calls[0][0].newPlayer).toBe(true)
+  })
+
+  // #288 — the other half of "a fresh <video> is announcing itself": saying out
+  // loud that the previous one is gone. Without it main infers the close from
+  // silence on the 5 s PLAYBACK_STALE_MS horizon and keeps asserting the closed
+  // player's frozen position into the room for that whole window.
+  it('tells main the player is gone when the composable unmounts, exactly once', async () => {
+    const playerClosed = vi.fn()
+    setApi({ syncplayPlayerClosed: playerClosed })
+    const Host = defineComponent({
+      setup() {
+        useSyncplayClient(makeDeps())
+        return () => null
+      }
+    })
+    const wrapper = mount(Host)
+    mountedWrappers.push(wrapper)
+    await flushPromises()
+    // Not on mount, and not on an ordinary tick — only on teardown.
+    expect(playerClosed).not.toHaveBeenCalled()
+
+    mountedWrappers.pop()
+    wrapper.unmount()
+
+    // Once per unmount, because the hook runs once and the composable is
+    // mount-scoped: idempotence is the handler's property, not the renderer's.
+    expect(playerClosed).toHaveBeenCalledTimes(1)
+  })
+
+  // The ordering B's unconditional clear rests on, asserted from this side of
+  // the IPC boundary: one client's close and the next player's announcement
+  // ride the same `invoke` queue, close first. `PlayerView` is the only mount
+  // site and is `v-if`-gated with no `key` and no `<KeepAlive>`, so the unmount
+  // always precedes the remount — which is why main's handler needs no payload
+  // to tell a stale close from a fresh one.
+  it('emits the close before a remount announces its new player', async () => {
+    const order: string[] = []
+    setApi({
+      syncplayPlayerClosed: vi.fn(() => {
+        order.push('player-closed')
+      }),
+      syncplaySetFile: vi.fn((f) => {
+        order.push(`set-file:newPlayer=${f.newPlayer === true}`)
+      })
+    })
+    let client: Client | null = null
+    const Host = defineComponent({
+      setup() {
+        client = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+        client.syncplayStatus.value = { state: 'ready' }
+        return () => null
+      }
+    })
+
+    // The player that closes.
+    const first = mount(Host)
+    mountedWrappers.push(first)
+    await flushPromises()
+    mountedWrappers.pop()
+    first.unmount()
+
+    // The reopen, mounted only after that teardown has run — and its first
+    // announcement, which is what re-establishes adoption in main after the
+    // close cleared it.
+    const second = mount(Host)
+    mountedWrappers.push(second)
+    await flushPromises()
+    client!.pushSyncplayFile()
+
+    // The whole sequence one renderer puts on the queue, in order: the first
+    // player announces itself, the close is emitted at its teardown, and only
+    // then does the next player announce — so main can clear unconditionally on
+    // the middle one without ever undoing the third.
+    expect(order).toEqual(['set-file:newPlayer=true', 'player-closed', 'set-file:newPlayer=true'])
   })
 })
 

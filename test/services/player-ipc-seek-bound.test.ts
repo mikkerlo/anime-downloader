@@ -143,13 +143,13 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
     expect(warn).not.toHaveBeenCalled()
   })
 
-  // The boundary window `[duration, duration + 1)`. This is the input where the
-  // main-side and renderer-side predicates could drift apart in a later edit,
-  // so it is pinned here *and* at the composable seam in
-  // `use-mse-player.test.ts`. `>= duration`, not `> duration`: `duration` itself
-  // is already the point where ffmpeg stops answering the question and starts
-  // substituting the final GOP (`-ss 1420.063` and `-ss 999999` are the same
-  // 15-packet run).
+  // The boundary window `[duration, duration + 1)`. `>= duration`, not
+  // `> duration`: `duration` itself is already the point where ffmpeg stops
+  // answering the question and starts substituting the final GOP
+  // (`-ss 1420.063` and `-ss 999999` are the same 15-packet run). Since #295
+  // this is the *only* pin on the window: the renderer reads the decision off
+  // the reply, so the composable-seam rows that used to mirror this comparison
+  // retired with it.
   describe.each([
     { label: 'exactly the duration', seek: DURATION },
     { label: 'half a second past the duration', seek: DURATION + 0.5 }
@@ -188,6 +188,12 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
       const res = await openCopy(2999)
       expect(probeCopyTimestampOffset).not.toHaveBeenCalled()
       expect(res.contentStart).toBe(0)
+      // The two fields have to agree on this path: `offsetPromise` short-circuits
+      // to `Promise.resolve(0)`, so a truthful `refusedSeek` sits next to a
+      // structural `contentStart` of 0 (#295). No transcode twin of this — that
+      // handler probes unconditionally, so its refused `contentStart` is
+      // whatever the anchor probe measures, i.e. the mock.
+      expect(res.refusedSeek).toBe(true)
     })
 
     it('copy: the probe is called with exactly the spawned seek on a pass-through', async () => {
@@ -211,6 +217,53 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
       expect(probeSeekAnchor).toHaveBeenCalledTimes(1)
       expect(probeSeekAnchor.mock.calls[0][1]).toBe(spawnSeek())
       expect(probeSeekAnchor.mock.calls[0][1]).toBe(DURATION - 0.001)
+    })
+  })
+
+  // #295: the decision itself rides the reply, so the renderer reads a boolean
+  // instead of re-deriving `requested >= duration` from two transported numbers.
+  // One pin per handler — the two return literals are wired independently, and a
+  // single case would leave copy/transcode drift unpinned, which is this issue's
+  // own failure class relocated from cross-process to cross-handler. Both
+  // directions per handler, because a hardcoded `true` passes a refusal-only
+  // test (and a hardcoded `false` passes a pass-through-only one).
+  describe('the reply reports the refusal decision main took (#295)', () => {
+    it('copy: a refused open reports refusedSeek: true', async () => {
+      const res = await openCopy(2999)
+      expect(res.refusedSeek).toBe(true)
+    })
+
+    it('copy: an open bounded through unchanged reports refusedSeek: false', async () => {
+      const res = await openCopy(DURATION - 0.001)
+      expect(res.refusedSeek).toBe(false)
+    })
+
+    it('transcode: a refused open reports refusedSeek: true', async () => {
+      const res = await openTranscode(2999)
+      expect(res.refusedSeek).toBe(true)
+    })
+
+    it('transcode: an open bounded through unchanged reports refusedSeek: false', async () => {
+      const res = await openTranscode(DURATION - 0.001)
+      expect(res.refusedSeek).toBe(false)
+    })
+
+    // The normalisation path zeroes the seek too, and it is *not* a refusal.
+    // This is why the decision travels as its own boolean rather than being
+    // inferred from the spawned 0 — on either side of the IPC boundary. It is
+    // also the pin that bites a `refused` computed from the handler's raw
+    // `initialSeek` parameter instead of from the expression inside
+    // `boundInitialSeek` that actually takes the branch.
+    it.each([
+      { label: 'undefined', seek: undefined },
+      { label: 'zero', seek: 0 },
+      { label: 'negative', seek: -5 },
+      { label: 'NaN', seek: NaN },
+      { label: 'Infinity', seek: Infinity }
+    ])('copy: normalising $label to 0 is not a refusal', async ({ seek }) => {
+      const res = await openCopy(seek)
+      expect(spawnSeek()).toBe(0)
+      expect(res.refusedSeek).toBe(false)
     })
   })
 

@@ -884,7 +884,13 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
   // Chromium's seek algorithm clamps that write to the MSE seekable end, so the
   // playhead lands on exactly `duration`, `ended` fires, and `onVideoEnded`
   // starts the 5 s auto-advance — the user picks episode 7 and gets episode 8.
-  describe('resume land vs. an out-of-file open position (#275)', () => {
+  //
+  // #295: the renderer no longer re-derives that refusal from the request and
+  // the duration — main reports it as `MseOpenResult.refusedSeek` and the
+  // composable reads the flag. The cases that only exercised the deleted
+  // comparison retired with it; what is left is "honours the flag", "does not
+  // invent a rule of its own on top of it", and the fail-open direction.
+  describe('resume land vs. an out-of-file open position (#275/#295)', () => {
     // The real Re:Zero S4 E01 [Crunchyroll] duration the #275 measurements were
     // taken against, and the buffered range an out-of-range `-ss` actually
     // produced on it (the final GOP: last keyframe 1419.418 → 1420.063).
@@ -923,7 +929,7 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       at?: number
       duration?: number
       resumeTarget: number
-      requestedSpawnSeek?: number
+      refusedSeek?: boolean
       timestampOffset: number
       ranges: [number, number][]
     }): {
@@ -954,9 +960,7 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
         mimeType: 'video/mp4',
         resumeTarget: opts.resumeTarget,
         timestampOffset: opts.timestampOffset,
-        ...(opts.requestedSpawnSeek === undefined
-          ? {}
-          : { requestedSpawnSeek: opts.requestedSpawnSeek })
+        ...(opts.refusedSeek === undefined ? {} : { refusedSeek: opts.refusedSeek })
       })
       fakeMs.dispatchEvent(new Event('sourceopen'))
       fakeSb.buffered.ranges = opts.ranges
@@ -974,13 +978,14 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       warn.mockRestore()
     })
 
-    it('cancels the land when the spawn seek was past the end of the file', () => {
-      // The reaching input: main refused `-ss 2999` and opened at 0, so the
-      // buffer is the head of the file — but the renderer still holds
-      // `resumeTarget: 3000`.
+    it('honours refusedSeek by cancelling the land', () => {
+      // The reaching input: main refused `-ss 2999`, reported `refusedSeek` and
+      // opened at 0, so the buffer is the head of the file — but the renderer
+      // still holds `resumeTarget: 3000`. The composable reads main's decision
+      // (#295); the duration is here only to make the clamp realistic.
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: 3000,
-        requestedSpawnSeek: 2999,
+        refusedSeek: true,
         timestampOffset: 0,
         ranges: [[0, 2]]
       })
@@ -996,29 +1001,12 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     })
 
-    // The boundary window `[duration, duration + 1)`, pinned on the same two
-    // inputs `player-ipc-seek-bound.test.ts` pins on the main side. Both sides
-    // compare `requestedSpawnSeek` against `probe.duration`, so they accept and
-    // refuse the same numbers; comparing `resumeTarget` here instead would
-    // disagree across the 1 s pre-roll and strand the playhead at 0 with the
-    // buffer at the last keyframe.
-    it.each([
-      { label: 'exactly the duration', spawn: DURATION },
-      { label: 'half a second past the duration', spawn: DURATION + 0.5 }
-    ])('cancels the land at the boundary — $label', ({ spawn }) => {
-      const { video, markProgrammaticSeek, m } = landHarness({
-        resumeTarget: spawn + 1,
-        requestedSpawnSeek: spawn,
-        timestampOffset: 0,
-        ranges: [[0, 2]]
-      })
-
-      expect(video.currentTime).toBe(0)
-      expect(markProgrammaticSeek).not.toHaveBeenCalled()
-
-      m.resetMseState()
-    })
-
+    // The boundary window `[duration, duration + 1)` used to be pinned here too,
+    // on the same two inputs `player-ipc-seek-bound.test.ts` pins on the main
+    // side, because the renderer made its own copy of `>= duration`. #295 moved
+    // the decision onto the reply, so the window is now pinned once, where it is
+    // decided — those two rows exercised nothing but the deleted comparison.
+    //
     // Characterization, so the rejected `duration - 1` margin cannot come back:
     // on this release it lands *before* the buffer start of the final GOP, and
     // the playhead sits in a gap with nothing to decode.
@@ -1026,7 +1014,6 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       const target = DURATION - 1
       const { video, m } = landHarness({
         resumeTarget: target,
-        requestedSpawnSeek: target,
         timestampOffset: FINAL_GOP[0][0],
         ranges: FINAL_GOP
       })
@@ -1040,19 +1027,20 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     })
 
-    // The other half of the boundary window, and the case that makes the choice
-    // of operand load-bearing rather than stylistic. `initialSeek = resumeTarget
-    // - 1`, so a `resumeTarget` in `[duration, duration + 1)` has a spawn seek
-    // *inside* the file: main accepts it and spawns. The renderer must accept it
-    // too. A predicate written on `resumeTarget` would cancel here instead —
+    // The other half of the boundary window, and the case that pins the renderer
+    // *not* inventing a rule of its own on top of main's. `initialSeek =
+    // resumeTarget - 1`, so a `resumeTarget` in `[duration, duration + 1)` has a
+    // spawn seek *inside* the file: main accepts it, spawns, and reports
+    // `refusedSeek: false`. The renderer must land. Someone writing
+    // `if (refusedSeek || resumeTarget >= duration)` cancels here instead —
     // playhead at 0, buffer at the last keyframe, permanent stall — which is a
     // different bug from the one this fix removes, not a stricter version of it.
     // Landing at the end and auto-advancing is the *correct* behaviour for a
     // position within one pre-roll of the end.
-    it('agrees with main and lands when the spawn seek was just inside the file', () => {
+    it('agrees with main and lands when main did not refuse the open', () => {
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: DURATION + 0.5,
-        requestedSpawnSeek: DURATION - 0.5,
+        refusedSeek: false,
         timestampOffset: FINAL_GOP[0][0],
         ranges: FINAL_GOP
       })
@@ -1069,7 +1057,7 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
     it('leaves a legitimate mid-file resume untouched', () => {
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: 600,
-        requestedSpawnSeek: 599,
+        refusedSeek: false,
         timestampOffset: 595,
         ranges: [[595.08, 601.0]]
       })
@@ -1086,7 +1074,6 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       const target = 1349.06
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: target,
-        requestedSpawnSeek: target - 1,
         timestampOffset: 1345.0,
         ranges: [[1345.0, 1355.0]]
       })
@@ -1097,10 +1084,13 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     })
 
-    it('is fail-open: an omitted requestedSpawnSeek leaves the land unchanged', () => {
-      // Pins the contract the nine existing `startMseSession` call sites in this
-      // file rely on — `test/**` is outside both typecheck projects, so nothing
-      // in the build would catch a required field here.
+    it('is fail-open: an omitted refusedSeek leaves the land unchanged', () => {
+      // `refusedSeek` is *required* on `StartMseSessionOpts`, so a typechecked
+      // caller cannot omit it — but `test/**` is outside both typecheck
+      // projects, so the nine other `startMseSession` call sites in this file
+      // do omit it, and this pins that they still land. The runtime direction
+      // is deliberate (#295): were the field ever to go missing, the
+      // degradation is the pre-#275 behaviour, not a stall.
       const { video, markProgrammaticSeek, m } = landHarness({
         resumeTarget: 600,
         timestampOffset: 595,
@@ -1113,18 +1103,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       m.resetMseState()
     })
 
-    it('is fail-open: an unknown duration leaves the land unchanged', () => {
-      const { video, m } = landHarness({
-        duration: 0,
-        resumeTarget: 600,
-        requestedSpawnSeek: 599,
-        timestampOffset: 595,
-        ranges: [[595.08, 601.0]]
-      })
-
-      expect(video.currentTime).toBe(600)
-
-      m.resetMseState()
-    })
+    // The unknown-`duration` fail-open case retired with #295: it existed
+    // because the renderer's own predicate had a `duration > 0` term, and that
+    // predicate is gone. `duration` no longer takes part in the decision at all.
   })
 })

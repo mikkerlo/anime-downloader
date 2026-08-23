@@ -79,6 +79,7 @@ export const CHANNELS = {
 
   // Player
   PLAYER_CLEANUP_REMUX: 'player:cleanup-remux',
+  PLAYER_CLOSE_STREAM_SESSION: 'player:close-stream-session',
   PLAYER_CLOSED: 'player:closed',
   PLAYER_FIND_LOCAL_FILE: 'player:find-local-file',
   PLAYER_OPENED: 'player:opened',

@@ -60,8 +60,11 @@ const { register } = await import('../../src/main/ipc/player.ipc')
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
-const mkEvent = (): unknown => ({
-  sender: { id: 1, isDestroyed: (): boolean => false, send: (): void => {} }
+// Parameterised for #291's ownership guard: `player:close-stream-session`
+// compares `session.senderId` against `event.sender.id`, so refusing a
+// cross-`webContents` close needs two distinct ids.
+const mkEvent = (id = 1): unknown => ({
+  sender: { id, isDestroyed: (): boolean => false, send: (): void => {} }
 })
 
 function mkProbe(): MkvProbeResult {
@@ -283,6 +286,131 @@ describe('player.ipc — session reaping across a close (#280)', () => {
     expect(svc.sessions.size).toBe(1)
     expect(svc.spawned).toHaveLength(1)
     expect(svc.killed).toEqual([])
+  })
+
+  it('characterizes: main registers two sessions on an overlapping open (renderer-side fix)', async () => {
+    // #291's reproduction. Open A parks in `probeMkvForMse` — which sits ABOVE
+    // `registerSession`, so main's map is still empty and there is nothing for a
+    // sweep to find. The renderer is live (the MSE open is behind no blocking
+    // overlay), so the user picks another translation: open B runs to completion
+    // and wins `startMseSession`. A then resumes, registers and spawns behind it,
+    // and the renderer no longer holds its id — an orphan ffmpeg until the next
+    // blanket `player:cleanup-remux`.
+    //
+    // Neither open bumps `cleanupGeneration` (only `player:cleanup-remux` does),
+    // so neither self-reap fires and both replies are full successes.
+    //
+    // TWO before the fix and TWO after it, deliberately: the fix is entirely
+    // renderer-side (a `prepareEpoch` supersede that closes the loser's session
+    // by id), so main registering both here is correct behavior, not the bug.
+    // What changes is that the renderer now names A and closes it — see the
+    // `player:close-stream-session` cases below.
+    let releaseProbe: () => void = () => {}
+    svc.gate(new Promise<void>((res) => (releaseProbe = res)))
+
+    const openA = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath) as Promise<{
+      sessionId: string
+    }>
+    // The user's second pick. Ungate first so B does not park behind A.
+    svc.gate(Promise.resolve())
+    const b = (await handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath)) as {
+      sessionId: string
+    }
+    expect(b.sessionId).toBeTruthy()
+    expect(svc.sessions.size).toBe(1)
+
+    releaseProbe()
+    const a = await openA
+
+    expect(a.sessionId).toBeTruthy()
+    expect(a.sessionId).not.toBe(b.sessionId)
+    // Both registered, both spawned, neither reaped.
+    expect(svc.sessions.size).toBe(2)
+    expect(svc.spawned).toHaveLength(2)
+    expect(svc.killed).toEqual([])
+  })
+
+  it('closes exactly the named session and leaves the concurrent winner alive (#291)', async () => {
+    // The behavior difference. The renderer's superseded prepare names the id
+    // ITS open returned; the blanket `player:cleanup-remux` would take out the
+    // winner's session too and unlink the shared tmpDir.
+    let releaseProbe: () => void = () => {}
+    svc.gate(new Promise<void>((res) => (releaseProbe = res)))
+    const openA = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath) as Promise<{
+      sessionId: string
+    }>
+    svc.gate(Promise.resolve())
+    const b = (await handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath)) as {
+      sessionId: string
+    }
+    releaseProbe()
+    const a = await openA
+    expect(svc.sessions.size).toBe(2)
+
+    const res = await handlers.get(CHANNELS.PLAYER_CLOSE_STREAM_SESSION)!(mkEvent(), a.sessionId)
+
+    expect(res).toEqual({ closed: true })
+    // No SIGKILL assertion here: this file runs a fake service whose
+    // `cleanupSession` only records the id, and whose `spawnFfmpegForSession`
+    // returns a `{ kill: vi.fn() }` nothing ever calls. The real kill (and the
+    // `.ass` unlink) is covered in `test/streaming/streaming-service.test.ts`,
+    // the only file that executes the real `cleanupSession`.
+    expect(svc.killed).toEqual([a.sessionId])
+    expect(svc.sessions.size).toBe(1)
+    expect([...svc.sessions.keys()]).toEqual([b.sessionId])
+  })
+
+  it('refuses a close from a webContents that does not own the session (#291)', async () => {
+    // A close is a SIGKILL of somebody's live playback. Without the ownership
+    // guard any renderer could reap any other's session by id. A no-op, not a
+    // throw: the caller issues this fire-and-forget, so a raise would surface
+    // only as an unhandled rejection.
+    const a = (await handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(1), mkvPath)) as {
+      sessionId: string
+    }
+    const b = (await handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(1), mkvPath)) as {
+      sessionId: string
+    }
+    expect(svc.sessions.size).toBe(2)
+
+    const res = await handlers.get(CHANNELS.PLAYER_CLOSE_STREAM_SESSION)!(mkEvent(2), a.sessionId)
+
+    expect(res).toEqual({ closed: false })
+    expect(svc.killed).toEqual([])
+    expect(svc.sessions.size).toBe(2)
+    expect([...svc.sessions.keys()].sort()).toEqual([a.sessionId, b.sessionId].sort())
+  })
+
+  it('answers { closed: false } for an unknown session id (#291)', async () => {
+    const res = await handlers.get(CHANNELS.PLAYER_CLOSE_STREAM_SESSION)!(mkEvent(), 'nope')
+    expect(res).toEqual({ closed: false })
+    expect(svc.killed).toEqual([])
+  })
+
+  it('does NOT bump the generation, so a concurrent parked open still replies (#291)', async () => {
+    // Why the targeted close cannot join the set of things that deregister a
+    // session while its own open handler is parked: the renderer only learns a
+    // `sessionId` from an open's REPLY, so by the time it can name one, that
+    // handler has already returned. Bumping `cleanupGeneration` here would only
+    // cancel *unrelated* opens — exactly the `{ error: 'cancelled' }` an
+    // overlapping translation switch must not produce.
+    const a = (await handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath)) as {
+      sessionId: string
+    }
+    let releaseProbe: () => void = () => {}
+    svc.gate(new Promise<void>((res) => (releaseProbe = res)))
+    const openB = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath) as Promise<{
+      sessionId?: string
+      error?: string
+    }>
+
+    await handlers.get(CHANNELS.PLAYER_CLOSE_STREAM_SESSION)!(mkEvent(), a.sessionId)
+    releaseProbe()
+
+    const b = await openB
+    expect(b.error).toBeUndefined()
+    expect(b.sessionId).toBeTruthy()
+    expect(svc.sessions.size).toBe(1)
   })
 
   it('CANNOT reach the legacy full-file remux at all, and the sweep deletes its output', async () => {

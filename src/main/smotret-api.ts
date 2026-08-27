@@ -86,11 +86,17 @@ export class SmotretApi {
   }
 
   async getAnime(id: number): Promise<{ data: AnimeDetail }> {
-    return this.request(`/series/${id}`) as Promise<{ data: AnimeDetail }>
+    const json = (await this.request(`/series/${id}`)) as { data: AnimeDetail }
+    for (const ep of json.data.episodes) {
+      ep.episodeInt = String(ep.episodeInt)
+    }
+    return json
   }
 
   async getEpisode(id: number): Promise<{ data: EpisodeDetail }> {
-    return this.request(`/episodes/${id}`) as Promise<{ data: EpisodeDetail }>
+    const json = (await this.request(`/episodes/${id}`)) as { data: EpisodeDetail }
+    json.data.episodeInt = String(json.data.episodeInt)
+    return json
   }
 
   /**
@@ -120,7 +126,7 @@ export class SmotretApi {
           detail = {
             id: tr.episodeId,
             episodeFull: ep?.episodeFull ?? '',
-            episodeInt: ep?.episodeInt ?? '',
+            episodeInt: ep?.episodeInt !== undefined ? String(ep.episodeInt) : '',
             episodeType: ep?.episodeType ?? '',
             translations: []
           }

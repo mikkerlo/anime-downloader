@@ -79,6 +79,19 @@ describe('SmotretApi — fixture replay', () => {
       expect(result.data.myAnimeListId).toBe(9253)
       expect(result.data.posterUrl).toContain('large')
     })
+
+    // The upstream API started returning episodeInt as a JSON number instead
+    // of a string; DownloadManager.enqueue calls `.padStart` on it and throws
+    // before pushing anything to the queue, so downloads silently vanish.
+    it('coerces a numeric episodeInt (upstream API shape) to a string', async () => {
+      const body = JSON.parse(JSON.stringify(fixture('anime.json')))
+      body.data.episodes[0].episodeInt = 1
+      body.data.episodes[1].episodeInt = 2
+      mockFetchOnce(body)
+      const result = await makeApi().getAnime(7)
+      expect(result.data.episodes[0].episodeInt).toBe('1')
+      expect(result.data.episodes[1].episodeInt).toBe('2')
+    })
   })
 
   describe('getEpisode', () => {
@@ -93,6 +106,14 @@ describe('SmotretApi — fixture replay', () => {
         height: 1080,
         authorsSummary: 'AniDub'
       })
+    })
+
+    it('coerces a numeric episodeInt (upstream API shape) to a string', async () => {
+      const body = JSON.parse(JSON.stringify(fixture('episode.json')))
+      body.data.episodeInt = 1
+      mockFetchOnce(body)
+      const result = await makeApi().getEpisode(100)
+      expect(result.data.episodeInt).toBe('1')
     })
   })
 
@@ -140,6 +161,15 @@ describe('SmotretApi — fixture replay', () => {
       const ids = Array.from({ length: 31 }, (_, i) => i + 1)
       await makeApi().getEpisodesBatch(ids)
       expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2)
+    })
+
+    it('coerces a numeric nested episode.episodeInt (upstream API shape) to a string', async () => {
+      const body = JSON.parse(JSON.stringify(fixture('translations-batch.json')))
+      for (const tr of body.data) tr.episode.episodeInt = Number(tr.episode.episodeInt)
+      mockFetchOnce(body)
+      const result = await makeApi().getEpisodesBatch([100, 101])
+      expect(result.data.find((e) => e.id === 100)!.episodeInt).toBe('1')
+      expect(result.data.find((e) => e.id === 101)!.episodeInt).toBe('2')
     })
   })
 

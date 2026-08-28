@@ -109,6 +109,11 @@ export const PLAYER_DIAG = process.env.ANIME_DL_PLAYER_DIAG === '1'
 /** Filename of the diag log under `userData`; shared with the Debug-tab IPC. */
 export const PLAYER_DIAG_LOG_FILENAME = 'player-diag.log'
 
+// A malformed file can have one mapped track start much later than the other.
+// Bound how much media either timestamp probe may copy while waiting for the
+// measured stream instead of relying on its first packet eventually arriving.
+const TIMESTAMP_PROBE_MAX_DURATION_SECONDS = 60
+
 /**
  * Which stream anchors the output timeline of a seeked ffmpeg run — i.e. what
  * `probeSeekAnchor` must measure to label the buffer:
@@ -206,6 +211,16 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
   function diag(line: string): void {
     const msg = `[player][diag] ${line}`
     console.log(msg)
+    try {
+      deps.playerDiagSink?.(msg)
+    } catch {
+      /* a broken sink must never take down the stream path */
+    }
+  }
+
+  function warn(line: string): void {
+    const msg = `[player][warn] ${line}`
+    console.warn(msg)
     try {
       deps.playerDiagSink?.(msg)
     } catch {
@@ -403,7 +418,10 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
   // preserves absolute timestamps through a pipe — and read the first packet's
   // PTS of `stream`. For video that is the landing keyframe's absolute PTS; for
   // audio it is the first copied audio packet (the `make_zero` anchor of a
-  // transcode-with-copied-audio run).
+  // transcode-with-copied-audio run). Limit only the stream being measured:
+  // ffmpeg stops the whole mux as soon as either stream reaches its `-frames`
+  // limit, so limiting both to one packet lets an earlier audio packet end a
+  // video probe before the landing keyframe is emitted.
   function probeAbsoluteStart(
     filePath: string,
     time: number,
@@ -426,10 +444,9 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         '-c',
         'copy',
         '-copyts',
-        '-frames:v',
-        '1',
-        '-frames:a',
-        '1',
+        ...(stream === 'audio' ? ['-frames:a', '1'] : ['-frames:v', '1']),
+        '-t',
+        String(TIMESTAMP_PROBE_MAX_DURATION_SECONDS),
         '-f',
         'nut',
         'pipe:1'
@@ -489,10 +506,13 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         '+frag_keyframe+empty_moov+default_base_moof+separate_moof',
         '-frag_duration',
         '1000000',
+        // Limit video only. An audio packet normally precedes the landing
+        // keyframe; `-frames:a 1` would terminate the entire mux first and
+        // leave ffprobe with no video packet to measure.
         '-frames:v',
         '1',
-        '-frames:a',
-        '1',
+        '-t',
+        String(TIMESTAMP_PROBE_MAX_DURATION_SECONDS),
         '-f',
         'mp4',
         'pipe:1'
@@ -547,6 +567,11 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     // start is a sub-minute mux offset. Anything else means a probe failed —
     // fall back to the request itself (worst case: the pre-#198 drift).
     if (!isFinite(absStart) || absStart < 0 || absStart > time + 0.001) {
+      warn(
+        `probeCopyTimestampOffset fallback requested=${time.toFixed(3)} absStart=${
+          isFinite(absStart) ? absStart.toFixed(3) : 'n/a'
+        }`
+      )
       return Math.max(0, time)
     }
     const emitted =
@@ -579,6 +604,11 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     }
     // A copied-audio anchor only ever starts at-or-before the request.
     if (isFinite(audioStart) && audioStart >= 0 && audioStart <= time + 0.001) return audioStart
+    warn(
+      `probeSeekAnchor fallback stream=audio requested=${time.toFixed(3)} audioStart=${
+        isFinite(audioStart) ? audioStart.toFixed(3) : 'n/a'
+      }`
+    )
     return Math.max(0, time)
   }
 

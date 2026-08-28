@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -292,13 +292,17 @@ describe('StreamingService probeCopyTimestampOffset', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  function mkSvc(): ReturnType<typeof createStreamingService> {
+  function mkSvc(
+    playerDiagSink?: (line: string) => void
+  ): ReturnType<typeof createStreamingService> {
     return createStreamingService({
       getFfmpegPath: () => ffmpeg,
       getFfprobePath: () => ffprobe,
+      playerDiagSink,
       channels
     })
   }
@@ -328,6 +332,34 @@ describe('StreamingService probeCopyTimestampOffset', () => {
     expect(fs.readdirSync(dir).filter((f) => f.endsWith('.nut'))).toEqual([])
   })
 
+  it('does not let the first audio packet terminate either video probe', async () => {
+    await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
+    const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
+    const absoluteProbe = lines.find((line) => line.includes('-f nut pipe:1'))!
+    const emittedProbe = lines.find((line) => line.includes('-f mp4 pipe:1'))!
+
+    // ffmpeg's per-stream frame limit terminates the whole output as soon as
+    // that stream reaches it. Audio commonly arrives before the seek's video
+    // keyframe, so the old `-frames:v 1 -frames:a 1` pair emitted audio only;
+    // both ffprobes returned no video PTS and seek alignment fell back to the
+    // raw request (up to one GOP late).
+    for (const args of [absoluteProbe, emittedProbe]) {
+      expect(args).toContain('-frames:v 1')
+      expect(args).not.toContain('-frames:a 1')
+    }
+  })
+
+  it('caps both timestamp probes while waiting for the measured stream', async () => {
+    await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
+    const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
+    const probes = lines.filter(
+      (line) => line.includes('-f nut pipe:1') || line.includes('-f mp4 pipe:1')
+    )
+
+    expect(probes).toHaveLength(2)
+    for (const args of probes) expect(args).toContain('-t 60')
+  })
+
   it('omits the hvc1 tag for H.264 sources', async () => {
     await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'h264')
     expect(fs.readFileSync(argsFile, 'utf-8')).not.toContain('-tag:v hvc1')
@@ -335,8 +367,20 @@ describe('StreamingService probeCopyTimestampOffset', () => {
 
   it('falls back to the requested time when the probes fail', async () => {
     fs.writeFileSync(ffprobe, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'h264')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const lines: string[] = []
+    const offset = await mkSvc((line) => lines.push(line)).probeCopyTimestampOffset(
+      '/x.mkv',
+      207,
+      'h264'
+    )
     expect(offset).toBe(207)
+    expect(warn).toHaveBeenCalledWith(
+      '[player][warn] probeCopyTimestampOffset fallback requested=207.000 absStart=n/a'
+    )
+    expect(lines).toEqual([
+      '[player][warn] probeCopyTimestampOffset fallback requested=207.000 absStart=n/a'
+    ])
   })
 
   it('returns 0 for non-positive seek times without spawning anything', async () => {
@@ -376,6 +420,7 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
@@ -421,12 +466,29 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
     expect(anchor).toBeCloseTo(198.043, 3)
     const args = fs.readFileSync(argsFile, 'utf-8')
     // Muxed context: BOTH streams mapped (a lone audio map seeks differently),
-    // absolute timestamps preserved, one packet per stream, piped.
+    // absolute timestamps preserved, stopped after the measured audio packet,
+    // piped. Video stays mapped to preserve the live run's demux context, but
+    // must not have its own frame limit competing to terminate the mux.
     expect(args).toContain('-map 0:v:0')
     expect(args).toContain('-map 0:a:0?')
     expect(args).toContain('-copyts')
     expect(args).toContain('-frames:a 1')
+    expect(args).not.toContain('-frames:v 1')
     expect(args).toContain('-f nut pipe:1')
+  })
+
+  it('warns when a copied-audio probe falls back to the requested time', async () => {
+    fs.writeFileSync(ffprobe, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },
+      207
+    )
+
+    expect(anchor).toBe(207)
+    expect(warn).toHaveBeenCalledWith(
+      '[player][warn] probeSeekAnchor fallback stream=audio requested=207.000 audioStart=n/a'
+    )
   })
 
   it('non-positive times return 0 without probing', async () => {

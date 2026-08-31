@@ -43,6 +43,40 @@ const PENDING_PAUSE_FAILED_TOAST = "The room kept playing — your pause didn't 
 // emitted on the *transition into* that state only — see `refusedToastShown`.
 const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
 
+/** Which way a programmatic playback operation moves the element (#306). */
+export type SyncplayPlaybackTarget = 'play' | 'pause'
+
+/** What a programmatic playback operation *means*, which decides what its media
+ *  echo establishes when it is consumed. See the registry block in
+ *  `useSyncplayClient` for the full contract.
+ *
+ *  - `echo` — the room, the readiness gate, the MSE buffer machinery, the
+ *    teardown pause. Consume the event and establish nothing: the caller has
+ *    already written whatever intent it owns.
+ *  - `restore` — the `if (wasPlaying)` resumes across a quality/translation
+ *    source swap. Carry the captured playing intent onto the new source, unless
+ *    a newer user action or remote adoption superseded it.
+ *  - `episode-start` — `goToEpisode`'s unconditional plays. Establish the new
+ *    episode's play intent once, so the previous episode's `intendedPaused` is
+ *    not left behind. */
+export type SyncplayPlaybackKind = 'echo' | 'restore' | 'episode-start'
+
+/** Handle to one registered programmatic playback operation (#306).
+ *
+ *  Retraction is exact *by construction*: a caller can only ever retract the
+ *  operation it holds, so a late `play()` rejection can no longer clear a newer
+ *  operation's expectation the way `markProgrammaticPlayback(null)` could.
+ *
+ *  Renderer-local. The id never leaves this process — it reaches neither main,
+ *  the preload bridge, nor Syncplay's wire protocol, which keeps its own ignore
+ *  counters and knows nothing about any of this. */
+export type SyncplayPlaybackOp = {
+  readonly id: number
+  /** Retract *this* operation and nothing else. A no-op once the operation has
+   *  been consumed, has expired, or was already retracted. */
+  retract: () => void
+}
+
 export type SyncplayDeps = {
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
@@ -82,9 +116,26 @@ export type SyncplayClient = {
   buildCanonicalName: () => string
   pushSyncplayFile: () => void
   setSyncplayLocalReady: (ready: boolean) => void
-  /** Flag a pause/play this app performs itself (buffer refill), so the
-   *  resulting element event is never mistaken for the user's intent. */
-  markProgrammaticPlayback: (paused: boolean | null) => void
+  /** Register a pause/play this app performs itself — the readiness gate, a
+   *  remote apply, an MSE buffer refill, a source-swap restore, an episode
+   *  start, the teardown pause — so the resulting element event is never
+   *  mistaken for the user's intent (#306).
+   *
+   *  Call it immediately *before* the `pause()`/`play()`, and only when the call
+   *  will actually change the element: registering a `pause()` on an
+   *  already-paused element fires no event, so the operation would sit in the
+   *  registry until its TTL and swallow the next real press in between.
+   *
+   *  The returned handle retracts exactly this operation, for a `play()` whose
+   *  promise rejects and whose `play` event therefore never arrives. */
+  beginProgrammaticPlayback: (
+    target: SyncplayPlaybackTarget,
+    kind?: SyncplayPlaybackKind
+  ) => SyncplayPlaybackOp
+  /** The element's media source has been replaced (a quality swap rebinding
+   *  `activeStreamUrl` on the same element, say). *Retires* every outstanding
+   *  playback operation rather than erasing it — see the registry block. */
+  bumpPlaybackSourceGeneration: () => void
   /** Flag a `currentTime` this app writes on the user's behalf (resume land,
    *  quality/translation restore, episode-nav rewind), so the resulting
    *  `seeked` is never broadcast to the room as the user's own seek. */
@@ -158,7 +209,6 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // would let the real echo escape.
   type AppliedSeek = { value: number; expiresAt: number; anyValue: boolean }
   let appliedSeekPosition: AppliedSeek | null = null
-  let appliedPaused: boolean | null = null
   const APPLIED_SEEK_EPSILON = 0.5
   // Floored by the MSE respawn path, which waits up to 15 s for buffer-ahead on
   // a transcode (`use-mse-player.ts` waitForBufferAhead) before the seek lands.
@@ -170,6 +220,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // null until something establishes it (a remote state we adopt, or the user
   // pressing play/pause); until then the element itself is the best answer.
   let intendedPaused: boolean | null = null
+  // Bumped by every write that *establishes* intent — the user's own press, a
+  // remote adoption, a navigation's episode-start (#306). A playback operation
+  // records the revision it was registered at and may only write intent while
+  // that revision still stands: anything newer has superseded the intent the
+  // operation was queued to carry, so a delayed `wasPlaying` restore can never
+  // undo the pause the user pressed while the new source was loading.
+  let intentRevision = 0
   let lastSnapshotPushAt = 0
   const SNAPSHOT_MIN_INTERVAL_MS = 900
 
@@ -486,20 +543,175 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     return true
   }
 
-  // The MSE buffer machinery pauses and resumes the element to refill; those
-  // moves are no more the user's intent than the readiness gate's are, and
-  // each leaked one stalls or resumes the whole room.
-  // `null` retracts a mark whose call turned out not to fire an event (a
-  // rejected play()), which would otherwise latch and swallow the user's next
-  // real one — the same latch family as the already-paused case. Only a resume
-  // mark is retracted: a play() rejecting *because* a later pause() aborted it
-  // must not clear that pause's own mark, and the slot is single.
-  function markProgrammaticPlayback(paused: boolean | null): void {
-    if (paused === null) {
-      if (appliedPaused === false) appliedPaused = null
-      return
+  // ── The programmatic playback operation registry (#306, Phase A) ──────────
+  //
+  // Replaces `appliedPaused`: one `boolean | null` slot, no TTL, written by six
+  // sites and cleared by whichever `play`/`pause` event happened to arrive
+  // next. Two defects came out of that shape, both written down in
+  // docs/syncplay.md before this:
+  //
+  // - Retraction was a *heuristic*, not an identity. `markProgrammaticPlayback(
+  //   null)` cleared whatever resume mark occupied the slot, so a `play()` that
+  //   fired its event (consuming its own mark), was followed by a newer resume
+  //   mark, and only then rejected, retracted the *newer* operation's mark — and
+  //   the next programmatic resume read as user intent.
+  // - The slot had no TTL at all, so a mark whose call fired no event latched
+  //   for the life of the session and swallowed the user's next real press.
+  //
+  // The registry fixes both by giving every operation an identity, a target, a
+  // kind, the source generation and intent revision it was made against, and a
+  // bounded lifetime. Retraction goes through the handle, so it can only ever
+  // remove the operation its caller registered.
+  //
+  // Renderer-local by construction: no operation id reaches main, the preload
+  // bridge or Syncplay's wire protocol, and no IPC channel was added for it.
+  // Main's protocol ignore counters are untouched and remain the wire-level
+  // defense.
+  //
+  // Kind is the other half, and it is not decoration. `onLocalPlay`'s echo
+  // branch returned *above* the intent and room-mirror writes, so a marked play
+  // left `syncplayLastRemotePlaying` false; the nested `applySyncplayReadyGate()`
+  // then read that unwritten mirror, computed `shouldPlay` false against an
+  // un-paused element and took the down-arm — the stuck pause. Marking the
+  // source-replacement plays *without* kinds reproduces it verbatim, which is
+  // why the registry and the marking land together. See SyncplayPlaybackKind.
+  //
+  // Neither `restore` nor `episode-start` sends: they are physical echoes of a
+  // navigation, not second copies of a user command, and `intentOr()` carries
+  // the intent they establish to the room on the next heartbeat.
+  type PlaybackOpRecord = {
+    id: number
+    target: SyncplayPlaybackTarget
+    kind: SyncplayPlaybackKind
+    /** The media source generation the call was made against. An operation
+     *  whose generation is behind the current one is *retired*: its source has
+     *  been replaced, so it may still consume its own late echo — that is the
+     *  point of keeping it — but it can no longer write intent. Derived rather
+     *  than stamped, so there is exactly one thing to get right on a bump. */
+    generation: number
+    /** The intent revision current when the operation was registered. */
+    intentRevision: number
+    expiresAt: number
+  }
+  // Bounded lifetime, which `appliedPaused` never had. Expiry only ever
+  // *releases* an event toward being classified as the user's and sent; it is
+  // never a new veto, so this is not — and must never become — a second
+  // wall-clock send-suppression window of the kind #304 deletes.
+  //
+  // 15 s, matching APPLIED_SEEK_TTL_MS, for the same reason: the MSE respawn
+  // path waits up to 15 s for buffer-ahead, and a `play()` issued against an
+  // element that is still fetching is the slowest echo we know how to produce.
+  const PLAYBACK_OP_TTL_MS = 15000
+  // Hard cap, so a pathological run of operations whose events never arrive
+  // cannot grow the registry without bound between prunes. Oldest first — the
+  // same order they are consumed in.
+  const PLAYBACK_OP_MAX = 16
+  let playbackOps: PlaybackOpRecord[] = []
+  let nextPlaybackOpId = 1
+  let playbackSourceGeneration = 0
+
+  function prunePlaybackOps(now: number): void {
+    if (playbackOps.length === 0) return
+    playbackOps = playbackOps.filter((op) => now < op.expiresAt)
+  }
+
+  function isRetired(op: PlaybackOpRecord): boolean {
+    return op.generation !== playbackSourceGeneration
+  }
+
+  function beginProgrammaticPlayback(
+    target: SyncplayPlaybackTarget,
+    kind: SyncplayPlaybackKind = 'echo'
+  ): SyncplayPlaybackOp {
+    const now = Date.now()
+    prunePlaybackOps(now)
+    const rec: PlaybackOpRecord = {
+      id: nextPlaybackOpId++,
+      target,
+      kind,
+      generation: playbackSourceGeneration,
+      intentRevision,
+      expiresAt: now + PLAYBACK_OP_TTL_MS
     }
-    appliedPaused = paused
+    playbackOps.push(rec)
+    if (playbackOps.length > PLAYBACK_OP_MAX) playbackOps.shift()
+    return {
+      id: rec.id,
+      // Identity, not position: the array is spliced from the middle on every
+      // consume, so an index captured here would retract a stranger.
+      retract: () => {
+        const i = playbackOps.findIndex((o) => o.id === rec.id)
+        if (i !== -1) playbackOps.splice(i, 1)
+      }
+    }
+  }
+
+  // The element's source has been replaced. Outstanding operations are
+  // *retired*, never erased: erasing them would hand their delayed raw
+  // `play`/`pause` events to the user branch, and the old source's move would go
+  // out as a fresh user command. A generation counter that only invalidates is
+  // the trap here — retiring keeps the expectation alive, defanged. The registry
+  // is untouched: retirement is the generation moving out from under the
+  // operations, not a write to them.
+  function bumpPlaybackSourceGeneration(): void {
+    playbackSourceGeneration++
+  }
+
+  // Deterministic matching: same target, oldest first, current-generation
+  // operations ahead of retired ones.
+  //
+  // The class order is the load-bearing half. Both orderings consume the same
+  // *number* of events, but only this one guarantees the surviving intent write
+  // is the live operation's: a retired operation writes nothing, so letting one
+  // absorb the new operation's echo would silently drop the new intent — the
+  // stuck pause by another route. Whichever physical event consumes it, what
+  // lands is the intent the *live* operation recorded, never the retired one's.
+  //
+  // The residual, stated rather than hidden. A raw HTML media event on a reused
+  // element carries no provenance at all: capturing the current generation
+  // inside a handler discovers nothing about where the event came from. So an
+  // event delivered after its operation expired, and a genuine user press that
+  // is indistinguishable from an outstanding same-direction echo, are both
+  // ambiguous, and bounded matching cannot decide them. The TTL is where that
+  // ambiguity is cut off, and it always resolves toward "the user" — an expired
+  // expectation suppresses nothing.
+  function consumePlaybackOp(target: SyncplayPlaybackTarget): PlaybackOpRecord | null {
+    const now = Date.now()
+    prunePlaybackOps(now)
+    let idx = playbackOps.findIndex((o) => o.target === target && !isRetired(o))
+    if (idx === -1) idx = playbackOps.findIndex((o) => o.target === target)
+    if (idx === -1) return null
+    return playbackOps.splice(idx, 1)[0]
+  }
+
+  // The kind contract, applied at consume time.
+  //
+  // `echo` establishes nothing — its caller already did, and for a remote apply
+  // that caller is `applyRemoteStateToElement`, which still adopts
+  // `intendedPaused = state.paused` on its own line. `restore` and
+  // `episode-start` perform exactly the intent and room-mirror updates the user
+  // path performs, minus the send. Skipping those updates is what left the
+  // mirror stale and let the nested ready-gate call re-pause the element.
+  function applyConsumedPlaybackIntent(op: PlaybackOpRecord): void {
+    if (op.kind === 'echo') return
+    // A retired operation belongs to a source that no longer exists; a
+    // superseded one to an intent that has already been overwritten by a newer
+    // user press, remote adoption or navigation. Both still consume their echo —
+    // that is why they are tracked — but neither may write.
+    if (isRetired(op) || op.intentRevision !== intentRevision) return
+    // Both non-echo kinds resume today. The pause direction is spelled out for
+    // symmetry so a future `restore` of a paused source does not have to
+    // rediscover which writes belong together.
+    const paused = op.target === 'pause'
+    intendedPaused = paused
+    intentRevision++
+    syncplayLastRemotePlaying = !paused
+    syncplayLastAppliedPaused = paused
+    if (!paused) {
+      clearPendingUserPause()
+      outOfFileUserPause = false
+      syncplayPausedBy.value = null
+    }
   }
 
   // The seek-side counterpart (#239). Every `currentTime` the app writes on the
@@ -514,7 +726,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // AppliedSeek comment above.
   //
   // A mark is only worth arming the way its write can actually be observed, the
-  // same rule markProgrammaticPlayback states for an already-paused element.
+  // same rule `beginProgrammaticPlayback` states for an already-paused element.
   // Writing the position the element *already reports* is the case that forks,
   // and which way depends entirely on `readyState`. Decided here rather than at
   // the seven call sites so an eighth cannot forget it.
@@ -621,22 +833,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayAllUsersReady() &&
       !pendingUserPause &&
       !outOfFileUserPause
-    // The gate moves the element on the room's behalf, never the user's — mark
-    // it like a remote apply so the resulting event isn't mistaken for intent
-    // however late the element gets around to firing it.
+    // The gate moves the element on the room's behalf, never the user's —
+    // register it like a remote apply so the resulting event isn't mistaken for
+    // intent however late the element gets around to firing it. `echo`: the
+    // gate asserts no intent of its own, it only re-enacts what the mirror
+    // already says.
     if (!shouldPlay && !v.paused) {
       suppressNextLocalEventUntil = Date.now() + 1500
-      appliedPaused = true
+      beginProgrammaticPlayback('pause')
       v.pause()
     } else if (shouldPlay && v.paused) {
       suppressNextLocalEventUntil = Date.now() + 1500
-      appliedPaused = false
+      const op = beginProgrammaticPlayback('play')
       v.play().catch(() => {
-        // The call failed, so no 'play' event will ever consume the marker —
+        // The call failed, so no 'play' event will ever consume this operation —
         // retract it, or the user's next real play is swallowed as this echo.
-        // Through the same function as useMsePlayer's retraction, so hardening
-        // the semantics can't apply to one call site and not the other.
-        markProgrammaticPlayback(null)
+        // Exact: the handle retracts this operation and cannot touch a newer
+        // one, which is what the old shared-slot `null` retraction could not
+        // promise (#306).
+        op.retract()
       })
     }
   }
@@ -768,9 +983,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the play/pause block and the seek toast are all skipped.
     //
     // The *whole* play/pause block, not just the `v.play()`: skipping only the
-    // call would latch `appliedPaused = false` with no event left to consume
-    // it, and the user's next real play would then be read as that echo and
-    // never reach the room (the latch family `docs/syncplay.md` documents).
+    // call would leave a resume operation registered with no event left to
+    // consume it, and the user's next real play would then be read as that echo
+    // and never reach the room until the operation's TTL ran out (the latch
+    // family `docs/syncplay.md` documents; #306 bounds it, it does not remove
+    // the reason to skip the whole block).
     //
     // The seek toast goes with it because during a hold the element is
     // deliberately behind, so `needsSeek` is true on essentially every apply and
@@ -821,7 +1038,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
     // Adopting the room's intent as our own — a later heartbeat must report
     // this, not whatever the buffer machinery has done to the element since.
-    if (!holding) intendedPaused = state.paused
+    //
+    // Kept, deliberately, under #306: the operation registry changes how the
+    // resulting *echo* is classified, not who establishes intent here. The
+    // revision bump is what supersedes an older queued `restore` — the room has
+    // spoken more recently than the source swap did.
+    if (!holding) {
+      intendedPaused = state.paused
+      intentRevision++
+    }
     if (needsSeek) {
       const target = Math.max(0, state.position)
       appliedSeekPosition = {
@@ -832,16 +1057,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       v.currentTime = target
     }
     if (needsPlayPause && !holding) {
-      appliedPaused = effectivePaused
-      if (effectivePaused) v.pause()
-      // Retracted like every other failed call (#236). Swallowing the rejection
-      // here latched `appliedPaused = false` for good: a remote resume refused
-      // by autoplay policy fires no `play` event to consume its mark, and
-      // `onLocalPlay()` then read the user's next real play as this echo, so it
-      // never reached the room. This was the one mark site that structurally
-      // could not retract — the same door the ready gate and useMsePlayer's
-      // two `v.play()` sites already close, through the same function.
-      else v.play().catch(() => markProgrammaticPlayback(null))
+      // The direct-arming site the single-slot rewrite is easiest to miss
+      // (#306): this one wrote `appliedPaused` inline rather than going through
+      // the mark helper, so it inherited neither the retraction nor the TTL.
+      // `echo`, because the intent write above is where this apply establishes
+      // what it wants — the element move below is only its enactment.
+      if (effectivePaused) {
+        beginProgrammaticPlayback('pause')
+        v.pause()
+      } else {
+        // Retracted like every other failed call (#236). Swallowing the
+        // rejection here latched `appliedPaused = false` for good: a remote
+        // resume refused by autoplay policy fires no `play` event to consume its
+        // mark, and `onLocalPlay()` then read the user's next real play as this
+        // echo, so it never reached the room.
+        const op = beginProgrammaticPlayback('play')
+        v.play().catch(() => op.retract())
+      }
     }
     const describesAMove = (!deferred && !firstApply) || state.doSeek
     if (state.setBy && needsSeek && !holding && describesAMove) {
@@ -954,6 +1186,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // above), and a hold surviving the switch would sit on that resume until it
     // expired into a failure toast for a pause the user made an episode ago.
     clearPendingUserPause()
+    // The element's source is about to be replaced, so every operation
+    // outstanding against the old one is retired (#306). This watcher is a
+    // pre-flush `watch`, so it runs before the `nextTick` in which
+    // `selectTranslation`/`goToEpisode` register their restore/episode-start
+    // operations — those are therefore registered at the *new* generation, and
+    // only genuinely stale ones are retired. `selectQuality` rebinds
+    // `activeStreamUrl` without touching either dep, so it calls
+    // `bumpPlaybackSourceGeneration()` itself.
+    bumpPlaybackSourceGeneration()
     // A new file is a new state of affairs, so the refusal receipt must not
     // survive it — left set it would silently swallow the explanation for a
     // refusal on *this* episode, the next episode of a differently-cut release
@@ -1043,25 +1284,32 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onLocalPlay(): void {
-    if (appliedPaused === false) {
-      // The element realizing a remote resume — not a local one.
-      appliedPaused = null
+    const op = consumePlaybackOp('play')
+    if (op) {
+      // The element realizing a play *this app* made. What that establishes is
+      // the operation's kind, not a fixed answer — see
+      // applyConsumedPlaybackIntent. It runs *before* the gate call below, and
+      // that ordering is the whole stuck-pause fix (#306): the gate reads
+      // `syncplayLastRemotePlaying`, and returning above these writes is what
+      // let it pause an element the app had just resumed.
+      applyConsumedPlaybackIntent(op)
       applySyncplayReadyGate()
       return
     }
     // Intent is recorded whatever the wall-clock window says. A genuine echo
-    // is already caught by the marker above; anything reaching here is the
+    // is already caught by the registry above; anything reaching here is the
     // user. Gating this on the window meant a pause inside it left intent at
     // "playing" while the element sat paused — the heartbeat then asserted
     // play and the next remote apply resumed it, so the pause "didn't work".
     intendedPaused = false
+    intentRevision++
     // The user changed their mind — clear before the gate call below, or it
     // would pause the element they just resumed. The out-of-file marker goes
     // with it (#281): there is no local pause left for the room to override.
     clearPendingUserPause()
     outOfFileUserPause = false
     // Unconditional since #228, like the pause half below: anything reaching
-    // here is past the `appliedPaused` echo check, and by #224's classification
+    // here is past the operation-registry echo check, and by #224's classification
     // rule that makes it the user. The wall-clock window that used to gate this
     // is re-armed by *every* apply for 1500 ms, at ~1 Hz through the whole
     // convergence window, so it was shut for exactly the presses this issue is
@@ -1079,11 +1327,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onLocalPause(): void {
-    if (appliedPaused === true) {
-      appliedPaused = null
+    const op = consumePlaybackOp('pause')
+    if (op) {
+      // Every pause operation registered today is an `echo` — the readiness
+      // gate's down-arm, a remote apply, an MSE buffer refill, PlayerView's
+      // teardown — so this establishes nothing. Routed through the same kind
+      // contract as the play half so a future non-echo pause cannot be added
+      // without deciding what it means.
+      applyConsumedPlaybackIntent(op)
       return
     }
     intendedPaused = true
+    intentRevision++
     // See onLocalPlay: the wall-clock gate that used to sit here was shut for
     // the whole convergence window, so the room mirror kept saying "playing"
     // through the user's own pause and the ready gate resumed the element a
@@ -1216,8 +1471,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayLastAppliedPaused = null
       syncplayPausedBy.value = null
       // Intent, and the markers that gate it. Left set, a stale `intendedPaused`
-      // reports room A's play state into room B, `appliedPaused` swallows
-      // exactly one real play/pause of the next session, `appliedSeekPosition`
+      // reports room A's play state into room B, a live playback operation
+      // swallows one real play/pause of the next session, `appliedSeekPosition`
       // swallows its first real seek for the rest of the 15 s TTL,
       // `suppressNextLocalEventUntil` eats both the send and the `pausedBy`
       // attribution of the first intent recorded inside the dead session's
@@ -1225,7 +1480,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
       //
       // Tradeoff, the twin of the widening #227 notes for the suppression
-      // window: `appliedPaused` and `appliedSeekPosition` are also armed by
+      // window: playback operations and `appliedSeekPosition` are also armed by
       // machinery that is *not* scoped to the syncplay session — the buffer
       // refill and the resume-from-middle land in `use-mse-player`, and
       // `PlayerView`'s saved-position restores. A session end landing between
@@ -1234,7 +1489,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // is the swallowed-event bug above — but it is the room-dragging
       // direction, so it is written down rather than discovered.
       intendedPaused = null
-      appliedPaused = null
+      intentRevision++
+      // Dropped outright rather than retired: a retired operation exists to
+      // absorb a late echo from a source that still belongs to *this* player,
+      // and a session end hands the element to a different room entirely. The
+      // widening tradeoff two paragraphs up is unchanged by the registry —
+      // fewer operations survive here, in the swallowed-event direction, not the
+      // room-dragging one.
+      playbackOps = []
       appliedSeekPosition = null
       // Room B must not inherit room A's pending pause — nor its 8 s timer,
       // which would toast a failure into a session that never held anything.
@@ -1257,8 +1519,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // saved position is eaten on every later episode open — the failure the
       // reset exists to prevent, and what `docs/syncplay.md` already claims.
       // Only this tracking: it is per-socket, and this is the socket ending.
-      // The user's intent is not — `intendedPaused`, `appliedPaused`,
-      // `appliedSeekPosition`, `suppressNextLocalEventUntil`,
+      // The user's intent is not — `intendedPaused`, the playback operation
+      // registry, `appliedSeekPosition`, `suppressNextLocalEventUntil`,
       // `lastSnapshotPushAt`, `syncplayLastRemotePlaying` and the ready flag all
       // deliberately survive a reconnect, unlike the `idle`/`disconnected`
       // branch above, which is a genuine session end. The two rules are not in
@@ -1388,7 +1650,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     buildCanonicalName,
     pushSyncplayFile,
     setSyncplayLocalReady,
-    markProgrammaticPlayback,
+    beginProgrammaticPlayback,
+    bumpPlaybackSourceGeneration,
     markProgrammaticSeek,
     applySyncplayReadyGate,
     toggleSyncplayConnection,

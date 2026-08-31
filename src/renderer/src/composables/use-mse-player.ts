@@ -15,6 +15,13 @@
 // from Vitest without a Vue component context.
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
+// Type-only, so this stays a structural dep contract with no runtime edge back
+// to the syncplay composable (#306).
+import type {
+  SyncplayPlaybackKind,
+  SyncplayPlaybackOp,
+  SyncplayPlaybackTarget
+} from './use-syncplay-client'
 
 const STREAM_ACK_THRESHOLD = 1 * 1024 * 1024
 const MAX_BUFFER_AHEAD = 60
@@ -58,9 +65,16 @@ export function useMsePlayer(deps: {
   getVideoEl: () => HTMLVideoElement | null
   /** Syncplay coordination: pause local ready-state while waiting for buffer ahead. */
   setSyncplayLocalReady: (ready: boolean) => void
-  /** Flags the pause/play this refill performs, so syncplay doesn't read it
-   *  as the user pausing the room (a stall would otherwise stop everyone). */
-  markProgrammaticPlayback?: (paused: boolean | null) => void
+  /** Registers the pause/play this refill performs, so syncplay doesn't read it
+   *  as the user pausing the room (a stall would otherwise stop everyone).
+   *  Returns a handle whose `retract()` removes exactly that operation, for a
+   *  `play()` whose promise rejects and whose `play` event never arrives (#306).
+   *  These are `echo` operations: the refill asserts no intent, it only restores
+   *  the element to what the room already believes. */
+  beginProgrammaticPlayback?: (
+    target: SyncplayPlaybackTarget,
+    kind?: SyncplayPlaybackKind
+  ) => SyncplayPlaybackOp
   /** Flags the resume land's `currentTime` write, so syncplay doesn't read it
    *  as the user seeking (which would drag every peer to our resume point). */
   markProgrammaticSeek?: (target: number) => void
@@ -388,7 +402,7 @@ export function useMsePlayer(deps: {
     deps.setSyncplayLocalReady(false)
     try {
       if (!v.paused) {
-        deps.markProgrammaticPlayback?.(true)
+        deps.beginProgrammaticPlayback?.('pause')
         v.pause()
       }
     } catch {
@@ -401,12 +415,14 @@ export function useMsePlayer(deps: {
         for (let i = 0; i < sb.buffered.length; i++) {
           if (t >= sb.buffered.start(i) - 0.25 && sb.buffered.end(i) - t >= seconds) {
             if (!wasPaused && v.paused) {
+              const op = deps.beginProgrammaticPlayback?.('play') ?? null
               try {
-                deps.markProgrammaticPlayback?.(false)
                 await v.play()
               } catch {
-                // Rejected: no 'play' event will consume the mark.
-                deps.markProgrammaticPlayback?.(null)
+                // Rejected: no 'play' event will consume this operation. The
+                // handle retracts *it* and nothing else, so a pause registered
+                // in the meantime keeps its own expectation (#306).
+                op?.retract()
               }
             }
             return
@@ -415,12 +431,12 @@ export function useMsePlayer(deps: {
         await new Promise<void>((res) => setTimeout(res, 200))
       }
       if (!wasPaused && v.paused) {
+        const op = deps.beginProgrammaticPlayback?.('play') ?? null
         try {
-          deps.markProgrammaticPlayback?.(false)
           await v.play()
         } catch {
-          // Rejected: no 'play' event will consume the mark.
-          deps.markProgrammaticPlayback?.(null)
+          // Rejected: no 'play' event will consume this operation — see above.
+          op?.retract()
         }
       }
     } finally {

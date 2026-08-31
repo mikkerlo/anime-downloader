@@ -2770,9 +2770,9 @@ describe('useSyncplayClient — playback intent vs machinery (#220)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    // Buffer refill marked a pause; suppose no event followed.
-    s.markProgrammaticPlayback(true)
-    s.onLocalPause() // the echo it was marking
+    // Buffer refill registered a pause; suppose no event followed.
+    s.beginProgrammaticPlayback('pause')
+    s.onLocalPause() // the echo it was registered for
     sendLocalState.mockClear()
     s.onLocalPause() // the user, moments later
 
@@ -2786,7 +2786,7 @@ describe('useSyncplayClient — playback intent vs machinery (#220)', () => {
     const s = useSyncplayClient(makeDeps({ video: fakeVideo() }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticPlayback(true)
+    s.beginProgrammaticPlayback('pause')
     s.onLocalPause()
 
     expect(sendLocalState).not.toHaveBeenCalled()
@@ -2803,27 +2803,30 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    // A refill marked a resume, then play() rejected and retracted it.
-    s.markProgrammaticPlayback(false)
-    s.markProgrammaticPlayback(null)
+    // A refill registered a resume, then play() rejected and retracted it.
+    const op = s.beginProgrammaticPlayback('play')
+    op.retract()
     s.onLocalPlay()
 
     expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 30, cause: 'play' })
   })
 
-  // The retraction only clears a *resume* mark: the slot is single, and a
-  // play() promise can outlive the mark it was installed with.
-  it('does not retract a pause mark when a stale play() rejection lands', () => {
+  // A play() promise can outlive the operation it was registered with. Under
+  // the old single slot this was carried by a heuristic — `markProgrammaticPlayback(
+  // null)` cleared only a *resume* mark — which happened to cover this ordering
+  // and demonstrably did not cover the next one down. The handle makes it
+  // structural (#306).
+  it('does not retract a pause operation when a stale play() rejection lands', () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
     const s = useSyncplayClient(makeDeps({ video: fakeVideo() }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    // A resume was marked, a pause superseded it, and only afterwards does the
-    // old play() reject — the pause's own mark must survive that retraction.
-    s.markProgrammaticPlayback(false)
-    s.markProgrammaticPlayback(true)
-    s.markProgrammaticPlayback(null)
+    // A resume was registered, a pause superseded it, and only afterwards does
+    // the old play() reject — the pause's own operation must survive that.
+    const play = s.beginProgrammaticPlayback('play')
+    s.beginProgrammaticPlayback('pause')
+    play.retract()
     s.onLocalPause()
 
     expect(sendLocalState).not.toHaveBeenCalled()
@@ -2861,14 +2864,320 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
 
     expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 30, cause: 'play' })
 
-    // …and the mark was *retracted*, not flipped. A mark left at `true` lets
-    // this same play through — `onLocalPlay`'s echo branch tests
-    // `appliedPaused === false` — and swallows the user's next real pause
-    // instead, which is exactly the edit a refactor of `markProgrammaticPlayback`
-    // could make. Only the second half of the pair tells the two apart.
+    // …and the operation was *retracted*, not flipped. An operation left
+    // registered as a pause lets this same play through and swallows the user's
+    // next real pause instead, which is exactly the edit a refactor of the
+    // retraction path could make. Only the second half of the pair tells the two
+    // apart.
     v.paused = true
     client.onLocalPause()
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 30, cause: 'pause' })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #306 Phase A — the programmatic playback operation registry.
+//
+// Every case below is written against the *old* single `appliedPaused` slot:
+// each either sends where the old shape swallowed, or swallows where the old
+// shape sent. The three groups map to the three properties the slot could not
+// hold — one live expectation at a time, retraction by shape rather than by
+// identity, and no lifetime at all.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('useSyncplayClient — playback operations are individually tracked (#306)', () => {
+  // THE characterization case for the single slot. The ready gate registers a
+  // pause, an inbound remote resume registers its own operation *before* the
+  // gate's `pause` event is delivered, and then that event lands.
+  //
+  // Old behavior: the apply's `appliedPaused = effectivePaused` overwrote the
+  // gate's `true` with `false`, so the gate's own pause event fell through
+  // `onLocalPause`'s `appliedPaused === true` test into the user branch and this
+  // app's readiness pause was broadcast to the room as the user pausing it.
+  it('does not broadcast a queued gate pause that a newer operation overwrote', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // A peer goes not-ready: the gate down-arms and registers its pause.
+    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: false } as SyncplayRoomUser]
+    await nextTick()
+    expect(v.pause).toHaveBeenCalled()
+
+    // Before the element gets around to firing `pause`, the room sends a state
+    // that registers an operation of its own.
+    v.paused = true
+    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: true } as SyncplayRoomUser]
+    await nextTick()
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    await flushPromises()
+
+    // Now the gate's pause event finally arrives. Past the 1500 ms window, so
+    // only the registry can suppress it — otherwise this passes for the wrong
+    // reason.
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(2000)
+    sendLocalState.mockClear()
+    client.onLocalPause()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // Exact retraction. The old `markProgrammaticPlayback(null)` cleared whatever
+  // resume mark was in the slot, so this ordering — first play consumed, second
+  // play registered, *then* the first play's promise rejects — retracted the
+  // second operation's expectation, and its echo escaped as the user's.
+  it('a stale play rejection does not retract the newer play operation', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 40, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    const first = s.beginProgrammaticPlayback('play')
+    s.onLocalPlay() // the first operation's own echo, consumed
+    const second = s.beginProgrammaticPlayback('play')
+    first.retract() // …and only now does the first call's promise reject
+
+    sendLocalState.mockClear()
+    s.onLocalPlay() // the second operation's echo
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // The second operation was consumed, not left behind: the user's next play
+    // must still reach the room.
+    second.retract() // a no-op — it is already gone
+    s.onLocalPlay()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 40, cause: 'play' })
+  })
+
+  // Bounded lifetime. `appliedPaused` had none, so a registered pause whose
+  // element event never arrived swallowed the user's real pause for the whole
+  // session. Expiry may only ever release an event *toward* being sent — it is
+  // never a new veto.
+  it('an operation whose event never arrives expires instead of latching', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 70, paused: false } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.beginProgrammaticPlayback('pause')
+    // Still inside the TTL: the expectation stands and the echo is swallowed.
+    vi.advanceTimersByTime(14000)
+    s.onLocalPause()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // A second operation that never fires, carried past its TTL.
+    s.beginProgrammaticPlayback('pause')
+    vi.advanceTimersByTime(15001)
+    s.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 70, cause: 'pause' })
+  })
+})
+
+// The operation *kind* contract. Without it, registering the five programmatic
+// PlayerView plays reproduces the documented stuck pause verbatim: the generic
+// echo branch returns above the intent and room-mirror writes, and the nested
+// ready-gate evaluation then reads the unwritten mirror and pauses the element
+// the app had just resumed.
+describe('useSyncplayClient — restore and episode-start intent kinds (#306)', () => {
+  it('a wasPlaying restore keeps the element playing and does not send', () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    // The element the source swap left behind: reloaded, paused, and about to be
+    // resumed by the `if (wasPlaying)` restore.
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.beginProgrammaticPlayback('play', 'restore')
+    v.paused = false
+    s.onLocalPlay()
+
+    // No stuck pause. `syncplayLastRemotePlaying` starts false, so an `echo`
+    // here would return above the mirror write and the gate call at the end of
+    // `onLocalPlay` would down-arm onto this very element.
+    expect(v.pause).not.toHaveBeenCalled()
+    // Not a second copy of a user command — the room hears it on the heartbeat.
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // …and the intent really was carried across the swap.
+    s.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+  })
+
+  it('a later real user pause supersedes an earlier queued restore', () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 12, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // The restore is registered, and before its `play` event is delivered the
+    // user presses pause.
+    s.beginProgrammaticPlayback('play', 'restore')
+    s.onLocalPause()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 12, cause: 'pause' })
+
+    sendLocalState.mockClear()
+    s.onLocalPlay() // the restore's delayed echo
+
+    // Consumed — it is still this app's own play, so it is not sent…
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // …and superseded — the user's pause is what the room is told next.
+    s.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 12, paused: true })
+  })
+
+  it('an episode start replaces the previous episode’s intent without sending', async () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 1400, paused: false } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { client } = trackedMount(deps)
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // The previous episode ended paused.
+    client.onLocalPause()
+    sendLocalState.mockClear()
+
+    // goToEpisode: the episode index moves, the watcher retires the old
+    // source's operations, and the nav's play is registered against the new one.
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    ;(v as { currentTime: number }).currentTime = 0
+    client.beginProgrammaticPlayback('play', 'episode-start')
+    v.paused = false
+    client.onLocalPlay()
+
+    // The physical echo is not a second copy of the navigation, and nothing at
+    // the old source's playhead reaches the wire.
+    expect(sendLocalState).not.toHaveBeenCalled()
+    expect(v.pause).not.toHaveBeenCalled()
+    // The previous episode's `intendedPaused` is gone, established once here.
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+  })
+
+  // What the harness actually observes on the MSE navigation path, recorded
+  // rather than presumed (#306). `startMseSession` assigns `mseSrcUrl`
+  // synchronously inside the awaited `prepareMkvForPlayback`, `videoSrc` selects
+  // it, and the play runs in a `nextTick` *after* the DOM patch — so the element
+  // this play is issued against is the NEW source at HAVE_NOTHING, not the old
+  // metadata-bearing one. A fake cannot settle real Chromium event ordering (see
+  // the note in docs/syncplay.md); what it can pin is that the classification is
+  // correct for the readiness this sequence produces.
+  it('the MSE episode-start play sees the new source at HAVE_NOTHING and sends nothing', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0,
+      src: 'blob:new-episode'
+    } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    const atCall = { src: v.src, readyState: v.readyState }
+    s.beginProgrammaticPlayback('play', 'episode-start')
+    v.paused = false
+    const atEvent = { src: v.src, readyState: v.readyState }
+    s.onLocalPlay()
+
+    expect(atCall).toEqual({ src: 'blob:new-episode', readyState: 0 })
+    expect(atEvent).toEqual({ src: 'blob:new-episode', readyState: 0 })
+    // Two independent reasons, and both must hold: the operation consumes the
+    // echo, and `hasAnnounceablePosition()` refuses to put a HAVE_NOTHING
+    // element's 0 on the wire.
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// A generation bump must not simply erase outstanding expectations: their late
+// raw events would then be classified as new user input and the old source's
+// move would reach the room. Retired operations stay tracked, can consume their
+// own compatible late echo, and can write neither intent nor another operation.
+describe('useSyncplayClient — late operations from a replaced source (#306)', () => {
+  it('a late gen-N pause after gen-N+1 has metadata sends nothing and mutates no intent', async () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 300, paused: false } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { client } = trackedMount(deps)
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // gen N: a buffer refill registers a pause whose event has not arrived.
+    client.beginProgrammaticPlayback('pause')
+
+    // The source is replaced and gen N+1 loads to HAVE_METADATA, where the
+    // readiness send guard no longer hides anything.
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    ;(v as { currentTime: number }).currentTime = 0
+    client.beginProgrammaticPlayback('play', 'episode-start')
+    v.paused = false
+    client.onLocalPlay()
+    sendLocalState.mockClear()
+    sendSnapshot.mockClear()
+
+    // gen N's pause finally lands.
+    client.onLocalPause()
+
+    // Absorbed by the retired expectation — not reclassified as the user.
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // …and it wrote nothing: the new episode's intent stands.
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+  })
+
+  it('retracting a retired operation cannot clear the newer one', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 200, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    const old = s.beginProgrammaticPlayback('play')
+    s.bumpPlaybackSourceGeneration()
+    s.beginProgrammaticPlayback('play', 'restore')
+
+    // The old source's `play()` rejects long after its source is gone.
+    old.retract()
+    v.paused = false
+    s.onLocalPlay()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+    expect(v.pause).not.toHaveBeenCalled()
+  })
+
+  // The documented residual: a retired expectation is bounded like any other,
+  // and past its TTL the ambiguity is resolved toward the user. This is the
+  // property that stops a source swap from latching a suppression forever.
+  it('a retired operation still expires, releasing the next event to the user', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 200, paused: false } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    s.beginProgrammaticPlayback('pause')
+    s.bumpPlaybackSourceGeneration()
+    vi.advanceTimersByTime(15001)
+    s.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 200, cause: 'pause' })
   })
 })
 
@@ -2922,9 +3231,9 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
       username: 'me'
     })
 
-    // A buffer refill marked a pause whose event never arrived — `appliedPaused`
-    // is latched at the moment the session dies.
-    client.markProgrammaticPlayback(true)
+    // A buffer refill registered a pause whose event never arrived — the
+    // operation is still outstanding at the moment the session dies.
+    client.beginProgrammaticPlayback('pause')
     await cycle(client, 'disconnected')
 
     sendLocalState.mockClear()
@@ -3274,8 +3583,8 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
 
     client.onLocalPlay()
 
-    // PlayerView.onBeforeUnmount: mark, then pause, then swap the source.
-    client.markProgrammaticPlayback(true)
+    // PlayerView.onBeforeUnmount: register, then pause, then swap the source.
+    client.beginProgrammaticPlayback('pause')
     client.onLocalPause()
     ;(v as { paused: boolean }).paused = true
 

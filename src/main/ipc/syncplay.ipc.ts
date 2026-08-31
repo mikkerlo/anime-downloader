@@ -53,11 +53,18 @@ export function register({ store }: AppDeps): void {
     }
   )
 
-  // Payload-free by design (#288): the handler clears unconditionally, so there
-  // is nothing for an emit timestamp to decide. See `playerClosed()` for the
-  // renderer-side ordering invariant that makes the unconditional clear safe.
-  ipcMain.handle(CHANNELS.SYNCPLAY_PLAYER_CLOSED, () => {
-    syncplay.playerClosed()
+  // Payload-free until #307, and the payload it gained is deliberately narrow.
+  // The #288/#300 half of `playerClosed()` — the snapshot clock, the adoption
+  // latch and the seek intent — still clears **unconditionally**, because the
+  // renderer-side ordering invariant documented at `playerClosed()` makes that
+  // safe and because gating it is exactly the #288 regression. What the
+  // `playerSessionId` argument gates is only the half #307 adds: nulling
+  // `currentFile` and putting `Set: {file: null}` on the wire, which no later
+  // snapshot would undo if it landed on the wrong player. `undefined` — an
+  // older renderer, or a mount that never announced — is unmatchable, so the
+  // handler degrades to head's behaviour rather than clearing blindly.
+  ipcMain.handle(CHANNELS.SYNCPLAY_PLAYER_CLOSED, (_event, playerSessionId?: string) => {
+    syncplay.playerClosed(playerSessionId)
   })
 
   ipcMain.handle(CHANNELS.SYNCPLAY_SET_READY, (_event, isReady: boolean) => {

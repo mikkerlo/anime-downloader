@@ -46,7 +46,7 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
   // keeps the argument out of the way of what each case is actually about.
   const OPEN = 'Some Anime - 1'
 
-  const file = (canonicalName: string, newPlayer = true): void => {
+  const file = (canonicalName: string, newPlayer = true, playerSessionId?: string): void => {
     client.setFile({
       animeId: 1,
       malId: 2,
@@ -54,7 +54,8 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       translationId: 3,
       canonicalName,
       duration: 1440,
-      newPlayer
+      newPlayer,
+      ...(playerSessionId === undefined ? {} : { playerSessionId })
     })
   }
 
@@ -658,6 +659,97 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       })
       file(OPEN, false)
       expect(position()).toBeNull()
+    })
+  })
+
+  // #307 — what a matching `playerClosed()` does to this read. Clearing
+  // `currentFile` is the point of that change (it retires our room membership),
+  // and the seed is where the side effect lands: with no current file, every
+  // `State` arriving during the closed window stamps `canonicalName: null`, so
+  // a reopen no longer inherits by direct key match and goes through
+  // `setFile()`'s peer-metadata check instead. That is an intentional behaviour
+  // change, and these cases are what pin it rather than let it be discovered.
+  describe('a closed player’s seed (#307)', () => {
+    // Nothing to seed *for*: the caller-scope guard reads `currentFile`, and a
+    // closed player has none.
+    it('answers null while the player is closed', () => {
+      handshake()
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+      expect(position()!).toBeCloseTo(600, 3)
+
+      client.playerClosed('mount-1')
+      expect(position()).toBeNull()
+    })
+
+    // A close that does not match clears nothing, so this read is untouched —
+    // the control that keeps the three cases below scoped to the *matching*
+    // close rather than to `playerClosed()` in general.
+    it('keeps answering after a close whose session id does not match', () => {
+      handshake()
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+
+      client.playerClosed('mount-2')
+      expect(position()!).toBeCloseTo(600, 3)
+    })
+
+    // The seed a same-episode reopen still gets: nothing in the roster
+    // contradicts the room, so the unkeyed state is adopted on the announce and
+    // the reopen is seeded from the room's *latest* position rather than the one
+    // stamped before the close.
+    it('seeds a same-episode reopen through the peer check', () => {
+      handshake()
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+      client.playerClosed('mount-1')
+      // Arrives with no player open, so it describes the room rather than any
+      // file of ours — `canonicalName: null`.
+      serverState(602, false, 'mikkerlo')
+
+      file(OPEN, true, 'mount-2')
+      expect(position()!).toBeCloseTo(602, 1)
+    })
+
+    // The cost, stated rather than discovered. On head the closed-window state
+    // was stamped with the file we had not let go of, so the reopen matched it
+    // by key and answered ~602 **regardless of the roster**. Now it is unkeyed,
+    // the announce runs the contradiction check, and a peer on different content
+    // refuses it. Head answers ~602 here; this is the case that fails without
+    // the fix, in the direction the issue calls out as intentional.
+    it('lets a contradicting peer refuse a reopen seed the key match used to give', () => {
+      handshake()
+      roster({
+        mikkerlo: {
+          isReady: true,
+          file: { features: { animeDlAppMeta: { animeId: 999, episodeInt: '7' } } }
+        }
+      })
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+      expect(position()!).toBeCloseTo(600, 3)
+
+      client.playerClosed('mount-1')
+      serverState(602, false, 'mikkerlo')
+
+      file(OPEN, true, 'mount-2')
+      expect(position()).toBeNull()
+    })
+
+    // The same mechanism read from the other side, and the half that *gains*: a
+    // state seen while nothing was open is unkeyed, so opening a **different**
+    // episode next inherits it — where head kept it keyed to the closed file and
+    // answered null. Consistent with #276's first-open semantics, which is the
+    // shape this now is.
+    it('lets a different episode inherit a state seen while the player was closed', () => {
+      handshake()
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+      client.playerClosed('mount-1')
+      serverState(602, false, 'mikkerlo')
+
+      file('Some Anime - 2', true, 'mount-2')
+      expect(position('Some Anime - 2')!).toBeCloseTo(602, 1)
     })
   })
 })

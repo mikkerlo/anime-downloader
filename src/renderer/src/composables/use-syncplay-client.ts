@@ -719,10 +719,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // What bounds the residual instead: while the element is parked
     // `hasAnnounceablePosition()` keeps the divergent snapshot off the wire, and
     // `onVideoLoadedMetadata` re-applies the parked state at unpark, adopting
-    // the room's `paused` and pausing the element. The visible cost is the
-    // badge — this consume clears `syncplayPausedBy` and sets
-    // `syncplayLastAppliedPaused = false`, so "Paused by <peer>" blinks off
-    // until the next inbound paused state re-flips `pausedChanged`, about one
+    // the room's `paused` and pausing the element. Two things move in the
+    // meantime, and the same next inbound state repairs both. The badge: this
+    // consume clears `syncplayPausedBy` and sets `syncplayLastAppliedPaused =
+    // false`, so "Paused by <peer>" blinks off until that state re-flips
+    // `pausedChanged`. And the room mirror: `syncplayLastRemotePlaying` goes
+    // true against a paused room, so a `canplay` or roster change landing
+    // inside the window takes the gate's resume arm rather than its pause arm.
+    // `recordRemoteState` runs parked or not, so both are back at the next
     // heartbeat. Pinned by "a parked remote pause does not supersede a queued
     // restore".
     if (isRetired(op) || op.intentRevision !== intentRevision) return

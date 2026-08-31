@@ -6,7 +6,10 @@ import { usePlayerKeyboard, type PlayerAction } from '../../composables/use-play
 import { useSubtitles } from '../../composables/use-subtitles';
 import { useRemux } from '../../composables/use-remux';
 import { useSkipMarkers } from '../../composables/use-skip-markers';
-import { useSyncplayClient } from '../../composables/use-syncplay-client';
+import {
+  useSyncplayClient,
+  type SyncplayPlaybackKind
+} from '../../composables/use-syncplay-client';
 import PlayerTitleBar from '../player/PlayerTitleBar.vue';
 import EpisodeNavButton from '../player/EpisodeNavButton.vue';
 import TranslationMenu from '../player/TranslationMenu.vue';
@@ -100,7 +103,7 @@ let hevcPromptResolver: ((c: HevcPromptChoice) => void) | null = null;
 const msePlayer = useMsePlayer({
   getVideoEl: () => videoRef.value,
   setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
-  markProgrammaticPlayback: (paused) => syncplay.markProgrammaticPlayback(paused),
+  beginProgrammaticPlayback: (target, kind) => syncplay.beginProgrammaticPlayback(target, kind),
   markProgrammaticSeek: (target) => syncplay.markProgrammaticSeek(target),
   hasRemoteStateApplied: () => roomOwnsPlayhead()
 });
@@ -1379,6 +1382,31 @@ function togglePlay(): void {
   }
 }
 
+// Every `.play()` this view makes *for* the user rather than *as* the user
+// (#306). `togglePlay` above is the sixth `.play()` in this file and the only
+// one that is the user's own action: it stays unregistered on purpose, because
+// registering it would swallow the very press it is reporting.
+//
+// The kind is the contract, not a label. `restore` carries the playing intent
+// captured before a source swap; `episode-start` establishes the new episode's
+// intent once. Both consume their physical `play` echo without sending a second
+// copy of the command — the room hears the resulting intent on the next
+// heartbeat, through `intentOr()`.
+//
+// Registering these plays *without* kinds would be worse than leaving them
+// unregistered: they would take the generic echo branch, which returns above the
+// intent and room-mirror writes, and the nested ready-gate evaluation would then
+// pause the element they just resumed. That is the stuck pause; see the registry
+// block in `use-syncplay-client.ts`.
+//
+// `Promise.resolve` because `HTMLMediaElement.play()` returns a promise in
+// Chromium but `undefined` in older/DOM-shim environments, and a rejection that
+// escaped here would leave the operation registered until its TTL.
+function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): void {
+  const op = syncplay.beginProgrammaticPlayback('play', kind);
+  void Promise.resolve(v.play()).catch(() => op.retract());
+}
+
 function seek(time: number): void {
   const video = videoRef.value;
   if (!video) return;
@@ -1692,13 +1720,18 @@ function selectQuality(stream: { height: number; url: string }): void {
   activeStreamUrl.value = stream.url;
   selectedHeight.value = stream.height;
   showQualityMenu.value = false;
+  // The one source swap no watcher in `useSyncplayClient` can see: neither the
+  // episode index nor the translation id changes, but the element is rebound and
+  // reloads (#306). Any playback operation outstanding against the old source is
+  // retired here, before the restore below registers its own.
+  syncplay.bumpPlaybackSourceGeneration();
 
   nextTick(() => {
     const v = videoRef.value;
     if (!v) return;
     syncplay.markProgrammaticSeek(savedTime);
     v.currentTime = savedTime;
-    if (wasPlaying) v.play();
+    if (wasPlaying) playProgrammatically(v, 'restore');
   });
 }
 
@@ -1865,7 +1898,7 @@ async function selectTranslation(tr: {
           if (!v) return;
           syncplay.markProgrammaticSeek(savedTime);
           v.currentTime = savedTime;
-          if (wasPlaying) v.play();
+          if (wasPlaying) playProgrammatically(v, 'restore');
           switchingTranslation.value = false;
         });
         return;
@@ -1915,7 +1948,7 @@ async function selectTranslation(tr: {
       if (!v) return;
       syncplay.markProgrammaticSeek(savedTime);
       v.currentTime = savedTime;
-      if (wasPlaying) v.play();
+      if (wasPlaying) playProgrammatically(v, 'restore');
       switchingTranslation.value = false;
     });
   } catch {
@@ -2058,7 +2091,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             syncplay.markProgrammaticSeek(0);
             v.currentTime = 0;
             v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
-            v.play();
+            playProgrammatically(v, 'episode-start');
           }
           navigating.value = false;
         });
@@ -2092,7 +2125,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         syncplay.markProgrammaticSeek(0);
         v.currentTime = 0;
         v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
-        v.play();
+        playProgrammatically(v, 'episode-start');
       }
       navigating.value = false;
     });
@@ -2375,13 +2408,14 @@ onBeforeUnmount(() => {
     // final `waiting`/`seeking` into `maybeRespawnForUnbufferedPosition()`
     // after `resetMseState()` is already queued.
     for (const [type, handler] of DIAGNOSTIC_LISTENERS) video.removeEventListener(type, handler);
-    // Mark it: since #228 an *unmarked* pause moves room-mirror state (and,
-    // post-adoption, sends a pause) before the composable dies, so closing the
-    // player would pause the room on the way out. Guarded on `!paused` by the
-    // rule marks follow everywhere — marking a pause() on an already-paused
-    // element fires no event, leaves the flag latched and swallows the next
-    // real one.
-    if (!video.paused) syncplay.markProgrammaticPlayback(true);
+    // Register it: since #228 an *unregistered* pause moves room-mirror state
+    // (and, post-adoption, sends a pause) before the composable dies, so closing
+    // the player would pause the room on the way out. An `echo` — the teardown
+    // asserts no intent, it is dismantling the player. Guarded on `!paused` by
+    // the rule every site follows — registering a pause() on an already-paused
+    // element fires no event, leaves the operation outstanding for its TTL and
+    // swallows the next real pause inside it.
+    if (!video.paused) syncplay.beginProgrammaticPlayback('pause');
     video.pause();
     // `src = ''` does not clear the source: an empty `src` attribute resolves
     // against the document URL, so `load()` selects the app's own index.html as

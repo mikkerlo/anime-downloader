@@ -214,3 +214,87 @@ describe('PlayerView — a refused open does not resume through the generic bran
     expect(body).toContain('const d = video.duration || saved.duration;')
   })
 })
+
+// Which `.play()` calls in this file are programmatic, and with which kind
+// (#306 Phase A). The *behavior* of each kind is covered for real at the
+// composable seam in `use-syncplay-client.test.ts`; what a scan can settle —
+// and nothing else can, since these are `<script setup>` internals of a ~2.9k
+// line SFC — is the wiring: that every programmatic play is registered, that it
+// carries the right kind, and that the user's own `togglePlay` is not.
+//
+// The census matters as much as the individual assertions. Six `.play()` calls,
+// five programmatic and one the user's; a seventh added without a decision is
+// either a room-visible move (unregistered) or a stuck pause (registered as a
+// generic echo), so the count is pinned.
+describe('PlayerView — programmatic plays carry an operation kind (#306)', () => {
+  const FLAT_NO_COMMENTS = SOURCE.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
+
+  it('registers exactly the five programmatic plays and leaves togglePlay alone', () => {
+    // Every `.play()` on the element, comments stripped so the prose above the
+    // helper cannot pad the count.
+    const plays = FLAT_NO_COMMENTS.match(/\bv(?:ideo)?\.play\(\)/g) ?? []
+    // One inside `playProgrammatically`, one inside `togglePlay`. The other five
+    // go through the helper.
+    expect(plays).toHaveLength(2)
+    const helpers = FLAT_NO_COMMENTS.match(/playProgrammatically\(v, '(restore|episode-start)'\)/g)
+    expect(helpers).toHaveLength(5)
+  })
+
+  it('gives the three wasPlaying restores restore semantics', () => {
+    // One per source swap that preserves the user's captured playing state:
+    // `selectQuality`, and `selectTranslation`'s local-file and stream branches.
+    const restores = FLAT_NO_COMMENTS.match(
+      /if \(wasPlaying\) playProgrammatically\(v, 'restore'\);/g
+    )
+    expect(restores).toHaveLength(3)
+  })
+
+  it('gives both goToEpisode plays episode-start semantics', () => {
+    const starts = FLAT_NO_COMMENTS.match(/playProgrammatically\(v, 'episode-start'\);/g)
+    expect(starts).toHaveLength(2)
+  })
+
+  it('leaves the user’s own togglePlay unregistered', () => {
+    const body = SOURCE.slice(
+      SOURCE.indexOf('function togglePlay()'),
+      SOURCE.indexOf('function playProgrammatically')
+    )
+    expect(body).toContain('video.play();')
+    expect(body).not.toContain('beginProgrammaticPlayback')
+    expect(body).not.toContain('playProgrammatically(')
+  })
+
+  it('retracts a rejected programmatic play through its own handle', () => {
+    // Exactness is the point: retracting by shape rather than by identity is the
+    // residual #306 removes. `op.retract()` can only ever remove the operation
+    // this call registered.
+    expect(FLAT_NO_COMMENTS).toContain(
+      "const op = syncplay.beginProgrammaticPlayback('play', kind); " +
+        'void Promise.resolve(v.play()).catch(() => op.retract());'
+    )
+  })
+
+  it('retires the old source’s operations on the quality swap the watcher cannot see', () => {
+    // `selectQuality` rebinds `activeStreamUrl` without touching the episode
+    // index or the translation id, so `useSyncplayClient`'s watcher never fires
+    // for it — this is the one source replacement that has to say so itself.
+    const body = SOURCE.slice(
+      SOURCE.indexOf('function selectQuality('),
+      SOURCE.indexOf('const TRANSLATION_TYPE_LABELS')
+    )
+    const flat = body.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
+    expect(flat).toContain('syncplay.bumpPlaybackSourceGeneration();')
+    expect(flat.indexOf('syncplay.bumpPlaybackSourceGeneration();')).toBeLessThan(
+      flat.indexOf('nextTick(')
+    )
+  })
+
+  it('registers the teardown pause as an echo, before the pause itself', () => {
+    const body = SOURCE.slice(
+      SOURCE.indexOf('onBeforeUnmount('),
+      SOURCE.indexOf("video.removeAttribute('src');")
+    )
+    expect(body).toContain("if (!video.paused) syncplay.beginProgrammaticPlayback('pause');")
+    expect(body.indexOf('beginProgrammaticPlayback')).toBeLessThan(body.indexOf('video.pause();'))
+  })
+})

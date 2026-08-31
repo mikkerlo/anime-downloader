@@ -88,6 +88,8 @@ Translation resolution for the target episode: (1) prefer any downloaded transla
 
 Auto-advance: when video ends and next episode is available, shows a 5-second countdown overlay. User can cancel or let it auto-navigate to the next episode.
 
+**Programmatic plays are registered with Syncplay (#306).** `PlayerView` makes six `.play()` calls; five of them are the app playing *for* the user rather than *as* the user, and each goes through the local `playProgrammatically(v, kind)` helper, which registers a playback operation with `useSyncplayClient` and retracts it by handle if the call rejects. The kinds are not interchangeable — `restore` for the three `if (wasPlaying)` resumes (quality switch, both translation-switch branches), `episode-start` for `goToEpisode`'s two unconditional plays — because a generic mark returns above the intent/room-mirror updates and the readiness gate then re-pauses the element the app just resumed. `togglePlay` is the sixth and stays unregistered: it *is* the user. `selectQuality` also calls `bumpPlaybackSourceGeneration()`, since it rebinds the stream URL without changing the episode index or translation id and is therefore the one source replacement the composable's watcher cannot see. Full contract in [Syncplay](./syncplay.md).
+
 Configurable keyboard shortcuts: `playerPrevEpisode` (default Shift+ArrowLeft) and `playerNextEpisode` (default Shift+ArrowRight) in Settings > Shortcuts.
 
 ## Pre-fetch Next Episode

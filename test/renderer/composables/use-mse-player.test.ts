@@ -1108,3 +1108,161 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
     // predicate is gone. `duration` no longer takes part in the decision at all.
   })
 })
+
+// The buffer-refill pause/resume pair, as programmatic playback operations
+// (#306 Phase A). Under the old `markProgrammaticPlayback(paused | null)` dep,
+// the refill's retraction on a rejected `play()` cleared whatever resume mark
+// occupied syncplay's single slot — including one a *newer* site had installed.
+// The handle makes the retraction exact, and this pins that the composable
+// retracts its own operation and nothing else.
+describe('useMsePlayer — refill playback operations are exact (#306)', () => {
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    onAbort: (() => void) | null = null
+    appendBuffer(): void {}
+    remove(): void {
+      queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
+    }
+    abort(): void {
+      this.onAbort?.()
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: FakeSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): FakeSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {}
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+  })
+
+  // A minimal stand-in for the registry: enough to record which operation each
+  // call registered and which one a retraction actually named.
+  function fakeRegistry() {
+    const registered: { id: number; target: string; kind: string }[] = []
+    const retracted: number[] = []
+    let next = 1
+    return {
+      registered,
+      retracted,
+      begin: (target: 'play' | 'pause', kind: string = 'echo') => {
+        const id = next++
+        registered.push({ id, target, kind })
+        return { id, retract: () => retracted.push(id) }
+      }
+    }
+  }
+
+  async function runRefill(playImpl: () => Promise<void>) {
+    const fakeSb = new FakeSourceBuffer()
+    fakeSb.buffered.ranges = [[0, 5]]
+    fakeSb.onAbort = () => {
+      fakeSb.buffered.ranges = [[99, 105]]
+    }
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 100,
+      // Playing, so the refill's `pause()` really does move the element and is
+      // therefore worth registering — the same rule every mark site follows.
+      paused: false,
+      error: null,
+      play: vi.fn(async () => {
+        video.paused = false
+        await playImpl()
+      }),
+      pause: vi.fn(() => {
+        video.paused = true
+      })
+    }
+    const reg = fakeRegistry()
+    setApi({
+      playerStreamSeek: vi.fn(async () => ({ generation: 1, timestampOffset: 99 })),
+      playerStreamStart: vi.fn(async () => {}),
+      playerStreamAck: vi.fn(async () => {})
+    })
+
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        beginProgrammaticPlayback: reg.begin
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 200,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: 0
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+    await m._internal.handleUnbufferedSeek()
+    m.resetMseState()
+    return { reg, video }
+  }
+
+  it('registers the refill pause and its resume as echo operations', async () => {
+    const { reg, video } = await runRefill(async () => {})
+
+    expect(video.pause).toHaveBeenCalled()
+    expect(video.play).toHaveBeenCalled()
+    expect(reg.registered).toEqual([
+      { id: 1, target: 'pause', kind: 'echo' },
+      { id: 2, target: 'play', kind: 'echo' }
+    ])
+    // Nothing rejected, so the `play` event is still owed and nothing is
+    // retracted.
+    expect(reg.retracted).toEqual([])
+  })
+
+  it('a rejected resume retracts only its own operation, never the refill pause', async () => {
+    const { reg } = await runRefill(async () => {
+      throw new DOMException('blocked', 'NotAllowedError')
+    })
+
+    // Exactly the resume, by id. The old dep took `null` and syncplay cleared
+    // whichever resume mark happened to be in its single slot — including a
+    // newer site's.
+    expect(reg.retracted).toEqual([2])
+    expect(reg.registered.find((o) => o.id === 2)?.target).toBe('play')
+  })
+})

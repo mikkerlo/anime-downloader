@@ -589,13 +589,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // the claim rather than each one minting a new identity that the unmount could
   // no longer name.
   //
-  // Built from the clock plus randomness rather than `crypto.randomUUID()`,
+  // Built from the clock plus a CSPRNG draw rather than `crypto.randomUUID()`,
   // which needs a secure context this renderer does not guarantee under
-  // `file://` and does not exist in every test environment. Uniqueness only has
-  // to hold against the IDs main is currently holding, and the clock component
-  // keeps it holding across a renderer reload — which resets any module-scoped
-  // counter while main keeps the file it was told about.
-  const playerSessionId = `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  // `file://`. `crypto.getRandomValues` carries no such requirement and exists
+  // in the renderer and in the Node test environment alike — and unlike
+  // `Math.random()` it does not trip CodeQL's `js/insecure-randomness` rule.
+  // Uniqueness only has to hold against the IDs main is currently holding, and
+  // the clock component keeps it holding across a renderer reload — which
+  // resets any module-scoped counter while main keeps the file it was told
+  // about.
+  const sessionEntropy = crypto.getRandomValues(new Uint32Array(1))[0].toString(36)
+  const playerSessionId = `p-${Date.now().toString(36)}-${sessionEntropy}`
 
   function pushSyncplayFile(): void {
     if (syncplayStatus.value.state !== 'ready') return

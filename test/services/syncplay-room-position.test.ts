@@ -711,6 +711,28 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
       expect(position()!).toBeCloseTo(602, 1)
     })
 
+    // The same reopen read from the *other* side of the race, and the reason
+    // the case above is ordering-dependent rather than structural. `null` is
+    // the accepted answer: the caller-scope guard is doing exactly its stated
+    // job — no mount is current, so there is no file to answer *for* — and the
+    // seed is not lost, only deferred to the announce that follows, which is
+    // what adopts the unkeyed state and makes the very same read succeed. What
+    // makes this invisible today is ordering alone: `PlayerView`'s read sits
+    // behind two `getSetting` awaits while `useSyncplayClient`'s push sits
+    // behind one, so the push lands first. Since #307 nulls `currentFile`, the
+    // #276 key match no longer covers the same-episode reopen on its own — this
+    // case is what a reordering would start failing on, in place of the silent
+    // "opened at the saved position" the user would otherwise see.
+    it('answers null for a same-episode reopen read before its announce', () => {
+      handshake()
+      file(OPEN, true, 'mount-1')
+      serverState(600, false, 'mikkerlo')
+      client.playerClosed('mount-1')
+      serverState(602, false, 'mikkerlo')
+
+      expect(position()).toBeNull()
+    })
+
     // The cost, stated rather than discovered. On head the closed-window state
     // was stamped with the file we had not let go of, so the reopen matched it
     // by key and answered ~602 **regardless of the roster**. Now it is unkeyed,

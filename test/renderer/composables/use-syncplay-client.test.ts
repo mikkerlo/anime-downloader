@@ -621,11 +621,11 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
   // `pause` half is the one #228's `cause === 'pause'` residual leans on.
   //
   // Each case has to reach the window at all: `onLocalPlay`/`onLocalPause`
-  // return early on a matching `appliedPaused`, so the apply that arms the
-  // window must leave that flag unset — i.e. it must move the playhead but not
-  // the play state (`needsSeek` without `needsPlayPause`). Hence the remote
-  // `paused` matching the element's in both rows; a mismatch there sets
-  // `appliedPaused` and the case goes vacuous.
+  // return early on a matching playback operation, so the apply that arms the
+  // window must register none — i.e. it must move the playhead but not the play
+  // state (`needsSeek` without `needsPlayPause`). Hence the remote `paused`
+  // matching the element's in both rows; a mismatch there registers an
+  // operation that consumes the event and the case goes vacuous.
   it.each([
     {
       label: 'play',
@@ -2761,8 +2761,9 @@ describe('useSyncplayClient — playback intent vs machinery (#220)', () => {
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 50, cause: 'pause' })
   })
 
-  // Defect A: marking a pause that fires no event latched appliedPaused, and
-  // the guard then ate the user's *next* real pause — "pauses don't work".
+  // Defect A: registering a pause that fires no event used to latch the old
+  // single slot for good, and the guard then ate the user's *next* real pause —
+  // "pauses don't work". An operation expires instead (#306).
   it('does not swallow a real pause after a programmatic mark that never fired', () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -2833,12 +2834,13 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
   })
 
   // The third door, and the one that was still open (#236). Both cases above
-  // reach `markProgrammaticPlayback` through a caller that owns the retraction;
-  // `applyRemoteState` marked its own resume inline and then swallowed the
-  // rejection with `catch(() => {})`, so a remote resume refused by autoplay
-  // policy latched `appliedPaused = false` with no `play` event coming to
-  // consume it — and the user's next real play took the echo branch and never
-  // reached the room. The one mark site that structurally could not retract.
+  // register through a caller that owns the retraction; `applyRemoteState`
+  // marked its own resume inline and then swallowed the rejection with
+  // `catch(() => {})`, so a remote resume refused by autoplay policy left a
+  // resume expectation standing with no `play` event coming to consume it — and
+  // the user's next real play took the echo branch and never reached the room.
+  // The one site that structurally could not retract; it registers an operation
+  // and retracts it on rejection now (#306).
   it('does not eat the user’s play after a remote resume was refused', async () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -3035,6 +3037,66 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 12, paused: true })
   })
 
+  // The other half of the supersession rule, characterized rather than claimed:
+  // a *parked* remote state does not supersede. The revision is bumped where
+  // intent is written, inside `applyRemoteStateToElement`, and #240 parks the
+  // state above that call — so a room pause landing in exactly the window a
+  // `restore` lives in leaves the restore current, and it writes its resume.
+  // This is the residual the comment on `applyConsumedPlaybackIntent` names;
+  // bumping the revision in `recordRemoteState` instead would supersede nearly
+  // every restore at 1 Hz, which is worse. What bounds it is asserted below.
+  it('a parked remote pause does not supersede a queued restore', async () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      readyState: 0,
+      currentTime: 0,
+      paused: true
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The source has just been swapped: the restore is queued against an element
+    // that cannot honor a write yet.
+    client.beginProgrammaticPlayback('play', 'restore')
+
+    // A peer pauses the room while we are still at HAVE_NOTHING. `recordRemoteState`
+    // runs — the badge appears — but the state is parked before any intent write.
+    emitRemoteState({ position: 100, paused: true, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    // The restore's own `play` event finally arrives, still current.
+    v.paused = false
+    client.onLocalPlay()
+
+    // Not superseded: it writes its resume over the room's pause, and the badge
+    // blinks off with it.
+    expect(client.syncplayPausedBy.value).toBeNull()
+    // Nothing goes out as a user command…
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // …and while the element is parked `hasAnnounceablePosition()` keeps the
+    // divergent snapshot off the wire too.
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).not.toHaveBeenCalled()
+
+    // The divergence is real, not merely theoretical: once the element reports
+    // metadata, the intent standing against a paused room is `paused: false`.
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+
+    // And this is what bounds it: the unpark re-applies the parked state, which
+    // adopts the room's `paused`, pauses the element and restores the badge —
+    // about one heartbeat of blink, not a room-dragging resume.
+    sendSnapshot.mockClear()
+    client.onVideoLoadedMetadata()
+    expect(v.pause).toHaveBeenCalled()
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
   it('an episode start replaces the previous episode’s intent without sending', async () => {
     const sendLocalState = vi.fn()
     const sendSnapshot = vi.fn()
@@ -3161,6 +3223,31 @@ describe('useSyncplayClient — late operations from a replaced source (#306)', 
     expect(v.pause).not.toHaveBeenCalled()
   })
 
+  // The class order in `consumePlaybackOp`, pinned. Drop the retraction above
+  // and the retired operation is still in the registry when the live restore's
+  // echo lands; matching retired-first hands that echo to an operation that
+  // writes nothing, `syncplayLastRemotePlaying` stays false, and the nested
+  // ready-gate call pauses the element the app just resumed.
+  it('a retired operation does not absorb the live operation’s echo', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 200, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // gen N: an echo play whose element event never arrived.
+    s.beginProgrammaticPlayback('play')
+    // The source is replaced; the restore is registered against gen N+1.
+    s.bumpPlaybackSourceGeneration()
+    s.beginProgrammaticPlayback('play', 'restore')
+
+    v.paused = false
+    s.onLocalPlay()
+
+    expect(v.pause).not.toHaveBeenCalled()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
   // The documented residual: a retired expectation is bounded like any other,
   // and past its TTL the ambiguity is resolved toward the user. This is the
   // property that stops a source swap from latching a suppression forever.
@@ -3271,9 +3358,10 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
     // Paused element + paused room: the apply needs a seek but no play/pause,
-    // so it arms `suppressNextLocalEventUntil` and leaves `appliedPaused` null.
-    // That isolation is the point — with `appliedPaused` set, `onLocalPause`
-    // returns at its own guard and the case would pass for the wrong reason.
+    // so it arms `suppressNextLocalEventUntil` and registers no playback
+    // operation. That isolation is the point — with a pause operation in the
+    // registry, `onLocalPause` returns at its own guard and the case would pass
+    // for the wrong reason.
     const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
     const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
       state: 'ready',
@@ -3429,9 +3517,9 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // A seek-only apply, which is what re-arms the 1500 ms window at ~1 Hz
     // through the whole convergence window — on head that window is what shut
     // the user's own mirror write out.
-    // `paused: false` matches the element, so this apply is seek-only: it leaves
-    // `appliedPaused` unset and the pause below reaches the bookkeeping instead
-    // of the echo branch.
+    // `paused: false` matches the element, so this apply is seek-only: it
+    // registers no playback operation and the pause below reaches the
+    // bookkeeping instead of the echo branch.
     emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
     vi.advanceTimersByTime(200)
     pressPause(client, v)
@@ -3541,7 +3629,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   })
 
   // 7. Decision 2's pause half, isolated from the hold (post-adoption, so
-  // nothing arms): a pause classified as real by the `appliedPaused` echo check
+  // nothing registers): a pause classified as real by the operation registry
   // moves the room mirror even inside the 1500 ms window an apply just re-armed.
   // Red on head, where the window shut both the mirror write and the badge.
   it('writes room-mirror state for a real pause inside the suppression window', async () => {
@@ -3553,8 +3641,8 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       playbackAdopted: true
     })
 
-    // Seek-only apply: it arms the window and leaves `appliedPaused` unset, so
-    // the pause below reaches the bookkeeping instead of the echo branch.
+    // Seek-only apply: it arms the window and registers no playback operation,
+    // so the pause below reaches the bookkeeping instead of the echo branch.
     emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
     vi.advanceTimersByTime(200)
 
@@ -3675,8 +3763,8 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   })
 
   // 12. Why the hold skips the *whole* play/pause block: skipping only the
-  // `v.play()` would latch `appliedPaused = false` with no event left to consume
-  // it, and the user's next real play would be eaten as that echo.
+  // `v.play()` would leave its play operation registered with no event left to
+  // consume it, and the user's next real play would be eaten as that echo.
   it('leaves no applied-pause latch behind, so a real play still reaches intent', async () => {
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })

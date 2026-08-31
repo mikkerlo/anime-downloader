@@ -696,8 +696,35 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (op.kind === 'echo') return
     // A retired operation belongs to a source that no longer exists; a
     // superseded one to an intent that has already been overwritten by a newer
-    // user press, remote adoption or navigation. Both still consume their echo —
-    // that is why they are tracked — but neither may write.
+    // user press, navigation, or a remote state that reached the element. Both
+    // still consume their echo — that is why they are tracked — but neither may
+    // write.
+    //
+    // "Reached the element" is the narrow half, and deliberately so. The
+    // revision is bumped where intent is *written*, in
+    // `applyRemoteStateToElement`; #240 parks a state above that call whenever
+    // the element is missing or below HAVE_METADATA, and `recordRemoteState`
+    // updates only the room mirror and the badge. So a room pause landing in
+    // exactly the window a `restore` lives in — between the source swap and its
+    // `play` echo — does not supersede it, and the restore writes its resume.
+    //
+    // Bumping in `recordRemoteState` would close that and cost more than it
+    // buys: it runs for every inbound state, parked or not, at roughly 1 Hz, so
+    // it would supersede essentially every `restore` and `episode-start` within
+    // a second of registration — including in a room whose paused-ness never
+    // changed. A superseded non-echo operation writes nothing, so `intendedPaused`
+    // would keep its pre-swap value for the heartbeat to assert: the
+    // room-dragging direction, and worse than the divergence it closes.
+    //
+    // What bounds the residual instead: while the element is parked
+    // `hasAnnounceablePosition()` keeps the divergent snapshot off the wire, and
+    // `onVideoLoadedMetadata` re-applies the parked state at unpark, adopting
+    // the room's `paused` and pausing the element. The visible cost is the
+    // badge — this consume clears `syncplayPausedBy` and sets
+    // `syncplayLastAppliedPaused = false`, so "Paused by <peer>" blinks off
+    // until the next inbound paused state re-flips `pausedChanged`, about one
+    // heartbeat. Pinned by "a parked remote pause does not supersede a queued
+    // restore".
     if (isRetired(op) || op.intentRevision !== intentRevision) return
     // Both non-echo kinds resume today. The pause direction is spelled out for
     // symmetry so a future `restore` of a paused source does not have to

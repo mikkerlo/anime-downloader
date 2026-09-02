@@ -583,12 +583,43 @@ function shouldBail(myPrepare: number): boolean {
 // — `selectTranslation` bumps `prepareEpoch` under a running `goToEpisode` and
 // vice versa — and neither touches the other's flag. Skipping the clear on a
 // cross-flow supersede therefore strands the flag for the life of the
-// component: `navigating` stuck true disables prev/next (`:2618`, `:2636`) and
-// makes every later `goToEpisode` a no-op, and `switchingTranslation` stuck
-// true leaves `TranslationMenu`'s button on `pointer-events: none`.
+// component: `navigating` stuck true disables prev/next — the two
+// `EpisodeNavButton`s bind `:disabled="!canPrev || navigating"` and
+// `:disabled="!canNext || navigating"` — and makes every later `goToEpisode` a
+// no-op, and `switchingTranslation` stuck true holds `TranslationMenu`'s
+// `:loading="switchingTranslation"` on, leaving its button on
+// `pointer-events: none`. (Named by symbol, not by line: this pair has gone
+// stale twice already, at two different line numbers, in a file whose numbers
+// move by thirty across a single merge.)
 //
 // A per-flag token answers "by whom" exactly: skip only when the same flow took
 // the flag over, and it will clear it itself.
+//
+// #302 makes that the rule for EVERY clear in each flow that can run while
+// another run of the SAME flow is in flight — not just the `!prep.ok` arm. The
+// scope line is that question and NOT "is there an await between here and my
+// last resume point", which establishes only that no NEW run was admitted since
+// the resume and says nothing about one that was already parked. Both flows can
+// overlap without any of #291's machinery: `selectTranslation` has no
+// re-entrancy guard at all (its early return only stops a re-pick of the
+// already-active translation), and `goToEpisode`'s guard sits above
+// `await saveProgress(true)`, so two runs entering inside that window both pass
+// it. The loser landing first would otherwise clear the winner's flag mid-open.
+//
+// For the four `nextTick` callbacks the compare wraps the WHOLE CALLBACK BODY
+// as an early return, never the flag write alone. There is only ever one
+// `<video>` and it is never swapped, so a superseded callback steers THE
+// ELEMENT THE WINNER IS NOW DRIVING: it seeks it to the loser's position, marks
+// a programmatic seek the room never asked for, registers a playback operation
+// against it, and on the navigation path attaches a second one-shot
+// `loadedmetadata` restore while the winner's source is still loading. A guard
+// that admits all of that and blocks only the bookkeeping declares the run
+// superseded and then lets it drive anyway. Nothing strands: every statement in
+// those callbacks is the loser's own continuation, and the winner runs its own.
+//
+// The compare is per-flow, and that is what keeps it safe rather than merely
+// tidy. A cross-flow supersede leaves the OTHER counter untouched, so the
+// loser's own compare is still true and it still releases its own flag.
 let translationEpoch = 0;
 let navigationEpoch = 0;
 
@@ -1894,11 +1925,13 @@ async function selectTranslation(tr: {
         }
 
         nextTick(() => {
+          if (translationEpoch !== mySwitch) return;
           const v = videoRef.value;
-          if (!v) return;
-          syncplay.markProgrammaticSeek(savedTime);
-          v.currentTime = savedTime;
-          if (wasPlaying) playProgrammatically(v, 'restore');
+          if (v) {
+            syncplay.markProgrammaticSeek(savedTime);
+            v.currentTime = savedTime;
+            if (wasPlaying) playProgrammatically(v, 'restore');
+          }
           switchingTranslation.value = false;
         });
         return;
@@ -1911,7 +1944,7 @@ async function selectTranslation(tr: {
     // wider here because `playerGetStreamUrl` is a network round trip.
     if (unmounted) return;
     if (!result) {
-      switchingTranslation.value = false;
+      if (translationEpoch === mySwitch) switchingTranslation.value = false;
       return;
     }
 
@@ -1944,15 +1977,17 @@ async function selectTranslation(tr: {
     }
 
     nextTick(() => {
+      if (translationEpoch !== mySwitch) return;
       const v = videoRef.value;
-      if (!v) return;
-      syncplay.markProgrammaticSeek(savedTime);
-      v.currentTime = savedTime;
-      if (wasPlaying) playProgrammatically(v, 'restore');
+      if (v) {
+        syncplay.markProgrammaticSeek(savedTime);
+        v.currentTime = savedTime;
+        if (wasPlaying) playProgrammatically(v, 'restore');
+      }
       switchingTranslation.value = false;
     });
   } catch {
-    switchingTranslation.value = false;
+    if (translationEpoch === mySwitch) switchingTranslation.value = false;
   }
 }
 
@@ -2023,6 +2058,17 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     resolvedTr = targetEp.translations[0] || null;
   }
 
+  // The one clear in this function that stays bare, deliberately (#302). Every
+  // other one is reached across a suspension point, so a newer `goToEpisode`
+  // may own `navigating` by the time it runs and each carries the ownership
+  // compare. Nothing between `const myNav = ++navigationEpoch` above and here
+  // suspends — the whole resolution chain (a)-(d) is synchronous — so no second
+  // run can be admitted in between and `navigationEpoch === myNav` holds by
+  // construction: the guarded single-line form used at the other six would be
+  // dead code here, not hardening. This is the ONE site where "no await
+  // intervenes" is the whole argument; it is not a licence to reason that way
+  // about the others, whose premise is a run that was ALREADY in flight rather
+  // than one admitted after the resume point.
   if (!resolvedTr) {
     navigating.value = false;
     return;
@@ -2086,6 +2132,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
         if (activeSubtitleContent.value && video && !unmounted) initSubtitles(video);
 
         nextTick(() => {
+          if (navigationEpoch !== myNav) return;
           const v = videoRef.value;
           if (v) {
             syncplay.markProgrammaticSeek(0);
@@ -2108,7 +2155,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     // returns a stream URL whether or not the component is still alive.
     if (unmounted) return;
     if (!result) {
-      navigating.value = false;
+      if (navigationEpoch === myNav) navigating.value = false;
       return;
     }
 
@@ -2126,6 +2173,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     if (result.subtitleContent && video && !unmounted) initSubtitles(video);
 
     nextTick(() => {
+      if (navigationEpoch !== myNav) return;
       const v = videoRef.value;
       if (v) {
         syncplay.markProgrammaticSeek(0);
@@ -2136,7 +2184,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       navigating.value = false;
     });
   } catch {
-    navigating.value = false;
+    if (navigationEpoch === myNav) navigating.value = false;
   }
 }
 

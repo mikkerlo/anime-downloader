@@ -291,13 +291,24 @@ export function useMsePlayer(deps: {
       // throws fires no `seeked`, and under the old single slot its mark latched
       // for the full 15 s TTL and swallowed the user's next real seek. Exact by
       // construction — `retract()` removes this operation and nothing else, so a
-      // remote apply registered in between is untouched.
+      // remote apply registered in between is untouched, and that exactness is
+      // pinned by `use-mse-player.test.ts`'s "retracts exactly its own seek
+      // operation when the land write throws". A retraction path at this seam
+      // must not be added without such a test: nothing else in the suite
+      // notices when the `retract()` call goes missing.
+      //
+      // The `let` + assign-inside-`try` shape is deliberate. It keeps
+      // register-before-write, and it also keeps a throw *from the dep* inside
+      // this handler — declared-and-assigned outside, such a throw would escape
+      // `onSourceBufferUpdateEnd` with `initialLandPending` still true and the
+      // land would retry on the next append.
       if (initialLandPending && v) {
         if (deps.hasRemoteStateApplied?.()) {
           console.log('[player] resume land cancelled — the syncplay room owns the playhead')
         } else if (t < resumeLandTarget) {
-          const seekOp = deps.beginProgrammaticSeek?.(resumeLandTarget)
+          let seekOp: SyncplaySeekOp | undefined
           try {
+            seekOp = deps.beginProgrammaticSeek?.(resumeLandTarget)
             v.currentTime = resumeLandTarget
             console.log(
               `[player] resume land → ${resumeLandTarget.toFixed(2)} (buffer start ${bufStart.toFixed(2)})`

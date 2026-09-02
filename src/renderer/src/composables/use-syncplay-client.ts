@@ -991,7 +991,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // now joined by the handle: a caller whose write throws retracts *its own*
   // operation immediately (`use-mse-player`'s land is the one such caller
   // today), which is exact by construction and cannot disturb anything else
-  // outstanding.
+  // outstanding. That exactness is pinned by a named test — `use-mse-player`'s
+  // "retracts exactly its own seek operation when the land write throws" — and
+  // the rule that made it necessary still stands: a retraction path here owes a
+  // test, because deleting the `retract()` call is otherwise green across the
+  // whole suite.
   function beginProgrammaticSeek(target: number): SyncplaySeekOp {
     const v = deps.getVideoEl()
     if (v && v.currentTime === target) {

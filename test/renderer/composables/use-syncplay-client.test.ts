@@ -3530,6 +3530,15 @@ describe('useSyncplayClient — seek operations are individually tracked (#306)'
   // the second target when the first apply's echo landed, so that echo
   // mismatched and went out as a user seek; main's belt misses it too, because
   // `lastAppliedRemotePosition` has also moved on.
+  //
+  // The two `seeked` events below are driven by hand, and that is the right unit
+  // for the registry's bookkeeping — each expectation is keyed to its own value
+  // and consumed by its own event, whichever of them the element delivers. It is
+  // *not* a claim about the browser: a real element aborts the pending seek when
+  // the second write supersedes it, so this pair of writes fires one `seeked`,
+  // not two, and the 300 expectation is then orphaned for its TTL. That orphan
+  // is the residual the registry widened (see `docs/syncplay.md`); what this
+  // test pins is only that neither expectation can clobber the other.
   it('two remote applies in flight each keep their own expectation', async () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })

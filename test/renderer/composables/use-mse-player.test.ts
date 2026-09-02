@@ -42,7 +42,10 @@ beforeEach(() => {
 // #306 Phase B: the seek dep hands back a handle whose `retract()` removes
 // exactly the operation it registered, so the fake has to be a factory rather
 // than a bare `vi.fn()` — the land's failure path calls `retract()` on it, and a
-// test asserting that needs a distinct spy per registration.
+// handle shared across registrations would make "which one was retracted"
+// unanswerable. None of the call sites below read the spy; the test that does is
+// `retracts exactly its own seek operation when the land write throws`, at the
+// bottom of this file, which uses its own recording registry instead.
 let nextFakeSeekOpId = 1
 function fakeSeekOp(): { id: number; retract: ReturnType<typeof vi.fn> } {
   return { id: nextFakeSeekOpId++, retract: vi.fn() }
@@ -1274,5 +1277,153 @@ describe('useMsePlayer — refill playback operations are exact (#306)', () => {
     // newer site's.
     expect(reg.retracted).toEqual([2])
     expect(reg.registered.find((o) => o.id === 2)?.target).toBe('play')
+  })
+})
+
+// The seek twin of the block above (#306 Phase B). The resume land is the one
+// seek site that holds its handle, because it is the one wrapping its
+// `currentTime` write in a `catch`: an assignment that throws fires no `seeked`,
+// so under the old single slot its mark latched for the full 15 s TTL and
+// swallowed the user's next real seek. The handle makes the cleanup exact, and
+// nothing else in the suite notices when the `retract()` call is deleted — which
+// is why this test exists and why the rule it discharges ("no retraction path
+// without a test") is restated in `docs/syncplay.md` and on
+// `beginProgrammaticSeek`.
+describe('useMsePlayer — the resume land retracts its own seek operation (#306)', () => {
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    appendBuffer(): void {}
+    remove(): void {
+      queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
+    }
+    abort(): void {}
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    constructor(public sb: FakeSourceBuffer) {
+      super()
+    }
+    addSourceBuffer(): FakeSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+    endOfStream(): void {}
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+  })
+
+  // The seek-side stand-in for the registry, the twin of `fakeRegistry()` above:
+  // a distinct spy per registration, so "which operation was retracted" is
+  // answerable rather than just "something was".
+  function fakeSeekRegistry() {
+    const registered: { id: number; target: number; retract: ReturnType<typeof vi.fn> }[] = []
+    const retracted: number[] = []
+    let next = 1
+    return {
+      registered,
+      retracted,
+      begin: (target: number) => {
+        const id = next++
+        const retract = vi.fn(() => {
+          retracted.push(id)
+        })
+        registered.push({ id, target, retract })
+        return { id, retract }
+      }
+    }
+  }
+
+  it('retracts exactly its own seek operation when the land write throws', () => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const reg = fakeSeekRegistry()
+    let writes = 0
+    // Unlike the plain-object fakes elsewhere in this file, `currentTime` needs a
+    // real setter here: the `catch` the land grew only exists for a write that
+    // throws, which is what a detached or torn-down element does.
+    const video = {
+      get currentTime(): number {
+        return 0
+      },
+      set currentTime(_v: number) {
+        writes++
+        throw new DOMException('detached', 'InvalidStateError')
+      },
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        beginProgrammaticSeek: reg.begin
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 1400,
+      timestampOffset: 1395
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    // A remote apply registered in between — the bystander. Under the old single
+    // slot the land's failure cleared whatever mark occupied it, so this one's
+    // echo escaped as a user seek and dragged the room back.
+    const apply = reg.begin(120)
+
+    fakeSb.buffered.ranges = [[1395.08, 1401.0]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    // The land really did attempt the write and really did throw.
+    expect(writes).toBe(1)
+
+    const land = reg.registered.find((o) => o.target === 1400)
+    expect(land).toBeDefined()
+    expect(land?.retract).toHaveBeenCalledTimes(1)
+
+    // Exactness, which is the whole point of the handle: the bystander survives.
+    expect(apply.retract).not.toHaveBeenCalled()
+    expect(reg.retracted).toEqual([land?.id])
+
+    m.resetMseState()
   })
 })

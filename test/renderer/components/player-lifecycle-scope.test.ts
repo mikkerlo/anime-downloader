@@ -46,7 +46,7 @@ function slice(startNeedle: string, endNeedle: string): string {
   return SOURCE.slice(start, end)
 }
 
-/** Whole-line `//` comments are stripped, so whole-line prose that names a call site can't satisfy a scan; a trailing `// …` still can. */
+/** Only whole-line `//` comments are stripped, so prose inside one can't satisfy a scan; a trailing `// …` or a `/* …` block comment still can. */
 function stripComments(text: string): string {
   return text.replace(/^[ \t]*\/\/.*$/gm, '')
 }
@@ -862,7 +862,8 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
     // so a *whole-line* `//` in `PlayerView.vue` naming `initSubtitles(video)`
     // would otherwise count as a site and fail this. It narrows the hazard
     // without closing it — `stripComments` only blanks whole-line `//`, so a
-    // *trailing* `// …` naming the literal still counts as a site (#312).
+    // *trailing* `// …`, or a block comment on its own line, naming the
+    // literal still counts as a site (#312).
     let guarded = 0
     for (const [name, body] of CONTINUATIONS) {
       const sites = [...body.matchAll(/initSubtitles\(video\)/g)]

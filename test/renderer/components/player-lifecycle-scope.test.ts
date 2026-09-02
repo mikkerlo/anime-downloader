@@ -46,7 +46,7 @@ function slice(startNeedle: string, endNeedle: string): string {
   return SOURCE.slice(start, end)
 }
 
-/** Only whole-line `//` comments are stripped, so prose inside one can't satisfy a scan; a trailing `// …` or a `/* …` block comment still can. */
+/** Only `//`-prefixed whole lines are stripped, so prose inside one can't satisfy a scan; a trailing `// …` or any line of a block comment still can. */
 function stripComments(text: string): string {
   return text.replace(/^[ \t]*\/\/.*$/gm, '')
 }

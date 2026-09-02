@@ -939,12 +939,14 @@ describe('#280 (4) — the ladder extends to the continuations own blanket clean
 })
 
 describe('#311 — the ladder checkpoints the stream fall-back in BOTH continuations', () => {
-  // The rule the #280 ladder actually carries is "bail after every await a
-  // close can land inside", and `playerGetStreamUrl` is the widest window
-  // either continuation has — a network round trip. `selectTranslation` had
-  // the checkpoint and `goToEpisode` did not, which is the asymmetry #311
-  // closes; scanning both from one `it.each` is what stops them drifting apart
-  // again.
+  // The rule the #280 ladder actually carries is "bail after every await whose
+  // continuation resumes with no checkpoint of its own". `playerGetStreamUrl`
+  // is not the widest window either continuation has — `prepareMkvForPlayback`
+  // is — but it is the widest *unchecked* one: that await comes back through
+  // `shouldBail`, this one returns a stream URL whether or not the component is
+  // still alive. `selectTranslation` had the checkpoint and `goToEpisode` did
+  // not, which is the asymmetry #311 closes; scanning both from one `it.each`
+  // is what stops them drifting apart again.
   const STREAM_URL_RE = /await window\.api\.playerGetStreamUrl\(/g
 
   it.each(CONTINUATIONS)(

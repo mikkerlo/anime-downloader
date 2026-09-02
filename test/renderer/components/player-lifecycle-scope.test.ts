@@ -85,7 +85,10 @@ function slice(startNeedle: string, endNeedle: string): string {
  * Quote tracking is enough and a tokenizer is not needed at this sha: the only
  * `//` occurrences that are not whole-line comments are two genuine trailing
  * comments and those two string literals, no template literal contains `//`,
- * and the file has no regex literals.
+ * and the one regex literal in the file (`/hvc1|hev1/i`) carries no quote, `//`
+ * or `/*`, so it is inert here. A regex literal containing any of those WOULD
+ * desynchronise this scan, and silently — which is why this clause is a fact
+ * about the current file, not a property anything enforces.
  *
  * Feed it JavaScript, never the whole SFC — `SETUP`, or a slice of it.
  */
@@ -1018,6 +1021,29 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
         const block = enclosing(SRC, at, false)
         expect(block, `${c.name}: clear outside any block at ${at}`).toBeGreaterThan(-1)
         if (c.flag === 'navigating' && SRC.slice(0, block).trimEnd().endsWith('if (!resolvedTr)')) {
+          // (c) selects on SHAPE ALONE — an `if (!resolvedTr)` block sitting at
+          // a straight-line position — so on its own it pins where the allowed
+          // bare clear is, never WHY it is allowed to be bare. That reason is a
+          // claim about the source ABOVE it: nothing between
+          // `const myNav = ++navigationEpoch` and the clear suspends, so the
+          // ownership compare the other six carry would be dead code here.
+          // Without the pin below, an `await` dropped anywhere into the
+          // resolution chain reintroduces #302 at precisely the one site this
+          // change deliberately leaves bare, and the whole scan stays green —
+          // cardinality and confinement included — because the clear neither
+          // moved nor changed shape. Scoped to `start`, not an unscoped
+          // `indexOf`: the premise is about THIS function's epoch set site.
+          const set = SRC.indexOf('const myNav = ++navigationEpoch', start)
+          expect(set, `${c.name}: no epoch set site above the bare clear at ${at}`).toBeGreaterThan(
+            -1
+          )
+          expect(set, `${c.name}: the bare clear at ${at} sits above its epoch set`).toBeLessThan(
+            at
+          )
+          expect(
+            SRC.slice(set, at),
+            `${c.name}: the bare clear at ${at} is now reached across a suspension`
+          ).not.toContain('await ')
           bare++
           continue
         }

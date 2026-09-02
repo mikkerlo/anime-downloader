@@ -60,7 +60,10 @@ describe('PlayerView — remote state outranks the saved position (#240)', () =>
     const body = resumeBody().replace(/\s+/g, ' ')
     const guard = body.indexOf(GUARD)
     const watched = body.indexOf('watchedReported = !!saved.watched;')
-    const write = body.indexOf('video.currentTime = saved.position;')
+    // The seek is the `seekProgrammatically` helper call since #306 Phase B —
+    // it registers the operation and performs the write together, so there is
+    // one thing to order the guard against instead of two.
+    const write = body.indexOf('seekProgrammatically(video, saved.position);')
     const toasts = [...body.matchAll(/resumeToast\.value = `Resumed at/g)].map((m) => m.index!)
 
     expect(watched).toBeGreaterThan(-1)
@@ -184,9 +187,9 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
 // #275 review: bounding the spawn also zeroes `mseInitialSeek`, so on a refused
 // open `resumeFromSavedPosition` no longer takes its toast-only MSE branch
 // (gated `mseInitialSeek.value > 0`) and falls through to the branch below it —
-// the one that actually writes `video.currentTime = saved.position`. Writing the
-// out-of-file saved position straight to the element is the original symptom
-// arriving through a second door.
+// the one that actually writes `saved.position` to the element, through
+// `seekProgrammatically`. Writing the out-of-file saved position straight to the
+// element is the original symptom arriving through a second door.
 //
 // It is inert today, but only via a two-step argument spanning two files, and
 // neither step is local to this function.
@@ -206,7 +209,7 @@ describe('PlayerView — a refused open does not resume through the generic bran
     // Containment rather than ordering: a write moved below the block's closing
     // brace is unconditional again and still satisfies `write > guard`.
     expect(body).toContain(
-      'if (saved.position > 5 && saved.position / d < 0.95) { syncplay.markProgrammaticSeek(saved.position); video.currentTime = saved.position;'
+      'if (saved.position > 5 && saved.position / d < 0.95) { seekProgrammatically(video, saved.position);'
     )
     // The other half of the argument above: the ratio is only against the
     // probe's duration if `d` prefers `video.duration`. Against `saved.duration`
@@ -296,5 +299,68 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     )
     expect(body).toContain("if (!video.paused) syncplay.beginProgrammaticPlayback('pause');")
     expect(body.indexOf('beginProgrammaticPlayback')).toBeLessThan(body.indexOf('video.pause();'))
+  })
+})
+
+// The seek half of the same wiring question (#306 Phase B), and the exact twin
+// of the census above. The *behaviour* — strict vs. any-value matching, the
+// `readyState` fork, retirement, expiry — is covered at the composable seam in
+// `use-syncplay-client.test.ts`; a scan can only settle that every `currentTime`
+// this file writes on the user's behalf is registered, and that the user's own
+// seek is not.
+//
+// The census is the load-bearing part, for the same reason it is for the plays.
+// Two raw `currentTime` writes exist: one inside `seekProgrammatically`, one
+// inside `seek()`. A third added without a decision is either a room-dragging
+// unregistered write — `forcePositionUpdate` fans it out to every watcher — or,
+// if it goes through the helper on the user's path, a seek the room never hears
+// at all. Both directions are #239's own defect returning at a new site, so the
+// count is pinned.
+describe('PlayerView — programmatic seeks go through the operation helper (#306)', () => {
+  const FLAT_NO_COMMENTS = SOURCE.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
+
+  it('routes exactly the six programmatic writes through the helper', () => {
+    // Every assignment to the element's playhead, comments stripped so the prose
+    // above the helper cannot pad the count.
+    const writes = FLAT_NO_COMMENTS.match(/\bv(?:ideo)?\.currentTime = /g) ?? []
+    // One inside `seekProgrammatically`, one inside `seek()`. Everything else
+    // goes through the helper.
+    expect(writes).toHaveLength(2)
+    const helpers = FLAT_NO_COMMENTS.match(/seekProgrammatically\(v(?:ideo)?, /g) ?? []
+    // `resumeFromSavedPosition`, `selectQuality`'s restore, `selectTranslation`'s
+    // two restores, and `goToEpisode`'s two rewinds to 0 — the seven external
+    // sites of #306 minus `use-mse-player`'s resume land, which lives in its own
+    // file and is pinned in `use-mse-player.test.ts`.
+    expect(helpers).toHaveLength(6)
+  })
+
+  it('gives both goToEpisode rewinds the same helper, at 0', () => {
+    const starts = FLAT_NO_COMMENTS.match(/seekProgrammatically\(v, 0\);/g)
+    expect(starts).toHaveLength(2)
+  })
+
+  it('leaves the user’s own seek unregistered', () => {
+    // `seek()` is where the scrubber and the keyboard land. Its `seeked` *is*
+    // the intent the room needs to hear, so registering an operation here would
+    // silently swallow every user seek.
+    const body = SOURCE.slice(
+      SOURCE.indexOf('function seek(time: number)'),
+      SOURCE.indexOf('function seekRelative(')
+    )
+    expect(body).toContain('video.currentTime = target;')
+    expect(body).not.toContain('beginProgrammaticSeek')
+    expect(body).not.toContain('seekProgrammatically(')
+  })
+
+  it('registers before the write and retracts its own operation if it throws', () => {
+    // Ordering first: an operation registered *after* the assignment could lose
+    // the race to the element's own `seeked`. Then exactness — `op.retract()`
+    // can only remove the operation this call registered, which is what the
+    // single `appliedSeekPosition` slot could not promise, and the rethrow keeps
+    // the helper's callers seeing exactly what a bare assignment gave them.
+    expect(FLAT_NO_COMMENTS).toContain(
+      'const op = syncplay.beginProgrammaticSeek(target); ' +
+        'try { v.currentTime = target; } catch (err) { op.retract(); throw err; }'
+    )
   })
 })

@@ -775,10 +775,10 @@ describe('useSyncplayClient — applied-seek marker lifetime (#239)', () => {
 // The PlayerView call sites are unreachable from a unit test (nothing mounts
 // PlayerView, and selectQuality / selectTranslation are unexported `<script
 // setup>` internals), so the contract is pinned here at the composable seam —
-// which is also why the "only arm a write that will move the element" rule is
-// enforced inside markProgrammaticSeek instead of at each call site: a guard
+// which is also why the "only register a write that will move the element" rule
+// is enforced inside beginProgrammaticSeek instead of at each call site: a guard
 // spelled out in PlayerView.vue could not be regression-tested at all.
-describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
+describe('useSyncplayClient — beginProgrammaticSeek (#239, #306 Phase B)', () => {
   it('swallows the seeked of a write that landed where it was told', () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -786,7 +786,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
     v.currentTime = 420
     s.onVideoSeeked()
 
@@ -805,7 +805,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     // and is clamped into range once metadata arrives. A shorter alt-translation
     // release therefore fires its seeked far from what we asked for — which is
     // why these marks are value-agnostic.
-    s.markProgrammaticSeek(1400)
+    s.beginProgrammaticSeek(1400)
     v.currentTime = 12
     s.onVideoSeeked()
 
@@ -819,7 +819,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
     v.currentTime = 420
     s.onVideoSeeked()
 
@@ -841,7 +841,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     // A real write — the element is at 0 and we ask for 420, so this arms —
     // whose `seeked` never arrives (the load was aborted first). The TTL is the
     // only thing that frees the mark then.
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
     vi.advanceTimersByTime(15001)
     v.currentTime = 900
     s.onVideoSeeked()
@@ -850,7 +850,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
   })
 
   // Regression, and the reason the "will this actually move the element?" rule
-  // lives inside markProgrammaticSeek rather than at the call sites.
+  // lives inside beginProgrammaticSeek rather than at the call sites.
   //
   // `goToEpisode` writes `currentTime = 0` in a nextTick that runs *after* the
   // `src` rebind, so the element has already reloaded: `readyState 0`, playhead
@@ -882,7 +882,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(0)
+    s.beginProgrammaticSeek(0)
 
     // The load completes before the user can seek anything — which is what the
     // narrative above already describes ("a few seconds into the new episode"),
@@ -927,7 +927,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(0)
+    s.beginProgrammaticSeek(0)
 
     vi.advanceTimersByTime(1000)
     v.currentTime = 0.2
@@ -949,7 +949,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
     s.onVideoSeeked()
     expect(sendLocalState).not.toHaveBeenCalled()
 
@@ -974,7 +974,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
     v.currentTime = 420.4
     s.onVideoSeeked()
 
@@ -999,7 +999,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     s.syncplayStatus.value = { state: 'ready' }
 
     // No `seeked` follows — the engine short-circuited the write.
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
 
     vi.advanceTimersByTime(3000)
     v.currentTime = 900
@@ -1025,7 +1025,7 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(420)
+    s.beginProgrammaticSeek(420)
 
     vi.advanceTimersByTime(3000)
     v.currentTime = 900
@@ -1046,43 +1046,56 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 420.3, cause: 'seek' })
   })
 
-  // The other side of that guard: the same rewind on the MSE/remux path is a
-  // real seek. `mseSrcUrl` has not been rebound yet, so the element still holds
-  // the old source at a non-zero position and `currentTime = 0` does fire a
-  // `seeked` — which must not reach the room, or `forcePositionUpdate` drags
-  // every peer back to 0. Dropping the arming altogether would pass the test
-  // above and fail this one.
-  it('still arms the same rewind when the element has somewhere to move from', () => {
+  // The other side of that guard: a rewind on an element that has somewhere to
+  // move from is a real seek, and its `seeked` must not reach the room or
+  // `forcePositionUpdate` drags every peer back to 0. Dropping the registration
+  // altogether would pass the test above and fail this one.
+  //
+  // Deliberately *not* claiming which real call site this is. The comment here
+  // used to name the MSE/remux episode-nav rewind, on the reasoning that
+  // `mseSrcUrl` has not been rebound yet — #306 corrected that from source
+  // reading (`startMseSession` assigns it synchronously inside the awaited
+  // preparation, and the rewind's `nextTick` resolves after the DOM patch), so
+  // that rewind almost certainly sits at `readyState 0` with the other four. A
+  // fake video with an assumed readiness cannot settle browser ordering either
+  // way; what it *can* pin, and all this asserts, is the composable's rule —
+  // a write that moves the element registers an operation.
+  it('still registers the same rewind when the element has somewhere to move from', () => {
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
     const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
     const s = useSyncplayClient(makeDeps({ video: v }))
     s.syncplayStatus.value = { state: 'ready' }
 
-    s.markProgrammaticSeek(0)
+    s.beginProgrammaticSeek(0)
     v.currentTime = 0
     s.onVideoSeeked()
 
     expect(sendLocalState).not.toHaveBeenCalled()
   })
 
-  // The widened single-slot residual (#258), asserted rather than assumed
-  // because this path *changed*: the post-metadata same-value write used to be
-  // the one arming path that never touched the slot, and it is now a writer.
+  // The single-slot residual #258 widened, and the case the registry closes
+  // (#306 Phase B). Asserted rather than assumed, because the outcome *flipped*
+  // here: this is a behaviour-difference test, red against the single slot and
+  // green against the registry.
   //
-  // Modelled here with an element whose `currentTime` has not yet reached the
+  // Modelled with an element whose `currentTime` has not yet reached the
   // apply's target when the same-value write runs — the only ordering in which
-  // the clobbering mark carries a *different* value, since the branch fires
+  // the second operation carries a *different* value, since that branch fires
   // only when `target === v.currentTime` and so normally re-arms the very
   // position the apply's echo will report.
   //
-  // Documented outcome: the apply's mark is overwritten, its echo mismatches,
-  // is deliberately not consumed (#224), and `sendSyncplayLocalState('seek')`
-  // puts the apply's own position back on the wire for `forcePositionUpdate` to
-  // fan out. Accepted: the escaping position is the one the room published
-  // moments earlier, and the alternative — skipping the arm while a live mark
-  // occupies the slot — re-opens the hole #258 closes.
-  it('a same-value post-metadata write clobbers an in-flight apply mark (#258)', async () => {
+  // What the slot did: the second arming overwrote the apply's mark, the
+  // apply's echo then mismatched on value, was deliberately not consumed
+  // (#224), and `sendSyncplayLocalState('seek')` put the apply's own position
+  // back on the wire for `forcePositionUpdate` to fan out to the room.
+  //
+  // What the registry does: both operations are registered, so the apply's echo
+  // at 300 matches the apply's own `value` operation and is consumed, and the
+  // same-value operation at 120 is still there afterwards to guard its own
+  // position. Nothing reaches the wire in either step. Two writes in flight no
+  // longer cost one leaked position.
+  it('does not let a same-value post-metadata write clobber an in-flight apply (#258, #306)', async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -1097,19 +1110,26 @@ describe('useSyncplayClient — markProgrammaticSeek (#239)', () => {
     // The element is still reporting 120 — the apply's seek has not completed.
     vi.advanceTimersByTime(2000)
     v.currentTime = 120
-    client.markProgrammaticSeek(120)
+    client.beginProgrammaticSeek(120)
 
-    // The apply's echo finally lands and no longer matches the slot.
+    // The apply's echo finally lands. Under the slot this had nothing left to
+    // match and went out as the user's seek; the apply's operation is still
+    // registered now, so it is consumed.
     v.currentTime = 300
     client.onVideoSeeked()
-    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'seek' })
+    expect(sendLocalState).not.toHaveBeenCalled()
 
-    // The clobbering mark itself survives the mismatch (#224) and still guards
-    // its own position.
-    sendLocalState.mockClear()
+    // And the same-value operation is untouched by that consume — exact
+    // matching, not a shared slot — so it still guards its own position.
     v.currentTime = 120
     client.onVideoSeeked()
     expect(sendLocalState).not.toHaveBeenCalled()
+
+    // Both spent: the next real seek is the user's.
+    v.currentTime = 900
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
   })
 })
 
@@ -3268,6 +3288,270 @@ describe('useSyncplayClient — late operations from a replaced source (#306)', 
   })
 })
 
+// The seek half of the registry (#306 Phase B) — the properties that only exist
+// once the single `appliedSeekPosition` slot is gone. The matching *rules* it
+// inherits (strict value vs. any-value, the epsilon, the `readyState` fork, the
+// deliberate non-consume on a mismatch) are pinned in the `beginProgrammaticSeek`
+// and `applied-seek marker lifetime` blocks above and are unchanged here.
+describe('useSyncplayClient — seek operations are individually tracked (#306)', () => {
+  // The behaviour difference, and the case the issue names: a source swap must
+  // not erase an outstanding old-generation seek expectation and let its late
+  // raw `seeked` be reclassified as new user input.
+  //
+  // Red against the single slot. There, the gen-N+1 write *overwrites* the
+  // gen-N mark, so the late gen-N `seeked` consumes the only mark there is and
+  // the new source's own `seeked` finds nothing armed — `position: 0` goes out
+  // as the user's seek and `forcePositionUpdate` drags every peer to 0. Green
+  // against the registry: both operations are tracked, the live one takes the
+  // first event (class order) and the retired one is still there to absorb the
+  // second.
+  //
+  // Note what is *not* claimed: neither event carries provenance, so which
+  // physical `seeked` belongs to which write is unknowable. What is asserted is
+  // that two registered writes account for two events — no leak, no erasure.
+  it('a retired seek expectation is not erased, and absorbs its late echo', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // gen N: a write against the old source whose `seeked` has not arrived.
+    s.beginProgrammaticSeek(300)
+    // `selectQuality` rebinds the stream on the same element and bumps.
+    s.bumpPlaybackSourceGeneration()
+    // gen N+1: the restore's rewind, on an element that has not reloaded yet.
+    s.beginProgrammaticSeek(0)
+
+    // Two `seeked` events arrive for two writes. Neither may reach the room.
+    v.currentTime = 300
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    v.currentTime = 0
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // Both spent — the user's next seek is the user's.
+    v.currentTime = 900
+    s.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+  })
+
+  // Exact retraction, the seek twin of "retracting a retired operation cannot
+  // clear the newer one". The slot had no retraction path at all; the failure
+  // mode a naive one would have introduced is retracting by shape — clearing
+  // whatever occupies the slot, which by then is a newer write's expectation.
+  it('retracting one seek operation leaves a newer one armed', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // The MSE resume land registers, then its `currentTime` assignment throws.
+    const land = s.beginProgrammaticSeek(600)
+    // A remote apply's write is registered in between, and does move the element.
+    s.beginProgrammaticSeek(120)
+    land.retract()
+
+    // The apply's echo is still guarded.
+    v.currentTime = 120
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // And the retracted operation guards nothing: a later seek to the position
+    // the failed write asked for is the user's.
+    v.currentTime = 600
+    s.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 600, cause: 'seek' })
+  })
+
+  it('retracting an already-consumed operation is a no-op, not a second removal', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    const first = s.beginProgrammaticSeek(300)
+    v.currentTime = 300
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // A newer write, then the first operation's late retraction. Retracting by
+    // identity finds nothing; retracting by shape would take this one.
+    s.beginProgrammaticSeek(700)
+    first.retract()
+
+    v.currentTime = 700
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // The `readyState 0` same-position branch registers nothing and hands back the
+  // inert handle. Retracting it must not reach into the registry — under a
+  // shape-based retraction it would have taken whatever else was outstanding.
+  it('the inert handle from a no-op registration retracts nothing', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    const real = s.beginProgrammaticSeek(420)
+    expect(real.id).not.toBe(0)
+
+    // The episode-nav rewind on an element already at 0: nothing to expect.
+    const inert = s.beginProgrammaticSeek(0)
+    expect(inert.id).toBe(0)
+    inert.retract()
+    ;(v as { readyState: number }).readyState = 1
+
+    // The real operation is untouched.
+    v.currentTime = 420
+    s.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // TTL direction, with more than one operation outstanding: expiry releases,
+  // it never vetoes. Pins that a stale operation cannot latch and swallow the
+  // user's next real seek, which is the property the slot had only by accident
+  // of being a single value.
+  it('expired seek operations release the next event instead of swallowing it', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // Two writes that move the element and whose `seeked` never arrives — an
+    // aborted load on each.
+    s.beginProgrammaticSeek(300)
+    s.beginProgrammaticSeek(700)
+
+    vi.advanceTimersByTime(15001)
+    v.currentTime = 900
+    s.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+
+    // And nothing survived to eat the one after it either.
+    sendLocalState.mockClear()
+    v.currentTime = 300
+    s.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'seek' })
+  })
+
+  // A source swap on its own must not resolve the ambiguity toward suppression
+  // forever: a retired seek operation is bounded like any other.
+  it('a retired seek operation still expires', () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    s.beginProgrammaticSeek(300)
+    s.bumpPlaybackSourceGeneration()
+
+    vi.advanceTimersByTime(15001)
+    v.currentTime = 300
+    s.onVideoSeeked()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'seek' })
+  })
+
+  // The registry is bounded in size as well as in time, so a run of writes whose
+  // events never arrive cannot grow it without bound. Oldest first, matching the
+  // consume order: the earliest expectation is the one dropped.
+  it('caps the registry, dropping the oldest expectation first', () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 512, paused: true } as Partial<HTMLVideoElement>)
+    const s = useSyncplayClient(makeDeps({ video: v }))
+    s.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // SEEK_OP_MAX is 16. Seventeen registrations, none of them consumed.
+    for (let i = 1; i <= 17; i++) s.beginProgrammaticSeek(i)
+
+    // Sixteen events are absorbed…
+    for (let i = 0; i < 16; i++) {
+      v.currentTime = 1000 + i
+      s.onVideoSeeked()
+    }
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    // …and the seventeenth is the user's, because the first registration was
+    // evicted rather than the registry growing.
+    v.currentTime = 2000
+    s.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+  })
+
+  // The remote apply is the eighth arming site and the one that never went
+  // through the helper. It registers a *strict* operation regardless of
+  // `readyState`, because #240 makes it the sole renderer-side echo guard for a
+  // deferred apply — a value-agnostic one would swallow the user's first real
+  // seek after every apply.
+  it('the remote apply registers a strict operation that does not swallow a far user seek', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    // The user hits Skip OP before the apply's own echo lands. Value-keyed, so
+    // this is not mistaken for it and still reaches the room.
+    v.currentTime = 900
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
+
+    // The apply's echo arrives afterwards and is still guarded — a mismatch does
+    // not consume (#224), so the expectation survived the user's seek.
+    sendLocalState.mockClear()
+    v.currentTime = 300
+    client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  // Two remote applies in quick succession — the first shape of the documented
+  // single-slot residual, and the second case the registry closes. The slot held
+  // the second target when the first apply's echo landed, so that echo
+  // mismatched and went out as a user seek; main's belt misses it too, because
+  // `lastAppliedRemotePosition` has also moved on.
+  it('two remote applies in flight each keep their own expectation', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 300, paused: true, doSeek: true })
+    emitRemoteState({ position: 700, paused: true, doSeek: true })
+    sendLocalState.mockClear()
+
+    v.currentTime = 300
+    client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+
+    v.currentTime = 700
+    client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
 // The renderer half of main's session-vs-socket split (#227). `tearDown()`
 // clears main's `snapshot`/`lastRoomState`/`playbackAdopted` and the reconnect
 // path skips it; the renderer's own intent refs had no such rule, so room A's
@@ -3341,7 +3625,7 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
 
     // A programmatic write that moved the element but whose `seeked` never
     // arrived (an aborted load) — the residual latch the 15 s TTL backstops.
-    client.markProgrammaticSeek(120)
+    client.beginProgrammaticSeek(120)
     await cycle(client, 'disconnected')
 
     // Well inside APPLIED_SEEK_TTL_MS, so only the reset can disarm it.
@@ -4319,7 +4603,7 @@ describe('useSyncplayClient — a reloading element announces nothing (#284)', (
 
     // The restore `nextTick`: seek back to the saved position, then resume —
     // both still on an element that has not loaded.
-    client.markProgrammaticSeek(612)
+    client.beginProgrammaticSeek(612)
     v.currentTime = 612
     client.onVideoSeeked()
     ;(v as { paused: boolean }).paused = false

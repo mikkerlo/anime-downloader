@@ -77,6 +77,42 @@ export type SyncplayPlaybackOp = {
   retract: () => void
 }
 
+/** How a programmatic seek operation is matched to the element's `seeked`
+ *  (#306 Phase B). Two kinds, differing only in how they are consumed (#239) —
+ *  the seek registry block in `useSyncplayClient` has the full argument for
+ *  each.
+ *
+ *  - `value` — matched by position, within `APPLIED_SEEK_EPSILON`. What a
+ *    remote apply arms, and what the post-metadata same-value write arms.
+ *  - `any` — matched by nothing but its own outstanding-ness: consumes the next
+ *    `seeked` whatever position it reports, because the write frequently lands
+ *    on an element at `readyState 0` and is clamped into `seekable` later. */
+export type SyncplaySeekMatch = 'value' | 'any'
+
+/** Handle to one registered programmatic seek operation (#306 Phase B).
+ *
+ *  The seek twin of `SyncplayPlaybackOp`, exact for the same reason: a caller
+ *  can only ever retract the operation it holds, so a `currentTime` write that
+ *  throws can no longer clear a newer operation's expectation the way the last
+ *  writer of the single `appliedSeekPosition` slot could.
+ *
+ *  `id === 0` is the inert handle `beginProgrammaticSeek` returns when it
+ *  deliberately arms nothing — the `readyState 0` same-position write, which
+ *  fires no `seeked` and so has nothing to expect. Its `retract()` is a no-op,
+ *  like any spent handle's, so callers need no special case.
+ *
+ *  Renderer-local. The id reaches neither main, the preload bridge, nor
+ *  Syncplay's wire protocol. */
+export type SyncplaySeekOp = {
+  readonly id: number
+  /** Retract *this* operation and nothing else. A no-op once the operation has
+   *  been consumed, has expired, or was already retracted. */
+  retract: () => void
+}
+
+/** The handle for "nothing was armed" — see `SyncplaySeekOp`. */
+const NO_SEEK_OP: SyncplaySeekOp = { id: 0, retract: () => {} }
+
 export type SyncplayDeps = {
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
@@ -134,12 +170,22 @@ export type SyncplayClient = {
   ) => SyncplayPlaybackOp
   /** The element's media source has been replaced (a quality swap rebinding
    *  `activeStreamUrl` on the same element, say). *Retires* every outstanding
-   *  playback operation rather than erasing it — see the registry block. */
+   *  playback **and seek** operation rather than erasing it — one source
+   *  generation governs both registries; see the registry blocks. */
   bumpPlaybackSourceGeneration: () => void
-  /** Flag a `currentTime` this app writes on the user's behalf (resume land,
-   *  quality/translation restore, episode-nav rewind), so the resulting
-   *  `seeked` is never broadcast to the room as the user's own seek. */
-  markProgrammaticSeek: (target: number) => void
+  /** Register a `currentTime` this app writes on the user's behalf (resume
+   *  land, quality/translation restore, episode-nav rewind), so the resulting
+   *  `seeked` is never broadcast to the room as the user's own seek (#306
+   *  Phase B).
+   *
+   *  Call it immediately *before* the write. Whether the operation is matched
+   *  by value or consumes the next `seeked` unconditionally is decided in here
+   *  from `readyState`, not at the call site, so an eighth caller cannot get it
+   *  wrong — including the "arm nothing" answer, which returns an inert handle.
+   *
+   *  The returned handle retracts exactly this operation, for a `currentTime`
+   *  write that throws and whose `seeked` therefore never arrives. */
+  beginProgrammaticSeek: (target: number) => SyncplaySeekOp
   applySyncplayReadyGate: () => void
   toggleSyncplayConnection: () => Promise<void>
   /** Wire into <video @seeked>. */
@@ -180,7 +226,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplaySnapshotTimer: ReturnType<typeof setInterval> | null = null
   let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null
   let suppressNextLocalEventUntil = 0
-  // The `currentTime` write we are still waiting for the element to realize.
+  // ── The programmatic seek operation registry (#306, Phase B) ──────────────
+  //
+  // The `currentTime` writes we are still waiting for the element to realize.
   // The 1500 ms window above is a wall-clock guess, and a seek on a network
   // stream regularly completes later than that — the element's `seeked` then
   // escapes as our own seek and we hand the peer their own position back with
@@ -188,31 +236,139 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // (which makes main drop the inbound states we need). Keying on the write
   // itself is exact, however long the element takes to get there.
   //
-  // Two kinds, differing only in how they are consumed (#239):
-  // - `anyValue: false` — matched by value within APPLIED_SEEK_EPSILON.
+  // Two match kinds, differing only in how they are consumed (#239):
+  // - `value` — matched by position within APPLIED_SEEK_EPSILON.
   //   Deliberately strict: for a remote apply it is the only renderer-side echo
   //   guard the apply gets, and a value-agnostic one would swallow the user's
-  //   first real seek after every apply. `markProgrammaticSeek` also arms this
+  //   first real seek after every apply. `beginProgrammaticSeek` also arms this
   //   kind for its post-metadata same-value write (#258), where the target is
   //   by construction the position the element already holds — see there.
-  // - `anyValue: true` — the ordinary write this app made on the user's behalf
-  //   (`markProgrammaticSeek`). Consumes the next `seeked` whatever position it
+  // - `any` — the ordinary write this app made on the user's behalf
+  //   (`beginProgrammaticSeek`). Consumes the next `seeked` whatever position it
   //   reports, because the write often lands on an element at `readyState 0`:
   //   it becomes the *default playback start position*, fires no `seeked` then,
   //   and is clamped into `seekable` once metadata arrives — so the eventual
   //   event can sit arbitrarily far from what we asked for.
   //
   // Bounded by a TTL rather than a wall clock — a short window is the same
-  // fragility this keying exists to remove — and cleared on a consume or on
-  // expiry, never on a mismatch: between an apply and its echo any of the
-  // programmatic sites can fire a `seeked`, and consuming the marker there
-  // would let the real echo escape.
-  type AppliedSeek = { value: number; expiresAt: number; anyValue: boolean }
-  let appliedSeekPosition: AppliedSeek | null = null
+  // fragility this keying exists to remove — and an operation leaves the
+  // registry on a consume, on its own retraction or on expiry, never on a
+  // mismatch: between an apply and its echo any of the programmatic sites can
+  // fire a `seeked`, and consuming an operation that does not match it would
+  // let the real echo escape (#224).
+  //
+  // What Phase B replaced, and why the single slot had to go: one
+  // `{ value, expiresAt, anyValue } | null` written by all eight arming sites.
+  // Any second arming in flight clobbered the first, and the `seeked` already
+  // queued for the clobbered write escaped to the room as the user's own seek —
+  // the room-dragging direction, since the reference server's
+  // `forcePositionUpdate` sets *every* watcher's position. The slot also had no
+  // retraction path at all: a write that threw left its mark latched for the
+  // whole TTL, and there was no way to remove one mark without removing
+  // whichever mark happened to occupy the slot.
+  //
+  // Deliberately the mirror of the playback registry below: same identity, same
+  // retirement derived from the one source generation, same bounded lifetime,
+  // same "expiry releases, never vetoes" direction. The matching *rules* are
+  // unchanged from the slot — only the bookkeeping is.
+  type SeekOpRecord = {
+    id: number
+    /** The position written. */
+    target: number
+    match: SyncplaySeekMatch
+    /** The media source generation the write was made against. Retirement is
+     *  derived from it exactly as it is for playback operations, so a source
+     *  swap has one thing to get right. A retired seek operation may still
+     *  consume its own late `seeked` — that is why it is kept rather than
+     *  erased — it is simply ordered behind the live ones. */
+    generation: number
+    expiresAt: number
+  }
   const APPLIED_SEEK_EPSILON = 0.5
   // Floored by the MSE respawn path, which waits up to 15 s for buffer-ahead on
   // a transcode (`use-mse-player.ts` waitForBufferAhead) before the seek lands.
   const APPLIED_SEEK_TTL_MS = 15000
+  // Hard cap, the twin of PLAYBACK_OP_MAX: a pathological run of writes whose
+  // `seeked` never arrives cannot grow the registry without bound between
+  // prunes. Oldest first — the same order they are consumed in.
+  const SEEK_OP_MAX = 16
+  let seekOps: SeekOpRecord[] = []
+  let nextSeekOpId = 1
+
+  function pruneSeekOps(now: number): void {
+    if (seekOps.length === 0) return
+    seekOps = seekOps.filter((op) => now < op.expiresAt)
+  }
+
+  // Reads `playbackSourceGeneration`, declared with the playback registry
+  // below: one source generation governs both registries, so
+  // `bumpPlaybackSourceGeneration()` retires seek and playback operations
+  // together — they describe the same element and the same swap. Nothing here
+  // runs during setup, so reading it from above is a reading order, not a
+  // temporal one.
+  function isSeekOpRetired(op: SeekOpRecord): boolean {
+    return op.generation !== playbackSourceGeneration
+  }
+
+  function registerSeekOp(target: number, match: SyncplaySeekMatch): SyncplaySeekOp {
+    const now = Date.now()
+    pruneSeekOps(now)
+    const rec: SeekOpRecord = {
+      id: nextSeekOpId++,
+      target,
+      match,
+      generation: playbackSourceGeneration,
+      expiresAt: now + APPLIED_SEEK_TTL_MS
+    }
+    seekOps.push(rec)
+    if (seekOps.length > SEEK_OP_MAX) seekOps.shift()
+    return {
+      id: rec.id,
+      // Identity, not position: the array is spliced from the middle on every
+      // consume, so an index captured here would retract a stranger.
+      retract: () => {
+        const i = seekOps.findIndex((o) => o.id === rec.id)
+        if (i !== -1) seekOps.splice(i, 1)
+      }
+    }
+  }
+
+  // Deterministic matching, the twin of `consumePlaybackOp`: an operation is
+  // eligible only if it *matches* this event — `any` matches anything, `value`
+  // only a landing within APPLIED_SEEK_EPSILON of the position it wrote — and
+  // among the eligible ones it is oldest first, current-generation ahead of
+  // retired.
+  //
+  // Non-matching operations are left armed on purpose (#224): this `seeked`
+  // belongs to some other write, and consuming an operation that does not match
+  // it is exactly what let the real echo escape.
+  //
+  // The class order carries less weight here than it does for playback, because
+  // no seek operation writes intent — consuming one only decides that *this*
+  // event is not the user's. It is the same rule anyway, so the file has one
+  // ordering to reason about, and it keeps a retired operation available for
+  // its own late echo instead of erasing an expectation that is still owed.
+  //
+  // The residual, stated rather than hidden, and the same shape the playback
+  // registry states: a raw `seeked` on a reused element carries no provenance.
+  // A genuine user seek landing within APPLIED_SEEK_EPSILON of an outstanding
+  // `value` operation — or landing anywhere at all while an `any` one is
+  // outstanding — is indistinguishable from that operation's echo, and bounded
+  // matching cannot decide it. Ordering also cannot rescue every interleaving:
+  // an `any` operation registered before a `value` one will absorb the `value`
+  // one's echo, leaving the later event to escape. The TTL is where the
+  // ambiguity is cut off, and it always resolves toward "the user" — an expired
+  // operation suppresses nothing.
+  function consumeSeekOp(v: HTMLVideoElement | null): SeekOpRecord | null {
+    const now = Date.now()
+    pruneSeekOps(now)
+    const matches = (o: SeekOpRecord): boolean =>
+      o.match === 'any' || (!!v && Math.abs(v.currentTime - o.target) < APPLIED_SEEK_EPSILON)
+    let idx = seekOps.findIndex((o) => matches(o) && !isSeekOpRetired(o))
+    if (idx === -1) idx = seekOps.findIndex(matches)
+    if (idx === -1) return null
+    return seekOps.splice(idx, 1)[0]
+  }
   // What *this user* wants the room to be doing. `v.paused` is not that: the
   // readiness gate and the MSE buffer machinery pause and resume the element
   // on their own, and reporting those as intent pauses the room on every
@@ -480,8 +636,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // to a position nobody applied — so a skip-opening click landing right
     // after a remote apply (or inside the 1500 ms the readiness gate re-arms on
     // every buffer refill) moved only the local player and the room never
-    // heard about it. `appliedSeekPosition` is what suppresses echoes now, and
-    // every programmatic `currentTime` write arms it via markProgrammaticSeek.
+    // heard about it. The seek operation registry is what suppresses echoes now
+    // (#306 Phase B), and every programmatic `currentTime` write registers an
+    // operation there — via `beginProgrammaticSeek`, or directly for the remote
+    // apply's deliberately strict one.
     // play/pause keep the window: they have no equivalent value to key on.
     if (cause !== 'seek' && Date.now() < suppressNextLocalEventUntil) return
     const v = deps.getVideoEl()
@@ -648,11 +806,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   // The element's source has been replaced. Outstanding operations are
   // *retired*, never erased: erasing them would hand their delayed raw
-  // `play`/`pause` events to the user branch, and the old source's move would go
-  // out as a fresh user command. A generation counter that only invalidates is
-  // the trap here — retiring keeps the expectation alive, defanged. The registry
-  // is untouched: retirement is the generation moving out from under the
-  // operations, not a write to them.
+  // `play`/`pause`/`seeked` events to the user branch, and the old source's move
+  // would go out as a fresh user command. A generation counter that only
+  // invalidates is the trap here — retiring keeps the expectation alive,
+  // defanged. Neither registry is touched: retirement is the generation moving
+  // out from under the operations, not a write to them.
+  //
+  // One counter for both registries (#306 Phase B). It describes the element's
+  // *source*, which is the thing that changed, and a seek expectation is as
+  // stale across a swap as a playback one — the difference is only in what
+  // retirement costs, since a retired seek operation writes no intent and so
+  // only loses its place in the consume order.
   function bumpPlaybackSourceGeneration(): void {
     playbackSourceGeneration++
   }
@@ -753,27 +917,34 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // position). The user's own paths (`seek()`, the scrubber's `commitSeek`)
   // deliberately do not.
   //
-  // TTL-bounded, and value-agnostic for the ordinary write — see the
-  // AppliedSeek comment above.
+  // TTL-bounded, and value-agnostic for the ordinary write — see the seek
+  // registry block above.
   //
-  // A mark is only worth arming the way its write can actually be observed, the
-  // same rule `beginProgrammaticPlayback` states for an already-paused element.
-  // Writing the position the element *already reports* is the case that forks,
-  // and which way depends entirely on `readyState`. Decided here rather than at
-  // the seven call sites so an eighth cannot forget it.
+  // An operation is only worth registering the way its write can actually be
+  // observed, the same rule `beginProgrammaticPlayback` states for an
+  // already-paused element. Writing the position the element *already reports*
+  // is the case that forks, and which way depends entirely on `readyState`.
+  // Decided here rather than at the seven call sites so an eighth cannot forget
+  // it.
   //
   // At `readyState 0` that write fires nothing: it only sets the *default
   // playback start position*, which — being zero — is not seeked to when
   // metadata arrives either. That is the normal case for the two episode-nav
   // rewinds, which run in a `nextTick` *after* the `src` rebind, so the element
-  // has already reloaded to `readyState 0` at 0. A mark armed there has no
-  // event to consume it, latches for the whole 15 s TTL and swallows the user's
-  // *next* real seek — next episode → OP → Skip OP, which is #239's own defect
-  // at a new site. So: arm nothing. Five of the seven current callers sit here,
-  // the restores/rewinds behind the `src` rebind. The sites that do move the
-  // element still arm normally, including the same rewind on the MSE/remux
-  // path, where `mseSrcUrl` has not been rebound yet so the element still holds
-  // the old source at a non-zero position.
+  // has already reloaded to `readyState 0` at 0. An operation registered there
+  // has no event to consume it, latches for the whole 15 s TTL and swallows the
+  // user's *next* real seek — next episode → OP → Skip OP, which is #239's own
+  // defect at a new site. So: register nothing, and hand the caller the inert
+  // handle. Five of the seven current callers sit here, the restores/rewinds
+  // behind the `src` rebind — including the episode-nav rewind on the MSE/remux
+  // path. `docs/syncplay.md` used to claim that one arms normally "because
+  // `mseSrcUrl` has not been rebound yet"; #306 corrected it from source
+  // reading (`startMseSession` assigns `mseSrcUrl` synchronously, inside the
+  // awaited `prepareMkvForPlayback`, and the rewind's `nextTick` resolves after
+  // the DOM patch), and Phase B carries that correction here. Source inspection
+  // is not a browser reproduction either, so the claim is only that this branch
+  // is *right for either answer*: at `readyState 0` there is no event to
+  // suppress, and at `HAVE_METADATA` the write is value-keyed below.
   //
   // At `readyState >= HAVE_METADATA` the same write is *not* silent: the HTML
   // seek algorithm has no same-position early-out, so it queues
@@ -792,20 +963,22 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // one.
   //
   // Value-keying is safe *here specifically*, against the standing reason
-  // programmatic marks are value-agnostic — a `readyState 0` write is clamped
-  // into `seekable` once metadata arrives, so a keyed mark would mismatch
-  // exactly when the new release is shorter than `savedTime`. That objection
-  // cannot reach this branch: it only fires when `target === v.currentTime`, so
-  // the target is by construction already inside `seekable` and cannot be
-  // clamped.
+  // programmatic operations are value-agnostic — a `readyState 0` write is
+  // clamped into `seekable` once metadata arrives, so a keyed operation would
+  // mismatch exactly when the new release is shorter than `savedTime`. That
+  // objection cannot reach this branch: it only fires when
+  // `target === v.currentTime`, so the target is by construction already inside
+  // `seekable` and cannot be clamped.
   //
-  // The cost, paid knowingly: this used to be the one arming site that never
-  // touched the slot, and it is now a writer, so it widens the set of paths
-  // that can hit the single-marker residual (`docs/syncplay.md`). Deliberately
-  // *not* guarded by "skip when a live mark already occupies the slot" — that
-  // guard is strictly worse, because the un-armed same-value `seeked` then
-  // either consumes the other mark (and the real echo it was holding escapes)
-  // or goes out as intent itself, which is the hole this branch closes.
+  // The cost the single slot charged for this branch is *gone* under the
+  // registry (#306 Phase B), and that is the one thing here that changed. It
+  // used to be the one arming site that never touched the slot, so making it a
+  // writer widened the set of paths that could clobber another site's mark. A
+  // registry has no slot to clobber: this operation is registered alongside
+  // whatever else is outstanding and consumes only a `seeked` that matches it.
+  // The old note that it is deliberately *not* guarded by "skip when a live
+  // mark already occupies the slot" survives as history — there is no longer a
+  // condition to write that guard against.
   //
   // Neither post-metadata caller can reach the branch today: the MSE land's
   // strict `t < resumeLandTarget` makes a same-value write unreachable at any
@@ -814,24 +987,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // sits at 0. This is for caller number eight.
   //
   // The residual latch is a write that does move the element but whose `seeked`
-  // never arrives (an aborted load); the TTL is the backstop for that, and a
-  // retraction path must not be added without a test for it.
-  function markProgrammaticSeek(target: number): void {
+  // never arrives (an aborted load). The TTL is still the backstop, and it is
+  // now joined by the handle: a caller whose write throws retracts *its own*
+  // operation immediately (`use-mse-player`'s land is the one such caller
+  // today), which is exact by construction and cannot disturb anything else
+  // outstanding.
+  function beginProgrammaticSeek(target: number): SyncplaySeekOp {
     const v = deps.getVideoEl()
     if (v && v.currentTime === target) {
-      if (v.readyState < 1) return
-      appliedSeekPosition = {
-        value: target,
-        expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
-        anyValue: false
-      }
-      return
+      if (v.readyState < 1) return NO_SEEK_OP
+      return registerSeekOp(target, 'value')
     }
-    appliedSeekPosition = {
-      value: target,
-      expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
-      anyValue: true
-    }
+    return registerSeekOp(target, 'any')
   }
 
   function setSyncplayLocalReady(ready: boolean): void {
@@ -968,8 +1135,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const diff = Math.abs(v.currentTime - state.position)
     // Folded into `needsSeek` rather than applied below it, so all five
     // seek-keyed effects fall away together: the no-op early-out, the
-    // `suppressNextLocalEventUntil` arming, the `appliedSeekPosition` echo
-    // guard, the write itself and the "X seeked to …" toast — which would
+    // `suppressNextLocalEventUntil` arming, the seek operation that guards the
+    // echo, the write itself and the "X seeked to …" toast — which would
     // otherwise announce a seek to a timestamp that does not exist in our file.
     // `needsPlayPause` is computed independently, so a room *pause* carried on
     // an out-of-file state is still honored.
@@ -1080,11 +1247,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     }
     if (needsSeek) {
       const target = Math.max(0, state.position)
-      appliedSeekPosition = {
-        value: target,
-        expiresAt: Date.now() + APPLIED_SEEK_TTL_MS,
-        anyValue: false
-      }
+      // The direct-arming site the seek rewrite is easiest to miss (#306 Phase
+      // B), the twin of the `appliedPaused` one below: this one wrote the
+      // `appliedSeekPosition` slot inline rather than going through the helper,
+      // so it inherited neither an identity nor a retraction path, and any
+      // other site's arming could clobber it.
+      //
+      // It registers a `value` operation *directly* rather than through
+      // `beginProgrammaticSeek`, and deliberately so: the apply's strictness is
+      // not a `readyState` decision but a standing property of this site. #240
+      // makes this the sole renderer-side seek-echo guard for a deferred apply,
+      // and a value-agnostic operation would swallow the user's first real seek
+      // after every apply. The target is `Math.max(0, state.position)` — the
+      // same number main emitted — so the renderer operation and main's
+      // `lastAppliedRemotePosition` backstop agree on one value.
+      registerSeekOp(target, 'value')
       v.currentTime = target
     }
     if (needsPlayPause && !holding) {
@@ -1282,27 +1459,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     })
   }
 
+  // Consuming *is* the classification (#306 Phase B). An operation matched here
+  // is the element realizing a move this app made — the peer's seek arriving
+  // back at us, or one of our own programmatic writes — and never the user's.
+  //
+  // Everything the single slot spelled out inline now lives in `consumeSeekOp`,
+  // with the same three answers: an expired operation is pruned and suppresses
+  // nothing (expiry releases, it never vetoes); a `value` operation the event
+  // does not match is left registered on purpose, because this `seeked` belongs
+  // to some other write and consuming it there is what let the real echo escape
+  // (#224); and a `seeked` matching nothing outstanding is the user's.
   function onVideoSeeked(): void {
-    const v = deps.getVideoEl()
-    const mark = appliedSeekPosition
-    if (mark) {
-      if (Date.now() >= mark.expiresAt) {
-        // Stale: whatever write armed it either never fired an event or its
-        // event was consumed long ago. Drop it and read this as the user.
-        appliedSeekPosition = null
-      } else if (
-        mark.anyValue ||
-        (v && Math.abs(v.currentTime - mark.value) < APPLIED_SEEK_EPSILON)
-      ) {
-        // The element realizing a move we made — the peer's seek arriving back
-        // at us, or one of our own programmatic writes. Not the user.
-        appliedSeekPosition = null
-        return
-      }
-      // A value-keyed mismatch leaves the mark armed on purpose: this is some
-      // other `seeked` that arrived between the apply and its echo, and
-      // consuming the marker here is what let the real echo escape (#224).
-    }
+    if (consumeSeekOp(deps.getVideoEl())) return
     sendSyncplayLocalState('seek')
   }
 
@@ -1501,34 +1669,34 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayLastRemotePlaying = false
       syncplayLastAppliedPaused = null
       syncplayPausedBy.value = null
-      // Intent, and the markers that gate it. Left set, a stale `intendedPaused`
-      // reports room A's play state into room B, a live playback operation
-      // swallows one real play/pause of the next session, `appliedSeekPosition`
-      // swallows its first real seek for the rest of the 15 s TTL,
-      // `suppressNextLocalEventUntil` eats both the send and the `pausedBy`
-      // attribution of the first intent recorded inside the dead session's
-      // window, and `lastSnapshotPushAt` drops the first `timeupdate` snapshot
-      // when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
+      // Intent, and the operations that gate it. Left set, a stale
+      // `intendedPaused` reports room A's play state into room B, a live
+      // playback operation swallows one real play/pause of the next session, a
+      // live seek operation swallows its first real seek for the rest of the
+      // 15 s TTL, `suppressNextLocalEventUntil` eats both the send and the
+      // `pausedBy` attribution of the first intent recorded inside the dead
+      // session's window, and `lastSnapshotPushAt` drops the first `timeupdate`
+      // snapshot when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
       //
       // Tradeoff, the twin of the widening #227 notes for the suppression
-      // window: playback operations and `appliedSeekPosition` are also armed by
-      // machinery that is *not* scoped to the syncplay session — the buffer
-      // refill and the resume-from-middle land in `use-mse-player`, and
-      // `PlayerView`'s saved-position restores. A session end landing between
-      // one of those arms and the element's event un-marks it, so that echo
+      // window: both registries are also armed by machinery that is *not*
+      // scoped to the syncplay session — the buffer refill and the
+      // resume-from-middle land in `use-mse-player`, and `PlayerView`'s
+      // saved-position restores. A session end landing between one of those
+      // registrations and the element's event drops the operation, so that echo
       // reaches the next room as a user action. One event, and the alternative
       // is the swallowed-event bug above — but it is the room-dragging
       // direction, so it is written down rather than discovered.
       intendedPaused = null
       intentRevision++
-      // Dropped outright rather than retired: a retired operation exists to
-      // absorb a late echo from a source that still belongs to *this* player,
-      // and a session end hands the element to a different room entirely. The
-      // widening tradeoff two paragraphs up is unchanged by the registry —
-      // fewer operations survive here, in the swallowed-event direction, not the
-      // room-dragging one.
+      // Both registries dropped outright rather than retired: a retired
+      // operation exists to absorb a late echo from a source that still belongs
+      // to *this* player, and a session end hands the element to a different
+      // room entirely. The widening tradeoff two paragraphs up is unchanged by
+      // the registries — fewer operations survive here, in the swallowed-event
+      // direction, not the room-dragging one.
       playbackOps = []
-      appliedSeekPosition = null
+      seekOps = []
       // Room B must not inherit room A's pending pause — nor its 8 s timer,
       // which would toast a failure into a session that never held anything.
       clearPendingUserPause()
@@ -1550,8 +1718,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // saved position is eaten on every later episode open — the failure the
       // reset exists to prevent, and what `docs/syncplay.md` already claims.
       // Only this tracking: it is per-socket, and this is the socket ending.
-      // The user's intent is not — `intendedPaused`, the playback operation
-      // registry, `appliedSeekPosition`, `suppressNextLocalEventUntil`,
+      // The user's intent is not — `intendedPaused`, the playback and seek
+      // operation registries, `suppressNextLocalEventUntil`,
       // `lastSnapshotPushAt`, `syncplayLastRemotePlaying` and the ready flag all
       // deliberately survive a reconnect, unlike the `idle`/`disconnected`
       // branch above, which is a genuine session end. The two rules are not in
@@ -1683,7 +1851,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     setSyncplayLocalReady,
     beginProgrammaticPlayback,
     bumpPlaybackSourceGeneration,
-    markProgrammaticSeek,
+    beginProgrammaticSeek,
     applySyncplayReadyGate,
     toggleSyncplayConnection,
     onVideoSeeked,

@@ -862,8 +862,8 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
     // so a *whole-line* `//` in `PlayerView.vue` naming `initSubtitles(video)`
     // would otherwise count as a site and fail this. It narrows the hazard
     // without closing it — `stripComments` only blanks whole-line `//`, so a
-    // *trailing* `// …`, or a block comment on its own line, naming the
-    // literal still counts as a site (#312).
+    // *trailing* `// …`, or any line of a block comment, naming the literal
+    // still counts as a site (#312).
     let guarded = 0
     for (const [name, body] of CONTINUATIONS) {
       const sites = [...body.matchAll(/initSubtitles\(video\)/g)]

@@ -938,6 +938,50 @@ describe('#280 (4) — the ladder extends to the continuations own blanket clean
   })
 })
 
+describe('#311 — the ladder checkpoints the stream fall-back in BOTH continuations', () => {
+  // The rule the #280 ladder actually carries is "bail after every await a
+  // close can land inside", and `playerGetStreamUrl` is the widest window
+  // either continuation has — a network round trip. `selectTranslation` had
+  // the checkpoint and `goToEpisode` did not, which is the asymmetry #311
+  // closes; scanning both from one `it.each` is what stops them drifting apart
+  // again.
+  const STREAM_URL_RE = /await window\.api\.playerGetStreamUrl\(/g
+
+  it.each(CONTINUATIONS)(
+    'bails immediately after every playerGetStreamUrl await in %s',
+    (name, body) => {
+      const sites = [...body.matchAll(STREAM_URL_RE)]
+      // The inventory is pinned, not just looped over: "for every await, assert
+      // a bail" passes vacuously over an empty match list, so a rename of the
+      // channel or a move behind a helper would turn this quietly green on the
+      // exact site it exists to protect.
+      expect(sites, `${name} playerGetStreamUrl site count`).toHaveLength(1)
+      for (const site of sites) {
+        const semi = body.indexOf(';', site.index!)
+        expect(semi, `unterminated playerGetStreamUrl statement in ${name}`).toBeGreaterThan(-1)
+        // Asserted before slicing: `indexOf` returns -1 when the bail is
+        // missing, and `slice(semi + 1, -1)` is "everything but the last
+        // character", which is non-whitespace — red for the wrong reason and
+        // reported as a several-hundred-character diff.
+        const bail = body.indexOf(BAIL, semi)
+        expect(
+          bail,
+          `no \`${BAIL}\` after the playerGetStreamUrl await in ${name}`
+        ).toBeGreaterThan(-1)
+        // "Immediately after", spelled as an assertion: a bare reachability
+        // check would also accept a bail thirty lines down, which is the
+        // failure this scan is about. Comments are already stripped from these
+        // bodies; the blank lines they leave behind are why this is a
+        // whitespace test rather than an offset compare.
+        expect(
+          body.slice(semi + 1, bail),
+          `statements between the playerGetStreamUrl await and its \`${BAIL}\` in ${name}`
+        ).toMatch(/^\s*$/)
+      }
+    }
+  )
+})
+
 describe('#280 (3) — the diagnostic element listeners are removed at teardown', () => {
   const TYPES = ['waiting', 'stalled', 'error', 'timeupdate', 'seeking', 'seeked']
 

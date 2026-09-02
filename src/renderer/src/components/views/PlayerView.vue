@@ -2101,6 +2101,12 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
 
     // Fall back to streaming
     const result = await window.api.playerGetStreamUrl(resolvedTr.id, resolvedTr.height);
+    // The ladder's rule (#280): a checkpoint after every await whose
+    // continuation resumes with none of its own. Not the widest window in this
+    // function — `prepareMkvForPlayback` above is wider — but the widest
+    // unchecked one: that await comes back through `shouldBail`, this one
+    // returns a stream URL whether or not the component is still alive.
+    if (unmounted) return;
     if (!result) {
       navigating.value = false;
       return;

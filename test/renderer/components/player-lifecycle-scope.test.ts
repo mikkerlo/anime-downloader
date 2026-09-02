@@ -46,7 +46,7 @@ function slice(startNeedle: string, endNeedle: string): string {
   return SOURCE.slice(start, end)
 }
 
-/** Line comments are stripped so prose that names a call site can't satisfy a scan. */
+/** Only `//`-prefixed whole lines are stripped, so prose inside one can't satisfy a scan; a trailing `// …` or any line of a block comment still can. */
 function stripComments(text: string): string {
   return text.replace(/^[ \t]*\/\/.*$/gm, '')
 }
@@ -856,19 +856,25 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
     // same `video` const, after a `playerGetStreamUrl` network round trip — so
     // the unmount window there is *wider*. `SubtitlesOctopus` is a Web Worker +
     // canvas whose only disposer, `destroySubtitles()`, already ran at unmount.
-    const continuations = [
-      slice('async function selectTranslation', 'async function goToEpisode'),
-      slice('async function goToEpisode', 'function cancelAutoAdvance')
-    ]
+    //
+    // The `CONTINUATIONS` bodies are comment-stripped, and that is load-bearing
+    // here: the count below is pinned over a regex that ordinary prose matches,
+    // so a *whole-line* `//` in `PlayerView.vue` naming `initSubtitles(video)`
+    // would otherwise count as a site and fail this. It narrows the hazard
+    // without closing it — `stripComments` only blanks whole-line `//`, so a
+    // *trailing* `// …`, or any line of a block comment, naming the literal
+    // still counts as a site (#312).
     let guarded = 0
-    for (const body of continuations) {
+    for (const [name, body] of CONTINUATIONS) {
       const sites = [...body.matchAll(/initSubtitles\(video\)/g)]
-      expect(sites).toHaveLength(2)
+      expect(sites, `${name} initSubtitles site count`).toHaveLength(2)
       for (const site of sites) {
         // The guard is the enclosing `if`, which is on the same line for one
         // pair of sites and on the line above for the other.
         const condition = body.slice(body.lastIndexOf('if (', site.index!), site.index!)
-        expect(condition, `unguarded initSubtitles at offset ${site.index}`).toContain('!unmounted')
+        expect(condition, `${name} unguarded initSubtitles at offset ${site.index}`).toContain(
+          '!unmounted'
+        )
         guarded++
       }
     }

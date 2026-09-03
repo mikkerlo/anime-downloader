@@ -1048,6 +1048,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayAllUsersReady() &&
       !pendingUserPause &&
       !outOfFileUserPause
+    // Mirrored by hand at `onLocalPlay`'s conditional send, which reduces this
+    // whole expression to `syncplayAllUsersReady()` because the handler has
+    // already settled the other three terms — a fifth term added here has to
+    // be reflected there too, or a held play goes back to sending. No test
+    // catches that: the mutation that reds `omits the discrete play when
+    // readiness holds it` is removal of the existing term, not addition of a
+    // new one.
+
     // The gate moves the element on the room's behalf, never the user's —
     // register it like a remote apply so the resulting event isn't mistaken for
     // intent however late the element gets around to firing it. `echo`: the

@@ -301,7 +301,10 @@ export function useMsePlayer(deps: {
       // register-before-write, and it also keeps a throw *from the dep* inside
       // this handler — declared-and-assigned outside, such a throw would escape
       // `onSourceBufferUpdateEnd` with `initialLandPending` still true and the
-      // land would retry on the next append.
+      // land would retry on the next append. Pinned, not merely asserted, by
+      // `use-mse-player.test.ts`'s "consumes the pending flag when the
+      // registration itself throws, so the land does not retry": it fails on the
+      // `const`-above-`try` shape and passes on this one.
       if (initialLandPending && v) {
         if (deps.hasRemoteStateApplied?.()) {
           console.log('[player] resume land cancelled — the syncplay room owns the playhead')

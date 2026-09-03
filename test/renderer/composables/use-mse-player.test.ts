@@ -1426,4 +1426,74 @@ describe('useMsePlayer — the resume land retracts its own seek operation (#306
 
     m.resetMseState()
   })
+
+  // The containment half of the same shape, and the reason the registration is a
+  // `let` declared above the `try` with the assignment as the first statement
+  // *inside* it. Declared-and-assigned outside, a throw from
+  // `beginProgrammaticSeek` escapes `onSourceBufferUpdateEnd` before
+  // `initialLandPending = false` runs, and the land — a once-per-session affair —
+  // retries on the next append. The dep throws exactly once here so the two
+  // shapes are told apart by what the *second* `updateend` does: nothing under
+  // the current shape, a full land write under the reverted one.
+  it('consumes the pending flag when the registration itself throws, so the land does not retry', () => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const reg = fakeSeekRegistry()
+    let begins = 0
+    const begin = (target: number): { id: number; retract: ReturnType<typeof vi.fn> } => {
+      begins++
+      if (begins === 1) throw new Error('registry unavailable')
+      return reg.begin(target)
+    }
+
+    let writes = 0
+    const video = {
+      get currentTime(): number {
+        return 0
+      },
+      set currentTime(_v: number) {
+        writes++
+      },
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+
+    const m = useMsePlayer(
+      makeDeps({
+        getVideoEl: () => video as unknown as HTMLVideoElement,
+        beginProgrammaticSeek: begin
+      })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 1400,
+      timestampOffset: 1395
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+
+    fakeSb.buffered.ranges = [[1395.08, 1401.0]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    // The throw was contained: it took the write down with it, but it did not
+    // take the handler down — nothing was registered, nothing was retracted.
+    expect(begins).toBe(1)
+    expect(writes).toBe(0)
+    expect(reg.registered).toHaveLength(0)
+    expect(reg.retracted).toEqual([])
+
+    // The flag was consumed anyway, so the next append is not a second chance.
+    fakeSb.dispatchEvent(new Event('updateend'))
+    expect(begins).toBe(1)
+    expect(writes).toBe(0)
+    expect(reg.registered).toHaveLength(0)
+
+    m.resetMseState()
+  })
 })

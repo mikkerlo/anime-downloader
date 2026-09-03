@@ -759,7 +759,9 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(remoteStates[0].setBy).toBe('peer')
       })
 
-      // The renderer's suppression window, walked end to end. The apply arms
+      // Main's own echo guard, walked end to end — the backstop behind the
+      // renderer's value-keyed seek registry, and since #304 the only clock-free
+      // layer left on either side. The apply arms
       // main's echo reference, the element's `seeked` comes back as a local
       // 'seek' at the applied value, and sendLocalState()'s echo guard swallows
       // it — so the peer's own position is never re-armed as a fresh intent and

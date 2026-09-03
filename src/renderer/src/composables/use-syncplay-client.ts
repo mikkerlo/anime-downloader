@@ -225,16 +225,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let syncplayToastTimer: ReturnType<typeof setTimeout> | null = null
   let syncplaySnapshotTimer: ReturnType<typeof setInterval> | null = null
   let syncplayWaitingTimer: ReturnType<typeof setTimeout> | null = null
-  let suppressNextLocalEventUntil = 0
   // ── The programmatic seek operation registry (#306, Phase B) ──────────────
   //
   // The `currentTime` writes we are still waiting for the element to realize.
-  // The 1500 ms window above is a wall-clock guess, and a seek on a network
-  // stream regularly completes later than that — the element's `seeked` then
-  // escapes as our own seek and we hand the peer their own position back with
-  // doSeek, dragging the room to a stale point and bumping the ignore counter
-  // (which makes main drop the inbound states we need). Keying on the write
-  // itself is exact, however long the element takes to get there.
+  // What this replaced on the seek side was a 1500 ms wall-clock guess, and a
+  // seek on a network stream regularly completes later than that — the
+  // element's `seeked` then escapes as our own seek and we hand the peer their
+  // own position back with doSeek, dragging the room to a stale point and
+  // bumping the ignore counter (which makes main drop the inbound states we
+  // need). Keying on the write itself is exact, however long the element takes
+  // to get there. That window is gone entirely as of #304; nothing in this
+  // composable is bounded by a wall clock any more.
   //
   // Two match kinds, differing only in how they are consumed (#239):
   // - `value` — matched by position within APPLIED_SEEK_EPSILON.
@@ -631,17 +632,29 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   function sendSyncplayLocalState(cause: 'play' | 'pause' | 'seek'): void {
     if (syncplayStatus.value.state !== 'ready') return
-    // Seeks are keyed on the value applied, not on the clock (#239). The
-    // wall-clock window dropped *every* seek inside it — including the user's,
-    // to a position nobody applied — so a skip-opening click landing right
-    // after a remote apply (or inside the 1500 ms the readiness gate re-arms on
-    // every buffer refill) moved only the local player and the room never
-    // heard about it. The seek operation registry is what suppresses echoes now
-    // (#306 Phase B), and every programmatic `currentTime` write registers an
-    // operation there — via `beginProgrammaticSeek`, or directly for the remote
-    // apply's deliberately strict one.
-    // play/pause keep the window: they have no equivalent value to key on.
-    if (cause !== 'seek' && Date.now() < suppressNextLocalEventUntil) return
+    // No cause is gated on the clock any more (#304). Every cause this function
+    // takes — `play`, `pause`, `seek` — reaches it only past its own operation
+    // registry: `onVideoSeeked` returns above the send on `consumeSeekOp`
+    // (#306 Phase B) and `onLocalPlay` / `onLocalPause` return above theirs on
+    // `consumePlaybackOp` (#306 Phase A). So everything arriving here has
+    // already been classified as the user's, and the 1500 ms
+    // `suppressNextLocalEventUntil` window that used to sit on this line could
+    // only drop presses the registries had already vouched for.
+    //
+    // Seek lost the window first (#239), for the reason the whole shape was
+    // wrong: it dropped *every* seek inside it — including the user's, to a
+    // position nobody applied — so a skip-opening click landing right after a
+    // remote apply (or inside the 1500 ms the readiness gate re-armed on every
+    // buffer refill) moved only the local player and the room never heard about
+    // it. Play and pause failed the same way and were only harder to see: a
+    // dropped pause never reaches main's discrete `sendLocalState` path, so a
+    // stale playing frame resumed the initiator a beat later.
+    //
+    // The two ways a registry can still miss an echo are both documented in
+    // docs/syncplay.md ("TTL direction"), and neither was ever bounded by a
+    // 1500 ms window — a TTL expiry releases its event ten window-lengths late,
+    // and a cap eviction needs 17 outstanding operations. Do not reintroduce a
+    // wall-clock backstop here for either.
     const v = deps.getVideoEl()
     if (!v) return
     if (!hasAnnounceablePosition(v)) return
@@ -753,8 +766,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
   // Bounded lifetime, which `appliedPaused` never had. Expiry only ever
   // *releases* an event toward being classified as the user's and sent; it is
-  // never a new veto, so this is not — and must never become — a second
-  // wall-clock send-suppression window of the kind #304 deletes.
+  // never a new veto, so this is not — and must never become — the wall-clock
+  // send-suppression window #304 deleted.
   //
   // 15 s, matching APPLIED_SEEK_TTL_MS, for the same reason: the MSE respawn
   // path waits up to 15 s for buffer-ahead, and a `play()` issued against an
@@ -1035,17 +1048,23 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayAllUsersReady() &&
       !pendingUserPause &&
       !outOfFileUserPause
+    // Mirrored by hand at `onLocalPlay`'s conditional send, which reduces this
+    // whole expression to `syncplayAllUsersReady()` because the handler has
+    // already settled the other three terms — a fifth term added here has to
+    // be reflected there too, or a held play goes back to sending. No test
+    // catches that: the mutation that reds `omits the discrete play when
+    // readiness holds it` is removal of the existing term, not addition of a
+    // new one.
+
     // The gate moves the element on the room's behalf, never the user's —
     // register it like a remote apply so the resulting event isn't mistaken for
     // intent however late the element gets around to firing it. `echo`: the
     // gate asserts no intent of its own, it only re-enacts what the mirror
     // already says.
     if (!shouldPlay && !v.paused) {
-      suppressNextLocalEventUntil = Date.now() + 1500
       beginProgrammaticPlayback('pause')
       v.pause()
     } else if (shouldPlay && v.paused) {
-      suppressNextLocalEventUntil = Date.now() + 1500
       const op = beginProgrammaticPlayback('play')
       v.play().catch(() => {
         // The call failed, so no 'play' event will ever consume this operation —
@@ -1095,8 +1114,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // - `effectivePaused` reads the live roster through `syncplayAllUsersReady()`;
   //   a park-time snapshot goes stale and would resume us over a peer that went
   //   not-ready in the meantime.
-  // - the early-out and `suppressNextLocalEventUntil` gate *sending* around the
-  //   element writes, so they have to fire when the writes do.
+  // - the no-op early-out decides whether this apply moves anything at all, and
+  //   the seek operation it guards is registered immediately before the write,
+  //   so both have to fire when the writes do.
   // - `intendedPaused` is the room intent we assert on the next heartbeat;
   //   adopting it while the element still sits at 0 would report an intent we
   //   have not enacted.
@@ -1137,11 +1157,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // purpose.
     const outOfFile = Number.isFinite(v.duration) && v.duration > 0 && state.position >= v.duration
     const diff = Math.abs(v.currentTime - state.position)
-    // Folded into `needsSeek` rather than applied below it, so all five
-    // seek-keyed effects fall away together: the no-op early-out, the
-    // `suppressNextLocalEventUntil` arming, the seek operation that guards the
-    // echo, the write itself and the "X seeked to …" toast — which would
-    // otherwise announce a seek to a timestamp that does not exist in our file.
+    // Folded into `needsSeek` rather than applied below it, so all four
+    // seek-keyed effects fall away together: the no-op early-out, the seek
+    // operation that guards the echo, the write itself and the "X seeked to …"
+    // toast — which would otherwise announce a seek to a timestamp that does
+    // not exist in our file.
     // `needsPlayPause` is computed independently, so a room *pause* carried on
     // an out-of-file state is still honored.
     const wouldSeek = state.doSeek || diff > 3.0
@@ -1170,13 +1190,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // Folded into `needsPlayPause` rather than applied below it so the no-op
     // early-out below still fires: `outOfFile` forces `needsSeek` false, so a
-    // refused resume would otherwise fall through and re-arm
-    // `suppressNextLocalEventUntil` once a second for the whole divergence.
+    // refused resume would otherwise fall through into the body once a second
+    // for the whole divergence — clobbering `intendedPaused` back to "playing"
+    // and bumping `intentRevision` on every frame, which is the very intent the
+    // refusal exists to keep.
     const refusingResume = outOfFile && outOfFileUserPause && !effectivePaused && v.paused
     const needsPlayPause = effectivePaused !== v.paused && !refusingResume
 
     if (!needsSeek && !needsPlayPause) return
-    suppressNextLocalEventUntil = Date.now() + 1500
 
     // A playing state arriving while the user's pre-adoption pause is still
     // pending (#228). The seek half is applied anyway — withholding it would
@@ -1499,11 +1520,19 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       applySyncplayReadyGate()
       return
     }
-    // Intent is recorded whatever the wall-clock window says. A genuine echo
-    // is already caught by the registry above; anything reaching here is the
-    // user. Gating this on the window meant a pause inside it left intent at
-    // "playing" while the element sat paused — the heartbeat then asserted
-    // play and the next remote apply resumed it, so the pause "didn't work".
+    // A genuine echo is already caught by the registry above; anything reaching
+    // here is the user. The wall-clock window that once gated this write is
+    // gone entirely (#304), but the reason it had to stop gating *intent* first
+    // (#228) is still worth keeping: a pause inside the window left intent at
+    // "playing" while the element sat paused — the heartbeat then asserted play
+    // and the next remote apply resumed it, so the pause "didn't work".
+    //
+    // `intentRevision++` is load-bearing rather than bookkeeping, and its
+    // position here matters: `applyConsumedPlaybackIntent` compares an
+    // operation's captured revision against this one to decide whether a
+    // non-echo operation may still write intent, so a bump that moves below the
+    // send or the gate call would let a stale queued `restore` overwrite the
+    // press the user just made.
     intendedPaused = false
     intentRevision++
     // The user changed their mind — clear before the gate call below, or it
@@ -1512,12 +1541,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     clearPendingUserPause()
     outOfFileUserPause = false
     // Unconditional since #228, like the pause half below: anything reaching
-    // here is past the operation-registry echo check, and by #224's classification
-    // rule that makes it the user. The wall-clock window that used to gate this
-    // is re-armed by *every* apply for 1500 ms, at ~1 Hz through the whole
-    // convergence window, so it was shut for exactly the presses this issue is
-    // about. It still gates sending (`sendSyncplayLocalState`), which is all it
-    // was ever able to say something true about.
+    // here is past the operation-registry echo check, and by #224's
+    // classification rule that makes it the user. The wall-clock window that
+    // used to gate these writes was re-armed by *every* apply for 1500 ms, at
+    // ~1 Hz through the whole convergence window, so it was shut for exactly
+    // the presses #228 was about. It went on gating the *send* until #304,
+    // which is the last claim in its favour that survived Phase A and did not
+    // survive it: `consumePlaybackOp` above now returns for every echo, so the
+    // only events left for the window to drop were ones the registry had
+    // already classified as this user's press.
     //
     // This half ships with the pause half or not at all: relaxing the pause
     // side alone leaves a stale `false` here that the gate call below reads,
@@ -1525,7 +1557,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     syncplayLastRemotePlaying = true
     syncplayLastAppliedPaused = false
     syncplayPausedBy.value = null
-    sendSyncplayLocalState('play')
+    // Only the *send* is conditional, and only on the one term of `shouldPlay`
+    // this handler has not already settled. By this line `syncplayLastRemotePlaying`
+    // is forced true above, `clearPendingUserPause()` has run and
+    // `outOfFileUserPause` is false, so `syncplayAllUsersReady()` is the sole
+    // residual conjunct of the gate's decision — and nothing between here and
+    // the gate call perturbs one of them.
+    //
+    // When readiness holds the element, the discrete play is omitted rather
+    // than deferred: main arms its ignore counter on a discrete send, and a
+    // play we are not going to enact should not deafen us to the acks that tell
+    // us when we may. The intent is not lost — `intendedPaused = false` above
+    // rides out on `intentOr(v)` with the next snapshot — and when readiness
+    // later releases the element the gate's own `play()` is an echo, not a
+    // second user command, so there is deliberately no delayed duplicate send.
+    //
+    // Deliberately *not* inferred by re-reading `v.paused` after the gate call:
+    // that conflates "readiness held us" with "the element was already playing",
+    // and the gate must stay below the intent and mirror writes it reads.
+    if (syncplayAllUsersReady()) sendSyncplayLocalState('play')
     applySyncplayReadyGate()
   }
 
@@ -1547,6 +1597,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // through the user's own pause and the ready gate resumed the element a
     // beat later. Past the echo check this is the user, so the mirror follows
     // them — which also makes "Paused by you" appear on the press.
+    //
+    // The pause send below is unconditional, unlike the play half's: readiness
+    // never holds a pause. `shouldPlay` false is exactly what the gate enacts,
+    // so there is no state in which the element declines to honour this one.
     syncplayLastRemotePlaying = false
     syncplayLastAppliedPaused = true
     if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
@@ -1677,14 +1731,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // `intendedPaused` reports room A's play state into room B, a live
       // playback operation swallows one real play/pause of the next session, a
       // live seek operation swallows its first real seek for the rest of the
-      // 15 s TTL, `suppressNextLocalEventUntil` eats both the send and the
-      // `pausedBy` attribution of the first intent recorded inside the dead
-      // session's window, and `lastSnapshotPushAt` drops the first `timeupdate`
-      // snapshot when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS.
+      // 15 s TTL, and `lastSnapshotPushAt` drops the first `timeupdate` snapshot
+      // when the next session starts inside SNAPSHOT_MIN_INTERVAL_MS. Since #304
+      // the two registries are the whole of what a dead session could carry into
+      // the next one on this axis: there is no wall-clock window left to eat the
+      // send and the `pausedBy` attribution of room B's first press.
       //
-      // Tradeoff, the twin of the widening #227 notes for the suppression
-      // window: both registries are also armed by machinery that is *not*
-      // scoped to the syncplay session — the buffer refill and the
+      // Tradeoff, the same widening #227 first wrote down for the suppression
+      // window this list has outlived: both registries are also armed by
+      // machinery that is *not* scoped to the syncplay session — the buffer
+      // refill and the
       // resume-from-middle land in `use-mse-player`, and `PlayerView`'s
       // saved-position restores. A session end landing between one of those
       // registrations and the element's event drops the operation, so that echo
@@ -1704,7 +1760,6 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // Room B must not inherit room A's pending pause — nor its 8 s timer,
       // which would toast a failure into a session that never held anything.
       clearPendingUserPause()
-      suppressNextLocalEventUntil = 0
       lastSnapshotPushAt = 0
       // Takes room A's refusal receipt with it, by this function's default: an
       // identical refusal in room B is news to the user, and a flag inherited
@@ -1723,8 +1778,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // reset exists to prevent, and what `docs/syncplay.md` already claims.
       // Only this tracking: it is per-socket, and this is the socket ending.
       // The user's intent is not — `intendedPaused`, the playback and seek
-      // operation registries, `suppressNextLocalEventUntil`,
-      // `lastSnapshotPushAt`, `syncplayLastRemotePlaying` and the ready flag all
+      // operation registries, `lastSnapshotPushAt`, `syncplayLastRemotePlaying`
+      // and the ready flag all
       // deliberately survive a reconnect, unlike the `idle`/`disconnected`
       // branch above, which is a genuine session end. The two rules are not in
       // tension: a reconnect keeps what the *user* wants and drops what the

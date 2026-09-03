@@ -3847,13 +3847,6 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 42, cause: 'seek' })
   })
 
-  // Was `re-opens the send gate and the pausedBy attribution for the next
-  // session`. The gate is gone (#304), and the honest thing to record is which
-  // half of this test still carries weight, because the suite cannot tell you:
-  // the send assertion below passed identically with the window in place and
-  // with it deleted, so it never announced itself as having gone vacuous. It is
-  // kept as a plain delivery non-regression and is *not* evidence about the
-  // session reset. The `pausedBy` assertion is the load-bearing half.
   it("attributes the next session's first pause after a session reset", async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
@@ -3878,7 +3871,6 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     sendLocalState.mockClear()
     client.onLocalPause()
 
-    // Delivery only — see the note above.
     expect(sendLocalState).toHaveBeenCalledTimes(1)
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'pause' })
     // The session end nulls `syncplayPausedBy`, and the next session's first

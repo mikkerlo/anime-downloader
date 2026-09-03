@@ -1967,7 +1967,14 @@ async function selectTranslation(tr: {
             reportPrepareError(prep);
             // Ownership, not `prep !== PLAYER_CLOSED_BAIL` (#291): release the
             // flag unless a later `selectTranslation` owns it, in which case it
-            // clears it in its own `nextTick`.
+            // clears it in its own `nextTick`. That "unless" is no longer
+            // reachable: with the compare above this arm and no await between,
+            // `translationEpoch === mySwitch` is provably true — a later
+            // `selectTranslation` means the compare four lines up already
+            // returned. It stays because #302's classifier scans every flag
+            // clear for the compare and goes red without one, not because
+            // anything can still reach the clear with the epoch moved. Same at
+            // the matching prepare arm in `goToEpisode`.
             if (translationEpoch === mySwitch) switchingTranslation.value = false;
             return;
           }
@@ -2253,7 +2260,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             // whenever the superseder was a `selectTranslation` — nothing
             // outside this function ever clears it. The walk in
             // `handleRemoteEpisodeChange` is stopped by its own sampled
-            // `translationEpoch` term instead, not by a stranded flag.
+            // `translationEpoch` term instead, not by a stranded flag. And as
+            // there, `navigationEpoch === myNav` is provably true under the
+            // compare above this arm with no await between them — kept for
+            // #302's flag-clear classifier, not as live protection.
             if (navigationEpoch === myNav) navigating.value = false;
             return;
           }

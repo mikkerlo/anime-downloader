@@ -1947,6 +1947,22 @@ async function selectTranslation(tr: {
 
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           const prep = await prepareMkvForPlayback(localResult.filePath);
+          // The callee's `shouldBail(myPrepare)` ladder says nothing about the
+          // CALLER's continuation (#317), and the gap is not theoretical: only
+          // `prepareMkvForPlayback` bumps `prepareEpoch`, so a superseder that
+          // took the stream branch never bumps at all — the loser's prepare
+          // runs to completion uncancelled and falls straight through to here.
+          // It has to sit ABOVE `if (!prep.ok)`, not below it: that arm's
+          // `reportPrepareError` writes `remuxError`, which the WINNER owns and
+          // which paints `.remux-overlay` over the winner's playing video — and
+          // `remuxError` is cleared in exactly one place, at the top of
+          // `prepareMkvForPlayback`, so a winner that took the stream branch
+          // never clears it for the life of the component. Past that arm the
+          // same argument covers `destroySubtitles()` below, which would tear
+          // down the WINNER's live `SubtitlesOctopus` with no recovery path
+          // either: the winner has already run its own `initSubtitles` and
+          // nothing re-runs it.
+          if (translationEpoch !== mySwitch) return;
           if (!prep.ok) {
             reportPrepareError(prep);
             // Ownership, not `prep !== PLAYER_CLOSED_BAIL` (#291): release the
@@ -1956,16 +1972,6 @@ async function selectTranslation(tr: {
             return;
           }
         }
-
-        // The callee's `shouldBail(myPrepare)` ladder says nothing about the
-        // CALLER's continuation (#317), and the gap is not theoretical: only
-        // `prepareMkvForPlayback` bumps `prepareEpoch`, so a superseder that
-        // took the stream branch never bumps at all — the loser's prepare runs
-        // to completion, hands back `ok: true`, and falls straight through to
-        // here. `destroySubtitles()` below would then tear down the WINNER's
-        // live `SubtitlesOctopus`, with no recovery path: the winner has
-        // already run its own `initSubtitles` and nothing re-runs it.
-        if (translationEpoch !== mySwitch) return;
 
         // Update subtitles
         destroySubtitles();
@@ -2007,6 +2013,12 @@ async function selectTranslation(tr: {
     // nothing: a run only skips that arm by FAILING this compare, and the
     // winner passes it by definition and reaches its own. The failure being
     // swallowed is the loser's, about a source nobody is going to play.
+    // Consequence for the arm below: with this compare above it and no await
+    // between, its `translationEpoch === mySwitch` is provably true and is no
+    // longer live protection. It stays because #302's classifier scans every
+    // flag clear for the compare and goes red without one, not because
+    // anything can still reach the clear with the epoch moved. Same at the
+    // matching `!result` arm in `goToEpisode`.
     if (translationEpoch !== mySwitch) return;
     if (!result) {
       if (translationEpoch === mySwitch) switchingTranslation.value = false;
@@ -2219,6 +2231,21 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           // open's — sweeps it.
           if (navigationEpoch !== myNav) return;
           const prep = await prepareMkvForPlayback(localResult.filePath);
+          // As in `selectTranslation` (#317): the callee's `shouldBail` ladder
+          // covers the callee, not this continuation, and a superseder that
+          // took the stream branch never bumps `prepareEpoch` — so a loser's
+          // prepare runs to completion uncancelled and falls through to here.
+          // Above `if (!prep.ok)` rather than below it, because that arm's
+          // `reportPrepareError` writes `remuxError` — the winner's, painting
+          // `.remux-overlay` over the winner's playing video, and cleared
+          // nowhere but at the top of `prepareMkvForPlayback`, so a winner on
+          // the stream branch never clears it. This is the more reachable of
+          // the two arms: holding next past the end of the downloaded range
+          // with `saveProgress` stalled puts the winner on the stream branch
+          // with the loser's prepare guaranteed to run all the way through.
+          // Past the arm it also covers `destroySubtitles()` below, which
+          // would tear down the winner's live subtitle worker.
+          if (navigationEpoch !== myNav) return;
           if (!prep.ok) {
             reportPrepareError(prep);
             // As in `selectTranslation` (#291). Skipping this unconditionally
@@ -2231,13 +2258,6 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             return;
           }
         }
-
-        // As in `selectTranslation` (#317): the callee's `shouldBail` ladder
-        // covers the callee, not this continuation, and a superseder that took
-        // the stream branch never bumps `prepareEpoch` — so a loser's prepare
-        // runs to completion uncancelled, returns `ok: true`, and would destroy
-        // the winner's live subtitle worker below.
-        if (navigationEpoch !== myNav) return;
 
         destroySubtitles();
         // Orphan-`SubtitlesOctopus` guard (#280) — see `selectTranslation`.
@@ -2267,7 +2287,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     if (unmounted) return;
     // The ownership half (#317), above `if (!result)` for the same reason as
     // `selectTranslation`'s: the only failure it swallows is a superseded run's,
-    // about a source nobody is going to play.
+    // about a source nobody is going to play. And as there, the arm's own
+    // `navigationEpoch === myNav` is provably true under this compare with no
+    // await between them — kept for #302's flag-clear classifier, not as live
+    // protection.
     if (navigationEpoch !== myNav) return;
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;

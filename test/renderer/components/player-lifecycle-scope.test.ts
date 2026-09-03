@@ -1188,6 +1188,12 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
     { name: 'persistSelectedTranslation(', re: 'persistSelectedTranslation\\(' },
     { name: 'resetEpisodeTracking(', re: 'resetEpisodeTracking\\(' },
     { name: 'destroySubtitles(', re: 'destroySubtitles\\(' },
+    // Shared state the winner owns, exactly like `destroySubtitles(`: it writes
+    // `remuxError`, which paints `.remux-overlay` over whatever is playing, and
+    // the only clear is at the top of `prepareMkvForPlayback` — so a winner that
+    // took the stream branch never clears a loser's write. Listing it is what
+    // pins the two prepare-arm compares ABOVE their `if (!prep.ok)`.
+    { name: 'reportPrepareError(', re: 'reportPrepareError\\(' },
     // A mutation in its own right, not merely a suspension point:
     // `prepareMkvForPlayback`'s first effectful statements are
     // `msePlayer.resetMseState(); clearRemux(); remuxError.value = '';`, above
@@ -1205,8 +1211,8 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
    * red — which is true of ten of the thirty-one sites.
    */
   const SYMBOL_SCAN: Record<string, { sites: number; blocks: number }> = {
-    selectTranslation: { sites: 14, blocks: 5 },
-    goToEpisode: { sites: 17, blocks: 5 }
+    selectTranslation: { sites: 15, blocks: 5 },
+    goToEpisode: { sites: 18, blocks: 5 }
   }
 
   function symbolSites(body: string): { name: string; index: number }[] {

@@ -1069,7 +1069,8 @@ describe('SyncplayClient room presence on join (#220)', () => {
     // The failure the unit tests missed and a live session found: opening the
     // player on "Join & watch" reset the host to 0. A fresh <video> fires
     // play/pause/seeked at ~0 *before* any remote state has been applied, so
-    // the renderer's suppression window isn't up and those events reach main
+    // the renderer has registered no operation that would claim them and they
+    // reach main as the user's
     // (use-syncplay-client.ts onLocalPlay/onLocalPause/onVideoSeeked).
     it('sends nothing when a fresh player fires its startup events at 0', () => {
       handshake()
@@ -1144,8 +1145,9 @@ describe('SyncplayClient room presence on join (#220)', () => {
     })
 
     // Caught in a live session: applying a peer's seek makes our element fire
-    // `seeked` once it finishes — often past the renderer's 1500 ms window on a
-    // network stream — and we handed the peer their own position back with
+    // `seeked` once it finishes — arbitrarily late on a network stream, which
+    // is why the renderer keys on the applied value rather than on any clock —
+    // and we handed the peer their own position back with
     // doSeek, dragging the room to a stale point and bumping the ignore
     // counter so inbound states got dropped. "Sync breaks after a few seeks".
     it('does not echo a seek that merely lands on the room position', () => {

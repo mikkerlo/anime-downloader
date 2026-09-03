@@ -649,9 +649,10 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
     m.resetMseState()
   })
 
-  // #239: with the 1500 ms wall-clock gate gone for seeks, this land is only
-  // kept off the wire by the marker. Unmarked, syncplay reads it as the user
-  // seeking and the reference server drags every peer onto our resume point.
+  // #239: no wall clock gates the renderer's sends any more (#304 removed the
+  // last of it), so this land is only kept off the wire by the marker.
+  // Unmarked, syncplay reads it as the user seeking and the reference server
+  // drags every peer onto our resume point.
   it('marks the resume land as programmatic before writing currentTime (#239)', () => {
     const fakeSb = new FakeSourceBuffer()
     const fakeMs = new FakeMediaSource(fakeSb)

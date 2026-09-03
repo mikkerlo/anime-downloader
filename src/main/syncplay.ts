@@ -104,9 +104,12 @@ export const PLAYBACK_ASSERT_STALE_MS = 2000
 export const ADOPT_TOLERANCE_S = 3
 // A "seek" this close to where the room already is didn't come from the user —
 // it's the element finishing the seek we applied from the room, arriving after
-// the renderer's suppression window. Tight on purpose: a real user seek lands
-// somewhere else, and a real seek to within half a second of the room's own
-// position is a no-op for everyone anyway.
+// the renderer's own seek operation stopped waiting for it (TTL expiry, or an
+// eviction from the operation registry). Tight on purpose: a real user seek
+// lands somewhere else, and a real seek to within half a second of the room's
+// own position is a no-op for everyone anyway. This is the backstop for the
+// renderer's value-keyed registry, not for any wall-clock window — the renderer
+// has had none since #304.
 export const ECHO_SEEK_EPSILON_S = 0.5
 // Ceiling on the one-way delay `handleState()` will back-date the room's
 // arrival stamp by (#279). `serverRtt / 2` is the only clock-offset-free
@@ -796,9 +799,10 @@ export class SyncplayClient extends EventEmitter {
     this.lastSnapshotAt = Date.now()
     // These arrive from the <video> element's own play/pause/seeked events,
     // which a freshly opened player fires at ~0 while it loads — before any
-    // remote state has been applied, so the renderer's suppression window
-    // isn't up yet. That is not the user driving the room, and treating it as
-    // such is what pulled everyone back to 0 on "Join & watch". Until we have
+    // remote state has been applied, so the renderer has registered no
+    // operation that would classify them as its own and they reach us as the
+    // user's. That is not the user driving the room, and treating it as such is
+    // what pulled everyone back to 0 on "Join & watch". Until we have
     // converged, such an event changes nothing on the wire: no assertion, and
     // no ignore-counter bump either — the counter makes handleState() drop
     // inbound states, which would starve the very convergence we're waiting

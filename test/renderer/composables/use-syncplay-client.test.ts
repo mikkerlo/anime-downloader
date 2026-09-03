@@ -169,7 +169,7 @@ async function mountWithRemoteState(
 // apply rule is written for: #240 forks applyRemoteState on `v.readyState >= 1`
 // and parks the state below it, so a fake without the field (`undefined >= 1`
 // is false) would defer *every* apply in this file and take the apply-rule and
-// 1.5s-window blocks with it. The deferral tests pass `readyState: 0`
+// send-gating blocks with it. The deferral tests pass `readyState: 0`
 // explicitly — a real happy-dom <video> is no help there either, since its
 // readyState is pinned at 0 and silently ignores assignment.
 //
@@ -577,20 +577,22 @@ describe('useSyncplayClient — mounting into an already-ready session (#213)', 
   })
 })
 
-// The window is armed by an apply, so a test that never applies a remote state
-// asserts nothing about it — the previous version of this block called
-// onLocalPlay() on a fresh client and checked the state *was* sent, which
-// passes with the gate at use-syncplay-client.ts:156 deleted.
+// `sendSyncplayLocalState` has no wall-clock gate left (#304): every cause
+// reaches it only past its own operation registry, so what these tests pin is
+// that a *classified user event* is delivered and a *classified echo* is not.
+// Each case still applies a remote state first, and deliberately so — the
+// suppression that remains is armed by an apply, and a test that never applies
+// one would pass against a composable with no echo guard at all.
 //
-// Reaching the wall-clock gate also needs a seek the *value*-keyed guard lets
-// through (use-syncplay-client.ts:343-351): an event landing on the position we
-// applied is consumed there and never gets as far as the window.
+// Reaching the send at all also needs a seek the *value*-keyed guard lets
+// through: an event landing on the position we applied is consumed by its seek
+// operation and never gets as far as the send.
 describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
   // #239: this seek is the user's, to a position nobody applied. It used to die
   // inside the wall-clock window — the user pressed Skip, the video moved
   // locally, and the room never heard about it. Seeks are keyed on the applied
   // value now, so only an actual echo is suppressed.
-  it('sends a user seek to an unrelated position inside the 1.5s window', async () => {
+  it('sends a user seek to an unrelated position 200 ms after an apply', async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -599,12 +601,13 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
       state: 'ready'
     })
 
-    // A remote seek arms the window and moves the element to 300.
+    // A remote seek registers a `value` operation for 300 and moves the element
+    // there.
     emitRemoteState({ position: 300, paused: true, doSeek: true })
     sendLocalState.mockClear()
 
     // 200 ms later the user drags the scrubber somewhere else entirely, so the
-    // value guard does not match and only the wall clock could suppress it.
+    // value guard does not match and nothing else may suppress it.
     vi.advanceTimersByTime(200)
     v.currentTime = 900
     client.onVideoSeeked()
@@ -612,32 +615,49 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 900, cause: 'seek' })
   })
 
-  // The window still gates play/pause: they have no applied value to key on, so
-  // deleting it wholesale would leak the readiness gate's own pause/resume.
+  // These two rows are the inversion #304 is (`still swallows a $label inside
+  // the 1.5s window` before it). The window's remaining case for existing was
+  // that play/pause have no applied value to key on, so deleting it wholesale
+  // would leak the readiness gate's own pause/resume to the room. Phase A
+  // (#306) answered that with the playback operation registry, and the registry
+  // answers it *above* this send: `onLocalPlay` / `onLocalPause` return on a
+  // matching `consumePlaybackOp` without reaching `sendSyncplayLocalState` at
+  // all. From that point the window could only ever drop a press the registry
+  // had already vouched for as the user's — which is precisely what these rows
+  // used to assert it did.
   //
-  // Both halves, because they are only coupled by the shape of one condition:
-  // with the `play` case alone, narrowing `cause !== 'seek'` to `cause ===
-  // 'play'` at use-syncplay-client.ts:190 leaves the whole suite green, and the
-  // `pause` half is the one #228's `cause === 'pause'` residual leans on.
+  // Both halves, because they were only coupled by the shape of one condition
+  // and are still worth keeping apart: the `pause` direction is the one #228's
+  // residual leaned on (a dropped pause never reaches main's discrete
+  // `sendLocalState` path, so a stale playing frame resumes the initiator), and
+  // the `play` direction is the one the new `syncplayAllUsersReady()` condition
+  // sits on — all users are ready in both rows, so the send is expected.
   //
-  // Each case has to reach the window at all: `onLocalPlay`/`onLocalPause`
-  // return early on a matching playback operation, so the apply that arms the
-  // window must register none — i.e. it must move the playhead but not the play
-  // state (`needsSeek` without `needsPlayPause`). Hence the remote `paused`
-  // matching the element's in both rows; a mismatch there registers an
-  // operation that consumes the event and the case goes vacuous.
+  // The seek-only apply fixture survives the inversion and is the whole reason
+  // these rows are non-vacuous: `onLocalPlay`/`onLocalPause` return early on a
+  // matching playback operation, so the apply must move the playhead but *not*
+  // the play state (`needsSeek` without `needsPlayPause`). Hence the remote
+  // `paused` matching the element's in both rows; a mismatch there registers an
+  // operation that consumes the event, the handler returns above the send, and
+  // the row would pass for the wrong reason.
+  //
+  // The `play` row leaves the element `paused: true`, so the ready gate below
+  // the send calls `v.play()`. That spy call is not a second IPC send, and the
+  // assertion here counts sends only.
   it.each([
     {
       label: 'play',
       paused: true,
-      fire: (c: Client) => c.onLocalPlay()
+      fire: (c: Client) => c.onLocalPlay(),
+      expected: { paused: false, position: 300, cause: 'play' }
     },
     {
       label: 'pause',
       paused: false,
-      fire: (c: Client) => c.onLocalPause()
+      fire: (c: Client) => c.onLocalPause(),
+      expected: { paused: true, position: 300, cause: 'pause' }
     }
-  ])('still swallows a $label inside the 1.5s window', async ({ paused, fire }) => {
+  ])('sends a $label 200 ms after an apply', async ({ paused, fire, expected }) => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -652,10 +672,11 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     vi.advanceTimersByTime(200)
     fire(client)
 
-    expect(sendLocalState).not.toHaveBeenCalled()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith(expected)
   })
 
-  it('sends that same seek once the window has expired', async () => {
+  it('sends that same seek 1501 ms after an apply', async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -675,9 +696,10 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
   })
 
   // The value-keyed guard is the one that must catch the element's own echo,
-  // however late it fires — this is what makes the window a backstop and not
-  // the mechanism.
-  it('swallows the echo of an applied seek even after the window has expired', async () => {
+  // however late it fires — bounded by the operation's TTL and by nothing
+  // shorter. It was the mechanism even while the wall clock still claimed to be
+  // a backstop; since #304 it is unambiguously the only thing here.
+  it('swallows the echo of an applied seek 4 s later', async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
@@ -689,7 +711,8 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
     emitRemoteState({ position: 300, paused: true, doSeek: true })
     sendLocalState.mockClear()
 
-    // A slow network stream takes longer than the window to land the seek.
+    // A slow network stream takes seconds to land the seek — far past anything
+    // a wall-clock window would have covered, and well inside the TTL.
     vi.advanceTimersByTime(4000)
     v.currentTime = 300
     client.onVideoSeeked()
@@ -698,7 +721,180 @@ describe('useSyncplayClient — sendSyncplayLocalState gating', () => {
   })
 })
 
-// The marker is the whole mechanism once the wall clock stops gating seeks, so
+// ─────────────────────────────────────────────────────────────────────────────
+// #304. The readiness gate is where the deleted window was armed most often —
+// every buffer refill re-armed it, at ~1 Hz through a stall — so it is where a
+// dropped user press was most likely to happen and where the deletion has to be
+// shown not to leak the gate's own moves back to the room.
+//
+// Every case here drives readiness with real events rather than by poking
+// `syncplayLocalReady`: the setter early-returns on no change and the flag
+// starts `true`, so the only way into the gate through readiness is *down*
+// through the 600 ms `waiting` debounce first. The gate arms during that
+// advance, not before it — the 601 ms is what makes `setSyncplayLocalReady`
+// fire, and the arming is inside it.
+//
+// After that first advance no case advances timers again. The whole point is
+// that a press landing in the same handful of milliseconds as the gate's own
+// move is now distinguished by the registry alone, and an advance would let a
+// reader believe some clock had helped.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('useSyncplayClient — user presses survive a readiness gate cycle (#304)', () => {
+  // A playing room, an adopted player, all users ready. `playbackAdopted: true`
+  // keeps `pendingUserPause` out of it: pre-adoption the hold would falsify
+  // `shouldPlay` and these cases would prove nothing about readiness.
+  async function readyAndPlaying(v: HTMLVideoElement): Promise<{
+    client: Client
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+  }> {
+    const r = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+    // Sets `syncplayLastRemotePlaying`. Position and paused both match the
+    // element, so this apply is a no-op: it registers no operation of its own
+    // and the cases below start with an empty registry.
+    r.emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    return r
+  }
+
+  // The pause direction, which is the one the residual was about: a dropped
+  // pause never reaches main's discrete `sendLocalState` path, so the next stale
+  // playing frame resumes the person who pressed it.
+  it('sends a user pause taken right after the gate recovered readiness', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await readyAndPlaying(v)
+
+    // Buffering. The debounce fires inside this advance and the gate down-arms
+    // within it: it registers a `pause` operation and calls `v.pause()`.
+    client.onVideoWaiting()
+    vi.advanceTimersByTime(601)
+    expect(v.pause).toHaveBeenCalled()
+
+    // The element realizes it, and the registry claims the event as the app's.
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    // The buffer refills: the gate re-arms upward and plays us.
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+    client.onLocalCanPlay()
+    expect(v.play).toHaveBeenCalled()
+
+    // All users are ready and the element is running again *before* the
+    // recovery play's echo is delivered. Both matter: with readiness lapsed at
+    // this moment the nested gate would take its down arm instead and register
+    // `pause`, which would swallow the real press below and leave the case
+    // passing in the wrong direction.
+    ;(v as { paused: boolean }).paused = false
+    ;(v.pause as ReturnType<typeof vi.fn>).mockClear()
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+    client.onLocalPlay()
+    // The nested gate takes neither branch — `shouldPlay` is true and the
+    // element is already playing — so it arms nothing that could eat the press.
+    expect(v.play).not.toHaveBeenCalled()
+    expect(v.pause).not.toHaveBeenCalled()
+
+    // Now the user presses pause, with the registry empty.
+    sendLocalState.mockClear()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 100, cause: 'pause' })
+  })
+
+  // The play direction, reached through the *down* gate so the user's press is
+  // the only resume in the sequence — an intermediate synthetic play would
+  // register an operation that consumed the press.
+  it('sends a user play taken right after the gate paused for buffering', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await readyAndPlaying(v)
+
+    client.onVideoWaiting()
+    vi.advanceTimersByTime(601)
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    // Readiness comes back with the element already running — the user pressed
+    // play. Ordering the element's state *before* `onLocalCanPlay` is what keeps
+    // the gate from issuing a synthetic resume of its own: `shouldPlay` is true
+    // and `v.paused` is false, so it takes neither branch and arms nothing.
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalCanPlay()
+    expect(v.play).not.toHaveBeenCalled()
+
+    sendLocalState.mockClear()
+    client.onLocalPlay()
+
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 100, cause: 'play' })
+  })
+
+  // The other half of #304's renderer change: when readiness is what is holding
+  // playback, the discrete play is *omitted* rather than deferred. Main arms its
+  // ignore counter on a discrete send, and a play we are not going to enact
+  // should not deafen us to the acks that say when we may.
+  it('omits the discrete play when readiness holds it, and keeps the intent', async () => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await readyAndPlaying(v)
+
+    // A peer is buffering, so `syncplayAllUsersReady()` is false while
+    // everything else `shouldPlay` reads is about to be forced true by the
+    // press itself.
+    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: false } as SyncplayRoomUser]
+    await nextTick()
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    // The user presses play against a held element.
+    sendLocalState.mockClear()
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    // No discrete play on the wire…
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // …and the gate immediately re-enacts the hold, because the peer is still
+    // buffering. This is the badge/indicator behavior the issue accepts as-is:
+    // the press cleared "Paused by …" even though the element did not move.
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // The intent is not lost: it rides out on the snapshot path via `intentOr`,
+    // which reports `paused: false` under a physically paused element.
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause() // the gate's own re-pause, consumed as the echo it is
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: false })
+
+    // The release is the gate's own play, so it is an echo and not a second
+    // user command — no duplicate discrete send when readiness returns.
+    sendLocalState.mockClear()
+    ;(v.play as ReturnType<typeof vi.fn>).mockClear()
+    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: true } as SyncplayRoomUser]
+    await nextTick()
+    expect(v.play).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// The marker is the whole mechanism now that no wall clock gates anything, so
 // its lifetime is load-bearing rather than an implementation detail (#239).
 describe('useSyncplayClient — applied-seek marker lifetime (#239)', () => {
   it('survives a mismatching seeked and still catches the real echo', async () => {
@@ -1410,7 +1606,7 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     expect(v.play).not.toHaveBeenCalled()
   })
 
-  // The deferred write fires arbitrarily far outside the 1500 ms window, so the
+  // The deferred write fires arbitrarily far after the state arrived, so the
   // applied-seek marker is the only thing standing between it and the wire —
   // and it has to be armed at the write, not at the park.
   it('does not let the deferred write escape as a local seek', async () => {
@@ -1428,7 +1624,7 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
 
     emitRemoteState({ position: 300, paused: true, doSeek: true })
 
-    // Metadata arrives long after the wall-clock window — and after the marker's
+    // Metadata arrives long after the state did — and after the marker's
     // own 15 s TTL, which is what makes this fail on an implementation that arms
     // the marker at park time: that mark would already be stale when the write
     // finally happens, and the echo escapes as the user's seek.
@@ -1974,7 +2170,7 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
     expect(v.currentTime).not.toBe(1440)
     expect(v.currentTime).toBe(0)
     // Not merely clamped-and-discarded: nothing was written at all, so the
-    // echo-guard arming and the suppression window never fire either.
+    // echo-guard arming never fires either.
     expect(rawCurrentTimeWrites.get(v as unknown as object)).toEqual([])
   })
 
@@ -2877,8 +3073,10 @@ describe('useSyncplayClient — a retracted mark cannot swallow the next play (#
     await flushPromises()
     expect(v.play).toHaveBeenCalled()
 
-    // Past the 1500 ms window the apply arms, so only the marker can suppress
-    // the send — without this the case would pass for the wrong reason.
+    // Kept from when a 1500 ms wall-clock window also gated the send: past it,
+    // only the marker could suppress this, so the case could not pass for the
+    // wrong reason. The window is gone (#304) and the advance is now simply
+    // realistic — a real press does not arrive in the same tick as the apply.
     vi.useFakeTimers()
     vi.advanceTimersByTime(2000)
     v.paused = false
@@ -2937,9 +3135,12 @@ describe('useSyncplayClient — playback operations are individually tracked (#3
     emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
     await flushPromises()
 
-    // Now the gate's pause event finally arrives. Past the 1500 ms window, so
-    // only the registry can suppress it — otherwise this passes for the wrong
-    // reason.
+    // Now the gate's pause event finally arrives. The 2000 ms advance is
+    // deliberate and stays: it was written to clear the 1500 ms wall-clock
+    // window so that only the registry could suppress this — otherwise the case
+    // passed for the wrong reason. That is exactly why this test needed no
+    // change when the window was deleted (#304): it was already proving the
+    // registry rather than the clock.
     vi.useFakeTimers()
     vi.advanceTimersByTime(2000)
     sendLocalState.mockClear()
@@ -3646,15 +3847,25 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     expect(sendLocalState).toHaveBeenCalledWith({ paused: false, position: 42, cause: 'seek' })
   })
 
-  it('re-opens the send gate and the pausedBy attribution for the next session', async () => {
+  // Was `re-opens the send gate and the pausedBy attribution for the next
+  // session`. The gate is gone (#304), and the honest thing to record is which
+  // half of this test still carries weight, because the suite cannot tell you:
+  // the send assertion below passed identically with the window in place and
+  // with it deleted, so it never announced itself as having gone vacuous. It is
+  // kept as a plain delivery non-regression and is *not* evidence about the
+  // session reset. The `pausedBy` assertion is the load-bearing half.
+  it("attributes the next session's first pause after a session reset", async () => {
     vi.useFakeTimers()
     const sendLocalState = vi.fn()
     setApi({ syncplaySendLocalState: sendLocalState })
     // Paused element + paused room: the apply needs a seek but no play/pause,
-    // so it arms `suppressNextLocalEventUntil` and registers no playback
-    // operation. That isolation is the point — with a pause operation in the
-    // registry, `onLocalPause` returns at its own guard and the case would pass
-    // for the wrong reason.
+    // so it registers a seek operation and no *playback* operation. That
+    // isolation is what keeps the `pausedBy` half meaningful — with a pause
+    // operation left in the registry, `onLocalPause` returns at its own guard,
+    // writes no attribution, and the case would fail (or, with the reset
+    // clearing it, pass) for reasons that have nothing to do with what is
+    // asserted here. Kept deliberately after the gate deletion for exactly that
+    // reason: dropping the fixture hollows out the surviving half too.
     const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
     const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
       state: 'ready',
@@ -3664,15 +3875,16 @@ describe('useSyncplayClient — session-scoped state resets on disconnect (#227)
     emitRemoteState({ position: 300, paused: true, doSeek: true })
     await cycle(client, 'disconnected')
 
-    // Still inside the dead session's 1500 ms window.
     sendLocalState.mockClear()
     client.onLocalPause()
 
+    // Delivery only — see the note above.
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
     expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'pause' })
-    // The same gate guards the room bookkeeping, so a leaked window also costs
-    // the next session's first `pausedBy` attribution. This is the race the
-    // reset deliberately widens (an echo pause arriving after it now runs the
-    // bookkeeping) — asserted rather than left to chance.
+    // The session end nulls `syncplayPausedBy`, and the next session's first
+    // user pause must re-establish it. This is the race the reset deliberately
+    // widens (an echo pause arriving after it now runs the bookkeeping) —
+    // asserted rather than left to chance.
     expect(client.syncplayPausedBy.value).toBe('me')
   })
 
@@ -3807,9 +4019,9 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       username: 'me'
     })
 
-    // A seek-only apply, which is what re-arms the 1500 ms window at ~1 Hz
-    // through the whole convergence window — on head that window is what shut
-    // the user's own mirror write out.
+    // A seek-only apply, the shape that arrives at ~1 Hz through the whole
+    // convergence window — and on the head of #228 the shape that re-armed the
+    // 1500 ms window that shut the user's own mirror write out.
     // `paused: false` matches the element, so this apply is seek-only: it
     // registers no playback operation and the pause below reaches the
     // bookkeeping instead of the echo branch.
@@ -3923,9 +4135,13 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
 
   // 7. Decision 2's pause half, isolated from the hold (post-adoption, so
   // nothing registers): a pause classified as real by the operation registry
-  // moves the room mirror even inside the 1500 ms window an apply just re-armed.
-  // Red on head, where the window shut both the mirror write and the badge.
-  it('writes room-mirror state for a real pause inside the suppression window', async () => {
+  // moves the room mirror, promptly, on the press. This was written against the
+  // 1500 ms window an apply re-armed at ~1 Hz — it was red on the head of #228,
+  // where that window shut both the mirror write and the badge — and it outlives
+  // the window's deletion (#304) as the assertion that classification, not the
+  // clock, is what admits these writes. The 200 ms advance below is kept for the
+  // same reason: it is when a press actually lands relative to an apply.
+  it('writes room-mirror state for a real pause moments after an apply', async () => {
     vi.useFakeTimers()
     const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
     const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
@@ -3934,7 +4150,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       playbackAdopted: true
     })
 
-    // Seek-only apply: it arms the window and registers no playback operation,
+    // Seek-only apply: it registers a seek operation and no playback operation,
     // so the pause below reaches the bookkeeping instead of the echo branch.
     emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
     vi.advanceTimersByTime(200)
@@ -4041,7 +4257,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       username: 'me'
     })
 
-    // Arms the 1500 ms window and leaves the mirror saying "the room is playing".
+    // Leaves the mirror saying "the room is playing".
     emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peer' })
     vi.advanceTimersByTime(200)
 

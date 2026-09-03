@@ -1970,7 +1970,7 @@ async function selectTranslation(tr: {
             // clears it in its own `nextTick`. That "unless" is no longer
             // reachable: with the compare above this arm and no await between,
             // `translationEpoch === mySwitch` is provably true — a later
-            // `selectTranslation` means the compare four lines up already
+            // `selectTranslation` means the compare above this arm already
             // returned. It stays because #302's classifier scans every flag
             // clear for the compare and goes red without one, not because
             // anything can still reach the clear with the epoch moved. Same at

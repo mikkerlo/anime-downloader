@@ -1913,6 +1913,13 @@ async function selectTranslation(tr: {
       // would resume on a dead instance and kill a *successor* `PlayerView`'s
       // session. Bail on the whole continuation, not just the kill.
       if (unmounted) return;
+      // The ownership half (#317), a SEPARATE statement rather than a term
+      // folded into the bail above — the two conditions have different failure
+      // modes and combining them makes them indistinguishable. #302 put this
+      // compare on the `nextTick` below, which stops a superseded pick steering
+      // the element but not installing its own state on the way there: the two
+      // writes below would persist the LOSING translation as the user's choice.
+      if (translationEpoch !== mySwitch) return;
       if (localResult) {
         activeTranslationId.value = tr.id;
         persistSelectedTranslation(tr.id);
@@ -1923,6 +1930,15 @@ async function selectTranslation(tr: {
           clearRemux();
           msePlayer.resetMseState();
         }
+        // BELOW the clears, never above them (#317). `clearRemux()` /
+        // `resetMseState()` are this run's own bookkeeping for a kill it has
+        // already issued — main SIGKILLed every registered session and swept
+        // the shared tmpDir — so a bail placed above them would leave
+        // `remuxedPath` pointing at an unlinked file on a LIVE component, and
+        // `remuxedPath.value || streamSessionId.value` would then read true for
+        // the next run. Below them, and above the first write the winner owns:
+        // that ordering is the whole rule, not a "checkpoint after every await".
+        if (translationEpoch !== mySwitch) return;
 
         // Switch to local file
         activeFilePath.value = localResult.filePath;
@@ -1931,11 +1947,34 @@ async function selectTranslation(tr: {
 
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
           const prep = await prepareMkvForPlayback(localResult.filePath);
+          // The callee's `shouldBail(myPrepare)` ladder says nothing about the
+          // CALLER's continuation (#317), and the gap is not theoretical: only
+          // `prepareMkvForPlayback` bumps `prepareEpoch`, so a superseder that
+          // took the stream branch never bumps at all — the loser's prepare
+          // runs to completion uncancelled and falls straight through to here.
+          // It has to sit ABOVE `if (!prep.ok)`, not below it: that arm's
+          // `reportPrepareError` writes `remuxError`, which the WINNER owns and
+          // which paints `.remux-overlay` over the winner's playing video — and
+          // `remuxError` is cleared in exactly one place, at the top of
+          // `prepareMkvForPlayback`, so a winner that took the stream branch
+          // never clears it for the life of the component. Past that arm the
+          // same argument covers `destroySubtitles()` below, which would tear
+          // down the WINNER's live `SubtitlesOctopus` with no recovery path
+          // either: the winner has already run its own `initSubtitles` and
+          // nothing re-runs it.
+          if (translationEpoch !== mySwitch) return;
           if (!prep.ok) {
             reportPrepareError(prep);
             // Ownership, not `prep !== PLAYER_CLOSED_BAIL` (#291): release the
             // flag unless a later `selectTranslation` owns it, in which case it
-            // clears it in its own `nextTick`.
+            // clears it in its own `nextTick`. That "unless" is no longer
+            // reachable: with the compare above this arm and no await between,
+            // `translationEpoch === mySwitch` is provably true — a later
+            // `selectTranslation` means the compare above this arm already
+            // returned. It stays because #302's classifier scans every flag
+            // clear for the compare and goes red without one, not because
+            // anything can still reach the clear with the epoch moved. Same at
+            // the matching prepare arm in `goToEpisode`.
             if (translationEpoch === mySwitch) switchingTranslation.value = false;
             return;
           }
@@ -1952,6 +1991,13 @@ async function selectTranslation(tr: {
         }
 
         nextTick(() => {
+          // #302, kept as defence in depth under #317's write-side compares
+          // rather than made redundant by them: this callback runs a frame
+          // LATER than every compare above it, so a pick that supersedes in
+          // between is caught only here. The two layers answer different
+          // questions — "may I install state?" above, "may I steer the one
+          // `<video>` element?" here — and the same pairing holds at the other
+          // three `nextTick` callbacks in these two functions.
           if (translationEpoch !== mySwitch) return;
           const v = videoRef.value;
           if (v) {
@@ -1969,6 +2015,18 @@ async function selectTranslation(tr: {
     // Same blanket-kill guard as the local-file branch (#280); the window is
     // wider here because `playerGetStreamUrl` is a network round trip.
     if (unmounted) return;
+    // The ownership half (#317). It sits above `if (!result)`, so a superseded
+    // run no longer reports its own stream-resolution failure — which loses
+    // nothing: a run only skips that arm by FAILING this compare, and the
+    // winner passes it by definition and reaches its own. The failure being
+    // swallowed is the loser's, about a source nobody is going to play.
+    // Consequence for the arm below: with this compare above it and no await
+    // between, its `translationEpoch === mySwitch` is provably true and is no
+    // longer live protection. It stays because #302's classifier scans every
+    // flag clear for the compare and goes red without one, not because
+    // anything can still reach the clear with the epoch moved. Same at the
+    // matching `!result` arm in `goToEpisode`.
+    if (translationEpoch !== mySwitch) return;
     if (!result) {
       if (translationEpoch === mySwitch) switchingTranslation.value = false;
       return;
@@ -1983,6 +2041,13 @@ async function selectTranslation(tr: {
       clearRemux();
       msePlayer.resetMseState();
     }
+    // Below the clears, above the writes (#317) — same ordering argument as the
+    // local-file branch above. Without it a superseded pick still points the
+    // element at its own stream and the quality dropdown at that stream's
+    // height, then declines to play either at the `nextTick`, leaving the
+    // player parked on the loser's source; and `destroySubtitles()` below tears
+    // down the winner's subtitle worker on the way past.
+    if (translationEpoch !== mySwitch) return;
 
     activeFilePath.value = '';
     activeStreamUrl.value = result.streamUrl;
@@ -2106,6 +2171,21 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       clearRemux();
       msePlayer.resetMseState();
     }
+    // Below the clears, above the writes (#317) — see `selectTranslation` for
+    // why that ordering rather than "checkpoint immediately after the await".
+    //
+    // The block below is the worst of the clobbers this issue closes, and it is
+    // reached from a DIFFERENT resume point than the source writes further down
+    // — the `playerCleanupRemux` above, not `playerGetStreamUrl` — which is why
+    // an audit scoped to the source writes misses it entirely. A superseded run
+    // resuming here would point the episode label and translation list at ITS
+    // target while the winner's stream plays, so `saveProgress` attributes
+    // progress to the wrong episode; reset all six of the winner's tracking
+    // fields mid-playback via `resetEpisodeTracking()`; and drop the winner's
+    // pending mark-watched, which nothing reports as a failure because
+    // `maybeMarkPendingPrevWatched()` is gated on the `episodeOpenedAt` this
+    // same block just reset.
+    if (navigationEpoch !== myNav) return;
 
     // Update episode state
     activeEpisodeIndex.value = targetIndex;
@@ -2127,6 +2207,9 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       // Guards the second blanket `playerCleanupRemux()` in this function
       // (#280), the one inside the `.mkv` branch below.
       if (unmounted) return;
+      // The ownership half (#317), separate from the `unmounted` term above:
+      // the source writes below belong to whichever run owns `myNav` now.
+      if (navigationEpoch !== myNav) return;
       if (localResult) {
         activeFilePath.value = localResult.filePath;
         activeStreamUrl.value = '';
@@ -2138,7 +2221,38 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             clearRemux();
             msePlayer.resetMseState();
           }
+          // Below the clears, above the call (#317) — and here the call itself
+          // is the mutation, not merely the suspension point. The first
+          // effectful statements inside `prepareMkvForPlayback` are
+          // `msePlayer.resetMseState(); clearRemux(); remuxError.value = '';`,
+          // above every await, and the one `shouldBail(myPrepare)` above them
+          // cannot fire on a supersede — no statement separates it from that
+          // function's own `prepareEpoch` bump — so on a live component they
+          // always run. A loser
+          // reaching the call therefore wipes the winner's `remuxedPath` and MSE
+          // state before doing anything else. The renderer only ever names a
+          // session id it got back from its own open reply, so once
+          // `resetMseState()` clears `streamSessionId` the winner's session
+          // survives in main with no renderer handle on it until the next
+          // blanket `playerCleanupRemux` — the unmount one, or the next `.mkv`
+          // open's — sweeps it.
+          if (navigationEpoch !== myNav) return;
           const prep = await prepareMkvForPlayback(localResult.filePath);
+          // As in `selectTranslation` (#317): the callee's `shouldBail` ladder
+          // covers the callee, not this continuation, and a superseder that
+          // took the stream branch never bumps `prepareEpoch` — so a loser's
+          // prepare runs to completion uncancelled and falls through to here.
+          // Above `if (!prep.ok)` rather than below it, because that arm's
+          // `reportPrepareError` writes `remuxError` — the winner's, painting
+          // `.remux-overlay` over the winner's playing video, and cleared
+          // nowhere but at the top of `prepareMkvForPlayback`, so a winner on
+          // the stream branch never clears it. This is the more reachable of
+          // the two arms: holding next past the end of the downloaded range
+          // with `saveProgress` stalled puts the winner on the stream branch
+          // with the loser's prepare guaranteed to run all the way through.
+          // Past the arm it also covers `destroySubtitles()` below, which
+          // would tear down the winner's live subtitle worker.
+          if (navigationEpoch !== myNav) return;
           if (!prep.ok) {
             reportPrepareError(prep);
             // As in `selectTranslation` (#291). Skipping this unconditionally
@@ -2146,7 +2260,10 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             // whenever the superseder was a `selectTranslation` — nothing
             // outside this function ever clears it. The walk in
             // `handleRemoteEpisodeChange` is stopped by its own sampled
-            // `translationEpoch` term instead, not by a stranded flag.
+            // `translationEpoch` term instead, not by a stranded flag. And as
+            // there, `navigationEpoch === myNav` is provably true under the
+            // compare above this arm with no await between them — kept for
+            // #302's flag-clear classifier, not as live protection.
             if (navigationEpoch === myNav) navigating.value = false;
             return;
           }
@@ -2178,6 +2295,13 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     // unchecked one: that await comes back through `shouldBail`, this one
     // returns a stream URL whether or not the component is still alive.
     if (unmounted) return;
+    // The ownership half (#317), above `if (!result)` for the same reason as
+    // `selectTranslation`'s: the only failure it swallows is a superseded run's,
+    // about a source nobody is going to play. And as there, the arm's own
+    // `navigationEpoch === myNav` is provably true under this compare with no
+    // await between them — kept for #302's flag-clear classifier, not as live
+    // protection.
+    if (navigationEpoch !== myNav) return;
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;
       return;

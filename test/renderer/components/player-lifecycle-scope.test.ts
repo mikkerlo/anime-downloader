@@ -1117,6 +1117,215 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
       }
     }
   })
+
+  // ---------------------------------------------------------------------
+  // #317 — the same ownership question, asked of the REACTIVE WRITES rather
+  // than of the flag clears.
+  //
+  // #302 put the compare on the `nextTick` callbacks, which leaves a
+  // superseded run *half* stopped: it declines to seek and to play, but it has
+  // already installed its own source, its own episode identity and its own
+  // translation on the way down. The half that still runs is the half that
+  // mutates shared state.
+  //
+  // The rule is POSITIONAL and it is one rule, not a rule plus an exception
+  // list: after every await in these two functions, the ownership compare goes
+  // BELOW `clearRemux()` / `msePlayer.resetMseState()` (where they follow) and
+  // ABOVE the first symbol-set write. A resume point with no symbol-set write
+  // below it is then vacuously satisfied rather than listed by hand, which is
+  // what stops the inventory going stale.
+  //
+  // Below the clears, not above them: those two calls are the run's own
+  // bookkeeping for a kill it already issued (main has SIGKILLed every
+  // registered session and swept the shared tmpDir). Bailing above them leaves
+  // `remuxedPath` pointing at an unlinked file on a LIVE component, and
+  // `remuxedPath.value || streamSessionId.value` then reads true for the next
+  // run. That is why the #280/#311 ladder rule — "checkpoint immediately after
+  // every await" — is wrong here if applied naively, and why this scan asserts
+  // the compare's POSITION rather than merely its presence: a presence-only
+  // scan is satisfied by a compare placed above the clears, which is the exact
+  // failure the whole `playerCleanupRemux` argument is about.
+  // ---------------------------------------------------------------------
+
+  /**
+   * The clobber inventory: everything a superseded run can install on its way
+   * down that the winner is now the owner of.
+   *
+   * WRITES AND CALLS ONLY. `activeSubtitleContent.value` is also *read*, in the
+   * `if (… && video && !unmounted)` orphan-worker guards, and a matcher on the
+   * bare identifier would flag those reads and drag the compares above the
+   * guards they belong under — so every ref member tests for `=` not followed
+   * by `=`.
+   *
+   * `pendingPrevEpisodeInt` is the one member that is NOT a ref: a plain `let`
+   * declared at the top of `<script setup>`, so it is assigned bare. Folding it
+   * into a single `<name>\.value =` matcher with the other nine drops it
+   * silently, and the block-count tripwire below CANNOT catch that — the six
+   * episode-identity writes above it keep its block red on their own, so the
+   * count still reads ten while the dropped mark-watched clobber goes unpinned.
+   * Its own matcher, and its own assertion, are below for that reason.
+   *
+   * `window.api.playerCleanupRemux(` is deliberately absent though it is a
+   * cross-run mutation too: its earliest resume point in `goToEpisode` is
+   * `await saveProgress(true)`, above the `const myNav = ++navigationEpoch`
+   * that a compare would have to read, so carrying it would force exactly the
+   * exemption list this scan refuses to encode. Its safety argument is the
+   * branch (c) premise — the whole stretch from the epoch bump to the bare
+   * clear is synchronous — which is pinned by its own scan above.
+   */
+  const SYMBOL_SET: { name: string; re: string }[] = [
+    { name: 'activeFilePath', re: 'activeFilePath\\.value =(?!=)' },
+    { name: 'activeStreamUrl', re: 'activeStreamUrl\\.value =(?!=)' },
+    { name: 'activeSubtitleContent', re: 'activeSubtitleContent\\.value =(?!=)' },
+    { name: 'activeTranslationId', re: 'activeTranslationId\\.value =(?!=)' },
+    { name: 'selectedHeight', re: 'selectedHeight\\.value =(?!=)' },
+    { name: 'activeEpisodeIndex', re: 'activeEpisodeIndex\\.value =(?!=)' },
+    { name: 'activeEpisodeLabel', re: 'activeEpisodeLabel\\.value =(?!=)' },
+    { name: 'activeTranslations', re: 'activeTranslations\\.value =(?!=)' },
+    { name: 'activeDownloadedTrIds', re: 'activeDownloadedTrIds\\.value =(?!=)' },
+    // The non-ref. See the docstring above before touching this line.
+    { name: 'pendingPrevEpisodeInt', re: 'pendingPrevEpisodeInt =(?!=)' },
+    { name: 'persistSelectedTranslation(', re: 'persistSelectedTranslation\\(' },
+    { name: 'resetEpisodeTracking(', re: 'resetEpisodeTracking\\(' },
+    { name: 'destroySubtitles(', re: 'destroySubtitles\\(' },
+    // Shared state the winner owns, exactly like `destroySubtitles(`: it writes
+    // `remuxError`, which paints `.remux-overlay` over whatever is playing, and
+    // the only clear is at the top of `prepareMkvForPlayback` — so a winner that
+    // took the stream branch never clears a loser's write. Listing it is what
+    // pins the two prepare-arm compares ABOVE their `if (!prep.ok)`.
+    { name: 'reportPrepareError(', re: 'reportPrepareError\\(' },
+    // A mutation in its own right, not merely a suspension point:
+    // `prepareMkvForPlayback`'s first effectful statements are
+    // `msePlayer.resetMseState(); clearRemux(); remuxError.value = '';`, above
+    // every await, and the one `shouldBail(myPrepare)` above them cannot fire
+    // on a supersede because no statement separates it from its own
+    // `++prepareEpoch`. So a loser reaching the CALL wipes the winner's MSE
+    // state before it does anything else.
+    { name: 'prepareMkvForPlayback(', re: 'prepareMkvForPlayback\\(' }
+  ]
+
+  /**
+   * The closed inventory, per flow. Pinned rather than merely looped over: a
+   * symbol quietly dropped from the set above turns a red site green, and the
+   * block count alone cannot see it whenever a sibling write keeps its block
+   * red — which is true of ten of the thirty-one sites.
+   */
+  const SYMBOL_SCAN: Record<string, { sites: number; blocks: number }> = {
+    selectTranslation: { sites: 15, blocks: 5 },
+    goToEpisode: { sites: 18, blocks: 5 }
+  }
+
+  function symbolSites(body: string): { name: string; index: number }[] {
+    const out: { name: string; index: number }[] = []
+    for (const { name, re } of SYMBOL_SET) {
+      for (const m of body.matchAll(new RegExp(re, 'g'))) out.push({ name, index: m.index! })
+    }
+    return out.sort((a, b) => a.index - b.index)
+  }
+
+  /**
+   * Group the sites by the resume point they are reached from. `precedingAwait`
+   * is the anchor — the same one the `unmounted` scans in this file use — and
+   * it is the only one that reaches all ten blocks: an anchor keyed to
+   * `playerGetStreamUrl` leaves the episode-identity block green, because that
+   * block is reached from a `playerCleanupRemux` resume point instead. Its
+   * own-await skip is what files `prepareMkvForPlayback(` under the
+   * `playerCleanupRemux` above it rather than under its own `await`.
+   */
+  function blocksOf(body: string): Map<number, { name: string; index: number }[]> {
+    const blocks = new Map<number, { name: string; index: number }[]>()
+    for (const s of symbolSites(body)) {
+      const at = precedingAwait(body, s.index)
+      expect(at, `${s.name} at ${s.index} is reached from no await at all`).toBeGreaterThan(-1)
+      const group = blocks.get(at)
+      if (group) group.push(s)
+      else blocks.set(at, [s])
+    }
+    return blocks
+  }
+
+  /**
+   * The per-flow epoch literal, taken from the #302 table above so the two
+   * cannot drift. Deliberately NOT one shared `'Epoch !== my'`-style constant:
+   * `CONTINUATIONS` is `it.each`-ed over both functions, and a literal loose
+   * enough to match both would also pass a MISMATCHED pair
+   * (`translationEpoch !== myNav`).
+   */
+  function earlyFor(name: string): string {
+    const c = callers().find((x) => x.name === name)
+    expect(c, `no #302 caller entry for ${name}`).toBeTruthy()
+    return c!.early
+  }
+
+  it.each(CONTINUATIONS)(
+    'guards every symbol-set write in %s against the run that superseded it',
+    (name, body) => {
+      const early = earlyFor(name)
+      const expected = SYMBOL_SCAN[name]
+      expect(expected, `no symbol-set inventory for ${name}`).toBeTruthy()
+      expect(symbolSites(body).length, `${name} symbol-set site count`).toBe(expected.sites)
+
+      const blocks = blocksOf(body)
+      expect(blocks.size, `${name} guarded block count`).toBe(expected.blocks)
+
+      // Collected rather than asserted per block, so a run of this scan names
+      // EVERY unguarded block at once instead of only the first. On v4.6.55
+      // that list is five entries here and five in the other flow — one per row
+      // of #317's table.
+      const unguarded: string[] = []
+      for (const [awaitAt, group] of blocks) {
+        const first = group[0].index
+        const compare = body.lastIndexOf(early, first)
+        if (compare <= awaitAt) {
+          unguarded.push(
+            `${group[0].name} at ${first}: no \`${early}\` between the await at ${awaitAt} and it`
+          )
+          continue
+        }
+        // Position, not presence. Wherever the clears follow the await, they
+        // must fall between the await and the compare — never below it.
+        const clear = body.indexOf('clearRemux();', awaitAt)
+        const reset = body.indexOf('msePlayer.resetMseState();', awaitAt)
+        if (clear > -1 && clear < first && reset > -1 && reset < first && compare < reset) {
+          unguarded.push(
+            `${group[0].name} at ${first}: the compare at ${compare} sits ABOVE the clears at ${clear}/${reset}`
+          )
+        }
+      }
+      expect(unguarded, `${name}: unguarded symbol-set blocks`).toEqual([])
+    }
+  )
+
+  it('pins the ten-block inventory and the non-ref pendingPrevEpisodeInt site', () => {
+    // Ten blocks across the two flows — one per row of #317's table. If the
+    // symbol set is ever narrowed to make this scan cheaper to satisfy, a
+    // short inventory shows up here as a count rather than as silence.
+    const total = CONTINUATIONS.reduce((n, [, body]) => n + blocksOf(body).size, 0)
+    expect(total, 'guarded blocks across both continuations').toBe(10)
+
+    const goTo = CONTINUATIONS.find(([n]) => n === 'goToEpisode')![1]
+    const pending = symbolSites(goTo).filter((s) => s.name === 'pendingPrevEpisodeInt')
+    expect(pending, 'pendingPrevEpisodeInt site count').toHaveLength(1)
+    expect(goTo).toContain("pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';")
+
+    // It rides in the episode-identity block, and is the last member of it —
+    // which is exactly why a `<name>\.value =`-shaped matcher loses it for
+    // free: the six writes above keep the block red without it.
+    const identity = goTo.indexOf('activeEpisodeIndex.value =')
+    expect(identity, 'missing the episode-identity block').toBeGreaterThan(-1)
+    const resume = precedingAwait(goTo, pending[0].index)
+    expect(resume).toBe(precedingAwait(goTo, identity))
+
+    // Asserted in its own right, not merely as a member of a red block: the
+    // write it guards silently drops the winner's pending mark-watched, and
+    // `maybeMarkPendingPrevWatched()` is gated on an `episodeOpenedAt` the same
+    // block just reset — so nothing reports the loss.
+    const early = earlyFor('goToEpisode')
+    expect(
+      goTo.lastIndexOf(early, pending[0].index),
+      'no ownership compare above the pendingPrevEpisodeInt write'
+    ).toBeGreaterThan(resume)
+  })
 })
 
 describe('#280 (4) — the unmount side of the compensating cleanup', () => {

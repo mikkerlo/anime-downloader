@@ -20,7 +20,8 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type {
   SyncplayPlaybackKind,
   SyncplayPlaybackOp,
-  SyncplayPlaybackTarget
+  SyncplayPlaybackTarget,
+  SyncplaySeekOp
 } from './use-syncplay-client'
 
 const STREAM_ACK_THRESHOLD = 1 * 1024 * 1024
@@ -75,9 +76,14 @@ export function useMsePlayer(deps: {
     target: SyncplayPlaybackTarget,
     kind?: SyncplayPlaybackKind
   ) => SyncplayPlaybackOp
-  /** Flags the resume land's `currentTime` write, so syncplay doesn't read it
-   *  as the user seeking (which would drag every peer to our resume point). */
-  markProgrammaticSeek?: (target: number) => void
+  /** Registers the resume land's `currentTime` write, so syncplay doesn't read
+   *  it as the user seeking (which would drag every peer to our resume point).
+   *  Returns a handle whose `retract()` removes exactly that operation, for a
+   *  write that throws and whose `seeked` therefore never arrives (#306
+   *  Phase B) — the land is the one caller that already had a `catch` for it,
+   *  and under the old single slot the failed write's mark latched for the full
+   *  15 s TTL and swallowed the user's next real seek. */
+  beginProgrammaticSeek?: (target: number) => SyncplaySeekOp
   /** True when a syncplay room already owns the playhead — a remote state has
    *  been applied (or is parked) in a live session (#240). The resume land is
    *  cancelled then: the room outranks the saved position. */
@@ -271,24 +277,47 @@ export function useMsePlayer(deps: {
       // *is* the resume — `resumeFromSavedPosition` writes no `currentTime` for
       // an MSE session, it only toasts. So the guard it grew for syncplay has to
       // be enforced here too, or the room's position (already written by the
-      // apply at `loadedmetadata`) is silently overwritten by the saved one:
-      // `markProgrammaticSeek` swallows the echo so the room never hears the
-      // move, and the next 1 Hz state seeks us back — two unbuffered seeks, two
-      // ffmpeg respawns, and a playhead that bounces room → saved → room.
+      // apply at `loadedmetadata`) is silently overwritten by the saved one: the
+      // seek operation swallows the echo so the room never hears the move, and
+      // the next 1 Hz state seeks us back — two unbuffered seeks, two ffmpeg
+      // respawns, and a playhead that bounces room → saved → room.
       // The pending flag is consumed either way: the land is a once-per-session
       // affair, not something to retry on the next append.
+      //
+      // The operation is registered *before* the write, because that is the only
+      // ordering in which the element's `seeked` can never beat it — and
+      // retracted if the write throws (#306 Phase B). That `catch` is why this
+      // is the one seek site holding its handle: a `currentTime` assignment that
+      // throws fires no `seeked`, and under the old single slot its mark latched
+      // for the full 15 s TTL and swallowed the user's next real seek. Exact by
+      // construction — `retract()` removes this operation and nothing else, so a
+      // remote apply registered in between is untouched, and that exactness is
+      // pinned by `use-mse-player.test.ts`'s "retracts exactly its own seek
+      // operation when the land write throws". A retraction path at this seam
+      // must not be added without such a test: nothing else in the suite
+      // notices when the `retract()` call goes missing.
+      //
+      // The `let` + assign-inside-`try` shape is deliberate. It keeps
+      // register-before-write, and it also keeps a throw *from the dep* inside
+      // this handler — declared-and-assigned outside, such a throw would escape
+      // `onSourceBufferUpdateEnd` with `initialLandPending` still true and the
+      // land would retry on the next append. Pinned, not merely asserted, by
+      // `use-mse-player.test.ts`'s "consumes the pending flag when the
+      // registration itself throws, so the land does not retry": it fails on the
+      // `const`-above-`try` shape and passes on this one.
       if (initialLandPending && v) {
         if (deps.hasRemoteStateApplied?.()) {
           console.log('[player] resume land cancelled — the syncplay room owns the playhead')
         } else if (t < resumeLandTarget) {
+          let seekOp: SyncplaySeekOp | undefined
           try {
-            deps.markProgrammaticSeek?.(resumeLandTarget)
+            seekOp = deps.beginProgrammaticSeek?.(resumeLandTarget)
             v.currentTime = resumeLandTarget
             console.log(
               `[player] resume land → ${resumeLandTarget.toFixed(2)} (buffer start ${bufStart.toFixed(2)})`
             )
           } catch {
-            /* ignore */
+            seekOp?.retract()
           }
         }
         initialLandPending = false

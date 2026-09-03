@@ -104,7 +104,7 @@ const msePlayer = useMsePlayer({
   getVideoEl: () => videoRef.value,
   setSyncplayLocalReady: (ready) => syncplay.setSyncplayLocalReady(ready),
   beginProgrammaticPlayback: (target, kind) => syncplay.beginProgrammaticPlayback(target, kind),
-  markProgrammaticSeek: (target) => syncplay.markProgrammaticSeek(target),
+  beginProgrammaticSeek: (target) => syncplay.beginProgrammaticSeek(target),
   hasRemoteStateApplied: () => roomOwnsPlayhead()
 });
 const {
@@ -1004,8 +1004,7 @@ async function resumeFromSavedPosition(): Promise<void> {
       return;
     }
     if (saved.position > 5 && saved.position / d < 0.95) {
-      syncplay.markProgrammaticSeek(saved.position);
-      video.currentTime = saved.position;
+      seekProgrammatically(video, saved.position);
       currentTime.value = saved.position;
       resumeToast.value = `Resumed at ${formatTime(saved.position)}`;
       if (resumeToastTimer) clearTimeout(resumeToastTimer);
@@ -1438,6 +1437,35 @@ function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): 
   void Promise.resolve(v.play()).catch(() => op.retract());
 }
 
+// The seek twin of the helper above (#306 Phase B), and the single place every
+// `currentTime` this file writes on the user's behalf goes through — the
+// saved-position resume, the three `savedTime` restores across a source swap,
+// and the two episode-nav rewinds to 0.
+//
+// The user's own paths (`seek()`, the scrubber's `commitSeek`) deliberately do
+// not come here: their `seeked` *is* the intent the room needs to hear.
+//
+// There is no kind to choose, unlike a play: a seek operation writes no intent,
+// it only decides that the resulting `seeked` is not the user's. Whether it is
+// matched by value or consumes the next `seeked` outright is decided inside
+// `beginProgrammaticSeek` from `readyState`, so nothing here — and nothing at a
+// future eighth site — has to get that right.
+//
+// The write is registered first, because that is the only ordering in which the
+// element's event cannot beat the operation into the registry. If the assignment
+// throws, the operation is retracted (exactly this one, never a neighbour's) and
+// the error is rethrown, so this helper changes what is *tracked* and not what
+// the caller sees.
+function seekProgrammatically(v: HTMLVideoElement, target: number): void {
+  const op = syncplay.beginProgrammaticSeek(target);
+  try {
+    v.currentTime = target;
+  } catch (err) {
+    op.retract();
+    throw err;
+  }
+}
+
 function seek(time: number): void {
   const video = videoRef.value;
   if (!video) return;
@@ -1760,8 +1788,7 @@ function selectQuality(stream: { height: number; url: string }): void {
   nextTick(() => {
     const v = videoRef.value;
     if (!v) return;
-    syncplay.markProgrammaticSeek(savedTime);
-    v.currentTime = savedTime;
+    seekProgrammatically(v, savedTime);
     if (wasPlaying) playProgrammatically(v, 'restore');
   });
 }
@@ -1928,8 +1955,7 @@ async function selectTranslation(tr: {
           if (translationEpoch !== mySwitch) return;
           const v = videoRef.value;
           if (v) {
-            syncplay.markProgrammaticSeek(savedTime);
-            v.currentTime = savedTime;
+            seekProgrammatically(v, savedTime);
             if (wasPlaying) playProgrammatically(v, 'restore');
           }
           switchingTranslation.value = false;
@@ -1980,8 +2006,7 @@ async function selectTranslation(tr: {
       if (translationEpoch !== mySwitch) return;
       const v = videoRef.value;
       if (v) {
-        syncplay.markProgrammaticSeek(savedTime);
-        v.currentTime = savedTime;
+        seekProgrammatically(v, savedTime);
         if (wasPlaying) playProgrammatically(v, 'restore');
       }
       switchingTranslation.value = false;
@@ -2135,8 +2160,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           if (navigationEpoch !== myNav) return;
           const v = videoRef.value;
           if (v) {
-            syncplay.markProgrammaticSeek(0);
-            v.currentTime = 0;
+            seekProgrammatically(v, 0);
             v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
             playProgrammatically(v, 'episode-start');
           }
@@ -2176,8 +2200,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       if (navigationEpoch !== myNav) return;
       const v = videoRef.value;
       if (v) {
-        syncplay.markProgrammaticSeek(0);
-        v.currentTime = 0;
+        seekProgrammatically(v, 0);
         v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
         playProgrammatically(v, 'episode-start');
       }

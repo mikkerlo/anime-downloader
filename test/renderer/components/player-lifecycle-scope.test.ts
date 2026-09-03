@@ -31,6 +31,27 @@ const APP_VUE = resolve(__dirname, '../../../src/renderer/src/App.vue')
 
 const SOURCE = readFileSync(PLAYER_VIEW, 'utf8')
 
+// The `<script setup>` region, and the input every whole-source scan below
+// reads. Module scope rather than local to the one `it()` that used to own
+// these two `indexOf` lines, because `SETUP` is built from them and the
+// assertion that makes `SETUP` well-defined — `expect(scripts).toEqual([…])`,
+// which rules out a second top-level `<script>` block — has to sit on the same
+// values. Recomputing them beside `SETUP` would leave the pair that is asserted
+// about and the pair that feeds `SETUP` free to drift with nothing reading both.
+//
+// Narrowing matters because `stripComments` is quote-aware and `<template>` is
+// not JavaScript: its apostrophes are not string delimiters (`couldn't` inside
+// an HTML comment is a live unmatched one), so a whole-file pass desynchronises
+// there and then includes or excludes `<style>` block comments by accident.
+// Dropping the non-script text also closes the false-POSITIVE direction — a
+// needle matching inside `<style>` comment prose would satisfy a scan vacuously.
+// Every needle in this file is script-side; the two literals that match
+// `PlayerView.vue` only outside the region are `'</script>'` (used below against
+// raw `SOURCE`, which stays raw) and `'else-if'` (read over App.vue's template).
+const setupStart = SOURCE.indexOf('<script setup lang="ts">')
+const setupEnd = SOURCE.indexOf('</script>', setupStart)
+const SETUP = SOURCE.slice(setupStart, setupEnd)
+
 /**
  * Every scan below asserts on an explicit slice, never on the whole file. A
  * file-wide `indexOf` would pass for the wrong reasons: `await
@@ -46,9 +67,69 @@ function slice(startNeedle: string, endNeedle: string): string {
   return SOURCE.slice(start, end)
 }
 
-/** Only `//`-prefixed whole lines are stripped, so prose inside one can't satisfy a scan; a trailing `// …` or any line of a block comment still can. */
+/**
+ * Every comment is stripped — a whole-line `//`, a trailing `// …` after code,
+ * and block comments (their newlines kept, so line structure survives) — so
+ * prose that names a call site can't satisfy a scan whatever style it is
+ * written in. A line of a block comment used to still count as a site; #302
+ * inverted that rather than merely widening it.
+ *
+ * The one deliberate carve-out, and the only part of this not inferable from
+ * the helper's name: a `//` inside a STRING LITERAL is preserved.
+ * `PlayerView.vue` returns `'anime-video://' + encodeURIComponent(…)` twice, and
+ * a naive trailing rule truncates both mid-expression — silently, because no
+ * scan asserts on those lines, so the helper would quietly mangle the input of
+ * every scan that reads it. Whoever later collapses this back into a two-line
+ * regex will read this docstring rather than the fixture that pins it.
+ *
+ * Quote tracking is enough and a tokenizer is not needed at this sha: the only
+ * `//` occurrences that are not whole-line comments are two genuine trailing
+ * comments and those two string literals, no template literal contains `//`,
+ * and the one regex literal in the file (`/hvc1|hev1/i`) carries no quote, `//`
+ * or `/*`, so it is inert here. A regex literal containing any of those WOULD
+ * desynchronise this scan, and silently — which is why this clause is a fact
+ * about the current file, not a property anything enforces.
+ *
+ * Feed it JavaScript, never the whole SFC — `SETUP`, or a slice of it.
+ */
 function stripComments(text: string): string {
-  return text.replace(/^[ \t]*\/\/.*$/gm, '')
+  let out = ''
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === "'" || ch === '"' || ch === '`') {
+      out += ch
+      i++
+      while (i < text.length) {
+        if (text[i] === '\\') {
+          out += text.slice(i, i + 2)
+          i += 2
+          continue
+        }
+        out += text[i]
+        i++
+        if (text[i - 1] === ch) break
+      }
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      const nl = text.indexOf('\n', i)
+      i = nl === -1 ? text.length : nl
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2)
+      const end = close === -1 ? text.length : close + 2
+      // Newlines only: blanking the body in place keeps every downstream
+      // `indexOf` roughly line-aligned with the file it came from.
+      out += text.slice(i, end).replace(/[^\n]/g, '')
+      i = end
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
 }
 
 function mountedBody(): string {
@@ -522,10 +603,13 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // column 0, so this cannot be satisfied by prose inside a comment — and it
     // sidesteps CodeQL's `js/bad-tag-filter`, which reads any hand-rolled
     // `<script…>` pattern as an HTML sanitiser missing its `<SCRIPT>` variant.
+    //
+    // This assertion is also what makes the module-scope `SETUP` well-defined:
+    // a second top-level `<script>` block would leave `SETUP` covering only the
+    // first one and silently narrow every scan pointed at it. The bounds are
+    // the module-scope pair for exactly that reason — see their comment.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
-    const setupStart = SOURCE.indexOf('<script setup lang="ts">')
-    const setupEnd = SOURCE.indexOf('</script>', setupStart)
     const decl = SOURCE.indexOf('let prepareEpoch = 0;')
     expect(decl).toBeGreaterThan(setupStart)
     expect(decl).toBeLessThan(setupEnd)
@@ -668,7 +752,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // For the #280 unmount half the write landed on discarded state. A
     // superseded open unwinds on a LIVE component, so `player closed` would
     // replace the winner's video with an error banner.
-    const src = stripComments(SOURCE)
+    const src = stripComments(SETUP)
     // Three call sites, all routed through the guard.
     expect([...src.matchAll(/reportPrepareError\(prep\)/g)]).toHaveLength(3)
     // The one surviving direct write is the guard's own, after the early return.
@@ -728,7 +812,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
       expect(c.arm).not.toContain('PLAYER_CLOSED_BAIL')
       // The token the compare reads is taken where the flag is SET, so the
       // compare cannot be vacuously true.
-      expect(stripComments(SOURCE)).toContain(c.set)
+      expect(stripComments(SETUP)).toContain(c.set)
     }
   })
 
@@ -757,6 +841,281 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     expect(walk).toContain('!navigating.value')
     expect(walk).toContain('translationEpoch === walkTranslation')
     expect(walk).not.toContain('switchingTranslation')
+  })
+})
+
+describe('#302 — every caller-side flag clear is guarded by ownership', () => {
+  // #291 gave `switchingTranslation` / `navigating` an ownership token where
+  // each flag is SET, but only one clear per flow read it — the `!prep.ok`
+  // unwind arm above. The scope line is "can another run of the SAME flow be in
+  // flight when this clear executes", NOT "is there an await between here and
+  // my last resume point": the second test establishes only that no NEW run was
+  // admitted since the resume and says nothing about one already parked.
+  // `selectTranslation` has no re-entrancy guard at all (its early return only
+  // stops a re-pick of the already-active translation) and `goToEpisode`'s sits
+  // above `await saveProgress(true)`, so both flows overlap without any of
+  // #291's machinery and the loser landing first clears the winner's flag.
+  //
+  // A closed-set classifier rather than eight literal `toContain`s, so a ninth
+  // clear added later cannot slip in unguarded.
+  //
+  // Every scan here reads comment-stripped, script-region source. The
+  // membership half below compares INDICES, and `stripComments` shortens the
+  // text, so its bounds must be computed in the same space as the matches they
+  // are tested against — `stripComments(SETUP)`, named rather than left as "the
+  // stripped source". Note the opposite order from every other scan in this
+  // file, which strips a raw slice: `slice()` keeps indexing raw `SOURCE` on
+  // purpose, because one of its callers passes an own-line `//` as an END
+  // needle and stripping would delete it out from under `indexOf`.
+  const SRC = stripComments(SETUP)
+
+  /** Backward-match the `(` that opens the `)` at `close`. */
+  function openParen(src: string, close: number): number {
+    let depth = 0
+    for (let i = close; i >= 0; i--) {
+      if (src[i] === ')') depth++
+      else if (src[i] === '(' && --depth === 0) return i
+    }
+    return -1
+  }
+
+  /**
+   * Strict: `function …(…) {` or `… => {` only. `if (`, `for (`, `try`,
+   * `catch` and bare blocks are NOT function bodies, and the outward walk
+   * steps over them.
+   *
+   * The looser reading — "nearest enclosing block" — classifies all eight
+   * sites identically today and is still wrong. A clear placed inside the
+   * `if (v) { … }` block this change standardises both `selectTranslation`
+   * callbacks on would have `if (v) {` as its nearest enclosing block, which is
+   * not preceded by `nextTick(`, so the misread routes it to branch (a) and
+   * demands a compare the callback's early return already provides. Relaxing it
+   * the other way — "any opener up to the function boundary" — is wrong too: a
+   * clear inside a NON-`nextTick` callback, such as the one-shot
+   * `loadedmetadata` listener if it ever grows a braced body, runs after the
+   * outer guard has already passed and genuinely needs its own compare.
+   */
+  function isFunctionBody(src: string, brace: number): boolean {
+    const head = src.slice(0, brace).trimEnd()
+    if (head.endsWith('=>')) return true
+    const close = head.lastIndexOf(')')
+    if (close === -1) return false
+    // Only a TS return-type annotation may sit between the parameter list and
+    // the brace (`): Promise<void> {`).
+    if (!/^\s*(:\s*[^;{}()]*)?$/.test(head.slice(close + 1))) return false
+    const open = openParen(src, close)
+    return open > -1 && /\bfunction\s*[A-Za-z0-9_$]*\s*$/.test(src.slice(0, open))
+  }
+
+  /** The function body at `brace` is a `(…) => {` handed straight to `nextTick(`. */
+  function isNextTickBody(src: string, brace: number): boolean {
+    const head = src.slice(0, brace).trimEnd()
+    if (!head.endsWith('=>')) return false
+    const params = head.slice(0, -2).trimEnd()
+    if (!params.endsWith(')')) return false
+    const open = openParen(src, params.length - 1)
+    return open > -1 && src.slice(0, open).trimEnd().endsWith('nextTick(')
+  }
+
+  /**
+   * Walks OUTWARD from `at` to an enclosing `{`, never inward from a known
+   * opener and never by searching for one. `if (!resolvedTr) {` occurs FOUR
+   * times inside `goToEpisode` — the first three are the resolution-chain
+   * fallbacks (b)/(c)/(d) and none of them contains a clear — so a matcher that
+   * searches for that string finds the wrong block.
+   */
+  function enclosing(src: string, at: number, functionsOnly: boolean): number {
+    let depth = 0
+    for (let i = at; i >= 0; i--) {
+      const ch = src[i]
+      if (ch === '}') depth++
+      else if (ch === '{') {
+        if (depth > 0) depth--
+        else if (!functionsOnly || isFunctionBody(src, i)) return i
+      }
+    }
+    return -1
+  }
+
+  function boundsOf(startNeedle: string, endNeedle: string): [number, number] {
+    const start = SRC.indexOf(startNeedle)
+    expect(start, `missing slice start: ${startNeedle}`).toBeGreaterThan(-1)
+    const end = SRC.indexOf(endNeedle, start + startNeedle.length)
+    expect(end, `missing slice end: ${endNeedle}`).toBeGreaterThan(start)
+    return [start, end]
+  }
+
+  function callers(): {
+    name: string
+    flag: string
+    guard: string
+    early: string
+    clears: number
+    bare: number
+    bounds: [number, number]
+  }[] {
+    return [
+      {
+        name: 'selectTranslation',
+        flag: 'switchingTranslation',
+        guard: 'if (translationEpoch === mySwitch) switchingTranslation.value = false;',
+        early: 'if (translationEpoch !== mySwitch) return;',
+        clears: 5,
+        bare: 0,
+        bounds: boundsOf('async function selectTranslation(', '\nasync function goToEpisode(')
+      },
+      {
+        name: 'goToEpisode',
+        flag: 'navigating',
+        guard: 'if (navigationEpoch === myNav) navigating.value = false;',
+        early: 'if (navigationEpoch !== myNav) return;',
+        clears: 6,
+        bare: 1,
+        bounds: boundsOf('async function goToEpisode(', '\nfunction cancelAutoAdvance(')
+      }
+    ]
+  }
+
+  it('strips block and trailing comments, and never a `//` inside a string literal', () => {
+    // The carve-out is not hypothetical: `PlayerView.vue` returns
+    // `'anime-video://' + encodeURIComponent(…)` twice, and a naive `//.*$`
+    // rule truncates both mid-expression. NOTHING in the suite would go red on
+    // that — no scan asserts on those two lines — so the helper would silently
+    // mangle the input of every scan that reads it until some needle happened
+    // to land on a line containing a URL scheme. The helper being the one
+    // unpinned input in a change whose whole test story is about naming inputs
+    // is the wrong shape to ship.
+    const fixture = [
+      "const url = 'anime-video://' + encodeURIComponent(p); // trailing prose",
+      '/* block prose */ const kept = 1;'
+    ].join('\n')
+    const out = stripComments(fixture)
+    expect(out).toContain("'anime-video://'")
+    expect(out).toContain('const kept = 1;')
+    expect(out).not.toContain('trailing prose')
+    expect(out).not.toContain('block prose')
+    // And on the real input every scan in this file reads.
+    expect(SRC).toContain("'anime-video://' + encodeURIComponent(")
+  })
+
+  it('classifies every flag clear as guarded, or as the one allowed bare site', () => {
+    for (const c of callers()) {
+      const [start, end] = c.bounds
+      const body = SRC.slice(start, end)
+      const sites = [...body.matchAll(new RegExp(`${c.flag}\\.value = false`, 'g'))].map(
+        (m) => start + m.index!
+      )
+      // Slice-scoped, not whole-source, and that is load-bearing: a whole-source
+      // count would also fire on a clear added in the OTHER flow's slice and
+      // mask the confinement scan below. It is also the direction membership
+      // cannot see — membership catches a clear added in the wrong flow, never
+      // one deleted, and a deleted clear strands the flag.
+      expect(sites, `${c.name} clear count`).toHaveLength(c.clears)
+
+      let bare = 0
+      for (const at of sites) {
+        // (c) is consulted FIRST — ordered, then positional. The allowed bare
+        // site sits at a straight-line position, so a positional-first
+        // classifier routes it to (a) and demands a compare the body
+        // deliberately does not have.
+        const block = enclosing(SRC, at, false)
+        expect(block, `${c.name}: clear outside any block at ${at}`).toBeGreaterThan(-1)
+        if (c.flag === 'navigating' && SRC.slice(0, block).trimEnd().endsWith('if (!resolvedTr)')) {
+          // (c) selects on SHAPE ALONE — an `if (!resolvedTr)` block sitting at
+          // a straight-line position — so on its own it pins where the allowed
+          // bare clear is, never WHY it is allowed to be bare. That reason is a
+          // claim about the source ABOVE it: nothing between
+          // `const myNav = ++navigationEpoch` and the clear suspends, so the
+          // ownership compare the other six carry would be dead code here.
+          // Without the pin below, an `await` dropped anywhere into the
+          // resolution chain reintroduces #302 at precisely the one site this
+          // change deliberately leaves bare, and the whole scan stays green —
+          // cardinality and confinement included — because the clear neither
+          // moved nor changed shape. Scoped to `start`, not an unscoped
+          // `indexOf`: the premise is about THIS function's epoch set site.
+          const set = SRC.indexOf('const myNav = ++navigationEpoch', start)
+          expect(set, `${c.name}: no epoch set site above the bare clear at ${at}`).toBeGreaterThan(
+            -1
+          )
+          expect(set, `${c.name}: the bare clear at ${at} sits above its epoch set`).toBeLessThan(
+            at
+          )
+          expect(
+            SRC.slice(set, at),
+            `${c.name}: the bare clear at ${at} is now reached across a suspension`
+          ).not.toContain('await ')
+          bare++
+          continue
+        }
+
+        const fn = enclosing(SRC, at, true)
+        expect(fn, `${c.name}: clear outside any function body at ${at}`).toBeGreaterThan(-1)
+        if (isNextTickBody(SRC, fn)) {
+          // (b) — accepted only when the CALLBACK's first statement is the
+          // early return. Containment in a `nextTick(` is the SELECTOR for this
+          // branch, never the allowance: the guard wraps the whole body because
+          // a superseded callback otherwise steers the element the winner is
+          // now driving — one `<video>`, never swapped.
+          expect(
+            SRC.slice(fn + 1)
+              .trimStart()
+              .startsWith(c.early),
+            `${c.name}: nextTick callback at ${fn} does not open with \`${c.early}\``
+          ).toBe(true)
+        } else {
+          // (a) — accepted only as the exact single-line form already in the
+          // file on the two `!prep.ok` arms, never by mere containment.
+          const line = SRC.slice(SRC.lastIndexOf('\n', at) + 1, SRC.indexOf('\n', at)).trim()
+          expect(line, `${c.name}: unguarded straight-line clear at ${at}`).toBe(c.guard)
+        }
+      }
+      // Cardinality on branch (c), not just its shape: without it a ninth clear
+      // dropped in as `if (!resolvedTr) { … }` at any straight-line position
+      // classifies as the exception and lands green.
+      expect(bare, `${c.name}: allowed bare clears`).toBe(c.bare)
+
+      // Mutating this: a ninth bare clear must be added BELOW that function's
+      // first `nextTick(`, with the count literal above bumped alongside it.
+      // The bump matters because cardinality fires on ANY clear added inside
+      // the slice, so without it the mutant goes red for a reason that has
+      // nothing to do with classification and the (a)/(b) selector stays
+      // unpinned by the very mutation written to pin it. The placement matters
+      // because a clear dropped ABOVE the first `nextTick(` classifies as (a)
+      // and goes red even under a broken "is there a `nextTick(` textually
+      // above me" selector — which would otherwise route all four straight-line
+      // clears to (b) and let them be satisfied by an enclosing callback's
+      // early return.
+      //
+      // Also, and this is not a hole: with the bump in place, the same ninth
+      // clear placed at an IN-CALLBACK position lands green. Branch (b) keys on
+      // the callback, not on the clear, so once a callback opens with its early
+      // return every clear inside it is guarded — which is semantically right.
+      // (Claim about the ADD only: deleting a clear at an in-callback position
+      // drops the slice count and goes red on cardinality.)
+    }
+  })
+
+  it('confines each flag write to its own flow, whole-source', () => {
+    // The per-caller scan above is keyed on `c.flag` and structurally cannot
+    // see a `navigating.value = false` dropped into `selectTranslation`, or the
+    // reverse — and that confinement is what the whole safety argument rests
+    // on. A cross-flow supersede leaves the OTHER counter untouched, so the
+    // loser's compare is still true and it still releases its own flag; nothing
+    // strands. Written as whole-source membership per slice rather than "the
+    // slice contains N writes": the two slices are adjacent and purely textual,
+    // so the loose form would also accept a write sitting in the gap between
+    // `selectTranslation`'s closing brace and `goToEpisode`'s opener.
+    for (const c of callers()) {
+      const [start, end] = c.bounds
+      const writes = [...SRC.matchAll(new RegExp(`${c.flag}\\.value =`, 'g'))]
+      expect(writes.length, `${c.flag} write count`).toBeGreaterThan(0)
+      for (const w of writes) {
+        expect(
+          w.index! >= start && w.index! < end,
+          `${c.flag} written outside ${c.name} at ${w.index}`
+        ).toBe(true)
+      }
+    }
   })
 })
 
@@ -859,11 +1218,12 @@ describe("#280 (4) — the onMounted tail and the continuations' orphan subtitle
     //
     // The `CONTINUATIONS` bodies are comment-stripped, and that is load-bearing
     // here: the count below is pinned over a regex that ordinary prose matches,
-    // so a *whole-line* `//` in `PlayerView.vue` naming `initSubtitles(video)`
-    // would otherwise count as a site and fail this. It narrows the hazard
-    // without closing it — `stripComments` only blanks whole-line `//`, so a
-    // *trailing* `// …`, or any line of a block comment, naming the literal
-    // still counts as a site (#312).
+    // so a `//` in `PlayerView.vue` naming `initSubtitles(video)` would
+    // otherwise count as a site and fail this. Since #302 that closes the
+    // hazard rather than narrowing it — `stripComments` now blanks a trailing
+    // `// …` and a block comment's body as well as a whole-line `//`, so no
+    // comment in any style can present the literal as a site, and the enclosing
+    // `if (` the walk below looks for can only be real code.
     let guarded = 0
     for (const [name, body] of CONTINUATIONS) {
       const sites = [...body.matchAll(/initSubtitles\(video\)/g)]
@@ -990,7 +1350,14 @@ describe('#280 (3) — the diagnostic element listeners are removed at teardown'
   it('registers all six from one table and removes the same table', () => {
     // One table drives both directions, so an added listener cannot be
     // registered without also being removed.
-    const table = slice('const DIAGNOSTIC_LISTENERS', 'onMounted(')
+    //
+    // Stripped like the other twelve `slice(` call sites (#302): these are
+    // positive `toContain`s over a literal ordinary prose can carry, so against
+    // raw text a commented-out entry still reads as a registration. No
+    // cardinality pin goes with it, deliberately — this table drives BOTH
+    // directions, so a seventh listener is registered and removed by
+    // construction, and a length assertion would turn a correct addition RED.
+    const table = stripComments(slice('const DIAGNOSTIC_LISTENERS', 'onMounted('))
     for (const type of TYPES) expect(table).toContain(`['${type}',`)
     expect(mountedBody()).toContain(
       'for (const [type, handler] of DIAGNOSTIC_LISTENERS) v.addEventListener(type, handler);'

@@ -372,3 +372,123 @@ Renderer state ownership: `useSyncplayStore` (`src/renderer/src/stores/syncplay.
 Main-side handlers (see [IPC Handlers](./ipc.md)): `connect`, `disconnect`, `set-file`, `local-state`, `local-snapshot`, `set-ready`, `get-status`, `get-room-users`, `get-room-position`, `set-password`, `has-password`. Broadcasts: `connection-status`, `remote-state`, `room-users`, `room-event`, `remote-episode-change`. Settings tab "Watch Together" in `SettingsView.vue` persists host/port/room/username/autoReconnect under the `syncplay` electron-store key, and the password separately under `syncplayPassword` (see Password ownership above). The live connection itself is **not** persisted: users must rejoin after a restart.
 
 Debug tracing gated by `SYNCPLAY_DEBUG=1` env var — dumps every inbound/outbound JSON message and state transition to the main process log.
+
+## Appendix: Captured Room Transcript (#307)
+
+Evidence for the close-membership path (#307 / PR #310), captured against the real reference server rather than a mock. Excerpts only — the raw capture is ~200 KB and deliberately stays out of the repo.
+
+### Environment
+
+- Server: `Syncplay/syncplay` @ `993232ab095bb810593459bc705b3e6fc64ad161` (tag `v1.7.6`), Python 3.12.3, Twisted 26.4.0. Loopback only, no password, no persistent-rooms DB, disposable temp dir.
+- App: branch `i307-close-membership` @ `f710b3e2` (v4.6.59), `npm run build`, `SYNCPLAY_DEBUG=1`, one Electron instance per client with isolated user-data dirs.
+
+The app is **TLS-only**: `syncplay.ts:1130` sends `{TLS:{startTLS:"send"}}` before `Hello` and `handleTls()` (`:1277-1290`) calls `failHandshake` on anything but `"true"`, so a plain-TCP fixture is unreachable by construction. Three things about `--tls` each fail closed: it takes a **directory**, not a file; `_allowTLSconnections()` (`server.py:251-257`) opens `privkey.pem`, `cert.pem` **and** `chain.pem` from that directory and silently disables TLS behind a printed warning if any one is missing; and the cert needs an **IP SAN** for `127.0.0.1`, because `upgradeToTls()` (`:1292`) passes the configured host straight through as `servername`.
+
+```bash
+mkdir certs && cd certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout privkey.pem -out cert.pem -days 3 \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+: > chain.pem   # must exist; may be empty (the loader splits on the PEM sentinel)
+cd ../server
+python -u syncplayServer.py --port 8998 --tls ../certs --interface-ipv4 127.0.0.1
+# Confirm "TLS support is enabled." on stdout before starting the app.
+```
+
+Trust the throwaway cert in the app with `NODE_EXTRA_CA_CERTS=<certs>/cert.pem`.
+
+### Excerpts
+
+Relative seconds since the closer's connect; `-->` outbound, `<--` inbound, `**` the harness action that caused it. Long frames are truncated with `…`.
+
+**1. The close, and the `Set: {file: null}` it sends** (`+20.49`, ±2 frames):
+
+```
++20.49 **  STEP 2: closer closes its player
++20.49 **  syncplayPlayerClosed("session-A1")
++20.49 --> {"Set":{"file":null}}
++21.13 <-- {"State":{"ping":{…},"playstate":{"position":20.998721364507613,"paused":false,"doSeek":false,"setBy":"watcher-307"}}}
++21.16 --> {"State":{"ping":{…},"playstate":{"position":21.03172112036699,"doSeek":false}}}
+```
+
+Four of these, one per close: `+20.49`, `+57.21`, `+91.77`, `+126.32`. The outbound `State` at `+21.16` carries **no `paused` key** — that is the spectator rule under [Heartbeat + RTT Compensation](#heartbeat--rtt-compensation) working as designed, not an anomaly: with the player gone the mirror asserts a position but makes no pause claim.
+
+**2. The next `List` reply renders the cleared row as `file: {}`** (`+29.14`, ±2 frames):
+
+```
++28.17 --> {"State":{"ping":{…},"playstate":{"position":28.113916876787496,"doSeek":false}}}
++29.13 <-- {"State":{…,"playstate":{"position":28.48615400317278,"paused":false,"setBy":"watcher-307"}}}
++29.14 --> {"List":null}
++29.14 <-- {"List":{"issue-307b":{
+             "closer-307":{"position":0,"file":{},"controller":false,"isReady":true,…},
+             "watcher-307":{"position":0,"file":{"name":"Placeholder Show - Episode 1 [test]","duration":1440,…},…}}}}
++29.17 --> {"State":{"ping":{…},"playstate":{"position":28.527498729735278,"doSeek":false}}}
+```
+
+The peer's row keeps its full file object; ours is `{}`, never `null` and never absent — which is why `handleList` maps a nameless file back to `null`. Note there is **no `Set: {user}` broadcast** of the clear: `sendFileUpdate` (`server.py:175-178`) drops a falsey file, so a peer only learns on its own next `List` poll, up to 15 s later.
+
+**3. Reconnect with the player closed re-announces nothing** (`+146.03`, the `Hello` and what followed it):
+
+```
++146.03 --> {"Hello":{"username":"closer-307","room":{"name":"issue-307b"},"version":"1.7.6",…}}
++146.03 <-- {"Set":{"ready":{"username":"closer-307","isReady":null,"manuallyInitiated":false}}}
++146.03 <-- {"Hello":{…,"realversion":"1.7.6","features":{"isolateRooms":false,…}}}
++146.03 --> {"Set":{"ready":{"isReady":true,"manuallyInitiated":false}}}
++146.03 --> {"List":null}
++146.04 <-- {"List":{"issue-307b":{"watcher-307":{…,"file":{"name":"Placeholder Show - Episode 1 [test]",…}}}}}
+```
+
+The absence is the finding, and it is only readable against what *did* follow: the sole outbound `Set` after the handshake is the readiness frame. `finishHandshake()`'s re-announce at `:1264` is guarded on `this.currentFile`, which `playerClosed()` nulled — so the dead player's file is not re-advertised.
+
+**4. A paused closer's claim collapsing at the close** (`+91.77`, ±2 frames):
+
+```
++91.64 <-- {"State":{…,"playstate":{"position":74.38988343856737,"paused":true,"setBy":"closer-307"},"ignoringOnTheFly":{"server":1}}}
++91.64 --> {"State":{"ping":{…},"ignoringOnTheFly":{"server":1}}}
++91.76 **  syncplayPlayerClosed("session-A3")
++91.77 --> {"Set":{"file":null}}
++91.81 <-- {"State":{…,"playstate":{"position":91.72563351752144,"paused":false,"setBy":"watcher-307"},"ignoringOnTheFly":{"server":1}}}
++91.81 --> {"State":{"ping":{…},"ignoringOnTheFly":{"server":1}}}
+```
+
+Up to `+91.77` the paused closer, frozen at `74.39`, wins the server's `min(watchers)` election once a second and holds the room there. After the close its position never reappears and the room advances on the watcher alone.
+
+### Provenance
+
+Raw capture: **530 closer frames + 502 watcher frames**, `sha256 c9345d490b1d9533692508bc0c76638d8105dfba9017d14b68d095a48d1daaaf`. The excerpts above are elided from that total — the 1 Hz `State` stream between them is omitted, as is a discarded first run in which both clients announced position 100 into a room sitting at ~0, so `isAdopted()`'s drift latch never fired and every outbound `State` was the ping-only mirror.
+
+### What this run did not cover
+
+- **No ID *mismatch* and no `undefined` close on the wire.** Every close quoted the ID its own mount announced. The mismatch arm — a close from a mount that never announced — is driven only by the unit tests.
+- **No crash or kill close**, only orderly ones.
+- **No official Syncplay/mpv peer in the room.** Both clients were this app, so the claim that official clients keep showing a stale watching row until their next poll is still untested — a roster-staleness caveat these docs deliberately do not promise against.
+
+The reconnect gap is **retired**, not open: the capture used `syncplayDisconnect()`/`syncplayConnect()` through `tearDown()` rather than `onSocketClose()`'s automatic retry, but `tearDown()` (`:1004-1039`) touches neither `currentFile` nor `currentPlayerSessionId`, and the re-announce at `:1264` is guarded on `this.currentFile` alone. Both paths reach that line in identical state, so excerpt 3 covers the auto-retry too.
+
+### Renderer-driven confirmation
+
+The transcript above drives `window.api` directly, so it proves the wire half and nothing above the preload boundary. A second, separate run closed that: four real UI actions in the running app — click **Open file** on a seeded downloaded episode → click the player's close button → click **Open file** again → close again — with the room joined through the Watch Together view, against the same server.
+
+From main's `SYNCPLAY_DEBUG` stdout, both `playerClosed()` log lines (`:994` and `:999`) on **each** close, quoting two different per-mount IDs:
+
+```
++25.92 [syncplay] player closed — dropping the snapshot claim { playerSessionId: 'p-mtm61pzo-ydm0ch' }
++25.92 [syncplay] player closed — dropping the file claim { file: 'Bocchi the Rock! - 1' }
++46.14 [syncplay] player closed — dropping the snapshot claim { playerSessionId: 'p-mtm625lu-1r79f7y' }
++46.14 [syncplay] player closed — dropping the file claim { file: 'Bocchi the Rock! - 1' }
+```
+
+Reaching the second line on both closes is the point: it means each close matched the ID the mount that announced the file had minted, so `playerSessionId` really is one-per-mount in the assembled app. The ID never reaches the wire — `sendSetFile()` (`:2295-2311`) builds the frame field by field and omits it — and it does not appear anywhere in that run's trace.
+
+From the trace, exactly one `{"Set":{"file":null}}` per close (`+22.26`, `+42.48`) and, per open, the announce plus `onDurationChange`'s re-push once the element reports a duration:
+
+```
++22.24 **  UI: click the player's close button
++22.26 --> {"Set":{"file":null}}
++29.28 --> {"List":null}
++29.28 <-- {"List":{"issue-307-ui":{"ui-closer":{"position":0,"file":{},…}}}}
++29.40 **  UI: click "Open file" on episode 1
++29.43 --> {"Set":{"file":{"name":"Bocchi the Rock! - 1","duration":0,…}}}
++29.44 --> {"Set":{"file":{"name":"Bocchi the Rock! - 1","duration":180,…}}}
+```
+
+Two `Set: {file}` per open, not one — the mount announces at `duration: 0` and re-pushes at the real duration, which is the documented `onDurationChange` behaviour above, not a double announce. Over the whole run: 2 null-`Set`s, 4 file-`Set`s, 153 frames.

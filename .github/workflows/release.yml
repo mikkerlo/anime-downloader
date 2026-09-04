@@ -109,12 +109,28 @@ jobs:
       # later — so allow one retry. Capped at 2 attempts so a genuine cert or
       # secret problem still fails. Every other platform uses the
       # single-attempt step below, so a real build break fails on first try.
+      #
+      # The keychain reset between attempts is load-bearing, not hygiene.
+      # electron-builder only tears its temporary keychain down on the success
+      # path, so a failed attempt leaves that keychain on disk AND at the head
+      # of the user search list. The next attempt creates a *new* keychain but
+      # `security set-key-partition-list` resolves against the search list,
+      # hits the orphan first, and tries to unlock it with the new attempt's
+      # password — failing with the very error we are retrying for. Measured on
+      # a forced-failure probe: without this reset, attempt 2 failed
+      # deterministically (actions/runs/33906796915).
       - name: Package (mac, up to 2 attempts)
         if: matrix.platform == 'mac'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Quoted paths, one per line, as `security` prints them.
+          list_keychains() {
+            security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
+          }
+          ORIGINAL_KEYCHAINS=$(list_keychains)
+
           for attempt in 1 2; do
             echo "::group::electron-builder attempt $attempt of 2"
             if npx electron-builder ${{ matrix.args }}; then
@@ -126,7 +142,25 @@ jobs:
               echo "::error::electron-builder failed on both attempts."
               exit 1
             fi
-            echo "::warning::electron-builder attempt $attempt failed — retrying once (see #320)."
+            echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
+
+            # Delete only the temporary keychains this attempt orphaned, then
+            # put the search list back exactly as we found it. Scoped to the
+            # temp dir so a pre-existing keychain is never destroyed.
+            list_keychains | while read -r kc; do
+              case "$kc" in
+                */T/*.keychain | */T/*.keychain-db)
+                  echo "removing orphaned keychain: $kc"
+                  security delete-keychain "$kc" || true
+                  ;;
+              esac
+            done
+            # Word splitting is intended: one keychain path per argument.
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
+            echo "search list restored to:"
+            list_keychains
+
             sleep 15
           done
 

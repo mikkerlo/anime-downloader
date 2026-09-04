@@ -100,20 +100,22 @@ rules, both learned the hard way:
   same aggregate unit satisfied, the aggregate does not move. It is a useful
   shape check; it is never the assertion that catches set rot.
 
-The worked example is #317/#318, which nearly shipped a hole for exactly this
-reason. When `reportPrepareError(` was added to `SYMBOL_SET` during review, the
-numbers moved like this (values as of #318 — treat them as an illustration, not
-a live invariant; `SYMBOL_SCAN` may have moved since):
+Blindness is the normal case rather than an occasional gap, and the ownership
+scan in `player-lifecycle-scope.test.ts` is the measured example. Across its two
+flows there are **33** symbol-set sites in **10** post-`await` blocks, and
+**32** of those sites share a block with a sibling. So dropping one of the
+**15** symbols moves the block count for exactly **one** of them —
+`prepareMkvForPlayback(` in `goToEpisode`, the only site alone in its block. For
+the other fourteen the block assertion reports the same number as before while a
+guarded site has silently gone unguarded.
 
-| | before | after |
-| --- | --- | --- |
-| `selectTranslation` sites | 14 | **15** |
-| `goToEpisode` sites | 17 | **18** |
-| `selectTranslation` blocks | 5 | 5 |
-| `goToEpisode` blocks | 5 | 5 |
+#317/#318 is where this nearly shipped a hole. Adding `reportPrepareError(` to
+the symbol set during review moved the per-flow site counts 14→15 and 17→18 and
+left both block counts at 5, because the newly matched site landed in a block
+another symbol already kept red.
 
-The newly matched site sat in a block another symbol already kept red, so the
-block count never moved. Only the pinned site count saw it.
+(Figures measured at #322 against the head of `main`; they move when
+`SYMBOL_SET` does, and the pins in `SYMBOL_SCAN` are the live copy.)
 
 Related, and the other way these tests go quietly wrong: a **positive** scan
 over raw source is satisfied by a commented-out copy of the needle, so a

@@ -1208,7 +1208,14 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
    * The closed inventory, per flow. Pinned rather than merely looped over: a
    * symbol quietly dropped from the set above turns a red site green, and the
    * block count alone cannot see it whenever a sibling write keeps its block
-   * red — which is true of ten of the thirty-one sites.
+   * red.
+   *
+   * That is the normal case here, not an edge: of the 33 sites across the 10
+   * blocks below (15 + 18, the pins in this very object), 32 share a block
+   * with a sibling. Dropping any one of the 15 symbols moves the block count
+   * for exactly one of them — `prepareMkvForPlayback(` in `goToEpisode`, the
+   * only site alone in its block. For the other 14 the block assertion goes on
+   * reporting the same number and only these site counts catch the loss.
    */
   const SYMBOL_SCAN: Record<string, { sites: number; blocks: number }> = {
     selectTranslation: { sites: 15, blocks: 5 },

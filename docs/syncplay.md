@@ -382,7 +382,7 @@ Evidence for the close-membership path (#307 / PR #310), captured against the re
 - Server: `Syncplay/syncplay` @ `993232ab095bb810593459bc705b3e6fc64ad161` (tag `v1.7.6`), Python 3.12.3, Twisted 26.4.0. Loopback only, no password, no persistent-rooms DB, disposable temp dir.
 - App: branch `i307-close-membership` @ `f710b3e2` (v4.6.59), `npm run build`, `SYNCPLAY_DEBUG=1`, one Electron instance per client with isolated user-data dirs.
 
-The app is **TLS-only**: `syncplay.ts:1130` sends `{TLS:{startTLS:"send"}}` before `Hello` and `handleTls()` (`:1277-1290`) calls `failHandshake` on anything but `"true"`, so a plain-TCP fixture is unreachable by construction. Three things about `--tls` each fail closed: it takes a **directory**, not a file; `_allowTLSconnections()` (`server.py:251-257`) opens `privkey.pem`, `cert.pem` **and** `chain.pem` from that directory and silently disables TLS behind a printed warning if any one is missing; and the cert needs an **IP SAN** for `127.0.0.1`, because `upgradeToTls()` (`:1292`) passes the configured host straight through as `servername`.
+The app is **TLS-only**: `syncplay.ts:1130` sends `{TLS:{startTLS:"send"}}` before `Hello` and `handleTls()` (`:1277-1290`) calls `failHandshake` on anything but `"true"`, so a plain-TCP fixture is unreachable by construction. Three things about `--tls` each fail closed: it takes a **directory**, not a file; `_allowTLSconnections()` (`server.py:251-257`) opens `privkey.pem`, `cert.pem` **and** `chain.pem` from that directory and silently disables TLS behind a printed warning if any one is missing; and the cert needs an **IP SAN** for `127.0.0.1`, because `upgradeToTls()` (`syncplay.ts:1292`) passes the configured host straight through as `servername`.
 
 ```bash
 mkdir certs && cd certs
@@ -462,7 +462,7 @@ Raw capture: **530 closer frames + 502 watcher frames**, `sha256 c9345d490b1d953
 - **No crash or kill close**, only orderly ones.
 - **No official Syncplay/mpv peer in the room.** Both clients were this app, so the claim that official clients keep showing a stale watching row until their next poll is still untested — a roster-staleness caveat these docs deliberately do not promise against.
 
-The reconnect gap is **retired**, not open: the capture used `syncplayDisconnect()`/`syncplayConnect()` through `tearDown()` rather than `onSocketClose()`'s automatic retry, but `tearDown()` (`:1004-1039`) touches neither `currentFile` nor `currentPlayerSessionId`, and the re-announce at `:1264` is guarded on `this.currentFile` alone. Both paths reach that line in identical state, so excerpt 3 covers the auto-retry too.
+The reconnect gap is **retired**, not open: the capture used `syncplayDisconnect()`/`syncplayConnect()` through `tearDown()` rather than `onSocketClose()`'s automatic retry, but `tearDown()` (`syncplay.ts:1005-1039`) touches neither `currentFile` nor `currentPlayerSessionId`, and the re-announce at `:1264` is guarded on `this.currentFile` alone. Both paths reach that line in identical state, so excerpt 3 covers the auto-retry too.
 
 ### Renderer-driven confirmation
 

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   check-version:
@@ -40,6 +41,9 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
+      # A macOS-only flake must not cancel the healthy linux/win legs (#320) —
+      # the release job still needs all three, so a genuine failure blocks it.
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -100,7 +104,36 @@ jobs:
 
       - run: npx electron-vite build
 
-      - run: npx electron-builder ${{ matrix.args }}
+      # macOS only: electron-builder's temporary-keychain handling flakes with
+      # "SecKeychainUnlock: The user name or passphrase you entered is not
+      # correct" (#320). It is transient — the same secrets succeed minutes
+      # later — so allow one retry. Capped at 2 attempts so a genuine cert or
+      # secret problem still fails. Every other platform uses the
+      # single-attempt step below, so a real build break fails on first try.
+      - name: Package (mac, up to 2 attempts)
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in 1 2; do
+            echo "::group::electron-builder attempt $attempt of 2"
+            if npx electron-builder ${{ matrix.args }}; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::electron-builder failed on both attempts."
+              exit 1
+            fi
+            echo "::warning::electron-builder attempt $attempt failed — retrying once (see #320)."
+            sleep 15
+          done
+
+      - name: Package
+        if: matrix.platform != 'mac'
+        run: npx electron-builder ${{ matrix.args }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -140,3 +173,52 @@ jobs:
           name: ${{ needs.check-version.outputs.tag }}
           files: artifacts/*
           generate_release_notes: true
+
+  # A failed release is otherwise silent: `release` is skipped, no release
+  # appears, and nobody is told. That is how v4.6.56 was permanently lost
+  # (#320). One issue per failed run, via the built-in GITHUB_TOKEN.
+  report-failure:
+    needs: [check-version, build, release]
+    # Explicit rather than a bare failure(): when `build` fails, `release` is
+    # skipped, and this spells out that a skipped dependency still counts. Does
+    # not fire when the whole run is skipped (should_release == false) or
+    # cancelled — only on a real failure, once per run.
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Open an issue for the lost release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+          TAG: ${{ needs.check-version.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          LABEL="${TAG:-(version unknown)}"
+          {
+            echo "The **Build & Release** run for \`$LABEL\` failed, so **no release was published**."
+            echo
+            echo "- Failed run: $RUN_URL"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo
+            cat <<'EOF'
+          ## Before you re-run this
+
+          `softprops/action-gh-release` defaults to `make_latest: true`. If a **newer** version has
+          been released since this run failed, re-running it publishes the older version afterwards
+          and marks **it** Latest — offering live users a downgrade through `electron-updater`.
+
+          Check `gh release list` first:
+
+          - Nothing newer released yet → re-run the failed jobs; the release is recoverable.
+          - A newer release already exists → **do not re-run.** Leave the version gap. The commit's
+            code ships in the later release; a late rerun is not safe.
+
+          The macOS keychain-unlock flake (#320) is the known cause; the mac packaging step already
+          retries once, so a mac failure here means both attempts failed.
+          EOF
+          } > issue-body.md
+          gh issue create \
+            --title "Release $LABEL failed to publish" \
+            --body-file issue-body.md

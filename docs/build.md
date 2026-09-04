@@ -31,3 +31,11 @@ Credentials come from repo Actions secrets, mapped to the env vars electron-buil
 Scope: **only `release.yml`** (version-bump pushes to main) signs and notarizes. PR builds (`check.yml`) never see the secrets and stay unsigned — deliberate, so fork-triggered runs can't touch signing material. If the secrets are absent the release build degrades gracefully: unsigned without the cert, signed-but-not-notarized without the API key.
 
 Verification on a signed release: `codesign -dv --verbose=2`, `spctl -a -vv` ("Notarized Developer ID"), `xcrun stapler validate` against the unpacked `.app`.
+
+## Release failures (#320)
+
+The macOS packaging step flakes on `security: SecKeychainUnlock: The user name or passphrase you entered is not correct`, thrown from inside electron-builder's own temporary-keychain handling. It is transient, not a secrets problem — the same secrets succeed minutes later — so the **"Package (mac, up to 2 attempts)"** step in `release.yml` retries once. The cap is 2: a genuine cert or secret failure still fails both. The other platforms use a separate single-attempt step so a real build break fails on the first try, and `strategy.fail-fast: false` keeps a mac flake from cancelling the healthy linux/win legs.
+
+When a release build fails, the `report-failure` job opens an issue naming the version and linking the run (built-in `GITHUB_TOKEN`, one issue per failed run). Before v4.6.60 this was silent — `release` was simply skipped — which is how v4.6.56 was permanently lost.
+
+**A late rerun is not always safe.** `softprops/action-gh-release` defaults `make_latest: true`, so re-running an old failed release build *after* a newer version has shipped publishes the older version last and marks **it** Latest — offering live users a downgrade through `electron-updater`. Check `gh release list` first: rerun only if nothing newer has been released. If something newer exists, leave the version gap — the commit's code ships in the later release anyway.

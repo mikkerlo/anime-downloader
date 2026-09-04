@@ -113,12 +113,16 @@ jobs:
       # The keychain reset between attempts is load-bearing, not hygiene.
       # electron-builder only tears its temporary keychain down on the success
       # path, so a failed attempt leaves that keychain on disk AND at the head
-      # of the user search list. The next attempt creates a *new* keychain but
-      # `security set-key-partition-list` resolves against the search list,
-      # hits the orphan first, and tries to unlock it with the new attempt's
-      # password — failing with the very error we are retrying for. Measured on
-      # a forced-failure probe: without this reset, attempt 2 failed
-      # deterministically (actions/runs/33906796915).
+      # of the user search list. Its filename is derived from the certificate,
+      # not randomised — the same basename appeared on two different runners —
+      # so the next attempt targets that very path while generating a *fresh*
+      # random password, and the unlock fails with the exact error the retry
+      # exists to survive.
+      #
+      # Measured on a forced-failure probe (attempt 1 given a wrong
+      # CSC_KEY_PASSWORD, attempt 2 the real one):
+      #   without this reset  attempt1_rc=1 attempt2_rc=1  runs/33906796915
+      #   with it             attempt1_rc=1 attempt2_rc=0  runs/33928659263
       - name: Package (mac, up to 2 attempts)
         if: matrix.platform == 'mac'
         shell: bash

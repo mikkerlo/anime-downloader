@@ -381,6 +381,13 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
   // the two blanket `playerCleanupRemux()` calls (which kill a *successor*
   // player's sessions and `unlinkSync` its tmpDir), and `startMseSession`,
   // which is not a `window.api` call at all but leaks an object URL.
+  //
+  // Comment-stripped, script-region source, the same input the slice-scoped
+  // scans above read: a positive `toContain` over raw text is satisfied by a
+  // commented-out copy of the needle, which is the one way the declaration it
+  // pins is likely to disappear (#321).
+  const SRC = stripComments(SETUP)
+
   it('pins the closed set of outward calls in prepareMkvForPlayback', () => {
     // A fifth main-process call added here fails this assertion until the author
     // lists it — and the guard assertion below then forces a bail with it.
@@ -534,7 +541,7 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
   it('bails with { ok: false } so the callers skip initSubtitles on the way out', () => {
     // `{ ok: true }` would fall through to the `initSubtitles(video)` calls in
     // `selectTranslation` / `goToEpisode` and construct an orphan worker.
-    expect(SOURCE).toContain(
+    expect(SRC).toContain(
       "const PLAYER_CLOSED_BAIL = { ok: false, error: 'player closed' } as const;"
     )
   })
@@ -569,6 +576,11 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
  * `PlayerView` does.
  */
 describe('#291 — supersede identity and the targeted unwind', () => {
+  // Comment-stripped, script-region source — see the note on the same binding
+  // in the ladder block above. The two scans below that deliberately keep
+  // reading raw `SOURCE` say so at their own site.
+  const SRC = stripComments(SETUP)
+
   /** Every `if (shouldBail(myPrepare)) { … }` block body in the two functions. */
   function bailBlocks(body: string): string[] {
     const out: string[] = []
@@ -608,6 +620,12 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // a second top-level `<script>` block would leave `SETUP` covering only the
     // first one and silently narrow every scan pointed at it. The bounds are
     // the module-scope pair for exactly that reason — see their comment.
+    //
+    // Both scans below therefore read RAW `SOURCE`, deliberately: the first has
+    // to see text outside `SETUP` (a second block is by definition not in it),
+    // and the second compares an INDEX against `setupStart`/`setupEnd`, which
+    // are raw-source offsets — `stripComments` shortens the text, so mixing the
+    // two spaces would compare offsets that do not mean the same thing.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
     const decl = SOURCE.indexOf('let prepareEpoch = 0;')
@@ -629,7 +647,11 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `prepareHevcTranscode` is a CONTINUATION of the same prepare, so it takes
     // `myPrepare` as a parameter. Re-taking an epoch there would make the
     // transcode supersede its own copy-path caller.
-    expect([...SOURCE.matchAll(/\+\+prepareEpoch/g)]).toHaveLength(1)
+    // Over stripped source: comment prose that writes the literal
+    // `++prepareEpoch` would otherwise inflate the count and turn this red for
+    // no real reason. `PlayerView.vue` already carries four comment mentions of
+    // `prepareEpoch`, one of them a bump's own description.
+    expect([...SRC.matchAll(/\+\+prepareEpoch/g)]).toHaveLength(1)
     expect(PREPARE_MKV).toContain('const myPrepare = ++prepareEpoch;')
     expect(PREPARE_HEVC).not.toContain('prepareEpoch')
     expect(PREPARE_HEVC).toMatch(/myPrepare: number/)
@@ -987,13 +1009,21 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
     // is the wrong shape to ship.
     const fixture = [
       "const url = 'anime-video://' + encodeURIComponent(p); // trailing prose",
-      '/* block prose */ const kept = 1;'
+      '/* block prose */ const kept = 1;',
+      "// const PLAYER_CLOSED_BAIL = { ok: false, error: 'player closed' } as const;"
     ].join('\n')
     const out = stripComments(fixture)
     expect(out).toContain("'anime-video://'")
     expect(out).toContain('const kept = 1;')
     expect(out).not.toContain('trailing prose')
     expect(out).not.toContain('block prose')
+    // The failure mode #321 is about, pinned on the helper itself: a
+    // declaration deleted from the code and left behind as a commented-out
+    // line must be INVISIBLE to a positive `toContain` scan. Over raw text that
+    // scan still passes and reports green. The needle carries quotes on
+    // purpose — the whole-line `//` has to win before quote tracking starts,
+    // or the rest of the fixture desynchronises.
+    expect(out).not.toContain('PLAYER_CLOSED_BAIL')
     // And on the real input every scan in this file reads.
     expect(SRC).toContain("'anime-video://' + encodeURIComponent(")
   })
@@ -1336,6 +1366,11 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
 })
 
 describe('#280 (4) — the unmount side of the compensating cleanup', () => {
+  // Comment-stripped, script-region source — see the note on the same binding
+  // in the ladder block above. Used by the POSITIVE declaration scan only; the
+  // two negative scans beside it stay raw and say why at their site.
+  const SRC = stripComments(SETUP)
+
   it('sets unmounted first in onBeforeUnmount, above the async saveProgress', () => {
     const body = unmountedBody()
     const flag = body.indexOf('unmounted = true')
@@ -1368,7 +1403,14 @@ describe('#280 (4) — the unmount side of the compensating cleanup', () => {
       'if (remuxedPath.value || hadActiveStream || mkvPreparesInFlight > 0) {'
     )
     // The declaration is a number, and nothing anywhere assigns it a boolean.
-    expect(SOURCE).toContain('let mkvPreparesInFlight = 0;')
+    // The declaration scan is positive, so it reads stripped source — a
+    // commented-out `let mkvPreparesInFlight = 0;` left behind by a deletion
+    // would satisfy it over raw text (#321).
+    expect(SRC).toContain('let mkvPreparesInFlight = 0;')
+    // The two boolean scans stay RAW, deliberately. They are `not.toContain`,
+    // so stripping could only LOOSEN them: over raw text a commented-out
+    // `mkvPreparesInFlight = true` still fails, which is the behaviour we want
+    // from a scan whose job is to catch a latch creeping back in.
     expect(SOURCE).not.toContain('mkvPreparesInFlight = true')
     expect(SOURCE).not.toContain('mkvPreparesInFlight = false')
   })

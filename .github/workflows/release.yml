@@ -133,25 +133,29 @@ jobs:
           list_keychains() {
             security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
           }
-          ORIGINAL_KEYCHAINS=$(list_keychains)
-
-          # Delete any temp keychain electron-builder orphaned, then put the
-          # search list back exactly as we found it. Enumerated from disk, not
-          # from the search list: the file at the cert-derived path is what
-          # breaks the next attempt, whether or not it is still listed.
-          reset_keychains() {
+          # Delete temporary keychains electron-builder orphaned. Enumerated
+          # from disk, not from the search list: the file at the cert-derived
+          # path is what breaks the next attempt, whether or not it is still
+          # listed. Scoped to $TMPDIR, so a login/system keychain is never
+          # touched — electron-builder's own root-certs keychain lives under
+          # ~/Library/Caches and is likewise out of range.
+          drop_temp_keychains() {
             { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
               while read -r kc; do
                 echo "removing orphaned keychain: $kc"
                 security delete-keychain "$kc" || true
               done
-            # Word splitting is intended: one keychain path per argument.
-            # shellcheck disable=SC2086
-            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
           }
 
+          # Before attempt 1 as well: a temp keychain predating this step is the
+          # only way a first attempt on a fresh runner can hit the collision, so
+          # sweeping up front is what makes the next recurrence informative.
+          drop_temp_keychains
+          # Captured after the sweep, so the restore below can never re-add a
+          # path we just deleted.
+          ORIGINAL_KEYCHAINS=$(list_keychains)
+
           for attempt in 1 2; do
-            reset_keychains
             echo "::group::electron-builder attempt $attempt of 2"
             if npx electron-builder ${{ matrix.args }}; then
               echo "::endgroup::"
@@ -163,6 +167,14 @@ jobs:
               exit 1
             fi
             echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
+
+            # Sweep what this attempt orphaned, then put the search list back
+            # exactly as we found it.
+            drop_temp_keychains
+            # Word splitting is intended: one keychain path per argument.
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
+
             sleep 15
           done
 

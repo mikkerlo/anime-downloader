@@ -112,17 +112,17 @@ jobs:
       #
       # The keychain reset between attempts is load-bearing, not hygiene.
       # electron-builder only tears its temporary keychain down on the success
-      # path, so a failed attempt leaves that keychain on disk AND at the head
-      # of the user search list. Its filename is derived from the certificate,
-      # not randomised — the same basename appeared on two different runners —
-      # so the next attempt targets that very path while generating a *fresh*
-      # random password, and the unlock fails with the exact error the retry
-      # exists to survive.
-      #
-      # Measured on a forced-failure probe (attempt 1 given a wrong
-      # CSC_KEY_PASSWORD, attempt 2 the real one):
-      #   without this reset  attempt1_rc=1 attempt2_rc=1  runs/33906796915
-      #   with it             attempt1_rc=1 attempt2_rc=0  runs/33928659263
+      # path, so a failed attempt leaves the keychain file behind under
+      # $TMPDIR. Its name is derived from the signing cert, so the next attempt
+      # resolves to that same path, finds the file already there, and runs
+      # `security set-key-partition-list -k <password generated this attempt>`
+      # against it — which cannot unlock a keychain created under the previous
+      # attempt's password, and fails with the very error we are retrying for.
+      # Deleting the file is the fix; restoring the search list is tidiness,
+      # since `security delete-keychain` drops the entry anyway. Measured on a
+      # forced-failure probe: without the reset attempt 2 failed
+      # deterministically (actions/runs/33906796915); with it attempt 2
+      # recovers (actions/runs/33928659263).
       - name: Package (mac, up to 2 attempts)
         if: matrix.platform == 'mac'
         shell: bash
@@ -135,7 +135,23 @@ jobs:
           }
           ORIGINAL_KEYCHAINS=$(list_keychains)
 
+          # Delete any temp keychain electron-builder orphaned, then put the
+          # search list back exactly as we found it. Enumerated from disk, not
+          # from the search list: the file at the cert-derived path is what
+          # breaks the next attempt, whether or not it is still listed.
+          reset_keychains() {
+            { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
+              while read -r kc; do
+                echo "removing orphaned keychain: $kc"
+                security delete-keychain "$kc" || true
+              done
+            # Word splitting is intended: one keychain path per argument.
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
+          }
+
           for attempt in 1 2; do
+            reset_keychains
             echo "::group::electron-builder attempt $attempt of 2"
             if npx electron-builder ${{ matrix.args }}; then
               echo "::endgroup::"
@@ -147,24 +163,6 @@ jobs:
               exit 1
             fi
             echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
-
-            # Delete only the temporary keychains this attempt orphaned, then
-            # put the search list back exactly as we found it. Scoped to the
-            # temp dir so a pre-existing keychain is never destroyed.
-            list_keychains | while read -r kc; do
-              case "$kc" in
-                */T/*.keychain | */T/*.keychain-db)
-                  echo "removing orphaned keychain: $kc"
-                  security delete-keychain "$kc" || true
-                  ;;
-              esac
-            done
-            # Word splitting is intended: one keychain path per argument.
-            # shellcheck disable=SC2086
-            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
-            echo "search list restored to:"
-            list_keychains
-
             sleep 15
           done
 

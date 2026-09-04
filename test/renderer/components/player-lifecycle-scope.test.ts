@@ -52,6 +52,18 @@ const setupStart = SOURCE.indexOf('<script setup lang="ts">')
 const setupEnd = SOURCE.indexOf('</script>', setupStart)
 const SETUP = SOURCE.slice(setupStart, setupEnd)
 
+// The input every POSITIVE scan in this file reads. A `toContain` over raw
+// text is satisfied by a commented-out copy of the needle, which is the one way
+// the declarations these scans pin are likely to disappear (#302, #321) — so
+// positive scans read stripped, script-region source. Declared once here rather
+// than per-describe: the name would otherwise say nothing about which block it
+// belongs to, and a later edit to one copy would be invisible to the others.
+//
+// Negative (`not.toContain`) scans deliberately keep reading raw `SOURCE`,
+// which is a superset of this, so they stay strictly the stronger check. Each
+// says so at its own site — that part has to stay local.
+const SRC = stripComments(SETUP)
+
 /**
  * Every scan below asserts on an explicit slice, never on the whole file. A
  * file-wide `indexOf` would pass for the wrong reasons: `await
@@ -381,12 +393,6 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
   // the two blanket `playerCleanupRemux()` calls (which kill a *successor*
   // player's sessions and `unlinkSync` its tmpDir), and `startMseSession`,
   // which is not a `window.api` call at all but leaks an object URL.
-  //
-  // Comment-stripped, script-region source, the same input the slice-scoped
-  // scans above read: a positive `toContain` over raw text is satisfied by a
-  // commented-out copy of the needle, which is the one way the declaration it
-  // pins is likely to disappear (#321).
-  const SRC = stripComments(SETUP)
 
   it('pins the closed set of outward calls in prepareMkvForPlayback', () => {
     // A fifth main-process call added here fails this assertion until the author
@@ -576,11 +582,6 @@ describe('#280 (4) — the unmounted ladder in prepareMkvForPlayback / prepareHe
  * `PlayerView` does.
  */
 describe('#291 — supersede identity and the targeted unwind', () => {
-  // Comment-stripped, script-region source — see the note on the same binding
-  // in the ladder block above. The two scans below that deliberately keep
-  // reading raw `SOURCE` say so at their own site.
-  const SRC = stripComments(SETUP)
-
   /** Every `if (shouldBail(myPrepare)) { … }` block body in the two functions. */
   function bailBlocks(body: string): string[] {
     const out: string[] = []
@@ -626,6 +627,12 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // and the second compares an INDEX against `setupStart`/`setupEnd`, which
     // are raw-source offsets — `stripComments` shortens the text, so mixing the
     // two spaces would compare offsets that do not mean the same thing.
+    //
+    // "Deliberately raw" is not "safe in the #321 sense": comment out
+    // `let prepareEpoch = 0;` and the `indexOf` below still finds it, still
+    // inside the bounds, still green. What closes that hole here is not this
+    // scan — it is typecheck, since two code-side sites read the binding
+    // (`:570`, `:1074`) and fail before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
     const decl = SOURCE.indexOf('let prepareEpoch = 0;')
@@ -881,15 +888,14 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
   // A closed-set classifier rather than eight literal `toContain`s, so a ninth
   // clear added later cannot slip in unguarded.
   //
-  // Every scan here reads comment-stripped, script-region source. The
+  // Every scan here reads the module-level `SRC` — comment-stripped,
+  // script-region source. That matters more here than elsewhere: the
   // membership half below compares INDICES, and `stripComments` shortens the
   // text, so its bounds must be computed in the same space as the matches they
-  // are tested against — `stripComments(SETUP)`, named rather than left as "the
-  // stripped source". Note the opposite order from every other scan in this
+  // are tested against. Note the opposite order from every other scan in this
   // file, which strips a raw slice: `slice()` keeps indexing raw `SOURCE` on
   // purpose, because one of its callers passes an own-line `//` as an END
   // needle and stripping would delete it out from under `indexOf`.
-  const SRC = stripComments(SETUP)
 
   /** Backward-match the `(` that opens the `)` at `close`. */
   function openParen(src: string, close: number): number {
@@ -1020,9 +1026,10 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
     // The failure mode #321 is about, pinned on the helper itself: a
     // declaration deleted from the code and left behind as a commented-out
     // line must be INVISIBLE to a positive `toContain` scan. Over raw text that
-    // scan still passes and reports green. The needle carries quotes on
-    // purpose — the whole-line `//` has to win before quote tracking starts,
-    // or the rest of the fixture desynchronises.
+    // scan still passes and reports green. The needle keeps its quotes because
+    // that is how the real declaration reads — a stripper that stopped honouring
+    // the whole-line `//` leaves `PLAYER_CLOSED_BAIL` in `out` and fails here
+    // directly, without the quotes needing to desynchronise anything.
     expect(out).not.toContain('PLAYER_CLOSED_BAIL')
     // And on the real input every scan in this file reads.
     expect(SRC).toContain("'anime-video://' + encodeURIComponent(")
@@ -1366,11 +1373,6 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
 })
 
 describe('#280 (4) — the unmount side of the compensating cleanup', () => {
-  // Comment-stripped, script-region source — see the note on the same binding
-  // in the ladder block above. Used by the POSITIVE declaration scan only; the
-  // two negative scans beside it stay raw and say why at their site.
-  const SRC = stripComments(SETUP)
-
   it('sets unmounted first in onBeforeUnmount, above the async saveProgress', () => {
     const body = unmountedBody()
     const flag = body.indexOf('unmounted = true')

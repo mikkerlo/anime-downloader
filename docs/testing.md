@@ -80,6 +80,48 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   deterministic; their underlying logic is covered at the unit + integration
   layers.
 
+## Structural (source-scanning) tests
+
+A few tests assert things about source *text* rather than behaviour — most of
+them in `test/renderer/components/player-lifecycle-scope.test.ts`, which pins
+the ownership guards in `PlayerView.vue`. They are cheap and they catch a real
+class of regression, but they fail silently in ways ordinary tests do not. Two
+rules, both learned the hard way:
+
+- **Pin the count, never just loop over the set.** A scan that walks a closed
+  set of symbols and asserts "no unguarded site" cannot tell *no unguarded
+  sites* from *no sites at all*. Dropping a symbol from the set — a one-line
+  edit, and the way this kind of test rots — turns a red site green with
+  nothing to notice it. The pinned per-flow count is the assertion that
+  catches that.
+- **An aggregate assertion is structurally blind to a dropped symbol.** Counting
+  the enclosing blocks, files or functions a scan reached looks like a stronger
+  check than counting sites, and it is not: whenever a *sibling* match keeps the
+  same aggregate unit satisfied, the aggregate does not move. It is a useful
+  shape check; it is never the assertion that catches set rot.
+
+The worked example is #317/#318, which nearly shipped a hole for exactly this
+reason. When `reportPrepareError(` was added to `SYMBOL_SET` during review, the
+numbers moved like this (values as of #318 — treat them as an illustration, not
+a live invariant; `SYMBOL_SCAN` may have moved since):
+
+| | before | after |
+| --- | --- | --- |
+| `selectTranslation` sites | 14 | **15** |
+| `goToEpisode` sites | 17 | **18** |
+| `selectTranslation` blocks | 5 | 5 |
+| `goToEpisode` blocks | 5 | 5 |
+
+The newly matched site sat in a block another symbol already kept red, so the
+block count never moved. Only the pinned site count saw it.
+
+Related, and the other way these tests go quietly wrong: a **positive** scan
+over raw source is satisfied by a commented-out copy of the needle, so a
+declaration deleted and left behind as a comment still reports green. Positive
+scans read comment-stripped source; negative (`not.toContain`) scans read raw,
+where stripping could only loosen them. See #302 and #321, and the per-site
+notes in that test file.
+
 ## IPC contract guard
 
 `test/ipc-channels.test.ts` asserts every `CHANNELS` / `EVENT_CHANNELS` entry is

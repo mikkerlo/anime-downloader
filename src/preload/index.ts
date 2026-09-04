@@ -455,7 +455,8 @@ const api = {
   }) => ipcRenderer.invoke(CHANNELS.SYNCPLAY_LOCAL_STATE, payload) as Promise<void>,
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_LOCAL_SNAPSHOT, snap) as Promise<void>,
-  syncplayPlayerClosed: () => ipcRenderer.invoke(CHANNELS.SYNCPLAY_PLAYER_CLOSED) as Promise<void>,
+  syncplayPlayerClosed: (playerSessionId?: string) =>
+    ipcRenderer.invoke(CHANNELS.SYNCPLAY_PLAYER_CLOSED, playerSessionId) as Promise<void>,
   syncplaySetReady: (isReady: boolean) =>
     ipcRenderer.invoke(CHANNELS.SYNCPLAY_SET_READY, isReady) as Promise<void>,
   syncplayGetStatus: () =>

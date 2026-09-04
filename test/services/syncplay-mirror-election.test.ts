@@ -90,8 +90,13 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
 
   // `useSyncplayClient`'s onMounted push — and, on the reference server, the
   // exact moment this client stops being immune to the election
-  // (`Watcher.__lt__` excludes a watcher whose file is `None`).
-  const announceFile = (client: SyncplayClient): void => {
+  // (`Watcher.__lt__` orders a watcher whose file is `None` last, so until this
+  // lands it can only win a room where nobody else has announced either).
+  //
+  // The `playerSessionId` is what a later `playerClosed()` has to quote back to
+  // retire this membership (#307); the cases that never close pass none, which
+  // is also the shape of a renderer that has not been plumbed.
+  const announceFile = (client: SyncplayClient, playerSessionId?: string): void => {
     client.setFile({
       animeId: 1,
       malId: 2,
@@ -99,7 +104,8 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       translationId: 3,
       canonicalName: OPEN,
       duration: 1440,
-      newPlayer: true
+      newPlayer: true,
+      ...(playerSessionId === undefined ? {} : { playerSessionId })
     })
   }
 
@@ -506,6 +512,13 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   /** One `remote-state` frame, plus how far under ground truth it landed. */
   type HeardFrame = SyncplayRemoteState & { behind: number }
 
+  // The mount IDs `twoWatchers()` announces under (#307). The #288 cases below
+  // deliberately close with **no** ID — an unmatchable close, which is head's
+  // behaviour exactly — so what they characterise is untouched by #307; the
+  // #307 cases quote `CLOSER_MOUNT` back and get the file clear as well.
+  const HOST_MOUNT = 'host-mount-1'
+  const CLOSER_MOUNT = 'closer-mount-1'
+
   // Two watchers whose elements are both on the room and both adopted — the
   // shape a close actually happens from, and the one `joinAPlayingRoom()` (a
   // joiner parked at 0) cannot express.
@@ -515,9 +528,9 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     heard: HeardFrame[]
   } => {
     const host = seat('hostuser')
-    announceFile(host)
+    announceFile(host, HOST_MOUNT)
     const closer = seat('closeruser')
-    announceFile(closer)
+    announceFile(closer, CLOSER_MOUNT)
     // The watching peer's ear. `behind` is stamped at *arrival* against
     // `trueRoomPosition()`, which is where this peer's own element is — so it
     // is exactly the `diff` the renderer's apply rule computes
@@ -716,6 +729,160 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // the exposure if that invariant ever breaks.
     run(2, () => trueRoomPosition())
     expect(closer.getStatus().playbackAdopted).toBe(true)
+  })
+
+  // ------------------------------------------------------------------------
+  // #307 — ending the *walk*, by leaving the election rather than merely
+  // falling silent inside it.
+  //
+  // #288's own bound stops at "the step": a closed player still had
+  // `currentFile`, still mirrored, and still sat in `min(watchers)`, so against
+  // a server whose forward compensation has not converged the room kept losing
+  // one one-way delay per election for as long as that dead seat sat there. The
+  // seat is what this removes.
+  //
+  // These are modelled rather than hand-fed because the quantity under test is
+  // an *election outcome*: whether `Set: {file: null}` takes us out of the
+  // reference's ordering is a statement about `Watcher.__lt__` and `min()`, not
+  // about which bytes we wrote. The absence assertions live in the hand-fed
+  // `#307` describe at the bottom of this file for the mirror-image reason.
+  // ------------------------------------------------------------------------
+
+  /** The modelled socket the server took over for a given client. */
+  const socketOf = (client: SyncplayClient): FakeSocket => tlsSockets[clients.indexOf(client)]
+
+  /** Put a raw frame on a client's socket, as a peer this app cannot express. */
+  const sendRaw = (client: SyncplayClient, obj: unknown): void => {
+    socketOf(client).write(JSON.stringify(obj) + '\r\n')
+  }
+
+  // The regression, on the server class where #288's residual is measurable
+  // (`fd = 0`, i.e. a server we have not echoed to yet). On head — and with a
+  // close that quotes no ID — the closed player keeps its file, keeps mirroring
+  // one delay low and keeps winning the election; here it drops out of the
+  // ordering entirely and the host takes the room back for good.
+  it('takes the closed player out of the election once its file membership is retired', () => {
+    rebuildServer(NO_FORWARD_DELAY)
+    const { closer } = twoWatchers()
+
+    closer.playerClosed(CLOSER_MOUNT)
+    const before = server.elections.length
+    run(6, closerSilent(closer))
+
+    const after = server.elections.slice(before)
+    expect(after.length).toBeGreaterThanOrEqual(4)
+    // Head, and any close that does not match: `closeruser` keeps taking the
+    // room. This is the assertion the fix exists for.
+    expect(after.filter((e) => e.setBy === 'closeruser')).toEqual([])
+    expect(after.every((e) => e.setBy === 'hostuser')).toBe(true)
+    // Still *considered*, though — `__lt__` orders it last, it does not delete
+    // it — which is why the positions map is the wrong place to read membership
+    // off since #307.
+    expect(Object.keys(after[0].positions).sort()).toEqual(['closeruser', 'hostuser'])
+  })
+
+  // The other half of the same statement: `Set: {file: {}}` is non-`None`
+  // membership in the reference (`if file_ and "name" in file_:` skips the
+  // store, `_file` keeps the empty mapping, and `__lt__` tests `is None`), so it
+  // does **not** retire the seat. Sent raw, because main has no code path that
+  // produces it — and that is the point: only the null form clears.
+  it('keeps the seat for Set:{file:{}}, which is membership rather than a clear', () => {
+    rebuildServer(NO_FORWARD_DELAY)
+    const { closer } = twoWatchers()
+
+    closer.playerClosed()
+    sendRaw(closer, { Set: { file: {} } })
+    const before = server.elections.length
+    run(6, closerSilent(closer))
+
+    const after = server.elections.slice(before)
+    expect(after.filter((e) => e.setBy === 'closeruser').length).toBeGreaterThan(0)
+  })
+
+  // …and an absent `file` key is not a command at all. The reference's `Set`
+  // dispatch never reaches `setFile`, so whatever membership the watcher had
+  // survives a `Set` about something else entirely.
+  it('leaves the seat alone for a Set that carries no file key', () => {
+    rebuildServer(NO_FORWARD_DELAY)
+    const { closer } = twoWatchers()
+
+    closer.playerClosed()
+    sendRaw(closer, { Set: { ready: { isReady: true, manuallyInitiated: false } } })
+    const before = server.elections.length
+    run(6, closerSilent(closer))
+
+    const after = server.elections.slice(before)
+    expect(after.filter((e) => e.setBy === 'closeruser').length).toBeGreaterThan(0)
+  })
+
+  // The election the old filter suppressed outright. `Room.getPosition()` folds
+  // `min()` over *every* watcher, so a room in which nobody has announced still
+  // elects — the first inserted one, since no `__lt__` comparison ever succeeds
+  // — and still writes `_position`, `_setBy` and `_lastUpdate`. Head's model
+  // held no election here at all, which made the room's age run on and the
+  // fixture's cadence a fiction.
+  it('elects the first-inserted watcher in a room where nobody has announced', () => {
+    seat('firstuser')
+    seat('seconduser')
+
+    run(3, () => null)
+
+    expect(server.elections.length).toBeGreaterThanOrEqual(2)
+    expect(server.elections.every((e) => e.setBy === 'firstuser')).toBe(true)
+    expect(Object.keys(server.elections[0].positions).sort()).toEqual(['firstuser', 'seconduser'])
+    expect(server.roomState().setBy).toBe('firstuser')
+  })
+
+  // And the ordering that matters in a mixed room: anything with a file and a
+  // known position beats every fileless watcher, whatever the insertion order —
+  // here the fileless ones are seated *first*, so a naive `min()` without
+  // `__lt__` would keep one of them.
+  it('lets an announcing watcher beat fileless peers seated before it', () => {
+    seat('quietuser')
+    seat('anotherquietuser')
+    const active = seat('activeuser')
+    announceFile(active)
+
+    run(3, (c) => (c === active ? trueRoomPosition() : null))
+
+    expect(server.elections.length).toBeGreaterThanOrEqual(2)
+    expect(server.elections.every((e) => e.setBy === 'activeuser')).toBe(true)
+    // Membership, not candidacy: all three are compared, and the positions map
+    // says so. A fixture that reads this map as "who has a file" is reading it
+    // wrong since #307.
+    expect(Object.keys(server.elections[0].positions).sort()).toEqual([
+      'activeuser',
+      'anotherquietuser',
+      'quietuser'
+    ])
+  })
+
+  // `List` renders a `None` file as `file: {}` (`protocols.py:695`), key present
+  // and empty, rather than omitting it. Read off the raw reply rather than off
+  // `getRoomUsers()`, because main maps both shapes to `null` and would report
+  // the two as identical — which is exactly why this needs pinning at the
+  // helper's own boundary.
+  it('renders a fileless watcher as file:{} in the modelled List reply', () => {
+    const quiet = seat('quietuser')
+    const lists: Array<Record<string, Record<string, { file?: unknown }>>> = []
+    socketOf(quiet).on('data', (buf: Buffer) => {
+      for (const line of String(buf).split('\r\n')) {
+        if (!line.trim()) continue
+        const msg = JSON.parse(line) as {
+          List?: Record<string, Record<string, { file?: unknown }>>
+        }
+        if (msg.List) lists.push(msg.List)
+      }
+    })
+    // Somebody else announcing is what makes the server re-`List` everyone.
+    const active = seat('activeuser')
+    announceFile(active)
+
+    const last = lists[lists.length - 1]
+    expect(last.cinema.quietuser.file).toEqual({})
+    expect(last.cinema.activeuser.file).toEqual(
+      expect.objectContaining({ name: OPEN, duration: 1440 })
+    )
   })
 })
 
@@ -952,5 +1119,226 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     const sent = seeksSent()
     expect(sent).toHaveLength(1)
     expect(sent[0].position).toBeCloseTo(900, 3)
+  })
+})
+
+// #307 — the *other* half of a player close: retiring our file membership.
+//
+// Deliberately hand-fed rather than modelled, and the reason is mechanical
+// rather than stylistic. `MinElectionServer.seat()` takes ownership of both
+// `FakeSocket.write` spies (it replaces them with its own `receive`), and the
+// helper's readouts (`wire`, `wireOf`) record `State` frames only. So neither
+// can witness the **absence** of a `Set: {file: null}` — which is exactly what
+// the mismatch cases below have to prove. Here `write` is still a `vi.fn()`, so
+// every serialized frame is inspectable, present or absent.
+describe('SyncplayClient.playerClosed — file membership (#307)', () => {
+  let client: SyncplayClient
+
+  const tls = (): FakeSocket => tlsSockets[tlsSockets.length - 1]
+
+  /** Every JSON frame this client has put on the current socket, in order. */
+  const framesSent = (): Array<Record<string, unknown>> =>
+    vi
+      .mocked(tls().write)
+      .mock.calls.flatMap(([data]) => String(data).split('\r\n'))
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+
+  /** The `Set: {file: …}` frames, so a clear and an announce read alike. */
+  const fileSets = (): unknown[] =>
+    framesSent()
+      .map((f) => (f as { Set?: { file?: unknown } }).Set)
+      .filter((s): s is { file?: unknown } => !!s && 'file' in s)
+      .map((s) => s.file)
+
+  const clears = (): unknown[] => fileSets().filter((f) => f === null)
+
+  // Also the reconnect driver: `connect()` runs `disconnectInternal(false)`
+  // first, and `currentFile` deliberately survives that — which is precisely
+  // what makes `finishHandshake()`'s re-announce the honest probe for "does main
+  // still hold a file?" below.
+  const handshake = (): void => {
+    client.connect({
+      host: 'syncplay.test',
+      port: 8999,
+      room: 'cinema',
+      username: 'me',
+      autoReconnect: false
+    })
+    const plain = plainSockets[plainSockets.length - 1]
+    plain.emit('connect')
+    plain.emit('data', Buffer.from('{"TLS":{"startTLS":"true"}}\r\n'))
+    tls().emit('secureConnect')
+    tls().emit(
+      'data',
+      Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.7.6"}}\r\n')
+    )
+  }
+
+  // What `currentFile` still holds, read the only way main will ever act on it
+  // without a fresh `setFile()`: reconnect and see what goes out. A brand-new
+  // `FakeSocket` means a brand-new `write` spy, so the readout is exactly this
+  // handshake's frames.
+  const fileAfterReconnect = (): unknown[] => {
+    handshake()
+    return fileSets()
+  }
+
+  // The roster that makes adoption reachable without a peer's `State`: alone in
+  // the room is `isAdopted()`'s second test, and it latches on the first
+  // heartbeat. These cases are about the close, not about convergence.
+  const rosterAlone = (): void => {
+    tls().emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({ List: { cinema: { me: { isReady: true, file: {} } } } }) + '\r\n'
+      )
+    )
+  }
+
+  const announce = (playerSessionId: string, canonicalName = OPEN): void => {
+    client.setFile({
+      animeId: 1,
+      malId: 2,
+      episodeInt: canonicalName.slice(-1),
+      translationId: 3,
+      canonicalName,
+      duration: 1440,
+      newPlayer: true,
+      playerSessionId
+    })
+  }
+
+  /** Latch adoption the way production does: a converged push, then a heartbeat. */
+  const adopt = (position: number): void => {
+    client.updateSnapshot({ position, paused: false })
+    vi.advanceTimersByTime(1000)
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    plainSockets.length = 0
+    tlsSockets.length = 0
+    client = new SyncplayClient()
+  })
+
+  afterEach(() => {
+    client.disconnect()
+    vi.useRealTimers()
+  })
+
+  // The whole feature in one case. On head there is no clear at all — the closed
+  // player stays file-bearing, keeps its seat in `Room.getPosition()`'s `min()`
+  // and is re-advertised on the next reconnect — so both the `clears()` and the
+  // `fileAfterReconnect()` assertions fail without the fix.
+  it('clears the file and sends exactly one null Set for a close that matches', () => {
+    handshake()
+    rosterAlone()
+    announce('mount-1')
+    adopt(600)
+    expect(client.getStatus().playbackAdopted).toBe(true)
+    vi.mocked(tls().write).mockClear()
+
+    client.playerClosed('mount-1')
+
+    // The unconditional #288/#300 half, which the session guard must never
+    // reach past.
+    expect(client.getStatus().playbackAdopted).toBe(false)
+    // One clear, not one per subsequent heartbeat: the handler is edge-shaped,
+    // and `currentPlayerSessionId` is nulled with the file so a repeat close
+    // cannot match again.
+    expect(clears()).toEqual([null])
+
+    vi.advanceTimersByTime(5000)
+    client.playerClosed('mount-1')
+    expect(clears()).toEqual([null])
+
+    // Gone locally too, not merely announced as gone: nothing to re-advertise.
+    expect(fileAfterReconnect()).toEqual([])
+  })
+
+  // The defensive ordering the design argues rather than relies on: B announces,
+  // then A's close arrives. Not reachable under today's single-mount `v-if`
+  // lifecycle and FIFO `invoke` queue — it is what a `<KeepAlive>`, a swapping
+  // `key`, or a second mount site would make reachable, and the point is that
+  // the damage stays bounded to the cheap, self-repairing half.
+  it('de-adopts but keeps B’s file when a stale close from A arrives after B announced', () => {
+    handshake()
+    rosterAlone()
+    announce('mount-a')
+    adopt(600)
+    announce('mount-b', 'Some Anime - 8')
+    adopt(120)
+    expect(client.getStatus().playbackAdopted).toBe(true)
+    vi.mocked(tls().write).mockClear()
+
+    client.playerClosed('mount-a')
+
+    // Reset: unconditional, so it lands even on a mismatch. Cheap — one push
+    // re-converges it, which the modelled #288 characterisation pins.
+    expect(client.getStatus().playbackAdopted).toBe(false)
+    // File: untouched. Proved from the raw socket writes, because "no frame" is
+    // the assertion and only a real write spy can carry it — `wireOf()` records
+    // `State` frames and would report the same empty list either way.
+    expect(clears()).toEqual([])
+
+    // And B is still the file main would re-advertise, read through the one path
+    // that re-announces without a fresh `setFile()`.
+    expect(fileAfterReconnect()).toEqual([
+      expect.objectContaining({ name: 'Some Anime - 8', duration: 1440 })
+    ])
+  })
+
+  // The mismatch that *is* reachable today, and the reason the guard cannot be
+  // "any close clears": a mount that opens while the session is not `ready`
+  // skips its push at `pushSyncplayFile()`'s guard, so main's stored ID still
+  // belongs to the previous mount. Its close is honest and must still reset the
+  // player state — but the file it never announced is not its to retire.
+  it('resets player state but keeps the file when an unannounced mount closes', () => {
+    handshake()
+    rosterAlone()
+    announce('mount-1')
+    adopt(600)
+    vi.mocked(tls().write).mockClear()
+
+    client.playerClosed('mount-2')
+
+    expect(client.getStatus().playbackAdopted).toBe(false)
+    expect(clears()).toEqual([])
+    expect(fileAfterReconnect()).toEqual([expect.objectContaining({ name: OPEN })])
+  })
+
+  // The un-plumbed caller. `undefined` is unmatchable rather than a wildcard, so
+  // a renderer that never learned to send an ID keeps head's behaviour exactly
+  // — the #288 reset, and nothing else.
+  it('treats a close with no session id as unmatchable', () => {
+    handshake()
+    rosterAlone()
+    announce('mount-1')
+    adopt(600)
+    vi.mocked(tls().write).mockClear()
+
+    client.playerClosed()
+
+    expect(client.getStatus().playbackAdopted).toBe(false)
+    expect(clears()).toEqual([])
+    expect(fileAfterReconnect()).toEqual([expect.objectContaining({ name: OPEN })])
+  })
+
+  // A matching close with nowhere to send it. The local half still runs — and it
+  // is the half that matters here, because `finishHandshake()` re-announces
+  // `currentFile` on every reconnect. On head that re-announcement puts the dead
+  // player's file back into the room's election the moment the socket returns.
+  it('clears local membership with no session, so a reconnect re-advertises nothing', () => {
+    // Announced before the handshake completes: `setFile()` stores it and skips
+    // the wire at its own readiness gate.
+    announce('mount-1')
+    client.playerClosed('mount-1')
+
+    handshake()
+
+    expect(fileSets()).toEqual([])
+    expect(clears()).toEqual([])
   })
 })

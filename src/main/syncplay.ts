@@ -240,12 +240,29 @@ export interface SyncplayFileInfo {
   duration: number
   /** Set by the renderer on the **first** file push of each composable mount
    *  (#236). Main has no honest source for "this push comes from a new player":
-   *  `canonicalName` is stable across a re-push *and* across a same-episode
-   *  reopen, and snapshot staleness reads "live" for the whole of
-   *  PLAYBACK_STALE_MS after the previous player closed. The renderer knows it
-   *  exactly. Never reaches the wire — `sendSetFile()` builds the outbound
-   *  `Set: {file}` field by field. */
+   *  `canonicalName` is stable across a re-push, and snapshot staleness reads
+   *  "live" for the whole of PLAYBACK_STALE_MS after the previous player
+   *  closed. The renderer knows it exactly. Never reaches the wire —
+   *  `sendSetFile()` builds the outbound `Set: {file}` field by field.
+   *
+   *  Since #307 a same-episode reopen *also* trips `identityChanged`, because
+   *  `playerClosed()` nulls `currentFile` on the way out and `undefined !==
+   *  name` is true. That is redundancy rather than a replacement: the two
+   *  signals disagree on every path where the close never landed (a crash, a
+   *  kill, a close whose session ID did not match), and `newPlayer` is the one
+   *  that is right on all of them. */
   newPlayer?: boolean
+  /** Identifies the `useSyncplayClient` mount that produced this announcement
+   *  (#307). Generated once per mount, so every push from one player — the
+   *  duration re-push, the in-player translation switch, the
+   *  transition-into-ready re-announce on a reconnect — carries the same value
+   *  and a new player carries a different one. Main stores it beside
+   *  `currentFile` and `playerClosed()` clears the file **only** for a close
+   *  quoting it back; see `playerClosed()` for why the rest of that handler
+   *  stays unconditional. Renderer→main only — like `newPlayer`, it never
+   *  reaches the wire, because `sendSetFile()` builds the `Set: {file}` object
+   *  field by field. */
+  playerSessionId?: string
 }
 
 export interface SyncplayRemoteState {
@@ -435,6 +452,14 @@ export class SyncplayClient extends EventEmitter {
   // the room's own position.
   private seekIntent: { at: number; attempts: number } | null = null
   private currentFile: SyncplayFileInfo | null = null
+  // Which `useSyncplayClient` mount `currentFile` belongs to (#307). Written
+  // and cleared in lockstep with it, and for the same reason it is not
+  // session-scoped: a reconnect re-announces the *same* player's file
+  // (finishHandshake()), so the pairing has to outlive the socket. `null` means
+  // "the file on record predates the ID" — an announcement from a renderer that
+  // has not been updated, or none at all — and `playerClosed()` treats that as
+  // unmatchable rather than as a wildcard.
+  private currentPlayerSessionId: string | null = null
   private serverMotd = ''
   private tlsUpgraded = false
   // Garbage-detection counters: per-attempt (reset in resetTransportState(),
@@ -698,14 +723,22 @@ export class SyncplayClient extends EventEmitter {
   setFile(file: SyncplayFileInfo): void {
     // Both resets below mean one thing — "a *new player* is announcing itself"
     // — and neither signal says it alone (#236). File identity catches an
-    // episode switch but not a same-episode reopen: `canonicalName` is
-    // `"{animeName} - {episode}"` with no translation component, so closing the
-    // player and picking another translation from the detail view re-pushes a
-    // byte-identical name at a brand-new <video> sitting at 0. `newPlayer` says
-    // it exactly, and its *absence* is what tells a re-push apart — the
+    // episode switch but not, on its own, a same-episode reopen: `canonicalName`
+    // is `"{animeName} - {episode}"` with no translation component, so closing
+    // the player and picking another translation from the detail view re-pushes
+    // a byte-identical name at a brand-new <video> sitting at 0. `newPlayer`
+    // says it exactly, and its *absence* is what tells a re-push apart — the
     // duration-known push (PlayerView's onDurationChange), the in-player
     // translation switch and the transition-into-ready push on a reconnect all
     // come from the same, still-live player.
+    //
+    // Since #307 the reopen usually trips `identityChanged` as well, because a
+    // matching `playerClosed()` nulls `currentFile` and `undefined !== name`.
+    // That is belt-and-braces, not a reason to retire `newPlayer`: the file
+    // survives every close that does *not* match — a crash, a kill, a stale
+    // mount's close whose session ID is a previous mount's — and on those the
+    // reopen is back to a byte-identical name against a live-looking snapshot
+    // clock, which is exactly the case `newPlayer` was added for.
     const identityChanged = this.currentFile?.canonicalName !== file.canonicalName
     const isNewPlayer = identityChanged || file.newPlayer === true
     // Nothing is dropped here any more (#276). The room's position is keyed to
@@ -759,6 +792,11 @@ export class SyncplayClient extends EventEmitter {
     // one would stamp doSeek on the new element's startup position.
     if (isNewPlayer) this.seekIntent = null
     this.currentFile = file
+    // Paired with the file, never inferred from it (#307). A renderer that
+    // sends no ID stores `null`, which `playerClosed()` cannot match — so the
+    // fallback for an un-plumbed caller is "clear nothing", i.e. head's
+    // behaviour, rather than "clear on any close".
+    this.currentPlayerSessionId = file.playerSessionId ?? null
     // The renderer's readiness is player-scoped and only pushes on a change, so
     // a player closed mid-buffer leaves main stuck at isReady:false: the next
     // player starts its closure at `true`, hits the equality guard, and sends
@@ -874,7 +912,7 @@ export class SyncplayClient extends EventEmitter {
 
   // The player is gone — said out loud rather than inferred from silence
   // (#288). `useSyncplayClient`'s onBeforeUnmount is the only emitter, and the
-  // session lives on, so this clears three of the player-scoped fields
+  // session lives on, so this clears the player-scoped fields
   // tearDown() does and nothing else: the snapshot clock, so buildPlaystate()
   // falls through to the mirror on the *very next* heartbeat instead of
   // asserting a frozen position for up to PLAYBACK_STALE_MS; the adoption
@@ -899,26 +937,69 @@ export class SyncplayClient extends EventEmitter {
   // (gated on `!playbackAdopted`) and a live intent cannot coincide. Clearing
   // only the flag here would have made this the first writer to break it.
   //
-  // **Unconditional — no timestamp compare, no arrival-order test**, and that
-  // rests on a renderer-side invariant rather than a runtime check: `PlayerView`
-  // is the only mount site of `useSyncplayClient` and is mounted under a plain
-  // `v-if="playerState"` (`App.vue`) with no `key` and no `<KeepAlive>`, so a
-  // close tears the component down — and runs `onBeforeUnmount` synchronously —
-  // *before* any reopen can mount the next one. The close's `invoke` and the
-  // reopen's `setFile({newPlayer: true})` are then two calls on one renderer's
-  // IPC queue, in that order. A reopen re-establishes adoption through
-  // `setFile()`'s own `isNewPlayer` path, not through this handler declining to
-  // act, which is what keeps the channel payload-free. If that mount site ever
-  // gains a `<KeepAlive>`, a `key` that swaps rather than tears down, or a second
-  // mount site, this clear can land on a live player and de-adopt it — cheap
-  // (one `setFile` re-adopts) but no longer free. The staleness threshold above
-  // is correct without this event either way, which is why it, not this, is the
-  // primary fix.
-  playerClosed(): void {
-    log('player closed — dropping the snapshot claim')
+  // **Those three are unconditional — no timestamp compare, no arrival-order
+  // test, no session compare**, and that rests on a renderer-side invariant
+  // rather than a runtime check: `PlayerView` is the only mount site of
+  // `useSyncplayClient` and is mounted under a plain `v-if="playerState"`
+  // (`App.vue`) with no `key` and no `<KeepAlive>`, so a close tears the
+  // component down — and runs `onBeforeUnmount` synchronously — *before* any
+  // reopen can mount the next one. The close's `invoke` and the reopen's
+  // `setFile({newPlayer: true})` are then two calls on one renderer's IPC
+  // queue, in that order. A reopen re-establishes adoption through `setFile()`'s
+  // own `isNewPlayer` path, not through this handler declining to act. If that
+  // mount site ever gains a `<KeepAlive>`, a `key` that swaps rather than tears
+  // down, or a second mount site, this clear can land on a live player and
+  // de-adopt it — cheap (one `setFile` re-adopts) but no longer free. The
+  // staleness threshold above is correct without this event either way, which is
+  // why it, not this, is the primary fix.
+  //
+  // ------------------------------------------------------------------------
+  // The second half is **session-gated**, and the asymmetry is the whole design
+  // of #307. The channel now carries the `playerSessionId` of the mount that is
+  // closing, and only the file/wire effect consults it:
+  //
+  //   | effect                                        | gated? |
+  //   |-----------------------------------------------|--------|
+  //   | lastSnapshotAt / playbackAdopted / seekIntent  | no     |
+  //   | currentFile + the stored ID, and Set:{file:null} | yes  |
+  //
+  // Gating the first three would reinstate #288: a close that mismatches would
+  // be ignored, and main would keep asserting a dead mount's frozen snapshot
+  // into the room for the rest of `PLAYBACK_ASSERT_STALE_MS`. So they run
+  // **above** the mismatch return, always.
+  //
+  // What makes the split safe in the other direction is that the two effects
+  // repair differently. The unconditional reset is self-healing in one push:
+  // `isAdopted()`'s drift latch re-adopts a live player on its next snapshot,
+  // which is the cost the #288 characterisation test already pins. Clearing the
+  // file is *not* self-healing — nothing re-announces a file on a snapshot;
+  // `sendSetFile()` has exactly two callers, this class's `setFile()` and
+  // `finishHandshake()`'s reconnect re-announce — so a mis-aimed clear would
+  // silently drop a live player out of the room's election with no path back
+  // until the user switched episode. Hence the guard, on the one effect that
+  // needs it.
+  //
+  // A `null` stored ID is unmatchable rather than a wildcard, so a renderer
+  // that never sends one keeps head's behaviour exactly.
+  //
+  // `Set: {file: null}` is the reference's own clear: `protocols.py:605-606`
+  // hands the null straight to `Watcher.setFile`, whose `if file_ and "name" in
+  // file_:` guard makes `None` safe and stores it, and `Watcher.__lt__`
+  // (`server.py:834-839`) then stops that watcher displacing a file-bearing one
+  // with a known position. `{}` would *not* clear — it is non-`None` membership.
+  // Sent only when the session is `ready`; a matching close with no socket still
+  // clears locally, which is what stops `finishHandshake()` re-advertising the
+  // dead player's file on the next reconnect.
+  playerClosed(playerSessionId?: string): void {
+    log('player closed — dropping the snapshot claim', { playerSessionId })
     this.lastSnapshotAt = 0
     this.playbackAdopted = false
     this.seekIntent = null
+    if (!playerSessionId || playerSessionId !== this.currentPlayerSessionId) return
+    log('player closed — dropping the file claim', { file: this.currentFile?.canonicalName })
+    this.currentFile = null
+    this.currentPlayerSessionId = null
+    if (this.status.state === 'ready') this.sendClearFile()
   }
 
   private tearDown(): void {
@@ -2228,6 +2309,29 @@ export class SyncplayClient extends EventEmitter {
       }
     }
     this.sendJson({ Set: set })
+  }
+
+  // Retire our file membership without leaving the room (#307). The wire shape
+  // is `Set: {file: null}`, and it is null rather than `{}` for a reason the
+  // reference is explicit about: `Watcher.setFile` guards on `if file_ and
+  // "name" in file_:`, so `None` is stored as-is and an empty object is stored
+  // as an empty object — non-`None` membership that `Watcher.__lt__`'s `is
+  // None` test still counts as file-bearing. Only the null form takes us out of
+  // the comparison.
+  //
+  // Note what this deliberately is *not*: a ping-only frame, or dropping the
+  // socket. Ping-only refreshes `_lastUpdatedOn` without writing `_position`
+  // (`server.py:870-873`), which erases elapsed projection time turn after turn
+  // while we are still file-bearing, so the room stays pinned near the dead
+  // player's position — the exact symptom #307 exists to end. Sending no
+  // `State` at all trips the protocol timeout instead.
+  //
+  // There is no null-file broadcast to peers: `sendFileUpdate`
+  // (`server.py:175-178`) refuses to broadcast a falsey file, so app peers
+  // converge on the next 15 s `List` poll and official clients keep the old
+  // "watching" row until they request one themselves.
+  private sendClearFile(): void {
+    this.sendJson({ Set: { file: null } })
   }
 
   // Whether a real player is driving us right now. The Watch Together view

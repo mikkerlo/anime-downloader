@@ -576,6 +576,31 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // previous player's adoption latch yank the room to 0.
   let announcedThisMount = false
 
+  // "Which player announced this file" (#307), on the same mount scope as the
+  // flag above and for the mirror-image reason. `newPlayer` tells main a *new*
+  // player has arrived; this tells it, on the way out, which player has left —
+  // so main can clear `currentFile` and retire our room membership for the
+  // mount that actually owned it, and decline to do so for a close that belongs
+  // to an older one.
+  //
+  // Constant for the life of the mount rather than per-push, which is what makes
+  // every re-announcement from this player — the duration push, the in-player
+  // translation switch, the transition-into-ready push after a reconnect — keep
+  // the claim rather than each one minting a new identity that the unmount could
+  // no longer name.
+  //
+  // Built from the clock plus a CSPRNG draw rather than `crypto.randomUUID()`,
+  // which needs a secure context this renderer does not guarantee under
+  // `file://`. `crypto.getRandomValues` carries no such requirement and exists
+  // in the renderer and in the Node test environment alike — and unlike
+  // `Math.random()` it does not trip CodeQL's `js/insecure-randomness` rule.
+  // Uniqueness only has to hold against the IDs main is currently holding, and
+  // the clock component keeps it holding across a renderer reload — which
+  // resets any module-scoped counter while main keeps the file it was told
+  // about.
+  const sessionEntropy = crypto.getRandomValues(new Uint32Array(1))[0].toString(36)
+  const playerSessionId = `p-${Date.now().toString(36)}-${sessionEntropy}`
+
   function pushSyncplayFile(): void {
     if (syncplayStatus.value.state !== 'ready') return
     const dur = deps.getVideoEl()?.duration || deps.getDuration() || 0
@@ -588,7 +613,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       translationId: deps.activeTranslationId.value ?? null,
       canonicalName: buildCanonicalName(),
       duration: dur,
-      newPlayer
+      newPlayer,
+      playerSessionId
     })
   }
 
@@ -1870,14 +1896,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // position at 1 Hz — which wins the server's `min(watchers)` election and
     // drags everyone still watching backwards by up to 5 s in one step.
     //
-    // Unconditional, and not gated on `syncplayStatus`: the handler is a clear
-    // of two fields, inert when no session is up, and a status read here would
-    // only add a way to skip the signal. One emit per unmount is all there is —
-    // the hook runs once and the composable is mount-scoped — so idempotence is
-    // the handler's property, not something arranged here. A reopen mounts
-    // *after* this teardown and re-announces with `newPlayer: true`, so the two
-    // ride the same IPC queue in that order.
-    window.api.syncplayPlayerClosed()
+    // Unconditional, and not gated on `syncplayStatus`: the handler's clears are
+    // inert when no session is up, and a status read here would only add a way
+    // to skip the signal. One emit per unmount is all there is — the hook runs
+    // once and the composable is mount-scoped — so idempotence is the handler's
+    // property, not something arranged here. A reopen mounts *after* this
+    // teardown and re-announces with `newPlayer: true`, so the two ride the same
+    // IPC queue in that order.
+    //
+    // The ID (#307) names *this* mount, and it is sent whether or not this mount
+    // ever announced. Main compares rather than trusts: a mount that skipped its
+    // push at `pushSyncplayFile()`'s readiness guard is quoting an ID main has
+    // never seen, so its close resets the player state (which it must, #288) and
+    // leaves the file an earlier mount announced alone (which it must too — no
+    // snapshot re-announces a file).
+    window.api.syncplayPlayerClosed(playerSessionId)
     if (syncplayToastTimer) {
       clearTimeout(syncplayToastTimer)
       syncplayToastTimer = null

@@ -29,9 +29,23 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   cut-down Syncplay server for the one seam hand-fed frames cannot express:
   `Room.getPosition()`'s `min(watchers)` election and the link latency that
   decides it. It stores `reported + forwardDelay`, stamps receipt on a separate
-  axis, excludes file-less watchers from the election, and re-elects once a
+  axis, orders file-less watchers **last** in the election, and re-elects once a
   second — so "who the server says set the room" is a *result* rather than an
-  input. A `doSeek` or a pause change takes the reference's other path instead:
+  input. That ordering was modelled as an *exclusion* until #307, which is not
+  what the reference does: `Watcher.__lt__` (`server.py:834-839`) makes a
+  file-less watcher compare as "not less than" anything and everything compare
+  as less than it, while `Room.getPosition()` still folds `min()` over **every**
+  watcher. Two consequences the old filter hid, and both are now pinned: a room
+  in which nobody has announced yet still holds an election — naming its
+  *first-inserted* watcher, since no comparison ever succeeds — and
+  `Election.positions` lists every watcher compared, file-less ones included, so
+  it is a record of the comparison rather than of who holds a file. `Set: {file:
+  null}` clears membership, `Set: {file: {}}` is non-`None` membership and does
+  not, an absent `file` key is no command at all, and modelled `List` renders a
+  `None` file as `file: {}` as the reference does. The **unknown-position** arm
+  of `__lt__` is deliberately unmodelled (`Watcher.position` is a non-nullable
+  `number`), stated in the helper header rather than silently assumed
+  equivalent. A `doSeek` or a pause change takes the reference's other path instead:
   a forced update that bypasses the election, carries the `ignoringOnTheFly`
   server counter and re-seats every watcher on the new position
   (`Room.setPosition`) — while deliberately *not* refreshing the room's

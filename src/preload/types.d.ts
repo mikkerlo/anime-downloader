@@ -334,8 +334,13 @@ interface Api {
     cause: 'play' | 'pause' | 'seek'
   }) => Promise<void>
   syncplaySendLocalSnapshot: (snap: { position: number; paused: boolean }) => Promise<void>
-  /** The player was torn down (#288). No payload: main clears unconditionally. */
-  syncplayPlayerClosed: () => Promise<void>
+  /** The player was torn down (#288). Main clears the snapshot clock, the
+   *  adoption latch and the seek intent **unconditionally** — no payload is
+   *  consulted for those. The optional `playerSessionId` (#307) is the mount ID
+   *  this player announced its file under, and it gates only the file half:
+   *  nulling main's `currentFile` and sending `Set: {file: null}`. Omitted, or
+   *  quoting an ID a newer mount has replaced, that half is skipped. */
+  syncplayPlayerClosed: (playerSessionId?: string) => Promise<void>
   syncplaySetReady: (isReady: boolean) => Promise<void>
   syncplayGetStatus: () => Promise<SyncplayStatus>
   syncplayGetRoomUsers: () => Promise<SyncplayRoomUser[]>

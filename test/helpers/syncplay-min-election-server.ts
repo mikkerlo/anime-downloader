@@ -25,11 +25,25 @@
 //    all, and the room is re-derived from the value it just stored — so the
 //    stored position gains one forward delay per turn round the election loop
 //    even while the room stands still.
-//  - `Watcher.__lt__` excludes a watcher whose file is `None`
-//    (`server.py:834-839`) — which is why a joiner with no player open still
-//    hears the room, and why `Set: {file}` is the moment the deafness starts.
+//  - `Watcher.__lt__` (`server.py:834-839`) is an *ordering*, not a filter: a
+//    watcher whose file is `None` compares as "not less than" anything, and
+//    anything compares as "less than" it. That is why a joiner with no player
+//    open still hears the room, and why `Set: {file}` is the moment the
+//    deafness starts. It is **not** an exclusion, and modelling it as one was
+//    wrong (#307): `Room.getPosition()` runs `min()` over *all* watchers, and
+//    Python's `min()` keeps its running best unless a candidate compares
+//    strictly less — so a room in which every watcher is fileless elects the
+//    **first inserted** one and updates `_position`, `_setBy` and `_lastUpdate`
+//    from it, rather than holding no election at all.
 //  - `Room.getPosition()` re-elects `min(watchers)` whenever the room state is
 //    over a second old, and sets **both** `_position` and `_setBy` from it.
+//  - `Watcher.setFile` (`server.py:739-743`) guards on `if file_ and "name" in
+//    file_:`, so `Set: {file: null}` stores `None` — the clear #307 sends on a
+//    player close — while `Set: {file: {}}` stores a non-`None` empty mapping
+//    that `__lt__`'s `is None` test still counts as file-bearing. An absent
+//    `file` key is not a command at all. All three are modelled separately.
+//  - `List` (`protocols.py:695`) renders a `None` file as `file: {}` rather
+//    than omitting the key.
 //  - A `doSeek` or a pause change forces a room update (`server.py:180-187`)
 //    broadcast to everyone including the setter (no sender filter), and
 //    `Room.setPosition()` re-seats every watcher onto that position
@@ -47,6 +61,18 @@
 // server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
 // fly.test.ts` owns that seam frame by frame and does it better; a second,
 // vaguer model of it here would only disagree with that one.
+//
+// Also deliberately **not** modelled, and stated rather than quietly assumed
+// (#307): the **unknown-position** arm of `__lt__` and `Room.getPosition()`.
+// The reference's `Watcher.getPosition()` can answer `None` — a watcher seated
+// but never heard from — and both the comparison and `min()`'s result then take
+// the same "not less than anything" path a fileless watcher does. `Watcher
+// .position` here is a non-nullable `number`, seeded from the room at `seat()`,
+// so that arm is unreachable in this model and no test may claim parity for it.
+// The file arm *is* modelled exactly, and it is the one #307 turns on; the
+// compatibility probe against the real server uses a peer with a known
+// position for precisely this reason. Making positions nullable is its own
+// refactor and is out of scope here.
 //
 // Shared rather than file-local because #278 and #279 are written against the
 // same model (#277 review) — they are the cross-fire and the room-slides-
@@ -136,6 +162,14 @@ export interface SeatOptions {
 export interface Election {
   at: number
   setBy: string
+  /**
+   * Every watcher the `min()` considered, and where it read at that instant.
+   * Since #307 that is **all** of them, fileless ones included — the reference
+   * orders a fileless watcher last rather than dropping it from the iterable,
+   * so a room whose watchers have not announced yet still holds an election and
+   * still names a `setBy`. The shape is unchanged; the membership is not, and
+   * a fixture counting rows or keys here has to say which it means.
+   */
   positions: Record<string, number>
 }
 
@@ -169,7 +203,13 @@ interface Watcher {
   position: number
   /** A mirror sends no `paused` key, so this stays `false` for one. */
   paused: boolean
-  /** `Watcher._file`; `null` excludes the watcher from the election. */
+  /**
+   * `Watcher._file`. `null` orders the watcher **last** in the election rather
+   * than removing it from the iterable (`__lt__`, `server.py:834-839`), so it
+   * can still win — and set the room's position, `setBy` and cadence — in a room
+   * where nobody has announced. `''` is the reference's non-`None` empty
+   * mapping (`Set: {file: {}}`), which is file-bearing membership.
+   */
   file: string | null
   ready: boolean
   /** `Watcher._lastUpdatedOn`, stamped at receipt. */
@@ -286,6 +326,22 @@ export class MinElectionServer {
     return this.roomPaused ? w.position : w.position + (Date.now() - w.lastUpdatedOn) / 1000
   }
 
+  /**
+   * `Watcher.__lt__` (`server.py:834-839`), file arm only — the position arm is
+   * unreachable here, per the header's unmodelled-unknown-position note.
+   *
+   * Strict, and asymmetric on purpose: a fileless watcher is less than nothing,
+   * and everything with a file is less than a fileless one. Fed to a Python-
+   * shaped `min()` — a running best replaced only on a strict `<` — that keeps
+   * the **first inserted** watcher when no comparison ever succeeds, which is
+   * exactly what an all-fileless room elects.
+   */
+  private watcherLessThan(a: Watcher, b: Watcher): boolean {
+    if (a.file === null) return false
+    if (b.file === null) return true
+    return this.watcherPosition(a) < this.watcherPosition(b)
+  }
+
   private projectedRoom(): number {
     if (this.roomPaused) return this.roomPosition
     return this.roomPosition + (Date.now() - this.roomLastUpdate) / 1000
@@ -301,11 +357,18 @@ export class MinElectionServer {
     // server that elects every other second — a fixture artefact, not the
     // reference.
     if (now - this.roomLastUpdate >= this.electionAgeMs) {
-      const candidates = [...this.watchers.values()].filter((w) => w.file !== null)
+      // Every watcher, not the file-bearing ones (#307). `min()` is a fold over
+      // the whole mapping and `__lt__` is what puts a fileless watcher last, so
+      // the empty-**room** guard below is the only one the reference has. The
+      // difference is visible: a room in which nobody has announced yet elects
+      // its first-inserted watcher, writes `_position`/`_setBy` from it and
+      // resets `_lastUpdate`, where a filter held no election at all and let the
+      // room's age run on.
+      const candidates = [...this.watchers.values()]
       if (candidates.length > 0) {
         let min = candidates[0]
         for (const c of candidates) {
-          if (this.watcherPosition(c) < this.watcherPosition(min)) min = c
+          if (this.watcherLessThan(c, min)) min = c
         }
         this.roomPosition = this.watcherPosition(min)
         this.roomSetBy = min.username
@@ -440,8 +503,21 @@ export class MinElectionServer {
     const w = this.watchers.get(username)
     if (!w) return
     let rosterDirty = false
+    // Three distinct cases, and `isRecord(null)` being `false` used to collapse
+    // two of them into "no command" (#307).
+    //
+    //  - an object → `Watcher.setFile` stores it. A `name` makes it a real file;
+    //    `{}` is a non-`None` empty mapping, which `__lt__`'s `is None` test
+    //    still counts as membership. Modelled as `''`.
+    //  - `null` → the guard `if file_ and "name" in file_:` is falsey, and the
+    //    reference stores `None`. This is the clear #307's `playerClosed()`
+    //    sends, and it is the one form that takes a watcher out of the ordering.
+    //  - absent → the `Set` dispatch never reaches `setFile` at all. Untouched.
     if (isRecord(set.file)) {
       w.file = typeof set.file.name === 'string' ? set.file.name : ''
+      rosterDirty = true
+    } else if (set.file === null) {
+      w.file = null
       rosterDirty = true
     }
     if (isRecord(set.ready) && typeof set.ready.isReady === 'boolean') {
@@ -519,10 +595,16 @@ export class MinElectionServer {
   private sendList(username: string): void {
     const entry: JsonRecord = {}
     for (const w of this.watchers.values()) {
+      // `protocols.py:695` renders a `None` file as `file: {}` — the key is
+      // present and empty, not absent (#307). Main maps both forms to `null`, so
+      // the change is reference fidelity rather than a renderer-visible one; it
+      // is worth making because `{}` is the shape every fixture reading a real
+      // server's reply will see, and a helper that omitted the key would train
+      // assertions the reference cannot satisfy.
       entry[w.username] = {
         isReady: w.ready,
         position: 0,
-        ...(w.file === null ? {} : { file: { name: w.file, duration: 1440, size: 1 } })
+        file: w.file === null ? {} : { name: w.file, duration: 1440, size: 1 }
       }
     }
     this.send(username, { List: { [this.room]: entry } })

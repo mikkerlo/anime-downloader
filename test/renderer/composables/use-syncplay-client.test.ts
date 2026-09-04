@@ -16,7 +16,7 @@ type Api = {
   syncplaySetFile: (payload: SyncplayFilePayload) => void
   syncplaySendLocalState: (state: { paused: boolean; position: number; cause: string }) => void
   syncplaySendLocalSnapshot: (state: { paused: boolean; position: number }) => void
-  syncplayPlayerClosed: () => void
+  syncplayPlayerClosed: (playerSessionId?: string) => void
   syncplaySetReady: (ready: boolean) => Promise<void>
   shikimoriGetUser: () => Promise<{ nickname?: string } | null>
   getSetting: (key: string) => Promise<unknown>
@@ -278,7 +278,12 @@ describe('useSyncplayClient — pushSyncplayFile', () => {
       translationId: 123,
       canonicalName: 'COTE - 7',
       duration: 1500,
-      newPlayer: true
+      newPlayer: true,
+      // Opaque by design (#307) — main only ever compares it with what a later
+      // close quotes back, so the fixture pins its *presence* and its type, not
+      // its spelling. The cases below pin the two properties that are load-
+      // bearing: constant within a mount, different between mounts.
+      playerSessionId: expect.any(String)
     })
   })
 
@@ -303,6 +308,44 @@ describe('useSyncplayClient — pushSyncplayFile', () => {
     s.pushSyncplayFile()
 
     expect(setFile.mock.calls.map(([p]) => p.newPlayer)).toEqual([true, false, false])
+  })
+
+  // `playerSessionId` is the mirror image of `newPlayer` and its scope is what
+  // makes it usable (#307): it says "this player", so it has to be **the same**
+  // on every push a mount makes — the duration re-push, the translation switch,
+  // the transition-into-ready re-announce after a reconnect. A per-push value
+  // would leave main holding an ID the unmount can no longer name, and the
+  // close would silently stop clearing the file.
+  it('carries one session id across every push of a mount', () => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const s = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+    s.syncplayStatus.value = { state: 'ready' }
+
+    s.pushSyncplayFile()
+    s.pushSyncplayFile()
+    s.pushSyncplayFile()
+
+    const ids = setFile.mock.calls.map(([p]) => p.playerSessionId)
+    expect(ids[0]).toEqual(expect.any(String))
+    expect(new Set(ids).size).toBe(1)
+  })
+
+  // …and different between mounts, which is the half the guard in main actually
+  // consumes: a close quoting the previous mount's ID must not clear the file
+  // the current one announced.
+  it('mints a different session id for each mount', () => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const first = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+    first.syncplayStatus.value = { state: 'ready' }
+    first.pushSyncplayFile()
+    const second = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+    second.syncplayStatus.value = { state: 'ready' }
+    second.pushSyncplayFile()
+
+    const [a, b] = setFile.mock.calls.map(([p]) => p.playerSessionId)
+    expect(a).not.toBe(b)
   })
 
   // Mount-scoped, not `onMounted`-scoped: a player that mounts *before* the
@@ -348,6 +391,36 @@ describe('useSyncplayClient — pushSyncplayFile', () => {
     // Once per unmount, because the hook runs once and the composable is
     // mount-scoped: idempotence is the handler's property, not the renderer's.
     expect(playerClosed).toHaveBeenCalledTimes(1)
+    // And it names itself (#307), even though this mount never announced — main
+    // compares rather than trusts, so an ID it has never seen is exactly how a
+    // never-announced mount tells it "reset the player state, leave the file".
+    expect(playerClosed.mock.calls[0][0]).toEqual(expect.any(String))
+  })
+
+  // The two halves of the session ID meeting: what a mount announces under is
+  // what its unmount quotes back. If these ever drift apart the file clear
+  // silently stops happening and only an integration test would notice.
+  it('closes with the same session id it announced under', async () => {
+    const playerClosed = vi.fn()
+    const setFile = vi.fn()
+    setApi({ syncplayPlayerClosed: playerClosed, syncplaySetFile: setFile })
+    const Host = defineComponent({
+      setup() {
+        const c = useSyncplayClient(makeDeps({ video: fakeVideo({ duration: 1500 } as never) }))
+        c.syncplayStatus.value = { state: 'ready' }
+        c.pushSyncplayFile()
+        return () => null
+      }
+    })
+    const wrapper = mount(Host)
+    mountedWrappers.push(wrapper)
+    await flushPromises()
+
+    mountedWrappers.pop()
+    wrapper.unmount()
+
+    expect(setFile).toHaveBeenCalled()
+    expect(playerClosed).toHaveBeenCalledWith(setFile.mock.calls[0][0].playerSessionId)
   })
 
   // The ordering B's unconditional clear rests on, asserted from this side of

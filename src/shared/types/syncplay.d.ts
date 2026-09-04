@@ -19,10 +19,25 @@ interface SyncplayFilePayload {
   duration: number
   /** True on the **first** file push of each `useSyncplayClient` mount (#236).
    *  Tells main "a new player is announcing itself", which neither the
-   *  canonical name (stable across a same-episode reopen) nor snapshot
-   *  staleness (a clock, wrong for `PLAYBACK_STALE_MS` after a close) can say.
-   *  Renderer→main only — it never reaches the Syncplay wire. */
+   *  canonical name (stable across a re-push) nor snapshot staleness (a clock,
+   *  wrong for `PLAYBACK_STALE_MS` after a close) can say.
+   *  Renderer→main only — it never reaches the Syncplay wire.
+   *
+   *  Since #307 a same-episode reopen usually trips main's name check too, as a
+   *  matching `playerClosed()` nulls `currentFile` first. That is redundancy,
+   *  not a replacement: the file survives every close that does not match — a
+   *  crash, a kill, a stale mount's close — and on those this flag is still the
+   *  only honest signal. */
   newPlayer?: boolean
+  /** Identifies the `useSyncplayClient` mount making this announcement (#307).
+   *  One value per mount, carried by every push that mount sends (the duration
+   *  re-push, the in-player translation switch, the transition-into-ready
+   *  re-announce on a reconnect), so main can tell "the player that announced
+   *  this file has closed" from "some older mount's close arrived late". Quoted
+   *  back on `syncplayPlayerClosed`, where it gates the file clear and the
+   *  outbound `Set: {file: null}` — and nothing else. Renderer→main only, like
+   *  `newPlayer`: it never reaches the Syncplay wire. */
+  playerSessionId?: string
 }
 
 interface SyncplayStatus {

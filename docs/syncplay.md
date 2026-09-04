@@ -91,7 +91,15 @@ The ack fires from *inside* the counter branch, not at the end of `handleState()
 
 **Two thresholds, not one (#288).** `PLAYBACK_STALE_MS` is the **de-adoption / new-player-detection** horizon and nothing else; what we may *assert* is bounded by the tighter, exported `PLAYBACK_ASSERT_STALE_MS` (2 s), used in `buildPlaystate()`'s live branch only and gated on `!snapshot.paused`. The invariant is "do not assert *playing* at P when P has not moved since the last time we said it" — a claim that is impossible for a live player, and exactly what wins `Room.getPosition()`'s `min()`. On one threshold a closed player kept asserting its frozen position at 1 Hz for the whole five seconds; the frozen value won every election from the moment it fell below the room, the room stopped advancing entirely, and every peer past its own 3 s apply rule was seeked *backwards* by up to 5 s in one step — attributed on the wire to the person who left. N = 2000 ms sits in a band about one second wide: the ceiling is ~2.5 s, because the worst frame a watching peer sees lands roughly N + one election period + one one-way delay behind its element and must stay under the renderer's 3.0 s apply rule (measured over 50 ms/direction: 3000 crosses it four times, 2500 never does); the floor is ~1.5 s, set by the ~1 s push cadence plus IPC and timer jitter. It can afford 2× the cadence where `PLAYBACK_STALE_MS` chose 5× because since #279 a *wrong* demotion costs `0.0000` against a forward-compensating server, where it used to start a ratchet. Freshness here is **push recency, not playhead movement**: a stalled-but-pushing element (buffering, MSE refill) stamps `lastSnapshotAt` on every push and keeps asserting its frozen position exactly as before — that is #284's side of the boundary. `hasLivePlayback()` itself is untouched, so `updateSnapshot()`'s stale gap and `maybeReassertSeek()`'s spectator drop still fire at 5 s; what *does* change for the re-assert is the frame it emits, since between the two thresholds `buildPlaystate()` now hands it the mirror's hardcoded `doSeek: false` instead of the frozen position with `doSeek: true` — bounded and self-clearing, at the cost that "attempts exhausted" no longer implies "we re-asserted". The `!paused` gate is about the mirror, not the pause: a paused position does not decay, and demoting a paused player early would push it into the paused-room creep documented at `buildPlaystate()`. The residual it leaves on purpose is a player that *crashes* while paused, which re-pauses the room for up to `PLAYBACK_STALE_MS`.
 
-**`syncplay:player-closed` (#288).** The threshold covers a crash, a kill or a hang, where no signal fires; for the ordinary close the composable says so out loud. `useSyncplayClient`'s `onBeforeUnmount` invokes the channel and `playerClosed()` clears `lastSnapshotAt`, `playbackAdopted` and `seekIntent` — three of the player-scoped fields `tearDown()` clears — **unconditionally**, with no timestamp compare and no arrival-order test, which is what keeps the channel payload-free. That rests on a renderer-side invariant rather than a runtime check: `PlayerView` is the only mount site of `useSyncplayClient` and is mounted under a plain `v-if="playerState"` with no `key` and no `<KeepAlive>`, so a close tears the component down before any reopen can mount the next one, and the close's `invoke` and the reopen's `setFile({newPlayer: true})` ride one renderer's queue in that order — the reopen re-establishes adoption through `setFile()`'s own `isNewPlayer` path. A future `<KeepAlive>`, a swapping `key`, or a second mount site would let the clear land on a live player and de-adopt it (cheap — one `setFile` re-adopts — but no longer free). `seekIntent` goes with the other two rather than being left to `maybeReassertSeek()`'s `!hasLivePlayback()` branch, which drops it a `State` later: `handleState()` captures `seekIntentWasLive` *above* that call, so on the one frame in between the emit substitutes the closed player's frozen position and skips the `lastRemoteRoomState` write. It also keeps the invariant the emit's pass-through `doSeek` rests on — every writer of `playbackAdopted = false` nulls the intent beside it, so `isRoomVoice` (gated on `!playbackAdopted`) and a live intent cannot coincide. Two shapes get the event and no other: a **mid-mount episode or translation switch** (no unmount, and `newPlayer` is mount-scoped so a re-push cannot carry it) and a close-and-reopen that collapses into a single render are **A-only cases**, capped by the assert threshold alone. And the honest limit: **this ends the step, not the walk.** A closed player still has `currentFile` set, still mirrors and still sits in the election, so against a server whose `fd` is still 0 the room keeps losing one one-way delay per election for as long as it sits there (see the `#279` residual below). Dropping a gone player out of the election entirely would need an unset-file path the reference server is not known to handle, and is its own issue.
+**`syncplay:player-closed` (#288).** The threshold covers a crash, a kill or a hang, where no signal fires; for the ordinary close the composable says so out loud. `useSyncplayClient`'s `onBeforeUnmount` invokes the channel and `playerClosed()` clears `lastSnapshotAt`, `playbackAdopted` and `seekIntent` — three of the player-scoped fields `tearDown()` clears — **unconditionally**, with no timestamp compare and no arrival-order test. (#307 gave the channel a payload for the *file* half described below; these three still ignore it, and running them above the mismatch return is what keeps #288/#300 true for a stale close.) That rests on a renderer-side invariant rather than a runtime check: `PlayerView` is the only mount site of `useSyncplayClient` and is mounted under a plain `v-if="playerState"` with no `key` and no `<KeepAlive>`, so a close tears the component down before any reopen can mount the next one, and the close's `invoke` and the reopen's `setFile({newPlayer: true})` ride one renderer's queue in that order — the reopen re-establishes adoption through `setFile()`'s own `isNewPlayer` path. A future `<KeepAlive>`, a swapping `key`, or a second mount site would let the clear land on a live player and de-adopt it (cheap — one `setFile` re-adopts — but no longer free). `seekIntent` goes with the other two rather than being left to `maybeReassertSeek()`'s `!hasLivePlayback()` branch, which drops it a `State` later: `handleState()` captures `seekIntentWasLive` *above* that call, so on the one frame in between the emit substitutes the closed player's frozen position and skips the `lastRemoteRoomState` write. It also keeps the invariant the emit's pass-through `doSeek` rests on — every writer of `playbackAdopted = false` nulls the intent beside it, so `isRoomVoice` (gated on `!playbackAdopted`) and a live intent cannot coincide. Two shapes get the event and no other: a **mid-mount episode or translation switch** (no unmount, and `newPlayer` is mount-scoped so a re-push cannot carry it) and a close-and-reopen that collapses into a single render are **A-only cases**, capped by the assert threshold alone. And the limit #288 left standing, which is where #307 picks up: **it ended the step, not the walk.** A closed player still had `currentFile` set, still mirrored and still sat in the election, so against a server whose `fd` is still 0 the room kept losing one one-way delay per election for as long as that dead seat sat there (see the `#279` residual below).
+
+**Retiring the seat (#307).** The unset-file path #288 called unknown is the reference's own: [`Set.file` dispatch](https://github.com/Syncplay/syncplay/blob/v1.7.6/syncplay/protocols.py#L605-L606) hands a null straight to [`Watcher.setFile`](https://github.com/Syncplay/syncplay/blob/v1.7.6/syncplay/server.py#L739-L743), whose `if file_ and "name" in file_:` guard makes `None` safe and stores it, and [`Watcher.__lt__`](https://github.com/Syncplay/syncplay/blob/v1.7.6/syncplay/server.py#L834-L839) then stops that watcher displacing one with a file and a known position. So `playerClosed()` now also nulls `currentFile` and sends `Set: {file: null}` — and the room stops being derived from a player nobody is watching. Three things this is deliberately *not*: `Set: {file: {}}`, which is non-`None` membership and does not clear; a ping-only frame, which refreshes `_lastUpdatedOn` without writing `_position` and so erases elapsed projection time turn after turn while we are still file-bearing, pinning the room near the dead player's position; and a silent disconnect, which trips the protocol timeout and loses the room.
+
+Only *this* half is session-gated. The channel carries the `playerSessionId` the closing mount announced under, and the guard sits between the two halves: reset always, clear the file only on a match. The asymmetry is repair cost. A wrong reset costs one snapshot — `isAdopted()`'s drift latch re-adopts, which the modelled #288 characterisation pins — whereas nothing re-announces a file on a snapshot: `sendSetFile()` has exactly two callers, `setFile()` and `finishHandshake()`'s reconnect re-announce, so a wrong clear would drop a live player out of the election with no path back until the user switched episode. A `null` stored ID is unmatchable rather than a wildcard, so an un-plumbed caller keeps the pre-#307 behaviour. The reachable mismatch today is a mount that opened while the session was not `ready`: it skipped its push at `pushSyncplayFile()`'s guard, so main's stored ID still belongs to the previous mount and its close resets the player state without touching a file that was never its to retire. A matching close with **no socket** still clears locally, and that is the half that matters on a flaky link — otherwise `finishHandshake()` puts the dead player's file straight back into the election on the next reconnect.
+
+**No immediate roster update, and the docs should not promise one.** [`sendFileUpdate`](https://github.com/Syncplay/syncplay/blob/v1.7.6/syncplay/server.py#L175-L178) refuses to broadcast a falsey file, so nothing is pushed to peers. App peers converge on the 15 s `List` poll; an official client can keep showing the closed row as "watching" until it requests a `List` of its own, and [`List`](https://github.com/Syncplay/syncplay/blob/v1.7.6/syncplay/protocols.py#L695) then renders the cleared file as `file: {}` (main maps that and an absent key alike to `null`).
+
+**One knock-on worth knowing about.** With `currentFile` null, every `State` arriving during the closed window stamps `lastRemoteRoomState.canonicalName = null` — a state describing the *room* rather than any file of ours. A same-episode reopen therefore no longer inherits a room-position seed by direct key match; it goes through `setFile()`'s peer-metadata contradiction check like any first open, so a peer on different content can now refuse a seed the key match used to give. The mirror of that is a gain: opening a *different* episode next inherits the closed-window state, where before it was keyed to the file we had not let go of. The routing is not the only thing that changed, though: **the same-episode reopen seed is ordering-dependent again.** With `currentFile` null the caller-scope guard refuses the read outright, and the key #276 made structural no longer covers the same-episode case on its own — the seed exists only after the reopen's announce has adopted the unkeyed state. So it rests, as it did before #276, on `useSyncplayClient`'s `onMounted` push (one await — `syncplayStore.refresh()`) landing ahead of `prepareMkvForPlayback`'s read (two `getSetting` awaits in `PlayerView`'s own `onMounted`). It does today, and the failure if that ever inverts is **silent** — no error, the user simply opens at the saved position instead of the room's. `answers null for a same-episode reopen read before its announce` in `syncplay-room-position.test.ts` pins the accepted answer on the losing side of that race; a reordering starts failing there rather than in the field. `identityChanged` also reads true on the reopen now, which makes `newPlayer` redundant on that path — but only on that path, so it stays: the file survives every close that does **not** match (a crash, a kill, a stale mount's close), and there `newPlayer` is still the only honest signal.
 
 **Known gap — a paused hidden player goes stale (#227, pinned not fixed).** `timeupdate` does not fire while the element is *paused*, so a paused player has only the throttled 1 s interval, and a window hidden for **minutes** (Chromium clamps to ~1 Hz first and drops toward ~1/min only under intensive throttling) does cross `PLAYBACK_STALE_MS` and get demoted to the spectator mirror. The de-adoption is a second, later step — it lives only in `updateSnapshot()`, which by construction cannot run during the gap — so `playbackAdopted` flips on the **first push after the window is unhidden**, not at the 5 s mark. Room-state-wise this used to be called harmless on two grounds — the mirror makes no pause claim, and its forward-projected position is never below the room, so it cannot drag `Room.getPosition()`'s `min()`. The first is right. **The second was the inverse of the measurement, and #279 is what it cost.** Against a *playing* room the mirror was anchored on the frame's **arrival** while the number inside it had been computed at the server's **send**, so it sat one one-way delay low, won the election every time, and the room was then re-derived from its own already-lagged value once a second — measured against reference server 1.7.6 over a 50 ms/direction link, a deficit compounding 0.038 s → 0.186 s across seven elections, which crosses the renderer's 3 s apply rule in about a minute and drags every peer that is actually watching. Since #279 `handleState()` back-dates that stamp by `min(serverRtt / 2, MAX_ROOM_ANCHOR_LAG_S)`, which cancels the arrival half; the reference server's own `fd ≈ avrRtt/2` cancels the receipt-stamping half (`server.py:875-884` — the two land on different axes and compose rather than double-counting), and the result is a dead heat: the mirror reports the room's own projection, so winning the election no longer moves anything. Two limits worth stating, because "the room is now exact" is the wrong reading. Against a server whose forward delay is still 0 — one we have sent no `clientRtt` echo to, per the ping paragraph below — the residual is `d` per election rather than `2d`, halved rather than ended. And the fix stops the walk without *reversing* it: whatever deficit the room holds at the moment the mirror takes over is retained, since room and mirror are then derived from each other with no restoring force. It is not free, though. On the first post-unhide push we de-adopt, and re-adoption is a drift test: if the room played on while we sat paused, or — spectating *alone* in a paused room — the server's own forward compensation walked `lastRoomState` away from our stationary position (the "known consequence" documented at `buildPlaystate()`), drift exceeds `ADOPT_TOLERANCE_S` and the user's first post-unhide action is dropped until a remote apply seeks us back. Main records those crept States and returns at the `setBy`-less guard, so nothing corrects the element and the drift is invisible until the user acts. **Half of that recovers since #277**, and it is the half that matters: a crept State arriving `setBy` **us** — the shape the server's `min()` re-election produces the moment we are the laggard — is now emitted while we are de-adopted with a peer present, so the element is seeked back onto the room and the drift closes without the user acting. A `setBy`-less State still returns at its own guard, because it carries no claim at all about who moved the room. Moving the element there is the fix working, not a regression, and what keeps it safe is the election rather than the `peers > 0` conjunct — that conjunct *enables* the emit in exactly this scenario, it does not block it. A mirror that crept forward in a **paused** room sits *above* the room, so it never wins `min()` and never becomes the position that comes back to us; only a mirror lagging a **playing** room does, and there being seeked onto the room is the correct outcome. Fixing the stale snapshot itself still needs a source that survives background throttling while paused, which is a separate issue; the five cases under "a paused hidden player goes stale and recovers" in `syncplay-room-presence.test.ts` pin the behaviour as it stands.
 
@@ -364,3 +372,123 @@ Renderer state ownership: `useSyncplayStore` (`src/renderer/src/stores/syncplay.
 Main-side handlers (see [IPC Handlers](./ipc.md)): `connect`, `disconnect`, `set-file`, `local-state`, `local-snapshot`, `set-ready`, `get-status`, `get-room-users`, `get-room-position`, `set-password`, `has-password`. Broadcasts: `connection-status`, `remote-state`, `room-users`, `room-event`, `remote-episode-change`. Settings tab "Watch Together" in `SettingsView.vue` persists host/port/room/username/autoReconnect under the `syncplay` electron-store key, and the password separately under `syncplayPassword` (see Password ownership above). The live connection itself is **not** persisted: users must rejoin after a restart.
 
 Debug tracing gated by `SYNCPLAY_DEBUG=1` env var — dumps every inbound/outbound JSON message and state transition to the main process log.
+
+## Appendix: Captured Room Transcript (#307)
+
+Evidence for the close-membership path (#307 / PR #310), captured against the real reference server rather than a mock. Excerpts only — the raw capture is ~200 KB and deliberately stays out of the repo.
+
+### Environment
+
+- Server: `Syncplay/syncplay` @ `993232ab095bb810593459bc705b3e6fc64ad161` (tag `v1.7.6`), Python 3.12.3, Twisted 26.4.0. Loopback only, no password, no persistent-rooms DB, disposable temp dir.
+- App: branch `i307-close-membership` @ `f710b3e2` (v4.6.59), `npm run build`, `SYNCPLAY_DEBUG=1`, one Electron instance per client with isolated user-data dirs.
+
+The app is **TLS-only**: `syncplay.ts:1130` sends `{TLS:{startTLS:"send"}}` before `Hello` and `handleTls()` (`:1277-1290`) calls `failHandshake` on anything but `"true"`, so a plain-TCP fixture is unreachable by construction. Three things about `--tls` each fail closed: it takes a **directory**, not a file; `_allowTLSconnections()` (`server.py:251-257`) opens `privkey.pem`, `cert.pem` **and** `chain.pem` from that directory and silently disables TLS behind a printed warning if any one is missing; and the cert needs an **IP SAN** for `127.0.0.1`, because `upgradeToTls()` (`syncplay.ts:1292`) passes the configured host straight through as `servername`.
+
+```bash
+mkdir certs && cd certs
+openssl req -x509 -newkey rsa:2048 -nodes -keyout privkey.pem -out cert.pem -days 3 \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+: > chain.pem   # must exist; may be empty (the loader splits on the PEM sentinel)
+cd ../server
+python -u syncplayServer.py --port 8998 --tls ../certs --interface-ipv4 127.0.0.1
+# Confirm "TLS support is enabled." on stdout before starting the app.
+```
+
+Trust the throwaway cert in the app with `NODE_EXTRA_CA_CERTS=<certs>/cert.pem`.
+
+### Excerpts
+
+Relative seconds since the closer's connect; `-->` outbound, `<--` inbound, `**` the harness action that caused it. Long frames are truncated with `…`.
+
+**1. The close, and the `Set: {file: null}` it sends** (`+20.49`, ±2 frames):
+
+```
++20.49 **  STEP 2: closer closes its player
++20.49 **  syncplayPlayerClosed("session-A1")
++20.49 --> {"Set":{"file":null}}
++21.13 <-- {"State":{"ping":{…},"playstate":{"position":20.998721364507613,"paused":false,"doSeek":false,"setBy":"watcher-307"}}}
++21.16 --> {"State":{"ping":{…},"playstate":{"position":21.03172112036699,"doSeek":false}}}
+```
+
+Four of these, one per close: `+20.49`, `+57.21`, `+91.77`, `+126.32`. The outbound `State` at `+21.16` carries **no `paused` key** — that is the spectator rule under [Heartbeat + RTT Compensation](#heartbeat--rtt-compensation) working as designed, not an anomaly: with the player gone the mirror asserts a position but makes no pause claim.
+
+**2. The next `List` reply renders the cleared row as `file: {}`** (`+29.14`, ±2 frames):
+
+```
++28.17 --> {"State":{"ping":{…},"playstate":{"position":28.113916876787496,"doSeek":false}}}
++29.13 <-- {"State":{…,"playstate":{"position":28.48615400317278,"paused":false,"setBy":"watcher-307"}}}
++29.14 --> {"List":null}
++29.14 <-- {"List":{"issue-307b":{
+             "closer-307":{"position":0,"file":{},"controller":false,"isReady":true,…},
+             "watcher-307":{"position":0,"file":{"name":"Placeholder Show - Episode 1 [test]","duration":1440,…},…}}}}
++29.17 --> {"State":{"ping":{…},"playstate":{"position":28.527498729735278,"doSeek":false}}}
+```
+
+The peer's row keeps its full file object; ours is `{}`, never `null` and never absent — which is why `handleList` maps a nameless file back to `null`. Note there is **no `Set: {user}` broadcast** of the clear: `sendFileUpdate` (`server.py:175-178`) drops a falsey file, so a peer only learns on its own next `List` poll, up to 15 s later.
+
+**3. Reconnect with the player closed re-announces nothing** (`+146.03`, the `Hello` and what followed it):
+
+```
++146.03 --> {"Hello":{"username":"closer-307","room":{"name":"issue-307b"},"version":"1.7.6",…}}
++146.03 <-- {"Set":{"ready":{"username":"closer-307","isReady":null,"manuallyInitiated":false}}}
++146.03 <-- {"Hello":{…,"realversion":"1.7.6","features":{"isolateRooms":false,…}}}
++146.03 --> {"Set":{"ready":{"isReady":true,"manuallyInitiated":false}}}
++146.03 --> {"List":null}
++146.04 <-- {"List":{"issue-307b":{"watcher-307":{…,"file":{"name":"Placeholder Show - Episode 1 [test]",…}}}}}
+```
+
+The absence is the finding, and it is only readable against what *did* follow: the sole outbound `Set` after the handshake is the readiness frame. `finishHandshake()`'s re-announce at `:1264` is guarded on `this.currentFile`, which `playerClosed()` nulled — so the dead player's file is not re-advertised.
+
+**4. A paused closer's claim collapsing at the close** (`+91.77`, ±2 frames):
+
+```
++91.64 <-- {"State":{…,"playstate":{"position":74.38988343856737,"paused":true,"setBy":"closer-307"},"ignoringOnTheFly":{"server":1}}}
++91.64 --> {"State":{"ping":{…},"ignoringOnTheFly":{"server":1}}}
++91.76 **  syncplayPlayerClosed("session-A3")
++91.77 --> {"Set":{"file":null}}
++91.81 <-- {"State":{…,"playstate":{"position":91.72563351752144,"paused":false,"setBy":"watcher-307"},"ignoringOnTheFly":{"server":1}}}
++91.81 --> {"State":{"ping":{…},"ignoringOnTheFly":{"server":1}}}
+```
+
+Up to `+91.77` the paused closer, frozen at `74.39`, wins the server's `min(watchers)` election once a second and holds the room there. After the close its position never reappears and the room advances on the watcher alone.
+
+### Provenance
+
+Raw capture: **530 closer frames + 502 watcher frames**, `sha256 c9345d490b1d9533692508bc0c76638d8105dfba9017d14b68d095a48d1daaaf`. The excerpts above are elided from that total — the 1 Hz `State` stream between them is omitted, as is a discarded first run in which both clients announced position 100 into a room sitting at ~0, so `isAdopted()`'s drift latch never fired and every outbound `State` was the ping-only mirror.
+
+### What this run did not cover
+
+- **No ID *mismatch* and no `undefined` close on the wire.** Every close quoted the ID its own mount announced. The mismatch arm — a close from a mount that never announced — is driven only by the unit tests.
+- **No crash or kill close**, only orderly ones.
+- **No official Syncplay/mpv peer in the room.** Both clients were this app, so the claim that official clients keep showing a stale watching row until their next poll is still untested — a roster-staleness caveat these docs deliberately do not promise against.
+
+The reconnect gap is **retired**, not open: the capture used `syncplayDisconnect()`/`syncplayConnect()` through `tearDown()` rather than `onSocketClose()`'s automatic retry, but `tearDown()` (`syncplay.ts:1005-1039`) touches neither `currentFile` nor `currentPlayerSessionId`, and the re-announce at `:1264` is guarded on `this.currentFile` alone. Both paths reach that line in identical state, so excerpt 3 covers the auto-retry too.
+
+### Renderer-driven confirmation
+
+The transcript above drives `window.api` directly, so it proves the wire half and nothing above the preload boundary. A second, separate run closed that: four real UI actions in the running app — click **Open file** on a seeded downloaded episode → click the player's close button → click **Open file** again → close again — with the room joined through the Watch Together view, against the same server.
+
+From main's `SYNCPLAY_DEBUG` stdout, both `playerClosed()` log lines (`:994` and `:999`) on **each** close, quoting two different per-mount IDs:
+
+```
++25.92 [syncplay] player closed — dropping the snapshot claim { playerSessionId: 'p-mtm61pzo-ydm0ch' }
++25.92 [syncplay] player closed — dropping the file claim { file: 'Bocchi the Rock! - 1' }
++46.14 [syncplay] player closed — dropping the snapshot claim { playerSessionId: 'p-mtm625lu-1r79f7y' }
++46.14 [syncplay] player closed — dropping the file claim { file: 'Bocchi the Rock! - 1' }
+```
+
+Reaching the second line on both closes is the point: it means each close matched the ID the mount that announced the file had minted, so `playerSessionId` really is one-per-mount in the assembled app. The ID never reaches the wire — `sendSetFile()` (`:2295-2311`) builds the frame field by field and omits it — and it does not appear anywhere in that run's trace.
+
+From the trace, exactly one `{"Set":{"file":null}}` per close (`+22.26`, `+42.48`) and, per open, the announce plus `onDurationChange`'s re-push once the element reports a duration:
+
+```
++22.24 **  UI: click the player's close button
++22.26 --> {"Set":{"file":null}}
++29.28 --> {"List":null}
++29.28 <-- {"List":{"issue-307-ui":{"ui-closer":{"position":0,"file":{},…}}}}
++29.40 **  UI: click "Open file" on episode 1
++29.43 --> {"Set":{"file":{"name":"Bocchi the Rock! - 1","duration":0,…}}}
++29.44 --> {"Set":{"file":{"name":"Bocchi the Rock! - 1","duration":180,…}}}
+```
+
+Two `Set: {file}` per open, not one — the mount announces at `duration: 0` and re-pushes at the real duration, which is the documented `onDurationChange` behaviour above, not a double announce. Over the whole run: 2 null-`Set`s, 4 file-`Set`s, 153 frames.

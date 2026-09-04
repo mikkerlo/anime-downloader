@@ -230,10 +230,13 @@ jobs:
           # first. The search is fuzzy and ranked, so the match is confirmed by
           # an exact title comparison before anything is written to it.
           TITLE="Release $LABEL failed to publish"
+          # Fail open: if the search itself errors, EXISTING stays empty and we
+          # still file. A lost release must never go unreported, so keep the
+          # `|| true` even if this step ever gains a pipefail shell.
           EXISTING=$(gh issue list --state open --limit 100 \
             --search "in:title \"$TITLE\"" --json number,title |
             jq -r --arg title "$TITLE" \
-              'map(select(.title == $title)) | .[0].number // empty')
+              'map(select(.title == $title)) | .[0].number // empty' || true)
           if [ -n "$EXISTING" ]; then
             echo "::notice::Issue #$EXISTING already tracks this failure — commenting instead of filing a duplicate."
             gh issue comment "$EXISTING" --body-file issue-body.md

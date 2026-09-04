@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   check-version:
@@ -176,7 +175,9 @@ jobs:
 
   # A failed release is otherwise silent: `release` is skipped, no release
   # appears, and nobody is told. That is how v4.6.56 was permanently lost
-  # (#320). One issue per failed run, via the built-in GITHUB_TOKEN.
+  # (#320). One issue per lost version, via the built-in GITHUB_TOKEN: a
+  # "Re-run failed jobs" reuses the same run and re-runs this job, so a second
+  # failure appends a comment to the open issue instead of filing a duplicate.
   report-failure:
     needs: [check-version, build, release]
     # Explicit rather than a bare failure(): when `build` fails, `release` is
@@ -185,13 +186,17 @@ jobs:
     # cancelled — only on a real failure, once per run.
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
+    # A job-level block replaces the workflow default outright, so this is the
+    # complete grant: filing/commenting needs `issues: write` and nothing else,
+    # and every other job keeps the workflow's `contents: write`.
+    permissions:
+      issues: write
 
     steps:
       - name: Open an issue for the lost release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.check-version.outputs.version }}
           TAG: ${{ needs.check-version.outputs.tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -219,6 +224,19 @@ jobs:
           retries once, so a mac failure here means both attempts failed.
           EOF
           } > issue-body.md
-          gh issue create \
-            --title "Release $LABEL failed to publish" \
-            --body-file issue-body.md
+
+          # Idempotent: "Re-run failed jobs" re-runs this job under the same
+          # run id, and the title is version-scoped, so look for an open issue
+          # first. The search is fuzzy and ranked, so the match is confirmed by
+          # an exact title comparison before anything is written to it.
+          TITLE="Release $LABEL failed to publish"
+          EXISTING=$(gh issue list --state open --limit 100 \
+            --search "in:title \"$TITLE\"" --json number,title |
+            jq -r --arg title "$TITLE" \
+              'map(select(.title == $title)) | .[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::Issue #$EXISTING already tracks this failure — commenting instead of filing a duplicate."
+            gh issue comment "$EXISTING" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md
+          fi

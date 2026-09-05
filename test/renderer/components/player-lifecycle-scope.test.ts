@@ -781,11 +781,10 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // For the #280 unmount half the write landed on discarded state. A
     // superseded open unwinds on a LIVE component, so `player closed` would
     // replace the winner's video with an error banner.
-    const src = stripComments(SETUP)
     // Three call sites, all routed through the guard.
-    expect([...src.matchAll(/reportPrepareError\(prep\)/g)]).toHaveLength(3)
+    expect([...SRC.matchAll(/reportPrepareError\(prep\)/g)]).toHaveLength(3)
     // The one surviving direct write is the guard's own, after the early return.
-    const writes = [...src.matchAll(/remuxError\.value = prep\.error/g)]
+    const writes = [...SRC.matchAll(/remuxError\.value = prep\.error/g)]
     expect(writes).toHaveLength(1)
     const guard = stripComments(slice('function reportPrepareError(', '\n}'))
     expect(guard).toContain('if (prep === PLAYER_CLOSED_BAIL) return;')
@@ -841,7 +840,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
       expect(c.arm).not.toContain('PLAYER_CLOSED_BAIL')
       // The token the compare reads is taken where the flag is SET, so the
       // compare cannot be vacuously true.
-      expect(stripComments(SETUP)).toContain(c.set)
+      expect(SRC).toContain(c.set)
     }
   })
 

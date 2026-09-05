@@ -1,0 +1,154 @@
+name: Keychain Harness (#327)
+
+# THROWAWAY. Exists only on the `ci-keychain-harness` branch. Delete in the PR
+# that lands the CSC_KEYCHAIN change.
+#
+# Validates the CSC_KEYCHAIN workaround for the electron-builder `-k` bug
+# (#327): `importCerts` hands `security set-key-partition-list -k` the .p12
+# import password instead of the keychain's own random one
+# (app-builder-lib@26.8.1 macCodeSign.js:169 vs :138). macOS <= 26.5 never
+# validated `-k`; 26.6.2 does, and rejects it. So we build the keychain
+# ourselves with the correct password and hand electron-builder CSC_KEYCHAIN,
+# which makes macPackager.js:29 return null from createKeychain and honour ours
+# at :51.
+#
+# WHY A MATRIX AND NOT push-and-pray: `macos-latest` is mid-rollout between
+# 20260728 (unaffected) and 20260831 (affected). One push = one draw and no
+# control. Six independent draws in a single push almost certainly contains
+# both images, so the treatment is read against a same-push control rather than
+# against a run from an hour ago — which is exactly the confound that made the
+# earlier probe worthless.
+#
+# There is a deadline: the control arm only exists while the rollout is
+# incomplete. Once macos-latest is fully 20260831 there is nothing to compare
+# against and mac releases simply fail.
+#
+# SAFETY, deliberate and load-bearing:
+#   - no GH_TOKEN is exposed to any build step
+#   - `--publish never`, so this can never touch a release
+#   - APPLE_API_KEY is never exported, so nothing is queued at Apple
+#     (SecKeychainUnlock throws inside codeSign, well before notarize)
+
+on:
+  push:
+    branches:
+      - ci-keychain-harness
+
+permissions:
+  contents: read
+
+jobs:
+  draw:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Six independent runners per push. `unsigned` exercises the
+        # ANIME_DL_CSC_LINK-absent fallback (release.yml:85), which is
+        # image-independent and validates on any draw.
+        draw: [1, 2, 3, 4, 5, unsigned]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # The causal variable is the macOS version, not $ImageVersion: 26.5.2 vs
+      # 26.6.2 is what does or doesn't validate `-k`. Read it from inside the
+      # job and put it in the summary so a run is legible without opening six
+      # logs.
+      - name: Record the image
+        id: image
+        shell: bash
+        run: |
+          PROD=$(sw_vers -productVersion)
+          BUILD=$(sw_vers -buildVersion)
+          echo "product=$PROD" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "draw ${{ matrix.draw }}: macOS $PROD ($BUILD), ImageVersion=${ImageVersion:-unset}" \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "macOS $PROD ($BUILD)  ImageVersion=${ImageVersion:-unset}"
+
+      # === THE CHANGE UNDER TEST ===
+      # This step body is the one that moves verbatim into release.yml's
+      # "Set up macOS signing & notarization". Keep them byte-identical below
+      # the `run:` key; a harness that drifts from the real step validates
+      # nothing.
+      - name: Set up macOS signing (CSC_KEYCHAIN)
+        shell: bash
+        env:
+          CSC_LINK_B64: ${{ matrix.draw == 'unsigned' && '' || secrets.ANIME_DL_CSC_LINK }}
+          CSC_KEY_PASSWORD_VAL: ${{ secrets.ANIME_DL_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CSC_LINK_B64" ]; then
+            echo "ANIME_DL_CSC_LINK secret not set — building unsigned."
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/build.keychain"
+          KC_PW="$(openssl rand -base64 32)"
+          printf '%s' "$CSC_LINK_B64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" "$KC"
+          # No -l/-u: never auto-lock, matching electron-builder's own settings.
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CSC_KEY_PASSWORD_VAL" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          # -k takes the KEYCHAIN's password. Passing the .p12 password here is
+          # the upstream bug this exists to route around.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PW" "$KC" > /dev/null
+          # Prepend ours, keep the user's existing list.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d ' "')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # CSC_KEYCHAIN, deliberately NOT CSC_LINK: macPackager.js:29 returns
+          # null from createKeychain when CSC_LINK is unset and honours
+          # CSC_KEYCHAIN at :51, so electron-builder never runs the broken path.
+          echo "CSC_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+      # === END CHANGE UNDER TEST ===
+
+      # First caveat: identity resolution must stay unambiguous with our
+      # keychain in the search list. Two identities is the signal to pin
+      # mac.identity / CSC_NAME.
+      - name: Assert exactly one signing identity
+        if: matrix.draw != 'unsigned'
+        shell: bash
+        run: |
+          echo "== find-identity in our keychain =="
+          security find-identity -v -p codesigning "$CSC_KEYCHAIN"
+          N=$(security find-identity -v -p codesigning "$CSC_KEYCHAIN" | grep -cE '^\s+[0-9]+\)') || true
+          echo "identities: $N"
+          echo "draw ${{ matrix.draw }}: $N codesigning identity(ies)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$N" -ne 1 ]; then
+            echo "::error::expected exactly 1 codesigning identity, found $N — pin mac.identity / CSC_NAME."
+            exit 1
+          fi
+
+      - run: npx electron-vite build
+
+      # No GH_TOKEN, and --publish never: this job must not be able to reach a
+      # release. Single attempt on purpose — the retry is what #327 says cannot
+      # help, and a second attempt would only muddy which image did what.
+      - name: Package (single attempt, never publishes)
+        id: pack
+        shell: bash
+        continue-on-error: true
+        run: npx electron-builder --mac --publish never
+
+      - name: Result
+        if: always()
+        shell: bash
+        run: |
+          OUT="${{ steps.pack.outcome }}"
+          LINE="draw ${{ matrix.draw }} | macOS ${{ steps.image.outputs.product }} (${{ steps.image.outputs.build }}) | electron-builder: $OUT"
+          echo "$LINE"
+          echo "$LINE" >> "$GITHUB_STEP_SUMMARY"
+          echo "== keychain search list at exit =="
+          security list-keychains -d user || true
+          if [ "$OUT" != "success" ]; then
+            echo "::warning::draw ${{ matrix.draw }} failed on macOS ${{ steps.image.outputs.product }}"
+          fi

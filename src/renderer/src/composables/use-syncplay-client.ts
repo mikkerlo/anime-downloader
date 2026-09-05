@@ -1334,6 +1334,41 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
         v.play().catch(() => op.retract())
       }
     }
+    // Adopting the room's intent also *announces* it (#324). Nothing else does:
+    // the echo consume in `onLocalPause` returns above `sendSyncplayLocalState`,
+    // and a paused element fires no `timeupdate` (the known gap on
+    // `pushSyncplaySnapshot`, #227), so main's copy of our snapshot keeps saying
+    // whatever we were doing before the apply until the 1 s interval fires.
+    // Main's own 1 s heartbeat races that interval, and when it wins,
+    // `canAssertSnapshot()` asserts the stale value straight back into the room
+    // — measured at 146 ms / 26 ms after a room pause, and at 138 ms / 152 ms
+    // after a room resume, where it undid the resuming user's play and left the
+    // room wedged. Pushing here makes the residual one IPC hop, not one
+    // heartbeat.
+    //
+    // Below the seek write for `position`, and for `position` only: the pushed
+    // `paused` is `intentOr(v)` — `intendedPaused ?? v.paused` — already fixed
+    // by the intent write above, so the element moves in between have no
+    // bearing on it. In particular do *not* await `v.play()`: it is async and
+    // retracts on rejection, and waiting on it parks the announcement behind
+    // autoplay-policy latency in exactly the direction that costs the user
+    // their play.
+    //
+    // Under `!holding` because nothing was adopted above, so there is nothing
+    // new to announce — *not* because a hold must not report that the user's
+    // pause was abandoned. A push here would carry `intendedPaused`, which a
+    // hold has already set to `true` (`onLocalPause` writes it before arming
+    // the hold): the user's own pause, which reached main on its own through
+    // that function's `sendSyncplayLocalState('pause')`, stamping
+    // `lastSnapshotAt` main-side. The gate is reachable only on a room *resume*
+    // arriving during a pending user pause — `holding` is false for every
+    // paused state by construction.
+    //
+    // It resets `lastSnapshotPushAt`, so the first `timeupdate` after a remote
+    // resume can be held off for up to SNAPSHOT_MIN_INTERVAL_MS. Harmless
+    // rather than a regression: the 1 s interval covers that gap, and the
+    // position such a `timeupdate` would have carried is the one just pushed.
+    if (!holding) pushSyncplaySnapshot()
     const describesAMove = (!deferred && !firstApply) || state.doSeek
     if (state.setBy && needsSeek && !holding && describesAMove) {
       showSyncplayToast(`${state.setBy} seeked to ${deps.formatTime(state.position)}`)

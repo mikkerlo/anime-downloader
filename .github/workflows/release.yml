@@ -106,9 +106,10 @@ jobs:
       # macOS only: electron-builder's temporary-keychain handling fails with
       # "SecKeychainUnlock: The user name or passphrase you entered is not
       # correct" (#320, #327). NOT transient — it is a deterministic rejection
-      # on the newer `macos-latest` image, so a retry on the same runner hits
-      # it twice. The retry is kept only because a job-level rerun re-rolls
-      # which image you get; it comes out with the real fix. Capped at 2
+      # on the newer `macos-latest` image, so an in-job retry on the same
+      # runner hits it twice and cannot help. What does sometimes recover is a
+      # *job-level* rerun, because that re-rolls which image you get. The retry
+      # stays only until the upstream fix lands (see below). Capped at 2
       # attempts. Every other platform uses the single-attempt step below, so
       # a real build break fails on first try.
       #

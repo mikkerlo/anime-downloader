@@ -154,6 +154,8 @@ jobs:
           # Captured after the sweep, so the restore below can never re-add a
           # path we just deleted.
           ORIGINAL_KEYCHAINS=$(list_keychains)
+          echo "baseline keychain search list:"
+          echo "$ORIGINAL_KEYCHAINS"
 
           for attempt in 1 2; do
             echo "::group::electron-builder attempt $attempt of 2"
@@ -169,11 +171,16 @@ jobs:
             echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
 
             # Sweep what this attempt orphaned, then put the search list back
-            # exactly as we found it.
+            # exactly as we found it. The restore is tidiness — delete-keychain
+            # drops the entry anyway — so `|| true` keeps it from failing the
+            # step under this step's `-e -o pipefail`: a retry that aborts
+            # before attempt 2 defeats the whole point of the retry.
             drop_temp_keychains
             # Word splitting is intended: one keychain path per argument.
             # shellcheck disable=SC2086
-            security list-keychains -d user -s $ORIGINAL_KEYCHAINS
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS || true
+            echo "search list restored to:"
+            list_keychains || true
 
             sleep 15
           done

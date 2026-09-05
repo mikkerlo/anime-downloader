@@ -331,4 +331,109 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     expect(after.some((f) => f.position === 0)).toBe(false)
     expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThanOrEqual(1)
   })
+
+  // The main-side half of #324, on the same harness because it is the same
+  // mechanism seen from the other end: a snapshot that has stopped matching the
+  // element. #284's is frozen by a reload; this one is merely *late*, by the
+  // one heartbeat the renderer used to take to announce an apply.
+  //
+  // **These two are characterization tests for `canAssertSnapshot()`, not #324
+  // regression protection.** They drive `updateSnapshot()` directly and never
+  // reach `applyRemoteStateToElement`, so they pass on `main` verbatim — only
+  // `test/renderer/composables/use-syncplay-client.test.ts` goes red on a
+  // revert of the renderer push. They are worth keeping on their own terms:
+  // they pin `canAssertSnapshot()` following the pushed value in both
+  // directions, and the paused arm (`if (this.snapshot.paused) return true`)
+  // has no staleness clock at all, so nothing else in the suite bounds it.
+  describe('a snapshot that lands before the heartbeat (#324)', () => {
+    it('suppresses the playing assertion once a paused snapshot lands', () => {
+      const { switcher, peer } = twoAdoptedWatchers()
+
+      // The user pauses the room on peer A.
+      const pausedAt = trueRoomPosition()
+      peer.sendLocalState({ paused: true, position: pausedAt, cause: 'pause' })
+      vi.advanceTimersByTime(DELAY_MS * 4)
+      expect(server.roomState().paused).toBe(true)
+
+      // pause-run2's gap: B has applied the pause and its element is stopped,
+      // but nothing has told main — the echo consume returns above the discrete
+      // send and a paused element fires no `timeupdate`. One heartbeat of that.
+      const beforePush = server.wireOf('switchuser').length
+      vi.advanceTimersByTime(1000)
+      const stale = server.wireOf('switchuser').slice(beforePush)
+      expect(stale.length).toBeGreaterThanOrEqual(1)
+      // `=== false`, not `!== true`: an explicit key, so this is the assertion
+      // arm and not the keyless spectator mirror — which is what makes it a
+      // claim the server acts on rather than a position it merely elects. A
+      // peer that performed no UI action has just told the room it is playing.
+      expect(stale.every((f) => f.paused === false)).toBe(true)
+
+      // The push. `updateSnapshot()` stamps unconditionally, so the flip is
+      // immediate and the next heartbeat carries the room's own intent.
+      switcher.updateSnapshot({ position: pausedAt, paused: true })
+      const afterPush = server.wireOf('switchuser').length
+      vi.advanceTimersByTime(1000)
+      const announced = server.wireOf('switchuser').slice(afterPush)
+      expect(announced.length).toBeGreaterThanOrEqual(1)
+      expect(announced.every((f) => f.paused === true)).toBe(true)
+    })
+
+    // The mirror, and the more important of the two: the paused arm of
+    // `canAssertSnapshot()` is `if (this.snapshot.paused) return true`, with no
+    // staleness compare at all. The playing direction at least has
+    // PLAYBACK_ASSERT_STALE_MS as a 2 s backstop; this one has nothing short of
+    // `hasLivePlayback()`, so the push is the only thing that bounds it.
+    it('suppresses the paused assertion once a playing snapshot lands', () => {
+      const { switcher, peer } = twoAdoptedWatchers()
+
+      // Both ends into the paused room the resume starts from.
+      const pausedAt = trueRoomPosition()
+      peer.sendLocalState({ paused: true, position: pausedAt, cause: 'pause' })
+      switcher.updateSnapshot({ position: pausedAt, paused: true })
+      vi.advanceTimersByTime(DELAY_MS * 4)
+      expect(server.roomState().paused).toBe(true)
+
+      // The user presses Play on peer A.
+      peer.sendLocalState({ paused: false, position: pausedAt, cause: 'play' })
+      const resumedAt = Date.now()
+      vi.advanceTimersByTime(DELAY_MS * 4)
+      expect(server.roomState().paused).toBe(false)
+
+      // resume-run5's gap, measured at 152 ms: B has applied the resume and its
+      // element is playing, and main still holds `paused: true`.
+      const beforePush = server.wireOf('switchuser').length
+      vi.advanceTimersByTime(1000)
+      const stale = server.wireOf('switchuser').slice(beforePush)
+      expect(stale.length).toBeGreaterThanOrEqual(1)
+      // Again an explicit key on the assertion arm: this is the frame that in
+      // run5 pushed peer A back to paused 3 ms after its own Play click landed.
+      //
+      // The *room* flag is deliberately not asserted here or in the case above.
+      // Both clients heartbeat at 1 Hz and disagree, so `roomPaused` is simply
+      // whichever frame the modelled server saw last — a scheduling artefact of
+      // the fixture, not the behaviour under test. What each client asserts is
+      // the behaviour, and it is what the fix changes.
+      expect(stale.every((f) => f.paused === true)).toBe(true)
+
+      // Nor does waiting it out help. Past PLAYBACK_ASSERT_STALE_MS the playing
+      // direction would have fallen through to the keyless mirror; this one
+      // keeps making the claim, because the paused arm never compares the
+      // clock. (Under PLAYBACK_STALE_MS throughout, so `hasLivePlayback()` is
+      // not what is being tested here.)
+      const beforeWait = server.wireOf('switchuser').length
+      vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS)
+      expect(Date.now() - resumedAt).toBeGreaterThan(PLAYBACK_ASSERT_STALE_MS)
+      const waited = server.wireOf('switchuser').slice(beforeWait)
+      expect(waited.length).toBeGreaterThanOrEqual(1)
+      expect(waited.every((f) => f.paused === true)).toBe(true)
+
+      // The push ends it, and nothing else in the system would have.
+      switcher.updateSnapshot({ position: pausedAt, paused: false })
+      const afterPush = server.wireOf('switchuser').length
+      vi.advanceTimersByTime(1000)
+      const announced = server.wireOf('switchuser').slice(afterPush)
+      expect(announced.length).toBeGreaterThanOrEqual(1)
+      expect(announced.every((f) => f.paused === false)).toBe(true)
+    })
+  })
 })

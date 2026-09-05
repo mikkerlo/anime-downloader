@@ -4055,6 +4055,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   // adoption the hold waits for — main's drift test reads the element position),
   // but nothing resumes the element and the room's intent is not adopted.
   it('holds a playing remote state: it seeks, but neither resumes nor clobbers intent', async () => {
+    vi.useFakeTimers()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
     const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
@@ -4069,8 +4070,15 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     expect(v.currentTime).toBe(200)
     expect(v.play).not.toHaveBeenCalled()
 
+    // Read the intent off the 1 s interval rather than a `timeupdate`: the apply
+    // above pushes a snapshot of its own (#324) and stamps `lastSnapshotPushAt`
+    // doing it, so a `timeupdate` on the next line returns at the
+    // SNAPSHOT_MIN_INTERVAL_MS throttle and this would assert on silence. The
+    // interval calls `pushSyncplaySnapshot` directly and is what carries the
+    // value in production anyway. Same substitution in every case below that
+    // reads a snapshot straight after an apply.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
   })
 
@@ -4176,6 +4184,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   // 6. The user changing their mind ends the hold — and must not leave the gate
   // holding a stale mirror that re-pauses the resume (the R8 half of decision 2).
   it('ends the hold on a real play, leaving the element playing', async () => {
+    vi.useFakeTimers()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
     const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
@@ -4193,8 +4202,10 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     expect(v.pause).not.toHaveBeenCalled()
     expect(client.syncplayToast.value).toBe('')
 
+    // The interval, not a `timeupdate` — the apply's own push (#324) throttles
+    // one landing this soon after it. See case 1.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: false })
   })
 
@@ -4331,8 +4342,14 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     client.onLocalPlay()
 
     expect(v.pause).not.toHaveBeenCalled()
+    // Read the intent off the 1 s interval rather than a `timeupdate`: the apply
+    // above now pushes a snapshot of its own (#324) and stamps
+    // `lastSnapshotPushAt` with it, so a `timeupdate` 200 ms later returns at
+    // the SNAPSHOT_MIN_INTERVAL_MS throttle and this would be asserting on
+    // silence. The interval calls `pushSyncplaySnapshot` directly and is what
+    // carries the value in production anyway.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 300, paused: false })
   })
 
@@ -4340,6 +4357,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   // `v.play()` would leave its play operation registered with no event left to
   // consume it, and the user's next real play would be eaten as that echo.
   it('leaves no applied-pause latch behind, so a real play still reaches intent', async () => {
+    vi.useFakeTimers()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
     const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
@@ -4353,8 +4371,10 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     ;(v as { paused: boolean }).paused = false
     client.onLocalPlay()
 
+    // The interval, not a `timeupdate` — the apply's own push (#324) throttles
+    // one landing this soon after it. See case 1.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: false })
   })
 
@@ -4557,6 +4577,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
   // 17b. The pin: adoption flipping true clears nothing. Red against any
   // revision that adds a clear on the latch.
   it('keeps holding across the adoption flip', async () => {
+    vi.useFakeTimers()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
     const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
@@ -4572,8 +4593,10 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
 
     expect(v.play).not.toHaveBeenCalled()
+    // The interval, not a `timeupdate` — the apply's own push (#324) throttles
+    // one landing this soon after it. See case 1.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
   })
 
@@ -4603,8 +4626,10 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     driveGateEntry(client)
     expect(v.play).not.toHaveBeenCalled()
 
+    // The interval, not a `timeupdate` — the apply's own push (#324) throttles
+    // one landing this soon after it. See case 1.
     sendSnapshot.mockClear()
-    client.onVideoTimeUpdate()
+    vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
 
     // …and the room owns us again from the next state on.
@@ -4915,5 +4940,217 @@ describe('useSyncplayClient — a reloading element announces nothing (#284)', (
     vi.advanceTimersByTime(1000)
 
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
+  })
+})
+
+// Adopting the room's intent also announces it (#324). Before the push the
+// renderer sat on a state change it already had: the echo consume in
+// `onLocalPause` returns above `sendSyncplayLocalState`, and a paused element
+// fires no `timeupdate` (#227), so main's copy of our snapshot kept the
+// pre-apply value until the 1 s interval fired. Main's own 1 s heartbeat races
+// that interval, and when it wins, `canAssertSnapshot()` asserts the stale
+// value back into the room.
+//
+// So the shared shape of every case below is: emit the state, then assert on
+// the push **with no timer tick and no `timeupdate` anywhere in the body**. A
+// case that advanced a timer would pass on `main` too — waiting for the
+// interval is the defect.
+//
+// The numbers are the measured runs': pause-run2 (146 ms to the stale
+// `paused: false`) and resume-run5 (152 ms to the stale `paused: true`, which
+// undid the resuming user's play and left the room wedged at the 7 s probe).
+describe('useSyncplayClient — applying a remote state announces it (#324)', () => {
+  it('pushes a snapshot carrying paused: true when it applies a room pause', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    // pause-run2: B's element was at 14.179569 and the room's pause carried
+    // 12.840873 — 1.34 s apart, inside the 3 s tolerance, so the apply pauses
+    // without seeking and the pushed position is the element's own.
+    const v = fakeVideo({ currentTime: 14.179569, paused: false } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 12.840873, paused: true, doSeek: false, setBy: 'peerA' })
+
+    expect(v.pause).toHaveBeenCalled()
+    // On `main` this is the run's stale `{position: 13.898323, paused: false}`,
+    // asserted by main's heartbeat 146 ms later.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 14.179569, paused: true })
+  })
+
+  it('pushes a snapshot carrying paused: false when it applies a room resume', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    // resume-run5: B was paused at 12.4732 and the room resumed at
+    // 12.531306821145725 — 58 ms apart, so again a play with no seek.
+    //
+    // `play` deliberately returns a promise that never settles, which is the
+    // autoplay-policy shape the push must not be parked behind: the pushed
+    // `paused` comes off `intentOr()`, already fixed by the intent write above
+    // the enactment block, so awaiting the call would buy nothing and cost the
+    // whole latency in the direction that loses the user's play. An
+    // implementation that awaits it fails here rather than in production.
+    const v = fakeVideo({
+      currentTime: 12.4732,
+      paused: true,
+      play: vi.fn().mockReturnValue(new Promise(() => {}))
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    sendSnapshot.mockClear()
+    emitRemoteState({
+      position: 12.531306821145725,
+      paused: false,
+      doSeek: false,
+      setBy: 'peerA'
+    })
+
+    expect(v.play).toHaveBeenCalled()
+    // On `main` this is the run's stale `{paused: true}`, which main's heartbeat
+    // asserted 152 ms later and pushed peer A back to paused 3 ms after its own
+    // Play click landed.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 12.4732, paused: false })
+  })
+
+  // Necessarily a resume: `holding = pendingUserPause && !state.paused`, so the
+  // gate is false for every paused state by construction and this cannot be a
+  // variant of the pause case above.
+  //
+  // The push is *not* withheld under a hold. The seek write above carries no
+  // `holding` term, and main's `isAdopted()` latches on position — withholding
+  // the announcement here would stall the very adoption the hold is waiting
+  // for. What the hold does change is the payload, and this pins that: the
+  // intent adoption is skipped, so `intentOr()` still reads the `true`
+  // `onLocalPause` wrote before arming the hold. Red against anyone who drops
+  // the `!holding` term from the *intent* write above, which would make this
+  // announce the room's `paused: false` over the user's own pause.
+  it("pushes the user's own pause, not the room's resume, while a hold is in effect", async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 200, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // Pre-adoption, so the press arms the hold: `intendedPaused = true` first,
+    // then `armPendingUserPause()`.
+    client.onLocalPause()
+    ;(v as { paused: boolean }).paused = true
+
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 250, paused: false, doSeek: true, setBy: 'peerA' })
+
+    // The seek landed even under the hold, and the push carries that position
+    // with the user's own intent — which is what main needs to adopt us.
+    expect(v.currentTime).toBe(250)
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 250, paused: true })
+  })
+
+  // An apply that moves nothing announces nothing: `if (!needsSeek &&
+  // !needsPlayPause) return` sits above the enactment block, so the push is
+  // never reached. Do not "fix" the residual on this path by hoisting the push
+  // above that early-out — a 1 Hz re-push of a snapshot nothing changed is what
+  // the interval is already for, and this test is here to go red if someone
+  // does. The path keeps the old one-heartbeat residual, deliberately and
+  // knowingly; #324 does not close it.
+  //
+  // It is reachable, which is why it is worth pinning. An element paused by an
+  // *echo* operation — an MSE buffer refill, the ready gate's down-arm — leaves
+  // `intendedPaused` at `false`: `onLocalPause` consumes the op and
+  // `applyConsumedPlaybackIntent` returns on `kind === 'echo'` without writing
+  // intent. A room pause arriving then has `effectivePaused === v.paused`, so
+  // `needsPlayPause` is false, and the 1 Hz interval keeps pushing
+  // `paused: false` into a paused room until something else moves.
+  //
+  // That is a live bug and it is tracked in #331, not only here — this case
+  // pins the *push*'s placement, not the staleness. The fix cannot be the
+  // hoist: hoisting the push re-sends the same stale `intentOr()`, and hoisting
+  // the *intent adoption* is blocked by `refusingResume`, which is folded into
+  // `needsPlayPause` precisely so this early-out still fires (#281). So this
+  // case stays green through #331's fix; only the paragraph above changes.
+  it('pushes nothing when the apply moves neither the playhead nor playback', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    sendSnapshot.mockClear()
+    // Inside the 3 s tolerance and already paused: nothing to seek, nothing to
+    // enact.
+    emitRemoteState({ position: 101, paused: true, doSeek: false, setBy: 'peerA' })
+
+    expect(v.pause).not.toHaveBeenCalled()
+    expect(v.currentTime).toBe(100)
+    expect(sendSnapshot).not.toHaveBeenCalled()
+  })
+
+  // The one place where the push and "at `readyState` 1" meet: #240 parks a
+  // state that arrives below HAVE_METADATA and replays it through the same
+  // block from `onVideoLoadedMetadata`, at a `readyState` that has just
+  // reached 1 — so `hasAnnounceablePosition` passes and the push fires there
+  // too. Wanted: main learns the unparked position without waiting out the
+  // interval.
+  it('pushes on the deferred apply, once the parked state is finally written', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 300, paused: false, doSeek: true, setBy: 'peerA' })
+    // Parked: the element was never written, so there is no position to claim.
+    expect(sendSnapshot).not.toHaveBeenCalled()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.currentTime).toBe(300)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 300, paused: false })
+  })
+
+  // Pin the channel, not only the resulting `paused`. The obvious "simplify" is
+  // a `sendSyncplayLocalState('pause')` in its place, which is green on the
+  // room's pause state and wrong on the ignore counter: the discrete send bumps
+  // `pendingClientAck` and asserts *intent* into the room, which is exactly the
+  // misclassification the echo branch exists to prevent for a peer that is
+  // merely following.
+  it('announces through the snapshot channel, never as a discrete State', async () => {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 14.179569, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    sendLocalState.mockClear()
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 12.840873, paused: true, doSeek: false, setBy: 'peerA' })
+    // The element's own `pause` event, arriving after the apply: it consumes the
+    // echo operation and returns above the send, which is the whole reason main
+    // hears nothing without the push.
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).not.toHaveBeenCalled()
   })
 })

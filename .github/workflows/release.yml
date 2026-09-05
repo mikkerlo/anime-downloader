@@ -139,11 +139,13 @@ jobs:
             security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
           }
           # Delete temporary keychains electron-builder orphaned. Enumerated
-          # from disk, not from the search list: the file at the cert-derived
-          # path is what breaks the next attempt, whether or not it is still
-          # listed. Scoped to $TMPDIR, so a login/system keychain is never
-          # touched — electron-builder's own root-certs keychain lives under
-          # ~/Library/Caches and is likewise out of range.
+          # from disk rather than from the search list, so an orphan that was
+          # unlisted but not deleted is still caught. Scoped to $TMPDIR, so a
+          # login/system keychain is never touched — electron-builder's own
+          # root-certs keychain lives under ~/Library/Caches and is likewise
+          # out of range. See the block comment above: this sweep is retained
+          # but unproven, and the path is derived from the project directory,
+          # not the signing cert.
           drop_temp_keychains() {
             { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
               while read -r kc; do

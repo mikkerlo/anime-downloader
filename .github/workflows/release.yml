@@ -103,26 +103,34 @@ jobs:
 
       - run: npx electron-vite build
 
-      # macOS only: electron-builder's temporary-keychain handling flakes with
+      # macOS only: electron-builder's temporary-keychain handling fails with
       # "SecKeychainUnlock: The user name or passphrase you entered is not
-      # correct" (#320). It is transient — the same secrets succeed minutes
-      # later — so allow one retry. Capped at 2 attempts so a genuine cert or
-      # secret problem still fails. Every other platform uses the
-      # single-attempt step below, so a real build break fails on first try.
+      # correct" (#320, #327). NOT transient — it is a deterministic rejection
+      # on the newer `macos-latest` image, so an in-job retry on the same
+      # runner hits it twice and cannot help. What does sometimes recover is a
+      # *job-level* rerun, because that re-rolls which image you get. The retry
+      # stays only until the upstream fix lands (see below). Capped at 2
+      # attempts. Every other platform uses the single-attempt step below, so
+      # a real build break fails on first try.
       #
-      # The keychain reset between attempts is load-bearing, not hygiene.
-      # electron-builder only tears its temporary keychain down on the success
-      # path, so a failed attempt leaves the keychain file behind under
-      # $TMPDIR. Its name is derived from the signing cert, so the next attempt
-      # resolves to that same path, finds the file already there, and runs
-      # `security set-key-partition-list -k <password generated this attempt>`
-      # against it — which cannot unlock a keychain created under the previous
-      # attempt's password, and fails with the very error we are retrying for.
-      # Deleting the file is the fix; restoring the search list is tidiness,
-      # since `security delete-keychain` drops the entry anyway. Measured on a
-      # forced-failure probe: without the reset attempt 2 failed
-      # deterministically (actions/runs/33906796915); with it attempt 2
-      # recovers (actions/runs/33928659263).
+      # The keychain sweep below is unproven, and two earlier claims here were
+      # wrong. The temporary keychain's filename is
+      # sha256(<project dir> + "app-builder") — the *project directory*, not
+      # the signing cert (macCodeSign.js:128) — so it is indeed stable across
+      # attempts and across runners, just not for the reason first given. And
+      # electron-builder already calls removeKeychain() on that path before
+      # creating it, on every attempt (macCodeSign.js:130), so our own sweep is
+      # very likely redundant. The "measured" A/B that claimed the sweep is
+      # what makes attempt 2 recover is withdrawn: the two probe runs sat on
+      # different macOS images, so the outcome tracks the image, not the sweep.
+      #
+      # Actual cause, per the maintainer's diagnosis on #327: importCerts
+      # (macCodeSign.js:169) passes the .p12 import password to
+      # `security set-key-partition-list -k`, which wants the *keychain's*
+      # random password (macCodeSign.js:138). macOS <= 26.5 never checked `-k`;
+      # 26.6.2 does, and rejects it. Upstream electron-builder #10066, fix
+      # #10101, v26 backport #10172 — unpublished as of writing, so the retry
+      # and the sweep stay until it lands and both can go in one change.
       - name: Package (mac, up to 2 attempts)
         if: matrix.platform == 'mac'
         shell: bash
@@ -134,11 +142,13 @@ jobs:
             security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
           }
           # Delete temporary keychains electron-builder orphaned. Enumerated
-          # from disk, not from the search list: the file at the cert-derived
-          # path is what breaks the next attempt, whether or not it is still
-          # listed. Scoped to $TMPDIR, so a login/system keychain is never
-          # touched — electron-builder's own root-certs keychain lives under
-          # ~/Library/Caches and is likewise out of range.
+          # from disk rather than from the search list, so an orphan that was
+          # unlisted but not deleted is still caught. Scoped to $TMPDIR, so a
+          # login/system keychain is never touched — electron-builder's own
+          # root-certs keychain lives under ~/Library/Caches and is likewise
+          # out of range. See the block comment above: this sweep is retained
+          # but unproven, and the path is derived from the project directory,
+          # not the signing cert.
           drop_temp_keychains() {
             { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
               while read -r kc; do

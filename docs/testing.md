@@ -80,6 +80,50 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   deterministic; their underlying logic is covered at the unit + integration
   layers.
 
+## Structural (source-scanning) tests
+
+A few tests assert things about source *text* rather than behaviour — most of
+them in `test/renderer/components/player-lifecycle-scope.test.ts`, which pins
+the ownership guards in `PlayerView.vue`. They are cheap and they catch a real
+class of regression, but they fail silently in ways ordinary tests do not. Two
+rules, both learned the hard way:
+
+- **Pin the count, never just loop over the set.** A scan that walks a closed
+  set of symbols and asserts "no unguarded site" cannot tell *no unguarded
+  sites* from *no sites at all*. Dropping a symbol from the set — a one-line
+  edit, and the way this kind of test rots — turns a red site green with
+  nothing to notice it. The pinned per-flow count is the assertion that
+  catches that.
+- **An aggregate assertion is structurally blind to a dropped symbol.** Counting
+  the enclosing blocks, files or functions a scan reached looks like a stronger
+  check than counting sites, and it is not: whenever a *sibling* match keeps the
+  same aggregate unit satisfied, the aggregate does not move. It is a useful
+  shape check; it is never the assertion that catches set rot.
+
+Blindness is the normal case rather than an occasional gap, and the ownership
+scan in `player-lifecycle-scope.test.ts` is the measured example. Across its two
+flows there are **33** symbol-set sites in **10** post-`await` blocks, and
+**32** of those sites share a block with a sibling. So dropping one of the
+**15** symbols moves the block count for exactly **one** of them —
+`prepareMkvForPlayback(` in `goToEpisode`, the only site alone in its block. For
+the other fourteen the block assertion reports the same number as before while a
+guarded site has silently gone unguarded.
+
+#317/#318 is where this nearly shipped a hole. Adding `reportPrepareError(` to
+the symbol set during review moved the per-flow site counts 14→15 and 17→18 and
+left both block counts at 5, because the newly matched site landed in a block
+another symbol already kept red.
+
+(Figures measured at #322 against the head of `main`; they move when
+`SYMBOL_SET` does, and the pins in `SYMBOL_SCAN` are the live copy.)
+
+Related, and the other way these tests go quietly wrong: a **positive** scan
+over raw source is satisfied by a commented-out copy of the needle, so a
+declaration deleted and left behind as a comment still reports green. Positive
+scans read comment-stripped source; negative (`not.toContain`) scans read raw,
+where stripping could only loosen them. See #302 and #321, and the per-site
+notes in that test file.
+
 ## IPC contract guard
 
 `test/ipc-channels.test.ts` asserts every `CHANNELS` / `EVENT_CHANNELS` entry is

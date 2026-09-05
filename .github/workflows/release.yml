@@ -40,6 +40,9 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
+      # A macOS-only flake must not cancel the healthy linux/win legs (#320) —
+      # the release job still needs all three, so a genuine failure blocks it.
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -100,7 +103,91 @@ jobs:
 
       - run: npx electron-vite build
 
-      - run: npx electron-builder ${{ matrix.args }}
+      # macOS only: electron-builder's temporary-keychain handling flakes with
+      # "SecKeychainUnlock: The user name or passphrase you entered is not
+      # correct" (#320). It is transient — the same secrets succeed minutes
+      # later — so allow one retry. Capped at 2 attempts so a genuine cert or
+      # secret problem still fails. Every other platform uses the
+      # single-attempt step below, so a real build break fails on first try.
+      #
+      # The keychain reset between attempts is load-bearing, not hygiene.
+      # electron-builder only tears its temporary keychain down on the success
+      # path, so a failed attempt leaves the keychain file behind under
+      # $TMPDIR. Its name is derived from the signing cert, so the next attempt
+      # resolves to that same path, finds the file already there, and runs
+      # `security set-key-partition-list -k <password generated this attempt>`
+      # against it — which cannot unlock a keychain created under the previous
+      # attempt's password, and fails with the very error we are retrying for.
+      # Deleting the file is the fix; restoring the search list is tidiness,
+      # since `security delete-keychain` drops the entry anyway. Measured on a
+      # forced-failure probe: without the reset attempt 2 failed
+      # deterministically (actions/runs/33906796915); with it attempt 2
+      # recovers (actions/runs/33928659263).
+      - name: Package (mac, up to 2 attempts)
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Quoted paths, one per line, as `security` prints them.
+          list_keychains() {
+            security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
+          }
+          # Delete temporary keychains electron-builder orphaned. Enumerated
+          # from disk, not from the search list: the file at the cert-derived
+          # path is what breaks the next attempt, whether or not it is still
+          # listed. Scoped to $TMPDIR, so a login/system keychain is never
+          # touched — electron-builder's own root-certs keychain lives under
+          # ~/Library/Caches and is likewise out of range.
+          drop_temp_keychains() {
+            { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
+              while read -r kc; do
+                echo "removing orphaned keychain: $kc"
+                security delete-keychain "$kc" || true
+              done
+          }
+
+          # Before attempt 1 as well: a temp keychain predating this step is the
+          # only way a first attempt on a fresh runner can hit the collision, so
+          # sweeping up front is what makes the next recurrence informative.
+          drop_temp_keychains
+          # Captured after the sweep, so the restore below can never re-add a
+          # path we just deleted.
+          ORIGINAL_KEYCHAINS=$(list_keychains)
+          echo "baseline keychain search list:"
+          echo "$ORIGINAL_KEYCHAINS"
+
+          for attempt in 1 2; do
+            echo "::group::electron-builder attempt $attempt of 2"
+            if npx electron-builder ${{ matrix.args }}; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::electron-builder failed on both attempts."
+              exit 1
+            fi
+            echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
+
+            # Sweep what this attempt orphaned, then put the search list back
+            # exactly as we found it. The restore is tidiness — delete-keychain
+            # drops the entry anyway — so `|| true` keeps it from failing the
+            # step under this step's `-e -o pipefail`: a retry that aborts
+            # before attempt 2 defeats the whole point of the retry.
+            drop_temp_keychains
+            # Word splitting is intended: one keychain path per argument.
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $ORIGINAL_KEYCHAINS || true
+            echo "search list restored to:"
+            list_keychains || true
+
+            sleep 15
+          done
+
+      - name: Package
+        if: matrix.platform != 'mac'
+        run: npx electron-builder ${{ matrix.args }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -140,3 +227,74 @@ jobs:
           name: ${{ needs.check-version.outputs.tag }}
           files: artifacts/*
           generate_release_notes: true
+
+  # A failed release is otherwise silent: `release` is skipped, no release
+  # appears, and nobody is told. That is how v4.6.56 was permanently lost
+  # (#320). One issue per lost version, via the built-in GITHUB_TOKEN: a
+  # "Re-run failed jobs" reuses the same run and re-runs this job, so a second
+  # failure appends a comment to the open issue instead of filing a duplicate.
+  report-failure:
+    needs: [check-version, build, release]
+    # Explicit rather than a bare failure(): when `build` fails, `release` is
+    # skipped, and this spells out that a skipped dependency still counts. Does
+    # not fire when the whole run is skipped (should_release == false) or
+    # cancelled — only on a real failure, once per run.
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    # A job-level block replaces the workflow default outright, so this is the
+    # complete grant: filing/commenting needs `issues: write` and nothing else,
+    # and every other job keeps the workflow's `contents: write`.
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open an issue for the lost release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.check-version.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          LABEL="${TAG:-(version unknown)}"
+          {
+            echo "The **Build & Release** run for \`$LABEL\` failed, so **no release was published**."
+            echo
+            echo "- Failed run: $RUN_URL"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo
+            cat <<'EOF'
+          ## Before you re-run this
+
+          `softprops/action-gh-release` defaults to `make_latest: true`. If a **newer** version has
+          been released since this run failed, re-running it publishes the older version afterwards
+          and marks **it** Latest — offering live users a downgrade through `electron-updater`.
+
+          Check `gh release list` first:
+
+          - Nothing newer released yet → re-run the failed jobs; the release is recoverable.
+          - A newer release already exists → **do not re-run.** Leave the version gap. The commit's
+            code ships in the later release; a late rerun is not safe.
+
+          The macOS keychain-unlock flake (#320) is the known cause; the mac packaging step already
+          retries once, so a mac failure here means both attempts failed.
+          EOF
+          } > issue-body.md
+
+          # Idempotent: "Re-run failed jobs" re-runs this job under the same
+          # run id, and the title is version-scoped, so look for an open issue
+          # first. The search is fuzzy and ranked, so the match is confirmed by
+          # an exact title comparison before anything is written to it.
+          TITLE="Release $LABEL failed to publish"
+          # Fail open: if the search itself errors, EXISTING stays empty and we
+          # still file. A lost release must never go unreported, so keep the
+          # `|| true` even if this step ever gains a pipefail shell.
+          EXISTING=$(gh issue list --state open --limit 100 \
+            --search "in:title \"$TITLE\"" --json number,title |
+            jq -r --arg title "$TITLE" \
+              'map(select(.title == $title)) | .[0].number // empty' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::Issue #$EXISTING already tracks this failure — commenting instead of filing a duplicate."
+            gh issue comment "$EXISTING" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md
+          fi

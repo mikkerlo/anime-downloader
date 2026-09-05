@@ -337,12 +337,14 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // element. #284's is frozen by a reload; this one is merely *late*, by the
   // one heartbeat the renderer used to take to announce an apply.
   //
-  // What these two pin is not the renderer's push — that is
-  // `test/renderer/composables/use-syncplay-client.test.ts` — but the payoff
-  // for it: `canAssertSnapshot()` following the pushed value, in both
-  // directions, before the heartbeat can assert the old one. Each case runs the
-  // gap first and the push second, so the frames the fix removes are asserted
-  // here rather than described.
+  // **These two are characterization tests for `canAssertSnapshot()`, not #324
+  // regression protection.** They drive `updateSnapshot()` directly and never
+  // reach `applyRemoteStateToElement`, so they pass on `main` verbatim — only
+  // `test/renderer/composables/use-syncplay-client.test.ts` goes red on a
+  // revert of the renderer push. They are worth keeping on their own terms:
+  // they pin `canAssertSnapshot()` following the pushed value in both
+  // directions, and the paused arm (`if (this.snapshot.paused) return true`)
+  // has no staleness clock at all, so nothing else in the suite bounds it.
   describe('a snapshot that lands before the heartbeat (#324)', () => {
     it('suppresses the playing assertion once a paused snapshot lands', () => {
       const { switcher, peer } = twoAdoptedWatchers()

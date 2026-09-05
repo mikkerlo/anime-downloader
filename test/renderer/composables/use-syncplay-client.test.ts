@@ -5069,6 +5069,13 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
   // intent. A room pause arriving then has `effectivePaused === v.paused`, so
   // `needsPlayPause` is false, and the 1 Hz interval keeps pushing
   // `paused: false` into a paused room until something else moves.
+  //
+  // That is a live bug and it is tracked in #331, not only here — this case
+  // pins the *push*'s placement, not the staleness. The fix cannot be the
+  // hoist: hoisting the push re-sends the same stale `intentOr()`, and hoisting
+  // the *intent adoption* is blocked by `refusingResume`, which is folded into
+  // `needsPlayPause` precisely so this early-out still fires (#281). So this
+  // case stays green through #331's fix; only the paragraph above changes.
   it('pushes nothing when the apply moves neither the playhead nor playback', async () => {
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })

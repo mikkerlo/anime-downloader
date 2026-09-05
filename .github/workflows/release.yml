@@ -103,12 +103,14 @@ jobs:
 
       - run: npx electron-vite build
 
-      # macOS only: electron-builder's temporary-keychain handling flakes with
+      # macOS only: electron-builder's temporary-keychain handling fails with
       # "SecKeychainUnlock: The user name or passphrase you entered is not
-      # correct" (#320). It is transient — the same secrets succeed minutes
-      # later — so allow one retry. Capped at 2 attempts so a genuine cert or
-      # secret problem still fails. Every other platform uses the
-      # single-attempt step below, so a real build break fails on first try.
+      # correct" (#320, #327). NOT transient — it is a deterministic rejection
+      # on the newer `macos-latest` image, so a retry on the same runner hits
+      # it twice. The retry is kept only because a job-level rerun re-rolls
+      # which image you get; it comes out with the real fix. Capped at 2
+      # attempts. Every other platform uses the single-attempt step below, so
+      # a real build break fails on first try.
       #
       # The keychain sweep below is unproven, and two earlier claims here were
       # wrong. The temporary keychain's filename is

@@ -110,19 +110,24 @@ jobs:
       # secret problem still fails. Every other platform uses the
       # single-attempt step below, so a real build break fails on first try.
       #
-      # The keychain reset between attempts is load-bearing, not hygiene.
-      # electron-builder only tears its temporary keychain down on the success
-      # path, so a failed attempt leaves the keychain file behind under
-      # $TMPDIR. Its name is derived from the signing cert, so the next attempt
-      # resolves to that same path, finds the file already there, and runs
-      # `security set-key-partition-list -k <password generated this attempt>`
-      # against it — which cannot unlock a keychain created under the previous
-      # attempt's password, and fails with the very error we are retrying for.
-      # Deleting the file is the fix; restoring the search list is tidiness,
-      # since `security delete-keychain` drops the entry anyway. Measured on a
-      # forced-failure probe: without the reset attempt 2 failed
-      # deterministically (actions/runs/33906796915); with it attempt 2
-      # recovers (actions/runs/33928659263).
+      # The keychain sweep below is unproven, and two earlier claims here were
+      # wrong. The temporary keychain's filename is
+      # sha256(<project dir> + "app-builder") — the *project directory*, not
+      # the signing cert (macCodeSign.js:128) — so it is indeed stable across
+      # attempts and across runners, just not for the reason first given. And
+      # electron-builder already calls removeKeychain() on that path before
+      # creating it, on every attempt (macCodeSign.js:130), so our own sweep is
+      # very likely redundant. The "measured" A/B that claimed the sweep is
+      # what makes attempt 2 recover is withdrawn: the two probe runs sat on
+      # different macOS images, so the outcome tracks the image, not the sweep.
+      #
+      # Actual cause, per the maintainer's diagnosis on #327: importCerts
+      # (macCodeSign.js:169) passes the .p12 import password to
+      # `security set-key-partition-list -k`, which wants the *keychain's*
+      # random password (macCodeSign.js:138). macOS <= 26.5 never checked `-k`;
+      # 26.6.2 does, and rejects it. Upstream electron-builder #10066, fix
+      # #10101, v26 backport #10172 — unpublished as of writing, so the retry
+      # and the sweep stay until it lands and both can go in one change.
       - name: Package (mac, up to 2 attempts)
         if: matrix.platform == 'mac'
         shell: bash

@@ -626,8 +626,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // rather than auto-jumping the leading gap. That stall outlives this gate:
   // such an element is at HAVE_METADATA, not HAVE_NOTHING, so what takes it off
   // 0 is a write — the parked remote state applied from `loadedmetadata`, or,
-  // when nothing is parked, the resume land (`use-mse-player.ts:225-239`, which
-  // `:226` cancels in exactly the case where a state is). The door reopens at
+  // when nothing is parked, the resume land (`use-mse-player.ts:308-324`, which
+  // `:309-310` cancels in exactly the case where a state is). The door reopens at
   // metadata; the first honest position rides on that write, not on this test.
   //
   // Nothing upstream covers that window during an in-player translation or
@@ -1433,7 +1433,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // false) and makes the deferred apply re-assert *this bookkeeping* as of the
     // moment we enact it. The position is not made current the same way: it
     // carries main's one-shot `serverRtt / 2` compensation from emit time
-    // (syncplay.ts:1223) and nothing advances the parked copy, so it applies
+    // (src/main/syncplay.ts:2115) and nothing advances the parked copy, so it applies
     // behind the room by the park's duration. Uncompensated on purpose — the
     // 1 Hz overwrite, the 3 s apply tolerance and main's adoption gate bound the
     // error; docs/syncplay.md, "Apply Rule".

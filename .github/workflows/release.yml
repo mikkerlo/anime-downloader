@@ -40,8 +40,10 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
-      # A macOS-only flake must not cancel the healthy linux/win legs (#320) —
-      # the release job still needs all three, so a genuine failure blocks it.
+      # One platform failing must not cancel the other two: a partial matrix
+      # still shows which targets are broken, which is the whole diagnostic
+      # value of the run. The release job needs all three artifacts anyway, so
+      # a genuine failure still blocks the release.
       fail-fast: false
       matrix:
         include:
@@ -109,8 +111,13 @@ jobs:
       # `security set-key-partition-list -k`, which wants the keychain's own
       # password. macOS <= 26.5 never checked `-k`; the runner image roll to
       # 26.6.2 started rejecting it. Fixed in app-builder-lib 26.16.1, which
-      # `package.json` pins exactly — npm's `latest` dist-tag still points at
-      # the unfixed 26.15.3, so the pin must not be a caret range.
+      # `package.json` pins exactly. Keep it exact until `npm view
+      # electron-builder dist-tags` reports `latest` at 26.16.1 or newer: npm
+      # resolves a range to the `latest` dist-tag whenever `latest` satisfies
+      # it, in preference to any higher in-range version, so while `latest`
+      # trails the fix any range that admits it resolves backwards onto an
+      # unfixed build. As of 2026-09 `latest` is 26.15.3 and the fix is only
+      # on the `v26` tag.
       - name: Package
         run: npx electron-builder ${{ matrix.args }}
         env:

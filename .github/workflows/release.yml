@@ -40,8 +40,10 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
-      # A macOS-only flake must not cancel the healthy linux/win legs (#320) —
-      # the release job still needs all three, so a genuine failure blocks it.
+      # One platform failing must not cancel the other two: a partial matrix
+      # still shows which targets are broken, which is the whole diagnostic
+      # value of the run. The release job needs all three artifacts anyway, so
+      # a genuine failure still blocks the release.
       fail-fast: false
       matrix:
         include:
@@ -103,100 +105,24 @@ jobs:
 
       - run: npx electron-vite build
 
-      # macOS only: electron-builder's temporary-keychain handling fails with
-      # "SecKeychainUnlock: The user name or passphrase you entered is not
-      # correct" (#320, #327). NOT transient — it is a deterministic rejection
-      # on the newer `macos-latest` image, so an in-job retry on the same
-      # runner hits it twice and cannot help. What does sometimes recover is a
-      # *job-level* rerun, because that re-rolls which image you get. The retry
-      # stays only until the upstream fix lands (see below). Capped at 2
-      # attempts. Every other platform uses the single-attempt step below, so
-      # a real build break fails on first try.
-      #
-      # The keychain sweep below is unproven, and two earlier claims here were
-      # wrong. The temporary keychain's filename is
-      # sha256(<project dir> + "app-builder") — the *project directory*, not
-      # the signing cert (macCodeSign.js:128) — so it is indeed stable across
-      # attempts and across runners, just not for the reason first given. And
-      # electron-builder already calls removeKeychain() on that path before
-      # creating it, on every attempt (macCodeSign.js:130), so our own sweep is
-      # very likely redundant. The "measured" A/B that claimed the sweep is
-      # what makes attempt 2 recover is withdrawn: the two probe runs sat on
-      # different macOS images, so the outcome tracks the image, not the sweep.
-      #
-      # Actual cause, per the maintainer's diagnosis on #327: importCerts
-      # (macCodeSign.js:169) passes the .p12 import password to
-      # `security set-key-partition-list -k`, which wants the *keychain's*
-      # random password (macCodeSign.js:138). macOS <= 26.5 never checked `-k`;
-      # 26.6.2 does, and rejects it. Upstream electron-builder #10066, fix
-      # #10101, v26 backport #10172 — unpublished as of writing, so the retry
-      # and the sweep stay until it lands and both can go in one change.
-      - name: Package (mac, up to 2 attempts)
-        if: matrix.platform == 'mac'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Quoted paths, one per line, as `security` prints them.
-          list_keychains() {
-            security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//'
-          }
-          # Delete temporary keychains electron-builder orphaned. Enumerated
-          # from disk rather than from the search list, so an orphan that was
-          # unlisted but not deleted is still caught. Scoped to $TMPDIR, so a
-          # login/system keychain is never touched — electron-builder's own
-          # root-certs keychain lives under ~/Library/Caches and is likewise
-          # out of range. See the block comment above: this sweep is retained
-          # but unproven, and the path is derived from the project directory,
-          # not the signing cert.
-          drop_temp_keychains() {
-            { find "${TMPDIR:-/tmp}" -maxdepth 1 -name '*.keychain*' 2>/dev/null || true; } |
-              while read -r kc; do
-                echo "removing orphaned keychain: $kc"
-                security delete-keychain "$kc" || true
-              done
-          }
-
-          # Before attempt 1 as well: a temp keychain predating this step is the
-          # only way a first attempt on a fresh runner can hit the collision, so
-          # sweeping up front is what makes the next recurrence informative.
-          drop_temp_keychains
-          # Captured after the sweep, so the restore below can never re-add a
-          # path we just deleted.
-          ORIGINAL_KEYCHAINS=$(list_keychains)
-          echo "baseline keychain search list:"
-          echo "$ORIGINAL_KEYCHAINS"
-
-          for attempt in 1 2; do
-            echo "::group::electron-builder attempt $attempt of 2"
-            if npx electron-builder ${{ matrix.args }}; then
-              echo "::endgroup::"
-              exit 0
-            fi
-            echo "::endgroup::"
-            if [ "$attempt" -eq 2 ]; then
-              echo "::error::electron-builder failed on both attempts."
-              exit 1
-            fi
-            echo "::warning::electron-builder attempt $attempt failed — resetting keychain state and retrying once (see #320)."
-
-            # Sweep what this attempt orphaned, then put the search list back
-            # exactly as we found it. The restore is tidiness — delete-keychain
-            # drops the entry anyway — so `|| true` keeps it from failing the
-            # step under this step's `-e -o pipefail`: a retry that aborts
-            # before attempt 2 defeats the whole point of the retry.
-            drop_temp_keychains
-            # Word splitting is intended: one keychain path per argument.
-            # shellcheck disable=SC2086
-            security list-keychains -d user -s $ORIGINAL_KEYCHAINS || true
-            echo "search list restored to:"
-            list_keychains || true
-
-            sleep 15
-          done
-
+      # One plain step for all three platforms. The macOS keychain failure that
+      # once needed a retry leg here (#320, #327, #332) was an upstream defect:
+      # importCerts passed the .p12 import password to
+      # `security set-key-partition-list -k`, which wants the keychain's own
+      # password. macOS <= 26.5 never checked `-k`; the runner image roll to
+      # 26.6.2 started rejecting it. Fixed in app-builder-lib 26.16.1, which
+      # `package.json` pins exactly. Keep it exact — not because a caret is
+      # unsafe in principle (`^26.16.1` resolves forward to the fix today),
+      # but because nothing gates a regression: `check.yml` packages `zip`
+      # with `--publish never` and never touches the signing path, so a later
+      # in-range 26.x that broke the same call would reach a release
+      # unexercised. If it is ever widened, the range must admit nothing
+      # below 26.16.1: npm resolves a range to the `latest` dist-tag whenever
+      # `latest` satisfies it, in preference to any higher in-range version,
+      # which is why `^26.8.1` — the range this replaced — resolved backwards
+      # onto 26.15.3. As of 2026-09 `latest` is 26.15.3, the fix ships only
+      # on the `v26` tag, and 26.15.4 through 26.16.0 are unfixed as well.
       - name: Package
-        if: matrix.platform != 'mac'
         run: npx electron-builder ${{ matrix.args }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -275,18 +201,22 @@ jobs:
             cat <<'EOF'
           ## Before you re-run this
 
-          `softprops/action-gh-release` defaults to `make_latest: true`. If a **newer** version has
-          been released since this run failed, re-running it publishes the older version afterwards
-          and marks **it** Latest — offering live users a downgrade through `electron-updater`.
+          **First ask where the cause lives, not whether a release is newer.** A re-run replays the
+          workflow *and the repo state* from this run's commit — `GITHUB_SHA` is pinned, so no fix
+          landed on `main` afterwards can ever reach it.
 
-          Check `gh release list` first:
+          - **Transient cause** (upload blip, registry timeout, runner hiccup) → re-running can
+            recover it, subject to the `make_latest` check below.
+          - **Cause lives in the repo** (a bad dependency, a broken build or workflow, a packaging
+            config error) → **a re-run cannot fix it.** Fix it on `main` and ship the fix; if the
+            fix touches `package.json` it cuts a release on merge, which recovers this untagged
+            version without spending a new number. See #332 for a worked example.
 
-          - Nothing newer released yet → re-run the failed jobs; the release is recoverable.
-          - A newer release already exists → **do not re-run.** Leave the version gap. The commit's
-            code ships in the later release; a late rerun is not safe.
-
-          The macOS keychain-unlock flake (#320) is the known cause; the mac packaging step already
-          retries once, so a mac failure here means both attempts failed.
+          Then, for the transient class only: `softprops/action-gh-release` defaults to
+          `make_latest: true`. If a **newer** version has been released since this run failed,
+          re-running publishes the older version afterwards and marks **it** Latest — offering live
+          users a downgrade through `electron-updater`. Check `gh release list`; if something newer
+          exists, **do not re-run.** Leave the gap — the commit's code ships in the later release.
           EOF
           } > issue-body.md
 

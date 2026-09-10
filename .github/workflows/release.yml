@@ -111,13 +111,14 @@ jobs:
       # `security set-key-partition-list -k`, which wants the keychain's own
       # password. macOS <= 26.5 never checked `-k`; the runner image roll to
       # 26.6.2 started rejecting it. Fixed in app-builder-lib 26.16.1, which
-      # `package.json` pins exactly. Keep it exact until `npm view
-      # electron-builder dist-tags` reports `latest` at 26.16.1 or newer: npm
-      # resolves a range to the `latest` dist-tag whenever `latest` satisfies
-      # it, in preference to any higher in-range version, so while `latest`
-      # trails the fix any range that admits it resolves backwards onto an
-      # unfixed build. As of 2026-09 `latest` is 26.15.3 and the fix is only
-      # on the `v26` tag.
+      # `package.json` pins exactly. Widening is safe only for a range that
+      # admits nothing below 26.16.1 (`^26.16.1` qualifies; `^26.8.1`, the
+      # range this replaced, does not): npm resolves a range to the `latest`
+      # dist-tag whenever `latest` satisfies it, in preference to any higher
+      # in-range version, so a range reaching below the fix can resolve
+      # backwards onto a build without it. As of 2026-09 `latest` is 26.15.3
+      # and the fix ships only on the `v26` tag, and 26.15.4 through 26.16.0
+      # are published and unfixed as well.
       - name: Package
         run: npx electron-builder ${{ matrix.args }}
         env:

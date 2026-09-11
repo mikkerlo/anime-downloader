@@ -905,7 +905,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // "Reached the element" is the narrow half, and deliberately so. The
     // revision is bumped in the *enactment block* of `applyRemoteStateToElement`
-    // (:1393-1396); #240 parks a state above that call whenever the element is
+    // (:1399-1402); #240 parks a state above that call whenever the element is
     // missing or below HAVE_METADATA, and `recordRemoteState` updates only the
     // room mirror and the badge. So a room pause landing in exactly the window a
     // `restore` lives in — between the source swap and its `play` echo — does
@@ -914,7 +914,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // "The revision is bumped where intent is written" stopped being the way to
     // say that at #331: two sites in `applyRemoteStateToElement` now write
     // intent and only the enactment block's bumps. The narrow adoption above the
-    // early-out (:1320) deliberately does not, so a room state that reaches the
+    // early-out (:1326) deliberately does not, so a room state that reaches the
     // element half by the no-op path writes intent without superseding anything
     // — the argument for that omission is at :1260-1273, and
     // `does not supersede a queued restore across a run of no-op applies (#331)`
@@ -1298,15 +1298,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // unguarded write here would clobber the user's own pause on that frame.
     //
     // That term covers the **pre-adoption** half of a user pause and only that
-    // half: the hold arms under `playbackAdopted !== true` (:1847), so a press
+    // half: the hold arms under `playbackAdopted !== true` (:1853), so a press
     // made after adoption arms nothing and `holding` is false here. What covers
     // the same shape post-adoption is main, not this line — `sendLocalState`
     // bumps `clientIgnoreCounter`/`pendingClientAck` on the discrete pause
     // (`syncplay.ts:884-885`) and `handleState` drops every inbound state while
-    // that ack is outstanding (`syncplay.ts:2098-2100`, cleared only by the
-    // frame that echoes the counter back, `syncplay.ts:1793`), so the playing
-    // state that crossed the press on the wire never reaches here. The split is
-    // named at the arming site (:1792-1795) and from main's end
+    // that ack is outstanding (`syncplay.ts:2098-2100`), so the playing state
+    // that crossed the press on the wire is dropped rather than applied. The ack
+    // is normally cleared by the frame that echoes the counter back
+    // (`syncplay.ts:1793`) — but not only: a server-forced State zeroes it
+    // unconditionally (`syncplay.ts:1782`), above the `localChangeAcked` read at
+    // `syncplay.ts:1972`, so such a frame clears the ack and passes the drop
+    // guard in the same `handleState` call. That is the ~1 RTT of lost echo
+    // protection `syncplay.ts:1774-1781` accepts by name; in that window the
+    // cover is a trade-off rather than a guarantee. The split is
+    // named at the arming site (:1798-1801) and from main's end
     // (`syncplay.ts:543-546`), but not where a reader of `!holding` needs it: the
     // gap would be this same defect mirrored — such a state arriving with one
     // peer not ready has `effectivePaused === v.paused === true`, so it is a
@@ -1463,14 +1469,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // hold is waiting for"), and a gate here contradicted it.
     //
     // The gate never withheld a payload in any case, only delayed one: the 1 s
-    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2023) is
+    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2029) is
     // unconditional and `pushSyncplaySnapshot` has no `holding` term of its
     // own, so the identical snapshot reached main within a second regardless.
     // Dropping it is a latency change, not a semantic one.
     //
     // Nor is the held payload a lie about the room: `intentOr(v)` reads
-    // `intendedPaused`, which `onLocalPause` sets to `true` (:1766) *above* its
-    // `armPendingUserPause()` (:1850). So a push under a hold announces the
+    // `intendedPaused`, which `onLocalPause` sets to `true` (:1772) *above* its
+    // `armPendingUserPause()` (:1856). So a push under a hold announces the
     // user's own pause at the position this apply just wrote — never the room's
     // resume, which the intent adoption above declines to adopt. `holding` is
     // false for every paused state by construction, so a room resume is the

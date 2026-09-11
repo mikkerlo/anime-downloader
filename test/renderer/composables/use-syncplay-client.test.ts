@@ -3332,10 +3332,12 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   })
 
   // The other half of the supersession rule, characterized rather than claimed:
-  // a *parked* remote state does not supersede. The revision is bumped where
-  // intent is written, inside `applyRemoteStateToElement`, and #240 parks the
-  // state above that call — so a room pause landing in exactly the window a
-  // `restore` lives in leaves the restore current, and it writes its resume.
+  // a *parked* remote state does not supersede. The revision is bumped in the
+  // enactment block of `applyRemoteStateToElement` — since #331 that is the
+  // narrower claim it has to be, the adoption above the early-out writing intent
+  // without bumping — and #240 parks the state above that call, so a room pause
+  // landing in exactly the window a `restore` lives in leaves the restore
+  // current, and it writes its resume.
   // This is the residual the comment on `applyConsumedPlaybackIntent` names;
   // bumping the revision in `recordRemoteState` instead would supersede nearly
   // every restore at 1 Hz, which is worse. What bounds it is asserted below.

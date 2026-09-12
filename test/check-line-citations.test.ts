@@ -111,6 +111,54 @@ describe('check-line-citations', () => {
     expect(r.resolved[0].target).toBe('src/target.ts')
   })
 
+  it('resolves a unique path suffix but fails a wrong directory', () => {
+    // The suffix filter is what makes `dir/target.ts:3` checkable at all, and
+    // what lets an anchor stay inside its paragraph instead of running to 130
+    // columns. Its other half is that a wrong directory must NOT quietly fall
+    // back to a unique basename: the gate's advice when the pin rises ("give it
+    // a path the gate can resolve") is only sound if a typo'd directory reds.
+    const ok = run({ 'src/dir/target.ts': TARGET, 'src/caller.ts': '// see dir/target.ts:3' })
+
+    expect(ok.failures).toEqual([])
+    expect(ok.resolvedUniqueBasename).toBe(1)
+    expect(ok.resolved[0].target).toBe('src/dir/target.ts')
+
+    const bad = run(base({ 'src/caller.ts': '// see src/wrong/target.ts:3' }))
+
+    expect(bad.resolved).toEqual([])
+    expect(bad.failures[0]).toMatchObject({
+      cited: 'src/wrong/target.ts:3',
+      why: 'no such file in this repo'
+    })
+  })
+
+  it('scans repo-root files under the `.` root', () => {
+    // Six named directories cannot reach a file with no directory component,
+    // and the root holds the architecture index and the rules file — prose
+    // *about* paths. An anchor there used to be invisible twice over: unchecked,
+    // and absent from the uncheckable pin, so the gate printed OK.
+    const corpus = base({ 'DESIGN.md': 'the mirror election (src/target.ts:999)' })
+
+    const named = run(corpus)
+    expect(named.scannedCount).toBe(1)
+    expect(named.failures).toEqual([])
+
+    const withRoot = analyze({
+      files: Object.keys(corpus),
+      readLines: (p: string) => corpus[p].split('\n'),
+      scanRoots: ['.', 'src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+
+    expect(withRoot.scannedCount).toBe(2)
+    expect(withRoot.failures).toHaveLength(1)
+    expect(withRoot.failures[0]).toMatchObject({
+      at: 'DESIGN.md:1',
+      cited: 'src/target.ts:999',
+      why: 'src/target.ts has 8 lines'
+    })
+  })
+
   it('counts a basename two tracked files carry instead of guessing', () => {
     const r = run({
       'src/main/dup.ts': TARGET,
@@ -143,6 +191,21 @@ describe('check-line-citations', () => {
 
     expect(r.pathless).toEqual([])
     expect(r.uncheckable).toBe(0)
+  })
+
+  it('does not count a JSON value or a stream selector as a pathless anchor', () => {
+    // A fifth of the first pin measured these: wire transcripts quoted verbatim
+    // in docs, and a `${sel}:0` ffmpeg selector. Nothing can be spelled out to
+    // fix one, so counting them means a new transcript line reds the gate with
+    // advice its author cannot follow. A backtick- or paren-wrapped anchor in
+    // the same file still counts, which is the half that has to keep working.
+    const r = run({
+      'docs/wire.md': '`{"playstate":{"position":20.998,"paused":false}}` then the gate at `:296`',
+      'src/caller.ts': '// ffmpeg map is `${sel}:0`, and the early-out (:1326) skips it'
+    })
+
+    expect(r.pathless.map((p) => p.anchor)).toEqual([':296', ':1326'])
+    expect(r.uncheckable).toBe(2)
   })
 
   it('treats an extension this repo does not contain as unresolvable, not missing', () => {

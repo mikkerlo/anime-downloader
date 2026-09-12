@@ -136,7 +136,10 @@ a matching preload binding — so deleting a handler or binding fails the build.
 `quality` job between `check:subscription-contract` and `test:coverage`) checks
 the `<path>:<line>` anchors written in comments and docs prose. Nothing else in
 the job reads a number inside a comment, so before #336 these were repaired by
-hand after the fact — four PRs' worth.
+hand after the fact — four PRs' worth. It scans `src`, `test`, `docs`, `e2e`,
+`scripts`, `.github` and the repo root — the root because `DESIGN.md` and
+`CLAUDE.md` are prose about paths, and an unscanned file is invisible twice over:
+its anchors are neither checked nor counted, so the gate prints OK.
 
 It **fails** on an anchor whose path does not exist, whose line is past EOF, or
 whose range starts after it ends. Whether the cited line *means* what the prose
@@ -157,8 +160,24 @@ tests* above:
   `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that
   inherit their path from a neighbouring line. Neither can be resolved, so the
   pin bounds how much the gate is blind to. Adding one reds the build; the fix
-  is almost always to spell the repo-relative path out rather than raise the
+  is almost always to give the anchor a resolvable path rather than raise the
   number.
+
+**Write the shortest path suffix only one file matches.** The resolver accepts
+any unique suffix of a tracked path, and checks it exactly as it checks a full
+one — `composables/use-syncplay-client.ts` resolves, and a wrong directory fails
+as a missing file rather than falling back to the basename. The full
+repo-relative path is always correct and is what a repair should reach for when
+the line has room; when it does not, a leading directory or two keeps the anchor
+inside its paragraph instead of pushing a comment past 130 columns, and if that
+suffix ever stops being unique the anchor lands in the uncheckable pin and reds
+— it does not go quiet.
+
+A quote or a closing brace before a `:NNN` is not an anchor: the Syncplay wire
+transcripts in `docs/syncplay.md` quote JSON whose values parse as pathless
+anchors, and there is nothing to spell out in a `"position"` value. Counting
+them meant the pin partly measured non-citations, and appending a transcript
+line redded the gate with advice its author could not follow.
 
 Citations to files outside the repo pass because their extension is one this
 repo does not contain — that rule, not a filename allowlist, is also what keeps

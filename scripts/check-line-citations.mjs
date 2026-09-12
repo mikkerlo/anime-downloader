@@ -41,11 +41,21 @@ export const SUSPICIOUS_LANDING_PIN = 0
 // that resolves everything and passes are otherwise indistinguishable. Adding
 // an anchor the gate cannot see reds this, and the fix is almost always to
 // spell the path out rather than to raise the number.
-export const UNCHECKABLE_PIN = 100
+//
+// 11 ambiguous basenames + 70 pathless anchors on this tree.
+export const UNCHECKABLE_PIN = 81
 
 // --- configuration ------------------------------------------------------------
 
-export const SCAN_ROOTS = ['src', 'test', 'docs', 'e2e', 'scripts', '.github']
+// `'.'` is the repo root itself — files with no directory component, which a
+// list of named directories cannot reach. The root holds the two most
+// anchor-prone prose files in the repo (the architecture index and the rules
+// file), and an anchor there is worse than unchecked: it does not enter the
+// uncheckable pin either, so the gate prints OK, no pin moves, and nobody
+// learns it exists. Naming the root files individually would rot the first time
+// a root doc is added, so the root is a root instead. Nine root files join the
+// scan under this arm and none carries an anchor today.
+export const SCAN_ROOTS = ['.', 'src', 'test', 'docs', 'e2e', 'scripts', '.github']
 
 // `src/renderer/public/` is vendored minified libass: noise under any rule, and
 // its worker bundles carry `node.id:1` tokens that match the citation shape
@@ -99,8 +109,15 @@ const CITATION = /\b([A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,4}):(\d
 // while carrying a stale citation — three of this PR's own repair rows were
 // written this way. Resolving them as "same file as the last anchor" is out of
 // scope; counting them is not. Anchored on a preceding non-path character so
-// `localhost:3000` and `12:30` do not match.
-const PATHLESS = /(^|[^A-Za-z0-9_./\\:-]):(\d+)(?:-(\d+))?\b/g
+// `localhost:3000` and `12:30` do not match — and not a quote or a closing
+// brace either, because `"position":20.99` inside a wire transcript is not an
+// anchor and nothing can be spelled out to fix it. That was 19 of the 89 this
+// pattern used to count: 17 JSON values in the Syncplay protocol transcripts
+// under docs/syncplay.md, one ffmpeg stream selector and one TLS fixture
+// buffer. A pin a fifth of which measures non-citations does not bound the
+// gate's blindness, and the next transcript line appended to those docs would
+// have redded the build with advice its author could not follow.
+const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
 
 // --- analysis -----------------------------------------------------------------
 
@@ -129,7 +146,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   return null
 }
 
-const underRoot = (p, roots) => roots.some((r) => p === r || p.startsWith(r + '/'))
+const underRoot = (p, roots) =>
+  roots.some((r) => (r === '.' ? !p.includes('/') : p === r || p.startsWith(r + '/')))
 
 /**
  * @param {object} opts
@@ -326,8 +344,11 @@ export function report(r, pins = {}) {
     if (r.uncheckable > uncheckablePin) {
       err.push(
         '',
-        'If you added an anchor: spell the repo-relative path out in full, so it is',
-        'checked rather than counted. Raise the pin only if you cannot.'
+        'If you added an anchor: give it a path the gate can resolve, so it is',
+        'checked rather than counted — the full repo-relative path, or the shortest',
+        'suffix of it only one tracked file matches (a leading directory or two is',
+        'usually enough). A bare basename two files carry is what lands here. Raise',
+        'the pin only if you cannot.'
       )
       if (r.ambiguous.length > 0) {
         err.push('', 'Ambiguous basenames:')

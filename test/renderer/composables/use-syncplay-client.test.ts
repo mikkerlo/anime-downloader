@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `use-syncplay-client.ts:480` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2029` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -2844,7 +2844,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
   // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
   // *also* true at the ordinary end of an episode where every peer holds the
   // same file: main emits `position + serverRtt / 2` for a playing room
-  // (`src/main/syncplay.ts:1636`), so the last state or two before our own end
+  // (`src/main/syncplay.ts:2115`), so the last state or two before our own end
   // already read past `duration`. Nothing is refused that the user can see — the
   // room is well inside the 3 s tolerance, so no seek was suppressed — and the
   // message would land in the middle of the 5 s next-episode countdown, on every
@@ -2879,7 +2879,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     })
 
     // A periodic, not a seek: main's heartbeat sends `doSeek: false`
-    // (`syncplay.ts:2199`), and only a genuine room seek sets the bit.
+    // (`src/main/syncplay.ts:2202`), and only a genuine room seek sets the bit.
     emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
 
     expect(client.syncplayToast.value).toBe('')

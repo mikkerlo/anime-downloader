@@ -476,7 +476,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // else: emitting any of it would make `hasRemoteStateApplied()` true, let
     // `roomOwnsPlayhead()` eat the saved position on every solo episode open,
     // and make `getRoomPosition()` answer from our own echo — the regression
-    // pinned at `syncplay-room-position.test.ts:143`.
+    // pinned at `test/services/syncplay-room-position.test.ts:173`.
     run(8, () => null)
 
     expect(solo.getStatus().playbackAdopted).toBe(false)

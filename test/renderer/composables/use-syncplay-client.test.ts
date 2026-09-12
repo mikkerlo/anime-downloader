@@ -3332,10 +3332,12 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   })
 
   // The other half of the supersession rule, characterized rather than claimed:
-  // a *parked* remote state does not supersede. The revision is bumped where
-  // intent is written, inside `applyRemoteStateToElement`, and #240 parks the
-  // state above that call — so a room pause landing in exactly the window a
-  // `restore` lives in leaves the restore current, and it writes its resume.
+  // a *parked* remote state does not supersede. The revision is bumped in the
+  // enactment block of `applyRemoteStateToElement` — since #331 that is the
+  // narrower claim it has to be, the adoption above the early-out writing intent
+  // without bumping — and #240 parks the state above that call, so a room pause
+  // landing in exactly the window a `restore` lives in leaves the restore
+  // current, and it writes its resume.
   // This is the residual the comment on `applyConsumedPlaybackIntent` names;
   // bumping the revision in `recordRemoteState` instead would supersede nearly
   // every restore at 1 Hz, which is worse. What bounds it is asserted below.
@@ -5062,20 +5064,30 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
   // does. The path keeps the old one-heartbeat residual, deliberately and
   // knowingly; #324 does not close it.
   //
-  // It is reachable, which is why it is worth pinning. An element paused by an
-  // *echo* operation — an MSE buffer refill, the ready gate's down-arm — leaves
-  // `intendedPaused` at `false`: `onLocalPause` consumes the op and
-  // `applyConsumedPlaybackIntent` returns on `kind === 'echo'` without writing
-  // intent. A room pause arriving then has `effectivePaused === v.paused`, so
-  // `needsPlayPause` is false, and the 1 Hz interval keeps pushing
-  // `paused: false` into a paused room until something else moves.
+  // The *value* pushed on this path was a separate defect, fixed in #331 and
+  // pinned by its own describe block at the end of this file — this case pins
+  // the push's placement and nothing about the payload.
   //
-  // That is a live bug and it is tracked in #331, not only here — this case
-  // pins the *push*'s placement, not the staleness. The fix cannot be the
-  // hoist: hoisting the push re-sends the same stale `intentOr()`, and hoisting
-  // the *intent adoption* is blocked by `refusingResume`, which is folded into
-  // `needsPlayPause` precisely so this early-out still fires (#281). So this
-  // case stays green through #331's fix; only the paragraph above changes.
+  // It was reachable, which is why it is worth pinning both. An element paused
+  // by an *echo* operation — an MSE buffer refill, the ready gate's down-arm —
+  // leaves `intendedPaused` **unchanged**: `onLocalPause` consumes the op and
+  // `applyConsumedPlaybackIntent` returns on `kind === 'echo'` without writing
+  // intent. "Unchanged" is only a lie about a paused element once something has
+  // already established intent as `false` (the user's Play, or an earlier apply
+  // that reached the enactment block) — from the initial `null`, `intentOr()`
+  // falls back to the element's own `true`, so the precondition is required
+  // rather than automatic. Given it, a room pause arriving then has
+  // `effectivePaused === v.paused`, `needsPlayPause` is false, and the 1 Hz
+  // interval announced `paused: false` into a paused room. Not indefinitely:
+  // main asserted it, the server un-paused the room, and
+  // `recordRemoteState()`'s unconditional `syncplayLastRemotePlaying` write then
+  // flipped the mirror the divergence depended on — one un-pause that stuck.
+  //
+  // The fix could not be the hoist: hoisting the push re-sends the same stale
+  // `intentOr()`, and hoisting the *intent adoption* wholesale is blocked by
+  // `refusingResume`, which is folded into `needsPlayPause` precisely so this
+  // early-out still fires (#281). #331 wrote intent above the early-out under
+  // `!outOfFile && !holding` instead, which is why this case is still green.
   it('pushes nothing when the apply moves neither the playhead nor playback', async () => {
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
@@ -5152,5 +5164,255 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 
     expect(sendSnapshot).toHaveBeenCalledTimes(1)
     expect(sendLocalState).not.toHaveBeenCalled()
+  })
+})
+
+// #324 closed the *racing* half of the stale-assert family. This is the half it
+// left open, and the worse-shaped one: the value the 1 Hz interval pushes is
+// itself wrong, so nothing self-corrects on the next heartbeat.
+//
+// The mechanism. `applyRemoteStateToElement` used to return at
+// `if (!needsSeek && !needsPlayPause) return` *above* its intent adoption, so an
+// apply the element already agrees with adopted nothing — while
+// `pushSyncplaySnapshot` announces `intentOr(v)`, i.e. `intendedPaused`, not
+// `v.paused`. Every pause the app makes on its own behalf is an `echo` operation
+// and establishes no intent, so a readiness-gate down-arm pauses the element and
+// leaves `intendedPaused` at whatever a prior establishing write left there. With
+// that write being `false`, a room pause then early-outs and the interval
+// announces `paused: false` into the room the user just paused — and the server
+// acts on it, which is what makes this a lost pause rather than a 1 Hz lie.
+//
+// The fix is a narrow adoption above the early-out under `!outOfFile && !holding`
+// with no `intentRevision++`. Every case below pins one term of that, and the
+// first is the one that goes red if the adoption is removed.
+describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)', () => {
+  const NOT_READY: SyncplayRoomUser[] = [{ username: 'peer', file: null, isReady: false }]
+
+  // The element really stops, and the composable's own pause path then runs
+  // against it exactly as the `pause` event would drive it.
+  const pausedByUser = (v: HTMLVideoElement, client: Client): void => {
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+  }
+
+  // The readiness gate's down-arm: it registers an `echo` pause and calls
+  // `v.pause()`, and the element's `pause` event then consumes that operation
+  // without establishing intent. The fake's `pause` is a mock, so the test
+  // flips `paused` the way the real element would.
+  const echoPausedByGate = (v: HTMLVideoElement, client: Client): void => {
+    client.syncplayRoomUsers.value = NOT_READY
+    client.applySyncplayReadyGate()
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+  }
+
+  // The headline regression, and the only case here that goes red if the
+  // adoption above the early-out is removed: without it the push below carries
+  // `paused: false` into a room the user paused.
+  //
+  // The precondition is explicit and load-bearing. `intendedPaused` starts at
+  // `null`, and from `null` `intentOr()` falls back to the element's own `true`
+  // — so a setup that drives the gate without establishing intent first passes
+  // on the old behaviour too, for the fallback's reason. The writer used here is
+  // `onLocalPlay`'s `intendedPaused = false`: the user pressed Play, which is
+  // the ordinary state of a room that has been watching anything.
+  //
+  // `readyState` is 1 throughout, or `hasAnnounceablePosition` would return
+  // above the push and the case would pass because nothing was pushed at all.
+  it('pushes the room’s pause, not a stale play, after an echo-paused element (#331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // 1. Intent is established as `false` — the user's own Play.
+    client.onLocalPlay()
+
+    // 2. A peer goes not-ready and the gate echo-pauses us. Intent is untouched:
+    //    `applyConsumedPlaybackIntent` returns on `kind === 'echo'`.
+    echoPausedByGate(v, client)
+
+    // 3. The room pauses. `effectivePaused` and `v.paused` already agree and the
+    //    position is inside the 3 s tolerance, so this apply moves nothing and
+    //    takes the early-out — which is still true after the fix, and still
+    //    pushes nothing of its own.
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 100.5, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.currentTime).toBe(100)
+    expect(sendSnapshot).not.toHaveBeenCalled()
+
+    // 4. The 1 Hz interval is the only corrector on this path (#227: a paused
+    //    element fires no `timeupdate`). On the old behaviour it announced
+    //    `paused: false` here, main asserted it, and the room came back playing.
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: true })
+  })
+
+  // The companion that keeps the case above honest about its own setup: the same
+  // drive with the establishing Play removed. Green before the fix through
+  // `intentOr()`'s `null` fallback and green after it through the adoption, so
+  // it must not be read as "the write is what makes the value correct".
+  it('pushes the room’s pause from unestablished intent too, by fallback (#331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    echoPausedByGate(v, client)
+
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 100.5, paused: true, doSeek: false, setBy: 'peer' })
+    vi.advanceTimersByTime(1000)
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: true })
+  })
+
+  // The `!outOfFile` term, which is deliberately broader than `!refusingResume`:
+  // any intent write above the early-out is unsafe for the whole out-of-file
+  // divergence, not only for the frames the refusal is actually firing on. The
+  // first half of this case exercises the refusal itself and is green under
+  // either guard; the second half — one peer not ready, which makes
+  // `effectivePaused` true and `refusingResume` consequently false while
+  // `outOfFileUserPause` is still armed — is the only assertion that reds if the
+  // guard is ever narrowed to match a prose description of the refusal.
+  it('leaves an out-of-file user pause alone across a 1 Hz stream of room resumes (#281, #331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 300,
+      duration: 1440,
+      paused: false
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: false,
+      outOfFile: true
+    })
+
+    // The user pauses while the room is past the end of our file, so
+    // `outOfFileUserPause` arms and the room may no longer resume us.
+    pausedByUser(v, client)
+
+    // A restore queued after that press — the press bumps the revision itself,
+    // so a restore queued before it is legitimately superseded and would pin
+    // nothing. If anything *below* bumps `intentRevision`, this operation is
+    // superseded and writes nothing when it is finally consumed. That is how the
+    // revision is read from outside.
+    client.beginProgrammaticPlayback('play', 'restore')
+
+    // The room's 1 Hz playing states, refused for the whole divergence. Read the
+    // pushed payload after *each* one: a per-apply clobber can hide between two
+    // reads of the final value.
+    sendSnapshot.mockClear()
+    for (let i = 0; i < 3; i++) {
+      emitRemoteState({ position: 3000 + i, paused: false, doSeek: false, setBy: 'peer' })
+      vi.advanceTimersByTime(1000)
+    }
+    expect(v.play).not.toHaveBeenCalled()
+    expect(sendSnapshot).toHaveBeenCalledTimes(3)
+    expect(sendSnapshot.mock.calls.every((c) => c[0].paused === true)).toBe(true)
+
+    // The fifth assertion: one peer not ready makes `effectivePaused` true, so
+    // the refusal predicate goes false while the marker stays armed. Still an
+    // early-out — nothing resumed us, because the gate's resume arm needs
+    // `!outOfFileUserPause` too — and still the user's pause on the wire.
+    client.syncplayRoomUsers.value = NOT_READY
+    sendSnapshot.mockClear()
+    for (let i = 0; i < 3; i++) {
+      emitRemoteState({ position: 3010 + i, paused: false, doSeek: false, setBy: 'peer' })
+      vi.advanceTimersByTime(1000)
+    }
+    expect(v.play).not.toHaveBeenCalled()
+    expect(sendSnapshot).toHaveBeenCalledTimes(3)
+    expect(sendSnapshot.mock.calls.every((c) => c[0].paused === true)).toBe(true)
+
+    // And the revision never moved: the restore queued at the top is still
+    // current, so its `play` event writes its resume.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 300, paused: false })
+  })
+
+  // The `!holding` term, built against the shape that actually reaches it rather
+  // than defensively. An MSE buffer refill pauses the element; a user pause
+  // landing inside that window arms the hold with `intendedPaused = true`; the
+  // refill's re-play on the way out returns `v.paused` to false through a `play`
+  // consumed as an `echo`, which establishes nothing, so the hold survives. The
+  // next playing-room heartbeat then has `effectivePaused === v.paused === false`
+  // and early-outs — and an unguarded write there would announce the room's
+  // resume over the user's own pause.
+  it('honours a pending user pause on the no-op path (#228, #331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 200, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: false
+    })
+
+    // Pre-adoption, so the press arms the hold rather than relying on main.
+    pausedByUser(v, client)
+
+    // The refill's re-play: an `echo` play, consumed without establishing
+    // anything, which leaves the hold and `intendedPaused = true` standing while
+    // the element is moving again.
+    client.beginProgrammaticPlayback('play')
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    sendSnapshot.mockClear()
+    emitRemoteState({ position: 200.5, paused: false, doSeek: false, setBy: 'peer' })
+    vi.advanceTimersByTime(1000)
+
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 200, paused: true })
+  })
+
+  // The `intentRevision` decision, pinned directly so the next person to touch
+  // the adoption's neighbourhood cannot quietly add the bump. Bumping here would
+  // supersede essentially every queued `restore` and `episode-start` within a
+  // second of registration — at this site's ~1 Hz cadence — and a superseded
+  // operation writes nothing at all.
+  it('does not supersede a queued restore across a run of no-op applies (#331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.beginProgrammaticPlayback('play', 'restore')
+
+    // Four heartbeats of a paused room, every one of them a no-op apply that now
+    // writes intent.
+    for (let i = 0; i < 4; i++) {
+      emitRemoteState({ position: 100 + i * 0.1, paused: true, doSeek: false, setBy: 'peer' })
+    }
+
+    // The restore's own `play` event, still current: it writes its resume. Under
+    // a bump at the adoption site it would be superseded, write nothing, and the
+    // push below would carry the room's `true`.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: false })
   })
 })

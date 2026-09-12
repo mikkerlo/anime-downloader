@@ -143,10 +143,14 @@ describe('check-line-citations', () => {
     expect(named.scannedCount).toBe(1)
     expect(named.failures).toEqual([])
 
+    // No `scanRoots` here: `analyze` falls back to the exported `SCAN_ROOTS`,
+    // so this pins the `'.'` entry in the config as well as the arm in
+    // `underRoot` that reads it. Passing a list instead made the two separable,
+    // and deleting `'.'` from the constant then left every test green and the
+    // gate printing OK — a regression as silent as the bug it undoes.
     const withRoot = analyze({
       files: Object.keys(corpus),
       readLines: (p: string) => corpus[p].split('\n'),
-      scanRoots: ['.', 'src', 'docs', 'test'],
       excludedPaths: []
     }) as Result
 

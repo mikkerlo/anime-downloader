@@ -111,12 +111,12 @@ const CITATION = /\b([A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,4}):(\d
 // scope; counting them is not. Anchored on a preceding non-path character so
 // `localhost:3000` and `12:30` do not match — and not a quote or a closing
 // brace either, because `"position":20.99` inside a wire transcript is not an
-// anchor and nothing can be spelled out to fix it. That was 19 of the 89 this
-// pattern used to count: 17 JSON values in the Syncplay protocol transcripts
-// under docs/syncplay.md, one ffmpeg stream selector and one TLS fixture
-// buffer. A pin a fifth of which measures non-citations does not bound the
-// gate's blindness, and the next transcript line appended to those docs would
-// have redded the build with advice its author could not follow.
+// anchor and nothing can be spelled out to fix it. On this tree the looser
+// class counts 90 of these and this one 70; the 20 dropped are JSON values in
+// the transcripts under docs/syncplay.md, an ffmpeg stream selector, a TLS
+// fixture buffer, and this comment's own example. A pin a fifth of which
+// measures non-citations does not bound the gate's blindness, and appending
+// one more transcript line would have redded it with advice nobody can follow.
 const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
 
 // --- analysis -----------------------------------------------------------------

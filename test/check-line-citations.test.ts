@@ -1,0 +1,239 @@
+// Fixtures for the citation gate (#336). Each case drives `analyze()` over a
+// synthetic corpus rather than the real tree, so the assertions stay exact:
+// the real tree's counts are the gate's own pins and move with every repair.
+//
+// This file is in `EXCLUDED_PATHS`, and has to be. Its fixtures are citation
+// shapes on purpose — several are deliberately broken — so scanning it would
+// make the gate fail on its own test data.
+import { describe, it, expect } from 'vitest'
+
+// @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
+import { analyze, report } from '../scripts/check-line-citations.mjs'
+
+type Corpus = Record<string, string>
+
+type Result = {
+  scannedCount: number
+  resolved: { at: string; cited: string; target: string }[]
+  resolvedFullPath: number
+  resolvedUniqueBasename: number
+  unresolvableByExtension: number
+  failures: { at: string; cited: string; why: string }[]
+  suspicious: { at: string; cited: string; target: string; start: number; why: string }[]
+  ambiguous: { at: string; cited: string; candidates: string[] }[]
+  pathless: { at: string; anchor: string }[]
+  uncheckable: number
+}
+
+// Line 1 is a comment, 4 is blank, 6 is a bare `}`, 8 is a lone `)`, and 3, 5
+// and 7 are code. One target file covers every landing class the heuristic has.
+const TARGET = [
+  '// why the function exists',
+  'export function f(): number {',
+  '  const a = 1',
+  '',
+  '  return a',
+  '}',
+  'const g = (',
+  ')',
+  ''
+].join('\n')
+
+const run = (files: Corpus, excludedPaths: string[] = []): Result =>
+  analyze({
+    files: Object.keys(files),
+    readLines: (p: string) => files[p].split('\n'),
+    scanRoots: ['src', 'docs', 'test'],
+    excludedPaths
+  }) as Result
+
+const base = (extra: Corpus = {}): Corpus => ({ 'src/target.ts': TARGET, ...extra })
+
+describe('check-line-citations', () => {
+  it('resolves a full-path citation that lands on code', () => {
+    const r = run(base({ 'src/caller.ts': '// the increment (src/target.ts:3)' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([])
+    expect(r.resolvedFullPath).toBe(1)
+    expect(r.resolved[0]).toMatchObject({ cited: 'src/target.ts:3', target: 'src/target.ts' })
+  })
+
+  it('fails a citation past the end of the file', () => {
+    const r = run(base({ 'src/caller.ts': '// see src/target.ts:999' }))
+
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({
+      at: 'src/caller.ts:1',
+      cited: 'src/target.ts:999',
+      why: 'src/target.ts has 8 lines'
+    })
+  })
+
+  it('counts the last real line rather than the phantom one after the newline', () => {
+    // TARGET is newline-terminated, so splitting on '\n' yields a ninth, empty
+    // element. Counting it would put the EOF boundary one line too far out and
+    // report a line count nobody else agrees with.
+    const r = run(
+      base({ 'src/caller.ts': '// last line (src/target.ts:8)\n// past it (src/target.ts:9)' })
+    )
+
+    expect(r.resolved.map((x) => x.cited)).toEqual(['src/target.ts:8'])
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({ cited: 'src/target.ts:9' })
+  })
+
+  it('fails a citation to a path that does not exist', () => {
+    const r = run(base({ 'src/caller.ts': '// see src/renamed-away.ts:3' }))
+
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({
+      cited: 'src/renamed-away.ts:3',
+      why: 'no such file in this repo'
+    })
+  })
+
+  it('fails an inverted range', () => {
+    const r = run(base({ 'src/caller.ts': '// see src/target.ts:5-3' }))
+
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({
+      cited: 'src/target.ts:5-3',
+      why: 'range starts after it ends'
+    })
+  })
+
+  it('resolves a bare basename exactly one tracked file carries', () => {
+    const r = run(base({ 'src/caller.ts': '// the increment (target.ts:3)' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.resolvedUniqueBasename).toBe(1)
+    expect(r.resolved[0].target).toBe('src/target.ts')
+  })
+
+  it('counts a basename two tracked files carry instead of guessing', () => {
+    const r = run({
+      'src/main/dup.ts': TARGET,
+      'src/renderer/dup.ts': TARGET,
+      'src/caller.ts': '// see dup.ts:3'
+    })
+
+    // Neither resolved nor failed: resolving it would be a coin flip, and
+    // failing it would red the gate on a citation that is probably fine.
+    expect(r.failures).toEqual([])
+    expect(r.resolved).toEqual([])
+    expect(r.ambiguous).toHaveLength(1)
+    expect(r.ambiguous[0]).toMatchObject({
+      cited: 'dup.ts:3',
+      candidates: ['src/main/dup.ts', 'src/renderer/dup.ts']
+    })
+    expect(r.uncheckable).toBe(1)
+  })
+
+  it('counts a pathless anchor rather than silently ignoring it', () => {
+    const r = run(base({ 'src/caller.ts': '// and the guard just below (:42)' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.pathless).toEqual([{ at: 'src/caller.ts:1', anchor: ':42' }])
+    expect(r.uncheckable).toBe(1)
+  })
+
+  it('does not count the line number of a full citation as a pathless anchor too', () => {
+    const r = run(base({ 'src/caller.ts': '// see src/target.ts:3' }))
+
+    expect(r.pathless).toEqual([])
+    expect(r.uncheckable).toBe(0)
+  })
+
+  it('treats an extension this repo does not contain as unresolvable, not missing', () => {
+    const r = run(base({ 'src/caller.ts': "// upstream's election (server.py:597-604)" }))
+
+    expect(r.failures).toEqual([])
+    expect(r.unresolvableByExtension).toBe(1)
+    expect(r.uncheckable).toBe(0)
+  })
+
+  it('leaves a host:port that matches the citation shape alone', () => {
+    // `syncplay.pl:8999` is the default reference server and port. It parses as
+    // a citation under any path regex; the resolvable-extension rule is the only
+    // thing between it and a spurious failure.
+    const r = run(base({ 'src/caller.ts': '// default server is syncplay.pl:8999' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.unresolvableByExtension).toBe(1)
+  })
+
+  it('does not scan a file under an excluded path', () => {
+    const r = run(base({ 'src/vendor/bundle.js': '// see src/gone.ts:5 and node.id:1 and (:7)' }), [
+      'src/vendor/'
+    ])
+
+    expect(r.failures).toEqual([])
+    expect(r.pathless).toEqual([])
+    expect(r.scannedCount).toBe(1)
+  })
+
+  it('resolves a markdown target but exempts it from the landing heuristic', () => {
+    // Line 1 of the target is a comment and line 3 is blank — both would warn in
+    // a .ts file. In prose they are ordinary paragraph boundaries.
+    const r = run({
+      'docs/notes.md': '<!-- a note -->\nThe room mirror.\n\n',
+      'src/caller.ts': '// see docs/notes.md:1 and docs/notes.md:3'
+    })
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([])
+    expect(r.resolved).toHaveLength(2)
+  })
+
+  it('warns on a landing on a blank line, a bare brace, a lone paren or a comment', () => {
+    const r = run(
+      base({
+        'src/caller.ts': [
+          '// blank (src/target.ts:4)',
+          '// brace (src/target.ts:6)',
+          '// paren (src/target.ts:8)',
+          '// comment (src/target.ts:1)'
+        ].join('\n')
+      })
+    )
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious.map((s) => [s.start, s.why])).toEqual([
+      [4, 'blank line'],
+      [6, 'bare `}`'],
+      [8, 'bare `)`'],
+      [1, 'comment line']
+    ])
+  })
+
+  it('classifies a range by its start line only', () => {
+    // `src/target.ts:2-6` opens on a declaration and closes on a bare `}`. Three
+    // of the repair targets in this PR have exactly that shape, so judging a
+    // range by any line but its first would red the tree the repair just fixed.
+    const r = run(base({ 'src/caller.ts': '// the whole function (src/target.ts:2-6)' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([])
+    expect(r.resolved).toHaveLength(1)
+  })
+
+  it('reds on a broken anchor and goes green once it is repaired', () => {
+    const broken = run(base({ 'src/caller.ts': '// the increment (src/target.ts:993)' }))
+    expect(report(broken, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
+
+    const repaired = run(base({ 'src/caller.ts': '// the increment (src/target.ts:3)' }))
+    expect(report(repaired, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+  })
+
+  it('reds when a pin drifts in either direction, not just upward', () => {
+    const r = run(base({ 'src/caller.ts': '// blank (src/target.ts:4)' }))
+
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
+    // Pinned at the measured value: a real but deliberate landing.
+    expect(report(r, { suspiciousLanding: 1, uncheckable: 0 }).ok).toBe(true)
+    // And a pin left behind by a repair that removed the landing reds too, so a
+    // stale pin cannot quietly license a new one.
+    expect(report(run(base()), { suspiciousLanding: 1, uncheckable: 0 }).ok).toBe(false)
+  })
+})

@@ -165,6 +165,12 @@ jobs:
 
       - run: npm run check:subscription-contract
 
+      # `<path>:<line>` citations in comments and docs prose: fails on an anchor
+      # that cannot resolve, and pins the count of anchors that land on a blank
+      # line, a brace or a comment — the shape a stale one almost always takes
+      # (#336). Nothing else in this job reads a number inside a comment.
+      - run: npm run check:line-citations
+
       # Runs the full unit + integration suite with coverage instrumentation;
       # per-seam thresholds in vitest.config.ts fail the build on regression
       # (Phase 7, #140).

@@ -903,7 +903,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     // the server the room is wrong; execution then falls past the drop guards
     // and hands the renderer that same contradicted position, which the
     // renderer applies because the difference exceeds its 3 s tolerance
-    // (use-syncplay-client.ts:585-586). Two quick arrow presses is the user
+    // (src/renderer/src/composables/use-syncplay-client.ts:1202). Two quick arrow presses is the user
     // report: the second lands inside the server's ignore window and is
     // discarded, and the periodic that closes the window carries the room still
     // at the first press.
@@ -1216,7 +1216,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // review): if the session's *first* foreign frame lands inside the window,
       // `lastRemoteRoomState` is never seeded at all and `getRoomPosition()`
       // answers `null` for the life of the intent — read by the MKV spawn seed
-      // (#262) and #276's join seed through src/main/ipc/syncplay.ipc.ts:73.
+      // (#262) and #276's join seed through src/main/ipc/syncplay.ipc.ts:86-88.
       // Bounded by SEEK_REASSERT_TTL_MS, and a spawn needs a new player, which
       // clears the intent — but it is "never seeded", not "ages".
       it('leaves getRoomPosition() null when the window covers the first foreign frame', () => {

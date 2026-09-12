@@ -297,7 +297,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // then resumes*. The latch survives the silence only because nothing runs
   // while a client is silent; the first resumed push is what touches it. It
   // lands in `updateSnapshot()` with `hasLivePlayback()` already false, so
-  // `syncplay.ts:770-776` clears `playbackAdopted` and nulls `seekIntent`
+  // `src/main/syncplay.ts:902-908` clears `playbackAdopted` and nulls `seekIntent`
   // before seating the snapshot — deliberately, since a push after a stale gap
   // is a fresh element under a byte-identical canonicalName that `setFile()`'s
   // identity check cannot see. So recovery here is de-adopt → spectator mirror

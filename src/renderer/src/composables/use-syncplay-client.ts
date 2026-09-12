@@ -1461,7 +1461,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // Unconditional, a hold included. The seek write above carries no `holding`
     // term — under a hold we still move the element to the room's position —
     // and main's adoption latch is a test on exactly that quantity:
-    // `isAdopted()` (syncplay.ts:2596) is
+    // `isAdopted()` (src/main/syncplay.ts:2596) is
     // `|snapshot.position - projectedRoomPosition(room)| <= ADOPT_TOLERANCE_S`.
     // So gating the push withheld the position announcement in precisely the
     // pre-adoption window the hold exists to shorten. That is the seek half's

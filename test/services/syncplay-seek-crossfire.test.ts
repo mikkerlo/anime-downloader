@@ -102,7 +102,7 @@ class LaggyElement {
     return this.position + (Date.now() - this.at) / 1000
   }
 
-  /** The renderer's apply rule, verbatim (use-syncplay-client.ts:585-586). */
+  /** The renderer's apply rule, verbatim (src/renderer/src/composables/use-syncplay-client.ts:1202). */
   apply(state: SyncplayRemoteState): boolean {
     if (!state.doSeek && Math.abs(this.currentTime() - state.position) <= 3) return false
     this.seekTo(state.position)

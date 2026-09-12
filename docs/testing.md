@@ -130,6 +130,42 @@ notes in that test file.
 referenced as a symbol on both sides, has a registered `ipcMain.handle`, and has
 a matching preload binding — so deleting a handler or binding fails the build.
 
+## Line-citation gate
+
+`npm run check:line-citations` (`scripts/check-line-citations.mjs`, in the CI
+`quality` job between `check:subscription-contract` and `test:coverage`) checks
+the `<path>:<line>` anchors written in comments and docs prose. Nothing else in
+the job reads a number inside a comment, so before #336 these were repaired by
+hand after the fact — four PRs' worth.
+
+It **fails** on an anchor whose path does not exist, whose line is past EOF, or
+whose range starts after it ends. Whether the cited line *means* what the prose
+says is not decidable, so the rest is a heuristic that only **warns**: an anchor
+landing on a blank line, a bare brace or a comment line is usually stale. A
+range is judged by its **start line only** — several legitimate ranges close on
+a `}`. `.md` targets are exempt; every line of prose looks like prose.
+
+Two pinned counts are what give that teeth, for the reasons in *Structural
+tests* above:
+
+- **Suspicious landings, pinned at 0.** Every such landing on this tree was
+  stale and #336 repaired all thirteen, so the measured false-positive rate is
+  zero. A deliberate landing raises the pin by one, with its reason in the
+  commit message.
+- **Uncheckable anchors.** Bare basenames more than one tracked file carries
+  (`syncplay.ts` is both `src/main/syncplay.ts` and
+  `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that
+  inherit their path from a neighbouring line. Neither can be resolved, so the
+  pin bounds how much the gate is blind to. Adding one reds the build; the fix
+  is almost always to spell the repo-relative path out rather than raise the
+  number.
+
+Citations to files outside the repo pass because their extension is one this
+repo does not contain — that rule, not a filename allowlist, is also what keeps
+`syncplay.pl:8999` (a host and port) from reporting as a missing file.
+`test/check-line-citations.test.ts` drives the analyzer over synthetic corpora
+rather than the real tree, whose counts are the pins themselves.
+
 ## Coverage thresholds
 
 `test:coverage` enforces **per-glob** floors (in `vitest.config.ts`) on the

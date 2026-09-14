@@ -4353,3 +4353,172 @@ describe('useSyncplayClient — a latched playback intent goes stale when the in
     expect(client.syncplayPausedBy.value).toBeNull()
   })
 })
+
+// #350. Syncplay's server re-elects `Room._setBy` to the minimum-position
+// watcher whenever the room state is over a second old (`server.py`,
+// `Room.getPosition()`), so the `setBy` on a 1 Hz periodic names whoever is
+// lagging, not whoever pressed anything. Only the forced broadcast after a
+// pause change carries the pauser. The renderer's badge already answers that by
+// painting a name on a playing→paused edge and never off a repeat — but the
+// edge flag was doubling as a room mirror, so two writes that say nothing about
+// a room *resume* re-armed it and handed the next periodic a fresh edge to
+// paint: the user's own press of play, and the hold expiry's badge clear.
+//
+// The rule these pin: a name is painted only on a transition the renderer
+// actually watched the room make. Where that cannot be known, the badge shows
+// nothing rather than a wrong name — and only until the room is next observed
+// playing, after which a real edge paints again.
+describe('useSyncplayClient — the badge takes a name only from a pause edge (#350)', () => {
+  const FAILED = "The room kept playing — your pause didn't stick"
+
+  const pressPause = (client: Client, v: HTMLVideoElement): void => {
+    client.onLocalPause()
+    ;(v as unknown as { paused: boolean }).paused = true
+  }
+
+  // The room pauses with an author, the way the badge is meant to be painted:
+  // a playing element meeting a paused room, so the apply enacts and the edge
+  // is unambiguous.
+  async function pausedByPeer(v: HTMLVideoElement): Promise<{
+    client: Client
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+  }> {
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'peer' })
+    ;(v as unknown as { paused: boolean }).paused = true
+    return { client, emitRemoteState }
+  }
+
+  // 1. The hold-expiry case. The expiry is a local verdict on a pause that did
+  // not stick — it clears the badge because "Paused by you" is no longer true —
+  // but the room never resumed for the badge's purposes, and the held playing
+  // frames left the edge armed. On head the very next paused frame reads as an
+  // edge and names the elected watcher, on a pause that is as likely as not
+  // this user's own arriving late with its authored frame dropped by main.
+  it('paints no name on the paused frame that follows a hold expiry', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // A playing frame crosses the press and is held — far enough out to move
+    // the element, so the expiry counts it as held and reports the failure.
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+
+    vi.advanceTimersByTime(8001)
+    expect(client.syncplayToast.value).toBe(FAILED)
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    emitRemoteState({ position: 260, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  // 2. And the suppression is one frame wide, not permanent: once the room is
+  // observed playing again outside a hold, the edge re-arms and the next
+  // transition paints. Without this the fix above would silence the badge for
+  // the rest of the session.
+  it('paints again once the room has been observed playing after the expiry', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    vi.advanceTimersByTime(8001)
+
+    // The room really is playing, and nothing is held any more.
+    emitRemoteState({ position: 300, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as unknown as { paused: boolean }).paused = false
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // A transition this client watched happen: the authored frame is the one
+    // that arrives, and it is allowed to paint.
+    emitRemoteState({ position: 310, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 3. The user's own play. Clearing the badge is right — nobody's pause stands
+  // on a room this user has just resumed — but the press is a local intent, not
+  // a report that the room resumed, and on head it re-armed the edge. If the
+  // play does not stick (a peer's pause stands, main drops the send
+  // pre-adoption) the next paused periodic paints the elected watcher onto a
+  // pause nobody just performed.
+  it('paints no name on the paused frame that follows the user pressing play', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await pausedByPeer(v)
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    client.onLocalPlay()
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // The room never confirmed the resume — this is the same paused room, one
+    // second on, with the server's election in `setBy`.
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'other' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  // 4. The same guard on the same half: a real resume followed by a real pause
+  // still paints, so the play arm suppresses one unattributable frame rather
+  // than the badge.
+  it('paints again once the room has been observed playing after the user pressed play', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await pausedByPeer(v)
+
+    client.onLocalPlay()
+    emitRemoteState({ position: 120, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as unknown as { paused: boolean }).paused = false
+
+    emitRemoteState({ position: 130, paused: true, doSeek: false, setBy: 'other' })
+    expect(client.syncplayPausedBy.value).toBe('other')
+  })
+
+  // 5. The handoff the edge flag exists to allow, and the reason it is not
+  // simply held alongside the badge: the user pauses, a peer's playing frame
+  // crosses the press, the peer then pauses. That last frame is a transition
+  // the renderer watched the room make, its `setBy` is a real author, and it
+  // takes the badge off "you". A fix that froze the flag for the duration of
+  // the hold would leave this reading "Paused by you" for a pause the peer
+  // performed.
+  it('still hands the badge to a peer whose pause follows a held playing frame', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    emitRemoteState({ position: 200, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 6. The prediction closes the flag, so the periodics that follow this user's
+  // own pause cannot repaint over "Paused by you" with the elected name. True
+  // on head as well — pinned because it is the property the `onLocalPause`
+  // write exists for, and the one a future flag change is most likely to drop.
+  it('leaves "paused by you" standing under a paused periodic naming someone else', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'other' })
+
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+})

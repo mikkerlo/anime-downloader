@@ -275,7 +275,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   let syncplayLocalReady = true
   let syncplayLastRemotePlaying = false
-  let syncplayLastAppliedPaused: boolean | null = null
+  // The badge's own edge tracking, and nothing else's (#350). It answers one
+  // question — *did this frame flip the room from playing to paused* — because
+  // that is the only frame whose `setBy` names an actor. The server re-elects
+  // `Room._setBy` to the minimum-position watcher whenever the room state is
+  // over a second old (`server.py`, `Room.getPosition()`), so the `setBy` on a
+  // periodic identifies the watcher who is lagging, not the person who pressed
+  // anything. Only the forced broadcast after a pause change carries the
+  // pauser, and the reference client reports the actor on exactly that
+  // transition (`client.py`, `_serverPaused`). A badge that can be repainted
+  // from a periodic is therefore wrong by construction, whatever else is right.
+  //
+  // Formerly named for the room mirror, and the rename is the fix's shape: the
+  // name said "last applied room state" while the only thing that ever read it
+  // was the badge's edge test below, which let writes that are true of a mirror
+  // but say nothing about a *room resume* — the user's own press of play, and
+  // the hold expiry's clear — re-arm the edge for the next periodic to paint
+  // over. `syncplayLastRemotePlaying` is the room mirror and still is; inbound
+  // frames move both, everything else moves at most one.
+  let badgeEdgePaused: boolean | null = null
   // The freshest state the element could not honor yet (#240) — see
   // applyRemoteState. `remoteStateApplied` is the "the room has told us where it
   // is" half of `hasRemoteStateApplied()`; both are cleared by
@@ -397,6 +415,21 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // be sitting on a correct badge (a room already reported paused never
       // produces the `roomPaused` edge, so that hold runs to the backstop).
       syncplayPausedBy.value = null
+      // Close the edge along with the badge (#350). Clearing the badge here is
+      // a local verdict on a pause that did not stick, not a report that the
+      // room resumed — but it leaves the edge test armed by the held playing
+      // frames, so the very next inbound *paused* frame reads as a fresh pause
+      // edge and paints whoever the server has elected onto a pause that, as
+      // often as not, is this user's own arriving late (main drops our own
+      // pause echo at its self-`setBy` guard, so the frame that would have
+      // named us never reaches here — only the periodic after it does).
+      //
+      // Deliberately narrow: this closes the frame immediately following the
+      // expiry, not the session. Once the room is observed playing again
+      // outside a hold, `recordRemoteState` re-arms and a later playing→paused
+      // transition paints its `setBy` as usual — that one is a real edge we
+      // watched happen.
+      badgeEdgePaused = true
       showSyncplayToast(PENDING_PAUSE_FAILED_TOAST)
     } else {
       clearPendingPauseToast()
@@ -736,7 +769,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // acting on a stale play intent the moment a player appears or the buffer
   // fills. `syncplayPausedBy` is the same class: it is UI state about the room,
   // not about our element.
-  function recordRemoteState(state: SyncplayRemoteState): void {
+  function recordRemoteState(state: SyncplayRemoteState, reassert = false): void {
     // The room went paused: whatever the pending pause was waiting for has
     // happened (ours landed, or a peer's did), so the hold ends here and the
     // rest of this function runs normally — that fall-through is what hands the
@@ -749,12 +782,25 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // unpark — the element half's early-outs can swallow a state entirely.
     if (state.paused) clearPendingUserPause()
     syncplayLastRemotePlaying = !state.paused
-    const pausedChanged = syncplayLastAppliedPaused !== state.paused
-    syncplayLastAppliedPaused = state.paused
-    // The badge body is held while a pause is pending — the mirror writes above
-    // are not, because their consumers need the room's truth. Otherwise the
-    // first held playing state would clear "Paused by you" off a pause the user
-    // can still see the element honoring.
+    // The flag follows every inbound frame, held or not: it is the room's own
+    // playing/paused history, and a held frame is still the room speaking. That
+    // is what keeps a genuine handoff intact — the user pauses, a peer's playing
+    // frame crosses the press, the peer then pauses, and that last frame is a
+    // real playing→paused transition whose `setBy` is a real actor, so it takes
+    // the badge off "you" and names them.
+    //
+    // The badge *body* is held while a pause is pending — otherwise the first
+    // held playing state would clear "Paused by you" off a pause the user can
+    // still see the element honoring.
+    // `reassert` is the #240 unpark, where this very frame is being enacted on
+    // the element now: it says what it says about the room whether or not a
+    // local play during the park moved the badge in between, so it restates it
+    // rather than asking the edge test — which the local play it is repairing
+    // would have to have re-armed for the answer to be yes, and since #350 it
+    // deliberately does not. Not a hole in the edge rule: an enacted frame is a
+    // transition this client watched the room make, which is the rule.
+    const pausedChanged = badgeEdgePaused !== state.paused || reassert
+    badgeEdgePaused = state.paused
     if (pausedChanged && !pendingUserPause) {
       if (state.paused && state.setBy) syncplayPausedBy.value = state.setBy
       else if (!state.paused) syncplayPausedBy.value = null
@@ -1022,7 +1068,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // behind the room by the park's duration. Uncompensated on purpose — the
     // 1 Hz overwrite, the 3 s apply tolerance and main's adoption gate bound the
     // error; docs/syncplay.md, "Apply Rule".
-    recordRemoteState(state)
+    recordRemoteState(state, true)
     applyRemoteStateToElement(state, v, true)
   }
 
@@ -1197,7 +1243,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // side alone leaves a stale `false` here that the gate call below reads,
     // and "press play right after pausing" re-pauses itself.
     syncplayLastRemotePlaying = true
-    syncplayLastAppliedPaused = false
+    // Deliberately no `badgeEdgePaused = false` here (#350). Clearing the badge
+    // is right — "Paused by X" is not true of a room this user has just
+    // resumed — but re-arming the edge is not: the user pressing play is a
+    // local intent, not the room reporting a resume, and if it does not stick
+    // (a peer's pause stands, main drops the send pre-adoption) the next paused
+    // periodic would meet a `false` flag, read as an edge, and paint the
+    // elected watcher's name onto a pause nobody just performed. The flag is
+    // left where the last inbound frame put it; a real resume moves it in
+    // `recordRemoteState`, which is where room facts belong.
     syncplayPausedBy.value = null
     sendSyncplayLocalState('play')
     applySyncplayReadyGate()
@@ -1215,7 +1269,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // beat later. Past the echo check this is the user, so the mirror follows
     // them — which also makes "Paused by you" appear on the press.
     syncplayLastRemotePlaying = false
-    syncplayLastAppliedPaused = true
+    // The prediction, and the one write outside `recordRemoteState` that may
+    // still arm the edge: this user pressing pause *is* a pause edge and the
+    // badge that follows it names them. It also closes the flag against the
+    // very next paused periodic, which would otherwise arrive carrying the
+    // elected watcher's name and repaint over "Paused by you".
+    badgeEdgePaused = true
     if (syncplayStatus.value.state === 'ready' && syncplayStatus.value.username) {
       syncplayPausedBy.value = syncplayStatus.value.username
     }
@@ -1320,7 +1379,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // a `true` and it resumes the pause we just confirmed had landed.
     if (status.roomPaused === true && prev?.roomPaused !== true && pendingUserPause) {
       syncplayLastRemotePlaying = false
-      syncplayLastAppliedPaused = true
+      // Our pause landing in the room is a real pause edge, and the badge
+      // already names the right person — closing the flag here is what keeps
+      // the first periodic after the landing from repainting it.
+      badgeEdgePaused = true
       clearPendingUserPause()
     }
     if (status.state === 'idle' || status.state === 'disconnected') {
@@ -1338,7 +1400,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // issuer goes away on either. See the `reconnecting` branch below.
       syncplayLocalReady = true
       syncplayLastRemotePlaying = false
-      syncplayLastAppliedPaused = null
+      // Room B must not inherit room A's edge. `null` rather than `false`, so
+      // the first inbound frame of a session reads as a genuine edge — that is
+      // the only way a badge is painted at join time at all. That first frame
+      // is still a periodic and its `setBy` is still an election; unchanged
+      // here, and outside #350, whose subject is the clears that re-arm the
+      // edge *inside* a session.
+      badgeEdgePaused = null
       syncplayPausedBy.value = null
       // Intent, and the markers that gate it. Left set, a stale `intendedPaused`
       // reports room A's play state into room B, `appliedPaused` swallows

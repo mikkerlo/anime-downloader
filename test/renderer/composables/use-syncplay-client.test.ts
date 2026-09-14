@@ -2098,6 +2098,36 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     expect(v.play).toHaveBeenCalled()
     expect(v.pause).not.toHaveBeenCalled()
   })
+
+  // The gate's own arm (#348), on the one axis the apply-site disarm cannot
+  // reach: a peer's readiness flipping `syncplayAllUsersReady()` through the
+  // roster watch, with no apply anywhere in the path. Without this case the arm
+  // is unpinned — deleting `!shouldPlay && v.paused && v.readyState <
+  // HAVE_FUTURE_DATA` from `applySyncplayReadyGate` leaves the whole suite
+  // green.
+  it('disarms a cold element when a peer goes not-ready with no apply in the path', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
+    await nextTick()
+    ;(v.pause as ReturnType<typeof vi.fn>).mockClear()
+
+    // Only the roster watch runs here — no inbound state, so nothing reaches
+    // `applyRemoteStateToElement`.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    await nextTick()
+
+    expect(v.pause).toHaveBeenCalledTimes(1)
+  })
 })
 
 // #289. The seek toast reads `needsSeek`, which answers "does the element have

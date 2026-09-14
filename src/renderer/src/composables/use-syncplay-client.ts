@@ -1538,9 +1538,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // it carries main's one-shot `serverRtt / 2` compensation from emit time
     // (src/main/syncplay.ts:2115) and nothing advances the parked copy, so it applies behind the
     // room by the park's duration. Uncompensated on purpose — the 3 s apply tolerance and main's
-    // adoption gate bound the error, and the 1 Hz overwrite too, but only where adoption cleared
-    // (`src/main/syncplay.ts:789`); an in-player translation or quality switch does not clear it,
-    // and a park is reachable there on the other two alone. docs/syncplay.md, "Apply Rule".
+    // adoption gate bound the error, and the 1 Hz overwrite too — but only where adoption cleared
+    // at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2489-2493`) is keyed
+    // with a peer; an in-player switch clears neither. docs/syncplay.md, "Apply Rule".
     recordRemoteState(state)
     applyRemoteStateToElement(state, v, true)
   }
@@ -1550,8 +1550,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // reset with it — it must not latch for the session: main stops emitting `remote-state` once we
   // are alone, so it would eat the user's saved position on every later open. Resetting in a live
   // room costs at most a sub-second flash before the next 1 Hz state seeks us to the room — where
-  // adoption cleared (`src/main/syncplay.ts:789`); on an in-player switch it did not, and nothing
-  // schedules that state.
+  // adoption cleared at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2492`)
+  // is keyed with a peer; on an in-player switch neither holds, and only a peer's move does.
   // `refusedToastShown` is cleared here too, by default and deliberately: every
   // caller of this function is a point where the file, the room or the socket
   // has changed under the flag, and a stale receipt makes the *next* refusal

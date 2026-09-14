@@ -27,11 +27,25 @@ import { basename, extname } from 'node:path'
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 
-// Citations landing on a blank line, a bare brace or a comment line. Zero is
-// not an aspiration: every such landing on this tree was stale, and the repair
-// half of #336 fixed all thirteen, so the heuristic's measured false-positive
-// rate here is zero. The first genuinely deliberate comment landing raises
-// this by one, with its reason.
+// Citations landing on a blank line, a bare brace or a comment line — and
+// since #344 that enumeration is not uniform: blank applies to every tracked
+// extension, the other three to code only, because `.md` is exempt from those
+// three and subject to blank. Zero is not an aspiration: every such landing on
+// this tree was stale, and the repair half of #336 fixed all thirteen while
+// #344 repaired the two markdown anchors its narrowing exposed, so the
+// heuristic's measured false-positive rate here is zero. The first genuinely
+// deliberate comment landing raises this by one, with its reason.
+//
+// What this pin does not cover, and what `resolved` does not attest: an anchor
+// landing on a live code line is checked for existence only. The four
+// same-file anchors in the `suspiciousLanding()` comment below all target
+// `if (…)` lines, which blank, bare brace and comment line can never see go
+// stale — they are attested as "the target line exists", not as drift-checked.
+// The bare-brace and comment-line predicates are also consecutive, so those
+// two anchors differ by one: a single line inserted above the ladder re-points
+// each at its neighbour's test, green and wrong. #345 kept them for the
+// inbound-anchor coverage on the record that `resolved` counts anchors that
+// resolve, not anchors that are checked.
 export const SUSPICIOUS_LANDING_PIN = 0
 
 // Anchors that name something in this repo and still cannot be checked:
@@ -131,11 +145,32 @@ const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
  * back into the warn class and the repair could never go green.
  */
 function suspiciousLanding(lines, targetPath, startLine) {
-  // Every line of a markdown file looks like prose; the heuristic cannot tell
-  // a deliberate paragraph target from a drifted one, so `.md` is exempt.
-  if (extname(targetPath) === '.md') return null
   const text = (lines[startLine - 1] ?? '').trim()
+  // Blank is the one predicate that is decidable on prose, so `.md` is subject
+  // to it rather than exempt (#344): no file deliberately cites the blank line
+  // between two of its own paragraphs, and both stale docs anchors that
+  // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
+  // The three predicates below cannot tell prose from prose the way the blank
+  // test at scripts/check-line-citations.mjs:153 can, and they are not exempt
+  // for the same reason — saying they are attributes one's evidence to the
+  // others. The comment-line test at scripts/check-line-citations.mjs:175 is a
+  // *measured* syntax collision with Markdown emphasis: of the 135 lines it
+  // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
+  // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
+  // false positive is demonstrated on the very lines #344 repaired *to*
+  // (docs/syncplay.md:238 and docs/syncplay.md:322 are both `**` openers), so
+  // hoisting this return past it would red the gate on the repair itself. The
+  // bare-brace test at scripts/check-line-citations.mjs:174 and the `<!--` test
+  // at scripts/check-line-citations.mjs:180 have no measured false positive in
+  // either direction — all 16 brace matches across the tracked `.md` sit
+  // inside fenced code blocks and nothing starts a line with `<!--` — so they
+  // stay exempt on an *argument*: a fenced `}` carries code semantics, and
+  // markup is not a line anyone cites deliberately. That `<!--` test is also
+  // what makes this return's placement observable rather than equivalent to
+  // deleting it, which the fixtures in test/check-line-citations.test.ts pin.
+  // The yml/yaml/sh `#` branch below cannot fire for a `.md` target at all.
+  if (extname(targetPath) === '.md') return null
   if (/^[}\])]+[;,]?$/.test(text)) return `bare \`${text}\``
   if (/^(\/\/|\/\*|\*)/.test(text)) return 'comment line'
   const ext = extname(targetPath)

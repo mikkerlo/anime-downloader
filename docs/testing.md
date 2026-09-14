@@ -146,15 +146,39 @@ whose range starts after it ends. Whether the cited line *means* what the prose
 says is not decidable, so the rest is a heuristic that only **warns**: an anchor
 landing on a blank line, a bare brace or a comment line is usually stale. A
 range is judged by its **start line only** — several legitimate ranges close on
-a `}`. `.md` targets are exempt; every line of prose looks like prose.
+a `}`. Since #344 that enumeration is **not uniform across extensions**. The
+blank-line test runs on every scanned extension, `.md` included: no file
+deliberately cites the blank line between two of its own paragraphs, which is
+decidable on prose in a way the rest is not — and two of the five markdown
+anchors in the tree were stale and landing exactly there. The other three tests
+stay exempt for `.md`, and not for the same reason. The comment-line predicate
+collides with Markdown's own emphasis syntax, measured: of the 135 markdown
+lines it matches, 102 are `**bold**` openers and 25 open with a single `*` —
+17 emphasis markers and 8 real bullets — leaving 8 that are genuinely
+comment-shaped, and both lines #344 repaired *to*
+are `**` openers, so running it on prose would red the gate on the repair
+itself. The bare-brace and `<!--` predicates have no measured false positive in
+either direction (all 16 brace matches sit inside fenced code blocks, and no
+markdown line starts with `<!--`); they stay exempt on the argument that a
+fenced `}` carries code semantics and that markup is not cited deliberately.
 
 Two pinned counts are what give that teeth, for the reasons in *Structural
 tests* above:
 
 - **Suspicious landings, pinned at 0.** Every such landing on this tree was
-  stale and #336 repaired all thirteen, so the measured false-positive rate is
-  zero. A deliberate landing raises the pin by one, with its reason in the
-  commit message.
+  stale: #336 repaired all thirteen, and #344 repaired the two the narrowing
+  above exposed — both anchors from
+  `test/services/syncplay-mirror-election.test.ts` into `docs/syncplay.md`, one
+  81 lines behind its subject and one 119. So the measured false-positive rate
+  is zero. A deliberate landing raises the pin by one, with its reason in the
+  commit message. What the pin does **not** cover is an anchor landing on a live
+  code line: that is checked for existence only. The four same-file anchors in
+  the `suspiciousLanding()` comment are the clearest case — all four target
+  `if (…)` lines, invisible to blank, bare brace and comment line alike, and the
+  two naming the consecutive bare-brace and comment-line predicates differ by
+  one, so a single line inserted above the ladder re-points each at its
+  neighbour's test, green and wrong. `resolved` counts anchors that resolve, not
+  anchors that are checked.
 - **Uncheckable anchors.** Bare basenames more than one tracked file carries
   (`syncplay.ts` is both `src/main/syncplay.ts` and
   `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that

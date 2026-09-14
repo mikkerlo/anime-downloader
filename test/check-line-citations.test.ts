@@ -240,17 +240,71 @@ describe('check-line-citations', () => {
     expect(r.scannedCount).toBe(1)
   })
 
-  it('resolves a markdown target but exempts it from the landing heuristic', () => {
-    // Line 1 of the target is a comment and line 3 is blank — both would warn in
-    // a .ts file. In prose they are ordinary paragraph boundaries.
+  it('subjects a markdown target to the blank-line test and exempts the markup one', () => {
+    // Line 1 of the target is an HTML comment and line 3 is blank — both would
+    // warn in a .ts file, and before #344 neither warned in prose. Line 3 warns
+    // now: a paragraph boundary is not a line anyone cites deliberately, so the
+    // blank test is decidable on prose where the markup one is not.
     const r = run({
       'docs/notes.md': '<!-- a note -->\nThe room mirror.\n\n',
       'src/caller.ts': '// see docs/notes.md:1 and docs/notes.md:3'
     })
 
     expect(r.failures).toEqual([])
-    expect(r.suspicious).toEqual([])
+    expect(r.suspicious).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'docs/notes.md:3',
+        target: 'docs/notes.md',
+        start: 3,
+        why: 'blank line'
+      }
+    ])
+    // The companion half, stated on its own so a later loosening of the
+    // expectation above cannot drop it silently: `<!--` is tested *below* the
+    // `.md` return, so deleting that return rather than moving it reds line 1
+    // here. This case alone distinguishes the move from the deletion.
+    expect(r.suspicious.some((s) => s.cited === 'docs/notes.md:1')).toBe(false)
     expect(r.resolved).toHaveLength(2)
+  })
+
+  it('exempts a markdown target landing on a bare brace inside a fenced block', () => {
+    // The bare-brace test also sits below the `.md` return, and this pins it
+    // there. `docs/types.md:19` is the live shape: the `}` closing a fenced
+    // `interface`, which has code semantics and so reads as drift — but no
+    // anchor in the tree lands on one, so the predicate stays exempt on that
+    // argument rather than on a measurement.
+    const r = run({
+      'docs/types.md': ['```ts', 'interface Room {', '  id: string', '}', '```', ''].join('\n'),
+      'src/caller.ts': '// the room shape (docs/types.md:4)'
+    })
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([])
+    expect(r.resolved).toHaveLength(1)
+  })
+
+  it('warns on a markdown landing on the second of two consecutive blank lines', () => {
+    // The one way the narrowed rule could misfire: a markdown file whose
+    // paragraphs are separated by more than one blank line puts a
+    // legitimately-aimed anchor on a blank. No tracked `.md` is written that
+    // way today, so this pins the assumption rather than leaving it to a tree
+    // scan — if it ever stops holding, this case is where it surfaces.
+    const r = run({
+      'docs/airy.md': 'First paragraph.\n\n\nSecond paragraph.\n',
+      'src/caller.ts': '// see docs/airy.md:3'
+    })
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'docs/airy.md:3',
+        target: 'docs/airy.md',
+        start: 3,
+        why: 'blank line'
+      }
+    ])
   })
 
   it('warns on a landing on a blank line, a bare brace, a lone paren or a comment', () => {

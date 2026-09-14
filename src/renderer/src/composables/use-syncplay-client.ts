@@ -75,6 +75,19 @@ export type SyncplayDeps = {
   onRemoteEpisodeChange: (ep: SyncplayRemoteEpisode) => void
 }
 
+/** An opaque handle on the playback intent as it stood at one instant, taken
+ *  with `latchPlaybackIntent()` and asked `isStale()` at the replay (#347).
+ *
+ *  Opaque on purpose. The alternative — a `getIntentRevision(): number` on the
+ *  composable's public surface — would hand `PlayerView` a naked counter with
+ *  no invariant attached, and the invariant is the whole point: *this latch is
+ *  no longer safe to replay*. A handle carries it, so the rule generalises to
+ *  any future latch-then-await-then-replay site instead of being re-derived
+ *  there. The number never leaves this file. */
+export type PlaybackIntentToken = {
+  isStale: () => boolean
+}
+
 export type SyncplayClient = {
   syncplayStatus: Ref<SyncplayStatus>
   syncplayRoomUsers: Ref<SyncplayRoomUser[]>
@@ -97,6 +110,10 @@ export type SyncplayClient = {
    *  quality/translation restore, episode-nav rewind), so the resulting
    *  `seeked` is never broadcast to the room as the user's own seek. */
   markProgrammaticSeek: (target: number) => void
+  /** Capture the playback intent as it stands right now, for a caller that is
+   *  about to latch a `wasPlaying` and replay it after an await (#347). The
+   *  returned token answers `isStale()` at the replay; see the type. */
+  latchPlaybackIntent: () => PlaybackIntentToken
   applySyncplayReadyGate: () => void
   toggleSyncplayConnection: () => Promise<void>
   /** Wire into <video @seeked>. */
@@ -183,6 +200,57 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   function intentOr(v: HTMLVideoElement): boolean {
     return intendedPaused ?? v.paused
+  }
+  // How many times the intent above has actually *moved* (#347). Not a write
+  // count: the apply adopts `state.paused` on every inbound state at ~1 Hz, and
+  // counting those would stale a token inside almost any network window, which
+  // would break the legitimate restore far more often than it caught the stale
+  // one. Movement is the thing a latched `wasPlaying` can go out of date
+  // against, so movement is what is counted.
+  //
+  // Every write to `intendedPaused` goes through `setIntendedPaused` rather
+  // than the four sites bumping a counter beside their assignment. The four are
+  // the apply's adoption, `onLocalPlay`, `onLocalPause` and the session-end
+  // reset; a fifth added later would have to remember, and the one that forgets
+  // is invisible — it does not fail, it just quietly hands a stale token back
+  // as fresh.
+  let intentRevision = 0
+
+  function setIntendedPaused(next: boolean | null): void {
+    if (intendedPaused === next) return
+    intendedPaused = next
+    intentRevision++
+  }
+
+  // See the `PlaybackIntentToken` type for why the comparison rides on the
+  // token instead of the counter being exposed.
+  //
+  // Two independent refusals, and they are not the same guard written twice:
+  //
+  // - `intentRevision !== at` is the mechanism. It catches an intent that moved
+  //   inside the caller's window — the user's own pause above all, but equally
+  //   a remote state that enacted on the element mid-switch, which has already
+  //   moved the element out from under the latched `wasPlaying`.
+  // - `intendedPaused === true` is the backstop, and it is deliberately not
+  //   derived from the counter. A replay must never resume the element against
+  //   a live pause intent, whatever the revisions say — which also covers a
+  //   token latched at an instant when the intent was *already* paused, where
+  //   nothing moves and the comparison alone would wave it through.
+  //
+  // The upstream plan for #347 sited the backstop in the composable's own
+  // consumed-op path, above the coupled write set that a surviving `restore`
+  // runs. This tree has no operation registry: the restore's only trace is the
+  // `play` event it fires, and by the time that reaches `onLocalPlay` nothing
+  // distinguishes it from the user pressing play — `onLocalPlay` is where the
+  // user *clears* a pause intent, so refusing there on `intendedPaused === true`
+  // would break play itself. The consumption site is the only place in this tree
+  // where the two are still distinguishable, so both guards live here, stated
+  // separately so neither reads as a restatement of the other.
+  function latchPlaybackIntent(): PlaybackIntentToken {
+    const at = intentRevision
+    return {
+      isStale: () => intentRevision !== at || intendedPaused === true
+    }
   }
   // A user pause made *before* main's adoption latch flipped (#228). It
   // outranks the room until it has had its chance to reach the room, and
@@ -878,7 +946,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
     // Adopting the room's intent as our own — a later heartbeat must report
     // this, not whatever the buffer machinery has done to the element since.
-    if (!holding) intendedPaused = state.paused
+    if (!holding) setIntendedPaused(state.paused)
     if (needsSeek) {
       const target = Math.max(0, state.position)
       appliedSeekPosition = {
@@ -1111,7 +1179,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // user. Gating this on the window meant a pause inside it left intent at
     // "playing" while the element sat paused — the heartbeat then asserted
     // play and the next remote apply resumed it, so the pause "didn't work".
-    intendedPaused = false
+    setIntendedPaused(false)
     // The user changed their mind — clear before the gate call below, or it
     // would pause the element they just resumed. The out-of-file marker goes
     // with it (#281): there is no local pause left for the room to override.
@@ -1140,7 +1208,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       appliedPaused = null
       return
     }
-    intendedPaused = true
+    setIntendedPaused(true)
     // See onLocalPlay: the wall-clock gate that used to sit here was shut for
     // the whole convergence window, so the room mirror kept saying "playing"
     // through the user's own pause and the ready gate resumed the element a
@@ -1290,7 +1358,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // reaches the next room as a user action. One event, and the alternative
       // is the swallowed-event bug above — but it is the room-dragging
       // direction, so it is written down rather than discovered.
-      intendedPaused = null
+      setIntendedPaused(null)
       appliedPaused = null
       appliedSeekPosition = null
       // Room B must not inherit room A's pending pause — nor its 8 s timer,
@@ -1447,6 +1515,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     setSyncplayLocalReady,
     markProgrammaticPlayback,
     markProgrammaticSeek,
+    latchPlaybackIntent,
     applySyncplayReadyGate,
     toggleSyncplayConnection,
     onVideoSeeked,

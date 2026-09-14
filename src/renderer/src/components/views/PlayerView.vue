@@ -6,7 +6,7 @@ import { usePlayerKeyboard, type PlayerAction } from '../../composables/use-play
 import { useSubtitles } from '../../composables/use-subtitles';
 import { useRemux } from '../../composables/use-remux';
 import { useSkipMarkers } from '../../composables/use-skip-markers';
-import { useSyncplayClient } from '../../composables/use-syncplay-client';
+import { useSyncplayClient, type PlaybackIntentToken } from '../../composables/use-syncplay-client';
 import PlayerTitleBar from '../player/PlayerTitleBar.vue';
 import EpisodeNavButton from '../player/EpisodeNavButton.vue';
 import TranslationMenu from '../player/TranslationMenu.vue';
@@ -1680,6 +1680,26 @@ function selectPreset(preset: 'off' | 'mode-a' | 'mode-b' | 'mode-c'): void {
   showPresetMenu.value = false;
 }
 
+// The single site every latch-then-await-then-replay resume goes through
+// (#347). A caller that latched `wasPlaying` before an await hands its token
+// here; this declines the call when the intent moved in between, so `v.play()`
+// never runs.
+//
+// The guard is here and not at the `if (wasPlaying)` sites on purpose. One site
+// covers every caller, the element cannot be resumed under a live pause intent
+// by any of them, and the contract stops being silently dependent on each
+// caller remembering to check. Callers that pass no token keep today's
+// behaviour exactly.
+//
+// Re-reading `!v.paused` at the replay instead is the obvious fix and it
+// silently breaks the feature: after the `src` rebind the element is paused
+// regardless of what the user wants, so the re-read would answer `false` every
+// time and no legitimate restore would ever fire.
+function playProgrammatically(v: HTMLVideoElement, token?: PlaybackIntentToken): void {
+  if (token?.isStale()) return;
+  v.play();
+}
+
 function selectQuality(stream: { height: number; url: string }): void {
   if (stream.height === selectedHeight.value) {
     showQualityMenu.value = false;
@@ -1698,6 +1718,10 @@ function selectQuality(stream: { height: number; url: string }): void {
     if (!v) return;
     syncplay.markProgrammaticSeek(savedTime);
     v.currentTime = savedTime;
+    // Deliberately no intent token (#347): nothing is awaited between the latch
+    // above and this `nextTick`, so there is no window for the intent to move
+    // in. It is the latch-then-replay shape without the latch-then-*await*, and
+    // a guard here would be cargo.
     if (wasPlaying) v.play();
   });
 }
@@ -1797,6 +1821,15 @@ async function selectTranslation(tr: {
   const video = videoRef.value;
   const savedTime = video ? video.currentTime : 0;
   const wasPlaying = video ? !video.paused : false;
+  // Latched at the same instant as `wasPlaying`, and replayed with it (#347).
+  // Both arms below sit behind an await — a `playerGetStreamUrl` round trip on
+  // one, an MKV prepare on the other, which is not bounded by a single round
+  // trip at all — and a pause the user makes inside that window would otherwise
+  // be undone by a `wasPlaying` that describes the world as it was before they
+  // pressed it. Worse, the undo is announced: the resulting `play` event is
+  // past every echo check, so `onLocalPlay` reads it as this user's intent and
+  // sends it to the room, resuming everyone.
+  const playbackIntent = syncplay.latchPlaybackIntent();
 
   switchingTranslation.value = true;
   const mySwitch = ++translationEpoch;
@@ -1865,7 +1898,7 @@ async function selectTranslation(tr: {
           if (!v) return;
           syncplay.markProgrammaticSeek(savedTime);
           v.currentTime = savedTime;
-          if (wasPlaying) v.play();
+          if (wasPlaying) playProgrammatically(v, playbackIntent);
           switchingTranslation.value = false;
         });
         return;
@@ -1915,7 +1948,7 @@ async function selectTranslation(tr: {
       if (!v) return;
       syncplay.markProgrammaticSeek(savedTime);
       v.currentTime = savedTime;
-      if (wasPlaying) v.play();
+      if (wasPlaying) playProgrammatically(v, playbackIntent);
       switchingTranslation.value = false;
     });
   } catch {

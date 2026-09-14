@@ -214,3 +214,89 @@ describe('PlayerView — a refused open does not resume through the generic bran
     expect(body).toContain('const d = video.duration || saved.duration;')
   })
 })
+
+// #347: the stale-`wasPlaying` replay. The staleness *rule* is tested for real
+// at the composable seam, in `use-syncplay-client.test.ts` — including what the
+// room sees on either side of a declined replay. What cannot be tested there is
+// the wiring: that the token is latched at the same instant as `wasPlaying`,
+// that both arms of `selectTranslation` actually pass it, and that the guard
+// sits inside the helper rather than at the call sites. That is what this
+// scans, the same approach the block above takes and for the same reason —
+// `selectTranslation` is an unexported `<script setup>` internal of a ~3.4k-line
+// SFC with no mount harness here.
+//
+// Each assertion is keyed to one edit that reintroduces the bug: dropping the
+// latch, replacing the guard with a re-read of the element, repairing one arm
+// and not the other, or moving the check out to the callers.
+describe('PlayerView — a translation switch does not replay a stale wasPlaying (#347)', () => {
+  function translationBody(): string {
+    const start = SOURCE.indexOf('async function selectTranslation')
+    const end = SOURCE.indexOf("async function goToEpisode(direction: 'prev' | 'next')")
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    return SOURCE.slice(start, end)
+  }
+
+  it('latches the intent at the same instant as wasPlaying', () => {
+    // Adjacency is the whole mechanism. A latch taken after the await describes
+    // the world the replay is already standing in and can never be stale.
+    const body = translationBody().replace(/\s+/g, ' ')
+    expect(body).toContain('const wasPlaying = video ? !video.paused : false;')
+    const latch = body.indexOf('const playbackIntent = syncplay.latchPlaybackIntent();')
+    const was = body.indexOf('const wasPlaying = video ? !video.paused : false;')
+    // Every await in this function is an IPC round trip, and the first one is
+    // where the window opens.
+    const firstAwait = body.indexOf('await window.api.')
+    expect(latch).toBeGreaterThan(was)
+    expect(firstAwait).toBeGreaterThan(-1)
+    expect(latch).toBeLessThan(firstAwait)
+  })
+
+  it('passes the token on both arms, not just the one the capture landed on', () => {
+    // The capture went down the remote arm, but the remux arm awaits an MKV
+    // prepare, which is not bounded by one round trip — so the local-file user
+    // is more exposed, not less. Shipping a one-armed fix under this title is
+    // worse than not shipping it: it makes the surviving arm harder to find.
+    const body = translationBody()
+    const guarded = [
+      ...body.matchAll(/if \(wasPlaying\) playProgrammatically\(v, playbackIntent\);/g)
+    ]
+    expect(guarded).toHaveLength(2)
+    // And no bare replay survives anywhere in the function.
+    expect(body).not.toContain('if (wasPlaying) v.play();')
+  })
+
+  it('consumes the token inside the helper, not at the call sites', () => {
+    // One site covers every caller and the helper's contract stops depending on
+    // each caller remembering. A guard spelled at the `if (wasPlaying)` sites
+    // is the version the next latch site forgets.
+    expect(FLAT).toContain(
+      'function playProgrammatically(v: HTMLVideoElement, token?: PlaybackIntentToken): void { if (token?.isStale()) return; v.play(); }'
+    )
+  })
+
+  it('does not re-read the element instead of the intent', () => {
+    // The rejected fix, and it looks like the obvious one: after the `src`
+    // rebind the element is paused regardless of what the user wants, so a
+    // re-read answers `false` every time and no legitimate restore ever fires
+    // again. Silent, and it breaks the feature rather than the bug.
+    const helper = FLAT.slice(
+      FLAT.indexOf('function playProgrammatically('),
+      FLAT.indexOf('function selectQuality(')
+    )
+    expect(helper).not.toContain('v.paused')
+  })
+
+  it('leaves selectQuality replaying unguarded', () => {
+    // Deliberate: nothing is awaited between its latch and its `nextTick`, so
+    // it is the latch-then-replay shape with no window for the intent to move
+    // in. A token there would be cargo.
+    const start = SOURCE.indexOf('function selectQuality(')
+    const end = SOURCE.indexOf('const TRANSLATION_TYPE_LABELS')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const body = SOURCE.slice(start, end)
+    expect(body).toContain('if (wasPlaying) v.play();')
+    expect(body).not.toContain('latchPlaybackIntent')
+  })
+})

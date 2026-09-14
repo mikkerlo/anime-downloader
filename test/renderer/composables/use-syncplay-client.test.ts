@@ -4185,3 +4185,171 @@ describe('useSyncplayClient — a reloading element announces nothing (#284)', (
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 612, paused: false })
   })
 })
+
+// #347. `PlayerView`'s `selectTranslation` latches `wasPlaying` synchronously
+// at the top and replays it after an await — a `playerGetStreamUrl` round trip
+// on one arm, an MKV prepare on the other. A pause the user makes inside that
+// window is undone by the replay, and the undo is *announced*: the `play` event
+// it fires is past every echo check, so `onLocalPlay` classifies it as this
+// user's intent and sends it to the room. Everyone watching gets resumed by a
+// pause.
+//
+// The token is the repair. These are the composable's half — the staleness rule
+// itself, and what the room sees on either side of it. The wiring that hands
+// the token from the latch to the two replays is pinned in
+// `test/renderer/components/player-syncplay-resume.test.ts`, which is a source
+// scan because `PlayerView` has no mount harness.
+describe('useSyncplayClient — a latched playback intent goes stale when the intent moves (#347)', () => {
+  // The state `selectTranslation` is entered in: the user is playing, and the
+  // intent says so. Established through `onLocalPlay` rather than an apply
+  // because a no-op apply — a playing state on a playing element — takes the
+  // early-out above the adoption and establishes nothing.
+  async function playingRoom(v: HTMLVideoElement): Promise<{
+    client: Client
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+    sendLocalState: ReturnType<typeof vi.fn>
+    sendSnapshot: ReturnType<typeof vi.fn>
+  }> {
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+    client.onLocalPlay()
+    sendLocalState.mockClear()
+    return { client, emitRemoteState, sendLocalState, sendSnapshot }
+  }
+
+  it('survives a window in which the intent did not move, so a legitimate restore still runs', async () => {
+    // The case a careless fix breaks. Re-reading `!v.paused` at the replay
+    // instead of comparing intent answers `false` every time — the element is
+    // paused after the `src` rebind whatever the user wants — and no legitimate
+    // restore would ever fire again.
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+
+    expect(token.isStale()).toBe(false)
+  })
+
+  it('does not count a re-adopted state that changes nothing', async () => {
+    // The apply adopts `state.paused` on every inbound state, at ~1 Hz through
+    // the whole convergence window. Counting writes rather than *movement*
+    // would stale the token inside almost any network window and break the
+    // legitimate restore far more often than it caught the stale one.
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+    // Far enough to need a seek, so this runs past the no-op early-out and
+    // reaches the adoption — which writes the same `false` it already held.
+    emitRemoteState({ position: 400, paused: false, setBy: 'peer' })
+
+    expect(token.isStale()).toBe(false)
+  })
+
+  it('is staled by the user pausing inside the window', async () => {
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+    client.onLocalPause()
+
+    expect(token.isStale()).toBe(true)
+  })
+
+  it('is staled by a remote state that enacts a pause inside the window', async () => {
+    // Not benign, and not a narrower rule than the user's own press: a remote
+    // state that enacted has already moved the element out from under the
+    // `wasPlaying` that was latched before it.
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+    emitRemoteState({ position: 50, paused: true, setBy: 'peer' })
+
+    expect(v.pause).toHaveBeenCalled()
+    expect(token.isStale()).toBe(true)
+  })
+
+  it('is staled by a session end, which leaves no room to restore into', async () => {
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+    client.syncplayStatus.value = { state: 'disconnected' }
+    await nextTick()
+
+    expect(token.isStale()).toBe(true)
+  })
+
+  it('is stale from the instant it is taken against a live pause intent', async () => {
+    // The backstop, and it is deliberately not derived from the counter:
+    // nothing moves in this window at all, so the revision comparison alone
+    // waves the replay through and the element is resumed against a pause the
+    // user is still looking at.
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client } = await playingRoom(v)
+    client.onLocalPause()
+
+    expect(client.latchPlaybackIntent().isStale()).toBe(true)
+  })
+
+  it('leaves the pause standing and announces nothing when the replay is declined', async () => {
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client, sendLocalState, sendSnapshot } = await playingRoom(v)
+
+    const token = client.latchPlaybackIntent()
+    client.onLocalPause()
+    // The element as `selectTranslation`'s `nextTick` finds it: the `src`
+    // rebind has already paused it.
+    ;(v as { paused: boolean }).paused = true
+    sendLocalState.mockClear()
+
+    // What `playProgrammatically` does with the token. The point of the
+    // assertion is that nothing follows it.
+    expect(token.isStale()).toBe(true)
+
+    client.onVideoTimeUpdate()
+
+    expect(v.play).not.toHaveBeenCalled()
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // The outbound path the un-pause travelled: the heartbeat reads the intent,
+    // and it still says paused.
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: true })
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  it('pins what the declined replay would have done, so the guard is not decoration', async () => {
+    // The same window, with the replay allowed through — i.e. the behaviour on
+    // `main`. The resume fires a `play` event that is past every echo check
+    // (nothing marked it, because nothing in this path ever did), so
+    // `onLocalPlay` reads it as this user's intent: the pause is clobbered, the
+    // badge is cleared, the mirror follows, and the room is told to play.
+    //
+    // Here as a characterisation of the defect rather than a guard on it. If
+    // this one ever goes green by itself, the classification rule it describes
+    // has changed and the test above is no longer testing what it says.
+    const v = fakeVideo({ currentTime: 50, paused: false } as Partial<HTMLVideoElement>)
+    const { client, sendLocalState, sendSnapshot } = await playingRoom(v)
+
+    client.latchPlaybackIntent()
+    client.onLocalPause()
+    ;(v as { paused: boolean }).paused = true
+    sendLocalState.mockClear()
+
+    // The element's `play` event, had the stale `wasPlaying` been replayed.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    client.onVideoTimeUpdate()
+
+    expect(sendLocalState).toHaveBeenCalledWith(
+      expect.objectContaining({ paused: false, cause: 'play' })
+    )
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 50, paused: false })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+})

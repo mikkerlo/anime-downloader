@@ -441,13 +441,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   let refusedToastShown = false
   // "The user paused while the room was out of our file" (#281, slice B).
   //
-  // Main de-adopts for that divergence (`src/main/syncplay.ts:1930`), so `sendLocalState()`
-  // returns at its adoption gate and the room is never told about this pause, not even an
-  // ignore-counter bump. The clear also lets the room's periodics survive `:2097`:
+  // Main de-adopts for that divergence (`src/main/syncplay.ts:1930`), so `sendLocalState()` returns
+  // at its adoption gate and the room is never told about this pause, not even an ignore-counter
+  // bump. The clear also lets the room's periodics survive `src/main/syncplay.ts:2097`:
   // `isForeignState || (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)`, plus
-  // `:2098`'s `localChangeAcked`. So the room's next 1 Hz *playing* state would resume the user,
-  // on a `needsPlayPause` computed independently of `outOfFile` by design (right for pause, wrong
-  // for resume). We cannot tell the room anything, so it must not override us.
+  // `src/main/syncplay.ts:2098`'s `localChangeAcked`. So the room's next 1 Hz *playing* state would
+  // resume the user, on a `needsPlayPause` computed independently of `outOfFile` by design (right
+  // for pause, wrong for resume). We cannot tell the room anything, so it must not override us.
   //
   // Its own boolean, mirroring `refusedToastShown`: neither existing marker survives that stream
   // — which de-adoption alone need not produce, since with `List` unkeyable `rosterReceived`
@@ -1223,12 +1223,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the length of the divergence, because main is silent and that pause has
     // no other way of holding.
     //
-    // Folded into `needsPlayPause` rather than applied below it so the no-op early-out still
-    // fires: `outOfFile` forces `needsSeek` false, so a refused resume would otherwise fall
-    // through into the body once a second for the whole divergence — clobbering `intendedPaused`
-    // back to "playing" and bumping `intentRevision` on every frame, the intent the refusal
-    // exists to keep. Real here: main de-adopts (`src/main/syncplay.ts:1930`), so frames clear
-    // `:2097` as foreign-`setBy` or as room voice — de-adopted plus a keyed roster with a peer.
+    // Folded into `needsPlayPause` rather than applied below it so the no-op early-out still fires:
+    // `outOfFile` forces `needsSeek` false, so a refused resume would otherwise fall into the body
+    // once a second for the whole divergence — clobbering `intendedPaused` back to "playing" and
+    // bumping `intentRevision` on every frame, the intent the refusal exists to keep. Real here:
+    // main de-adopts (`src/main/syncplay.ts:1930`), so frames clear `src/main/syncplay.ts:2097` as
+    // foreign-`setBy` or as room voice — de-adopted plus a keyed roster with a peer.
     const refusingResume = outOfFile && outOfFileUserPause && !effectivePaused && v.paused
     const needsPlayPause = effectivePaused !== v.paused && !refusingResume
 

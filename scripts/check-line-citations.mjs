@@ -56,8 +56,8 @@ export const SUSPICIOUS_LANDING_PIN = 0
 // an anchor the gate cannot see reds this, and the fix is almost always to
 // spell the path out rather than to raise the number.
 //
-// 11 ambiguous basenames + 109 pathless anchors on this tree.
-export const UNCHECKABLE_PIN = 120
+// 11 ambiguous basenames + 106 pathless anchors on this tree.
+export const UNCHECKABLE_PIN = 117
 
 // --- configuration ------------------------------------------------------------
 

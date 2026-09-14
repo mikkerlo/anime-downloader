@@ -27,6 +27,13 @@ import { useSyncplayStore } from '../stores/syncplay'
 
 const WAITING_DEBOUNCE_MS = 600
 
+// `HTMLMediaElement.HAVE_FUTURE_DATA` — the transition at which the can-autoplay flag is
+// consulted, so `readyState <` it is exactly the window in which an armed element can still
+// start itself (#348). Not read off `v`: the constant is absent on a `null` element and on the
+// tests' fake video, so both disarm sites have to compare against the same number either way. At
+// module scope because `setSyncplayLocalReady` calls a reader above it — TDZ, not a 3 (#349).
+const HAVE_FUTURE_DATA = 3
+
 // How long a user pause made before adoption outranks the room (#228).
 //
 // Budget: <= 3 s to adopt + <= 1 s for the heartbeat that first asserts the
@@ -1062,13 +1069,6 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     applySyncplayReadyGate()
   }
 
-  // `HTMLMediaElement.HAVE_FUTURE_DATA`, spelled out because the constant is on
-  // the element and both readers here are guards against an element that may be
-  // `null`. It is the transition at which the HTML *can autoplay flag* is
-  // consulted, so `readyState < HAVE_FUTURE_DATA` is exactly the window in which
-  // an element carrying `autoplay` can still start playing on its own (#348).
-  const HAVE_FUTURE_DATA = 3
-
   function applySyncplayReadyGate(): void {
     if (syncplayStatus.value.state !== 'ready') return
     const v = deps.getVideoEl()
@@ -1268,11 +1268,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // sits above that write, so an apply whose position and paused-ness the
     // element already matches used to adopt nothing — while
     // `pushSyncplaySnapshot` announces `intentOr(v)` (`intendedPaused ??
-    // v.paused`, :391), not `v.paused`.
+    // v.paused`, :398), not `v.paused`.
     //
     // What makes that a lost pause rather than a cosmetic gap. Nothing but the
     // user handlers and this adoption writes `intendedPaused`: an `echo`
-    // operation establishes nothing by contract (:899), and every pause the app
+    // operation establishes nothing by contract (:906), and every pause the app
     // makes on its own behalf that an element can *report* is an echo — the
     // readiness gate's down-arm (:1106-1108), a remote apply, an MSE buffer
     // refill, PlayerView's teardown. The two `autoplay` disarms (#348) are the
@@ -1357,7 +1357,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // Only the `holding` **binding** hoists above the early-out.
     // `notePendingPauseHeldState()` stays below it, per its own contract
-    // (:544-547): a state that early-outs moved nothing and so held nothing.
+    // (:551-554): a state that early-outs moved nothing and so held nothing.
     const holding = pendingUserPause && !state.paused
     if (!outOfFile && !holding) intendedPaused = state.paused
 
@@ -1395,7 +1395,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //   already being paused — so on an already-paused element this call
     //   disarms and fires *nothing*. An operation registered for it would never
     //   be consumed and would sit in the registry for the full
-    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:801), where the user's next genuine pause would
+    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:808), where the user's next genuine pause would
     //   match it and be swallowed as an echo. That is the latch family #236
     //   records one line-block below, on the play side.
     //

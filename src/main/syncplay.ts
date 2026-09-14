@@ -2140,8 +2140,8 @@ export class SyncplayClient extends EventEmitter {
     // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
     // tolerance: the element only advances while it is firing `timeupdate`, so
     // a reading that is seconds old is still an accurate reading of a *stopped*
-    // element (src/renderer/src/composables/use-syncplay-client.ts:730-732, SNAPSHOT_MIN_INTERVAL_MS at
-    // src/renderer/src/composables/use-syncplay-client.ts:388). If the renderer ever gains a playback-rate control this bound has
+    // element (src/renderer/src/composables/use-syncplay-client.ts:737-739, SNAPSHOT_MIN_INTERVAL_MS at
+    // src/renderer/src/composables/use-syncplay-client.ts:395). If the renderer ever gains a playback-rate control this bound has
     // to be re-derived.
     const emitted = seekIntentWasLive ? this.snapshot.position : compensated
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {

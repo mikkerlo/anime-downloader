@@ -1918,9 +1918,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:944`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:951`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:954`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:961`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only

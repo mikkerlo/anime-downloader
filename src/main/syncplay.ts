@@ -1800,24 +1800,24 @@ export class SyncplayClient extends EventEmitter {
     const paused = ps.paused === true
     const doSeek = ps.doSeek === true
 
-    // Record the room's view before the echo guards below: a spectator mirrors
-    // this back to the server, and the server's own periodic States are exactly
-    // the ones that keep it fresh. They do carry a setBy, contrary to what this
-    // comment used to claim — server.py:82-87 always passes room.getSetBy(),
-    // and Room.getPosition() re-elects it to the min() watcher whenever the room
-    // state is over a second old, so a periodic frame can arrive setBy *us* and
-    // return at the self-guard below. Recording above the guards is what keeps
-    // it fresh regardless.
-    // Back-dated to the server's *send*, not this frame's arrival (#279). The
-    // number inside `position` was computed one one-way delay ago, so stamping
-    // arrival makes `projectedRoomPosition()` read the room `d` low forever —
-    // and `buildPlaystate()`'s spectator mirror then puts that value back on the
-    // wire, where `Room.getPosition()`'s min() elects it and re-derives the room
-    // from it. The server's own `Watcher.updateState` compensation does not
-    // recover it: it adds `fd ≈ avrRtt/2` to the *position* while stamping
-    // `_lastUpdatedOn` at receipt (`server.py:875-884`), so per election the room
-    // loses `2d − fd` — measured at 0.05 s/election on a 50 ms/direction link,
-    // which crosses the renderer's 3 s apply rule in about a minute.
+    // Record the room's view before the echo guards below: a spectator mirrors this back to the
+    // server, and the server's own periodic States are exactly the ones that keep it fresh. They
+    // do carry a setBy, contrary to what this comment used to claim — server.py:82-87 always
+    // passes room.getSetBy(), and Room.getPosition() re-elects it to the min() watcher whenever
+    // the room state is over a second old, so a periodic frame can arrive setBy *us* and return
+    // at the self-guard below. Recording above the guards is what keeps it fresh regardless — and
+    // it is also why the once-a-second premise here is the *inbound* stream and not the surviving
+    // set: the claim sits above `:2097` and `:2098`, so what those drop does not enter it.
+    // Back-dated to the server's *send*, not this frame's arrival (#279). The number inside
+    // `position` was computed one one-way delay ago, so stamping arrival makes
+    // `projectedRoomPosition()` read the room `d` low forever — and `buildPlaystate()`'s
+    // spectator mirror then puts that value back on the wire, where `Room.getPosition()`'s min()
+    // elects it and re-derives the room from it. The server's own `Watcher.updateState`
+    // compensation does not recover it: it adds `fd ≈ avrRtt/2` to the *position* while stamping
+    // `_lastUpdatedOn` at receipt (`server.py:875-884`), so per election the room loses `2d − fd`
+    // — measured at 0.05 s/election on a 50 ms/direction link, which crosses the renderer's 3 s
+    // apply rule in about a minute. That election rate is the server's own and the stamp is above
+    // the guards, so it compounds on frames that die at `:2097`/`:2098` too.
     //
     // The time axis rather than the position axis, and they are not the same
     // thing: `projectedRoomPosition()` discards `at` outright when the room is
@@ -1901,22 +1901,22 @@ export class SyncplayClient extends EventEmitter {
     // `statusProjection()`'s `outOfFile` so the two cannot drift apart. See it
     // for both arguments.
     //
-    // `rosterSaysAlone()` is the one thing this predicate has that the plan did
-    // not, and it is a *derivation* rather than a new policy: do not write what
-    // the very next `isAdopted()` call will unconditionally undo. A client alone
-    // in a room re-latches on that function's roster-alone branch, so the write
-    // is a no-op for the wire — but not for the renderer, which is handed the
-    // intermediate state by `emitStatusIfProjectionChanged()` a few lines below.
-    // The review that specified this assumed `maybeReassertSeek()` in between
-    // would have re-latched by then; it returns at its own `if (!intent)` first,
-    // so with no seek in flight — the ordinary case — nothing did, and a solo
-    // client flip-flopped its projection once a second between this write and
-    // the next heartbeat's `buildPlaystate()`. Measured, not reasoned: `announces
-    // no projection change to a client alone in a room parked past the end of
-    // its file` is red without this conjunct. It is deliberately "the roster
-    // *says* alone" rather than "no peers known": on a server whose `List` we
-    // cannot key to our room (#223) the roster never arrives, and there the
-    // de-adoption is the conservative answer.
+    // `rosterSaysAlone()` is the one thing this predicate has that the plan did not, and it is a
+    // *derivation* rather than a new policy: do not write what the very next `isAdopted()` call
+    // will unconditionally undo. A client alone in a room re-latches on that function's
+    // roster-alone branch, so the write is a no-op for the wire — but not for the renderer, which
+    // is handed the intermediate state by `emitStatusIfProjectionChanged()` a few lines below.
+    // The review that specified this assumed `maybeReassertSeek()` in between would have
+    // re-latched by then; it returns at its own `if (!intent)` first, so with no seek in flight —
+    // the ordinary case — nothing did, and a solo client flip-flopped its projection once a
+    // second between this write and the next heartbeat's `buildPlaystate()`. Measured, not
+    // reasoned: `announces no projection change to a client alone in a room parked past the end
+    // of its file` is red without this conjunct. That once a second is the inbound stream at this
+    // peer, not the emitted one: a lone client's frames are its own echo, self-`setBy`, and every
+    // one dies at `:2097` — this write and the projection emit both sit above that guard, which
+    // is what made the flip-flop observable. It is deliberately "the roster *says* alone" rather
+    // than "no peers known": on a server whose `List` we cannot key to our room (#223) the roster
+    // never arrives, and there the de-adoption is the conservative answer.
     const roomPastEnd = this.roomPastEndOfOwnFile(this.lastRoomState)
     if (
       roomPastEnd !== null &&
@@ -2113,22 +2113,22 @@ export class SyncplayClient extends EventEmitter {
     // branching the two values re-arms the #220 self-seek loop documented in
     // sendLocalState() on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
     const compensated = paused ? position : position + this.serverRtt / 2
-    // Arm the echo target only for a state that will actually move the element
-    // (#236), under the same rule the renderer applies with (`state.doSeek ||
-    // |currentTime - position| > 3`, use-syncplay-client.ts). Armed
-    // unconditionally it sat pointing at the room's resting position after
-    // states that changed nothing — refreshed every second in a paused room —
-    // and sendLocalState() then swallowed any genuine user seek landing within
-    // ECHO_SEEK_EPSILON_S of it. A state that moves nothing fires no `seeked`,
-    // so it has no echo to suppress; a previously-armed target is deliberately
-    // left in place, since that one is still owed its event.
-    //
-    // The predictor is main's snapshot rather than the element's currentTime,
-    // so near the 3 s boundary the two can disagree by up to one snapshot
-    // cadence and main can decline to arm for a state the renderer does apply
-    // — wider still under #240, which defers the write to `loadedmetadata`. The
-    // renderer's own value-keyed guard still suppresses that echo, so the loss
-    // is main's belt, not both layers.
+    // Arm the echo target only for a state that will actually move the element (#236), under the
+    // rule the renderer applies with (`state.doSeek || |currentTime - position| > 3`,
+    // use-syncplay-client.ts). Armed unconditionally it sat on the room's resting position after
+    // no-op states, and sendLocalState() swallowed genuine user seeks within ECHO_SEEK_EPSILON_S.
+    // That refresh is per frame off `setBy`, not per window: the arming rests on a periodic
+    // elected to another peer, foreign-`setBy` and past `:2097`/`:2098` unconditionally — #340
+    // measured that arm here in a *playing* room — and on a pre-adoption one with a peer in a
+    // keyed roster, past them as room voice. At the elected peer past adoption it is self-`setBy`
+    // and dies at `:2097`, so the paused-room rate is that predicate's consequence, not a
+    // measurement. A state that moves nothing fires no `seeked`, so it has no echo to suppress; a
+    // previously-armed target is left in place, since that one is still owed its event. The
+    // predictor is main's snapshot, not the element's currentTime, so near the 3 s boundary the
+    // two can disagree by a snapshot cadence and main can decline to arm for a state the renderer
+    // does apply — wider still under #240, which defers the write to `loadedmetadata`. The
+    // renderer's own value-keyed guard still suppresses that echo, so the loss is main's belt,
+    // not both layers.
     //
     // While a seek of ours is unresolved the room does not get to move our
     // playhead (#278), so what goes out is our own snapshot rather than the
@@ -2476,16 +2476,16 @@ export class SyncplayClient extends EventEmitter {
   //    and applying it re-opens the #220 self-seek loop. Adoption latches
   //    within a heartbeat of converging, so the relaxed window is short by
   //    construction.
-  //  - `rosterReceived && peers > 0` — `isAdopted()`'s idiom, for its reason
-  //    (#236): "the roster is empty" and "the roster has not arrived" are
-  //    different answers. A user *alone* in a room has their own position
-  //    echoed back once a second; emitting that would make
-  //    `hasRemoteStateApplied()` true, let `roomOwnsPlayhead()` eat the saved
-  //    position on every solo episode open, and make `getRoomPosition()` answer
-  //    from our own echo. On a server whose `List` reply we cannot key to our
-  //    room (#223) `rosterReceived` is permanently false and this is inert —
-  //    deliberately, since reading an unknown roster as "peers present" is the
-  //    reading that re-opens the solo-room regression.
+  //  - `rosterReceived && peers > 0` — `isAdopted()`'s idiom, for its reason (#236): "the
+  //    roster is empty" and "the roster has not arrived" are different answers. A user *alone*
+  //    in a room has their own position echoed back once a second; that cadence is the inbound
+  //    stream at the guard, and the argument is about the frames it must *drop* rather than
+  //    ones that get through. Emitting them would make `hasRemoteStateApplied()` true, let
+  //    `roomOwnsPlayhead()` eat the saved position on every solo episode open, and make
+  //    `getRoomPosition()` answer from our own echo. On a server whose `List` reply we cannot
+  //    key to our room (#223) `rosterReceived` is permanently false and this is inert —
+  //    deliberately, since reading an unknown roster as "peers present" is the reading that
+  //    re-opens the solo-room regression.
   private isRoomVoice(setBy: string | null): boolean {
     if (setBy === null) return false
     if (this.playbackAdopted) return false

@@ -4,10 +4,13 @@
 //
 // The discriminating property is the *gate*: a state we set ourselves — a user
 // alone in a room, whose own position the server echoes back once a second —
-// must answer `null`, even though `lastRoomState` is populated by it. An
-// implementation built on `lastRoomState` (the spectator mirror's source,
-// recorded deliberately *above* handleState()'s echo guards) passes every other
-// test here and fails that one.
+// must answer `null`, even though `lastRoomState` is populated by it. That cadence
+// is the inbound stream measured *at* `src/main/syncplay.ts:2097`, and the whole
+// argument is about the frames that guard must therefore drop rather than about
+// any that get through. An implementation built on `lastRoomState` (the spectator
+// mirror's source, recorded deliberately *above* `handleState()`'s echo guards)
+// passes every other test here and fails that one — which is why the gate, and not
+// `lastRoomState`, is the property under test.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'events'

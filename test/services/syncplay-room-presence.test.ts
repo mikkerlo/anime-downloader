@@ -976,8 +976,15 @@ describe('SyncplayClient room presence on join (#220)', () => {
     // The echo target is armed only for a state that would actually move the
     // element (#236 item 2), under the same rule the renderer applies with.
     // Armed on every inbound state it sat pointing at the room's resting
-    // position — refreshed once a second in a paused room — and swallowed any
-    // genuine user seek landing within ECHO_SEEK_EPSILON_S of it. Here the
+    // position and swallowed any genuine user seek landing within
+    // ECHO_SEEK_EPSILON_S of it. That refresh is per frame off `setBy`, not a
+    // property of the room: a periodic the server elected to another peer is
+    // foreign-`setBy` and past `src/main/syncplay.ts:2097` unconditionally, a
+    // pre-adoption one with a peer in a keyed roster is past it as room voice, and
+    // at the elected peer past adoption it is self-`setBy` and dies there. So
+    // "refreshed once a second in a paused room" is that predicate's consequence
+    // rather than a measurement — #340 measured the foreign arm at the guard in a
+    // *playing* room, and probed neither the arming nor a paused one. Here the
     // snapshot is pushed *first*, so 301 is one second from where we already
     // are: inside the renderer's 3 s tolerance, with no doSeek, it moves
     // nothing and therefore has no echo to suppress.

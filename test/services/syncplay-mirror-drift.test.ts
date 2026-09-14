@@ -1,6 +1,11 @@
 // #279 — the spectator mirror is anchored on the frame's *arrival*, so it
 // reports the room one one-way delay low, wins `Room.getPosition()`'s `min()`,
-// and the room is re-derived from that already-lagged value once a second.
+// and the room is re-derived from that already-lagged value once a second. That
+// once a second is the server's own re-election rate over the inbound stream, and
+// the stamp it feeds is taken *above* `src/main/syncplay.ts:2097` and
+// `src/main/syncplay.ts:2098` — so the walk compounds on frames that die at those
+// guards as readily as on ones the renderer ever sees, and #340's drop counts do
+// not bear on it.
 //
 // Two halves, because the bug needs both and neither alone can show it:
 //

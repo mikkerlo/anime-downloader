@@ -159,7 +159,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // to *win*, so they drive the server class where a deficit survives #279:
   // `forwardDelay: 0`, i.e. a server we have not echoed to yet. That is not a
   // hypothetical server — the reference derives `_forwardDelay` from *our* echo
-  // of its `latencyCalculation` (`docs/syncplay.md:157`), which is absent for
+  // of its `latencyCalculation` (`docs/syncplay.md:238`), which is absent for
   // the first round trips of every session and permanently whenever
   // `consumeServerLatencyEcho()`'s hold guard drops the pair. The echo's hold
   // correction — the same server's *other*, independent half — is left at the
@@ -279,7 +279,8 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // `lastRemoteRoomState` is refreshed *only* below the emit, so on head it
     // freezes at the last pre-election frame and `ROOM_POSITION_MAX_AGE_MS`
     // kills the join-time MKV seed 15 s later — the cap doing exactly the job
-    // `docs/syncplay.md:203` argued it could never be called on to do.
+    // that the argument retracted at `docs/syncplay.md:322` said it could never
+    // be called on to do.
     const seed = joiner.getRoomPosition(OPEN)
     expect(seed).not.toBeNull()
     expect(Math.abs(seed! - trueRoomPosition())).toBeLessThan(ADOPT_TOLERANCE_S)

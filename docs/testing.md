@@ -153,8 +153,9 @@ decidable on prose in a way the rest is not — and two of the five markdown
 anchors in the tree were stale and landing exactly there. The other three tests
 stay exempt for `.md`, and not for the same reason. The comment-line predicate
 collides with Markdown's own emphasis syntax, measured: of the 135 markdown
-lines it matches, 102 are `**bold**` paragraph openers and 25 are `*` bullets,
-leaving 8 that are genuinely comment-shaped — and both lines #344 repaired *to*
+lines it matches, 102 are `**bold**` openers and 25 open with a single `*` —
+17 emphasis markers and 8 real bullets — leaving 8 that are genuinely
+comment-shaped, and both lines #344 repaired *to*
 are `**` openers, so running it on prose would red the gate on the repair
 itself. The bare-brace and `<!--` predicates have no measured false positive in
 either direction (all 16 brace matches sit inside fenced code blocks, and no
@@ -170,7 +171,14 @@ tests* above:
   `test/services/syncplay-mirror-election.test.ts` into `docs/syncplay.md`, one
   81 lines behind its subject and one 119. So the measured false-positive rate
   is zero. A deliberate landing raises the pin by one, with its reason in the
-  commit message.
+  commit message. What the pin does **not** cover is an anchor landing on a live
+  code line: that is checked for existence only. The four same-file anchors in
+  the `suspiciousLanding()` comment are the clearest case — all four target
+  `if (…)` lines, invisible to blank, bare brace and comment line alike, and the
+  two naming the consecutive bare-brace and comment-line predicates differ by
+  one, so a single line inserted above the ladder re-points each at its
+  neighbour's test, green and wrong. `resolved` counts anchors that resolve, not
+  anchors that are checked.
 - **Uncheckable anchors.** Bare basenames more than one tracked file carries
   (`syncplay.ts` is both `src/main/syncplay.ts` and
   `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that

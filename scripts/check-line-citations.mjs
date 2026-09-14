@@ -35,6 +35,17 @@ import { basename, extname } from 'node:path'
 // #344 repaired the two markdown anchors its narrowing exposed, so the
 // heuristic's measured false-positive rate here is zero. The first genuinely
 // deliberate comment landing raises this by one, with its reason.
+//
+// What this pin does not cover, and what `resolved` does not attest: an anchor
+// landing on a live code line is checked for existence only. The four
+// same-file anchors in the `suspiciousLanding()` comment below all target
+// `if (…)` lines, which blank, bare brace and comment line can never see go
+// stale — they are attested as "the target line exists", not as drift-checked.
+// The bare-brace and comment-line predicates are also consecutive, so those
+// two anchors differ by one: a single line inserted above the ladder re-points
+// each at its neighbour's test, green and wrong. #345 kept them for the
+// inbound-anchor coverage on the record that `resolved` counts anchors that
+// resolve, not anchors that are checked.
 export const SUSPICIOUS_LANDING_PIN = 0
 
 // Anchors that name something in this repo and still cannot be checked:
@@ -141,17 +152,17 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:142 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:153 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:164 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:175 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
-  // matches across the tracked `.md`, 102 are `**bold**` paragraph openers and
-  // 25 are `*` bullets, leaving 8 that are genuinely comment-shaped — and the
+  // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
+  // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
   // false positive is demonstrated on the very lines #344 repaired *to*
   // (docs/syncplay.md:238 and docs/syncplay.md:322 are both `**` openers), so
   // hoisting this return past it would red the gate on the repair itself. The
-  // bare-brace test at scripts/check-line-citations.mjs:163 and the `<!--` test
-  // at scripts/check-line-citations.mjs:169 have no measured false positive in
+  // bare-brace test at scripts/check-line-citations.mjs:174 and the `<!--` test
+  // at scripts/check-line-citations.mjs:180 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and

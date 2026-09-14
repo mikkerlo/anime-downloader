@@ -83,3 +83,31 @@ for unit testing. Floors sit a few points below current coverage so churn
 doesn't flake CI; raise them in follow-ups as coverage climbs. The CI `quality`
 job runs `test:coverage` (not plain `test`) so a threshold regression fails the
 PR.
+
+## Evidence discipline for runtime captures
+
+Some bugs are only settleable by instrumenting a build and driving two real app
+instances against a live Syncplay server (#305, #340, #343, #348). That work
+produces evidence, and the evidence is worthless unless it survives the write-up
+— the #305 campaign lost all five run trees, the instrumentation patch and the
+harness scripts to a wiped scratchpad, leaving a posted comment as the only
+source and its own sha256 manifest permanently uncheckable.
+
+Four rules, and they are rules rather than advice because this cost is paid
+after the fact, by whoever needs the baseline next:
+
+1. **The posted comment is the record.** Anything not published at post time is
+   deemed destroyed at post time and may not be cited by a later step. A claim
+   whose support lives only on disk is not support.
+2. **Publish every run verbatim, not a representative one.** A run summarised in
+   prose cannot be re-read; a run whose records are quoted can.
+3. **The rig goes on a branch, not in a scratchpad.** Push the instrumentation
+   patch and the driver to `evidence/<issue>-<step>` before the write-up, and
+   link it from the report. Such a branch is never opened as a PR — it costs no
+   CI and never merges — and it is what makes a re-capture a re-run rather than
+   a rebuild.
+4. **Line anchors belong in `docs/` and source comments, not in issue bodies.**
+   An issue body cites symbols; a stale symbol reference is rewritten, never
+   re-anchored. Keeping `path:line` true in a long-lived issue costs more than
+   the citation is worth, and it is the failure mode that consumed most of the
+   #305 thread.

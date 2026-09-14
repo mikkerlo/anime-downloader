@@ -27,6 +27,14 @@ import { useSyncplayStore } from '../stores/syncplay'
 
 const WAITING_DEBOUNCE_MS = 600
 
+// `HTMLMediaElement.HAVE_FUTURE_DATA`. Named because it is the transition at
+// which the HTML spec consults the can-autoplay flag, which makes
+// `readyState < HAVE_FUTURE_DATA` exactly the window in which an armed element
+// can still start playing on its own (#348). Not read off the element: the
+// constant is absent on a fake and on a null element, and the two disarm sites
+// below must compare against the same number either way.
+const HAVE_FUTURE_DATA = 3
+
 // How long a user pause made before adoption outranks the room (#228).
 //
 // Budget: <= 3 s to adopt + <= 1 s for the heartbeat that first asserts the
@@ -628,6 +636,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       suppressNextLocalEventUntil = Date.now() + 1500
       appliedPaused = true
       v.pause()
+    } else if (!shouldPlay && v.paused && v.readyState < HAVE_FUTURE_DATA) {
+      // The gate's half of #348, and it is reachable with no apply anywhere in
+      // the path: two of this function's callers — the roster watch and
+      // `setSyncplayLocalReady()` — reach it directly, so the apply-site disarm
+      // does not cover them. Same hole, same shape: `!v.paused` above is false
+      // for a cold element, so the gate declined to disarm one too.
+      //
+      // Beside the arm above rather than folded into it: that one moves an
+      // element that is playing and marks the `pause` event it will fire, this
+      // one disarms an element that is already paused and fires nothing, so the
+      // mark must not be copied down. See the apply site for the full argument.
+      v.pause()
     } else if (shouldPlay && v.paused) {
       suppressNextLocalEventUntil = Date.now() + 1500
       appliedPaused = false
@@ -757,6 +777,43 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // `suppressNextLocalEventUntil` once a second for the whole divergence.
     const refusingResume = outOfFile && outOfFileUserPause && !effectivePaused && v.paused
     const needsPlayPause = effectivePaused !== v.paused && !refusingResume
+
+    // Enact a paused intent on an element that is only *incidentally* paused
+    // (#348). `needsPlayPause` asks whether the element is at the right paused
+    // value; on an armed element that is a different question from whether it
+    // has been *told* to be there. The media load algorithm sets the
+    // can-autoplay flag on every `src` rebind — `PlayerView.vue`'s <video>
+    // carries a bare `autoplay` — and the element consults it at
+    // HAVE_FUTURE_DATA and starts playing with nothing in the app asking it to.
+    // Before this, a paused room reaching a cold element moved nothing, so the
+    // apply returned below and the element autostarted a few ms later, announced
+    // `paused: false`, and destroyed a pause a peer had really pressed.
+    //
+    // Above the early-out, because the whole defect is that the early-out is
+    // taken. Above the `suppressNextLocalEventUntil` arming for the same reason
+    // the call is bare — see below.
+    //
+    // `v.paused` is load-bearing, not decorative. It makes this arm and the
+    // play/pause block below mutually exclusive by construction (that block
+    // needs `effectivePaused !== v.paused`, i.e. `!v.paused` here), which is
+    // what keeps the warm path at one `pause()` and keeps this off the `holding`
+    // path entirely. Without it the arm fires on a *buffering* element — at
+    // HAVE_METADATA, still playing, `effectivePaused` true on local readiness
+    // alone — where `pause()` fires a real `pause` event, `onLocalPause()` reads
+    // it as the user, and the fix announces a pause nobody pressed.
+    //
+    // `readyState < HAVE_FUTURE_DATA` is the window in which the element can
+    // still autostart, because that is the transition at which the flag is
+    // consulted. Past it there is nothing to disarm and this would only re-pause
+    // a settled element once a second, forever.
+    //
+    // **No `appliedPaused` / `suppressNextLocalEventUntil` mark.** The internal
+    // pause steps clear the can-autoplay flag *above* the `if paused is false`
+    // guard that fires the `pause` event, so this call disarms the element and
+    // fires nothing at all. A mark here would have no event to consume it and
+    // would sit until it swallowed the user's next real press — the #236 latch,
+    // pause side.
+    if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()
 
     if (!needsSeek && !needsPlayPause) return
     suppressNextLocalEventUntil = Date.now() + 1500

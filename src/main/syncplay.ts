@@ -2036,7 +2036,7 @@ export class SyncplayClient extends EventEmitter {
     // "the intent was retired ⇒ the renderer was handed that frame" — is
     // untouched on both sides. It is also what keeps #228: recordRemoteState()
     // runs unconditionally at the top of applyRemoteState()
-    // (src/renderer/src/composables/use-syncplay-client.ts:1511-1512) and owns the pending-pause release and
+    // (src/renderer/src/composables/use-syncplay-client.ts:1593-1594) and owns the pending-pause release and
     // the "Paused by …" badge, so dropping the frame would lose the pause half
     // to save the position half. Rewrite, never drop.
     const seekIntentWasLive = this.seekIntent !== null
@@ -2103,7 +2103,7 @@ export class SyncplayClient extends EventEmitter {
     // Only a *playing* room has aged since the state left the peer; a paused
     // position doesn't advance with wall time, so shifting it forward is pure
     // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
-    // (src/renderer/src/composables/use-syncplay-client.ts:1202), so a paused scrub lands every peer up to
+    // (src/renderer/src/composables/use-syncplay-client.ts:1233), so a paused scrub lands every peer up to
     // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
     // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
     // mirrored server-side in _updatePositionByAge, server.py:871-872).
@@ -2179,8 +2179,8 @@ export class SyncplayClient extends EventEmitter {
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two
     // statements that would both be false: a "<me> seeked to 10:06" toast for a
-    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1491-1493) and a "Paused by me"
-    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1142-1143). `null`
+    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1573-1575) and a "Paused by me"
+    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1173-1174). `null`
     // is the existing "the room moved, nobody in particular" value — the type
     // already allows it and both renderer reads are already null-guarded — so
     // no flag and no renderer change is needed to say it.

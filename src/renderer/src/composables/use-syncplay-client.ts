@@ -420,42 +420,42 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // resetRemoteStateTracking.
   let pendingRemoteState: SyncplayRemoteState | null = null
   let remoteStateApplied = false
-  // The out-of-file refusal is emitted on the *transition into* the refusal, not
-  // per refused state (#281). `showSyncplayToast` is not a debounce: it assigns
-  // the single toast slot and *re-arms* the 3500 ms clear timer on every call,
-  // so a refusal emitted per inbound state at 1 Hz would never expire, and
-  // last-writer-wins would swallow every other syncplay toast for the whole
-  // divergence — the pending-pause pair, the reconnect notice and all
-  // `room-event` text. Cleared in two places: where a state applies in range,
-  // alongside `remoteStateApplied`, and — by default — inside
-  // `resetRemoteStateTracking()`, which every file, session and socket change
-  // runs. The default is the clear rather than the keep on purpose: the flag is
-  // a receipt for a refusal already explained about a file we may no longer have
-  // open, so a caller that forgets to think about it fails towards a redundant
-  // toast instead of towards an explanation the user never sees. The single
-  // opt-out is `resetRemoteStateTracking({ keepRefusalNotice: true })` on the
-  // *reconnect* branch: same room, same file, nothing new to say, and clearing
-  // it there would let the refusal re-fire straight over the reconnect notice
-  // that follows it. Any second opt-out needs the same argument (and will fail
-  // the guard test that counts them).
+  // The out-of-file refusal is emitted on the *transition into* the refusal, not per refused
+  // state (#281). `showSyncplayToast` is not a debounce: it assigns the single toast slot and
+  // *re-arms* the 3500 ms clear timer on every call, so a refusal emitted per inbound state
+  // at 1 Hz would never expire, and last-writer-wins would swallow every other syncplay toast
+  // for the whole divergence. Not a universal: a stream sparser than one per 3500 ms does
+  // clear. Here it is the room's cadence, because what reaches us survives
+  // `src/main/syncplay.ts:2097`/`:2098` — foreign-`setBy`, or room voice, which needs
+  // de-adoption *and* a keyed roster with a peer (`:2489-2493`), not de-adoption alone. And
+  // what fires this toast is what de-adopted main: `wouldSeek` needs `diff > 3.0` (:1202) on
+  // the two positions main tests against `ADOPT_TOLERANCE_S` at `src/main/syncplay.ts:1924`,
+  // writing the flag at `:1930`. Cleared where a state applies in range, alongside
+  // `remoteStateApplied`, and — by default — in `resetRemoteStateTracking()`, which every file,
+  // session and socket change runs. The clear is the default because the flag is a receipt for
+  // a refusal already explained, about a file we may no longer have open: a forgetful caller
+  // fails towards a redundant toast, not towards an explanation the user never sees. The one
+  // opt-out, `resetRemoteStateTracking({ keepRefusalNotice: true })` on *reconnect* — same
+  // room, same file, nothing new to say, and clearing it would let the refusal re-fire over
+  // the reconnect notice — is counted by a guard test; a second needs the same argument.
   let refusedToastShown = false
   // "The user paused while the room was out of our file" (#281, slice B).
   //
-  // Main de-adopts for the length of that divergence, so `sendLocalState()`
-  // returns at its adoption gate and the room is never told about this pause —
-  // not even an ignore-counter bump. The room's next 1 Hz *playing* state would
-  // then resume the user, on a `needsPlayPause` that is computed independently
-  // of `outOfFile` by design (right for the pause direction, wrong for the
-  // resume direction once main has gone silent). We cannot tell the room
-  // anything, so it must not be able to override us either.
+  // Main de-adopts for that divergence (`src/main/syncplay.ts:1930`), so `sendLocalState()`
+  // returns at its adoption gate and the room is never told about this pause, not even an
+  // ignore-counter bump. The clear also lets the room's periodics survive `:2097`:
+  // `isForeignState || (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)`, plus
+  // `:2098`'s `localChangeAcked`. So the room's next 1 Hz *playing* state would resume the user,
+  // on a `needsPlayPause` computed independently of `outOfFile` by design (right for pause, wrong
+  // for resume). We cannot tell the room anything, so it must not override us.
   //
-  // Its own boolean, mirroring `refusedToastShown`, because neither existing
-  // marker survives the 1 Hz stream of refused resumes: `recordRemoteState()`
-  // runs for every inbound state, parked or not, and nulls `syncplayPausedBy`
-  // on any non-paused state — so it is already clobbered by the time the apply
-  // tests it — while `intendedPaused` is written from the apply path and
-  // conflates "the room paused us" with "the user paused". `pendingUserPause`
-  // is durable but must not arm here (see `onLocalPause`).
+  // Its own boolean, mirroring `refusedToastShown`: neither existing marker survives that stream
+  // — which de-adoption alone need not produce, since with `List` unkeyable `rosterReceived`
+  // stays false and `isRoomVoice()` returns there (`src/main/syncplay.ts:2492`), so only a peer's
+  // foreign-`setBy` move arrives. `recordRemoteState()` nulls `syncplayPausedBy` on any
+  // non-paused state, parked or not — already clobbered when the apply tests it — while
+  // `intendedPaused` comes from the apply path and conflates "the room paused us" with "the user
+  // paused". `pendingUserPause` is durable but must not arm here (see `onLocalPause`).
   //
   // Set in `onLocalPause()` beside the arming that is now gated off, and
   // cleared everywhere the refusal notice clears: on a state that applies in
@@ -905,8 +905,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // "Reached the element" is the narrow half, and deliberately so. The
     // revision is bumped in the *enactment block* of `applyRemoteStateToElement`
-    // (:1399-1402); #240 parks a state above that call whenever the element is
-    // missing or below HAVE_METADATA, and `recordRemoteState` updates only the
+    // (use-syncplay-client.ts:1399-1402); #240 parks a state above that call whenever the element
+    // is missing or below HAVE_METADATA, and `recordRemoteState` updates only the
     // room mirror and the badge. So a room pause landing in exactly the window a
     // `restore` lives in — between the source swap and its `play` echo — does
     // not supersede it, and the restore writes its resume.
@@ -914,33 +914,33 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // "The revision is bumped where intent is written" stopped being the way to
     // say that at #331: two sites in `applyRemoteStateToElement` now write
     // intent and only the enactment block's bumps. The narrow adoption above the
-    // early-out (:1326) deliberately does not, so a room state that reaches the
-    // element half by the no-op path writes intent without superseding anything
+    // early-out (use-syncplay-client.ts:1326) deliberately does not, so a room state that reaches
+    // the element half by the no-op path writes intent without superseding anything
     // — the argument for that omission is at :1260-1273, and
     // `does not supersede a queued restore across a run of no-op applies (#331)`
     // pins it.
     //
-    // Bumping in `recordRemoteState` would close that and cost more than it
-    // buys: it runs for every inbound state, parked or not, at roughly 1 Hz, so
-    // it would supersede essentially every `restore` and `episode-start` within
-    // a second of registration — including in a room whose paused-ness never
-    // changed. A superseded non-echo operation writes nothing, so `intendedPaused`
-    // would keep its pre-swap value for the heartbeat to assert: the
-    // room-dragging direction, and worse than the divergence it closes.
+    // Bumping in `recordRemoteState` would close that and cost more than it buys — but the ~1 Hz
+    // it is priced at is a *pre-adoption* rate. It runs for every inbound state that survives
+    // `src/main/syncplay.ts:2097`/`:2098`, parked or not, and the three `restore` registrations
+    // are same-episode: `isNewPlayer` is false at `src/main/syncplay.ts:789`, adoption holds, and
+    // their own periodics die at that guard. Only `episode-start` clears adoption there, so only
+    // it is registered where ~1 Hz holds. A superseded non-echo operation writes nothing, so
+    // `intendedPaused` keeps its pre-swap value for the heartbeat to assert: room-dragging.
     //
-    // What bounds the residual instead: while the element is parked
-    // `hasAnnounceablePosition()` keeps the divergent snapshot off the wire, and
-    // `onVideoLoadedMetadata` re-applies the parked state at unpark, adopting
-    // the room's `paused` and pausing the element. Two things move in the
-    // meantime, and the same next inbound state repairs both. The badge: this
-    // consume clears `syncplayPausedBy` and sets `syncplayLastAppliedPaused =
-    // false`, so "Paused by <peer>" blinks off until that state re-flips
-    // `pausedChanged`. And the room mirror: `syncplayLastRemotePlaying` goes
-    // true against a paused room, so a `canplay` or roster change landing
-    // inside the window takes the gate's resume arm rather than its pause arm.
-    // `recordRemoteState` runs parked or not, so both are back at the next
-    // heartbeat. Pinned by "a parked remote pause does not supersede a queued
-    // restore".
+    // What bounds the residual instead: while the element is parked `hasAnnounceablePosition()`
+    // keeps the divergent snapshot off the wire, and `onVideoLoadedMetadata` re-applies the
+    // parked state at unpark, adopting the room's `paused` and pausing the element. Two things
+    // move in the meantime. The badge: this consume clears `syncplayPausedBy` and sets
+    // `syncplayLastAppliedPaused = false`, so "Paused by <peer>" blinks off until a state
+    // re-flips `pausedChanged`. And the room mirror: `syncplayLastRemotePlaying` goes true
+    // against a paused room, so a `canplay` or roster change landing inside the window takes the
+    // gate's resume arm rather than its pause arm. `recordRemoteState` runs parked or not, so
+    // both are back at the next inbound state surviving `src/main/syncplay.ts:2097`/`:2098` —
+    // and *that*, not a heartbeat, is the bound: all five writers of `playbackAdopted = false`
+    // (`src/main/syncplay.ts:789`, `:903`, `:996`, `:1032`, `:1930`) are events, not schedules,
+    // so no timer in the tree caps the run. How often the harmful path is taken is #343. Pinned
+    // by "a parked remote pause does not supersede a queued restore".
     if (isRetired(op) || op.intentRevision !== intentRevision) return
     // Both non-echo kinds resume today. The pause direction is spelled out for
     // symmetry so a future `restore` of a paused source does not have to
@@ -1223,12 +1223,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the length of the divergence, because main is silent and that pause has
     // no other way of holding.
     //
-    // Folded into `needsPlayPause` rather than applied below it so the no-op
-    // early-out below still fires: `outOfFile` forces `needsSeek` false, so a
-    // refused resume would otherwise fall through into the body once a second
-    // for the whole divergence — clobbering `intendedPaused` back to "playing"
-    // and bumping `intentRevision` on every frame, which is the very intent the
-    // refusal exists to keep.
+    // Folded into `needsPlayPause` rather than applied below it so the no-op early-out still
+    // fires: `outOfFile` forces `needsSeek` false, so a refused resume would otherwise fall
+    // through into the body once a second for the whole divergence — clobbering `intendedPaused`
+    // back to "playing" and bumping `intentRevision` on every frame, the intent the refusal
+    // exists to keep. Real here: main de-adopts (`src/main/syncplay.ts:1930`), so frames clear
+    // `:2097` as foreign-`setBy` or as room voice — de-adopted plus a keyed roster with a peer.
     const refusingResume = outOfFile && outOfFileUserPause && !effectivePaused && v.paused
     const needsPlayPause = effectivePaused !== v.paused && !refusingResume
 
@@ -1249,12 +1249,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // divergence at all, because `intentOr`'s fallback is the element's own
     // `true`), a gate down-arm pauses the element and leaves `intendedPaused`
     // *unchanged* at `false`. A room **pause** then needs no element move, takes
-    // the early-out below, and the 1 s interval announces `paused: false` into
-    // the room the user just paused. It does not stay a 1 Hz lie: main's
-    // `canAssertSnapshot()` asserts it, the server un-pauses the room, and the
-    // next inbound state's `syncplayLastRemotePlaying = !state.paused` (:1134)
-    // flips the very mirror the divergence relied on — so from there the room
-    // really is playing, and nothing in the loop restores the pause. #324's lost
+    // the early-out below, and the 1 s interval announces `paused: false` into the room the user
+    // just paused. Not repaired on a schedule: main's `canAssertSnapshot()` asserts it, the
+    // server un-pauses the room, and the next inbound state's `syncplayLastRemotePlaying =
+    // !state.paused` (use-syncplay-client.ts:1134) flips the mirror the divergence relied on —
+    // but only a state surviving `src/main/syncplay.ts:2097`/`:2098` gets there, past adoption
+    // maybe none. From there the room is playing, and nothing restores the pause. #324's lost
     // play, in the pause direction.
     //
     // **No `intentRevision++`**, and not because this site is
@@ -1263,14 +1263,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // got past it, which is the whole subject of the comment in
     // `applyConsumedPlaybackIntent`: a `restore` registered in the `nextTick`
     // after a source swap lives inside the parked window precisely because the
-    // park is there. What carries the omission is a bound of its own: this
-    // adoption fires on *every* inbound state that reaches the element half, at
-    // ~1 Hz, so a surviving `restore`'s clobber of `intendedPaused` lasts at
-    // most one heartbeat, with the room mirror repaired on the same schedule by
-    // :1134. Bumping here would instead supersede essentially every queued
-    // `restore` and `episode-start` within a second of registration — the
-    // unbounded cost that comment already rejects — against a one-heartbeat
-    // residual, the same one #324 accepted for the racing half.
+    // park is there. What carries the omission is a bound of its own, and it is structural, not a
+    // rate: a surviving `restore`'s clobber of `intendedPaused` stands until the next inbound
+    // state surviving `src/main/syncplay.ts:2097`/`:2098` — the room mirror repairs on that same
+    // gated state, `use-syncplay-client.ts:1134` — and no timer, ack, re-adoption or roster event
+    // caps that run: uncapped by any schedule in the tree. Reachability is #343. Bumping here
+    // would instead supersede queued operations within a second of registration — but only
+    // pre-adoption, where `episode-start` is registered and the three same-episode `restore`s are
+    // not — against the residual #324 accepted for the racing half.
     //
     // **`!outOfFile`, deliberately broader than `!refusingResume`:** *any*
     // intent write above the early-out is unsafe for the whole out-of-file
@@ -1281,10 +1281,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // resume then reaches this line with `v.paused` still true (the gate's
     // resume arm needs `!outOfFileUserPause`, :1085, so nothing resumed us),
     // `needsPlayPause` false and `needsSeek` false under `outOfFile`, and
-    // nothing clears the marker in the meantime. A `!refusingResume` guard would
-    // perform there, once a second for the whole divergence, exactly the clobber
-    // :1226-1231 says the fold exists to prevent. Do not narrow it to match a
-    // prose description of the refusal.
+    // nothing clears the marker in the meantime. A `!refusingResume` guard would perform there,
+    // once a second for the whole divergence — main is de-adopted for its length, so the room's
+    // own frames clear `src/main/syncplay.ts:2097` — exactly the clobber :1226-1231 says the fold
+    // exists to prevent. Do not narrow it to match a prose description of the refusal.
     //
     // **`!holding`** is not implied by that term, and it is reachable rather
     // than defensive. An MSE buffer refill pauses the element and holds
@@ -1531,27 +1531,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // never stale — but a local play/pause during the wait overwrites it, and
     // the two halves then disagree: the parked state pauses the element and
     // adopts `intendedPaused = true` while `syncplayLastRemotePlaying` still
-    // says the room is playing, so the very next `applySyncplayReadyGate()`
-    // plays it again with `syncplayPausedBy` naming nobody. Re-running here
-    // costs nothing on the immediate path (it just ran, so `pausedChanged` is
-    // false) and makes the deferred apply re-assert *this bookkeeping* as of the
-    // moment we enact it. The position is not made current the same way: it
-    // carries main's one-shot `serverRtt / 2` compensation from emit time
-    // (src/main/syncplay.ts:2115) and nothing advances the parked copy, so it applies
-    // behind the room by the park's duration. Uncompensated on purpose — the
-    // 1 Hz overwrite, the 3 s apply tolerance and main's adoption gate bound the
-    // error; docs/syncplay.md, "Apply Rule".
+    // says the room is playing, so the very next `applySyncplayReadyGate()` plays it again with
+    // `syncplayPausedBy` naming nobody. Re-running here costs nothing on the immediate path (it
+    // just ran, so `pausedChanged` is false) and makes the deferred apply re-assert *this
+    // bookkeeping* as of the moment we enact it. The position is not made current the same way:
+    // it carries main's one-shot `serverRtt / 2` compensation from emit time
+    // (src/main/syncplay.ts:2115) and nothing advances the parked copy, so it applies behind the
+    // room by the park's duration. Uncompensated on purpose — the 3 s apply tolerance and main's
+    // adoption gate bound the error, and the 1 Hz overwrite too, but only where adoption cleared
+    // (`src/main/syncplay.ts:789`); an in-player translation or quality switch does not clear it,
+    // and a park is reachable there on the other two alone. docs/syncplay.md, "Apply Rule".
     recordRemoteState(state)
     applyRemoteStateToElement(state, v, true)
   }
 
   // A remote episode change swaps the <video> source, and a state parked for the
-  // previous episode must never be applied at the new one's `loadedmetadata`.
-  // The applied flag is reset with it — it must not latch for the session: main
-  // stops emitting `remote-state` the moment we are alone in the room, so a
-  // latched flag would eat the user's saved position on every later episode
-  // open, forever. Resetting inside a live room costs at most a sub-second flash
-  // at the saved position before the next 1 Hz state seeks us to the room.
+  // previous episode must never be applied at the new one's `loadedmetadata`. The applied flag is
+  // reset with it — it must not latch for the session: main stops emitting `remote-state` once we
+  // are alone, so it would eat the user's saved position on every later open. Resetting in a live
+  // room costs at most a sub-second flash before the next 1 Hz state seeks us to the room — where
+  // adoption cleared (`src/main/syncplay.ts:789`); on an in-player switch it did not, and nothing
+  // schedules that state.
   // `refusedToastShown` is cleared here too, by default and deliberately: every
   // caller of this function is a point where the file, the room or the socket
   // has changed under the flag, and a stale receipt makes the *next* refusal

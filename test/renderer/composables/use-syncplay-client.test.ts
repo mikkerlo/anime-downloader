@@ -2422,9 +2422,15 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
 })
 
 // #281 slice B, the renderer half. Main de-adopts for the length of the
-// divergence, so `sendLocalState()` returns at its adoption gate — no
-// assertion, not even an ignore-counter bump — and a local pause can no longer
-// reach the room. The room's next 1 Hz *playing* state would then resume the
+// divergence (`src/main/syncplay.ts:1930`), so `sendLocalState()` returns at its
+// adoption gate — no assertion, not even an ignore-counter bump — and a local
+// pause can no longer reach the room. That clear is also what lets the room's own
+// periodics survive `src/main/syncplay.ts:2097`, whose gate is `isForeignState ||
+// (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)` with
+// `src/main/syncplay.ts:2098`'s unacked-local-change drop below it. De-adoption is
+// necessary and not sufficient: with `List` unkeyable (#223) `rosterReceived` stays
+// false and only a peer's own foreign-`setBy` move arrives — which is what the
+// fixtures below emit. So the room's next 1 Hz *playing* state would then resume the
 // user, on a `needsPlayPause` that is deliberately independent of `outOfFile`.
 // We cannot tell the room anything, so it must not be able to override us
 // either: honour a room pause, refuse a room resume that would override a local
@@ -2472,7 +2478,10 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     expect(v.play).not.toHaveBeenCalled()
     expect(v.paused).toBe(true)
     // …and it keeps holding, because the room is going to say the same thing
-    // once a second for the whole divergence.
+    // once a second for the whole divergence — and these frames do arrive. They
+    // carry `setBy: 'peer'`, so `isForeignState` is true and they are past
+    // `src/main/syncplay.ts:2097` unconditionally, with no adoption reasoning
+    // needed: this fixture pins the foreign-`setBy` regime, not the de-adopted one.
     emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
     emitRemoteState({ position: 3002, paused: false, doSeek: false, setBy: 'peer' })
     expect(v.play).not.toHaveBeenCalled()
@@ -2723,8 +2732,14 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 // *re-arms* its 3500 ms clear timer on every call. So a refusal emitted per
 // inbound state at 1 Hz would never expire, and last-writer-wins would swallow
 // every other syncplay toast for the whole divergence: the pending-pause pair,
-// the reconnect notice and all `room-event` text. The refusal is therefore
-// emitted on the transition *into* the refusal only.
+// the reconnect notice and all `room-event` text. Not a universal — a stream
+// sparser than one per 3500 ms does let the notice clear. It is the room's cadence
+// here because the out-of-file divergence is the window `src/main/syncplay.ts:1930`
+// de-adopts for, so the room's own periodics stop dying at
+// `src/main/syncplay.ts:2097` and arrive as room voice — which needs de-adoption
+// *and* a keyed roster with a peer in it, not de-adoption alone — while a peer's
+// explicit move is foreign-`setBy` and past that guard regardless. The refusal is
+// therefore emitted on the transition *into* the refusal only.
 describe('useSyncplayClient — the refusal toast fires on the transition only (#281)', () => {
   it('emits once across a 1 Hz stream of refused states', async () => {
     vi.useFakeTimers()
@@ -3339,8 +3354,12 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   // landing in exactly the window a `restore` lives in leaves the restore
   // current, and it writes its resume.
   // This is the residual the comment on `applyConsumedPlaybackIntent` names;
-  // bumping the revision in `recordRemoteState` instead would supersede nearly
-  // every restore at 1 Hz, which is worse. What bounds it is asserted below.
+  // bumping the revision in `recordRemoteState` instead would supersede a queued
+  // operation within a second of registration — but only *pre-adoption*, which is
+  // where `episode-start` is registered. The three same-episode `restore`s are not:
+  // `isNewPlayer` is false at `src/main/syncplay.ts:789`, adoption holds, and their
+  // own periodics die at `src/main/syncplay.ts:2097`. What bounds it is asserted
+  // below.
   it('a parked remote pause does not supersede a queued restore', async () => {
     const sendLocalState = vi.fn()
     const sendSnapshot = vi.fn()
@@ -3385,8 +3404,11 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
 
     // And this is what bounds it: the unpark re-applies the parked state, which
-    // adopts the room's `paused`, pauses the element and restores the badge —
-    // about one heartbeat of blink, not a room-dragging resume.
+    // adopts the room's `paused`, pauses the element and restores the badge. That
+    // is the bound — not "about one heartbeat of blink", which #340 falsified: the
+    // other repair channel waits on the next inbound state to survive
+    // `src/main/syncplay.ts:2097` and `src/main/syncplay.ts:2098`, and nothing in
+    // the tree schedules that state. Either way, not a room-dragging resume.
     sendSnapshot.mockClear()
     client.onVideoLoadedMetadata()
     expect(v.pause).toHaveBeenCalled()
@@ -5169,7 +5191,10 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 
 // #324 closed the *racing* half of the stale-assert family. This is the half it
 // left open, and the worse-shaped one: the value the 1 Hz interval pushes is
-// itself wrong, so nothing self-corrects on the next heartbeat.
+// itself wrong, so nothing self-corrects on a schedule. The repair waits on an
+// inbound state surviving `src/main/syncplay.ts:2097` and
+// `src/main/syncplay.ts:2098`, and on a same-episode swap, past adoption, that may
+// be no state at all (#340) — a heartbeat is not the bound.
 //
 // The mechanism. `applyRemoteStateToElement` used to return at
 // `if (!needsSeek && !needsPlayPause) return` *above* its intent adoption, so an
@@ -5180,7 +5205,8 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 // leaves `intendedPaused` at whatever a prior establishing write left there. With
 // that write being `false`, a room pause then early-outs and the interval
 // announces `paused: false` into the room the user just paused — and the server
-// acts on it, which is what makes this a lost pause rather than a 1 Hz lie.
+// acts on it, which is what makes this a lost pause rather than a lie the next
+// inbound state flips back.
 //
 // The fix is a narrow adoption above the early-out under `!outOfFile && !holding`
 // with no `intentRevision++`. Every case below pins one term of that, and the
@@ -5384,9 +5410,11 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
 
   // The `intentRevision` decision, pinned directly so the next person to touch
   // the adoption's neighbourhood cannot quietly add the bump. Bumping here would
-  // supersede essentially every queued `restore` and `episode-start` within a
-  // second of registration — at this site's ~1 Hz cadence — and a superseded
-  // operation writes nothing at all.
+  // supersede a queued `restore` or `episode-start` within a second of registration
+  // — but only *pre-adoption*, which is where `episode-start` is registered and
+  // where the three same-episode `restore`s are not: their periodics arrive
+  // self-`setBy` and die at `src/main/syncplay.ts:2097`. A superseded operation
+  // writes nothing at all.
   it('does not supersede a queued restore across a run of no-op applies (#331)', async () => {
     vi.useFakeTimers()
     const sendSnapshot = vi.fn()

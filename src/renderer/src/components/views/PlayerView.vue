@@ -1433,6 +1433,44 @@ function togglePlay(): void {
 // Chromium but `undefined` in older/DOM-shim environments, and a rejection that
 // escaped here would leave the operation registered until its TTL.
 function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): void {
+  // A `restore` replays a `wasPlaying` latched *before* an await — the remux
+  // prepare in `selectTranslation`'s local-file arm, or the `playerGetStreamUrl`
+  // round trip in its stream arm (622 ms in #343's capture) — so by the time it
+  // runs the world may have moved. If the user pressed pause inside that window,
+  // replaying the latch un-pauses them *and* announces it: `pushSyncplaySnapshot`
+  // reads the clobbered intent as `paused: intentOr(v)` and the room resumes
+  // (#347). Neither existing guard sees it — the epoch guard defends against a
+  // newer *switch*, and the operation's intent-revision test compares the instant
+  // the op was registered, which is already after the pause.
+  //
+  // So the latch is checked against the present rather than trusted: the ready
+  // gate's own predicate, read live in this call stack. Refusing here means no
+  // `v.play()` and no operation registered at all, which is why it is the
+  // mechanism and the composable's intent backstop is only the second line.
+  //
+  // Not re-reading `v.paused` instead: after a src rebind the element is paused
+  // regardless, so that reads false every time and no legitimate restore would
+  // ever fire.
+  //
+  // Session term, deliberately `!== 'idle' && !== 'disconnected'` rather than
+  // `=== 'ready'`. The markers the predicate reads are session-scoped and
+  // `useSyncplayClient` clears them on `idle`/`disconnected` only — a *reconnect*
+  // keeps every one of them, same room, same player, same user — so a
+  // `ready`-only term would be off in exactly the window where a pause made
+  // across a socket blip is still live, and a translation switch taken there
+  // would undo it. Outside a session the veto must stay off entirely:
+  // `syncplayLastRemotePlaying` initialises `false`, so an ungated veto would
+  // refuse every restore in a player that never joined a room.
+  //
+  // Keyed on `restore` only. `episode-start` establishes the new episode's
+  // intent rather than replaying a stale one, so the premise does not apply —
+  // and folding it in on symmetry grounds would break the binge auto-resume the
+  // way `use-syncplay-client.ts`'s `clearPendingUserPause()` note describes:
+  // across an episode switch taken during a divergence the projection still says
+  // `outOfFile` and the ready gate declines the resume.
+  const state = syncplay.syncplayStatus.value.state;
+  const sessionLive = state !== 'idle' && state !== 'disconnected';
+  if (kind === 'restore' && sessionLive && !syncplay.shouldElementPlay()) return;
   const op = syncplay.beginProgrammaticPlayback('play', kind);
   void Promise.resolve(v.play()).catch(() => op.retract());
 }

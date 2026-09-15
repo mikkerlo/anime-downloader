@@ -55,6 +55,24 @@ export interface EmbedData {
   subtitlesUrl: string | null
 }
 
+/**
+ * Thrown by `SmotretApi.request()` when the server answers HTTP 200 with a
+ * top-level `error` envelope (e.g. `{"error":{"code":403,"message":"..."}}`).
+ * The smotret-anime API uses HTTP status for some failures and this envelope
+ * for others, so `request()` must check for it independently of
+ * `!response.ok` — see issue #354. `code` carries `error.code` so callers can
+ * branch on an auth failure without parsing the message.
+ */
+export class SmotretApiError extends Error {
+  code: number
+
+  constructor(code: number, message: string) {
+    super(`API error ${code}: ${message}`)
+    this.name = 'SmotretApiError'
+    this.code = code
+  }
+}
+
 export class SmotretApi {
   private getToken: () => string
 
@@ -76,7 +94,20 @@ export class SmotretApi {
       throw new Error(`API error: ${response.status} ${response.statusText}`)
     }
 
-    return response.json()
+    const json = await response.json()
+
+    // The API can answer HTTP 200 with an error envelope instead of a real
+    // payload (e.g. `{"error":{"code":403,"message":"You should login
+    // first."}}`). Key on the *presence* of `error`, not on `code === 403`,
+    // so other server-side codes are not missed (#354).
+    if (json && typeof json === 'object' && 'error' in json) {
+      const err = (json as { error?: { code?: number; message?: string } }).error
+      if (err) {
+        throw new SmotretApiError(err.code ?? 0, err.message ?? 'Unknown error')
+      }
+    }
+
+    return json
   }
 
   async searchAnime(query: string): Promise<{ data: AnimeSearchResult[] }> {

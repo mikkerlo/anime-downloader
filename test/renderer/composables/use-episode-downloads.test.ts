@@ -554,6 +554,19 @@ describe('useEpisodeDownloads — actions', () => {
     expect(dl.errorMessage.value).toMatch(/token/i)
   })
 
+  it('playStream writes errorMessage instead of going silent when the stream URL is null', async () => {
+    setApi({ playerGetStreamUrl: vi.fn().mockResolvedValue(null) })
+    const row = mkRow({ episodeId: 1, episodeInt: '1', selectedTrId: 100 })
+    const deps = makeDeps({
+      anime: ref({ id: 1 } as unknown as AnimeDetail)
+    })
+    const dl = useEpisodeDownloads(deps)
+    const openPlayerSpy = vi.spyOn(deps.playerStore, 'openPlayer')
+    await dl.playStream(row)
+    expect(openPlayerSpy).not.toHaveBeenCalled()
+    expect(dl.errorMessage.value).toBeTruthy()
+  })
+
   it('cancelEpisodeDownload + cancelAllDownloads route to IPC', async () => {
     const cancel = vi.fn().mockResolvedValue(undefined)
     setApi({ downloadCancelByEpisode: cancel })

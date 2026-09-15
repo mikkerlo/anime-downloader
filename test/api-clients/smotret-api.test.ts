@@ -256,5 +256,57 @@ describe('SmotretApi — fixture replay', () => {
       mockFetchOnce({}, 500, 'Server Error')
       await expect(makeApi().getAnime(1)).rejects.toThrow(/API error: 500 Server Error/)
     })
+
+    // The smotret-anime API can answer HTTP 200 with an error envelope
+    // (`{"error":{"code":403,"message":"..."}}`) instead of a real payload.
+    // request() only checked `!response.ok`, so this body was returned as a
+    // "success" — searchAnime resolved to the error envelope typed as search
+    // results, and getEmbed resolved to `undefined` outright. Every
+    // request()-backed method must instead reject.
+    const errorBody = { error: { code: 403, message: 'You should login first.' } }
+
+    it('searchAnime rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().searchAnime('foo')).rejects.toThrow()
+    })
+
+    it('getAnime rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getAnime(1)).rejects.toThrow()
+    })
+
+    it('getEpisode rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEpisode(100)).rejects.toThrow()
+    })
+
+    it('getEpisodesBatch rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEpisodesBatch([100])).rejects.toThrow()
+    })
+
+    it('getEmbed rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEmbed(1001)).rejects.toThrow()
+    })
+
+    it('lookupByMalIds rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().lookupByMalIds([9253])).rejects.toThrow()
+    })
+
+    it('carries error.code and error.message into the thrown error', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEmbed(1001)).rejects.toMatchObject({
+        code: 403,
+        message: expect.stringContaining('You should login first.')
+      })
+    })
+
+    it('validateToken still returns valid:false without throwing on the same body', async () => {
+      mockFetchOnce(errorBody)
+      const v = await makeApi('bad-tok').validateToken()
+      expect(v).toEqual({ valid: false, error: 'Invalid token' })
+    })
   })
 })

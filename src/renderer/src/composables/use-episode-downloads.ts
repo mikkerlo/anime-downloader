@@ -445,6 +445,15 @@ export function useEpisodeDownloads(deps: {
         animeId: deps.getAnimeId(),
         malId: deps.anime.value?.myAnimeListId ?? 0
       })
+    } else {
+      // #354: playerGetStreamUrl collapses "no stream for this translation"
+      // and "the API refused the request" to the same null — without this,
+      // the Play button did nothing at all, with no toast or banner.
+      errorMessage.value =
+        'Could not start playback. The stream may be unavailable, or your API token may have expired — check Settings → Connectors.'
+      setTimeout(() => {
+        errorMessage.value = ''
+      }, 5000)
     }
   }
 

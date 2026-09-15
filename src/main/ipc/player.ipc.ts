@@ -164,7 +164,8 @@ export function register({
         }
 
         return { streamUrl, subtitleContent, availableStreams }
-      } catch {
+      } catch (err) {
+        console.error('[player] stream url failed:', err)
         return null
       }
     }

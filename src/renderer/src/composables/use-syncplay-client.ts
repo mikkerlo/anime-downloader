@@ -592,7 +592,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // One frame wide on purpose: once the room is observed playing again outside
     // a hold, `recordRemoteState` re-arms and the following transition paints as
-    // usual.
+    // usual. What that one frame costs in the silent arm is a *wrong* name and
+    // not a missing one: a genuine peer forced-update pause landing inside it is
+    // not an edge, so it is dropped and "Paused by you" keeps standing over it.
+    // Bounded by the room's 1 Hz, and taken deliberately — the alternative is
+    // the elected laggard repainted off every periodic behind the expiry.
     badgeEdgePaused = true
     if (held) {
       // Only a hold that held something can have failed visibly — and only then
@@ -970,7 +974,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // "Reached the element" is the narrow half, and deliberately so. The
     // revision is bumped in the *enactment block* of `applyRemoteStateToElement`
-    // (use-syncplay-client.ts:1564-1567); #240 parks a state above that call whenever the element
+    // (use-syncplay-client.ts:1573-1576); #240 parks a state above that call whenever the element
     // is missing or below HAVE_METADATA, and `recordRemoteState` updates only the
     // room mirror and the badge. So a room pause landing in exactly the window a
     // `restore` lives in — between the source swap and its `play` echo — does
@@ -979,9 +983,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // "The revision is bumped where intent is written" stopped being the way to
     // say that at #331: two sites in `applyRemoteStateToElement` now write
     // intent and only the enactment block's bumps. The narrow adoption above the
-    // early-out (use-syncplay-client.ts:1445) deliberately does not, so a room state that reaches
+    // early-out (use-syncplay-client.ts:1454) deliberately does not, so a room state that reaches
     // the element half by the no-op path writes intent without superseding anything
-    // — the argument for that omission is at :1379-1392, and
+    // — the argument for that omission is at :1388-1401, and
     // `does not supersede a queued restore across a run of no-op applies (#331)`
     // pins it.
     //
@@ -1219,7 +1223,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // for why the parked frame's own `setBy` may never be read there. The mirror
   // half needs no argument at all — `syncplayLastRemotePlaying` below is written
   // unconditionally on every call, above the edge test, which is the whole of
-  // what #240's re-run repairs.
+  // what #240's re-run repairs. It is also the one path that may overwrite a
+  // local pause prediction made while the state sat parked: unlike a periodic's
+  // re-elected `setBy`, the restated name is edge-derived — the room paused at
+  // park time, not on a re-election — and names the peer who paused the room
+  // before the user's own press landed, which is why the overwrite is right
+  // here and wrong there.
   function recordRemoteState(
     state: SyncplayRemoteState,
     reassert?: { pausedBy: string | null }
@@ -1355,9 +1364,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // What makes that a lost pause rather than a cosmetic gap. Nothing but the
     // user handlers and this adoption writes `intendedPaused`: an `echo`
-    // operation establishes nothing by contract (:964), and every pause the app
+    // operation establishes nothing by contract (:968), and every pause the app
     // makes on its own behalf that an element can *report* is an echo — the
-    // readiness gate's down-arm (:1168-1170), a remote apply, an MSE buffer
+    // readiness gate's down-arm (:1172-1174), a remote apply, an MSE buffer
     // refill, PlayerView's teardown. The two `autoplay` disarms (#348) are the
     // exception that does not disturb this, and the qualifier is what carries
     // them: each runs only on an element that is already paused, where the
@@ -1371,7 +1380,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the early-out below, and the 1 s interval announces `paused: false` into the room the user
     // just paused. Not repaired on a schedule: main's `canAssertSnapshot()` asserts it, the
     // server un-pauses the room, and the next inbound state's `syncplayLastRemotePlaying =
-    // !state.paused` (use-syncplay-client.ts:1238) flips the mirror the divergence relied on —
+    // !state.paused` (use-syncplay-client.ts:1247) flips the mirror the divergence relied on —
     // but only a state surviving `src/main/syncplay.ts:2097`/`:2098` gets there, past adoption
     // maybe none. From there the room is playing, and nothing restores the pause. #324's lost
     // play, in the pause direction.
@@ -1385,7 +1394,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // park is there. What carries the omission is a bound of its own, and it is structural, not a
     // rate: a surviving `restore`'s clobber of `intendedPaused` stands until the next inbound
     // state surviving `src/main/syncplay.ts:2097`/`:2098` — the room mirror repairs on that same
-    // gated state, `use-syncplay-client.ts:1238` — and no timer, ack, re-adoption or roster event
+    // gated state, `use-syncplay-client.ts:1247` — and no timer, ack, re-adoption or roster event
     // caps that run: uncapped by any schedule in the tree. Reachability is #343. Bumping here
     // would instead supersede queued operations within a second of registration — but only
     // pre-adoption, where `episode-start` is registered and the three same-episode `restore`s are
@@ -1394,15 +1403,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // **`!outOfFile`, deliberately broader than `!refusingResume`:** *any*
     // intent write above the early-out is unsafe for the whole out-of-file
     // divergence, not only for the frames the refusal is actually firing on.
-    // `refusingResume` carries `!effectivePaused` (:1346) and `effectivePaused`
-    // folds in `!syncplayAllUsersReady()` (:1332), so one peer going not-ready
+    // `refusingResume` carries `!effectivePaused` (:1355) and `effectivePaused`
+    // folds in `!syncplayAllUsersReady()` (:1341), so one peer going not-ready
     // makes the refusal false while `outOfFileUserPause` is still armed: a room
     // resume then reaches this line with `v.paused` still true (the gate's
-    // resume arm needs `!outOfFileUserPause`, :1154, so nothing resumed us),
+    // resume arm needs `!outOfFileUserPause`, :1158, so nothing resumed us),
     // `needsPlayPause` false and `needsSeek` false under `outOfFile`, and
     // nothing clears the marker in the meantime. A `!refusingResume` guard would perform there,
     // once a second for the whole divergence — main is de-adopted for its length, so the room's
-    // own frames clear `src/main/syncplay.ts:2097` — exactly the clobber :1340-1345 says the fold
+    // own frames clear `src/main/syncplay.ts:2097` — exactly the clobber :1349-1354 says the fold
     // exists to prevent. Do not narrow it to match a prose description of the refusal.
     //
     // **`!holding`** is not implied by that term, and it is reachable rather
@@ -1417,7 +1426,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // unguarded write here would clobber the user's own pause on that frame.
     //
     // That term covers the **pre-adoption** half of a user pause and only that
-    // half: the hold arms under `playbackAdopted !== true` (:2065), so a press
+    // half: the hold arms under `playbackAdopted !== true` (:2074), so a press
     // made after adoption arms nothing and `holding` is false here. What covers
     // the same shape post-adoption is main, not this line — `sendLocalState`
     // bumps `clientIgnoreCounter`/`pendingClientAck` on the discrete pause
@@ -1431,7 +1440,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // guard in the same `handleState` call. That is the ~1 RTT of lost echo
     // protection `syncplay.ts:1774-1781` accepts by name; in that window the
     // cover is a trade-off rather than a guarantee. The split is
-    // named at the arming site (:2010-2013) and from main's end
+    // named at the arming site (:2019-2022) and from main's end
     // (`syncplay.ts:543-546`), but not where a reader of `!holding` needs it: the
     // gap would be this same defect mirrored — such a state arriving with one
     // peer not ready has `effectivePaused === v.paused === true`, so it is a
@@ -1440,7 +1449,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // Only the `holding` **binding** hoists above the early-out.
     // `notePendingPauseHeldState()` stays below it, per its own contract
-    // (:609-612): a state that early-outs moved nothing and so held nothing.
+    // (:613-616): a state that early-outs moved nothing and so held nothing.
     const holding = pendingUserPause && !state.paused
     if (!outOfFile && !holding) intendedPaused = state.paused
 
@@ -1478,12 +1487,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //   already being paused — so on an already-paused element this call
     //   disarms and fires *nothing*. An operation registered for it would never
     //   be consumed and would sit in the registry for the full
-    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:866), where the user's next genuine pause would
+    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:870), where the user's next genuine pause would
     //   match it and be swallowed as an echo. That is the latch family #236
     //   records one line-block below, on the play side.
     //
     // Drop `v.paused` and both arguments fail at once: `effectivePaused` is
-    // `state.paused || !syncplayAllUsersReady()` (use-syncplay-client.ts:1332), a disjunction, so it is
+    // `state.paused || !syncplayAllUsersReady()` (use-syncplay-client.ts:1341), a disjunction, so it is
     // true on a *playing* room whenever readiness is down — and a bare
     // `v.pause()` on an element that is still playing fires a real `pause` event
     // that `onLocalPause` reads as the user and announces to the room. A pause
@@ -1634,14 +1643,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // hold is waiting for"), and a gate here contradicted it.
     //
     // The gate never withheld a payload in any case, only delayed one: the 1 s
-    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2243) is
+    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2252) is
     // unconditional and `pushSyncplaySnapshot` has no `holding` term of its
     // own, so the identical snapshot reached main within a second regardless.
     // Dropping it is a latency change, not a semantic one.
     //
     // Nor is the held payload a lie about the room: `intentOr(v)` reads
-    // `intendedPaused`, which `onLocalPause` sets to `true` (:1976) *above* its
-    // `armPendingUserPause()` (:2068). So a push under a hold announces the
+    // `intendedPaused`, which `onLocalPause` sets to `true` (:1985) *above* its
+    // `armPendingUserPause()` (:2077). So a push under a hold announces the
     // user's own pause at the position this apply just wrote — never the room's
     // resume, which the intent adoption above declines to adopt. `holding` is
     // false for every paused state by construction, so a room resume is the

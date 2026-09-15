@@ -3,7 +3,7 @@
 // serverRtt / 2 before applying. A paused position has not aged, so shifting it
 // is pure error — and on the paused-seek path it is a silent, tolerance-free
 // mis-seek, since `doSeek` bypasses the renderer's 3 s window
-// (src/renderer/src/composables/use-syncplay-client.ts:1233). Upstream gates the same shift on the same flag
+// (src/renderer/src/composables/use-syncplay-client.ts:1325). Upstream gates the same shift on the same flag
 // (client.py:459-460, server.py:871-872).
 //
 // The compensated value must stay ONE expression read twice: it is emitted to

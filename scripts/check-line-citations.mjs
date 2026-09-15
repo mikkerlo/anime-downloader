@@ -140,7 +140,7 @@ const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
  * interior line is a brace or a comment (src/main/syncplay.ts:902-908,
  * src/main/syncplay.ts:862-870 and
- * src/renderer/src/composables/use-syncplay-client.ts:1573-1575), so
+ * src/renderer/src/composables/use-syncplay-client.ts:1665-1667), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  */
@@ -159,7 +159,7 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
   // false positive is demonstrated on the very lines #344 repaired *to*
-  // (docs/syncplay.md:238 and docs/syncplay.md:324 are both `**` openers), so
+  // (docs/syncplay.md:246 and docs/syncplay.md:332 are both `**` openers), so
   // hoisting this return past it would red the gate on the repair itself. The
   // bare-brace test at scripts/check-line-citations.mjs:174 and the `<!--` test
   // at scripts/check-line-citations.mjs:180 have no measured false positive in

@@ -209,6 +209,41 @@ repo does not contain — that rule, not a filename allowlist, is also what keep
 `test/check-line-citations.test.ts` drives the analyzer over synthetic corpora
 rather than the real tree, whose counts are the pins themselves.
 
+## Evidence retention
+
+Some findings are settled by a capture rather than by a test: two instrumented
+app instances against a real server, a driver, and a run directory of records.
+Those runs are not reproducible on demand and their artifacts do not survive —
+the five-run campaign behind #348's root cause was written up in a comment and
+its run trees, instrumentation patch, harness scripts and sha256 manifest were
+all gone by the time the fix was written, wiped with the scratchpad that held
+them. The issue-body retention rule that used to cover this is retired; these
+four rules replace it.
+
+1. **The posted comment is the record.** Anything not published at post time is
+   deemed destroyed at post time and may not be cited by a later step. A claim
+   whose support lives only in a run directory is a claim with no support the
+   moment that directory is gone, and the failure is silent: the prose still
+   reads as evidence. Write the report so that it stands alone, and where it
+   cannot, say so in it — "run 5's per-record sequence is not quoted because the
+   comment summarises it in prose" is a usable disclosure; a reconstruction from
+   the mechanism is not.
+2. **Publish every run verbatim, not a representative one.** Selecting the run
+   that reproduces discards the denominator, and the denominator is the claim:
+   "4 of 5" and "the one we kept" are different findings. Verbatim means the
+   record lines with their numbers and clocks, not a paraphrase of what they
+   showed.
+3. **The rig goes on an `evidence/<issue>-<step>` branch, never a scratchpad.**
+   Push the instrumentation patch, the driver, the clock anchoring and the
+   environment setup from the instrumented checkout and link the branch from the
+   report. Such a branch is never opened as a PR, so it costs zero CI and never
+   merges — and rebuilding a rig from scratch is the real cost an artifact loss
+   imposes, not the records themselves.
+4. **This section is the rule's home.** It lives in a file under `docs/`, on
+   purpose: the rules in this repo that hold are the ones with a file behind
+   them, and a retention rule kept in an issue body is subject to exactly the
+   loss it exists to prevent.
+
 ## Coverage thresholds
 
 `test:coverage` enforces **per-glob** floors (in `vitest.config.ts`) on the

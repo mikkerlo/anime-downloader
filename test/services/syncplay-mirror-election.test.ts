@@ -279,7 +279,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // `lastRemoteRoomState` is refreshed *only* below the emit, so on head it
     // freezes at the last pre-election frame and `ROOM_POSITION_MAX_AGE_MS`
     // kills the join-time MKV seed 15 s later — the cap doing exactly the job
-    // that the argument retracted at `docs/syncplay.md:322` said it could never
+    // that the argument retracted at `docs/syncplay.md:324` said it could never
     // be called on to do.
     const seed = joiner.getRoomPosition(OPEN)
     expect(seed).not.toBeNull()

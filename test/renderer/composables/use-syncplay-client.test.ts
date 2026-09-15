@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2029` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2111` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1832,6 +1832,301 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     expect(client.syncplayPausedBy.value).toBe('peer')
     client.applySyncplayReadyGate()
     expect(v.play).not.toHaveBeenCalled()
+  })
+
+  // ── The armed-element disarm (#348) ────────────────────────────────────────
+  //
+  // `PlayerView.vue`'s `<video>` carries a bare `autoplay` attribute, and the
+  // HTML media element load algorithm re-sets the *can autoplay flag* on every
+  // `src` rebind — so a cold element is **armed** to start playing the moment it
+  // has data, whatever the room intends. The only thing that clears the flag is
+  // the internal pause steps, i.e. an actual `pause()` call; and because the
+  // flag-clearing step sits above the `if paused is false` guard that fires the
+  // `pause` event, `pause()` on an already-paused element disarms it and fires
+  // nothing.
+  //
+  // The defect these cases pin: `needsPlayPause` conflates "the element is at
+  // the right paused value" with "the element has been told to be at that
+  // value". On a cold element those are different facts, so a paused room
+  // produced `effectivePaused === v.paused === true`, the apply early-outed as a
+  // no-op, and the element autostarted a few frames later and destroyed the
+  // room's pause.
+  //
+  // The fake has no can-autoplay flag of its own, so these assert the **proxy**:
+  // that the disarming call is issued. That is the one thing the app controls
+  // and the one thing that was missing — the element being *already paused* is
+  // the premise of the case, not a reason the call is redundant.
+  it('disarms a cold element when the parked state it unparks into is paused', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    // Parks: `readyState < 1`.
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+    expect(v.pause).not.toHaveBeenCalled()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    // The unpark moves neither the playhead nor the paused bit, so on `main`
+    // this apply returned at its no-op early-out and left the element armed.
+    expect(v.pause).toHaveBeenCalled()
+  })
+
+  // The case that decides the *shape* of the guard, not just its presence.
+  //
+  // `effectivePaused` is `state.paused || !syncplayAllUsersReady()` — a
+  // disjunction — so it is true on a *playing* room whenever readiness is down.
+  // A guard of `effectivePaused && v.readyState < 3` therefore fires a bare
+  // `v.pause()` at an element that is still playing, which fires a real `pause`
+  // event, which `onLocalPause` reads as the user (the registry is empty by
+  // design here) and announces to the room. That is the mirror image of the bug
+  // the disarm fixes: a pause nobody pressed.
+  //
+  // `v.paused` in the guard removes the case by construction. The fake's `pause`
+  // is rewired below to the HTML internal pause steps, because the bare
+  // `vi.fn()` at `test/renderer/composables/use-syncplay-client.test.ts:194`
+  // fires no event and the whole point here is what the event would do.
+  it('does not announce a pause when a buffering element takes a playing state', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 100,
+      paused: false,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // A playing room, adopted by nobody yet — so the user's press arms the hold.
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // A peer goes not-ready: `syncplayAllUsersReady()` is false from here on, so
+    // every inbound playing state now computes `effectivePaused === true`.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    await nextTick()
+
+    // The element is playing again with the hold still set. Reachable as
+    // documented in `applyConsumedPlaybackIntent`: a superseded
+    // `restore`/`episode-start` operation returns at
+    // `src/renderer/src/composables/use-syncplay-client.ts:951`, *above* the
+    // `clearPendingUserPause()` at
+    // `src/renderer/src/composables/use-syncplay-client.ts:961`, so the element
+    // is re-played by the op's own `play()` with `pendingUserPause` intact.
+    ;(v as { paused: boolean }).paused = false
+    // The internal pause steps, modelled: set `paused`, and fire the event only
+    // if the element was not already paused.
+    ;(v as { pause: unknown }).pause = vi.fn(() => {
+      const wasPaused = v.paused
+      ;(v as { paused: boolean }).paused = true
+      if (!wasPaused) client.onLocalPause()
+    })
+    sendLocalState.mockClear()
+
+    // `readyState 1` with `paused: false` is ordinary here, not exotic: an MSE
+    // buffer respawn drops the element to HAVE_METADATA and never below, and the
+    // park only forks below HAVE_METADATA — so states keep flowing in at ~1 Hz
+    // for the whole respawn window.
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+
+    expect(sendLocalState).not.toHaveBeenCalled()
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  // The most valuable case in this set, because it defends the non-obvious half
+  // of the fix: the disarm issues a **bare** `v.pause()` and registers no
+  // programmatic operation.
+  //
+  // Copying `beginProgrammaticPlayback('pause')` from the enactment block is the
+  // natural instinct and it would introduce a new bug. The internal pause steps
+  // clear the can-autoplay flag unconditionally but fire the `pause` event only
+  // when the element was not already paused — and this arm runs only when it
+  // was. So the operation would never be consumed, would sit in the registry for
+  // the whole `PLAYBACK_OP_TTL_MS`, and the user's next genuine pause inside
+  // that window would match it and return at `onLocalPause`'s echo check without
+  // ever reaching the room. That is #236's latch, on the pause side.
+  it('leaves no stale operation for the user’s next pause to be swallowed by', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+    expect(v.pause).toHaveBeenCalled()
+
+    // The room resumes, the element follows, and the user presses pause — a
+    // genuine press, with the registry expected to be empty.
+    sendLocalState.mockClear()
+    emitRemoteState({ position: 0, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    sendLocalState.mockClear()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 0, cause: 'pause' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  // The benign twin. The autostart misclassification fires on *every* unpark;
+  // what is conditional is only whether a pause existed to be destroyed. The
+  // disarm therefore runs on the common path too, and must stay silent there —
+  // it may not turn an unpark nobody paused into a pause announcement.
+  it('announces nothing when it disarms an unpark that nobody paused', async () => {
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // `setBy: null` — no peer paused; this is the room's ordinary 1 Hz state
+    // against an element that simply has not loaded yet.
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: null })
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.pause).toHaveBeenCalled()
+    expect(sendLocalState).not.toHaveBeenCalled()
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  // No double-pause on the warm path. A playing element at HAVE_ENOUGH_DATA
+  // taking a room pause must still go through the enactment block — which
+  // registers the operation that claims the resulting `pause` event — exactly
+  // once, not once there and once from the disarm. A second, unregistered call
+  // would leave the registered operation belonging to an event that was already
+  // spent, which is the same stale-op latch from the other direction.
+  //
+  // "Exactly once" is a real assertion about the guard and not an artifact of
+  // the fake, and the natural reading is the opposite: `fakeVideo`'s `pause` is a
+  // bare `vi.fn()` (test/renderer/composables/use-syncplay-client.test.ts:194)
+  // that does **not** flip `paused`, so nothing about the fake would stop a
+  // second call from landing. Only `v.paused` in the disarm's guard does — and
+  // here it is what excludes the disarm, since the element is playing.
+  it('takes the enactment path exactly once on a warm playing element', async () => {
+    const v = fakeVideo({
+      currentTime: 100,
+      paused: false,
+      readyState: 4
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'peer' })
+
+    expect(v.pause).toHaveBeenCalledTimes(1)
+  })
+
+  // The inversion risk, pinned: `effectivePaused` is a disjunction, so the
+  // disarm can fire against a room that is genuinely playing, purely because
+  // readiness is down. That is the ready gate's `!shouldPlay` behaviour and it is
+  // intended — but only if the element is picked back up when readiness returns.
+  // Nothing pinned that ordering before.
+  it('is not stranded paused once readiness comes back to a playing room', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    // A playing room while a peer is still not ready: `effectivePaused` is true
+    // on readiness alone.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    await nextTick()
+    emitRemoteState({ position: 0, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+    expect(v.pause).toHaveBeenCalled()
+    expect(v.play).not.toHaveBeenCalled()
+
+    // The peer becomes ready. The roster watch is load-bearing on this axis:
+    // `setSyncplayLocalReady` early-returns on an unchanged value, so a peer's
+    // recovery has no other route into the gate.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
+    await nextTick()
+
+    expect(v.play).toHaveBeenCalled()
+  })
+
+  // The unpark case's twin in the other direction: a playing room must still be
+  // picked up at unpark, and the disarm must not touch it.
+  it('plays a cold element when the parked state it unparks into is playing', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready'
+    })
+
+    emitRemoteState({ position: 0, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(v.play).toHaveBeenCalled()
+    expect(v.pause).not.toHaveBeenCalled()
+  })
+
+  // The gate's own arm (#348), on the one axis the apply-site disarm cannot
+  // reach: a peer's readiness flipping `syncplayAllUsersReady()` through the
+  // roster watch, with no apply anywhere in the path. Without this case the arm
+  // is unpinned — deleting `!shouldPlay && v.paused && v.readyState <
+  // HAVE_FUTURE_DATA` from `applySyncplayReadyGate` leaves the whole suite
+  // green.
+  it('disarms a cold element when a peer goes not-ready with no apply in the path', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 1
+    } as Partial<HTMLVideoElement>)
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true
+    })
+
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
+    await nextTick()
+    ;(v.pause as ReturnType<typeof vi.fn>).mockClear()
+
+    // Only the roster watch runs here — no inbound state, so nothing reaches
+    // `applyRemoteStateToElement`.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    await nextTick()
+
+    expect(v.pause).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -5124,7 +5419,14 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
     // enact.
     emitRemoteState({ position: 101, paused: true, doSeek: false, setBy: 'peerA' })
 
-    expect(v.pause).not.toHaveBeenCalled()
+    // `v.pause` stopped being a proxy for "the enactment block ran" at #348:
+    // the apply now has a second, registry-free reason to call it, and this
+    // element meets it — `readyState 1` (the fake's default) is below
+    // HAVE_FUTURE_DATA, so it is still armed to autostart however paused it
+    // currently reads. Flipped from `not.toHaveBeenCalled()`, which was
+    // asserting the defect #348 fixes. What this case is actually about is
+    // below: the apply moves nothing and announces nothing.
+    expect(v.pause).toHaveBeenCalledTimes(1)
     expect(v.currentTime).toBe(100)
     expect(sendSnapshot).not.toHaveBeenCalled()
   })

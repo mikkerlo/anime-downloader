@@ -140,7 +140,7 @@ const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
  * interior line is a brace or a comment (src/main/syncplay.ts:902-908,
  * src/main/syncplay.ts:862-870 and
- * src/renderer/src/composables/use-syncplay-client.ts:1665-1667), so
+ * src/renderer/src/composables/use-syncplay-client.ts:1714-1716), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  */

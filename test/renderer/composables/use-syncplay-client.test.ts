@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2252` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2303` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1918,9 +1918,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1019`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1028`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1028`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1063`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -5103,13 +5103,23 @@ describe('useSyncplayClient — the badge takes a name only from a pause edge (#
   }
 
   // 1. The issue's only *observed* reproduction (gate run 1 on #305): the badge
-  // names a peer, the user switches translation, and the restore's `play` echo
-  // is consumed. On `main` that consume cleared the badge and armed the edge, so
-  // the next paused periodic — of the same, unchanged pause — repainted it with
-  // the elected watcher. `main`'s registry routes the echo through
-  // `consumePlaybackOp('play')` and returns above `onLocalPlay`'s user arm, so
-  // the clear reached here and nowhere else.
-  it('keeps the peer’s name across a translation switch that consumes its restore', async () => {
+  // names a peer, a non-echo consume runs against the unchanged pause, and the
+  // next paused periodic — of that same pause — repainted the badge with the
+  // elected watcher. On `main` the consume cleared the badge and armed the edge;
+  // `main`'s registry routes the echo through `consumePlaybackOp('play')` and
+  // returns above `onLocalPlay`'s user arm, so the clear reached here and
+  // nowhere else.
+  //
+  // Grounded on `episode-start`, not the `restore` the observed reproduction
+  // used. #347's veto returns above this whole coupled write set for
+  // `kind === 'restore' && target === 'play' && intendedPaused === true`, which
+  // is exactly the translation switch against a paused room — so a `restore`
+  // here would never reach the write this case is about and the case would pass
+  // for the wrong reason. `episode-start` is the other non-echo kind and is
+  // deliberately outside that veto (it *establishes* the new episode's intent
+  // rather than replaying a stale one), so it still reaches the write and still
+  // exercises #350's deletion.
+  it('keeps the peer’s name across an episode-start that consumes its play echo', async () => {
     // Playing, and at the room's position: the first frame below is a genuine
     // no-op, so it registers no `play` echo operation of its own. That matters —
     // `consumePlaybackOp('play')` takes the oldest outstanding `play`, so a stray
@@ -5129,13 +5139,14 @@ describe('useSyncplayClient — the badge takes a name only from a pause edge (#
     expect(v.pause).toHaveBeenCalled()
     ;(v as { paused: boolean }).paused = true
 
-    // The translation switch: the `savedTime` restore registers a play operation
-    // and the element's `play` event is that operation's echo.
-    client.beginProgrammaticPlayback('play', 'restore')
+    // The episode start: it registers a play operation and the element's `play`
+    // event is that operation's echo. This is the non-echo consume that still
+    // reaches the coupled write set under #347's `restore`-keyed veto.
+    client.beginProgrammaticPlayback('play', 'episode-start')
     ;(v as { paused: boolean }).paused = false
     client.onLocalPlay()
 
-    // The swap said nothing about who paused the room.
+    // The consume said nothing about who paused the room.
     expect(client.syncplayPausedBy.value).toBe('peer')
 
     // And the periodic behind it — same pause, `setBy` re-elected to the laggard
@@ -5962,12 +5973,19 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
     // `outOfFileUserPause` arms and the room may no longer resume us.
     pausedByUser(v, client)
 
-    // A restore queued after that press — the press bumps the revision itself,
-    // so a restore queued before it is legitimately superseded and would pin
-    // nothing. If anything *below* bumps `intentRevision`, this operation is
-    // superseded and writes nothing when it is finally consumed. That is how the
-    // revision is read from outside.
-    client.beginProgrammaticPlayback('play', 'restore')
+    // An operation queued after that press — the press bumps the revision itself,
+    // so one queued before it is legitimately superseded and would pin nothing.
+    // If anything *below* bumps `intentRevision`, this operation is superseded
+    // and writes nothing when it is finally consumed. That is how the revision is
+    // read from outside.
+    //
+    // `episode-start` rather than `restore` since #347: a `restore` consumed
+    // against a live `intendedPaused === true` is now refused by the intent
+    // backstop, which would make this probe read "superseded" for a reason that
+    // has nothing to do with the revision. `episode-start` is deliberately
+    // outside that backstop — it establishes the new episode's intent rather than
+    // replaying a stale one — so it still reports only what the counter did.
+    client.beginProgrammaticPlayback('play', 'episode-start')
 
     // The room's 1 Hz playing states, refused for the whole divergence. Read the
     // pushed payload after *each* one: a per-apply clobber can hide between two
@@ -5995,7 +6013,7 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
     expect(sendSnapshot).toHaveBeenCalledTimes(3)
     expect(sendSnapshot.mock.calls.every((c) => c[0].paused === true)).toBe(true)
 
-    // And the revision never moved: the restore queued at the top is still
+    // And the revision never moved: the operation queued at the top is still
     // current, so its `play` event writes its resume.
     ;(v as { paused: boolean }).paused = false
     client.onLocalPlay()
@@ -6047,7 +6065,115 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
   // where the three same-episode `restore`s are not: their periodics arrive
   // self-`setBy` and die at `src/main/syncplay.ts:2097`. A superseded operation
   // writes nothing at all.
-  it('does not supersede a queued restore across a run of no-op applies (#331)', async () => {
+  //
+  // The probe is `episode-start` since #347, for the reason above: a `restore`
+  // consumed against the `intendedPaused === true` this run of no-op applies
+  // adopts is now refused by the intent backstop, so it would report "superseded"
+  // whatever the counter did and pin nothing. That refusal is itself the subject
+  // of `a restore never clobbers a live paused intent (#347)`, which is the case
+  // this one used to double as — and got wrong, because the hole the backstop
+  // closes is exactly this adoption writing intent without moving the counter.
+  it('does not supersede a queued episode-start across a run of no-op applies (#331)', async () => {
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.beginProgrammaticPlayback('play', 'episode-start')
+
+    // Four heartbeats of a paused room, every one of them a no-op apply that now
+    // writes intent.
+    for (let i = 0; i < 4; i++) {
+      emitRemoteState({ position: 100 + i * 0.1, paused: true, doSeek: false, setBy: 'peer' })
+    }
+
+    // The operation's own `play` event, still current: it writes its resume. Under
+    // a bump at the adoption site it would be superseded, write nothing, and the
+    // push below would carry the room's `true`.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: false })
+  })
+})
+
+// ── #347: the ready gate's predicate, named — and the intent backstop ────────
+//
+// The defect: `selectTranslation` latches `wasPlaying` at its top and replays it
+// after an await, so a pause made inside that window is undone by the replay and
+// announced to the room. The repair is a live veto in PlayerView's
+// `playProgrammatically`, reading the ready gate's own decision at the replay.
+// This seam owns two halves of that: the predicate itself, extracted so the gate
+// and the veto cannot drift apart, and an intent backstop for a `restore` that
+// reaches the consume anyway.
+//
+// `driveGateEntry` is deliberately absent: under this design nothing waits for a
+// gate entry — the predicate is read in the replay's own call stack — so
+// arranging its 600 ms readiness drop would pin a recovery nothing depends on.
+describe('useSyncplayClient — shouldElementPlay is the gate’s own decision (#347)', () => {
+  it('reads false before any room state and true once the room is playing', async () => {
+    const v = fakeVideo({ paused: true } as Partial<HTMLVideoElement>)
+    const { client } = trackedMount(makeDeps({ video: v }))
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    // `syncplayLastRemotePlaying` initialises false, which is why the veto that
+    // reads this has to be session-gated.
+    expect(client.shouldElementPlay()).toBe(false)
+
+    v.paused = false
+    client.onLocalPlay()
+    expect(client.shouldElementPlay()).toBe(true)
+  })
+
+  it('reads false for each of the four terms the gate reads', async () => {
+    const v = fakeVideo({ paused: false } as Partial<HTMLVideoElement>)
+    const { client } = trackedMount(makeDeps({ video: v }))
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    client.onLocalPlay()
+    expect(client.shouldElementPlay()).toBe(true)
+
+    // The user's own pause: mirror false *and* the pending hold armed.
+    v.paused = true
+    client.onLocalPause()
+    expect(client.shouldElementPlay()).toBe(false)
+
+    // Readiness, the term the gate shares with `onLocalPlay`'s conditional send.
+    v.paused = false
+    client.onLocalPlay()
+    expect(client.shouldElementPlay()).toBe(true)
+    client.setSyncplayLocalReady(false)
+    expect(client.shouldElementPlay()).toBe(false)
+  })
+
+  it('is the expression the gate enacts, not a second opinion', async () => {
+    // The point of naming it: gate and veto must not be able to disagree. If the
+    // predicate says no, the gate pauses the element — so a restore the veto
+    // declines is one the gate would have refused a moment later anyway.
+    const v = fakeVideo({ paused: false } as Partial<HTMLVideoElement>)
+    const { client } = trackedMount(makeDeps({ video: v }))
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+
+    expect(client.shouldElementPlay()).toBe(false)
+    client.applySyncplayReadyGate()
+    expect(v.pause).toHaveBeenCalled()
+  })
+})
+
+describe('useSyncplayClient — a restore never clobbers a live paused intent (#347)', () => {
+  // Defence in depth behind the veto, and an early return rather than a guard on
+  // the `intendedPaused` assignment alone: the write set below it is coupled, and
+  // letting the other four writes run would satisfy three of the ready gate's
+  // four up-arm terms, so the un-pause would change doors instead of stopping.
+  it('refuses the whole coupled write set when intent is a live pause', async () => {
     vi.useFakeTimers()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
@@ -6059,15 +6185,42 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
 
     client.beginProgrammaticPlayback('play', 'restore')
 
-    // Four heartbeats of a paused room, every one of them a no-op apply that now
-    // writes intent.
-    for (let i = 0; i < 4; i++) {
-      emitRemoteState({ position: 100 + i * 0.1, paused: true, doSeek: false, setBy: 'peer' })
-    }
+    // A peer pauses an element that is already paused: a no-op apply, which
+    // adopts `intendedPaused = true` above the early-out and deliberately moves
+    // no `intentRevision`. So the revision comparison below reads "current" and
+    // cannot see that the restore is stale — this is the hole the counter has.
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
 
-    // The restore's own `play` event, still current: it writes its resume. Under
-    // a bump at the adoption site it would be superseded, write nothing, and the
-    // push below would carry the room's `true`.
+    // The restore's own `play` event arrives, current by every existing test.
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    // Intent survives…
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: true })
+    // …and so does everything coupled to it: the badge is not blinked off, and
+    // the room mirror is not flipped to "playing" against a paused room, which
+    // is what would hand the next gate entry its up-arm.
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    expect(client.shouldElementPlay()).toBe(false)
+  })
+
+  it('leaves an episode-start free to establish the new episode’s intent', async () => {
+    // Keyed on kind, like the veto. `episode-start` replaces intent rather than
+    // replaying a stale one, so the backstop must not hold it.
+    vi.useFakeTimers()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    client.beginProgrammaticPlayback('play', 'episode-start')
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'peer' })
     ;(v as { paused: boolean }).paused = false
     client.onLocalPlay()
 

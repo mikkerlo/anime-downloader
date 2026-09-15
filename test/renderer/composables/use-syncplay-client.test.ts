@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2111` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2252` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1918,9 +1918,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:951`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1019`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:961`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1028`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -3655,6 +3655,12 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   // `isNewPlayer` is false at `src/main/syncplay.ts:789`, adoption holds, and their
   // own periodics die at `src/main/syncplay.ts:2097`. What bounds it is asserted
   // below.
+  //
+  // #350 note: this case's original badge characterisation — "the badge blinks
+  // off with the resume" — *was* the defect, and this is its only observed
+  // reproduction (gate run 1 on #305). It is asserted the other way now, and
+  // `paints no name` in the #350 block covers the periodic that repainted over
+  // the blink.
   it('a parked remote pause does not supersede a queued restore', async () => {
     const sendLocalState = vi.fn()
     const sendSnapshot = vi.fn()
@@ -3682,9 +3688,11 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     v.paused = false
     client.onLocalPlay()
 
-    // Not superseded: it writes its resume over the room's pause, and the badge
-    // blinks off with it.
-    expect(client.syncplayPausedBy.value).toBeNull()
+    // Not superseded: it writes its resume over the room's pause. The badge used
+    // to blink off with it and no longer does (#350) — a source swap is this app
+    // moving its own element and says nothing about who paused the room, so the
+    // consume writes intent and the room mirror and leaves the badge alone.
+    expect(client.syncplayPausedBy.value).toBe('peer')
     // Nothing goes out as a user command…
     expect(sendLocalState).not.toHaveBeenCalled()
     // …and while the element is parked `hasAnnounceablePosition()` keeps the
@@ -3699,8 +3707,12 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
 
     // And this is what bounds it: the unpark re-applies the parked state, which
-    // adopts the room's `paused`, pauses the element and restores the badge. That
-    // is the bound — not "about one heartbeat of blink", which #340 falsified: the
+    // adopts the room's `paused` and pauses the element. The badge is no longer
+    // part of what needs bounding — since #350 it never moved — but the unpark
+    // still restates the park-time author, so the assertion below holds for a
+    // second reason and would hold if the intent divergence were the only one
+    // left. That is the bound — not "about one heartbeat of blink", which #340
+    // falsified: the
     // other repair channel waits on the next inbound state to survive
     // `src/main/syncplay.ts:2097` and `src/main/syncplay.ts:2098`, and nothing in
     // the tree schedules that state. Either way, not a room-dragging resume.
@@ -5053,6 +5065,324 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // adoption and end the hold the honest way.
     expect(v.currentTime).toBe(604)
   })
+})
+
+// #350. The badge may take a name from a **pause edge** and from nowhere else.
+//
+// The reference server re-elects `Room._setBy` to the minimum-position watcher
+// every time the room state is over a second old (`server.py`,
+// `Room.getPosition()`), so the `setBy` on a 1 Hz periodic identifies whoever is
+// lagging, not whoever pressed anything. The only frame that carries the actor
+// is the forced update `forcePositionUpdate` broadcasts after a pause change,
+// and the reference client reports the actor on exactly that transition
+// (`client.py`, `_serverPaused`), keeping no persistent state. A badge that can
+// be repainted from a periodic is therefore wrong by construction, independently
+// of every room-correctness defect.
+//
+// The renderer already gated the badge on a playing→paused edge. The defect was
+// that the flag answering "was the room playing before this frame?" doubled as a
+// room mirror, so three writes that are **not** reports that the room resumed
+// armed the edge anyway and let the next periodic paint the elected name:
+//
+//   1. the non-echo consume in `applyConsumedPlaybackIntent` — a source swap or
+//      an episode start, which also cleared the badge outright,
+//   2. the hold expiry in `expirePendingUserPause` — by omission: it never wrote
+//      the flag, so the held playing frames left it armed behind the hand-back,
+//   3. the user's own play in `onLocalPlay`, a local intent that may not stick.
+//
+// The flag is `badgeEdgePaused` now and only `recordRemoteState` and the user's
+// own pause prediction write it. Cases below: (1)–(4) are the issue's, (5)–(8)
+// are the guards that keep the suppressions one frame wide, and (9)–(10) pin the
+// unpark's parked-author restatement.
+describe('useSyncplayClient — the badge takes a name only from a pause edge (#350)', () => {
+  const FAILED = "The room kept playing — your pause didn't stick"
+
+  const pressPause = (client: Client, v: HTMLVideoElement): void => {
+    client.onLocalPause()
+    ;(v as unknown as { paused: boolean }).paused = true
+  }
+
+  // 1. The issue's only *observed* reproduction (gate run 1 on #305): the badge
+  // names a peer, the user switches translation, and the restore's `play` echo
+  // is consumed. On `main` that consume cleared the badge and armed the edge, so
+  // the next paused periodic — of the same, unchanged pause — repainted it with
+  // the elected watcher. `main`'s registry routes the echo through
+  // `consumePlaybackOp('play')` and returns above `onLocalPlay`'s user arm, so
+  // the clear reached here and nowhere else.
+  it('keeps the peer’s name across a translation switch that consumes its restore', async () => {
+    // Playing, and at the room's position: the first frame below is a genuine
+    // no-op, so it registers no `play` echo operation of its own. That matters —
+    // `consumePlaybackOp('play')` takes the oldest outstanding `play`, so a stray
+    // echo left over from the setup would be consumed instead of the restore and
+    // the whole case would pass vacuously.
+    const v = fakeVideo({ currentTime: 300, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // The room is paused, by a peer, on a real edge.
+    emitRemoteState({ position: 300, paused: false, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 300, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    // The apply's own `pause()` landed; only its `pause` operation is outstanding.
+    expect(v.pause).toHaveBeenCalled()
+    ;(v as { paused: boolean }).paused = true
+
+    // The translation switch: the `savedTime` restore registers a play operation
+    // and the element's `play` event is that operation's echo.
+    client.beginProgrammaticPlayback('play', 'restore')
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+
+    // The swap said nothing about who paused the room.
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    // And the periodic behind it — same pause, `setBy` re-elected to the laggard
+    // — is not an edge and does not repaint.
+    emitRemoteState({ position: 300, paused: true, doSeek: false, setBy: 'laggard' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 2. The hold expiry. The issue prescribed that the three clears "stop
+  // touching" the flag; at this site there was nothing to stop — the expiry never
+  // wrote it — so the fix *adds* a write. What armed the edge is the held playing
+  // frames going through `recordRemoteState`, whose flag write is not held.
+  it('paints no name on the paused periodic that follows a hold expiry', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // The room keeps playing through the whole 8 s budget; each frame is held,
+    // and each one arms the edge.
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    vi.advanceTimersByTime(8000)
+    expect(client.syncplayToast.value).toBe(FAILED)
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // The room was paused all along — our own pause did land, late. Main drops
+    // our own echo at its self-`setBy` guard, so the frame that would have named
+    // us never arrives; this is the periodic behind it, carrying the election.
+    emitRemoteState({ position: 208, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+  })
+
+  // 3. The unchanged direction, so the suppressions are not mistaken for a rule
+  // against painting at all: a genuine room resume followed by a genuine room
+  // pause is a real edge and paints the real actor.
+  it('still paints the new actor on a real resume-then-pause', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // A foreign resume: the room really is playing again, observed.
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    // …and a foreign pause behind it. A real playing→paused edge.
+    emitRemoteState({ position: 205, paused: true, doSeek: false, setBy: 'other' })
+    expect(client.syncplayPausedBy.value).toBe('other')
+  })
+
+  // 4. The prediction holds against the election. A's own pause paints "you", and
+  // the paused periodic that follows names whoever the server elected — it is not
+  // an edge, so it may not overwrite.
+  it('leaves "paused by you" standing under a paused periodic naming someone else', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me',
+      // Post-adoption, so the pause arms no hold: this case is about the edge
+      // flag, not about the badge body being held.
+      playbackAdopted: true
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'other' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  // 5. Guard: the expiry's suppression is one frame wide. Once the room has been
+  // observed playing *outside* a hold, the next transition paints as usual.
+  it('paints again once the room has been observed playing after an expiry', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    vi.advanceTimersByTime(8000)
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    emitRemoteState({ position: 210, paused: false, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 215, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 6. Guard: the same for the user's own play. The press no longer arms the
+  // edge, but an observed resume behind it does.
+  it('paints again once the room has been observed playing after the user pressed play', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: true } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // The press did not stick — the room is still paused, and says so. Not an
+    // edge: the last report was "paused" and nothing has reported otherwise.
+    emitRemoteState({ position: 100, paused: true, doSeek: false, setBy: 'laggard' })
+    expect(client.syncplayPausedBy.value).toBeNull()
+
+    // The press *did* reach the room this time.
+    emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 105, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 7. Guard against over-suppression in the other axis: a genuine handoff. The
+  // user pauses, a peer's playing frame crosses the press, the peer then pauses.
+  // The badge must end on the peer. This is what falsifies the tidier variant
+  // that freezes the flag with the badge body under a hold.
+  it('still hands the badge to a peer whose pause follows a held playing frame', async () => {
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    emitRemoteState({ position: 200, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 8. The expiry's flag write sits *above* the `held` fork, and this is the arm
+  // that needs it separately. `pendingPauseHeldAny` is written by the element
+  // half below its no-op early-out, so a playing state arriving while a peer is
+  // not ready — `effectivePaused` stays true, the element is already paused, the
+  // apply is a no-op — arms the edge through `recordRemoteState` without ever
+  // counting as held. The expiry is then silent and deliberately leaves "Paused
+  // by you" standing; with the write inside the `held` arm the very next paused
+  // periodic would repaint that badge with the election.
+  it('closes the edge on a silent expiry that held nothing but saw a playing frame', async () => {
+    vi.useFakeTimers()
+    const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    pressPause(client, v)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // A peer is buffering, so `effectivePaused` matches the element, and the
+    // position matches too: the element half returns at its no-op early-out and
+    // nothing is recorded as held — but `recordRemoteState` ran above it and
+    // armed the edge.
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    expect(v.play).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(8000)
+    // Silent, and the badge is left standing: nothing visibly contradicted it.
+    expect(client.syncplayToast.value).not.toBe(FAILED)
+    expect(client.syncplayPausedBy.value).toBe('me')
+
+    // The room's next paused periodic carries the election, and must not take
+    // "Paused by you" away from the user who actually pressed pause.
+    emitRemoteState({ position: 200, paused: true, doSeek: false, setBy: 'laggard' })
+    expect(client.syncplayPausedBy.value).toBe('me')
+  })
+
+  // 9. The unpark, and why the parked *author* is remembered rather than re-read.
+  // `applyRemoteState` overwrites the park rather than queueing it ("only the
+  // freshest state may be applied late"), so at 1 Hz any park outliving a tick is
+  // holding a periodic. Re-reading that frame's `setBy` at unpark would replace a
+  // correct author with the server's election — the exact symptom of the report.
+  it('restates the park-time author at unpark, not the parked frame’s setBy', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: false,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    // Observed playing, then a real playing→paused edge. The element is cold, so
+    // each of these parks — and the second one paints.
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 110, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    // One second on: a periodic of the same paused room, `setBy` re-elected to
+    // the laggard. Not an edge, so it paints nothing — but it overwrites the park.
+    emitRemoteState({ position: 110, paused: true, doSeek: false, setBy: 'laggard' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+
+    // Metadata arrives and the park is enacted.
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // 10. The other side of the same slot, and the coupling the rename exposed:
+  // #240's `re-asserts the room bookkeeping when a local play beat the parked
+  // state` used to get its badge back because `onLocalPlay` armed the edge. With
+  // that write gone the restatement is explicit, and it must survive a park the
+  // user's own press cleared the badge out of.
+  it('restates the parked author over a local play that cleared the badge', async () => {
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 0
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+
+    emitRemoteState({ position: 0, paused: true, doSeek: false, setBy: 'peer' })
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+    expect(client.syncplayPausedBy.value).toBeNull()
+    ;(v as { readyState: number }).readyState = 1
+    client.onVideoLoadedMetadata()
+
+    expect(client.syncplayPausedBy.value).toBe('peer')
+  })
+
+  // There is deliberately no case for `resetRemoteStateTracking` clearing
+  // `pendingRemoteStatePausedBy`. The author is written at the only site that
+  // parks a state, so a survivor is overwritten by the next park before any
+  // unpark can read it: deleting that clear is an equivalent mutation, and the
+  // case that was here passed with it deleted. It is an invariant, not a
+  // behaviour; see the comment on the line itself.
 })
 
 // #284. Both outbound doors — the 1 Hz snapshot and the play/pause/seek State —

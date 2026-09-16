@@ -256,5 +256,76 @@ describe('SmotretApi — fixture replay', () => {
       mockFetchOnce({}, 500, 'Server Error')
       await expect(makeApi().getAnime(1)).rejects.toThrow(/API error: 500 Server Error/)
     })
+
+    // The smotret-anime API can answer HTTP 200 with an error envelope
+    // (`{"error":{"code":403,"message":"..."}}`) instead of a real payload.
+    // request() only checked `!response.ok`, so this body was returned as a
+    // "success" — searchAnime resolved to the error envelope typed as search
+    // results, and getEmbed resolved to `undefined` outright. Every
+    // request()-backed method must instead reject.
+    const errorBody = { error: { code: 403, message: 'You should login first.' } }
+
+    it('searchAnime rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().searchAnime('foo')).rejects.toThrow()
+    })
+
+    it('getAnime rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getAnime(1)).rejects.toThrow()
+    })
+
+    it('getEpisode rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEpisode(100)).rejects.toThrow()
+    })
+
+    it('getEpisodesBatch rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEpisodesBatch([100])).rejects.toThrow()
+    })
+
+    it('getEmbed rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEmbed(1001)).rejects.toThrow()
+    })
+
+    it('lookupByMalIds rejects on a 200 response carrying an error envelope', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().lookupByMalIds([9253])).rejects.toThrow()
+    })
+
+    it('carries error.code and error.message into the thrown error', async () => {
+      mockFetchOnce(errorBody)
+      await expect(makeApi().getEmbed(1001)).rejects.toMatchObject({
+        code: 403,
+        message: expect.stringContaining('You should login first.')
+      })
+    })
+
+    // The guard keys on the presence of `error`, not on `code === 403`. Pin
+    // that with a non-403 body, and pin the deliberate asymmetry alongside
+    // it: `validateToken` stays on its raw fetch and only treats 403 as
+    // invalid, so the same body that makes `request()` reject leaves the
+    // token valid (#354).
+    const rateLimitBody = { error: { code: 429, message: 'rate limited' } }
+
+    it('rejects on a non-403 error envelope too — the guard keys on presence, not on 403', async () => {
+      mockFetchOnce(rateLimitBody)
+      await expect(makeApi().getEmbed(1001)).rejects.toMatchObject({ code: 429 })
+    })
+
+    it('validateToken answers valid:true on that same 429 body — the exemption is deliberate', async () => {
+      mockFetchOnce(rateLimitBody)
+      expect(await makeApi('tok').validateToken()).toEqual({ valid: true })
+    })
+
+    // A null `error` alongside a real payload is a success, not a failure —
+    // the inner `if (err)` is what makes presence-keying safe here, and
+    // without this case it can be simplified away with the suite still green.
+    it('resolves a 200 body whose error key is null', async () => {
+      mockFetchOnce({ error: null, data: [] })
+      await expect(makeApi().searchAnime('foo')).resolves.toEqual({ error: null, data: [] })
+    })
   })
 })

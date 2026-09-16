@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest'
+// @vitest-environment happy-dom
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
+import { transformSync } from 'esbuild'
+import { ref } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises } from '@vue/test-utils'
+import { useSyncplayClient } from '../../../src/renderer/src/composables/use-syncplay-client'
 
 // The resume-vs-room precedence rule (#240). `resumeFromSavedPosition` is an
 // unexported `<script setup>` internal of a ~2.9k-line SFC wired to dozens of
@@ -362,5 +368,271 @@ describe('PlayerView — programmatic seeks go through the operation helper (#30
       'const op = syncplay.beginProgrammaticSeek(target); ' +
         'try { v.currentTime = target; } catch (err) { op.retract(); throw err; }'
     )
+  })
+})
+
+// ── #347: a stale `wasPlaying` restore must not un-pause the room ────────────
+//
+// `selectTranslation` latches `wasPlaying` synchronously at its top and replays
+// it on *both* arms after the switch completes — the local-file/remux arm and
+// the stream arm, each `if (wasPlaying) playProgrammatically(v, 'restore');`.
+// Between the latch and either replay sits an await (a remux prepare, or the
+// `playerGetStreamUrl` round trip — 622 ms in #343's capture), and a pause the
+// user makes inside that window is silently undone by the replay *and announced
+// to the room* through `pushSyncplaySnapshot`'s `intentOr(v)`.
+//
+// The repair is a live veto inside `playProgrammatically`: a `restore` is
+// declined when the session is live and the ready gate's own predicate
+// (`shouldElementPlay()`) says the element should not be playing. So the cases
+// below are behavioural, not a scan — they run the *real* helper source against
+// the *real* composable. The helper is a `<script setup>` internal of a ~3.6k
+// line SFC with no mount harness in this repo, so it is lifted out of the source
+// text and instantiated over a `syncplay` binding: that keeps the production
+// text itself under test (an edit to the helper changes what runs here) without
+// mounting the view.
+//
+// `driveGateEntry` (use-syncplay-client.test.ts) is deliberately absent from all
+// of these: it arranges a 600 ms readiness drop that a fast source switch never
+// takes, and under this design there is no gate entry in the path at all — the
+// predicate is read at the replay, in the same call stack. Do not add it back as
+// boilerplate.
+
+type PlayHelper = (v: HTMLVideoElement, kind: string) => void
+
+function loadPlayProgrammatically(syncplay: unknown): PlayHelper {
+  const start = SOURCE.indexOf('function playProgrammatically(')
+  const end = SOURCE.indexOf('function seekProgrammatically(')
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const js = transformSync(SOURCE.slice(start, end), { loader: 'ts' }).code
+  return new Function('syncplay', `${js}\nreturn playProgrammatically;`)(syncplay) as PlayHelper
+}
+
+function selectTranslationBody(): string {
+  const start = SOURCE.indexOf('async function selectTranslation(')
+  const end = SOURCE.indexOf("async function goToEpisode(direction: 'prev' | 'next')")
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  return SOURCE.slice(start, end)
+}
+
+/** The two replay arms, split at the `playerGetStreamUrl` await that separates
+ *  the local-file/remux branch from the stream fallback. */
+function translationArms(): { remux: string; remote: string } {
+  const body = selectTranslationBody()
+  const split = body.indexOf('await window.api.playerGetStreamUrl(')
+  expect(split).toBeGreaterThan(-1)
+  return { remux: body.slice(0, split), remote: body.slice(split) }
+}
+
+function stubApi(extra: Record<string, unknown> = {}): void {
+  ;(globalThis as { window?: { api: Record<string, unknown> } }).window = {
+    api: {
+      syncplayGetStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
+      syncplayGetRoomUsers: vi.fn().mockResolvedValue([]),
+      syncplayConnect: vi.fn().mockResolvedValue(undefined),
+      syncplayDisconnect: vi.fn().mockResolvedValue(undefined),
+      syncplaySetFile: vi.fn(),
+      syncplaySendLocalState: vi.fn(),
+      syncplaySendLocalSnapshot: vi.fn(),
+      syncplayPlayerClosed: vi.fn(),
+      syncplaySetReady: vi.fn().mockResolvedValue(undefined),
+      shikimoriGetUser: vi.fn().mockResolvedValue({ nickname: '' }),
+      getSetting: vi.fn().mockResolvedValue(null),
+      setSetting: vi.fn().mockResolvedValue(undefined),
+      onSyncplayConnectionStatus: () => () => {},
+      onSyncplayRemoteState: () => () => {},
+      onSyncplayRoomUsers: () => () => {},
+      onSyncplayRoomEvent: () => () => {},
+      onSyncplayTrace: () => () => {},
+      onSyncplayRemoteEpisodeChange: () => () => {},
+      ...extra
+    }
+  }
+}
+
+type Rig = {
+  v: HTMLVideoElement & { paused: boolean }
+  client: ReturnType<typeof useSyncplayClient>
+  play: PlayHelper
+  sendLocalState: ReturnType<typeof vi.fn>
+  sendSnapshot: ReturnType<typeof vi.fn>
+}
+
+/** A player mid-session with a loaded element, wired the way PlayerView wires
+ *  it: the element's own `play` event fans into `syncplay.onLocalPlay()`. */
+async function makeRig(state: SyncplayStatus['state'] = 'ready'): Promise<Rig> {
+  const sendLocalState = vi.fn()
+  const sendSnapshot = vi.fn()
+  stubApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+  const v = {
+    currentTime: 30,
+    duration: 1440,
+    paused: true,
+    readyState: 1,
+    play: vi.fn(),
+    pause: vi.fn()
+  } as unknown as HTMLVideoElement & { paused: boolean }
+  const client = useSyncplayClient({
+    getVideoEl: () => v,
+    getDuration: () => 1440,
+    getAnimeId: () => 1,
+    getMalId: () => null,
+    getAnimeName: () => 'Test Anime',
+    getCurrentEpisodeInt: () => '1',
+    getActiveEpisodeLabel: () => '1',
+    activeTranslationId: ref(1),
+    activeEpisodeIndex: ref(0),
+    formatTime: (s: number) => `${Math.floor(s / 60)}`,
+    onRemoteEpisodeChange: () => {}
+  })
+  // The `<video @play>` binding, not a convenience: the veto's whole job is to
+  // stop the element from ever firing this, so the event has to come from the
+  // element rather than from the test body.
+  ;(v as unknown as { play: ReturnType<typeof vi.fn> }).play = vi.fn(() => {
+    v.paused = false
+    client.onLocalPlay()
+    return Promise.resolve()
+  })
+  // The composable's own status fetch resolves a microtask later and would
+  // otherwise overwrite the state this rig is built for.
+  await flushPromises()
+  client.syncplayStatus.value = { state, username: 'me' }
+  return { v, client, play: loadPlayProgrammatically(client), sendLocalState, sendSnapshot }
+}
+
+/** The pre-switch world the latch reads: the room is playing and so are we. */
+function startPlaying(rig: Rig): void {
+  rig.v.paused = false
+  rig.client.onLocalPlay()
+  rig.sendLocalState.mockClear()
+  rig.sendSnapshot.mockClear()
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+  stubApi()
+})
+
+describe.each([
+  ['the local-file / remux arm', 'remux' as const],
+  ['the stream arm behind playerGetStreamUrl', 'remote' as const]
+])('PlayerView — a stale wasPlaying restore is declined on %s (#347)', (_label, arm) => {
+  it('routes this arm’s replay through the guarded helper', () => {
+    // The behavioural half below exercises the helper once; this is what makes
+    // the case *this arm's*. A fix that repairs one arm and leaves the other
+    // calling `v.play()` directly is worse than no fix — the survivor gets
+    // harder to find.
+    const flat = translationArms()
+      [arm].replace(/\/\/[^\n]*/g, '')
+      .replace(/\s+/g, ' ')
+    expect(flat).toContain("if (wasPlaying) playProgrammatically(v, 'restore');")
+    expect(flat).not.toContain('v.play()')
+  })
+
+  it('declines the replay, keeps the pause, and announces no un-pause', async () => {
+    const rig = await makeRig('ready')
+    startPlaying(rig)
+
+    // `selectTranslation` latches at its top, while the element is playing.
+    const wasPlaying = !rig.v.paused
+    expect(wasPlaying).toBe(true)
+
+    // The await — a remux prepare, or the `playerGetStreamUrl` round trip. The
+    // user gives up waiting and presses pause inside it.
+    await Promise.resolve()
+    rig.v.paused = true
+    rig.client.onLocalPause()
+    rig.sendLocalState.mockClear()
+
+    // The switch completes and the `nextTick` replays the latch.
+    if (wasPlaying) rig.play(rig.v, 'restore')
+    await Promise.resolve()
+
+    // The element stays where the user put it…
+    expect(rig.v.play).not.toHaveBeenCalled()
+    expect(rig.v.paused).toBe(true)
+    // …and so does the intent, which is what the room is told on the next
+    // snapshot. This is the room-visible half of #343's capture: `intendedPaused`
+    // clobbered `true` → `false` and `roomPaused` following it.
+    rig.client.onVideoTimeUpdate()
+    expect(rig.sendSnapshot).toHaveBeenCalledWith({ position: 30, paused: true })
+    expect(rig.sendSnapshot).not.toHaveBeenCalledWith({ position: 30, paused: false })
+    // Nothing goes out as a discrete command either.
+    expect(rig.sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('declines it across a reconnect too, not only on a ready session', async () => {
+    // The session term is `ready || reconnecting`, never `ready` alone. The refs
+    // the predicate reads are session-scoped and deliberately survive a socket
+    // blip — the composable clears them on `idle`/`disconnected` only — so a
+    // `ready`-only veto is off in exactly the window where a pause made across
+    // the blip is still live, and a translation switch would undo it.
+    const rig = await makeRig('ready')
+    startPlaying(rig)
+    const wasPlaying = !rig.v.paused
+
+    rig.v.paused = true
+    rig.client.onLocalPause()
+    // The socket blips mid-switch. Same room, same player, same user.
+    rig.client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+
+    if (wasPlaying) rig.play(rig.v, 'restore')
+    await Promise.resolve()
+
+    expect(rig.v.play).not.toHaveBeenCalled()
+    expect(rig.v.paused).toBe(true)
+  })
+})
+
+describe('PlayerView — the restore veto is narrow (#347)', () => {
+  // Guards, not regressions: both of these are green before the fix and after
+  // it. They are what a careless veto breaks.
+  it('still resumes when nothing contradicted the latch', async () => {
+    const rig = await makeRig('ready')
+    startPlaying(rig)
+    const wasPlaying = !rig.v.paused
+
+    // The source swap leaves the element paused and reloaded; nobody paused
+    // anything, so the room is still playing and the predicate still reads true.
+    rig.v.paused = true
+
+    if (wasPlaying) rig.play(rig.v, 'restore')
+    await Promise.resolve()
+
+    expect(rig.v.play).toHaveBeenCalled()
+    expect(rig.v.paused).toBe(false)
+    rig.client.onVideoTimeUpdate()
+    expect(rig.sendSnapshot).toHaveBeenCalledWith({ position: 30, paused: false })
+  })
+
+  it('still resumes for a player that never joined a room', async () => {
+    // `syncplayLastRemotePlaying` initialises `false`, so an unguarded veto would
+    // refuse every restore in the plain local player. `idle` and `disconnected`
+    // are outside the session term for exactly this reason.
+    const rig = await makeRig('idle')
+    rig.v.paused = true
+
+    rig.play(rig.v, 'restore')
+    await Promise.resolve()
+
+    expect(rig.v.play).toHaveBeenCalled()
+    expect(rig.v.paused).toBe(false)
+  })
+
+  it('leaves episode-start unvetoed', async () => {
+    // Keyed on kind. `episode-start`'s contract is to *establish* the new
+    // episode's intent, not to replay a stale one, so the veto's premise does
+    // not apply — and folding it in on symmetry grounds would break the binge
+    // auto-resume the same way `use-syncplay-client.ts`'s divergence note
+    // describes: across an episode switch taken during a divergence the
+    // projection still says `outOfFile` and the ready gate declines the resume.
+    const rig = await makeRig('ready')
+    rig.v.paused = true
+    rig.client.onLocalPause()
+
+    rig.play(rig.v, 'episode-start')
+
+    expect(rig.v.play).toHaveBeenCalled()
   })
 })

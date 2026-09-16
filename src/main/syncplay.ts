@@ -2036,7 +2036,7 @@ export class SyncplayClient extends EventEmitter {
     // "the intent was retired ⇒ the renderer was handed that frame" — is
     // untouched on both sides. It is also what keeps #228: recordRemoteState()
     // runs unconditionally at the top of applyRemoteState()
-    // (src/renderer/src/composables/use-syncplay-client.ts:1685-1686) and owns the pending-pause release and
+    // (src/renderer/src/composables/use-syncplay-client.ts:1734-1735) and owns the pending-pause release and
     // the "Paused by …" badge, so dropping the frame would lose the pause half
     // to save the position half. Rewrite, never drop.
     const seekIntentWasLive = this.seekIntent !== null
@@ -2103,7 +2103,7 @@ export class SyncplayClient extends EventEmitter {
     // Only a *playing* room has aged since the state left the peer; a paused
     // position doesn't advance with wall time, so shifting it forward is pure
     // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
-    // (src/renderer/src/composables/use-syncplay-client.ts:1325), so a paused scrub lands every peer up to
+    // (src/renderer/src/composables/use-syncplay-client.ts:1374), so a paused scrub lands every peer up to
     // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
     // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
     // mirrored server-side in _updatePositionByAge, server.py:871-872).
@@ -2140,8 +2140,8 @@ export class SyncplayClient extends EventEmitter {
     // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
     // tolerance: the element only advances while it is firing `timeupdate`, so
     // a reading that is seconds old is still an accurate reading of a *stopped*
-    // element (src/renderer/src/composables/use-syncplay-client.ts:799-801, SNAPSHOT_MIN_INTERVAL_MS at
-    // src/renderer/src/composables/use-syncplay-client.ts:395). If the renderer ever gains a playback-rate control this bound has
+    // element (src/renderer/src/composables/use-syncplay-client.ts:808-810, SNAPSHOT_MIN_INTERVAL_MS at
+    // src/renderer/src/composables/use-syncplay-client.ts:404). If the renderer ever gains a playback-rate control this bound has
     // to be re-derived.
     const emitted = seekIntentWasLive ? this.snapshot.position : compensated
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
@@ -2179,8 +2179,8 @@ export class SyncplayClient extends EventEmitter {
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two
     // statements that would both be false: a "<me> seeked to 10:06" toast for a
-    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1665-1667) and a "Paused by me"
-    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1265-1266). `null`
+    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1714-1716) and a "Paused by me"
+    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1314-1315). `null`
     // is the existing "the room moved, nobody in particular" value — the type
     // already allows it and both renderer reads are already null-guarded — so
     // no flag and no renderer change is needed to say it.

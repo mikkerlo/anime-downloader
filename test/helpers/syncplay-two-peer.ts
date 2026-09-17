@@ -325,9 +325,12 @@ export class HarnessVideo {
    * way `PlayerView` wires `@seeked` / `@play` / `@pause` / `@loadedmetadata`.
    */
   tick(): QueuedMediaEvent[] {
-    // Before the seek landing below, and unreachable together with it — a
-    // `reload()` drops `pending` — so the order is documentation rather than a
-    // tie-break: metadata is the event that reopens the door a load closed.
+    // Before the seek landing below. A `reload()` drops `pending`, so the two
+    // cannot land in the tick a load starts — but a `currentTime` write after it
+    // re-arms `pending`, and at `seekLandMs: 0` that write plus a due landing
+    // hands back `['loadedmetadata', 'seeked']` in one batch. The order here is
+    // the right one for that case too: metadata is the event that reopens the
+    // door a load closed.
     //
     // Held back while the load's own queued tasks are still undelivered: on a
     // real element those run before the task that reaches HAVE_METADATA, so the
@@ -340,7 +343,12 @@ export class HarnessVideo {
     // queuing between two ticks can defer the landing — and `play()`/`pause()`
     // are edge-guarded, so deferring it forever needs a fixture (or an apply
     // path) flipping the element *both* ways in every slice. One press, or a
-    // pause that stays a pause, defers by exactly one tick.
+    // pause that stays a pause, defers by exactly one tick. The gate is the
+    // whole queue rather than the load's own tasks, so it also defers a task
+    // queued *after* metadata came due: a `play()` there comes back at
+    // `readyState` 0 with `loadedmetadata` a tick behind it, where a real
+    // element runs the older task first and delivers that `play` at
+    // HAVE_METADATA.
     if (
       this.metadataDueAt !== null &&
       Date.now() >= this.metadataDueAt &&

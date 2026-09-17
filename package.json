@@ -26,6 +26,7 @@
     "test:e2e": "playwright test",
     "check:subscription-contract": "bash scripts/check-subscription-contract.sh",
     "check:line-citations": "node scripts/check-line-citations.mjs",
+    "check:prose-shape": "node scripts/check-prose-shape.mjs",
     "screenshot": "node scripts/screenshot.js"
   },
   "build": {

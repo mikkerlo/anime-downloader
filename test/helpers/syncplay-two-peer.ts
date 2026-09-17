@@ -135,8 +135,9 @@ export interface HarnessVideoOptions {
   src?: string
   /** How long `reload()` takes to reach HAVE_METADATA, i.e. the gap between the
    *  media load algorithm's synchronous reset and the `loadedmetadata` task.
-   *  Not zero by default: the whole of #284's suppression window, and the
-   *  staleness this file's adoption fixture turns on, live inside that gap. */
+   *  Defaults to 0. #284's suppression window, and the staleness this file's
+   *  adoption fixture turns on, both live inside this gap, so a fixture that
+   *  wants either has to seat one. */
   metadataMs?: number
 }
 
@@ -286,9 +287,12 @@ export class HarnessVideo {
    *  - the playhead resets to 0. An element announcing that 0 is #220, and the
    *    gate above is the only thing standing between the two.
    *  - a playing element is paused and a `pause` task is queued. Not incidental
-   *    either: `onLocalPause` gates on `readyState > 0` *specifically* to keep
-   *    this reload-shaped implicit pause off the wire, and an element that
-   *    reloaded without queuing one would leave that guard unobserved.
+   *    either: that pause is delivered while the element still reports
+   *    HAVE_NOTHING, where `hasAnnounceablePosition()`
+   *    (`use-syncplay-client.ts:770`) drops it before it can reach the wire and
+   *    `onLocalPause`'s `readyState > 0` conjunct keeps it from arming the
+   *    pending user pause. An element that reloaded without queuing one would
+   *    leave both guards unobserved.
    *
    * `loadedmetadata` then arrives asynchronously, `metadataMs` later, and takes
    * `readyState` back to HAVE_METADATA. It is delivered through `tick()` with
@@ -324,7 +328,24 @@ export class HarnessVideo {
     // Before the seek landing below, and unreachable together with it — a
     // `reload()` drops `pending` — so the order is documentation rather than a
     // tie-break: metadata is the event that reopens the door a load closed.
-    if (this.metadataDueAt !== null && Date.now() >= this.metadataDueAt) {
+    //
+    // Held back while the load's own queued tasks are still undelivered: on a
+    // real element those run before the task that reaches HAVE_METADATA, so the
+    // `pause` a reload queues is handed to `onLocalPause` at `readyState` 0.
+    //
+    // The hold-back is bounded rather than open-ended, and that bound is worth
+    // stating because a gate on someone else's queue is the shape that starves:
+    // every `tick()` ends by draining the queue, and the `seeked` below is
+    // pushed past this check and drained by that same drain, so only a caller
+    // queuing between two ticks can defer the landing — and `play()`/`pause()`
+    // are edge-guarded, so deferring it forever needs a fixture (or an apply
+    // path) flipping the element *both* ways in every slice. One press, or a
+    // pause that stays a pause, defers by exactly one tick.
+    if (
+      this.metadataDueAt !== null &&
+      Date.now() >= this.metadataDueAt &&
+      this.queued.length === 0
+    ) {
       this.metadataDueAt = null
       this.readyState = 1
       this.queued.push('loadedmetadata')

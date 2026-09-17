@@ -215,7 +215,7 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The four guards below are about the harness as an instrument rather than
+  // The five guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
   it('freezes a stalled element at the first in-flight write, not the latest', () => {
@@ -242,6 +242,43 @@ describe('two-peer syncplay harness', () => {
     vi.advanceTimersByTime(6000)
     expect(el.tick()).toEqual(['seeked'])
     expect(el.currentTime).toBeCloseTo(646, 6)
+  })
+
+  it("hands back a reload's pause before the metadata that reopens the gate", () => {
+    // At the default `metadataMs` of 0 the HAVE_METADATA transition used to be
+    // applied inside the same `tick()` that handed back the `pause` `reload()`
+    // queued, so the caller — which dispatches a whole batch *after* `tick()`
+    // returns — ran `onLocalPause` with the element already reporting
+    // HAVE_METADATA. That is the inverse of a real element, where the load's
+    // queued tasks run before the task that reaches HAVE_METADATA, and it is
+    // the ordering this seam exists to model: the pause has to arrive at
+    // `readyState` 0, which is what `hasAnnounceablePosition()`
+    // (`src/renderer/src/composables/use-syncplay-client.ts:770`) and
+    // `onLocalPause`'s own `readyState > 0` conjunct are both reading.
+    //
+    // Before the fix this read `[['pause', 'loadedmetadata'], []]` with
+    // `readyState` 1 on the first batch. `readyStates` alone cannot tell the
+    // two apart — it is `[1, 0, 1]` either way — so the batching is the
+    // assertion, and the `readyState` sampled per batch is what the guards
+    // downstream would have seen.
+    const el = new HarnessVideo({ position: 100, paused: false })
+    el.reload('harness://ep-8')
+
+    const batches: { events: string[]; readyStateAtDelivery: number }[] = []
+    for (let i = 0; i < 2; i += 1) {
+      vi.advanceTimersByTime(50)
+      // Sampled after `tick()` returns and not inside it, because that is where
+      // the harness's own `deliver()` reads it: every event in a batch is
+      // dispatched into the composable at the `readyState` the tick left behind.
+      batches.push({ events: el.tick(), readyStateAtDelivery: el.readyState })
+    }
+
+    expect(batches).toEqual([
+      { events: ['pause'], readyStateAtDelivery: 0 },
+      { events: ['loadedmetadata'], readyStateAtDelivery: 1 }
+    ])
+    // The landing is deferred, never dropped, and it still moves `readyState`.
+    expect(el.readyStates).toEqual([1, 0, 1])
   })
 
   it('refuses a re-entrant seat() rather than cross-wiring two peers', async () => {

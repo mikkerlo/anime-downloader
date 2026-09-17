@@ -6,6 +6,7 @@ import { usePlayerKeyboard, type PlayerAction } from '../../composables/use-play
 import { useSubtitles } from '../../composables/use-subtitles';
 import { useRemux } from '../../composables/use-remux';
 import { useSkipMarkers } from '../../composables/use-skip-markers';
+import { usePlayingEpisode } from '../../composables/use-playing-episode';
 import {
   useSyncplayClient,
   type SyncplayPlaybackKind
@@ -233,6 +234,18 @@ const playerShortcuts = ref<Record<string, string>>({ ...DEFAULT_PLAYER_SHORTCUT
 const currentEpisodeInt = computed(
   () => props.allEpisodes[activeEpisodeIndex.value]?.episodeInt || ''
 );
+
+// #371 — the episode the element is DECODING, which is not the same thing as
+// the episode the UI has navigated to. `goToEpisode` advances
+// `activeEpisodeIndex` before the new source resolves, so `currentEpisodeInt`
+// flips while the old media is still playing; anything that persists watch
+// progress in that window would key the old element's `currentTime` under the
+// new episode. Only readers about the media currently decoding take this ref —
+// see `use-playing-episode.ts` for the opener-vs-playing rule that decides
+// every call site.
+const { playingEpisodeInt, seedPlayingEpisode, onLoadStart, isPlayingEpisode } = usePlayingEpisode({
+  getSelectedEpisodeInt: () => currentEpisodeInt.value
+});
 
 // Skip Detection — useSkipMarkers owns the dual-mode detection (local
 // playback uses stored per-episode boundaries; streamed playback asks
@@ -640,7 +653,11 @@ function trackProgressDelta(now: number): void {
 }
 
 async function saveProgress(force = false): Promise<void> {
-  const epInt = currentEpisodeInt.value;
+  // #371 — the PLAYING episode, not the selected one. This keys watch progress
+  // for the media that is decoding, and `video.currentTime` below is that
+  // element's clock; during the nav window the two disagree and the selected
+  // index is the wrong answer.
+  const epInt = playingEpisodeInt.value;
   if (!props.animeId || !epInt) return;
   const video = videoRef.value;
   if (!video || !duration.value) return;
@@ -673,6 +690,21 @@ async function persistSelectedTranslation(translationId: number): Promise<void> 
   const vidDur = video?.duration && !Number.isNaN(video.duration) ? video.duration : 0;
   let pos = watchedReported ? 0 : (video?.currentTime ?? 0);
   let dur = duration.value || vidDur;
+  // #371 — the KEY stays on the selected episode (the translation id being
+  // recorded is about the episode being opened), but the POSITION must not.
+  // `TranslationMenu` is not gated by `navigating` the way the two
+  // `EpisodeNavButton`s are, and `goToEpisode` swaps `activeTranslations` to the
+  // target episode's list in the same synchronous block as the index write — so
+  // picking a translation *during* the nav window is a plausible user action,
+  // not a contrived race. When it happens the element is still decoding the
+  // previous episode, and its clock and duration belong to that episode, not to
+  // `epInt`. Drop them and let the stored-row fetch below supply the truth;
+  // that path already exists for the pre-loadedmetadata case and is the correct
+  // behaviour here for the same reason.
+  if (!isPlayingEpisode(epInt)) {
+    pos = 0;
+    dur = 0;
+  }
   if (!dur) {
     // Pre-loadedmetadata switch: avoid clobbering existing resume position with 0/0
     try {
@@ -743,7 +775,12 @@ async function maybeMarkWatched(): Promise<void> {
   await saveProgress(true);
 
   if (!props.malId) return;
-  const epNum = parseInt(currentEpisodeInt.value, 10);
+  // #371 — the PLAYING episode, matching `saveProgress(true)` above. Both halves
+  // of this function share one `watchedReported` flag; if they keyed differently
+  // it would report episode N+1 watched to Shikimori while writing episode N's
+  // progress row. "Which episode did the user actually watch" has one answer,
+  // and it is the one that was decoding while `cumulativePlayTime` accrued.
+  const epNum = parseInt(playingEpisodeInt.value, 10);
   if (!Number.isFinite(epNum) || epNum <= 0) return;
   try {
     const rate = await window.api.shikimoriGetRate(props.malId);
@@ -964,6 +1001,13 @@ function mkvSessionSeededFromRoom(): boolean {
 async function resumeFromSavedPosition(): Promise<void> {
   const video = videoRef.value;
   if (!video) return;
+  // #371 — `currentEpisodeInt`, deliberately, and NOT `playingEpisodeInt`. This
+  // is an opener: it restores the position for the episode being *opened*, and
+  // it is the restore half of the transaction `prepareMkvForPlayback` spawns
+  // ffmpeg for. One of its four call sites is a direct synchronous call in
+  // `onMounted` under `readyState >= 1`, so it does not even run strictly after
+  // a `loadstart`. Retargeting it at the playing ref would resume the new
+  // episode from the outgoing one's record.
   const epInt = currentEpisodeInt.value;
   if (!props.animeId || !epInt) return;
   try {
@@ -1091,6 +1135,12 @@ async function prepareMkvForPlayback(
     let resumeTarget = 0;
     mkvSpawnFromRoom = false;
     try {
+      // #371 — `currentEpisodeInt`, deliberately, and NOT `playingEpisodeInt`.
+      // This is the sharpest opener in the file: it runs *after* the index
+      // write, so the racy-looking value is the correct one. It fetches the
+      // saved position that feeds `resolveMkvSpawnTarget`, i.e. the offset the
+      // ffmpeg session for the episode being opened starts at — reading the
+      // playing ref here would spawn ffmpeg at the outgoing episode's offset.
       const epInt = currentEpisodeInt.value;
       // Both reads are issued together, not in sequence (#262): main projects the
       // room position at reply time, so a concurrent read is no staler, and this
@@ -2466,6 +2516,14 @@ onMounted(async () => {
   // here awaits, so the hoist adds no await ahead of `prepareMkvForPlayback` —
   // which is what keeps `docs/syncplay.md`'s ordering rule intact.
 
+  // #371 — seed the playing-episode ref from the current selection. Required,
+  // not belt-and-braces: the resume block at the tail of this hook calls
+  // `resumeFromSavedPosition()` directly when `video.readyState >= 1`, so on a
+  // warm mount no `loadstart` has fired and a `loadstart`-only ref would be
+  // empty for the whole first episode. Synchronous and above the first await
+  // for the same reason as everything else in this block (#280).
+  seedPlayingEpisode();
+
   // useSkipMarkers already wires the signature-updated subscription via its
   // own onMounted hook — we just need to kick off the initial load.
   loadSkipDetections();
@@ -2832,6 +2890,7 @@ const bufferedProgress = computed(() => {
         @play="onPlay"
         @pause="onPause"
         @seeked="onVideoSeekedAll"
+        @loadstart="onLoadStart"
         @loadedmetadata="syncplay.onVideoLoadedMetadata"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"

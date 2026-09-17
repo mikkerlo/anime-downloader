@@ -2,6 +2,8 @@
 
 The built-in player auto-saves playback position to `watchProgress` (electron-store, keyed by `animeId:episodeInt`). The save hook runs on `timeupdate` throttled to 5s, and on `pause`/unmount (forced). On player open, after `loadedmetadata`, the saved position is restored if `position > 5s` and `position / duration < 0.95`, and a brief toast is shown.
 
+**The `episodeInt` in that key is the episode the `<video>` element is decoding, not the episode the UI has navigated to (#371).** The two diverge for the length of every episode change, because `goToEpisode` advances the index before the new source resolves — and a save landing in that window used to file the outgoing episode's position under the incoming episode's key, which `resumeFromSavedPosition` then restored, opening the fresh episode partway in. `saveProgress` and `maybeMarkWatched`'s Shikimori episode number therefore both read `playingEpisodeInt` (from `usePlayingEpisode`, adopted on the element's `loadstart` and seeded at mount); the restore side — `resumeFromSavedPosition` and `prepareMkvForPlayback`'s saved-position fetch — reads `currentEpisodeInt`, because those are about the episode being *opened*. See [Episode Navigation](./player.md) for the full inventory and the one mixed case (`persistSelectedTranslation`).
+
 "Watched" detection counts real playback time via `timeupdate` deltas (clamped `< 2s` to ignore seek jumps). An episode is marked `watched: true` when `position / duration >= 0.8` AND cumulative playback `>= 180s`. The flag is set once per episode per session.
 
 When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and:

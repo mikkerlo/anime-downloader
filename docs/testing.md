@@ -53,7 +53,9 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   the last write and a playing room reads ahead of the playhead a seek just set.
   Drives real `SyncplayClient`s through the `net`/`tls` mocks
   (`test/services/syncplay-mirror-election.test.ts`, #277;
-  `test/services/syncplay-mirror-drift.test.ts`, #279).
+  `test/services/syncplay-mirror-drift.test.ts`, #279), and, through the
+  two-peer harness below, real renderers on top of them
+  (`test/services/syncplay-seek-crossfire.test.ts`, #361).
 
   Three knobs on top, all added by #279 and all defaulting to the reference's
   own behaviour. `forwardDelay` sets the `fd` in `reported + fd` to `'avrRtt/2'` (the
@@ -75,8 +77,11 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
 - **In-process IPC loop** (`test/setup/electron-mock.ts` → `test/ipc/`) — the
   global `electron` mock can close the bridge on itself: `ipcMain.handle`
   registrations are always recorded, and `__enableIpcLoop()` makes
-  `ipcRenderer.invoke` route into them and return the handler's result (a
-  rejection if it throws, the way real `invoke` does). The main→renderer half
+  `ipcRenderer.invoke` route into them and return the handler's result. Both
+  failure paths reject with the string a renderer actually sees — `Error
+  invoking remote method '<channel>': <Name>: <message>` — for a handler that
+  throws and for a channel nobody handled; `syncplay-bridge.test.ts` pins both
+  shapes verbatim. The main→renderer half
   was already closed — a broadcaster that calls `__emit` lands on the same
   `ipcRenderer.on` registry the preload's `subscribe()` writes to — so a test
   can drive a real router, the real `src/preload/index.ts` and a real
@@ -93,6 +98,54 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   broadcast half exists at all because `src/main/ipc/syncplay-broadcasts.ts`
   extracted the six `syncplay.on(…) → broadcastToAll(…)` wirings out of
   `src/main/index.ts`, which coverage excludes and no test can import.
+- **Two-peer interaction** (`test/helpers/syncplay-two-peer.ts`) — two complete
+  Syncplay stacks in one Vitest process, each running the real composable, the
+  real `src/preload/index.ts`, the real `src/main/ipc/syncplay.ipc.ts` and a real
+  `SyncplayClient`, all four of them against a shared
+  `MinElectionServer`. It exists to delete a stand-in:
+  `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
+  whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
+  hand-copied `Math.abs(…) <= 3`, so the shipped literal at
+  `src/renderer/src/composables/use-syncplay-client.ts:1411` could drift from it
+  and nothing would notice. Both peers now run the shipped rule, and mutating
+  that literal reds the file for any narrowing and for any widening to 4.0 s or
+  beyond — every drift in that run lands on an exact integer, so what the file
+  pins the literal into is the half-open window `[3.0, 4.0)` rather than a point.
+
+  The loop is **not** built on the in-process IPC loop above, because that mock's
+  registries are process-wide and keyed by channel name — two peers would
+  overwrite each other's handlers. Each peer gets a private module graph instead
+  (`vi.resetModules()` plus `vi.doMock` of `electron`, `net` and `tls`), which
+  gives it its own IPC registries, its own sockets, its own `syncplay` singleton
+  — the one `syncplay.ipc.ts` imports at module scope, and the reason a shared
+  graph cannot work — and its own preload `api` object. The renderer half needs
+  one production seam for the same reason, `SyncplayDeps.api` (#361 step 3),
+  because `window.api` is one object per renderer and cannot be swapped around
+  two interleaved mounts. Same non-emulation caveat as the IPC loop: payloads
+  cross by reference, not structured-cloned. `HarnessVideo` models a playhead on
+  the fake clock, a seek that takes `seekLandMs` to land, and queued
+  `play`/`pause`/`seeked` tasks — deliberately not the composable test file's
+  `fakeVideo`, which models a static playhead for 205 single-frame cases. Only
+  the *first* write of a burst freezes the reported position — a second write
+  arriving before the first lands replaces the target but must not re-read the
+  walking playhead, or a stalled laggard drifts forward and under-reports its own
+  lateness into the server's `min()` election.
+  Callers own `vi.useFakeTimers()`; `advance()` steps the one shared clock in
+  50 ms slices and drains microtasks between them, because Vue's scheduler
+  flushes on microtasks rather than on the timer queue. Three of the helper's
+  contracts are enforced rather than documented. `advance()` rejects a duration
+  that is not a whole number of slices. `seat()` refuses re-entry, because two
+  seats in flight at once interleave `vi.resetModules()` and the `window.api`
+  swap and hand back two silently cross-wired peers. And `dispose()` tears down
+  every peer even when an earlier one throws, draining the room before it
+  rethrows the first error — a case that mocks something `dispose()` calls used
+  to abandon the peers queued behind the thrower *and* leave the room populated,
+  so the next case's `room?.dispose()` re-ran the same throwing teardown and red
+  a neighbour that had nothing wrong with it.
+  `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
+  three guards, the first-write freeze above, and both rejection shapes this
+  bridge copy produces, the no-handler one and a handler that throws — and
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence

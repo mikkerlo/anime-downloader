@@ -120,7 +120,42 @@ export type SyncplaySeekOp = {
 /** The handle for "nothing was armed" — see `SyncplaySeekOp`. */
 const NO_SEEK_OP: SyncplaySeekOp = { id: 0, retract: () => {} }
 
+/** The slice of the preload bridge this composable reaches for.
+ *
+ *  Narrow on purpose, and derived from `Api` rather than hand-written: a
+ *  renamed channel wrapper fails typecheck here instead of at the fourteen call
+ *  sites. */
+export type SyncplayBridgeApi = Pick<
+  Api,
+  | 'getSetting'
+  | 'setSetting'
+  | 'shikimoriGetUser'
+  | 'syncplayConnect'
+  | 'syncplayDisconnect'
+  | 'syncplayPlayerClosed'
+  | 'syncplaySendLocalSnapshot'
+  | 'syncplaySendLocalState'
+  | 'syncplaySetFile'
+  | 'syncplaySetReady'
+  | 'onSyncplayRemoteEpisodeChange'
+  | 'onSyncplayRemoteState'
+  | 'onSyncplayRoomEvent'
+  | 'onSyncplayTrace'
+>
+
 export type SyncplayDeps = {
+  /** The preload bridge to talk to main over. Defaults to the renderer's own
+   *  `window.api`, which is what PlayerView wants and passes nothing for.
+   *
+   *  It is a dep rather than a global read (#361 step 3) because `window.api`
+   *  is one object per renderer and the two-peer interaction harness runs two
+   *  complete stacks in one process. Swapping the global around each peer
+   *  cannot work: the mount at `onMounted` awaits `getSetting` *before* it
+   *  installs its four subscriptions, and the 1 Hz snapshot interval fires on a
+   *  clock nobody scopes — so either peer can reach the global while the other
+   *  one owns it. Resolved once at setup, so the value a mount starts with is
+   *  the value it keeps. */
+  api?: SyncplayBridgeApi
   /** Live <video> element getter. */
   getVideoEl: () => HTMLVideoElement | null
   /** Live duration value (the player progress ref). */
@@ -231,6 +266,8 @@ export type SyncplayClient = {
 }
 
 export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
+  // Resolved once, at setup, and never re-read — see `SyncplayDeps.api`.
+  const api: SyncplayBridgeApi = deps.api ?? window.api
   const syncplayStore = useSyncplayStore()
   const { status: syncplayStatus, roomUsers: syncplayRoomUsers } = storeToRefs(syncplayStore)
   const syncplayRoomInput = ref('')
@@ -684,7 +721,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const dur = deps.getVideoEl()?.duration || deps.getDuration() || 0
     const newPlayer = !announcedThisMount
     announcedThisMount = true
-    window.api.syncplaySetFile({
+    api.syncplaySetFile({
       animeId: deps.getAnimeId(),
       malId: deps.getMalId(),
       episodeInt: deps.getCurrentEpisodeInt() || deps.getActiveEpisodeLabel() || '',
@@ -762,7 +799,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const v = deps.getVideoEl()
     if (!v) return
     if (!hasAnnounceablePosition(v)) return
-    window.api.syncplaySendLocalState({
+    api.syncplaySendLocalState({
       paused: intentOr(v),
       position: v.currentTime,
       cause
@@ -799,7 +836,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // claim, and this door had no readiness term at all (#284).
     if (!hasAnnounceablePosition(v)) return
     lastSnapshotPushAt = Date.now()
-    window.api.syncplaySendLocalSnapshot({
+    api.syncplaySendLocalSnapshot({
       position: v.currentTime,
       paused: intentOr(v)
     })
@@ -983,7 +1020,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // "Reached the element" is the narrow half, and deliberately so. The
     // revision is bumped in the *enactment block* of `applyRemoteStateToElement`
-    // (use-syncplay-client.ts:1622-1625); #240 parks a state above that call whenever the element
+    // (use-syncplay-client.ts:1659-1662); #240 parks a state above that call whenever the element
     // is missing or below HAVE_METADATA, and `recordRemoteState` updates only the
     // room mirror and the badge. So a room pause landing in exactly the window a
     // `restore` lives in — between the source swap and its `play` echo — does
@@ -992,9 +1029,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // "The revision is bumped where intent is written" stopped being the way to
     // say that at #331: two sites in `applyRemoteStateToElement` now write
     // intent and only the enactment block's bumps. The narrow adoption above the
-    // early-out (use-syncplay-client.ts:1503) deliberately does not, so a room state that reaches
+    // early-out (use-syncplay-client.ts:1540) deliberately does not, so a room state that reaches
     // the element half by the no-op path writes intent without superseding anything
-    // — the argument for that omission is at :1437-1450, and
+    // — the argument for that omission is at :1474-1487, and
     // `does not supersede a queued episode-start across a run of no-op applies (#331)`
     // pins it.
     //
@@ -1165,7 +1202,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (syncplayLocalReady === ready) return
     syncplayLocalReady = ready
     if (syncplayStatus.value.state === 'ready') {
-      window.api.syncplaySetReady(ready).catch(() => {})
+      api.syncplaySetReady(ready).catch(() => {})
     }
     applySyncplayReadyGate()
   }
@@ -1409,7 +1446,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // sits above that write, so an apply whose position and paused-ness the
     // element already matches used to adopt nothing — while
     // `pushSyncplaySnapshot` announces `intentOr(v)` (`intendedPaused ??
-    // v.paused`, :407), not `v.paused`.
+    // v.paused`, :444), not `v.paused`.
     //
     // What makes that a lost pause rather than a cosmetic gap. Nothing but the
     // user handlers and this adoption writes `intendedPaused`: an `echo`
@@ -1429,7 +1466,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // the early-out below, and the 1 s interval announces `paused: false` into the room the user
     // just paused. Not repaired on a schedule: main's `canAssertSnapshot()` asserts it, the
     // server un-pauses the room, and the next inbound state's `syncplayLastRemotePlaying =
-    // !state.paused` (use-syncplay-client.ts:1296) flips the mirror the divergence relied on —
+    // !state.paused` (use-syncplay-client.ts:1333) flips the mirror the divergence relied on —
     // but only a state surviving `src/main/syncplay.ts:2097`/`:2098` gets there, past adoption
     // maybe none. From there the room is playing, and nothing restores the pause. #324's lost
     // play, in the pause direction.
@@ -1443,7 +1480,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // park is there. What carries the omission is a bound of its own, and it is structural, not a
     // rate: a surviving `restore`'s clobber of `intendedPaused` stands until the next inbound
     // state surviving `src/main/syncplay.ts:2097`/`:2098` — the room mirror repairs on that same
-    // gated state, `use-syncplay-client.ts:1296` — and no timer, ack, re-adoption or roster event
+    // gated state, `use-syncplay-client.ts:1333` — and no timer, ack, re-adoption or roster event
     // caps that run: uncapped by any schedule in the tree. Reachability is #343. Bumping here
     // would instead supersede queued operations within a second of registration — but only
     // pre-adoption, where `episode-start` is registered and the three same-episode `restore`s are
@@ -1452,11 +1489,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // **`!outOfFile`, deliberately broader than `!refusingResume`:** *any*
     // intent write above the early-out is unsafe for the whole out-of-file
     // divergence, not only for the frames the refusal is actually firing on.
-    // `refusingResume` carries `!effectivePaused` (:1404) and `effectivePaused`
-    // folds in `!syncplayAllUsersReady()` (:1390), so one peer going not-ready
+    // `refusingResume` carries `!effectivePaused` (:1441) and `effectivePaused`
+    // folds in `!syncplayAllUsersReady()` (:1427), so one peer going not-ready
     // makes the refusal false while `outOfFileUserPause` is still armed: a room
     // resume then reaches this line with `v.paused` still true (the gate's
-    // resume arm needs `!outOfFileUserPause`, :1206, so nothing resumed us),
+    // resume arm needs `!outOfFileUserPause`, :1243, so nothing resumed us),
     // `needsPlayPause` false and `needsSeek` false under `outOfFile`, and
     // nothing clears the marker in the meantime. A `!refusingResume` guard would perform there,
     // once a second for the whole divergence — main is de-adopted for its length, so the room's
@@ -1536,12 +1573,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //   already being paused — so on an already-paused element this call
     //   disarms and fires *nothing*. An operation registered for it would never
     //   be consumed and would sit in the registry for the full
-    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:879), where the user's next genuine pause would
+    //   `PLAYBACK_OP_TTL_MS` (use-syncplay-client.ts:916), where the user's next genuine pause would
     //   match it and be swallowed as an echo. That is the latch family #236
     //   records one line-block below, on the play side.
     //
     // Drop `v.paused` and both arguments fail at once: `effectivePaused` is
-    // `state.paused || !syncplayAllUsersReady()` (use-syncplay-client.ts:1390), a disjunction, so it is
+    // `state.paused || !syncplayAllUsersReady()` (use-syncplay-client.ts:1427), a disjunction, so it is
     // true on a *playing* room whenever readiness is down — and a bare
     // `v.pause()` on an element that is still playing fires a real `pause` event
     // that `onLocalPause` reads as the user and announces to the room. A pause
@@ -1874,10 +1911,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       syncplayStatus.value.state === 'hello-sent' ||
       syncplayStatus.value.state === 'reconnecting'
     if (isActive) {
-      await window.api.syncplayDisconnect()
+      await api.syncplayDisconnect()
       return
     }
-    const cfg = (await window.api.getSetting('syncplay')) as {
+    const cfg = (await api.getSetting('syncplay')) as {
       lastHost?: string
       lastPort?: number
       lastRoom?: string
@@ -1889,10 +1926,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     const room = syncplayRoomInput.value.trim() || cfg?.lastRoom || ''
     let username = cfg?.username?.trim() || ''
     if (!username) {
-      const shiki = await window.api.shikimoriGetUser()
+      const shiki = await api.shikimoriGetUser()
       if (shiki?.nickname) {
         username = shiki.nickname
-        await window.api.setSetting('syncplay', { ...(cfg || {}), username })
+        await api.setSetting('syncplay', { ...(cfg || {}), username })
       }
     }
     if (!room) {
@@ -1903,7 +1940,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       showSyncplayToast('Set a username in Settings → Watch Together')
       return
     }
-    await window.api.syncplayConnect({
+    await api.syncplayConnect({
       host,
       port,
       room,
@@ -2269,13 +2306,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     } catch {
       /* ignore */
     }
-    const cfg = (await window.api.getSetting('syncplay')) as { lastRoom?: string } | null
+    const cfg = (await api.getSetting('syncplay')) as { lastRoom?: string } | null
     if (cfg?.lastRoom) syncplayRoomInput.value = cfg.lastRoom
 
-    unsubRemoteState = window.api.onSyncplayRemoteState((state) => {
+    unsubRemoteState = api.onSyncplayRemoteState((state) => {
       applyRemoteState(state)
     })
-    unsubRoomEvent = window.api.onSyncplayRoomEvent((ev) => {
+    unsubRoomEvent = api.onSyncplayRoomEvent((ev) => {
       if (ev.level === 'warn' || ev.level === 'error') {
         console.warn('[syncplay]', ev.text)
       } else {
@@ -2284,7 +2321,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       const ms = ev.level === 'warn' || ev.level === 'error' ? 8000 : 3500
       showSyncplayToast(ev.text, ms)
     })
-    unsubTrace = window.api.onSyncplayTrace((entry) => {
+    unsubTrace = api.onSyncplayTrace((entry) => {
       const arrow = entry.dir === 'in' ? '<<' : '>>'
       let flat: string
       try {
@@ -2294,7 +2331,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       }
       console.log(`[syncplay] ${arrow} ${entry.keys} ${flat}`)
     })
-    unsubRemoteEpisodeChange = window.api.onSyncplayRemoteEpisodeChange((ep) => {
+    unsubRemoteEpisodeChange = api.onSyncplayRemoteEpisodeChange((ep) => {
       deps.onRemoteEpisodeChange(ep)
     })
 
@@ -2337,7 +2374,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // never seen, so its close resets the player state (which it must, #288) and
     // leaves the file an earlier mount announced alone (which it must too — no
     // snapshot re-announces a file).
-    window.api.syncplayPlayerClosed(playerSessionId)
+    api.syncplayPlayerClosed(playerSessionId)
     if (syncplayToastTimer) {
       clearTimeout(syncplayToastTimer)
       syncplayToastTimer = null

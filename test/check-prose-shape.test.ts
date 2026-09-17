@@ -266,12 +266,12 @@ describe('check-prose-shape', () => {
     // silently unmeasured, indistinguishable from clean. Raised in review on
     // #374; this corpus is the one measured there.
     //
-    // Bounding the search at the FIRST FENCE is the fix. The tighter bound —
-    // requiring the closer before the first blank line — looks right and is
-    // wrong: `.github/agents/todo-reviewer.agent.md` has a blank line inside its
-    // front matter, and that rule starts reporting `name: todo-reviewer` at
-    // 19/41. Out of scope today, but the header argues the content rule holds
-    // independent of the root choice, so it is not taken.
+    // Bounding the search at the first fence AT THE LEFT MARGIN is the fix. The
+    // tighter bound — requiring the closer before the first blank line — looks
+    // right and is wrong: `.github/agents/todo-reviewer.agent.md` has a blank
+    // line inside its front matter, and that rule starts reporting
+    // `name: todo-reviewer` at 19/41. Out of scope today, but the header argues
+    // the content rule holds independent of the root choice, so it is not taken.
     const fencedSample = run({
       'docs/notes.md': [
         '---',
@@ -322,6 +322,44 @@ describe('check-prose-shape', () => {
     })
 
     expect(realFrontMatterThenFence.hits).toEqual([])
+  })
+
+  it('keeps front matter that holds a fence inside an indented block scalar', () => {
+    // THE THIRD ARM, and it is a regression test: the first cut of the bound
+    // above was `FENCE`, any indentation, and it re-opened the very class the
+    // front-matter exclusion exists to kill. A YAML block scalar
+    // (`description: |`) may hold a fenced sample, indented under its key — the
+    // shape an agent-instruction header takes when it documents a command. The
+    // bound stopped at that fence, the closing `---` on line 11 was never
+    // reached, the file was refused as front matter, and its keys were scanned
+    // as prose: `name: todo-reviewer` at 19/77 and `description: |` at 14/77,
+    // two hits at the head of a file that must report none.
+    //
+    // A fence INSIDE front matter can only be indented, because an unindented
+    // one would be a YAML key of its own. So the margin is what separates the
+    // two cases, and the corpus in the test above — a fenced `---` sample at
+    // column 0 — is the one that still has to bound the search.
+    const blockScalar = run({
+      'docs/notes.md': [
+        '---',
+        'name: todo-reviewer',
+        'description: |',
+        '  Reviews the TODO list against the tree and reports what has drifted. Run it',
+        '  like this:',
+        '',
+        '  ```sh',
+        '  npm run check:todo',
+        '  ```',
+        'model: opus',
+        '---',
+        '',
+        'Body prose that is long enough to make a block of its own without tripping',
+        'anything, and that ends properly.',
+        ''
+      ].join('\n')
+    })
+
+    expect(blockScalar.hits).toEqual([])
   })
 
   it('stays quiet on a raw HTML block', () => {
@@ -505,6 +543,114 @@ describe('check-prose-shape', () => {
     ])
     expect(kinds[5]).toEqual({ kind: 'skip', why: 'fence' })
     expect(kinds.slice(7, 10).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
+  })
+
+  it('does not let an indented marker close the fence it is sitting in', () => {
+    // EXCLUSION 3's fourth part, and the last one the marker rule let through.
+    // A closing fence is indented at most 3 columns past the fence it closes;
+    // beyond that the line is code content. Under an unbounded `^\s*` the marker
+    // below closed the ```markdown fence it sits in, and the defect arrived in
+    // both directions at once, exactly as the info-string one does: `short code
+    // arg` leaked out at 14/76, and line 6's real closer then RE-OPENED a fence,
+    // swallowing the ragged 28/74 on line 9.
+    //
+    // The opener here sits at the margin, so 4 columns is past the bound. The
+    // test below is the other half: the same 4 columns against an opener that is
+    // itself indented, which must still close.
+    const lines = [
+      '```markdown',
+      'Everything below is a sample of the very page this gate had to learn to read.',
+      '    ```',
+      'short code arg',
+      '  --dry-run  print the plan and exit without writing anything to disk at all',
+      '```',
+      '',
+      'Genuine prose after the fenced sample, wrapped by hand to a sensible width',
+      'a short line that just stops',
+      'the tail of the paragraph.',
+      ''
+    ]
+    const r = run({ 'docs/notes.md': lines.join('\n') })
+
+    // SOFT, deliberately. A hard `toEqual` on `hits` short-circuits the
+    // classification assertions below, so a mutation that breaks all three is
+    // observed through one of them and the other two are never exercised — which
+    // is how a mutation control can come back green-looking on coverage it never
+    // had. Soft runs every assertion and reports each that reds.
+    expect.soft(r.hits).toEqual([
+      {
+        path: 'docs/notes.md',
+        line: 9,
+        len: 28,
+        blockMax: 74,
+        text: 'a short line that just stops'
+      }
+    ])
+
+    // The classification directly: the indented marker is fenced CODE, not a
+    // fence, and so is everything it guards.
+    const kinds = classify(lines) as Kind[]
+    expect.soft(kinds.slice(2, 5)).toEqual([
+      { kind: 'skip', why: 'fenced code' },
+      { kind: 'skip', why: 'fenced code' },
+      { kind: 'skip', why: 'fenced code' }
+    ])
+    expect.soft(kinds[5]).toEqual({ kind: 'skip', why: 'fence' })
+    expect.soft(kinds.slice(7, 10).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
+  })
+
+  it('closes an indented fence with a closer indented to match it', () => {
+    // The other half of the indent bound, and the reason it is measured against
+    // the OPENER rather than the left margin. CommonMark takes fence
+    // indentation from the CONTAINER's content column, so a fence inside a list
+    // item indented to column 4 opens and closes at column 4 and is legal.
+    //
+    // An absolute `^ {0,3}` refuses both markers here, and then every line
+    // between them is scanned as prose: this corpus reports four hits, the raw
+    // `jj` command lines. That is not hypothetical — five
+    // `.gemini/skills/*/SKILL.md` files carry exactly this shape, and the
+    // absolute bound takes the broad tree count from 14 to 40, all 26 of them
+    // fenced code. The bound exists to stop code leaking into the prose
+    // population; an absolute one leaks more than it stops.
+    const lines = [
+      '8.  **Commit, Push, and PR**: use `jj` for the commit and `gh` for the PR,',
+      '    which is the step this list has been building towards all along',
+      '',
+      '    ```bash',
+      '    jj describe -m "Commit message. Fixes #<issue-number>"',
+      '    jj bookmark create <branch-name> -r @',
+      '    jj git push -b <branch-name>',
+      '    ```',
+      '',
+      'Genuine prose after the list, wrapped by hand to a sensible width indeed',
+      'a short line that just stops',
+      'the tail of the paragraph.',
+      ''
+    ]
+    const r = run({ 'docs/notes.md': lines.join('\n') })
+
+    // Only the genuine ragged line, from AFTER the list: nothing from inside the
+    // fence, and the fence really did close, so line 11 is prose and not code.
+    expect.soft(r.hits).toEqual([
+      {
+        path: 'docs/notes.md',
+        line: 11,
+        len: 28,
+        blockMax: 72,
+        text: 'a short line that just stops'
+      }
+    ])
+
+    const kinds = classify(lines) as Kind[]
+    expect.soft(kinds[3]).toEqual({ kind: 'skip', why: 'fence' })
+    expect
+      .soft(kinds.slice(4, 7).map((k) => k.why))
+      .toEqual(['fenced code', 'fenced code', 'fenced code'])
+    expect.soft(kinds[7]).toEqual({ kind: 'skip', why: 'fence' })
+    // And the fence is CLOSED, not still open: the prose below classifies as
+    // prose. Under an absolute bound the opener never opened, so these read
+    // `text` for the wrong reason — hence the `hits` assertion above as well.
+    expect.soft(kinds.slice(9, 12).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
   })
 
   // --- the clauses, one at a time ---------------------------------------------

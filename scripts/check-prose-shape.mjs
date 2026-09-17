@@ -88,16 +88,50 @@ export const EXCLUDED_PATHS = []
 // single boolean toggled on any fence opener lets a `~~~` close a ``` fence and
 // a ``` close a 4-backtick one; capturing only the character and the length
 // still lets a ```js line close a ```markdown one, because CommonMark carries
-// no info string on a CLOSING fence — a marker that has one is content. That is
-// the third part of the rule, not a detail: a docs page showing a fenced sample
-// with a language tag is exactly the shape that introduces one, and this repo's
-// docs are mostly fenced samples.
+// no info string on a CLOSING fence — a marker that has one is content. A docs
+// page showing a fenced sample with a language tag is exactly the shape that
+// introduces one, and this repo's docs are mostly fenced samples.
 //
-// All three parts fail OPEN, and in both directions at once: the sample's lines
-// leak into the prose population, and the sample's real closer then RE-OPENS a
-// fence, so the genuine prose after the block classifies `fenced code` and is
-// silently not measured. Group 2 is what the closer branch reads to refuse it.
-const FENCE = /^\s*(`{3,}|~{3,})(.*)$/
+// CommonMark's closing rule has four parts and all four are here: the closer is
+// a run of the SAME character, AT LEAST AS LONG as the opener, carrying NO INFO
+// STRING, and INDENTED AT MOST 3 COLUMNS PAST THE OPENER. Group 1 is the fourth
+// — under an unbounded `^\s*` a 4-space-indented ``` closed the ```markdown
+// fence it was sitting in.
+//
+// RELATIVE to the opener, not to the left margin, and that is the whole care in
+// this line. CommonMark measures fence indentation from its CONTAINER's content
+// column, so `    ```bash` under an ordered-list item indented to column 4 is a
+// perfectly legal fence. This script tracks no containers, so an absolute
+// `^ {0,3}` rejects those and their contents leak into the prose population:
+// measured on this tree it turns 14 broad hits into 40, 26 raw `jj`/`gh` command
+// lines and a JSON blob out of five `.gemini/skills/*/SKILL.md` samples. That is
+// the same fail-open class this bound exists to close, arriving from the other
+// side. Carrying the opener's own indent is what makes both cases come out
+// right without a container stack.
+//
+// Indentation is counted in COLUMNS, so a tab is 4 — which is why a tab-indented
+// marker cannot close a fence opened at the margin either.
+//
+// The asymmetry is deliberate: no bound on an OPENER. An opener decides what is
+// EXCLUDED, so a permissive one under-reports; a closer decides what comes BACK
+// IN, so a permissive one leaks code into the measurement. Only the second is a
+// false positive, and only the second is bounded.
+//
+// Every part fails OPEN, and in both directions at once: the sample's lines leak
+// into the prose population, and the sample's real closer then RE-OPENS a fence,
+// so the genuine prose after the block classifies `fenced code` and is silently
+// not measured. Group 3 is what the closer branch reads to refuse an info string.
+const FENCE = /^([ \t]*)(`{3,}|~{3,})(.*)$/
+
+// A tab is 4 columns of indentation, per CommonMark. Anything else in the indent
+// run is a space and counts 1.
+const indentColumns = (s) => s.length + 3 * (s.split('\t').length - 1)
+
+// The same marker AT THE LEFT MARGIN, for one job: bounding the front-matter
+// closer search. A fence inside front matter can only be part of an indented
+// YAML block scalar, so an indented marker must not end that search — the
+// fenced sample that makes the bound necessary sits at column 0.
+const FENCE_AT_MARGIN = /^(?:`{3,}|~{3,})/
 const HEADING = /^\s*#{1,6}\s/
 const TABLE_ROW = /^\s*\|/
 const BLOCKQUOTE = /^\s*>/
@@ -138,9 +172,12 @@ export function classify(lines) {
   const out = []
   let inFence = false
   // The open fence's marker, so a closer is only honoured when it is a run of
-  // the SAME character at least as long, carrying no info string — CommonMark's
-  // rule. Empty when no fence is open.
+  // the SAME character at least as long, carrying no info string and indented no
+  // more than 3 columns past the opener — CommonMark's rule. Empty when no fence
+  // is open, and `fenceIndent` is the opener's own indentation in columns, which
+  // is what the fourth part is measured against.
   let fenceMarker = ''
+  let fenceIndent = 0
   // YAML front matter: `---` on the very first line opens it, the next `---`
   // closes it. Every `name:`/`description:` key is a short line inside a block
   // whose longest line is a long `description:`, so front matter is a pure
@@ -154,10 +191,15 @@ export function classify(lines) {
   // towards `scannedCount`: silently unmeasured, indistinguishable from clean.
   let inFrontMatter = false
   if (lines[0] !== undefined && lines[0].trim() === '---') {
-    // ...and it has to arrive before the first fence, so a `---` inside a
-    // fenced YAML sample cannot stand in for it.
+    // ...and it has to arrive before the first fence AT THE LEFT MARGIN, so a
+    // `---` inside a fenced YAML sample cannot stand in for it. The margin is
+    // load-bearing, not tidiness: front matter legitimately holds a fence of its
+    // own inside an indented `description: |` block scalar, and bounding on any
+    // fence stopped the search there, refused real front matter and reported
+    // `name:`/`description:` keys — the exact class this exclusion exists to
+    // kill, back through a narrower door.
     for (let i = 1; i < lines.length; i++) {
-      if (FENCE.test(lines[i])) break
+      if (FENCE_AT_MARGIN.test(lines[i])) break
       if (lines[i].trim() === '---') {
         inFrontMatter = true
         break
@@ -184,17 +226,20 @@ export function classify(lines) {
     }
 
     const fence = line.match(FENCE)
-    // A closer is a run of the SAME character at least as long AND NOTHING
-    // ELSE: CommonMark carries no info string on a closing fence, so a marker
-    // that has one is content, not a closer.
+    // A closer is a run of the SAME character at least as long, NOTHING ELSE on
+    // the line — CommonMark carries no info string on a closing fence, so a
+    // marker that has one is content — and indented at most 3 columns past the
+    // opener it is closing.
     if (
       fence &&
       (!inFence ||
-        (fence[1][0] === fenceMarker[0] &&
-          fence[1].length >= fenceMarker.length &&
-          fence[2].trim() === ''))
+        (fence[2][0] === fenceMarker[0] &&
+          fence[2].length >= fenceMarker.length &&
+          fence[3].trim() === '' &&
+          indentColumns(fence[1]) <= fenceIndent + 3))
     ) {
-      fenceMarker = inFence ? '' : fence[1]
+      fenceMarker = inFence ? '' : fence[2]
+      fenceIndent = inFence ? 0 : indentColumns(fence[1])
       inFence = !inFence
       inHtml = false
       out.push({ kind: 'skip', why: 'fence' })

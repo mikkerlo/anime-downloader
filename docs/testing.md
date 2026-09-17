@@ -146,8 +146,8 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   three guards, the first-write freeze above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
   `syncplay-seek-crossfire.test.ts` is the first scenario on it. Three more
-  scenario files sit on the same harness
-  (#361 step 4): `syncplay-two-peer-playpause.test.ts` (both directions, a peer
+  scenario files sit on the same harness (#361 step 4):
+  `syncplay-two-peer-playpause.test.ts` (both directions, a peer
   joining a room that is already paused, and a peer's own pause not coming
   back), `syncplay-two-peer-seek-echo.test.ts` (a drag propagating, its echo
   suppressed on the originator, and the re-assert behind

@@ -33,7 +33,7 @@
 //    crossing case, each reading `pendingServerAck: 1`. What the zeros pin is
 //    "cleared before every boundary", i.e. the counter never latches, which is a
 //    different regression class from "it was set at some point".
-//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1792`)
+//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1793`)
 //    is unreachable here.** `MinElectionServer` never writes a `client` key —
 //    the reference only writes one when its own counter is truthy
 //    (`protocols.py:758-760`) — so on this link `pendingClientAck` is only ever

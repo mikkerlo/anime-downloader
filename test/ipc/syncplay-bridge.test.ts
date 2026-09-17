@@ -254,6 +254,18 @@ describe('syncplay IPC bridge — invoke channels', () => {
       `Error invoking remote method '${CHANNELS.SYNCPLAY_DISCONNECT}': Error: socket already gone`
     )
   })
+
+  it('surfaces an unhandled channel the way Electron does', async () => {
+    // The loop's other rejection shape, and the one nothing else pins. This
+    // file registers `syncplay.ipc.ts` and nothing else — `CHANNELS.APP_VERSION`
+    // is handled by `src/main/ipc/app.ipc.ts`, which never loads here, so the
+    // channel is genuinely unhandled. In Electron that error is raised in main
+    // and comes back through the same renderer-side wrapper as a throw.
+    await expect(api().appVersion()).rejects.toThrow(
+      `Error invoking remote method '${CHANNELS.APP_VERSION}': ` +
+        `Error: No handler registered for '${CHANNELS.APP_VERSION}'`
+    )
+  })
 })
 
 describe('syncplay IPC bridge — broadcast channels', () => {

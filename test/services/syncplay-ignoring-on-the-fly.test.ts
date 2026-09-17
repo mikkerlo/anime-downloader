@@ -903,7 +903,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
     // the server the room is wrong; execution then falls past the drop guards
     // and hands the renderer that same contradicted position, which the
     // renderer applies because the difference exceeds its 3 s tolerance
-    // (src/renderer/src/composables/use-syncplay-client.ts:1374). Two quick arrow presses is the user
+    // (src/renderer/src/composables/use-syncplay-client.ts:1411). Two quick arrow presses is the user
     // report: the second lands inside the server's ignore window and is
     // discarded, and the periodic that closes the window carries the room still
     // at the first press.

@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+//
 // The boundary of #278's read-side rule, made executable.
 //
 // #278 fixes symptom 1 — "two quick arrow presses revert to the first" — by
@@ -27,249 +29,112 @@
 //    `min()`; a `doSeek: false` frame should not be allowed to move the room
 //    backwards by minutes at all.
 //
-// Driven by `test/helpers/syncplay-min-election-server.ts` (landed on #282 for
-// #277), because "who the server says set the room" is the *result* here rather
-// than an input — of the election, of the link delay, and of what each client
-// last asserted.
+// ── Why this runs on the two-peer harness (#361 step 3) ───────────────────────
+//
+// It used to carry a `LaggyElement` whose `apply()` was commented "the
+// renderer's apply rule, verbatim" and was a hand-copied `Math.abs(…) <= 3`.
+// The shipped rule is a separate literal in `use-syncplay-client.ts`, so the
+// copy could drift from it and nothing would notice — the assertion that "the
+// renderer applies it" was being made against the copy. Both peers now run the
+// real composable over the real preload bridge and the real IPC router
+// (`test/helpers/syncplay-two-peer.ts`), so the rule under test is the one that
+// ships: mutating the `3.0` at `src/renderer/src/composables/use-syncplay-client.ts:1411`
+// reds this file.
+//
+// The three things `LaggyElement` did are still done, by the harness rather
+// than by hand: the laggy landing is `HarnessVideo`'s `seekLandMs`, the 1 Hz
+// snapshot push is the composable's own interval instead of the fixture's
+// manual `updateSnapshot`, and the seek that starts the crossfire is a scrubber
+// drag — a bare `currentTime` write whose `seeked` the composable classifies as
+// the user's — instead of a direct `sendLocalState` call.
+//
+// Still driven by `test/helpers/syncplay-min-election-server.ts` (landed on #282
+// for #277), because "who the server says set the room" is the *result* here
+// rather than an input — of the election, of the link delay, and of what each
+// client last asserted.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { EventEmitter } from 'events'
-
-class FakeSocket extends EventEmitter {
-  setKeepAlive = vi.fn()
-  write: (data: string) => void = vi.fn()
-  destroy = vi.fn(() => {
-    this.emit('close')
-  })
-}
-
-const plainSockets: FakeSocket[] = []
-const tlsSockets: FakeSocket[] = []
-
-vi.mock('net', () => ({
-  createConnection: vi.fn(() => {
-    const s = new FakeSocket()
-    plainSockets.push(s)
-    return s
-  })
-}))
-
-vi.mock('tls', () => ({
-  connect: vi.fn(() => {
-    const s = new FakeSocket()
-    tlsSockets.push(s)
-    return s
-  })
-}))
-
-import { SyncplayClient, ADOPT_TOLERANCE_S } from '../../src/main/syncplay'
-import { MinElectionServer } from '../helpers/syncplay-min-election-server'
-import type { SyncplayRemoteState } from '../../src/main/syncplay'
+import { ADOPT_TOLERANCE_S } from '../../src/main/syncplay'
+import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
+import type { TwoPeerRoom } from '../helpers/syncplay-two-peer'
 
 const ROOM_START = 100
 const SEEK_TO = 645
 const DELAY_MS = 50
-const OPEN = 'Some Anime - 7'
 /** How long the joiner's unbuffered seek takes to land — an MKV/MSE respawn. */
 const LAND_MS = 6000
 
-const seekIntentOf = (client: SyncplayClient): { at: number; attempts: number } | null =>
-  (client as unknown as { seekIntent: { at: number; attempts: number } | null }).seekIntent
-
-/**
- * A `<video>` whose seeks do not land instantly. While one is in flight the
- * element reports its **stalled** `currentTime` — the pre-seek value — which is
- * exactly what the renderer's 1 Hz snapshot push reports to main, and exactly
- * what wins the server's `min()` election. That is #284's subject; here it is
- * the fixture.
- */
-class LaggyElement {
-  private position: number
-  private at: number
-  private landing: { target: number; startedAt: number } | null = null
-
-  constructor(
-    position: number,
-    private readonly landMs: number
-  ) {
-    this.position = position
-    this.at = Date.now()
-  }
-
-  /** What `v.currentTime` reads right now. */
-  currentTime(): number {
-    if (this.landing !== null) return this.position
-    return this.position + (Date.now() - this.at) / 1000
-  }
-
-  /** The renderer's apply rule, verbatim (src/renderer/src/composables/use-syncplay-client.ts:1374). */
-  apply(state: SyncplayRemoteState): boolean {
-    if (!state.doSeek && Math.abs(this.currentTime() - state.position) <= 3) return false
-    this.seekTo(state.position)
-    return true
-  }
-
-  seekTo(target: number): void {
-    if (this.landMs <= 0) {
-      this.position = target
-      this.at = Date.now()
-      return
-    }
-    this.position = this.currentTime()
-    this.at = Date.now()
-    this.landing = { target, startedAt: Date.now() }
-  }
-
-  /** Called on every fixture step; completes a seek once its wait is up. */
-  tick(): void {
-    if (this.landing === null) return
-    if (Date.now() - this.landing.startedAt < this.landMs) return
-    this.position = this.landing.target
-    this.at = Date.now()
-    this.landing = null
-  }
-
-  get isSeeking(): boolean {
-    return this.landing !== null
-  }
-}
-
 describe('SyncplayClient — the post-agreement re-election #278 does not reach', () => {
-  let server: MinElectionServer
-  let clients: SyncplayClient[] = []
+  let room: TwoPeerRoom
   let t0 = 0
-
-  const seat = (username: string): SyncplayClient => {
-    const client = new SyncplayClient()
-    clients.push(client)
-    client.connect({
-      host: 'syncplay.test',
-      port: 8999,
-      room: 'cinema',
-      username,
-      autoReconnect: false
-    })
-    server.seat({
-      username,
-      delayMs: DELAY_MS,
-      plain: plainSockets[plainSockets.length - 1],
-      takeTls: () => tlsSockets[tlsSockets.length - 1]
-    })
-    return client
-  }
-
-  const announceFile = (client: SyncplayClient): void =>
-    client.setFile({
-      animeId: 1,
-      malId: 2,
-      episodeInt: '7',
-      translationId: 3,
-      canonicalName: OPEN,
-      duration: 1440,
-      newPlayer: true
-    })
 
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
-    plainSockets.length = 0
-    tlsSockets.length = 0
-    clients = []
     t0 = Date.now()
-    server = new MinElectionServer({ position: ROOM_START, paused: false })
   })
 
   afterEach(() => {
-    server.stop()
-    for (const client of clients) client.disconnect()
+    room?.dispose()
     vi.useRealTimers()
   })
 
-  it('yanks a host whose seek the room accepted, with no seekIntent left to key on', () => {
-    /** One frame the renderer was handed, with the state main held at the time. */
-    type Observed = {
-      at: number
-      state: SyncplayRemoteState
-      intent: { at: number; attempts: number } | null
-      element: number
-    }
+  it('yanks a host whose seek the room accepted, with no seekIntent left to key on', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
 
     // Both elements start converged on the room and both clients adopt: this is
-    // an ordinary two-watcher session, not #277's unadopted mirror.
-    const hostEl = new LaggyElement(ROOM_START, 0)
-    const joinerEl = new LaggyElement(ROOM_START, LAND_MS)
+    // an ordinary two-watcher session, not #277's unadopted mirror. The host's
+    // element is buffered and lands its writes on the spot; the joiner's takes
+    // LAND_MS and reports its stalled position the whole time.
+    const host = await room.seat({
+      username: 'hostuser',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS,
+      seekLandMs: 0
+    })
+    const joiner = await room.seat({
+      username: 'joinuser',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS,
+      seekLandMs: LAND_MS
+    })
 
-    const host = seat('hostuser')
-    const hostFrames: Observed[] = []
-    host.on('remote-state', (s: SyncplayRemoteState) =>
-      hostFrames.push({
-        at: Date.now() - t0,
-        state: s,
-        intent: seekIntentOf(host),
-        element: hostEl.currentTime()
-      })
-    )
-    announceFile(host)
+    await room.advance(4)
+    expect(host.status().playbackAdopted).toBe(true)
+    expect(joiner.status().playbackAdopted).toBe(true)
 
-    const joiner = seat('joinuser')
-    const joinerFrames: Observed[] = []
-    joiner.on('remote-state', (s: SyncplayRemoteState) =>
-      joinerFrames.push({
-        at: Date.now() - t0,
-        state: s,
-        intent: seekIntentOf(joiner),
-        element: joinerEl.currentTime()
-      })
-    )
-    announceFile(joiner)
-
-    // Each element applies what it is handed, and each renderer pushes its
-    // element's live `currentTime` at 1 Hz — the stalled one included.
-    host.on('remote-state', (s: SyncplayRemoteState) => hostEl.apply(s))
-    joiner.on('remote-state', (s: SyncplayRemoteState) => joinerEl.apply(s))
-
-    const run = (seconds: number): void => {
-      const steps = Math.round((seconds * 1000) / 50)
-      let sinceSnapshot = 0
-      for (let i = 0; i < steps; i += 1) {
-        vi.advanceTimersByTime(50)
-        hostEl.tick()
-        joinerEl.tick()
-        sinceSnapshot += 50
-        if (sinceSnapshot >= 1000) {
-          sinceSnapshot = 0
-          host.updateSnapshot({ position: hostEl.currentTime(), paused: false })
-          joiner.updateSnapshot({ position: joinerEl.currentTime(), paused: false })
-        }
-      }
-    }
-
-    run(4)
-    expect(host.getStatus().playbackAdopted).toBe(true)
-    expect(joiner.getStatus().playbackAdopted).toBe(true)
-
-    // t=4000: the host seeks 545 s forward. Its own element lands instantly
-    // (buffered); the joiner's takes LAND_MS and reports its stalled position
-    // the whole time.
-    hostEl.seekTo(SEEK_TO)
-    host.sendLocalState({ paused: false, position: SEEK_TO, cause: 'seek' })
-    expect(seekIntentOf(host)).not.toBeNull()
+    // t=4000: the user drags the host's scrubber 545 s forward. No programmatic
+    // operation is armed, so the `seeked` the element queues is classified as
+    // the user's and leaves through `sendLocalState('seek')` — the same door the
+    // shipped player uses.
     const seekedAt = Date.now()
-    hostFrames.length = 0
+    host.frames.length = 0
+    host.userSeek(SEEK_TO)
+    await room.advance(0.05)
+    expect(host.seekIntent()).not.toBeNull()
 
-    run(16)
+    await room.advance(15.95)
 
     // The frame that is the whole point: the host's element is at ~645 and it is
-    // handed the room's collapsed ~105 on a `doSeek: false` periodic. Measured
-    // on this fixture, and it reproduces the trace in #278's Motivation to two
-    // decimal places — `t=6050 host <- 105.52 setBy=joinuser doSeek=false
-    // el=647.05`, and the room never returning above ~114 by t=20000.
-    const yank = hostFrames.find((f) => f.element > SEEK_TO - 5 && f.state.position < SEEK_TO - 100)
+    // handed the room's collapsed ~104 on a `doSeek: false` periodic. Measured
+    // on this fixture — `t=6050 host <- 104.15 setBy=joinuser doSeek=false
+    // el=647.05`, and the room never returning above ~114 by t=20000, which is
+    // the trace in #278's Motivation on the instant and on the element to two
+    // decimal places. The room position it carries is the one number the port
+    // moved: 104.15 where the hand-rolled fixture read 105.52, because the
+    // snapshot that wins the election is now the composable's own 1 Hz push off
+    // a stalled `HarnessVideo` rather than a manual `updateSnapshot` on a
+    // 50 ms fixture step, and the two land one slice apart.
+    const yank = host.frames.find(
+      (f) => f.element > SEEK_TO - 5 && f.state.position < SEEK_TO - 100
+    )
     expect(yank, 'the host was never yanked — the fixture stopped reproducing').toBeDefined()
 
     // 1. The room genuinely moved. This is not a read-side timing artefact:
     //    the server's own `_position` is down there too.
-    expect(server.roomState().position).toBeLessThan(SEEK_TO - 100)
+    expect(room.server.roomState().position).toBeLessThan(SEEK_TO - 100)
 
     // 2. **The intent is already null when it lands.** It was retired by the
     //    server's own reflected forced update (`syncplay.ts:2143-2148`, drift ≈
@@ -281,9 +146,34 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     expect(yank!.at).toBeGreaterThan(seekedAt - t0)
 
     // 3. And so the frame goes to the renderer unrewritten, at the room's
-    //    position rather than ours, far enough out that the renderer applies it.
+    //    position rather than ours, far enough out that the renderer applies it
+    //    — and this is now the *shipped* apply rule saying so, not a copy of it:
+    //    the host's element is dragged back off 645.
     expect(Math.abs(yank!.element - yank!.state.position)).toBeGreaterThan(ADOPT_TOLERANCE_S)
     expect(yank!.state.doSeek).toBe(false)
+    expect(host.el.seekWrites.some((w) => w < SEEK_TO - 100)).toBe(true)
+
+    // The tolerance itself, pinned — and this is the line that makes the file a
+    // test of the shipped rule rather than of a copy of it.
+    //
+    // The `3.0` below is not a reimplementation of the apply rule the way
+    // `LaggyElement.apply()` was; it is an assertion *about* it, from outside.
+    // Every frame here is `doSeek: false` and well inside the file, so the rule
+    // reduces to "diff > the literal", and the element's write history says which
+    // frames cleared it. Over this run that is two — the yank at t=6050
+    // (diff ≈ 543) and one re-seek at t=10050 when free-running drift reached
+    // 3.1 s — out of eight periodics, the other six sitting at 0.1–3.0 and
+    // moving nothing. Widen the literal at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` to 4.0 and the
+    // 3.1 s frame stops qualifying while this filter still counts it; narrow it
+    // and frames this filter skips start writing. Either way the two sides
+    // disagree and this reds.
+    const overTolerance = host.frames.filter(
+      (f) => !f.state.doSeek && Math.abs(f.element - f.state.position) > 3.0
+    )
+    const appliedWrites = host.el.seekWrites.filter((w) => w !== SEEK_TO)
+    expect(appliedWrites).toHaveLength(overTolerance.length)
+    expect(appliedWrites).toHaveLength(2)
 
     // 4. The joiner is yanked too — at t≈14050, once the room's `setBy` swings
     //    back to the host and its self-guard stops eating the periodics — and it
@@ -292,7 +182,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     //    That is the fact that closes the question rather than merely bounding
     //    it: even an unbounded window would protect the host and leave the
     //    joiner exactly as it is today.
-    const joinerYank = joinerFrames.find(
+    const joinerYank = joiner.frames.find(
       (f) => f.at > seekedAt - t0 && f.state.position < SEEK_TO - 100 && f.element > SEEK_TO - 5
     )
     expect(
@@ -300,6 +190,6 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
       'the joiner was never yanked — the fixture stopped reproducing'
     ).toBeDefined()
     expect(joinerYank!.intent).toBeNull()
-    expect(joinerFrames.every((f) => f.intent === null)).toBe(true)
+    expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
   })
 })

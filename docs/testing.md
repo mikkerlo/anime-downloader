@@ -132,14 +132,19 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   lateness into the server's `min()` election.
   Callers own `vi.useFakeTimers()`; `advance()` steps the one shared clock in
   50 ms slices and drains microtasks between them, because Vue's scheduler
-  flushes on microtasks rather than on the timer queue. Two of the helper's
-  contracts are enforced rather than documented: `advance()` rejects a duration
-  that is not a whole number of slices, and `seat()` refuses re-entry, because
-  two seats in flight at once interleave `vi.resetModules()` and the `window.api`
-  swap and hand back two silently cross-wired peers.
+  flushes on microtasks rather than on the timer queue. Three of the helper's
+  contracts are enforced rather than documented. `advance()` rejects a duration
+  that is not a whole number of slices. `seat()` refuses re-entry, because two
+  seats in flight at once interleave `vi.resetModules()` and the `window.api`
+  swap and hand back two silently cross-wired peers. And `dispose()` tears down
+  every peer even when an earlier one throws, draining the room before it
+  rethrows the first error — a case that mocks something `dispose()` calls used
+  to abandon the peers queued behind the thrower *and* leave the room populated,
+  so the next case's `room?.dispose()` re-ran the same throwing teardown and red
+  a neighbour that had nothing wrong with it.
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
-  two guards, the first-write freeze above, and both rejection shapes this bridge
-  copy produces, the no-handler one and a handler that throws — and
+  three guards, the first-write freeze above, and both rejection shapes this
+  bridge copy produces, the no-handler one and a handler that throws — and
   `syncplay-seek-crossfire.test.ts` is the first scenario on it.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows

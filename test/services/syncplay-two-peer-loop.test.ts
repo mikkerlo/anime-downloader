@@ -200,7 +200,9 @@ describe('two-peer syncplay harness', () => {
     })
 
     // `Once`, so the `dispose()` in `afterEach` still gets a real disconnect and
-    // the socket is closed rather than left for the next case.
+    // the socket is closed rather than leaked. Dropping it reds this case in
+    // teardown — and only this case: `dispose()` drains its peers and rethrows,
+    // so the throw stays here instead of reaching the next one.
     vi.spyOn(host.client, 'disconnect').mockImplementationOnce(() => {
       throw new Error('socket already gone')
     })
@@ -213,7 +215,7 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The three guards below are about the harness as an instrument rather than
+  // The four guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
   it('freezes a stalled element at the first in-flight write, not the latest', () => {
@@ -262,5 +264,29 @@ describe('two-peer syncplay harness', () => {
     // at. Clean multiples still pass, including the float-inexact ones.
     await expect(room.advance(0.07)).rejects.toThrow(/whole number of slices/)
     await expect(room.advance(15.95)).resolves.toBeUndefined()
+  })
+
+  it('tears down the rest of the room when one peer throws on disconnect', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    const [host, joiner] = await seatBoth()
+    await room.advance(2)
+
+    // A *permanent* throw — the shape the throwing-handler case above would
+    // leave behind if it ever lost its `mockImplementationOnce`. `dispose()`
+    // used to walk `peers` unguarded, so the host's throw abandoned the joiner
+    // and skipped the `peers` reset; the next case's `room?.dispose()` then ran
+    // the same throwing teardown a second time and red a case that was fine.
+    vi.spyOn(host.client, 'disconnect').mockImplementation(() => {
+      throw new Error('socket already gone')
+    })
+    const joinerDisconnect = vi.spyOn(joiner.client, 'disconnect')
+
+    // Still surfaces on the caller that armed it, rather than being swallowed.
+    expect(() => room.dispose()).toThrow('socket already gone')
+    // The peer queued behind the thrower was torn down anyway (0 before).
+    expect(joinerDisconnect).toHaveBeenCalledTimes(1)
+    // And the room is drained, so the `afterEach` dispose is a no-op instead of
+    // a second throw landing on whichever case runs next.
+    expect(() => room.dispose()).not.toThrow()
   })
 })

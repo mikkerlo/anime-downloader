@@ -622,13 +622,30 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
     elapsed: () => Date.now() - t0,
     seat,
     advance,
+    // Drains `peers` up front and tears every one of them down even if an
+    // earlier peer throws, then rethrows the first error. Both halves matter
+    // once a case mocks something this calls: a throw used to abandon the rest
+    // of the room *and* leave `peers` populated, so the next case's
+    // `room?.dispose()` — `room` being a describe-scoped `let` that a case
+    // building no room of its own never reassigns — re-ran the same throwing
+    // teardown and red a neighbour with nothing wrong with it. Rethrowing keeps
+    // the failure on the case that armed the throw.
     dispose: () => {
       server.stop()
-      for (const peer of peers) {
-        peer.unmount()
-        peer.client.disconnect()
+      let firstError: unknown
+      let threw = false
+      for (const peer of peers.splice(0)) {
+        try {
+          peer.unmount()
+          peer.client.disconnect()
+        } catch (err) {
+          if (!threw) {
+            threw = true
+            firstError = err
+          }
+        }
       }
-      peers.length = 0
+      if (threw) throw firstError
     }
   }
 }

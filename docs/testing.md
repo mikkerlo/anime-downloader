@@ -145,7 +145,20 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
   three guards, the first-write freeze above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
-  `syncplay-seek-crossfire.test.ts` is the first scenario on it.
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Three more
+  scenario files sit on the same harness
+  (#361 step 4): `syncplay-two-peer-playpause.test.ts` (both directions, a peer
+  joining a room that is already paused, and a peer's own pause not coming
+  back), `syncplay-two-peer-seek-echo.test.ts` (a drag propagating, its echo
+  suppressed on the originator, and the re-assert behind
+  `SEEK_REASSERT_TOLERANCE_S` — the two cases there go red under *opposite*
+  moves of that literal, which is what pins it as the cause) and
+  `syncplay-two-peer-ignore-counters.test.ts` (the `ignoringOnTheFly`
+  bookkeeping across a clean round trip, two changes in flight, and a peer's
+  forced update crossing our window). Each file's header records what it
+  cannot isolate on this harness rather than asserting around it — the
+  pause-on-join case is guarded twice, `pendingServerAck` is never observable
+  as non-zero, and the server never echoes a `client` key.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence

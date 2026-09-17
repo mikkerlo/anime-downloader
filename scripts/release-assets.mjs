@@ -57,11 +57,20 @@ export const GH_CALL_TIMEOUT_MS = 15 * 60_000
 // Five attempts at the per-call timeout is 75 min for a single file, and the
 // `release` job is capped at 30 min (`timeout-minutes`), so a genuinely hung
 // upload would be killed by the runner mid-retry and the script would never
-// print which file it was stuck on. The budget is checked before each attempt
-// against how long an attempt can take, so a hang gives up after one timeout
-// (~15 min), reports itself through `failed`, and leaves the rest of the job's
-// 30 min for verify and publish. Retries of fast-returning errors — the class
-// this script exists for — cost ~2.5 min and never come near it.
+// print which file it was stuck on. Under this budget a hang gives up after one
+// timeout (~15 min), reports itself through `failed`, and leaves the rest of the
+// job's 30 min for verify and publish.
+//
+// What has to hold is that a healthy run never reaches it, and the figure that
+// decides that is cumulative upload time, not retry cost. The whole set is
+// ~722 MB across 13 files; the slowest throughput actually observed here is the
+// real failing run's ~1 MB/s, which puts a complete healthy release at ~11 min.
+// That is what the 20 min is sized against — the retries this script exists for
+// are ~2.5 min per file on top and are not what would breach it. Nothing is
+// refused before the budget is genuinely spent, either (see `outOfTime`), so a
+// run slower still keeps uploading until 20 min have actually elapsed, by which
+// point the job's own 30 min cap is close and giving up with a named file beats
+// being killed without one.
 export const DEFAULT_BUDGET_MS = 20 * 60_000
 
 // The `electron-updater` feeds, one per platform. See `report()` for why their
@@ -102,10 +111,21 @@ export async function uploadAll({
   const uploaded = []
   const failed = []
   const startedAt = now()
-  // An attempt that has not started cannot overrun the budget on its own, so
-  // the question is whether one *could* still finish inside it, not whether the
-  // budget is already spent.
-  const outOfTime = () => now() - startedAt + callMs > budgetMs
+  const elapsed = () => now() - startedAt
+
+  // The two cases are not symmetric, and one guard for both is what made this
+  // wrong the first time round. Refusing to start a file guarantees that file
+  // is missing from the release; starting it only risks the job's 30 min
+  // backstop, which exists precisely to catch that. So a file's first attempt
+  // is optimistic — it runs unless the budget is genuinely spent — and only a
+  // retry asks the conservative question, because a file being retried has
+  // already demonstrated it is misbehaving and has already burned a call.
+  //
+  // The conservative form applied to first attempts reduces to `elapsed > 5
+  // min` at the defaults (20 min budget, 15 min call), so a healthy release
+  // slower than ~2 MB/s had most of its files refused untried. The real
+  // failing run moved 722 MB at about 1 MB/s.
+  const outOfTime = (tries) => (tries === 0 ? elapsed() >= budgetMs : elapsed() + callMs > budgetMs)
 
   for (const file of files) {
     let lastError = 'unknown'
@@ -113,7 +133,7 @@ export async function uploadAll({
     let tries = 0
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      if (outOfTime()) {
+      if (outOfTime(tries)) {
         const budget = `no time left in the ${Math.round(budgetMs / 60_000)} min upload budget`
         // Keep the reason this file was already failing; the budget is why it
         // stopped being retried, not why it failed.

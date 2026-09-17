@@ -300,11 +300,18 @@ describe('release-assets — upload', () => {
     expect(report(v).ok).toBe(false)
   })
 
-  it('gives up inside the batch budget instead of being killed mid-retry', async () => {
+  it('stops retrying a hung file, but still gives the next one its first attempt', async () => {
     // The stall case. Each attempt on a hung PUT burns the whole per-call
     // timeout, so five of them is 75 min for one file against a 30 min job cap:
     // the runner would kill the job part-way through attempt 2 and the log
-    // would never say which file it was stuck on, nor that the rest never ran.
+    // would never say which file it was stuck on.
+    //
+    // The two halves of the guard are both here. A *retry* asks whether another
+    // full-length call could still fit, so neither hung file gets a second
+    // attempt. A *first* attempt only asks whether the budget is spent, so
+    // next.deb is still tried — refusing it outright would guarantee it is
+    // missing, where trying it only risks the job's backstop. third.zip is
+    // refused because by then the 20 minutes really are gone.
     const callMs = 15 * 60_000
     let clock = 0
     const uploadOne = vi.fn(async () => {
@@ -313,7 +320,7 @@ describe('release-assets — upload', () => {
     })
 
     const r = await uploadAll({
-      files: ['big.AppImage', 'next.deb'],
+      files: ['big.AppImage', 'next.deb', 'third.zip'],
       uploadOne,
       sleep: noSleep,
       now: () => clock,
@@ -321,9 +328,7 @@ describe('release-assets — upload', () => {
       budgetMs: 20 * 60_000
     })
 
-    // One attempt fits; a second could not finish inside the budget, so it is
-    // not started, and neither is the file behind it.
-    expect(uploadOne).toHaveBeenCalledTimes(1)
+    expect(uploadOne).toHaveBeenCalledTimes(2)
     expect(r.uploaded).toEqual([])
     expect(r.failed).toEqual([
       {
@@ -331,8 +336,57 @@ describe('release-assets — upload', () => {
         tries: 1,
         error: 'gh timed out (no time left in the 20 min upload budget to retry)'
       },
-      { file: 'next.deb', tries: 0, error: 'no time left in the 20 min upload budget' }
+      {
+        file: 'next.deb',
+        tries: 1,
+        error: 'gh timed out (no time left in the 20 min upload budget to retry)'
+      },
+      { file: 'third.zip', tries: 0, error: 'no time left in the 20 min upload budget' }
     ])
+  })
+
+  it('lets a slow but healthy release finish rather than refusing files untried', async () => {
+    // v4.6.91's real asset set, sizes from `gh release view`, at the throughput
+    // the real failing run actually managed — 722 MB whose last asset landed
+    // about eleven minutes in. Nothing here is failing: every call returns.
+    //
+    // The regression this pins: one conservative guard for both first attempts
+    // and retries reduces to "refuse anything not yet started after 5 minutes"
+    // at these numbers (20 min budget less a 15 min call), so this run lost 9 of
+    // its 13 assets without a single upload being attempted for them. A healthy
+    // release failing outright is worse than the bug the budget was added for.
+    const sizesMb: Record<string, number> = {
+      'Anime-DL-amd64.deb': 106.19,
+      'Anime-DL-arm64.dmg': 136.53,
+      'Anime-DL-arm64.dmg.blockmap': 0.14,
+      'Anime-DL-arm64.zip': 129.64,
+      'Anime-DL-arm64.zip.blockmap': 0.13,
+      'Anime-DL-x64-portable.exe': 105.46,
+      'Anime-DL-x64.exe': 105.79,
+      'Anime-DL-x64.exe.blockmap': 0.11,
+      'Anime-DL-x86_64.AppImage': 137.84,
+      'builder-debug.yml': 0.001,
+      'latest-linux.yml': 0.001,
+      'latest-mac.yml': 0.001,
+      'latest.yml': 0.001
+    }
+    const files = Object.keys(sizesMb)
+    let clock = 0
+    const uploadOne = vi.fn(async (f: string) => {
+      clock += (sizesMb[f] / 1.06) * 1000
+    })
+
+    // Defaults on purpose: this is about the shipped numbers, not injected ones.
+    const r = await uploadAll({ files, uploadOne, sleep: noSleep, now: () => clock })
+
+    // The run has to be long enough to have crossed the old cut-off, or it
+    // proves nothing.
+    expect(clock).toBeGreaterThan(DEFAULT_BUDGET_MS - GH_CALL_TIMEOUT_MS)
+    expect(clock).toBeLessThan(DEFAULT_BUDGET_MS)
+
+    expect(r.failed).toEqual([])
+    expect(r.uploaded).toEqual(files)
+    expect(uploadOne).toHaveBeenCalledTimes(13)
   })
 
   it('spends the full attempt count when the failures come back fast', () => {

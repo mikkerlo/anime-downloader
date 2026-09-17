@@ -29,13 +29,7 @@ import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
 import { syncplay } from './syncplay'
-import type {
-  SyncplayRemoteState,
-  SyncplayRoomUser,
-  SyncplayRoomEvent,
-  SyncplayRemoteEpisode,
-  SyncplayStatus
-} from './syncplay'
+import { registerSyncplayBroadcasts } from './ipc/syncplay-broadcasts'
 import type { Mp4StreamingStats } from './mp4-faststart'
 
 import { createAnimeCacheService, type AnimeCacheEntry } from './services/anime-cache'
@@ -882,24 +876,7 @@ async function bootstrap(): Promise<void> {
     }
   }, 30_000)
 
-  syncplay.on('connection-status', (status: SyncplayStatus) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS, status)
-  })
-  syncplay.on('remote-state', (state: SyncplayRemoteState) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, state)
-  })
-  syncplay.on('room-users', (users: SyncplayRoomUser[]) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_ROOM_USERS, users)
-  })
-  syncplay.on('room-event', (ev: SyncplayRoomEvent) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_ROOM_EVENT, ev)
-  })
-  syncplay.on('remote-episode-change', (ep: SyncplayRemoteEpisode) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_REMOTE_EPISODE_CHANGE, ep)
-  })
-  syncplay.on('trace', (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => {
-    broadcastToAll(EVENT_CHANNELS.SYNCPLAY_TRACE, entry)
-  })
+  registerSyncplayBroadcasts(syncplay, broadcastToAll)
 
   if (shikimoriSyncService.getQueueLength() > 0) {
     shikimoriSyncService.startSyncTimer()

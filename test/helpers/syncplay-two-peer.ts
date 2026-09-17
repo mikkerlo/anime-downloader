@@ -265,7 +265,9 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
 
 /** `SyncplayClient`'s three `ignoringOnTheFly` counters, sampled together. */
 export interface IgnoreCounters {
-  /** Monotonic; bumped once per *discrete* change the client originates. */
+  /** Bumped once per *discrete* change the client originates, and by nothing
+   *  else. Monotonic within a connection: `resetTransportState()` zeroes it
+   *  with the other two (`src/main/syncplay.ts:1071-1073`). */
   clientIgnoreCounter: number
   /** The counter of our newest outstanding change, or 0. */
   pendingClientAck: number
@@ -672,16 +674,29 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
 // against the real class — the escape hatch it leaves open for private members
 // — so the field name and its type are checked against the declaration, where a
 // structural cast invents whatever shape it is handed and a renamed field goes
-// on compiling. Verified: rename `clientIgnoreCounter` and `tsc` reports TS7053
-// here and nowhere else.
+// on compiling. Verified: rename `clientIgnoreCounter` in `src/main/syncplay.ts`
+// and `tsc` reports TS7053 on the `countersOf` line below — one error, nowhere
+// else.
 //
-// One caveat, so nobody reads more into this than it gives: `npm run typecheck`
-// does not cover it. Neither `tsconfig.node.json` nor `tsconfig.web.json`
-// includes `test/**`, so the error above is one an editor or an explicit `tsc`
-// on this file surfaces, not one the CI gate fails on. What the single reader
-// buys unconditionally is the blast radius — a rename breaks one line here
-// instead of failing at runtime in every scenario file that spelled the field
-// out for itself.
+// Two caveats, so nobody reads more into this than it gives. First, no CI gate
+// fails on that rename: `npm run typecheck` runs the two projects, and neither
+// `tsconfig.node.json` nor `tsconfig.web.json` includes `test/**`. Second,
+// reproducing it by hand is not the one-liner it sounds like. `tsc` on this
+// file alone refuses to start while a `tsconfig.json` sits beside it (TS5112,
+// which tells you to pass `--ignoreConfig`), and once past that it resolves
+// neither the ambient `src/shared/types/*.d.ts` nor the `@shared/*` paths, so
+// the one real error would land under the 123 resolution errors this file
+// already reports that way. A config supplying both reproduces it exactly.
+// What that config does *not* need is a strictness flag: TS7053 is a
+// `noImplicitAny` diagnostic, and the TypeScript 6 pinned here defaults
+// `noImplicitAny` on — measured both with no config at all and under a
+// `tsconfig.json` that omits `strict`, as both of ours do — so it is an
+// explicit `--noImplicitAny false` (or `--strict false`), not the default,
+// that turns the rename back into a clean run.
+//
+// What the single reader buys unconditionally is the blast radius — a rename
+// breaks one line here instead of failing at runtime in every scenario file
+// that spelled the field out for itself.
 const seekIntentOf = (client: MainSyncplayClient): { at: number; attempts: number } | null =>
   client['seekIntent']
 

@@ -675,8 +675,8 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
 // — so the field name and its type are checked against the declaration, where a
 // structural cast invents whatever shape it is handed and a renamed field goes
 // on compiling. Verified: rename `clientIgnoreCounter` in `src/main/syncplay.ts`
-// and `tsc` reports TS7053 on the `countersOf` line below — one error, nowhere
-// else.
+// and `tsc` reports one error on the `countersOf` line below, nowhere else. The
+// code it carries depends on the new name; see the recipe further down.
 //
 // Two caveats, so nobody reads more into this than it gives. First, no CI gate
 // fails on that rename: `npm run typecheck` runs the two projects, and neither
@@ -690,9 +690,13 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
 // moves with the next import added here, so read it as a wall, not a fixture.
 // The config that reproduces it exactly is `tsconfig.node.json` with
 // `composite` dropped, `"types": ["node"]` added, and this file appended to
-// `include`: zero errors at baseline, one TS7053 under the rename. Dropping
-// `composite` is the load-bearing part — kept, it buries the run in TS6307 for
-// every file reached by import rather than listed.
+// `include`: zero errors at baseline, one error on the `countersOf` line under
+// the rename — TS7053 when the new name is unlike the old, TS2551 ("did you
+// mean 'clientIgnoreCounterX'?") when it is a near miss; `--noImplicitAny
+// false` clears either, so the paragraph below holds for both. Dropping
+// `composite` only trims noise: kept, the same run adds four TS6307 for the
+// files reached by import but not listed, and still reports the real error
+// beside them.
 // What that config does *not* need is a strictness flag: TS7053 is a
 // `noImplicitAny` diagnostic, and the TypeScript 6 pinned here defaults
 // `noImplicitAny` on — measured both with no config at all and under a

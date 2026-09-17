@@ -13,11 +13,13 @@
 import { describe, it, expect } from 'vitest'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
-import { analyze, report } from '../scripts/check-prose-shape.mjs'
+import { analyze, classify, report } from '../scripts/check-prose-shape.mjs'
 
 type Corpus = Record<string, string>
 
 type Hit = { path: string; line: number; len: number; blockMax: number; text: string }
+
+type Kind = { kind: 'skip' | 'break' | 'item' | 'text'; why?: string }
 
 type Result = {
   scannedCount: number
@@ -253,6 +255,75 @@ describe('check-prose-shape', () => {
     expect(realFrontMatter.hits).toEqual([])
   })
 
+  it('does not let a `---` inside a fence stand in for the front-matter closer', () => {
+    // The same narrowing, bounded again. The closer search was `some()` over the
+    // whole file, so ANY later `---` satisfied it — including one inside a
+    // fenced YAML sample, which is how a docs page shows front matter. The file
+    // below opens with a thematic break and shows a front-matter sample in a
+    // fence further down; unbounded, the opener is promoted to front matter and
+    // everything down to the sample's first `---` classifies `skip`, taking the
+    // ragged line 3 with it. Narrower than the pre-#374 behaviour, same shape:
+    // silently unmeasured, indistinguishable from clean. Raised in review on
+    // #374; this corpus is the one measured there.
+    //
+    // Bounding the search at the FIRST FENCE is the fix. The tighter bound —
+    // requiring the closer before the first blank line — looks right and is
+    // wrong: `.github/agents/todo-reviewer.agent.md` has a blank line inside its
+    // front matter, and that rule starts reporting `name: todo-reviewer` at
+    // 19/41. Out of scope today, but the header argues the content rule holds
+    // independent of the root choice, so it is not taken.
+    const fencedSample = run({
+      'docs/notes.md': [
+        '---',
+        'The two-peer harness starts both clients against the same in-memory server',
+        'a short line that just stops',
+        'the tail of the paragraph.',
+        '',
+        '```yaml',
+        '---',
+        'name: pr-review',
+        '---',
+        '```',
+        '',
+        'A closing paragraph that ends properly.'
+      ].join('\n')
+    })
+
+    // Under the unbounded search this is `[]` — the hit does not move, it
+    // disappears.
+    expect(linesOf(fencedSample)).toEqual([3])
+    expect(fencedSample.hits[0]).toMatchObject({
+      len: 28,
+      blockMax: 74,
+      text: 'a short line that just stops'
+    })
+
+    // The non-deletion arm, again: REAL front matter whose closer arrives before
+    // any fence is still skipped whole, and a fenced `---` sample below it does
+    // not confuse the bound.
+    const realFrontMatterThenFence = run({
+      'docs/notes.md': [
+        '---',
+        'name: pr-review',
+        'description: Review a pull request against the repository conventions, and',
+        '  the architecture index',
+        '---',
+        '',
+        '```yaml',
+        '---',
+        'name: a sample of front matter, shown in a fence',
+        '---',
+        '```',
+        '',
+        'Body prose that is long enough to make a block of its own without tripping',
+        'anything, and that ends properly.',
+        ''
+      ].join('\n')
+    })
+
+    expect(realFrontMatterThenFence.hits).toEqual([])
+  })
+
   it('stays quiet on a raw HTML block', () => {
     // EXCLUSION 2, and the largest single class: 23 of the 51 raw hits on this
     // tree, all of them README.md's centred badge table. `<br />` is 8 columns
@@ -373,6 +444,67 @@ describe('check-prose-shape', () => {
     })
 
     expect(backtickInWider.hits).toEqual([])
+  })
+
+  it('does not let a marker carrying an info string close the fence it is sitting in', () => {
+    // EXCLUSION 3's third part, and the one the captured marker still let
+    // through: `fence[1]` pins the character and the length, but a closing fence
+    // in CommonMark is the marker and nothing but whitespace after it. Without
+    // group 2 a ```js line closes a ```markdown one — and a docs page showing a
+    // fenced sample with a language tag is the commonest shape in this repo.
+    // Raised in review on #374; this corpus is the one measured there.
+    //
+    // It fails OPEN in BOTH directions at once, which is why one corpus carries
+    // both halves:
+    //
+    //   - the sample's own lines leak into the prose population — line 4 reports
+    //     `short code arg` at 14/76, a command listing indented exactly as it
+    //     should be;
+    //   - and the sample's REAL closer on line 6 then re-OPENS a fence, so the
+    //     genuine prose on lines 8-10 classifies `fenced code` and the ragged
+    //     line 9 is never measured. That is the front-matter thread's shape
+    //     arriving through the fence: content that is silently not measured is
+    //     indistinguishable in the report from content with nothing wrong.
+    const lines = [
+      '```markdown',
+      'Everything below is a sample of the very page this gate had to learn to read.',
+      '```js',
+      'short code arg',
+      '  --dry-run  print the plan and exit without writing anything to disk at all',
+      '```',
+      '',
+      'Genuine prose after the fenced sample, wrapped by hand to a sensible width',
+      'a short line that just stops',
+      'the tail of the paragraph.',
+      ''
+    ]
+    const r = run({ 'docs/notes.md': lines.join('\n') })
+
+    // One assertion for both halves: the leaked 14/76 is absent AND the
+    // swallowed 28/74 is present. Under the unfixed predicate this reads
+    // `[{ line: 4, len: 14, blockMax: 76, text: 'short code arg' }]` — the wrong
+    // line, from inside the sample, with the real one gone.
+    expect(r.hits).toEqual([
+      {
+        path: 'docs/notes.md',
+        line: 9,
+        len: 28,
+        blockMax: 74,
+        text: 'a short line that just stops'
+      }
+    ])
+
+    // And the classification directly, because `hits` can only observe a line
+    // the predicate would have flagged: every line the impostor guards stays
+    // fenced code, including the impostor itself.
+    const kinds = classify(lines) as Kind[]
+    expect(kinds.slice(2, 5)).toEqual([
+      { kind: 'skip', why: 'fenced code' },
+      { kind: 'skip', why: 'fenced code' },
+      { kind: 'skip', why: 'fenced code' }
+    ])
+    expect(kinds[5]).toEqual({ kind: 'skip', why: 'fence' })
+    expect(kinds.slice(7, 10).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
   })
 
   // --- the clauses, one at a time ---------------------------------------------

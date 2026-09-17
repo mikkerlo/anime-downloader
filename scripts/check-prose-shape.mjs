@@ -84,11 +84,20 @@ export const EXCLUDED_PATHS = []
 
 // --- line classification ------------------------------------------------------
 
-// The marker is CAPTURED, not just detected. A single boolean toggled on any
-// fence opener lets a `~~~` close a ``` fence and a ``` close a 4-backtick one,
-// which fails OPEN — the lines after it leak into the prose population, and a
-// docs page showing a Markdown sample is exactly what introduces one.
-const FENCE = /^\s*(`{3,}|~{3,})/
+// The marker is CAPTURED, not just detected, and so is EVERYTHING AFTER IT. A
+// single boolean toggled on any fence opener lets a `~~~` close a ``` fence and
+// a ``` close a 4-backtick one; capturing only the character and the length
+// still lets a ```js line close a ```markdown one, because CommonMark carries
+// no info string on a CLOSING fence — a marker that has one is content. That is
+// the third part of the rule, not a detail: a docs page showing a fenced sample
+// with a language tag is exactly the shape that introduces one, and this repo's
+// docs are mostly fenced samples.
+//
+// All three parts fail OPEN, and in both directions at once: the sample's lines
+// leak into the prose population, and the sample's real closer then RE-OPENS a
+// fence, so the genuine prose after the block classifies `fenced code` and is
+// silently not measured. Group 2 is what the closer branch reads to refuse it.
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/
 const HEADING = /^\s*#{1,6}\s/
 const TABLE_ROW = /^\s*\|/
 const BLOCKQUOTE = /^\s*>/
@@ -129,8 +138,8 @@ export function classify(lines) {
   const out = []
   let inFence = false
   // The open fence's marker, so a closer is only honoured when it is a run of
-  // the SAME character at least as long — CommonMark's rule. Empty when no
-  // fence is open.
+  // the SAME character at least as long, carrying no info string — CommonMark's
+  // rule. Empty when no fence is open.
   let fenceMarker = ''
   // YAML front matter: `---` on the very first line opens it, the next `---`
   // closes it. Every `name:`/`description:` key is a short line inside a block
@@ -143,10 +152,18 @@ export function classify(lines) {
   // opening with a thematic break — or one whose front matter is unterminated —
   // classifies `skip` to EOF and contributes nothing while still counting
   // towards `scannedCount`: silently unmeasured, indistinguishable from clean.
-  let inFrontMatter =
-    lines[0] !== undefined &&
-    lines[0].trim() === '---' &&
-    lines.slice(1).some((l) => l.trim() === '---')
+  let inFrontMatter = false
+  if (lines[0] !== undefined && lines[0].trim() === '---') {
+    // ...and it has to arrive before the first fence, so a `---` inside a
+    // fenced YAML sample cannot stand in for it.
+    for (let i = 1; i < lines.length; i++) {
+      if (FENCE.test(lines[i])) break
+      if (lines[i].trim() === '---') {
+        inFrontMatter = true
+        break
+      }
+    }
+  }
   // Raw HTML: BLOCK-SHAPED, per CommonMark's rule for an HTML block — it opens
   // on a line whose first non-space character is `<` and runs to the next blank
   // line. The alternative reading is line-shaped (`^\s*<` on each line on its
@@ -167,9 +184,15 @@ export function classify(lines) {
     }
 
     const fence = line.match(FENCE)
+    // A closer is a run of the SAME character at least as long AND NOTHING
+    // ELSE: CommonMark carries no info string on a closing fence, so a marker
+    // that has one is content, not a closer.
     if (
       fence &&
-      (!inFence || (fence[1][0] === fenceMarker[0] && fence[1].length >= fenceMarker.length))
+      (!inFence ||
+        (fence[1][0] === fenceMarker[0] &&
+          fence[1].length >= fenceMarker.length &&
+          fence[2].trim() === ''))
     ) {
       fenceMarker = inFence ? '' : fence[1]
       inFence = !inFence

@@ -135,6 +135,36 @@ describe('IPC channel contract', () => {
     })
     expect(unwired).toEqual([])
   })
+
+  // The failure mode the `-broadcasts.ts` extraction (#361) introduces, which
+  // every check above is blind to: the module can be imported and never called.
+  // `hasMainReference` right above is satisfied by the extracted file merely
+  // existing — the `EVENT_CHANNELS.SYNCPLAY_*` symbols are in `ROUTERS` either
+  // way — and so is a grep of the built bundle. Neither distinguishes "module
+  // exists" from "module is wired", and nothing else can: `src/main/index.ts`
+  // boots the app, so no test imports `bootstrap()` to observe the call. The
+  // app would boot fine with the wiring gone and the broadcasts would simply
+  // stop, leaving the Watch Together UI silently never updating.
+  //
+  // Matched on the call, not the name, so `void registerSyncplayBroadcasts` —
+  // import kept, wiring dropped — reds this.
+  it('calls every extracted *-broadcasts.ts registrar from src/main/index.ts', () => {
+    const modules = readdirSync(IPC_DIR).filter((f) => f.endsWith('-broadcasts.ts'))
+    // Guards the guard: a rename out of the `-broadcasts.ts` convention would
+    // otherwise turn this into a vacuous pass over an empty list.
+    expect(modules.length).toBeGreaterThan(0)
+
+    const index = read('src/main/index.ts')
+    const uncalled = modules.flatMap((file) => {
+      const src = readFileSync(resolve(IPC_DIR, file), 'utf8')
+      const exported = [...src.matchAll(/export function (register\w+)\s*\(/g)].map((m) => m[1])
+      expect(exported.length).toBeGreaterThan(0)
+      return exported
+        .filter((name) => !new RegExp(`\\b${name}\\s*\\(`).test(index))
+        .map((name) => `${file}: ${name}`)
+    })
+    expect(uncalled).toEqual([])
+  })
 })
 
 // #294: the MSE-open reply shape existed as five literal copies (main's

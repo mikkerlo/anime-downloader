@@ -141,6 +141,17 @@ describe('syncplay IPC bridge — invoke channels', () => {
     // Not a pass-through: the handler rebuilds the config around the resolved
     // password (#216), so the assertion is on the merged object.
     expect(client.connect).toHaveBeenCalledWith({ ...cfg, password: 'explicit' })
+    // The handler's other half, and the only one of the twelve with a side
+    // effect outside the client: the session intent it persists to
+    // `store.syncplay` before connecting (`docs/architecture.md`), which the
+    // join form prefills from. Nothing else in the suite covered it.
+    expect(store.get('syncplay')).toEqual({
+      lastHost: 'syncplay.test',
+      lastPort: 8999,
+      lastRoom: 'r',
+      username: 'u',
+      autoReconnect: true
+    })
   })
 
   it('syncplayDisconnect → disconnect()', async () => {
@@ -236,7 +247,12 @@ describe('syncplay IPC bridge — invoke channels', () => {
       throw new Error('socket already gone')
     })
 
-    await expect(api().syncplayDisconnect()).rejects.toThrow('socket already gone')
+    // Asserted as the whole renderer-visible string, not a substring: a caller
+    // that pattern-matches on `err.message` is matching this, so the loop is
+    // only worth trusting if it reproduces Electron's wrapper verbatim.
+    await expect(api().syncplayDisconnect()).rejects.toThrow(
+      `Error invoking remote method '${CHANNELS.SYNCPLAY_DISCONNECT}': Error: socket already gone`
+    )
   })
 })
 

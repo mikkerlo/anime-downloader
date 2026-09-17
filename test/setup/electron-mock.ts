@@ -94,14 +94,24 @@ vi.mock('electron', () => {
         // Real `invoke` always returns a promise, and a synchronous throw in the
         // handler comes back to the renderer as a rejection — so the whole call
         // runs inside one.
+        //
+        // Both rejection paths take the same wrapper on purpose. In Electron the
+        // no-handler error is raised in main and travels back through the very
+        // same renderer-side wrapper as a handler throw, so what a renderer sees
+        // is `Error invoking remote method '<channel>': <Name>: <message>` in
+        // both cases. Since the point of the loop is that a test can assert what
+        // the renderer actually sees, the mock owes it that shape.
+        const asRemoteError = (err: unknown): Error =>
+          new Error(
+            `Error invoking remote method '${channel}': ` +
+              (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
+          )
         return (async () => {
-          if (!handler) throw new Error(`No handler registered for '${channel}'`)
+          if (!handler) throw asRemoteError(new Error(`No handler registered for '${channel}'`))
           try {
             return await handler({}, ...args)
           } catch (err) {
-            throw new Error(
-              `Error invoking remote method '${channel}': ${err instanceof Error ? err.message : String(err)}`
-            )
+            throw asRemoteError(err)
           }
         })()
       }),

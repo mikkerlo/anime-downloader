@@ -165,19 +165,19 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // exactly 4.0 s — out of eight periodics, the other six sitting on exact
     // 1.0/2.0/3.0 and moving nothing. Mutating the literal at
     // `src/renderer/src/composables/use-syncplay-client.ts:1411` reds this for any
-    // narrowing and for any widening past 4.0, and the three checked are worth
-    // naming because the failure is a different one each time. `4.0` leaves the
-    // t=10050 frame at exactly the tolerance, so it stops qualifying, the element
-    // is not re-seeked, and the run free-runs further apart: 2 applied writes
-    // against 3 frames this filter counts — `to have a length of 3 but got 2`.
-    // `2.0` applies frames this filter skips and the run stays converged: 3
+    // narrowing and for any widening to 4.0 or beyond, and the three checked are
+    // worth naming because the failure is a different one each time. `4.0` leaves
+    // the t=10050 frame at exactly the tolerance, so it stops qualifying, the
+    // element is not re-seeked, and the run free-runs further apart: 2 applied
+    // writes against 3 frames this filter counts — `to have a length of 3 but got
+    // 2`. `2.0` applies frames this filter skips and the run stays converged: 3
     // applied writes against 1 — `to have a length of 1 but got 3`. `1000.0`
     // refuses the yank itself and the room never comes back down, so it is
     // assertion 1 that goes first — `expected 654.00… to be less than 545`.
     // The asymmetry is worth writing down rather than rounding off: every drift
     // in this run lands on an exact integer, so `3.5` and `3.9999` both survive
-    // green. What this file pins the literal into is the window `(3.0, 4.0]`,
-    // not a point.
+    // green while `4.0` does not. What this file pins the literal into is the
+    // half-open window `[3.0, 4.0)`, not a point.
     const overTolerance = host.frames.filter(
       (f) => !f.state.doSeek && Math.abs(f.element - f.state.position) > 3.0
     )

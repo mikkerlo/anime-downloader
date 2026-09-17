@@ -7,8 +7,10 @@
 // peer's element reaches the other peer's element, through the real composable,
 // the real preload bridge, the real IPC router, the real `SyncplayClient` and
 // the modelled server" — the claim every fixture built on the harness rests on.
-// The fifth pins the failure half of that bridge: the rejection shape a
-// renderer sees when nobody handled the channel.
+// The fifth and sixth pin the failure half of that bridge — both rejection
+// shapes the harness's own copy of the `invoke` wrapper produces: the one a
+// renderer sees when nobody handled the channel, and the one it sees when the
+// handler threw.
 // #362's bridge test covers one loop; this covers two of them side by side, and
 // the scenario work lives in the files that use it
 // (`syncplay-seek-crossfire.test.ts` is the first).
@@ -176,6 +178,38 @@ describe('two-peer syncplay harness', () => {
     await expect(host.api.appVersion()).rejects.toThrow(
       `Error invoking remote method '${CHANNELS.APP_VERSION}': ` +
         `Error: No handler registered for '${CHANNELS.APP_VERSION}'`
+    )
+  })
+
+  it('rejects a throwing handler the way the shared mock does', async () => {
+    // The wrapper's *other* leg, and the one nothing pinned until now: swapping
+    // the harness's `throw asRemoteError(err)` for a bare `throw err` left every
+    // file that uses the harness green, so half of the copy was unobserved.
+    //
+    // Same construction as `test/ipc/syncplay-bridge.test.ts`, with one
+    // difference that is the point of doing it here as well: that file drives a
+    // `vi.fn()` client, and a peer graph holds the *real* `SyncplayClient` the
+    // router closes over at module scope. So this is the real handler body
+    // (`syncplay.disconnect()`) throwing, not a stub standing where it would be.
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    const host = await room.seat({
+      username: 'hostuser',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+
+    // `Once`, so the `dispose()` in `afterEach` still gets a real disconnect and
+    // the socket is closed rather than left for the next case.
+    vi.spyOn(host.client, 'disconnect').mockImplementationOnce(() => {
+      throw new Error('socket already gone')
+    })
+
+    // Asserted as the whole renderer-visible string, like the no-handler case
+    // above: a caller that pattern-matches on `err.message` is matching this,
+    // and the two shapes are only interchangeable with Electron's if both are.
+    await expect(host.api.syncplayDisconnect()).rejects.toThrow(
+      `Error invoking remote method '${CHANNELS.SYNCPLAY_DISCONNECT}': Error: socket already gone`
     )
   })
 

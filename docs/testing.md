@@ -108,9 +108,9 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
   `src/renderer/src/composables/use-syncplay-client.ts:1411` could drift from it
   and nothing would notice. Both peers now run the shipped rule, and mutating
-  that literal reds the file for any narrowing and for any widening past 4.0 s —
-  every drift in that run lands on an exact integer, so what the file pins the
-  literal into is the window `(3.0, 4.0]` rather than a point.
+  that literal reds the file for any narrowing and for any widening to 4.0 s or
+  beyond — every drift in that run lands on an exact integer, so what the file
+  pins the literal into is the half-open window `[3.0, 4.0)` rather than a point.
 
   The loop is **not** built on the in-process IPC loop above, because that mock's
   registries are process-wide and keyed by channel name — two peers would
@@ -138,7 +138,8 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   two seats in flight at once interleave `vi.resetModules()` and the `window.api`
   swap and hand back two silently cross-wired peers.
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
-  two guards and the first-write freeze above — and
+  two guards, the first-write freeze above, and both rejection shapes this bridge
+  copy produces, the no-handler one and a handler that throws — and
   `syncplay-seek-crossfire.test.ts` is the first scenario on it.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows

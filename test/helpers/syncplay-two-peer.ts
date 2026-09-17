@@ -348,10 +348,13 @@ async function buildPeerGraph(observe: (client: MainSyncplayClient) => void): Pr
       // handler throw, so a renderer sees
       // `Error invoking remote method '<channel>': <Name>: <message>` either way.
       //
-      // "Keep them in step" is enforced rather than asked for: the no-handler
-      // shape below is pinned by `test/services/syncplay-two-peer-loop.test.ts`,
-      // which reds on a mutated prefix here. Before it existed this copy was
-      // unobserved and the drift it warns about would have been silent.
+      // "Keep them in step" is enforced rather than asked for, and on both legs:
+      // `test/services/syncplay-two-peer-loop.test.ts` pins the no-handler shape
+      // below, which reds on a mutated prefix here, and the handler-throw shape,
+      // which reds if `throw asRemoteError(err)` is relaxed to a bare `throw err`
+      // — that one used to leave every file that uses this harness green. Before
+      // those two cases neither leg was observed, and the drift this paragraph
+      // warns about would have been silent on whichever one it hit.
       invoke: (channel: string, ...args: unknown[]) => {
         const handler = mainHandlers.get(channel)
         const asRemoteError = (err: unknown): Error =>

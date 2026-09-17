@@ -24,6 +24,7 @@ type Result = {
   scanned: string[]
   hits: Hit[]
   byFile: Map<string, number>
+  deficit: number
 }
 
 const run = (files: Corpus, scanRoots: string[] = ['.', 'docs']): Result =>
@@ -209,6 +210,49 @@ describe('check-prose-shape', () => {
     expect(r.hits).toEqual([])
   })
 
+  it('scans a file that opens with a thematic break rather than skipping it to EOF', () => {
+    // The front-matter exclusion, bounded. An opening `---` alone is not front
+    // matter: without a CLOSING `---` the old predicate skipped every line to
+    // EOF, so the file contributed nothing while still counting towards
+    // `scannedCount` — silently unmeasured, and indistinguishable in the report
+    // from a file that is clean. That is the exact failure mode the header
+    // argues hardest against, and PR 2 pins the difference. Raised in review on
+    // #374; this six-line corpus is the one measured there.
+    const unterminated = run({
+      'docs/notes.md': [
+        '---',
+        'The two-peer harness starts both clients against the same in-memory server',
+        'a short line that just stops',
+        'the tail of the paragraph.',
+        '',
+        'A closing paragraph that ends properly.'
+      ].join('\n')
+    })
+
+    expect(linesOf(unterminated)).toEqual([3])
+    expect(unterminated.hits[0]).toMatchObject({ len: 28, text: 'a short line that just stops' })
+
+    // The other half, so the narrowing cannot become a deletion: REAL front
+    // matter — an opening `---` with a closing `---` — is still skipped whole,
+    // ragged `description:` keys and all.
+    const realFrontMatter = run({
+      'docs/notes.md': [
+        '---',
+        'name: pr-review',
+        'description: Review a pull request against the repository conventions, and',
+        '  the architecture index',
+        'model: opus',
+        '---',
+        '',
+        'Body prose that is long enough to make a block of its own without tripping',
+        'anything, and that ends properly.',
+        ''
+      ].join('\n')
+    })
+
+    expect(realFrontMatter.hits).toEqual([])
+  })
+
   it('stays quiet on a raw HTML block', () => {
     // EXCLUSION 2, and the largest single class: 23 of the 51 raw hits on this
     // tree, all of them README.md's centred badge table. `<br />` is 8 columns
@@ -285,6 +329,50 @@ describe('check-prose-shape', () => {
     })
 
     expect(r.hits).toEqual([])
+  })
+
+  it('does not let a mismatched fence marker close the fence it is sitting in', () => {
+    // EXCLUSION 3's failure mode, and it fails OPEN. Detecting a fence without
+    // CAPTURING its marker lets any opener close any fence, so the lines after
+    // the impostor leak into the prose population — the one exclusion priced at
+    // 14 against 282 hits, defeated by a line of sample Markdown. Raised in
+    // review on #374; both corpora below are the ones measured there.
+    //
+    // A `~~~` inside a ```-fence. With a single toggled boolean it closes the
+    // fence and the two lines under it are scanned as prose, reporting `short
+    // leaf` at 10/76 — a tree listing, indented exactly as it should be.
+    const tildeInBacktick = run({
+      'docs/notes.md': [
+        '```text',
+        '  ├── src/main/',
+        '~~~',
+        'short leaf',
+        '  ├── syncplay.ts — the client, the mirror election and the drift guard here',
+        '```',
+        ''
+      ].join('\n')
+    })
+
+    expect(tildeInBacktick.hits).toEqual([])
+
+    // And the same defect from the other side: a ``` inside a ````-fence, which
+    // is how a docs page shows a fenced sample without the sample eating the
+    // page. CommonMark closes a fence only on a run of the SAME character at
+    // least as long, so three backticks cannot close four. With the boolean it
+    // does, and `short arg` reports at 9/76.
+    const backtickInWider = run({
+      'docs/notes.md': [
+        '````',
+        'a sample of a fenced block, shown inside a wider fence so it renders intact',
+        '```',
+        'short arg',
+        '  --dry-run  print the plan and exit without writing anything to disk at all',
+        '````',
+        ''
+      ].join('\n')
+    })
+
+    expect(backtickInWider.hits).toEqual([])
   })
 
   // --- the clauses, one at a time ---------------------------------------------
@@ -447,5 +535,33 @@ describe('check-prose-shape', () => {
     expect(out.join('\n')).toContain('ragged lines: 1 in 1 file(s)')
     expect(out.join('\n')).toContain('docs/testing.md:8')
     expect(out.join('\n')).toContain('PRINT-ONLY')
+  })
+
+  it('reports the deficit it actually selected on, not the module default', () => {
+    // `analyze()` honours a `deficit` argument and `raggedLines()` selects
+    // against it, but the result carried no record of which one produced it and
+    // `report()` had nothing to read but the module constant — so selecting at
+    // 50 printed `deficit >= 20`. Latent today because nothing passes a
+    // non-default deficit; it stops being latent in PR 2, where that sentence is
+    // the human-readable claim sitting immediately next to the pin. Raised in
+    // review on #374.
+    const ragged = ['x'.repeat(100), 'a short line that just stops', 'the tail.', ''].join('\n')
+    const r = analyze({
+      files: ['docs/notes.md'],
+      readLines: () => ragged.split('\n'),
+      deficit: 50
+    }) as Result
+
+    expect(r.deficit).toBe(50)
+    expect(linesOf(r)).toEqual([2])
+
+    const text = report(r).out.join('\n')
+    expect(text).toContain('deficit >= 50 columns')
+    expect(text).not.toContain('deficit >= 20 columns')
+
+    // And the default path, so the `?? DEFICIT` fallback stays honest.
+    expect(report(run({ 'docs/notes.md': ragged })).out.join('\n')).toContain(
+      'deficit >= 20 columns'
+    )
   })
 })

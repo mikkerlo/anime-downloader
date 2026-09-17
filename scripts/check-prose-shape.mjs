@@ -8,12 +8,12 @@
 // `**/*.md`, so `format:check` never opens a Markdown file — but removing that
 // line fixes nothing here. `.prettierrc` sets no `proseWrap`, and the default is
 // `preserve`: Prettier does not reflow prose, so the line that motivated this
-// (docs/testing.md:84, 41 columns inside a block whose longest line is 79) comes
+// (a line in docs/testing.md left at 41 columns inside a 79-column block) comes
 // out byte-identical. A max-column check cannot see it either, by construction —
 // the line is too SHORT, not too long. What is left is the shape of the ragged
 // edge, which is what this measures.
 //
-// Run: node scripts/check-prose-shape.mjs
+// Run: npm run check:prose-shape
 //
 // THE PREDICATE IS COMMITTED, NOT TUNED. Its form and its value were fixed in
 // the issue before the count was looked at, and the issue's Risks section
@@ -84,7 +84,11 @@ export const EXCLUDED_PATHS = []
 
 // --- line classification ------------------------------------------------------
 
-const FENCE = /^\s*(?:```|~~~)/
+// The marker is CAPTURED, not just detected. A single boolean toggled on any
+// fence opener lets a `~~~` close a ``` fence and a ``` close a 4-backtick one,
+// which fails OPEN — the lines after it leak into the prose population, and a
+// docs page showing a Markdown sample is exactly what introduces one.
+const FENCE = /^\s*(`{3,}|~{3,})/
 const HEADING = /^\s*#{1,6}\s/
 const TABLE_ROW = /^\s*\|/
 const BLOCKQUOTE = /^\s*>/
@@ -124,6 +128,10 @@ const SENTENCE_TERMINAL = /[.:;!?]$/
 export function classify(lines) {
   const out = []
   let inFence = false
+  // The open fence's marker, so a closer is only honoured when it is a run of
+  // the SAME character at least as long — CommonMark's rule. Empty when no
+  // fence is open.
+  let fenceMarker = ''
   // YAML front matter: `---` on the very first line opens it, the next `---`
   // closes it. Every `name:`/`description:` key is a short line inside a block
   // whose longest line is a long `description:`, so front matter is a pure
@@ -131,7 +139,14 @@ export function classify(lines) {
   // `.md` at this commit, all of them agent-instruction headers. Zero inside
   // these scan roots, because the roots already exclude those directories; the
   // content rule is what makes that independent of the root choice.
-  let inFrontMatter = lines[0] !== undefined && lines[0].trim() === '---'
+  // Only a CLOSING `---` makes the opener front matter. Without that, a file
+  // opening with a thematic break — or one whose front matter is unterminated —
+  // classifies `skip` to EOF and contributes nothing while still counting
+  // towards `scannedCount`: silently unmeasured, indistinguishable from clean.
+  let inFrontMatter =
+    lines[0] !== undefined &&
+    lines[0].trim() === '---' &&
+    lines.slice(1).some((l) => l.trim() === '---')
   // Raw HTML: BLOCK-SHAPED, per CommonMark's rule for an HTML block — it opens
   // on a line whose first non-space character is `<` and runs to the next blank
   // line. The alternative reading is line-shaped (`^\s*<` on each line on its
@@ -151,12 +166,19 @@ export function classify(lines) {
       continue
     }
 
-    if (FENCE.test(line)) {
+    const fence = line.match(FENCE)
+    if (
+      fence &&
+      (!inFence || (fence[1][0] === fenceMarker[0] && fence[1].length >= fenceMarker.length))
+    ) {
+      fenceMarker = inFence ? '' : fence[1]
       inFence = !inFence
       inHtml = false
       out.push({ kind: 'skip', why: 'fence' })
       continue
     }
+    // A fence marker that cannot close the open one falls through to here and
+    // is classified as what it is: a line of fenced code.
     if (inFence) {
       out.push({ kind: 'skip', why: 'fenced code' })
       continue
@@ -309,7 +331,7 @@ export function analyze({
   const byFile = new Map()
   for (const h of hits) byFile.set(h.path, (byFile.get(h.path) ?? 0) + 1)
 
-  return { scannedCount: scanned.length, scanned, hits, byFile }
+  return { scannedCount: scanned.length, scanned, hits, byFile, deficit }
 }
 
 /**
@@ -320,7 +342,7 @@ export function report(r) {
   out.push(`check:prose-shape — scanned ${r.scannedCount} markdown files`)
   out.push(
     `  ragged lines: ${r.hits.length} in ${r.byFile.size} file(s) ` +
-      `(deficit >= ${DEFICIT} columns, print-only)`
+      `(deficit >= ${r.deficit ?? DEFICIT} columns, print-only)`
   )
   for (const h of r.hits) {
     out.push(`  ${h.path}:${h.line}  ${h.len}/${h.blockMax}  ${h.text}`)

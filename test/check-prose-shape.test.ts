@@ -1,0 +1,451 @@
+// Fixtures for the prose-shape measurement (#370). Every case drives
+// `analyze()` over a synthetic corpus rather than the real tree, for the reason
+// test/check-line-citations.test.ts gives: the real tree's counts are the
+// gate's own pin and move with every repair. Here that is not a general
+// principle but a live constraint — docs/testing.md carries 13 of the 14 hits
+// on this tree and is the file #366 and #369 both renumber, so an assertion
+// written against a live line number is a test whose next rebase deletes it.
+//
+// The corpus lives INLINE, which is also why this file needs no `EXCLUDED_PATHS`
+// entry: its ragged prose is a string handed to `analyze()`, never a file on
+// disk, so the gate cannot scan its own test data and there is no path-shaped
+// exclusion to keep in sync.
+import { describe, it, expect } from 'vitest'
+
+// @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
+import { analyze, report } from '../scripts/check-prose-shape.mjs'
+
+type Corpus = Record<string, string>
+
+type Hit = { path: string; line: number; len: number; blockMax: number; text: string }
+
+type Result = {
+  scannedCount: number
+  scanned: string[]
+  hits: Hit[]
+  byFile: Map<string, number>
+}
+
+const run = (files: Corpus, scanRoots: string[] = ['.', 'docs']): Result =>
+  analyze({
+    files: Object.keys(files),
+    readLines: (p: string) => files[p].split('\n'),
+    scanRoots
+  }) as Result
+
+const linesOf = (r: Result): number[] => r.hits.map((h) => h.line)
+
+// THE MOTIVATING DEFECT, frozen. This is the `docs/testing.md` bullet a rebase
+// conflict in the #362/#363/#364 series left ragged: its eighth line stops at 41
+// columns in the middle of a sentence, inside a block whose longest line is 79.
+// Human review is what caught it, because nothing in `typecheck`, `lint`,
+// `format:check` or the suite reads prose shape — `.prettierignore` carries
+// `**/*.md`, and with it removed Prettier still leaves the line byte-identical
+// because no `proseWrap` is set.
+//
+// Copied verbatim rather than paraphrased: the widths ARE the fixture, and a
+// tidied-up imitation would be a test of a shape nobody wrote.
+const RAGGED_BULLET = [
+  '- **In-process IPC loop** (`test/setup/electron-mock.ts` → `test/ipc/`) — the',
+  '  global `electron` mock can close the bridge on itself: `ipcMain.handle`',
+  '  registrations are always recorded, and `__enableIpcLoop()` makes',
+  "  `ipcRenderer.invoke` route into them and return the handler's result. Both",
+  '  failure paths reject with the string a renderer actually sees — `Error',
+  "  invoking remote method '<channel>': <Name>: <message>` — for a handler that",
+  '  throws and for a channel nobody handled; `syncplay-bridge.test.ts` pins both',
+  '  shapes verbatim. The main→renderer half',
+  '  was already closed — a broadcaster that calls `__emit` lands on the same',
+  "  `ipcRenderer.on` registry the preload's `subscribe()` writes to — so a test",
+  '  can drive a real router, the real `src/preload/index.ts` and a real',
+  '  broadcast module against each other with no Electron runtime. Opt-in per',
+  "  file, because routing `invoke` changes what every other suite's bare spy",
+  '  returns; `__reset()` clears both registries and disarms it. It is **not** an',
+  '  IPC emulation: arguments and return values pass by reference where real IPC',
+  "  structured-clones them, and a file that declares its own `vi.mock('electron',",
+  '  …)` replaces this module wholesale, loop included.',
+  ''
+].join('\n')
+
+// A hand-formatted run of parenthetical citations, copied from the same file.
+// Four consecutive short lines, each deliberately broken so a citation sits on a
+// line of its own. See the characterisation test at the bottom: two of the four
+// red under the committed threshold, and that is reported rather than tuned away.
+const CITATION_RUN = [
+  "  equivalent. A `doSeek` or a pause change takes the reference's other path instead:",
+  '  a forced update that bypasses the election, carries the `ignoringOnTheFly`',
+  '  server counter and re-seats every watcher on the new position',
+  "  (`Room.setPosition`) — while deliberately *not* refreshing the room's",
+  '  `_lastUpdate`, so the next re-election runs from the last election rather than',
+  '  the last write and a playing room reads ahead of the playhead a seek just set.',
+  '  Drives real `SyncplayClient`s through the `net`/`tls` mocks',
+  '  (`test/services/syncplay-mirror-election.test.ts`, #277;',
+  '  `test/services/syncplay-mirror-drift.test.ts`, #279), and, through the',
+  '  two-peer harness below, real renderers on top of them',
+  '  (`test/services/syncplay-seek-crossfire.test.ts`, #361).',
+  ''
+].join('\n')
+
+describe('check-prose-shape', () => {
+  it('reds on the short line a rebase left inside a wrapped bullet', () => {
+    // THE REGRESSION CASE. Line 8 is `shapes verbatim. The main→renderer half`:
+    // 41 columns where its neighbours run to 79, ending mid-sentence on "half".
+    // Nothing else in the bullet reds — the other sixteen lines are wrapped
+    // within a few columns of each other, which is what makes the deficit rule
+    // a signal here rather than a census of a hand-wrapped paragraph.
+    const r = run({ 'docs/testing.md': RAGGED_BULLET })
+
+    expect(linesOf(r)).toEqual([8])
+    expect(r.hits[0]).toMatchObject({
+      path: 'docs/testing.md',
+      len: 41,
+      blockMax: 79,
+      text: 'shapes verbatim. The main→renderer half'
+    })
+    // Print-only in PR 1: it reports and exits 0. The pin that turns this into
+    // a failure is PR 2, after the citation-anchor repairs stop moving the
+    // number it would be pinned to.
+    expect(report(r).ok).toBe(true)
+  })
+
+  // --- the green classes ------------------------------------------------------
+
+  it('stays quiet on a paragraph whose final line is legitimately short', () => {
+    // Clause (b). A paragraph's last line is short because the paragraph ended,
+    // which is every well-wrapped paragraph in the tree. Without this clause the
+    // predicate reports one hit per paragraph and measures nothing.
+    const r = run({
+      'docs/notes.md': [
+        'The mirror election runs on every playstate the server sends, and the room',
+        'reads the position it last wrote rather than the one the playhead is at.',
+        'A short tail.',
+        ''
+      ].join('\n')
+    })
+
+    expect(r.hits).toEqual([])
+
+    // The same class with no full stop to fall back on: a paragraph whose last
+    // line is a trailing parenthetical citation. Clause (d) cannot save this
+    // one, so it is clause (b) alone holding it green — which is what makes
+    // deleting clause (b) observable rather than redundant with the terminal
+    // rule.
+    const parenthetical = run({
+      'docs/notes.md': [
+        'The two-peer harness starts both clients against the same in-memory server',
+        'and drives them through the real transport mocks, one election at a time',
+        '(`test/services/syncplay-seek-crossfire.test.ts`)',
+        ''
+      ].join('\n')
+    })
+
+    expect(parenthetical.hits).toEqual([])
+  })
+
+  it('stays quiet on a short list item among long ones', () => {
+    // Clause (a)'s list-item boundary. A bullet is its own block, so a one-line
+    // bullet is a block of one and cannot be ragged — it has no non-final line.
+    // Without this boundary the whole list is one block and every short bullet
+    // scores against the longest bullet in it: 116 hits on this tree against 14,
+    // 45 of them in TODO.md alone.
+    const r = run({
+      'docs/notes.md': [
+        '- **Unit** — services and `lib` helpers driven through their own seams, with',
+        '  an in-memory storage fake',
+        '- **Integration** — flows wired through the app harness',
+        '- **End-to-end** — Playwright against a packaged build.',
+        ''
+      ].join('\n')
+    })
+
+    // Two of these four lines are short, carry no closing punctuation and are
+    // not the last line of the list — so the ONLY thing holding them green is
+    // that each bullet is its own block. Delete the boundary and this case
+    // reports both of them, which is the shape of the 116-against-14 difference
+    // at tree scale.
+    expect(r.hits).toEqual([])
+  })
+
+  it('stays quiet on the line immediately before a fenced block', () => {
+    // A fence closes the block above it, so the sentence that introduces a code
+    // sample is a block's last line however short it is — and a lead-in like
+    // "Run:" is short by construction.
+    const r = run({
+      'docs/notes.md': [
+        'The two-peer harness starts both clients against the same in-memory server',
+        'and drives them through the real transport mocks.',
+        'Run:',
+        '',
+        '```bash',
+        'npm run test',
+        '```',
+        ''
+      ].join('\n')
+    })
+
+    expect(r.hits).toEqual([])
+  })
+
+  it('stays quiet on a YAML front-matter block', () => {
+    // EXCLUSION 1. Front matter is short `name:` and `description:` keys sharing
+    // a block with one long `description:`, which is a pure false-positive
+    // generator: 14 of the 51 raw hits on this tree, every one of them an
+    // agent-instruction header. In scope it is zero because the roots exclude
+    // those directories; excluded by content it is zero wherever it appears.
+    const r = run({
+      'docs/notes.md': [
+        '---',
+        'name: pr-review',
+        'description: Review a pull request against the repository conventions, the',
+        '  architecture index and the per-subsystem pages under docs/',
+        'model: opus',
+        '---',
+        '',
+        'Body prose that is long enough to make a block of its own without tripping',
+        'anything, and that ends properly.',
+        ''
+      ].join('\n')
+    })
+
+    expect(r.hits).toEqual([])
+  })
+
+  it('stays quiet on a raw HTML block', () => {
+    // EXCLUSION 2, and the largest single class: 23 of the 51 raw hits on this
+    // tree, all of them README.md's centred badge table. `<br />` is 8 columns
+    // against a 247-column `<a href=…><img …/></a>`, which is a markup fact and
+    // not a wrap anyone chose.
+    //
+    // The rule is BLOCK-SHAPED — it opens on a line whose first non-space
+    // character is `<` and runs to the next blank line — so a run of plain text
+    // inside a `<td>` is excluded with the tags around it. The line-shaped
+    // alternative (`^\s*<` per line) measures the same 14 on this tree because
+    // every badge line opens with a tag; this fixture is what tells the two
+    // apart, since its `Latest release` line carries no tag of its own.
+    const badges = run({
+      'README.md': [
+        '<p>',
+        '  <a href="https://github.com/mikkerlo/anime-downloader/releases/latest"><img src="https://img.shields.io/github/v/release/mikkerlo/anime-downloader?style=flat-square" alt="Latest release" /></a>',
+        '  <br />',
+        '  <img src="https://img.shields.io/badge/license-ISC-blue?style=flat-square" alt="License: ISC" />',
+        '</p>',
+        ''
+      ].join('\n')
+    })
+
+    expect(badges.hits).toEqual([])
+
+    // And the half that tells BLOCK-shaped apart from LINE-shaped: prose inside
+    // a `<td>`, wrapped by hand, carrying no tag of its own. The line-shaped
+    // rule sees three ordinary prose lines and reports the short one; the
+    // block-shaped rule sees the cell it is sitting in. Both measure 14 on this
+    // tree — every badge line opens with a tag — so this fixture is the only
+    // thing that distinguishes them, and it is why the block-shaped reading is
+    // the one written down.
+    const cell = run({
+      'README.md': [
+        '<table>',
+        '  <tr>',
+        '    <td>',
+        '      MKV streaming — the player pulls remuxed segments straight from the source',
+        '      and never writes a temp file',
+        '      while the subtitles render natively.',
+        '    </td>',
+        '  </tr>',
+        '</table>',
+        ''
+      ].join('\n')
+    })
+
+    expect(cell.hits).toEqual([])
+  })
+
+  it('stays quiet inside a fenced code block', () => {
+    // EXCLUSION 3, and the one that decides whether this is a measurement or
+    // noise. Clause (a) names a fence as a block BOUNDARY; read literally, the
+    // lines between two fences then form blocks of their own and get scanned,
+    // which measures 282 hits in 13 files on this tree against 14 with them
+    // skipped — 85 from one data-flow diagram, 50 from an ASCII source tree, 19
+    // from wire transcripts. An indented listing is not ragged prose and nobody
+    // can act on the report, so fenced contents are not scanned at all.
+    // An interface listing, the docs/types.md shape. Every declaration line is
+    // tens of columns short of the one long member and none of them ends in
+    // prose punctuation, so with fence contents scanned this fixture reports
+    // three hits on code that is indented exactly as it should be.
+    const r = run({
+      'docs/types.md': [
+        '```ts',
+        'interface SyncplayRoom {',
+        '  name: string',
+        '  watchers: Record<string, { position: number; paused: boolean; file: FileInfo | null }>',
+        '  position: number',
+        '}',
+        '```',
+        ''
+      ].join('\n')
+    })
+
+    expect(r.hits).toEqual([])
+  })
+
+  // --- the clauses, one at a time ---------------------------------------------
+
+  it('takes the deficit against the block maximum, absolutely and not as a ratio', () => {
+    // Clause (c). 20 columns exactly is the bar, so 19 is silent and 20 reds —
+    // written as a pair because a threshold pinned on one side only is satisfied
+    // by any looser rule. Absolute rather than ratio: a ratio makes the bar
+    // depend on how long the longest line in the block happens to be, so the
+    // same 60-column line is a hit in one paragraph and clean in another.
+    const block = (short: string): Corpus => ({
+      'docs/notes.md': [
+        'x'.repeat(80),
+        short,
+        'the tail of the paragraph, which is never judged',
+        ''
+      ].join('\n')
+    })
+
+    expect(run(block('y'.repeat(61))).hits).toEqual([])
+    expect(linesOf(run(block('y'.repeat(60))))).toEqual([2])
+  })
+
+  it('leaves a short line that ends a thought alone', () => {
+    // Clause (d). A line ending in `.`, `:`, `;`, `!` or `?` stopped on purpose.
+    // Dropping the rule takes this tree from 14 hits to 19 inside the prose
+    // roots and from 374 to 443 at the issue's widest measurement — it is the
+    // second of the two parameters that decide whether this is a gate.
+    const block = (short: string): Corpus => ({
+      'docs/notes.md': ['x'.repeat(80), short, 'the tail of the paragraph.', ''].join('\n')
+    })
+
+    for (const ending of ['.', ':', ';', '!', '?']) {
+      expect(run(block('a short deliberate stop' + ending)).hits).toEqual([])
+    }
+    expect(linesOf(run(block('a short line that just stops')))).toEqual([2])
+  })
+
+  it('breaks a block on a heading, a table row, a blockquote and a rule', () => {
+    // The rest of clause (a). Each of these lines is markup rather than prose,
+    // so it is neither scanned nor counted into a neighbour's `blockMax`: the
+    // short cell of a table would otherwise be ragged against the widest row.
+    const r = run({
+      'docs/notes.md': [
+        '## A heading that is quite long indeed, and is not prose to be judged',
+        'short prose',
+        '',
+        '| a | b |',
+        '| - | - |',
+        '| a very long cell indeed, long enough to dominate a block | x |',
+        '',
+        '> a quoted line that runs on for a good long while, as quotations do',
+        'short again',
+        '',
+        '---',
+        ''
+      ].join('\n')
+    })
+
+    expect(r.hits).toEqual([])
+  })
+
+  // --- scan scope -------------------------------------------------------------
+
+  it('scans the prose roots and leaves agent-instruction markdown out', () => {
+    // The scope choice is worth 3.4x on the raw count — 18 of the 44 tracked
+    // `.md` live under `.claude/`, `.gemini/` and `.github/`, and every
+    // front-matter hit comes from them. This is NOT `SCAN_ROOTS` in
+    // scripts/check-line-citations.mjs, which governs outbound anchors and
+    // covers `src`, `test`, `e2e` and `scripts` as well.
+    const ragged = ['x'.repeat(80), 'a short line that just stops', 'the tail.', ''].join('\n')
+    const corpus: Corpus = {
+      'DESIGN.md': ragged,
+      'docs/testing.md': ragged,
+      'src/shared/README.md': ragged,
+      '.claude/skills/pr-review/SKILL.md': ragged,
+      '.github/agents/todo-reviewer.agent.md': ragged,
+      'test/fixtures/shikimori/README.md': ragged,
+      'src/main/syncplay.ts': ragged
+    }
+
+    // No `scanRoots` here: `analyze` falls back to the exported `SCAN_ROOTS`, so
+    // this pins the config as well as the arm in `underRoot` that reads it.
+    const r = analyze({
+      files: Object.keys(corpus),
+      readLines: (p: string) => corpus[p].split('\n')
+    }) as Result
+
+    expect(r.scanned).toEqual(['DESIGN.md', 'docs/testing.md', 'src/shared/README.md'])
+    expect(r.hits.map((h) => h.path)).toEqual([
+      'DESIGN.md',
+      'docs/testing.md',
+      'src/shared/README.md'
+    ])
+  })
+
+  it('does not scan a file under an excluded path', () => {
+    // The parameter exists for symmetry with the sibling's seam and is empty by
+    // default, because this gate's fixtures are inline strings rather than files
+    // on disk. Pinned so the seam cannot be dropped as unused.
+    const ragged = ['x'.repeat(80), 'a short line that just stops', 'the tail.', ''].join('\n')
+    const r = analyze({
+      files: ['docs/testing.md', 'docs/generated/api.md'],
+      readLines: () => ragged.split('\n'),
+      excludedPaths: ['docs/generated/']
+    }) as Result
+
+    expect(r.scanned).toEqual(['docs/testing.md'])
+  })
+
+  // --- the citation run -------------------------------------------------------
+
+  it('reds two lines of a hand-formatted citation run, which is an open question', () => {
+    // CHARACTERISATION, NOT AN ENDORSEMENT. The issue's Testing Strategy asks
+    // for a hand-formatted citation run as a GREEN class, naming this live
+    // instance: four consecutive short lines, each deliberately broken so a
+    // parenthetical citation sits on a line of its own.
+    //
+    // Under the committed threshold it is not green. Two of the four red — the
+    // 61-column `Drives real …` line and the 55-column `two-peer harness below`
+    // line — while the third escapes only through clause (d)'s trailing `;` and
+    // the fourth only through clause (b), being the block's last line. That is
+    // the contradiction mikkerlo raised in the third review on #370 (question 2:
+    // are they true positives, or does the predicate get a citation-run rule?),
+    // and it is a predicate-shape call reserved to the issue author: the Risks
+    // section forbids settling it by adjusting the threshold once the count is
+    // known.
+    //
+    // So this test records what the committed predicate does, exactly, rather
+    // than asserting what the issue hoped it would do. If the answer is "true
+    // positives", this stays and the citation-run green class is struck from the
+    // issue. If the answer is a citation-run rule, this test is what has to
+    // change, in the open, in the PR that changes the predicate.
+    const r = run({ 'docs/testing.md': CITATION_RUN })
+
+    expect(r.hits.map((h) => [h.line, h.len, h.blockMax])).toEqual([
+      [3, 63, 84],
+      [7, 61, 84],
+      [10, 55, 84]
+    ])
+    // The two that stay green, named so a later loosening cannot drop them
+    // silently: line 8 ends in `;` and line 11 is the block's last line.
+    expect(linesOf(r)).not.toContain(8)
+    expect(linesOf(r)).not.toContain(11)
+  })
+
+  // --- the report -------------------------------------------------------------
+
+  it('always reports ok, because PR 1 is print-only', () => {
+    // The whole point of shipping the measurement before the pin: a print-only
+    // script renumbers nothing, so it does not queue behind the citation-anchor
+    // repairs that are moving the very lines it would be pinned against. PR 2
+    // adds the non-zero pin, following the UNCHECKABLE_PIN convention rather
+    // than SUSPICIOUS_LANDING_PIN — the hits are real and unrepaired, so zero is
+    // not available.
+    const r = run({ 'docs/testing.md': RAGGED_BULLET })
+    const { ok, out } = report(r)
+
+    expect(ok).toBe(true)
+    expect(out.join('\n')).toContain('ragged lines: 1 in 1 file(s)')
+    expect(out.join('\n')).toContain('docs/testing.md:8')
+    expect(out.join('\n')).toContain('PRINT-ONLY')
+  })
+})

@@ -27,10 +27,24 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check if tag already exists
+      # `git ls-remote`, not `git rev-parse`. The rev-parse form this replaces
+      # was a no-op that always answered "no tag": `actions/checkout` runs
+      # `git fetch --no-tags --depth=1` (the step log echoes `fetch-tags: false`),
+      # so the working clone has no tags in it to parse and every run computed
+      # `should_release=true` regardless. It went unnoticed because the guard's
+      # answer was right by accident — a version bump lands once. `ls-remote`
+      # asks origin instead and needs no fetch.
+      #
+      # Since #365 the tag is created only when the release actually publishes,
+      # so a tag on origin now means "this version shipped" and nothing else. A
+      # failed run leaves a draft and no tag, and stays retryable — which is the
+      # whole point of moving tag creation last.
+      - name: Check if the version has already shipped
         id: check-tag
         run: |
-          if git rev-parse "v${{ steps.get-version.outputs.version }}" >/dev/null 2>&1; then
+          TAG="${{ steps.get-version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already exists on origin — nothing to release."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_release=true" >> "$GITHUB_OUTPUT"
@@ -122,8 +136,20 @@ jobs:
       # which is why `^26.8.1` — the range this replaced — resolved backwards
       # onto 26.15.3. As of 2026-09 `latest` is 26.15.3, the fix ships only
       # on the `v26` tag, and 26.15.4 through 26.16.0 are unfixed as well.
+      #
+      # `--publish never` is hygiene, not the fix for #365. Every build log shows
+      # electron-builder already skipping every file
+      # (`reason=release doesn't exist and not created because "publish" is not
+      # "always" and build is not on tag`), so it has never published anything
+      # here. It is worth pinning anyway on two counts: the same logs carry
+      # `Implicit publishing triggered by CI detection. This behavior will be
+      # disabled in electron-builder v27`, and the `release` job now creates its
+      # draft *before* uploading — a pre-existing draft would let all three build
+      # jobs publish into the very release the release job is writing to, which
+      # is exactly the "asset the build did not produce" case the verifier reds
+      # on. `check.yml` already builds this way.
       - name: Package
-        run: npx electron-builder ${{ matrix.args }}
+        run: npx electron-builder ${{ matrix.args }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -140,29 +166,82 @@ jobs:
             dist/*.blockmap
           if-no-files-found: ignore
 
+  # Draft first, verify, then publish, and only then does a tag exist.
+  #
+  # `softprops/action-gh-release` lost v4.6.92 and v4.6.93 the same way: it fires
+  # every file at GitHub concurrently (13 uploads on v4.6.93), and when one large
+  # binary answered `Error saving asset` ten seconds in, the four other large
+  # binaries still in flight were abandoned with no log line. The action creates
+  # every non-prerelease as a draft and flips `draft: false` only once all
+  # artifacts have uploaded, so both versions were left as drafts carrying the
+  # eight small files and none of the five ~100-140 MB binaries. See
+  # scripts/release-assets.mjs for why the filename-collision theory was tested
+  # and dropped.
+  #
+  # The draft-first mechanism is kept — it is the right shape, and it is what
+  # makes a partial upload recoverable instead of publicly visible — but the
+  # steps that decide when to leave it are explicit here rather than implicit in
+  # an action. One `gh release upload` per file with its own retry means one
+  # file's 5xx cannot take the others with it; the verify step reads the release
+  # back and compares it against `artifacts/`, so a short release can never be
+  # published; and the tag is created by the publish itself, so a run that fails
+  # anywhere above leaves a draft, no tag, and a version that is still retryable.
   release:
     needs: [check-version, build]
     runs-on: ubuntu-latest
 
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.check-version.outputs.tag }}
+
     steps:
       - uses: actions/checkout@v5
+
+      # No `cache: npm` and no `npm ci`: this job runs a dependency-free script
+      # and needs nothing from node_modules. Pinned anyway so a runner image
+      # roll cannot change the Node the release path runs on.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
 
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Create tag
+      # Idempotent on purpose: "Re-run failed jobs" has to reuse the draft a
+      # previous attempt left behind rather than fail on it. `gh release view`
+      # resolves drafts by tag, so this is a real lookup, not a guess. A draft
+      # does NOT create the git tag — GitHub creates it at `--target` when the
+      # release is published, which is the last step below.
+      - name: Create or reuse the draft release
         run: |
-          git tag ${{ needs.check-version.outputs.tag }}
-          git push origin ${{ needs.check-version.outputs.tag }}
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Reusing the draft release left by an earlier attempt."
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --draft \
+              --generate-notes
+          fi
 
-      - uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.check-version.outputs.tag }}
-          name: ${{ needs.check-version.outputs.tag }}
-          files: artifacts/*
-          generate_release_notes: true
+      # Never fails the job on its own — see the note in the script. `verify` is
+      # the gate, and letting it run produces one authoritative list of what is
+      # missing instead of two partly-overlapping ones.
+      - name: Upload the artifacts
+        run: node scripts/release-assets.mjs upload "$TAG" artifacts
+
+      - name: Verify every artifact is attached
+        run: node scripts/release-assets.mjs verify "$TAG" artifacts
+
+      # Only reached when the asset set is complete. Un-drafting is what creates
+      # the tag, so nothing above this line leaves a tag behind. `--latest`
+      # preserves the `make_latest: true` the action defaulted to, which is what
+      # `electron-updater` reads `latest.yml` from.
+      - name: Publish the release
+        run: gh release edit "$TAG" --draft=false --latest
 
   # A failed release is otherwise silent: `release` is skipped, no release
   # appears, and nobody is told. That is how v4.6.56 was permanently lost
@@ -206,17 +285,24 @@ jobs:
           landed on `main` afterwards can ever reach it.
 
           - **Transient cause** (upload blip, registry timeout, runner hiccup) → re-running can
-            recover it, subject to the `make_latest` check below.
+            recover it, subject to the Latest check below.
           - **Cause lives in the repo** (a bad dependency, a broken build or workflow, a packaging
             config error) → **a re-run cannot fix it.** Fix it on `main` and ship the fix; if the
             fix touches `package.json` it cuts a release on merge, which recovers this untagged
             version without spending a new number. See #332 for a worked example.
 
-          Then, for the transient class only: `softprops/action-gh-release` defaults to
-          `make_latest: true`. If a **newer** version has been released since this run failed,
-          re-running publishes the older version afterwards and marks **it** Latest — offering live
-          users a downgrade through `electron-updater`. Check `gh release list`; if something newer
-          exists, **do not re-run.** Leave the gap — the commit's code ships in the later release.
+          If the run got as far as the release job, there is a **draft** release for this version
+          carrying whatever did upload. It is not public, no tag was created, and a re-run reuses
+          that draft and retries only what is missing — so the version is still free. Do not
+          publish the draft by hand: it is a draft precisely because the asset set is short, and a
+          release missing its installers looks complete to anyone who finds it.
+
+          Then, for the transient class only: the publish step passes `--latest`. If a **newer**
+          version has been released since this run failed, re-running publishes the older version
+          afterwards and marks **it** Latest — offering live users a downgrade through
+          `electron-updater`. Check `gh release list`; if something newer exists, **do not re-run.**
+          Leave the gap — the commit's code ships in the later release, and the abandoned draft can
+          be deleted.
           EOF
           } > issue-body.md
 

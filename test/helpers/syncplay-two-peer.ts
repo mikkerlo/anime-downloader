@@ -263,6 +263,18 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
   episodeInt?: string
 }
 
+/** `SyncplayClient`'s three `ignoringOnTheFly` counters, sampled together. */
+export interface IgnoreCounters {
+  /** Bumped once per *discrete* change the client originates, and by nothing
+   *  else. Monotonic within a connection: `resetTransportState()` zeroes it
+   *  with the other two (`src/main/syncplay.ts:1071-1073`). */
+  clientIgnoreCounter: number
+  /** The counter of our newest outstanding change, or 0. */
+  pendingClientAck: number
+  /** The server counter we owe an answer for. */
+  pendingServerAck: number
+}
+
 export interface Peer {
   readonly username: string
   /** This peer's real main-process client. */
@@ -281,6 +293,11 @@ export interface Peer {
    *  rather than re-derived, because the fixtures that care about it are about
    *  the exact instant it is retired. */
   seekIntent(): { at: number; attempts: number } | null
+  /** `SyncplayClient`'s private `ignoringOnTheFly` counters, as one triple.
+   *  Surfaced here for the same reason as `seekIntent()`, and so the fixtures
+   *  that read them spell the field names in one place rather than one per
+   *  scenario file. */
+  counters(): IgnoreCounters
   /** The user drags the scrubber: a bare `currentTime` write with no
    *  programmatic operation armed, so the resulting `seeked` reaches the room as
    *  the user's own seek. */
@@ -580,6 +597,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       broadcasts: graph.broadcasts,
       status: () => client.getStatus(),
       seekIntent: () => seekIntentOf(client),
+      counters: () => countersOf(client),
       userSeek: (to: number) => {
         el.currentTime = to
       },
@@ -650,5 +668,50 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
   }
 }
 
+// The two readers below reach into `SyncplayClient`'s private state, and they
+// are the only place in the two-peer fixtures that does. Element access rather
+// than `as unknown as { … }`: TypeScript resolves `client['seekIntent']`
+// against the real class — the escape hatch it leaves open for private members
+// — so the field name and its type are checked against the declaration, where a
+// structural cast invents whatever shape it is handed and a renamed field goes
+// on compiling. Verified: rename `clientIgnoreCounter` in `src/main/syncplay.ts`
+// and `tsc` reports one error on the `countersOf` line below, nowhere else. The
+// code it carries depends on the new name; see the recipe further down.
+//
+// Two caveats, so nobody reads more into this than it gives. First, no CI gate
+// fails on that rename: `npm run typecheck` runs the two projects, and neither
+// `tsconfig.node.json` nor `tsconfig.web.json` includes `test/**`. Second,
+// reproducing it by hand is not the one-liner it sounds like. `tsc` on this
+// file alone refuses to start while a `tsconfig.json` sits beside it (TS5112,
+// which tells you to pass `--ignoreConfig`), and once past that it resolves
+// neither the ambient `src/shared/types/*.d.ts` nor the `@shared/*` paths, so
+// the one real error would land under the ~120 resolution errors this file
+// already reports that way — mostly TS2304 and TS2307, and the exact count
+// moves with the next import added here, so read it as a wall, not a fixture.
+// The config that reproduces it exactly is `tsconfig.node.json` with
+// `composite` dropped, `"types": ["node"]` added, and this file appended to
+// `include`: zero errors at baseline, one error on the `countersOf` line under
+// the rename — TS7053 when the new name is unlike the old, TS2551 ("did you
+// mean 'clientIgnoreCounterX'?") when it is a near miss; `--noImplicitAny
+// false` clears either, so the paragraph below holds for both. Dropping
+// `composite` only trims noise: kept, the same run adds four TS6307 for the
+// files reached by import but not listed, and still reports the real error
+// beside them.
+// What that config does *not* need is a strictness flag: TS7053 is a
+// `noImplicitAny` diagnostic, and the TypeScript 6 pinned here defaults
+// `noImplicitAny` on — measured both with no config at all and under a
+// `tsconfig.json` that omits `strict`, as both of ours do — so it is an
+// explicit `--noImplicitAny false` (or `--strict false`), not the default,
+// that turns the rename back into a clean run.
+//
+// What the single reader buys unconditionally is the blast radius — a rename
+// breaks one line here instead of failing at runtime in every scenario file
+// that spelled the field out for itself.
 const seekIntentOf = (client: MainSyncplayClient): { at: number; attempts: number } | null =>
-  (client as unknown as { seekIntent: { at: number; attempts: number } | null }).seekIntent
+  client['seekIntent']
+
+const countersOf = (client: MainSyncplayClient): IgnoreCounters => ({
+  clientIgnoreCounter: client['clientIgnoreCounter'],
+  pendingClientAck: client['pendingClientAck'],
+  pendingServerAck: client['pendingServerAck']
+})

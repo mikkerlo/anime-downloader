@@ -307,7 +307,8 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
     })
 
     // The discriminator between the `at` form and the position form, and the
-    // direct regression net for `docs/syncplay.md:74`. The `at` form is inert
+    // direct regression net for docs/syncplay.md:74 ("`doSeek` is provably
+    // `false` on a rewritten tick"). The `at` form is inert
     // in a paused room **by construction**, not by measurement:
     // `projectedRoomPosition()` discards `at` outright when `room.paused`
     // (`elapsed = room.paused ? 0 : …`), so this holds for any value of the

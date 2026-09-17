@@ -9,11 +9,17 @@
 // half of this one) moved these by hand after the fact.
 //
 // What is decidable here is whether a citation resolves to a line that exists.
-// Whether that line *means* what the prose says is not, so the gate is split
-// into three unambiguous failures plus a heuristic that only warns — and two
+// Whether that line *means* what the prose says is generally not, so the gate is
+// split into unambiguous failures plus a heuristic that only warns — and two
 // pinned counts, which are what give the warn teeth and what stop the gate
-// from passing by seeing nothing. A printed-only number is the aggregate
-// assertion docs/testing.md:97-101 warns about: nobody diffs it.
+// from passing by seeing nothing. A printed-only number is the shape check
+// docs/testing.md:199-203 ("it is never the assertion that catches set rot")
+// warns about: nobody diffs it.
+//
+// The one case where meaning *is* decidable is #366's marked form: a citation
+// that carries its own target verbatim, `<path>:<n> ("quoted text")`. Comparing
+// that quote against the cited line is a substring test, not a judgement about
+// prose, so it hard-fails rather than warns. See `extractMarkedQuote()`.
 //
 // Run: npm run check:line-citations
 
@@ -23,7 +29,7 @@ import { basename, extname } from 'node:path'
 
 // --- pins ---------------------------------------------------------------------
 //
-// Exact-match assertions, per docs/testing.md:91 ("Pin the count, never just
+// Exact-match assertions, per docs/testing.md:193 ("Pin the count, never just
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 
@@ -133,6 +139,88 @@ const CITATION = /\b([A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,4}):(\d
 // one more transcript line would have redded it with advice nobody can follow.
 const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
 
+// The marked form (#366): a citation that carries its own target verbatim,
+// spelled `<path>:<n> ("quoted text")` — the citation optionally closed by a
+// backtick, because a backticked path is the same citation and admits nothing
+// new (measured: still exactly one hit tree-wide). Everything after that is
+// fixed: one space, one open paren, one double quote, no slack.
+//
+// THE STRICTNESS IS THE DESIGN, and a later reader will see a fussy regex and
+// want to relax it. Measured across the resolvable citations on the tree this
+// shipped on, counting by admitted gap between the end of the citation and the
+// opening quote:
+//
+//   no slack (this rule)  1 candidate    0 false positives
+//   up to 10 characters   4 candidates   3 false positives
+//   up to 40 characters   5 candidates   4 false positives
+//
+// Triggering on mere adjacency instead — any double-quoted run of >= 12
+// characters on the citing line or the two below it — gives 75 candidates of
+// which 2 occur at their cited span: 73 false reports for one and a bit of
+// signal. Backticks as the delimiter are worse again in both directions: 1636
+// candidates, 34 at span, so it neither selects the marked cases nor stays
+// quiet on the rest.
+//
+// The three the 10-character gap admits are all the same shape and none is a
+// citation of its target: a scare-quoted concept or a line of UI copy sitting
+// next to an anchor. They are named here WITHOUT line numbers on purpose —
+// writing a counterexample in the marked spelling would make this rationale
+// block acquire live anchors of its own, green by coincidence and free to rot
+// like any other. They are: the two anchors into
+// `src/renderer/src/composables/use-syncplay-client.ts` that carry the toast
+// copy "Paused by me" (one in `docs/syncplay.md`, one in `src/main/syncplay.ts`)
+// and the `docs/syncplay.md` anchor that scare-quotes the phrase "where intent
+// is written". Loosening the rule re-imports that population.
+const MARKED_OPEN = /^`? \("/
+
+// A wrapped quote is the normal case, not an edge: the first anchor written in
+// this form had its quote split across two comment lines, so a single-line
+// extractor would have missed the very citation that motivated the mechanism.
+// Continuation lines are joined with a single space after their leading comment
+// marker is stripped, which is what makes the rule uniform across citing-file
+// kinds — `//` and `*` in code, `#` in yaml/sh, nothing at all in markdown
+// prose, where a paragraph is one long line and no continuation is needed.
+const MARKED_CONTINUATION = 3
+
+const stripContinuationMarker = (line) =>
+  line.replace(/^\s*(?:\/\/+|\/\*|\*\/|\*|#)?\s*/, '').trim()
+
+/**
+ * Normalize both sides of a quote comparison: drop Markdown emphasis and
+ * backticks, collapse whitespace. Neither of #366's two repair targets needs
+ * this — their `**` sit outside the quoted span, so the raw substring already
+ * matches — so the rule is justified by a constructed fixture rather than by a
+ * live anchor: a quote with *internal* emphasis would fail a raw comparison,
+ * and a quote wrapped across comment lines carries whitespace the target has
+ * not got.
+ */
+export const normalizeQuote = (s) => s.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim()
+
+/**
+ * Pull the quote out of a marked citation, or return null if the citation is
+ * not marked. `rest` is the citing line from the end of the citation onward.
+ *
+ * @param {string[]} lines  the citing file
+ * @param {number} i        zero-based index of the citing line
+ * @param {string} rest
+ * @returns {string | null}
+ */
+export function extractMarkedQuote(lines, i, rest) {
+  const open = MARKED_OPEN.exec(rest)
+  if (!open) return null
+  let buf = rest.slice(open[0].length)
+  for (let k = i; ; ) {
+    const close = buf.indexOf('"')
+    if (close >= 0) {
+      const quote = buf.slice(0, close)
+      return normalizeQuote(quote) === '' ? null : quote
+    }
+    k++
+    if (k >= lines.length || k - i > MARKED_CONTINUATION) return null
+    buf += ' ' + stripContinuationMarker(lines[k])
+  }
+}
+
 // --- analysis -----------------------------------------------------------------
 
 /**
@@ -143,6 +231,16 @@ const PATHLESS = /(^|[^A-Za-z0-9_./\\:"'}-]):(\d+)(?:-(\d+))?\b/g
  * src/renderer/src/composables/use-syncplay-client.ts:1751-1753), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
+ *
+ * Since #366 the BLANK-LINE predicate alone also runs on a range's interior
+ * lines, via `interiorBlankLine()` below — the other three stay on the start
+ * line. That split is measured, not aesthetic: applying this function whole to
+ * every line of every range turns 13 of the 28 resolved ranges suspicious, all
+ * of them legitimate, because a cited block's last line is a closing brace by
+ * construction — and three of the 13 are inside this very docstring, so the
+ * text explaining why ranges are start-line-only would itself red the gate.
+ * Blank-line-only on interior lines measures 0 hits, so the pin stays at 0 and
+ * a range that slid onto a paragraph gap is still caught.
  */
 function suspiciousLanding(lines, targetPath, startLine) {
   const text = (lines[startLine - 1] ?? '').trim()
@@ -152,17 +250,19 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:153 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:251 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:175 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:275 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
-  // false positive is demonstrated on the very lines #344 repaired *to*
-  // (docs/syncplay.md:246 and docs/syncplay.md:332 are both `**` openers), so
-  // hoisting this return past it would red the gate on the repair itself. The
-  // bare-brace test at scripts/check-line-citations.mjs:174 and the `<!--` test
-  // at scripts/check-line-citations.mjs:180 have no measured false positive in
+  // false positive is demonstrated on the very lines #344 repaired *to*:
+  // docs/syncplay.md:246 ("Both directions of the ping exchange") and
+  // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
+  // were wrong") are both `**` openers, so hoisting this return past it would
+  // red the gate on the repair itself. The bare-brace test at
+  // scripts/check-line-citations.mjs:274 and the `<!--` test at
+  // scripts/check-line-citations.mjs:280 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and
@@ -179,6 +279,57 @@ function suspiciousLanding(lines, targetPath, startLine) {
   }
   if (text.startsWith('<!--')) return 'comment line'
   return null
+}
+
+/**
+ * The interior half of the rule above: the first blank line strictly inside a
+ * cited range, or null. Only the first, so one citation contributes at most one
+ * suspicious entry however many gaps it spans — the pin counts citations that
+ * look stale, not lines.
+ */
+function interiorBlankLine(lines, startLine, endLine) {
+  if (endLine === null) return null
+  for (let n = startLine + 1; n <= endLine; n++) {
+    if ((lines[n - 1] ?? '').trim() === '') return n
+  }
+  return null
+}
+
+/**
+ * Verify a marked citation's quote against its target. Returns null when the
+ * quote occurs anywhere in the cited line or range, `{ elsewhere }` otherwise —
+ * empty for *stale* (the quote is nowhere in the file) and populated for
+ * *drift* (the quote moved, and these are the lines it moved to).
+ *
+ * MULTIPLICITY GOVERNS THE DRIFT REPORT ONLY. If the quote is at the cited
+ * span, the citation is right and how many other lines also carry it is not a
+ * question anyone asked — 15 of the tree's single-line anchors target a line
+ * that is not unique in its file, and four of #366's own retrofits are
+ * self-file citations where the quote is by construction on the citing line as
+ * well as the target. "Refuse to guess, report them all" applies on the failing
+ * branch, where the only open question *is* which line to name in the repair.
+ *
+ * The citing line itself is excluded from a self-file drift report: naming it
+ * would be telling the author their citation should point at their own
+ * sentence.
+ *
+ * @param {string[]} lines  the target file
+ * @param {{ start: number, end: number | null, quote: string, self: boolean, citedAt: number }} opts
+ * @returns {{ elsewhere: number[] } | null}
+ */
+function verifyQuote(lines, { start, end, quote, self, citedAt }) {
+  const needle = normalizeQuote(quote)
+  const last = end ?? start
+  for (let n = start; n <= Math.min(last, lines.length); n++) {
+    if (normalizeQuote(lines[n - 1] ?? '').includes(needle)) return null
+  }
+  const elsewhere = []
+  for (let n = 1; n <= lines.length; n++) {
+    if (n >= start && n <= last) continue
+    if (self && n === citedAt) continue
+    if (normalizeQuote(lines[n - 1] ?? '').includes(needle)) elsewhere.push(n)
+  }
+  return { elsewhere }
 }
 
 const underRoot = (p, roots) =>
@@ -231,6 +382,8 @@ export function analyze({
   const ambiguous = []
   const pathless = []
   const resolved = []
+  const marked = []
+  const quoteFailures = []
   let unresolvableByExtension = 0
   let resolvedFullPath = 0
   let resolvedUniqueBasename = 0
@@ -287,7 +440,27 @@ export function analyze({
 
         resolved.push({ at, cited, target, start, end })
         const why = suspiciousLanding(linesOf(target), target, start)
-        if (why) suspicious.push({ at, cited, target, start, why })
+        if (why) {
+          suspicious.push({ at, cited, target, start, why })
+        } else {
+          const gap = interiorBlankLine(linesOf(target), start, end)
+          if (gap !== null) {
+            suspicious.push({ at, cited, target, start: gap, why: 'blank line' })
+          }
+        }
+
+        const quote = extractMarkedQuote(linesOf(from), i, line.slice(m.index + m[0].length))
+        if (quote !== null) {
+          marked.push({ at, cited, target, quote })
+          const verdict = verifyQuote(linesOf(target), {
+            start,
+            end,
+            quote,
+            self: from === target,
+            citedAt: i + 1
+          })
+          if (verdict) quoteFailures.push({ at, cited, target, quote, ...verdict })
+        }
       }
 
       // Blank the full citations out first, so the line number inside a
@@ -307,6 +480,8 @@ export function analyze({
     unresolvableByExtension,
     failures,
     suspicious,
+    marked,
+    quoteFailures,
     ambiguous,
     pathless,
     uncheckable: ambiguous.length + pathless.length
@@ -333,8 +508,42 @@ export function report(r, pins = {}) {
       `(${r.ambiguous.length} ambiguous basename, ${r.pathless.length} pathless) — pin ${uncheckablePin}`
   )
   out.push(`  suspicious landings: ${r.suspicious.length} — pin ${landingPin}`)
+  out.push(
+    `  marked quotes: ${r.marked?.length ?? 0} verified against their target ` +
+      `(${r.quoteFailures?.length ?? 0} failing)`
+  )
 
   let ok = true
+
+  // No pin here, deliberately. A pin guards a class that can grow silently;
+  // this one cannot, because marking is opt-in — the population is exactly the
+  // anchors that volunteered. The escape hatch for a citation that genuinely
+  // points at "around here" is to not mark it, which degrades to the rest of
+  // this gate rather than to a silenced failure.
+  if (r.quoteFailures && r.quoteFailures.length > 0) {
+    ok = false
+    err.push('', `${r.quoteFailures.length} marked citation(s) no longer quote their target:`, '')
+    for (const q of r.quoteFailures) {
+      err.push(`  ${q.at}: \`${q.cited}\` quotes "${q.quote}"`)
+      if (q.elsewhere.length === 0) {
+        err.push(`    stale — that text is nowhere in ${q.target}`)
+      } else if (q.elsewhere.length === 1) {
+        err.push(`    drift — it is at ${q.target}:${q.elsewhere[0]}`)
+      } else {
+        err.push(
+          `    drift — it is at ${q.elsewhere.map((n) => `${q.target}:${n}`).join(', ')};` +
+            ' more than one match, so pick the one the prose means'
+        )
+      }
+    }
+    err.push(
+      '',
+      'A citation written as `path:NN ("quoted text")` claims the quote is at that',
+      'line or inside that range. Repoint the anchor at the line named above, or, if',
+      'the target really was rewritten, requote it. Dropping the `("…")` turns the',
+      'anchor back into an unverified one rather than silencing a failure.'
+    )
+  }
 
   if (r.failures.length > 0) {
     ok = false

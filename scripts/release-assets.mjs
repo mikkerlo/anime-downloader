@@ -55,11 +55,19 @@ export const GH_CALL_TIMEOUT_MS = 15 * 60_000
 
 // The attempt count bounds errors that return; this bounds the ones that don't.
 // Five attempts at the per-call timeout is 75 min for a single file, and the
-// `release` job is capped at 30 min (`timeout-minutes`), so a genuinely hung
-// upload would be killed by the runner mid-retry and the script would never
-// print which file it was stuck on. Under this budget a hang gives up after one
-// timeout (~15 min), reports itself through `failed`, and leaves the rest of the
-// job's 30 min for verify and publish.
+// `release` job is capped at 45 min (`timeout-minutes`), so without this a
+// genuinely hung upload would be killed by the runner mid-retry and the script
+// would never print which file it was stuck on. Under this budget a hang gives
+// up and reports itself through `failed` instead.
+//
+// What the budget does not do is bound when the batch *ends*. `outOfTime(0)` is
+// `elapsed() >= budgetMs`, so it decides only whether a call may *start*: one
+// started at 19:59 still gets its full GH_CALL_TIMEOUT_MS, and the worst case
+// before `uploadAll` can return and name the file is 20 + 15 = 35 min. Only for
+// a single hung file does the report land near one timeout in; two of them, or
+// one starting late, run to that sum. It is 35 min — not the budget on its own —
+// plus checkout, setup-node and the ~700 MB `download-artifact` that the job's
+// `timeout-minutes` has to contain, which is what sizes it at 45 rather than 30.
 //
 // What has to hold is that a healthy run never reaches it, and the figure that
 // decides that is cumulative upload time, not retry cost. The whole set is
@@ -69,8 +77,8 @@ export const GH_CALL_TIMEOUT_MS = 15 * 60_000
 // are ~2.5 min per file on top and are not what would breach it. Nothing is
 // refused before the budget is genuinely spent, either (see `outOfTime`), so a
 // run slower still keeps uploading until 20 min have actually elapsed, by which
-// point the job's own 30 min cap is close and giving up with a named file beats
-// being killed without one.
+// point one more full-length call would put the job's own 45 min cap in reach,
+// and giving up with a named file beats being killed without one.
 export const DEFAULT_BUDGET_MS = 20 * 60_000
 
 // The `electron-updater` feeds, one per platform. See `report()` for why their
@@ -115,7 +123,7 @@ export async function uploadAll({
 
   // The two cases are not symmetric, and one guard for both is what made this
   // wrong the first time round. Refusing to start a file guarantees that file
-  // is missing from the release; starting it only risks the job's 30 min
+  // is missing from the release; starting it only risks the job's 45 min
   // backstop, which exists precisely to catch that. So a file's first attempt
   // is optimistic — it runs unless the budget is genuinely spent — and only a
   // retry asks the conservative question, because a file being retried has

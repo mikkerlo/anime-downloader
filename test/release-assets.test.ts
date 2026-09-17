@@ -238,10 +238,12 @@ describe('release-assets — reading the two sets back', () => {
 
     expect(cap).not.toBeNull()
     const minutes = Number(cap![1])
-    expect(minutes).toBeLessThanOrEqual(30)
+    expect(minutes).toBeLessThanOrEqual(60)
     // The script has to give up and report first; if the runner's kill is what
-    // fires, nothing says which file was stuck.
-    expect(DEFAULT_BUDGET_MS / 60_000).toBeLessThan(minutes)
+    // fires, nothing says which file was stuck. The budget bounds when a call
+    // may *start*, not when the batch ends, so the last call started can run a
+    // full timeout on top of it — that sum is what the cap has to contain.
+    expect((DEFAULT_BUDGET_MS + GH_CALL_TIMEOUT_MS) / 60_000).toBeLessThan(minutes)
   })
 })
 
@@ -302,8 +304,8 @@ describe('release-assets — upload', () => {
 
   it('stops retrying a hung file, but still gives the next one its first attempt', async () => {
     // The stall case. Each attempt on a hung PUT burns the whole per-call
-    // timeout, so five of them is 75 min for one file against a 30 min job cap:
-    // the runner would kill the job part-way through attempt 2 and the log
+    // timeout, so five of them is 75 min for one file against a 45 min job cap:
+    // the runner would kill the job part-way through attempt 3 and the log
     // would never say which file it was stuck on.
     //
     // The two halves of the guard are both here. A *retry* asks whether another

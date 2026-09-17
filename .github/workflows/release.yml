@@ -195,10 +195,13 @@ jobs:
     # not a budget. It exists because the uploads are serialised now: without it
     # a hung `gh release upload` would sit against the 6 h default with every
     # remaining file queued behind it, and nothing would be reported until it
-    # expired. The script gives up on its own well inside this (see
-    # DEFAULT_BUDGET_MS in scripts/release-assets.mjs); if it somehow doesn't,
-    # the job reds here and `report-failure` files the issue either way.
-    timeout-minutes: 30
+    # expired. It has to contain the script's own bounds rather than cut across
+    # them: DEFAULT_BUDGET_MS (20 min) decides only when a call may *start*, so
+    # the last one started can run a full GH_CALL_TIMEOUT_MS (15 min) on top of
+    # it — 35 min before the script can report, plus checkout and the ~700 MB
+    # download. If this is what fires, nothing says which file was stuck; it
+    # should only ever be the backstop, with `report-failure` filing either way.
+    timeout-minutes: 45
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

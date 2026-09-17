@@ -12,13 +12,13 @@
 // opens ~2 minutes in.
 //
 // These are behavioral tests against the seam, not a `PlayerView` mount —
-// `PlayerView` has no mount harness (see the header of
-// `test/renderer/components/player-lifecycle-scope.test.ts`, which says so and
-// falls back to source scans), and building one is out of scope for this
-// issue. The keying decision was extracted into
-// `usePlayingEpisode` precisely so the behaviour difference could be tested
-// without one. The `PlayerView`-side *wiring* — the `@loadstart` attribute and
-// the `onMounted` seed call — is pinned by the structural scan in
+// `PlayerView` has no mount harness, so
+// `test/renderer/components/player-lifecycle-scope.test.ts:32` reads the SFC as
+// text and scans it instead; building a real harness is out of scope for this
+// issue. The keying decision was extracted into `usePlayingEpisode` precisely
+// so the behaviour difference could be tested without one. The
+// `PlayerView`-side *wiring* — the `@loadstart` attribute and the `onMounted`
+// seed call — is pinned by the structural scan in
 // `player-lifecycle-scope.test.ts`, because nothing here can see it: every test
 // below stays green if either is dropped.
 //

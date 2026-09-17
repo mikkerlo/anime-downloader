@@ -1653,3 +1653,215 @@ describe('#280 (3) — the diagnostic element listeners are removed at teardown'
     )
   })
 })
+
+// #371 — the split between the episode being OPENED and the episode on SCREEN.
+//
+// `usePlayingEpisode`'s own tests (`use-playing-episode.test.ts`) cover the ref,
+// the seed and the adopt-on-commit rule behaviourally. They are blind to two
+// things, both of which live in this file instead:
+//
+//   1. WHICH `PlayerView` readers take the new ref. The composable is correct
+//      whether two readers use it or zero do; the whole fix is the assignment.
+//   2. Whether the ref is PRODUCED at all. Drop the `@loadstart` attribute from
+//      the `<video>`, or drop the `seedPlayingEpisode()` call from `onMounted`,
+//      and every composable test still passes — both are wiring in this SFC.
+//
+// Counts are pinned as literals rather than looped over a symbol set, per
+// `docs/testing.md`'s rule for structural scans: a scan that walks the readers
+// and asserts "each one is retargeted" cannot tell *all retargeted* from *the
+// set lost an entry*, and dropping a symbol from the list is exactly how this
+// kind of test rots.
+describe('#371 — the retargeted readers, the untouched readers, and the producer', () => {
+  // `saveProgress` and `maybeMarkWatched`'s Shikimori `epNum` — the only two
+  // readers that are about the media currently decoding. Exactly two, and the
+  // literal is what tells "both retargeted" apart from "one of them drifted
+  // back": the two functions below are also asserted individually, but a third
+  // site appearing somewhere else in the file would pass those and fail this.
+  it('pins exactly 2 playing-episode reads, in exactly the two retargeted readers', () => {
+    expect(SRC.split('playingEpisodeInt.value').length - 1).toBe(2)
+
+    const saveProgress = stripComments(
+      slice('async function saveProgress(', 'async function persistSelectedTranslation(')
+    )
+    expect(saveProgress).toContain('const epInt = playingEpisodeInt.value;')
+    expect(saveProgress).not.toContain('currentEpisodeInt')
+
+    const maybeMarkWatched = stripComments(
+      slice('async function maybeMarkWatched(', 'function resetEpisodeTracking(')
+    )
+    expect(maybeMarkWatched).toContain('parseInt(playingEpisodeInt.value, 10)')
+    expect(maybeMarkWatched).not.toContain('currentEpisodeInt')
+  })
+
+  // The amendment, and the third class the split produces: a writer whose KEY
+  // is the selected episode but whose POSITION comes off the element. The key
+  // stays on `currentEpisodeInt` — the translation id being recorded is about
+  // the episode being opened — while the position is discarded when the element
+  // is decoding something else. Pinned separately from the two retargeted
+  // readers above because it is not one: the count there stays 2.
+  it('guards the position source in persistSelectedTranslation, keeping its key selected', () => {
+    // One call site, and it is the predicate's only consumer: `saveProgress`
+    // and `maybeMarkWatched` switch keys outright rather than comparing.
+    expect(SRC.split('isPlayingEpisode(epInt)').length - 1).toBe(1)
+    expect(SRC).toContain('isPlayingEpisode } = usePlayingEpisode({')
+
+    const persist = stripComments(
+      slice('async function persistSelectedTranslation(', 'async function markEpisodeWatched(')
+    )
+    expect(persist).toContain('const epInt = currentEpisodeInt.value;')
+    expect(persist).toContain('if (!isPlayingEpisode(epInt)) {')
+  })
+
+  // Split out because it fails for a different reason than "the guard is
+  // missing": the guard can be present but placed after the fallback it feeds,
+  // in which case the stale element values survive and nothing else notices.
+  it('zeroes both position and duration, ahead of the stored-row fallback', () => {
+    const persist = stripComments(
+      slice('async function persistSelectedTranslation(', 'async function markEpisodeWatched(')
+    )
+
+    const guard = persist.indexOf('if (!isPlayingEpisode(epInt)) {')
+    const fallback = persist.indexOf('if (!dur) {')
+    expect(guard).toBeGreaterThan(-1)
+    expect(fallback).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(fallback)
+
+    // Both, not just the position: `duration.value` in the window is the
+    // OUTGOING episode's duration, and a duration is per-episode too. Zeroing
+    // `dur` is also what routes the write into the fallback below.
+    const body = persist.slice(guard, fallback)
+    expect(body).toContain('pos = 0;')
+    expect(body).toContain('dur = 0;')
+  })
+
+  // Eleven original references, less the definition, less the two that moved.
+  // Seven of the eight are `.value` reads; the eighth — the skip-UI reset
+  // watcher, `watch(currentEpisodeInt, …)` — is a `watch` SOURCE, not a read.
+  // It has to fire on selection so the new episode's OP/ED button appears, and
+  // driving it off the playing ref would delay the skip-UI reset until the
+  // element rebinds (on the MKV path, an ffmpeg spawn).
+  it('pins exactly 8 selected-episode readers, plus the producer dep that feeds the ref', () => {
+    // 8 `.value` reads = the 7 untouched readers + the one getter handed to
+    // `usePlayingEpisode`, which is the ref's own source and not a consumer.
+    expect(SRC.split('currentEpisodeInt.value').length - 1).toBe(8)
+    expect(SRC.split('watch(currentEpisodeInt').length - 1).toBe(1)
+    expect(SRC).toContain('const currentEpisodeInt = computed(')
+    expect(SRC).toContain('getSelectedEpisodeInt: () => currentEpisodeInt.value')
+  })
+
+  // Enumerated so a reader silently switching sides is visible as more than a
+  // count drift. Each entry names the site and the reason it is an OPENER (or
+  // otherwise about the selection) rather than about the decoding media.
+  it.each([
+    [
+      'skip markers',
+      'const skipMarkers = useSkipMarkers({',
+      'const {\n  showSkipDetections',
+      'getCurrentEpisodeInt: () => currentEpisodeInt.value,'
+    ],
+    [
+      'syncplay announce',
+      'const syncplay = useSyncplayClient({',
+      'const {\n  syncplayStatus',
+      'getCurrentEpisodeInt: () => currentEpisodeInt.value,'
+    ],
+    [
+      'resumeFromSavedPosition',
+      'async function resumeFromSavedPosition(',
+      'function seek(',
+      'const epInt = currentEpisodeInt.value;'
+    ],
+    [
+      'prepareMkvForPlayback saved-position fetch',
+      'async function prepareMkvForPlayback(',
+      'const [saved, roomPosition]',
+      'const epInt = currentEpisodeInt.value;'
+    ]
+  ])('%s still reads the selected episode', (_name, start, end, needle) => {
+    const body = stripComments(slice(start, end))
+    expect(body).toContain(needle)
+    expect(body).not.toContain('playingEpisodeInt')
+  })
+
+  // The producer half. Neither of these is a `currentEpisodeInt` read, so
+  // neither is covered by the two counts above, and neither is visible to the
+  // composable's own tests.
+  it('binds loadstart declaratively on the <video>, exactly once', () => {
+    // Raw SOURCE: the binding is a template attribute, outside `SETUP`.
+    expect(SOURCE.split('@loadstart="onLoadStart"').length - 1).toBe(1)
+
+    // Declarative, so teardown follows the element rather than outliving it —
+    // the unmount block's `video.load()` is the file's only synchronous
+    // `loadstart` source and it fires during teardown.
+    expect(SRC).not.toContain("addEventListener('loadstart'")
+  })
+
+  // The same fact through the compiled template rather than through its text, so
+  // dropping the attribute cannot go green on a spelling the text scan happens
+  // to miss (`v-on:loadstart`, a reordered attribute, a handler renamed on one
+  // side only). The listener total is pinned too: the element carried 13 before
+  // this change, and an accidental removal that swaps in some other listener
+  // would hold the count while breaking the binding, so both are asserted.
+  it('exposes loadstart in the compiled <video> listener table, 14 handlers in all', () => {
+    const { descriptor, errors } = parse(readFileSync(PLAYER_VIEW, 'utf8'), {
+      filename: PLAYER_VIEW
+    })
+    expect(errors).toEqual([])
+
+    const videos: ElementNode[] = []
+    const visit = (node: TemplateChildNode): void => {
+      if (node.type !== 1) return
+      const el = node as ElementNode
+      if (el.tag === 'video') videos.push(el)
+      for (const child of el.children) visit(child)
+    }
+    for (const child of (descriptor.template!.ast as unknown as ElementNode).children) visit(child)
+    expect(videos).toHaveLength(1)
+
+    const handlers = videos[0].props
+      .filter((p) => p.type === 7 && (p as { name: string }).name === 'on')
+      .map((p) => (p as { arg?: { content?: string } }).arg?.content)
+
+    expect(handlers).toHaveLength(14)
+    expect(handlers).toContain('loadstart')
+
+    const loadstart = videos[0].props.find(
+      (p) =>
+        p.type === 7 &&
+        (p as { name: string }).name === 'on' &&
+        (p as { arg?: { content?: string } }).arg?.content === 'loadstart'
+    )
+    expect((loadstart as { exp?: { content?: string } }).exp?.content).toBe('onLoadStart')
+  })
+
+  it('calls seedPlayingEpisode exactly once, from inside onMounted', () => {
+    expect(SRC.split('seedPlayingEpisode()').length - 1).toBe(1)
+    expect(mountedBody()).toContain('seedPlayingEpisode();')
+  })
+
+  // Split from the count above because it is a different fact and fails for a
+  // different reason: the seed can be present but hoisted wrongly. Every index
+  // is asserted non-negative BEFORE it is ordered — `indexOf` returns -1 for a
+  // missing needle, and -1 is less than everything, so a bare `toBeLessThan`
+  // chain would pass vacuously on exactly the deletion this is meant to catch.
+  it('seeds above onMounted’s first await and above the direct resume call', () => {
+    const body = mountedBody()
+
+    const seed = body.indexOf('seedPlayingEpisode();')
+    const firstAwait = body.indexOf('await ')
+    // The seed is required, not belt-and-braces: `resumeFromSavedPosition()` is
+    // called DIRECTLY in this hook under `if (video.readyState >= 1)`, so on a
+    // warm mount no `loadstart` precedes it and a `loadstart`-only ref would be
+    // empty for the whole first episode.
+    const directResume = body.indexOf('resumeFromSavedPosition();')
+
+    expect(seed).toBeGreaterThan(-1)
+    expect(firstAwait).toBeGreaterThan(-1)
+    expect(directResume).toBeGreaterThan(-1)
+
+    // Synchronous, so a close landing in those awaits cannot leave the ref
+    // unseeded on a resumed continuation (#280's rule, same reason).
+    expect(seed).toBeLessThan(firstAwait)
+    expect(seed).toBeLessThan(directResume)
+  })
+})

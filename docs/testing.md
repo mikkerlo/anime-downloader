@@ -72,6 +72,27 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   tick, Shikimori offline-queue drain) wired through `test/helpers/app-harness.ts`
   (in-memory store + broadcast spy + stub HTTP/download seams). Not a full `App`
   reconstruction — each test composes only what it needs.
+- **In-process IPC loop** (`test/setup/electron-mock.ts` → `test/ipc/`) — the
+  global `electron` mock can close the bridge on itself: `ipcMain.handle`
+  registrations are always recorded, and `__enableIpcLoop()` makes
+  `ipcRenderer.invoke` route into them and return the handler's result (a
+  rejection if it throws, the way real `invoke` does). The main→renderer half
+  was already closed — a broadcaster that calls `__emit` lands on the same
+  `ipcRenderer.on` registry the preload's `subscribe()` writes to — so a test
+  can drive a real router, the real `src/preload/index.ts` and a real
+  broadcast module against each other with no Electron runtime. Opt-in per
+  file, because routing `invoke` changes what every other suite's bare spy
+  returns; `__reset()` clears both registries and disarms it. It is **not** an
+  IPC emulation: arguments and return values pass by reference where real IPC
+  structured-clones them, and a file that declares its own `vi.mock('electron',
+  …)` replaces this module wholesale, loop included.
+  `test/ipc/syncplay-bridge.test.ts` (#361) is the first user — all 12
+  `CHANNELS.SYNCPLAY_*` invoke channels and all 6 `EVENT_CHANNELS.SYNCPLAY_*`
+  broadcasts, asserted against a census of the constants rather than a
+  hand-written list, so an unwired thirteenth channel reds the file. The
+  broadcast half exists at all because `src/main/ipc/syncplay-broadcasts.ts`
+  extracted the six `syncplay.on(…) → broadcastToAll(…)` wirings out of
+  `src/main/index.ts`, which coverage excludes and no test can import.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence
@@ -255,3 +276,17 @@ for unit testing. Floors sit a few points below current coverage so churn
 doesn't flake CI; raise them in follow-ups as coverage climbs. The CI `quality`
 job runs `test:coverage` (not plain `test`) so a threshold regression fails the
 PR.
+
+Two entries name a **single file** rather than a directory (#361). With
+`perFile: false` every glob is an aggregate, and an aggregate is exactly what a
+large, high-coverage file can sink into unnoticed: `src/main/syncplay.ts` — the
+biggest and most defect-dense file in the project — matched no glob at all, so
+it was measured and never gated, and `use-syncplay-client.ts` sat inside the
+55% `composables/**` number with room to fall a long way before anything
+noticed. A one-file glob is its own aggregate. Measured at #361:
+`src/main/syncplay.ts` 98.49% statements/lines, floored at 88;
+`src/renderer/src/composables/use-syncplay-client.ts` 97.15%, floored at 87 —
+both inside the ~7–13 point margin the other floors use. The single-file globs
+**overlap** the directory ones rather than carving out of them, so
+`use-syncplay-client.ts` still counts into the composables aggregate too and
+the tighter of the two floors is what binds.

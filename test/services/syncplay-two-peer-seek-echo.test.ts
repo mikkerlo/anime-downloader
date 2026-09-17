@@ -119,7 +119,8 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // dragged nothing, produces none and holds no intent at any point.
     expect(seekFrames(host)).toBe(1)
     expect(seekFrames(joiner)).toBe(0)
-    // The set is counted before it is quantified over (`docs/testing.md:193`):
+    // The set is counted before it is quantified over, per
+    // docs/testing.md:193 ("Pin the count, never just loop over the set"):
     // `every()` on an empty array is `true`, so without the pin a harness change
     // that stopped handing the joiner frames at all — a widened drop guard, a
     // rewired observer — would leave the line below green while asserting

@@ -307,11 +307,12 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
     })
 
     // The discriminator between the `at` form and the position form, and the
-    // direct regression net for `docs/syncplay.md:74`. The `at` form is inert
-    // in a paused room **by construction**, not by measurement:
-    // `projectedRoomPosition()` discards `at` outright when `room.paused`
-    // (`elapsed = room.paused ? 0 : …`), so this holds for any value of the
-    // shift and cannot regress under a future retune. The rig confirms it.
+    // direct regression net for docs/syncplay.md:74 ("`doSeek` is provably
+    // `false` on a rewritten tick"). The `at` form is inert in a paused room
+    // **by construction**, not by measurement: `projectedRoomPosition()`
+    // discards `at` outright when `room.paused` — `elapsed = room.paused ? 0 : …`
+    // — so this holds for any value of the shift and cannot regress under a
+    // future retune. The rig confirms it.
     //
     // The creep that *is* here is the one documented at `buildPlaystate()`:
     // the server's `_updatePositionByAge` compensates a frame that makes no

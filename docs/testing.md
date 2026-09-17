@@ -264,8 +264,8 @@ either direction (all 16 brace matches sit inside fenced code blocks, and no
 markdown line starts with `<!--`); they stay exempt on the argument that a
 fenced `}` carries code semantics and that markup is not cited deliberately.
 
-Two pinned counts are what give that teeth, for the reasons in *Structural
-tests* above:
+Three pinned counts are what give that teeth, for the reasons in *Structural
+tests* above — two exact, one a floor:
 
 - **Suspicious landings, pinned at 0.** Every such landing on this tree was
   stale: #336 repaired all thirteen, and #344 repaired the two the narrowing
@@ -288,6 +288,9 @@ tests* above:
   pin bounds how much the gate is blind to. Adding one reds the build; the fix
   is almost always to give the anchor a resolvable path rather than raise the
   number.
+- **Marked citations, floored at 12.** The only one-sided count here, because
+  the marked class can only shrink silently — see *The marked form* below.
+  Falling below the floor reds; rising above it is free.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -310,6 +313,61 @@ repo does not contain — that rule, not a filename allowlist, is also what keep
 `syncplay.pl:8999` (a host and port) from reporting as a missing file.
 `test/check-line-citations.test.ts` drives the analyzer over synthetic corpora
 rather than the real tree, whose counts are the pins themselves.
+
+### What `resolved` does and does not attest
+
+`resolved: N` says that N anchors name a file that exists and a line that is not
+obviously blank, braced or commented. It is **not a claim about meaning.** #344
+audited the four markdown anchors outside its own repair, cleared them on the
+grounds that they landed on live prose "on their exact subjects", and two of
+them went **87 lines** stale within three days — a whole subsystem section was
+inserted above their targets — with `check:line-citations` green the whole time.
+Landing on live prose is what the heuristic cannot see, and prose cannot be told
+from prose by looking at one line in isolation.
+
+**The marked form is the convention for a new anchor whose target is prose.**
+Write the citation as `path:NN ("quoted text")` and the gate asserts the quote
+still occurs at that line, or anywhere inside that range. The quote may wrap
+across adjacent comment lines; both sides are normalized (Markdown emphasis and
+backticks dropped, whitespace collapsed) before comparing, so a quote may
+include or omit the target's `**`. This is the one part of the gate that judges
+meaning, and it can, because the comparison is a substring test against a string
+the comment already contains rather than a judgement about prose.
+
+- **It hard-fails, and the count has a floor rather than a pin.** A quote found
+  elsewhere in the file is reported as **drift**, with the corrected line named,
+  which makes the repair mechanical; a quote found nowhere is reported as
+  **stale**. If a drifted quote matches several lines the gate names them all and
+  refuses to guess. The escape hatch for a citation that genuinely means "around
+  here" is to not mark it, which degrades to the rest of this gate rather than to
+  a silenced failure — but since #372 that costs a deliberate lowering of
+  `MARKED_PIN` rather than nothing, because the class is one-sided: it cannot
+  grow silently (marking is opt-in, so every arrival is deliberate) but it *can*
+  shrink silently, and shrinking is the direction that costs coverage.
+- **Multiplicity governs the drift report only.** If the quote is at the cited
+  span, the citation is right and how many other lines carry the same text is
+  not a question anyone asked. Fifteen of the tree's single-line anchors target
+  a line that is not unique in its file, and four of the twelve markdown anchors
+  are self-file citations, where marking one necessarily puts the quoted string
+  on the citing line as well.
+- **The spelling admits no slack, and that is the design.** The quote must open
+  immediately after the citation — one space, one paren, one double quote, the
+  citation optionally closed by a backtick. Measured tree-wide: no slack selects
+  exactly the marked anchors; a ten-character gap admits three more, all of them
+  scare-quoted concepts or lines of UI copy sitting next to an anchor; triggering
+  on mere adjacency admits 75 candidates for two true ones. The measurement is
+  recorded in `scripts/check-line-citations.mjs` beside the pattern, because the
+  first loosening re-imports that population.
+
+All twelve markdown-target anchors in the tree are written in this form. The 107
+code-target anchors are not: they keep the landing heuristic as partial cover,
+and each retrofit would be a fresh claim about what a line means, so they are a
+separate job. A range is still classified by its **start line** for the brace and
+comment predicates — thirteen legitimate ranges close on a `}` — but since #366
+the **blank-line** predicate also runs on every line of a range after its start,
+its **end line included** — a range whose last line is a paragraph gap has slid
+just as surely as one with a gap in the middle. That measures zero hits today and
+catches a range that has slid across a paragraph gap.
 
 ## Evidence retention
 

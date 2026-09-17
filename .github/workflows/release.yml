@@ -183,12 +183,22 @@ jobs:
   # steps that decide when to leave it are explicit here rather than implicit in
   # an action. One `gh release upload` per file with its own retry means one
   # file's 5xx cannot take the others with it; the verify step reads the release
-  # back and compares it against `artifacts/`, so a short release can never be
-  # published; and the tag is created by the publish itself, so a run that fails
-  # anywhere above leaves a draft, no tag, and a version that is still retryable.
+  # back and gates the publish on every downloaded artifact being attached and
+  # on all three `electron-updater` feeds having been built; and the tag is
+  # created by the publish itself, so a run that fails anywhere above leaves a
+  # draft, no tag, and a version that is still retryable.
   release:
     needs: [check-version, build]
     runs-on: ubuntu-latest
+
+    # The whole upload set has been finishing in minutes, so this is a ceiling,
+    # not a budget. It exists because the uploads are serialised now: without it
+    # a hung `gh release upload` would sit against the 6 h default with every
+    # remaining file queued behind it, and nothing would be reported until it
+    # expired. The script gives up on its own well inside this (see
+    # DEFAULT_BUDGET_MS in scripts/release-assets.mjs); if it somehow doesn't,
+    # the job reds here and `report-failure` files the issue either way.
+    timeout-minutes: 30
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

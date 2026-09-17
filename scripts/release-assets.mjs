@@ -24,8 +24,10 @@
 //           One file's 5xx neither aborts the others nor ends the step — every
 //           file gets its attempts, and the failures are reported together.
 //   verify  compare the asset set actually attached to the release against the
-//           files that came out of `artifacts/`. A short release must never be
-//           published, so this is what the publish step is gated on.
+//           files that came out of `artifacts/`, and require the three
+//           `electron-updater` feeds to be among them. Everything that arrived
+//           has to be attached, and all three legs have to have arrived, so
+//           this is what the publish step is gated on.
 //
 // Both halves are exported over injectable seams so the tests drive them over
 // in-memory data instead of the network.
@@ -34,7 +36,7 @@
 //      node scripts/release-assets.mjs verify <tag> <dir>
 
 import { execFileSync } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Five attempts with the backoff below spans roughly two and a half minutes per
@@ -45,6 +47,27 @@ export const DEFAULT_ATTEMPTS = 5
 
 export const backoffMs = (attempt) => Math.min(60_000, 5_000 * 2 ** (attempt - 1))
 
+// Bounded per call, not just per batch: the retry loop only covers uploads that
+// come back. A hung PUT has no bound of its own, and since the uploads are now
+// serialised, one of them holds up every file behind it. 15 min is well past the
+// slowest upload seen here (~11 min for the 138 MB AppImage).
+export const GH_CALL_TIMEOUT_MS = 15 * 60_000
+
+// The attempt count bounds errors that return; this bounds the ones that don't.
+// Five attempts at the per-call timeout is 75 min for a single file, and the
+// `release` job is capped at 30 min (`timeout-minutes`), so a genuinely hung
+// upload would be killed by the runner mid-retry and the script would never
+// print which file it was stuck on. The budget is checked before each attempt
+// against how long an attempt can take, so a hang gives up after one timeout
+// (~15 min), reports itself through `failed`, and leaves the rest of the job's
+// 30 min for verify and publish. Retries of fast-returning errors — the class
+// this script exists for — cost ~2.5 min and never come near it.
+export const DEFAULT_BUDGET_MS = 20 * 60_000
+
+// The `electron-updater` feeds, one per platform. See `report()` for why their
+// absence is a failure in its own right.
+export const REQUIRED_FEEDS = ['latest-linux.yml', 'latest-mac.yml', 'latest.yml']
+
 // --- upload -------------------------------------------------------------------
 
 /**
@@ -52,13 +75,16 @@ export const backoffMs = (attempt) => Math.min(60_000, 5_000 * 2 ** (attempt - 1
  *
  * Deliberately never throws and never short-circuits. The whole defect being
  * fixed is that one asset's failure silently took four others with it, so a
- * file that exhausts its attempts is recorded and the next file still runs. The
- * caller decides what to do with `failed`.
+ * file that exhausts its attempts — or the batch's time budget — is recorded and
+ * the next file still runs. The caller decides what to do with `failed`.
  *
  * @param {object} opts
  * @param {string[]} opts.files                 paths to upload, in order
  * @param {(f: string, attempt: number) => Promise<void>} opts.uploadOne
  * @param {number} [opts.attempts]              tries per file, not per batch
+ * @param {number} [opts.budgetMs]              wall-clock ceiling for the batch
+ * @param {number} [opts.callMs]                what one attempt may cost
+ * @param {() => number} [opts.now]
  * @param {(ms: number) => Promise<void>} [opts.sleep]
  * @param {(line: string) => void} [opts.log]
  * @returns {Promise<{uploaded: string[], failed: {file: string, tries: number, error: string}[]}>}
@@ -67,17 +93,34 @@ export async function uploadAll({
   files,
   uploadOne,
   attempts = DEFAULT_ATTEMPTS,
+  budgetMs = DEFAULT_BUDGET_MS,
+  callMs = GH_CALL_TIMEOUT_MS,
+  now = () => Date.now(),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   log = () => {}
 }) {
   const uploaded = []
   const failed = []
+  const startedAt = now()
+  // An attempt that has not started cannot overrun the budget on its own, so
+  // the question is whether one *could* still finish inside it, not whether the
+  // budget is already spent.
+  const outOfTime = () => now() - startedAt + callMs > budgetMs
 
   for (const file of files) {
     let lastError = 'unknown'
     let ok = false
+    let tries = 0
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (outOfTime()) {
+        const budget = `no time left in the ${Math.round(budgetMs / 60_000)} min upload budget`
+        // Keep the reason this file was already failing; the budget is why it
+        // stopped being retried, not why it failed.
+        lastError = tries === 0 ? budget : `${lastError} (${budget} to retry)`
+        break
+      }
+      tries = attempt
       try {
         await uploadOne(file, attempt)
         log(`uploaded ${file}${attempt > 1 ? ` (attempt ${attempt})` : ''}`)
@@ -96,8 +139,8 @@ export async function uploadAll({
 
     if (ok) uploaded.push(file)
     else {
-      log(`giving up on ${file} after ${attempts} attempts — ${lastError}`)
-      failed.push({ file, tries: attempts, error: lastError })
+      log(`giving up on ${file} after ${tries} attempt(s) — ${lastError}`)
+      failed.push({ file, tries, error: lastError })
     }
   }
 
@@ -123,7 +166,8 @@ export function analyze({ expected, attached }) {
     expected: expectedNames,
     attached: attachedNames,
     missing: expectedNames.filter((n) => !attachedSet.has(n)),
-    extra: attachedNames.filter((n) => !expectedSet.has(n))
+    extra: attachedNames.filter((n) => !expectedSet.has(n)),
+    missingFeeds: REQUIRED_FEEDS.filter((n) => !expectedSet.has(n))
   }
 }
 
@@ -141,6 +185,21 @@ export function analyze({ expected, attached }) {
  * nothing, and an empty release that publishes is the worst outcome available:
  * it looks like a shipped version and offers `electron-updater` nothing.
  *
+ * A missing `electron-updater` feed reds as well, and that one is not a
+ * comparison — it is a floor under the comparison. `missing` and `extra` are
+ * both computed against whatever `download-artifact` happened to put in
+ * `artifacts/`, so they answer "is everything that arrived attached?", not "is
+ * the release complete". `upload-artifact` runs with `if-no-files-found:
+ * ignore`, so a matrix leg whose `dist/` globs stop matching uploads nothing,
+ * the release job downloads nothing for that platform, and a release with no
+ * Windows binaries in it compares clean. The three feeds are one per platform
+ * and are produced unconditionally by a leg that ran, so requiring them in the
+ * expected set is a check on the build matrix that does not depend on the
+ * download. A release missing one silently 404s the update check for every user
+ * on that platform. It is skipped when nothing arrived at all — that case has
+ * its own message above, and listing all three feeds under it would bury the
+ * sentence that explains why.
+ *
  * @returns {{ ok: boolean, out: string[], err: string[] }}
  */
 export function report(r) {
@@ -156,6 +215,21 @@ export function report(r) {
       '',
       'No artifacts were found to release.',
       'The build matrix produced nothing to attach, so there is nothing to publish.'
+    )
+  }
+
+  if (r.expected.length > 0 && r.missingFeeds?.length > 0) {
+    ok = false
+    err.push('', `${r.missingFeeds.length} electron-updater feed(s) never reached the release:`, '')
+    for (const n of r.missingFeeds) err.push(`  ${n}`)
+    err.push(
+      '',
+      'Each feed is produced by one platform leg of the build matrix, so a feed',
+      'that is not in artifacts/ means that leg produced no output at all — the',
+      'other files from it are missing too, and nothing above can see that,',
+      'because the comparison only covers what was downloaded.',
+      'Publishing anyway would 404 the update check for every user on that',
+      'platform. Check the build job for that platform and its dist/ globs.'
     )
   }
 
@@ -183,22 +257,36 @@ export function report(r) {
     )
   }
 
-  if (ok) out.push('OK — every artifact is attached')
+  if (ok) out.push('OK — every artifact is attached, and all three updater feeds are here')
   return { ok, out, err }
 }
 
 // --- CLI ----------------------------------------------------------------------
 
 const gh = (args) =>
-  execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  execFileSync('gh', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: GH_CALL_TIMEOUT_MS,
+    killSignal: 'SIGKILL'
+  })
 
-const artifactNames = (dir) =>
-  readdirSync(dir)
-    .filter((n) => statSync(join(dir, n)).isFile())
-    .sort()
+// A missing directory is the zero-artifact case, not a crash: `download-artifact`
+// creates nothing when there is nothing to download, and `report()` has a much
+// better message for an empty set than an ENOENT stack does.
+export const artifactNames = (dir) =>
+  existsSync(dir)
+    ? readdirSync(dir)
+        .filter((n) => statSync(join(dir, n)).isFile())
+        .sort()
+    : []
 
-function attachedAssets(tag) {
-  return JSON.parse(gh(['release', 'view', tag, '--json', 'assets'])).assets.map((a) => a.name)
+// Name *and* state: GitHub creates the asset record before the bytes land, so a
+// half-written asset carries the right name. Anything not `uploaded` counts as
+// missing, which is what `--clobber` will replace on the next attempt anyway.
+export function attachedAssets(tag, run = gh) {
+  const { assets } = JSON.parse(run(['release', 'view', tag, '--json', 'assets']))
+  return assets.filter((a) => a.state === 'uploaded').map((a) => a.name)
 }
 
 async function runUpload(tag, dir) {
@@ -221,9 +309,12 @@ async function runUpload(tag, dir) {
 }
 
 function runVerify(tag, dir) {
-  const { ok, out, err } = report(
-    analyze({ expected: artifactNames(dir), attached: attachedAssets(tag) })
-  )
+  const expected = artifactNames(dir)
+  // Nothing to compare against, so don't ask GitHub. The run is already lost,
+  // and a failed `gh release view` on top of it would replace the one message
+  // that explains why with a `Command failed` stack.
+  const attached = expected.length > 0 ? attachedAssets(tag) : []
+  const { ok, out, err } = report(analyze({ expected, attached }))
   console.log(out.join('\n'))
   if (err.length > 0) console.error(err.join('\n'))
   if (!ok) process.exit(1)

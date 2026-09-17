@@ -685,8 +685,14 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
 // file alone refuses to start while a `tsconfig.json` sits beside it (TS5112,
 // which tells you to pass `--ignoreConfig`), and once past that it resolves
 // neither the ambient `src/shared/types/*.d.ts` nor the `@shared/*` paths, so
-// the one real error would land under the 123 resolution errors this file
-// already reports that way. A config supplying both reproduces it exactly.
+// the one real error would land under the ~120 resolution errors this file
+// already reports that way — mostly TS2304 and TS2307, and the exact count
+// moves with the next import added here, so read it as a wall, not a fixture.
+// The config that reproduces it exactly is `tsconfig.node.json` with
+// `composite` dropped, `"types": ["node"]` added, and this file appended to
+// `include`: zero errors at baseline, one TS7053 under the rename. Dropping
+// `composite` is the load-bearing part — kept, it buries the run in TS6307 for
+// every file reached by import rather than listed.
 // What that config does *not* need is a strictness flag: TS7053 is a
 // `noImplicitAny` diagnostic, and the TypeScript 6 pinned here defaults
 // `noImplicitAny` on — measured both with no config at all and under a

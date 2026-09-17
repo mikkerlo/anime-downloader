@@ -19,7 +19,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
-import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
+import { createTwoPeerRoom, HarnessVideo } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom } from '../helpers/syncplay-two-peer'
 
 const ROOM_START = 100
@@ -151,5 +151,56 @@ describe('two-peer syncplay harness', () => {
     expect(remoteStates(host).length).toBeGreaterThan(0)
     expect(remoteStates(joiner).length).toBeGreaterThan(0)
     expect(host.broadcasts).not.toBe(joiner.broadcasts)
+  })
+
+  // The three guards below are about the harness as an instrument rather than
+  // about the loop: each one pins a way it used to mismodel or silently degrade,
+  // and each fails on the previous behaviour.
+  it('freezes a stalled element at the first in-flight write, not the latest', () => {
+    // A second `currentTime` write arriving before the first lands used to
+    // re-read `live()` into `stalled`, and `live()` walks from the *old* anchor
+    // — so the reported position un-froze and jumped forward by however long the
+    // first seek had been pending. This read 102 before the fix. A real element
+    // stays where the first seek left it until one of them lands, and the
+    // crossfire fixture depends on it: a laggard drifting forward while stalled
+    // under-reports its own lateness into the server's `min()` election.
+    const el = new HarnessVideo({ position: 100, paused: false, seekLandMs: 6000 })
+    vi.advanceTimersByTime(1000)
+    expect(el.currentTime).toBeCloseTo(101, 6)
+
+    el.currentTime = 645
+    expect(el.currentTime).toBeCloseTo(101, 6)
+    vi.advanceTimersByTime(1000)
+    el.currentTime = 646
+    expect(el.currentTime).toBeCloseTo(101, 6)
+
+    // The interrupting write still replaces the target, and only one `seeked`
+    // fires — an interrupted seek fires none of its own. 6 s after the *second*
+    // write, the element lands on the second target.
+    vi.advanceTimersByTime(6000)
+    expect(el.tick()).toEqual(['seeked'])
+    expect(el.currentTime).toBeCloseTo(646, 6)
+  })
+
+  it('refuses a re-entrant seat() rather than cross-wiring two peers', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    // Two seats in flight at once interleave `vi.resetModules()` and the
+    // `window.api` swap over one module registry. That used to type-check and
+    // hand back two silently cross-wired peers; now it throws.
+    const first = room.seat({ username: 'hostuser', position: ROOM_START, delayMs: DELAY_MS })
+    await expect(
+      room.seat({ username: 'joinuser', position: ROOM_START, delayMs: DELAY_MS })
+    ).rejects.toThrow(/not re-entrant/)
+    await first
+  })
+
+  it('refuses an advance() that is not a whole number of slices', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    // `Math.round` on the step count used to make a non-multiple silently
+    // shorter than asked — `advance(0.07)` ran 50 ms, not 70 — so a fixture's
+    // quoted `t=` numbers could drift from its own prose with nothing to point
+    // at. Clean multiples still pass, including the float-inexact ones.
+    await expect(room.advance(0.07)).rejects.toThrow(/whole number of slices/)
+    await expect(room.advance(15.95)).resolves.toBeUndefined()
   })
 })

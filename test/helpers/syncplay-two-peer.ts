@@ -189,7 +189,14 @@ export class HarnessVideo {
       this.anchor = target
       this.anchorAt = Date.now()
       this.stalled = null
-    } else {
+    } else if (this.stalled === null) {
+      // Only the *first* in-flight write freezes the reading. A second write
+      // arriving before the first lands must not re-read `live()`: `live()`
+      // walks from the old anchor, so re-reading un-freezes the playhead and
+      // jumps it forward by however long the first seek had been pending. A
+      // real element stays where the first seek left it until one of them
+      // lands. Replacing `pending` outright *is* right — an interrupted seek
+      // fires no `seeked` of its own.
       this.stalled = this.live()
     }
     this.pending = { target, dueAt: Date.now() + this.seekLandMs }
@@ -214,11 +221,6 @@ export class HarnessVideo {
       this.pausedFlag = true
       this.queued.push('pause')
     }
-  }
-
-  /** True while a write has been made and not yet landed. */
-  get isSeeking(): boolean {
-    return this.pending !== null
   }
 
   /**
@@ -336,16 +338,28 @@ async function buildPeerGraph(observe: (client: MainSyncplayClient) => void): Pr
       // The renderer→main half. Same contract as the global mock's loop: always
       // a promise, a missing handler and a throwing handler both rejecting the
       // way real `invoke` does.
+      //
+      // `test/setup/electron-mock.ts` is the source of truth for these two
+      // rejection shapes; this copy exists only because a per-peer
+      // `vi.doMock('electron')` replaces that module wholesale, registries
+      // included, so the loop has to be rebuilt rather than imported. Keep the
+      // strings in step with it: in Electron the no-handler error is raised in
+      // main and comes back through the very same renderer-side wrapper as a
+      // handler throw, so a renderer sees
+      // `Error invoking remote method '<channel>': <Name>: <message>` either way.
       invoke: (channel: string, ...args: unknown[]) => {
         const handler = mainHandlers.get(channel)
+        const asRemoteError = (err: unknown): Error =>
+          new Error(
+            `Error invoking remote method '${channel}': ` +
+              (err instanceof Error ? `${err.name}: ${err.message}` : String(err))
+          )
         return (async () => {
-          if (!handler) throw new Error(`No handler registered for '${channel}'`)
+          if (!handler) throw asRemoteError(new Error(`No handler registered for '${channel}'`))
           try {
             return await handler({}, ...args)
           } catch (err) {
-            throw new Error(
-              `Error invoking remote method '${channel}': ${err instanceof Error ? err.message : String(err)}`
-            )
+            throw asRemoteError(err)
           }
         })()
       },
@@ -461,7 +475,15 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
   })
   const peers: Peer[] = []
 
+  let seating = false
   const seat = async (peerOpts: SeatPeerOptions): Promise<Peer> => {
+    // Serialised by contract, not re-entrant — see the note on the global
+    // below. Two seats in flight at once interleave `vi.resetModules()` and the
+    // `window.api` swap, and cross-wire the peers with no error. Left latched on
+    // a throw deliberately: a seat that failed halfway has left the module
+    // registry in a state the room cannot recover from anyway.
+    if (seating) throw new Error('seat() is not re-entrant: await each seat before the next')
+    seating = true
     const el = new HarnessVideo(peerOpts)
     const frames: ObservedFrame[] = []
     // Registered ahead of the broadcast wiring — see `buildPeerGraph` — so
@@ -563,11 +585,21 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       unmount: () => wrapper.unmount()
     }
     peers.push(peer)
+    seating = false
     return peer
   }
 
   const advance = async (seconds: number, stepMs = DEFAULT_STEP_MS): Promise<void> => {
-    const steps = Math.round((seconds * 1000) / stepMs)
+    // `Math.round` on the product first, deliberately: `15.95 * 1000` is exact
+    // but `0.07 * 1000` is not, and a raw float remainder check would reject
+    // callers that are actually fine. Rounding the *step count* instead would
+    // silently run a different duration than asked — `advance(0.07)` would run
+    // 50 ms — and the crossfire timings are quoted to the slice.
+    const ms = Math.round(seconds * 1000)
+    if (ms % stepMs !== 0) {
+      throw new Error(`advance(${seconds}, ${stepMs}): ${ms}ms is not a whole number of slices`)
+    }
+    const steps = ms / stepMs
     for (let i = 0; i < steps; i += 1) {
       await vi.advanceTimersByTimeAsync(stepMs)
       for (const peer of peers) peer.tick()

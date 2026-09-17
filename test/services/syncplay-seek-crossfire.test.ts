@@ -162,16 +162,29 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // reduces to "diff > the literal", and the element's write history says which
     // frames cleared it. Over this run that is two — the yank at t=6050
     // (diff ≈ 543) and one re-seek at t=10050 when free-running drift reached
-    // 3.1 s — out of eight periodics, the other six sitting at 0.1–3.0 and
-    // moving nothing. Widen the literal at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1411` to 4.0 and the
-    // 3.1 s frame stops qualifying while this filter still counts it; narrow it
-    // and frames this filter skips start writing. Either way the two sides
-    // disagree and this reds.
+    // 4.0 s — out of eight periodics, the other six sitting at 1–3 and moving
+    // nothing. Mutating the literal at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` reds this in
+    // both directions, and the three checked are worth naming because the
+    // failure is a different one each time. `4.0` leaves the t=10050 frame at
+    // exactly the tolerance, so it stops qualifying, the element is not
+    // re-seeked, and the run free-runs further apart: 2 applied writes against
+    // 3 frames this filter counts — `to have a length of 3 but got 2`. `2.0`
+    // applies frames this filter skips and the run stays converged: 3 applied
+    // writes against 1 — `to have a length of 1 but got 3`. `1000.0` refuses
+    // the yank itself and the room never comes back down, so it is assertion 1
+    // that goes first — `expected 654.00… to be less than 545`.
     const overTolerance = host.frames.filter(
       (f) => !f.state.doSeek && Math.abs(f.element - f.state.position) > 3.0
     )
-    const appliedWrites = host.el.seekWrites.filter((w) => w !== SEEK_TO)
+    // Separated by *position in the history*, not by value. The drag is write
+    // #0 — `seekWrites` is empty until it, as the opening `advance(4)` leaves
+    // the host's element free-running — so everything after it is an apply. A
+    // value filter would drop an apply that happened to write exactly `SEEK_TO`,
+    // and since this count is one of the two sides of the cross-check below it
+    // would fail *open*: one fewer applied write, quietly agreeing with a
+    // narrowed literal.
+    const appliedWrites = host.el.seekWrites.slice(1)
     expect(appliedWrites).toHaveLength(overTolerance.length)
     expect(appliedWrites).toHaveLength(2)
 

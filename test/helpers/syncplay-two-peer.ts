@@ -65,8 +65,14 @@
 //    #362's bridge test; a scenario turning on mutation-after-send is not
 //    faithful here.
 //  - The real `<video>`. `HarnessVideo` models the playhead, a seek that takes
-//    time to land, and the queued `play`/`pause`/`seeked` tasks — nothing else.
-//    See its own note.
+//    time to land, the queued `play`/`pause`/`seeked`/`loadedmetadata` tasks,
+//    and the part of the media load algorithm a source swap makes observable —
+//    nothing else. See its own note.
+//  - The follow-through on a remote episode change. `Peer.remoteEpisodes`
+//    records what the composable handed its consumer, and stops there, because
+//    the navigation belongs to `PlayerView` and not to the composable under
+//    test. "Peer B's player actually opened episode 8" is not a claim this
+//    harness can make; "peer B was told to" is.
 //  - Whatever `MinElectionServer` does not model; its header is the authority,
 //    and the `ignoringOnTheFly` ignore window is on that list.
 //
@@ -85,6 +91,7 @@ import { InMemoryStorage } from './in-memory-storage'
 import type { MinElectionServerOptions } from './syncplay-min-election-server'
 import type {
   SyncplayClient as MainSyncplayClient,
+  SyncplayRemoteEpisode,
   SyncplayRemoteState,
   SyncplayStatus
 } from '../../src/main/syncplay'
@@ -121,9 +128,19 @@ export interface HarnessVideoOptions {
    *  snapshot pushes to main and what wins the server's `min()` election — the
    *  property the crossfire fixture is built on. `0` lands on the write. */
   seekLandMs?: number
+  /** `v.src`. Identity only — nothing here fetches it — but identity is the
+   *  whole subject of #360, where a frame describing the *previous* episode is
+   *  applied to the element the next one just bound. A fixture that cannot say
+   *  which file the element is on cannot tell that apart from an ordinary seek. */
+  src?: string
+  /** How long `reload()` takes to reach HAVE_METADATA, i.e. the gap between the
+   *  media load algorithm's synchronous reset and the `loadedmetadata` task.
+   *  Not zero by default: the whole of #284's suppression window, and the
+   *  staleness this file's adoption fixture turns on, live inside that gap. */
+  metadataMs?: number
 }
 
-type QueuedMediaEvent = 'play' | 'pause' | 'seeked'
+type QueuedMediaEvent = 'play' | 'pause' | 'seeked' | 'loadedmetadata'
 
 /**
  * A `<video>` with a clock.
@@ -146,26 +163,58 @@ type QueuedMediaEvent = 'play' | 'pause' | 'seeked'
  */
 export class HarnessVideo {
   duration: number
-  readyState: number
+  /** `v.src`. Written by `reload()`, read by fixtures that need to say which
+   *  file an apply landed on. */
+  src: string
   /** Every `currentTime` write, pre-clamp, in order. */
   readonly seekWrites: number[] = []
+  /** Every `readyState` **transition**, in order, seeded with the value the
+   *  element was constructed at. A same-value write records nothing, because on
+   *  a real element `readyState` is a derived read-only attribute and only its
+   *  transitions are observable; the seed is here so a fixture reading this can
+   *  tell "never moved" from "moved back to where it started". */
+  readonly readyStates: number[] = []
+  /** Every source this element has been bound to, in order, seeded with the
+   *  constructor's. `loads.length - 1` is the number of reloads. */
+  readonly loads: string[] = []
 
+  private readyStateFlag: number
   private pausedFlag: boolean
   private anchor: number
   private anchorAt: number
   /** Non-null while a write is in flight: what the element reports meanwhile. */
   private stalled: number | null = null
   private pending: { target: number; dueAt: number } | null = null
+  /** Non-null while a load is running: when `loadedmetadata` is due. */
+  private metadataDueAt: number | null = null
   private readonly queued: QueuedMediaEvent[] = []
   private readonly seekLandMs: number
+  private readonly metadataMs: number
 
   constructor(opts: HarnessVideoOptions = {}) {
     this.duration = opts.duration ?? 1440
-    this.readyState = opts.readyState ?? 1
+    this.readyStateFlag = opts.readyState ?? 1
+    this.readyStates.push(this.readyStateFlag)
+    this.src = opts.src ?? 'harness://initial'
+    this.loads.push(this.src)
     this.pausedFlag = opts.paused ?? true
     this.anchor = opts.position ?? 0
     this.anchorAt = Date.now()
     this.seekLandMs = opts.seekLandMs ?? 0
+    this.metadataMs = opts.metadataMs ?? 0
+  }
+
+  get readyState(): number {
+    return this.readyStateFlag
+  }
+
+  /** Settable, because the composable's own test fixtures move `readyState` by
+   *  hand and a harness that only reached it through `reload()` could not
+   *  express a park at HAVE_NOTHING that never ends. Recorded either way. */
+  set readyState(next: number) {
+    if (next === this.readyStateFlag) return
+    this.readyStateFlag = next
+    this.readyStates.push(next)
   }
 
   private live(): number {
@@ -224,11 +273,62 @@ export class HarnessVideo {
   }
 
   /**
+   * Bind a new source — the HTML media load algorithm, to the depth these
+   * fixtures can see.
+   *
+   * Three things happen synchronously in the spec's algorithm and all three are
+   * modelled, because each one is load-bearing somewhere in the syncplay stack:
+   *
+   *  - `readyState` drops to HAVE_NOTHING. That is the gate
+   *    `hasAnnounceablePosition()` closes in `use-syncplay-client.ts` (#284), so
+   *    a reloading element stops pushing snapshots — which is what eventually
+   *    takes main past `PLAYBACK_ASSERT_STALE_MS` and then `PLAYBACK_STALE_MS`.
+   *  - the playhead resets to 0. An element announcing that 0 is #220, and the
+   *    gate above is the only thing standing between the two.
+   *  - a playing element is paused and a `pause` task is queued. Not incidental
+   *    either: `onLocalPause` gates on `readyState > 0` *specifically* to keep
+   *    this reload-shaped implicit pause off the wire, and an element that
+   *    reloaded without queuing one would leave that guard unobserved.
+   *
+   * `loadedmetadata` then arrives asynchronously, `metadataMs` later, and takes
+   * `readyState` back to HAVE_METADATA. It is delivered through `tick()` with
+   * the other media events, so nothing fires re-entrantly from inside this call.
+   *
+   * What this is deliberately *not* is a new element. A real episode change
+   * rebinds the same `<video>`, which is why `newPlayer` exists on the file push
+   * at all (`src/main/syncplay.ts:743`) and why the harness keeps one object
+   * here: a fixture that swapped the element out would be testing a mount, and
+   * the mount is the case main can already see.
+   */
+  reload(src: string): void {
+    this.src = src
+    this.loads.push(src)
+    if (!this.pausedFlag) {
+      this.pausedFlag = true
+      this.queued.push('pause')
+    }
+    this.anchor = 0
+    this.anchorAt = Date.now()
+    this.stalled = null
+    this.pending = null
+    this.readyState = 0
+    this.metadataDueAt = Date.now() + this.metadataMs
+  }
+
+  /**
    * Land anything due and hand back the media events to deliver. Called once
    * per `advance()` slice; the caller routes each event into the composable the
-   * way `PlayerView` wires `@seeked` / `@play` / `@pause`.
+   * way `PlayerView` wires `@seeked` / `@play` / `@pause` / `@loadedmetadata`.
    */
   tick(): QueuedMediaEvent[] {
+    // Before the seek landing below, and unreachable together with it — a
+    // `reload()` drops `pending` — so the order is documentation rather than a
+    // tie-break: metadata is the event that reopens the door a load closed.
+    if (this.metadataDueAt !== null && Date.now() >= this.metadataDueAt) {
+      this.metadataDueAt = null
+      this.readyState = 1
+      this.queued.push('loadedmetadata')
+    }
     if (this.pending !== null && Date.now() >= this.pending.dueAt) {
       if (this.stalled !== null) {
         this.anchor = this.pending.target
@@ -260,6 +360,8 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
   /** Symmetric one-way link delay in ms, as `MinElectionServer` seats it. */
   delayMs?: number
   animeName?: string
+  /** The episode this peer *starts* on. Mutable afterwards through
+   *  `Peer.goToEpisode()` — see the note there on why it cannot be a constant. */
   episodeInt?: string
 }
 
@@ -288,6 +390,18 @@ export interface Peer {
   readonly frames: ObservedFrame[]
   /** Every channel broadcast to this peer's renderer, in order. */
   readonly broadcasts: { channel: string; payload: unknown }[]
+  /** Every episode change a *peer* signalled, in the order this renderer's
+   *  `SyncplayDeps.onRemoteEpisodeChange` was handed them.
+   *
+   *  Recorded rather than acted on, and that is the honest shape: the composable
+   *  explicitly does not own the follow-through — its own header says so, and it
+   *  hands the episode to the consumer while `PlayerView` wires the navigation.
+   *  A harness that navigated here would be asserting against its own model of
+   *  PlayerView rather than against PlayerView. */
+  readonly remoteEpisodes: SyncplayRemoteEpisode[]
+  /** The episode this peer's renderer currently reports, i.e. what its next
+   *  file push will announce. */
+  episode(): string
   status(): SyncplayStatus
   /** `SyncplayClient`'s private `seekIntent`. Private by design — read here
    *  rather than re-derived, because the fixtures that care about it are about
@@ -305,6 +419,28 @@ export interface Peer {
   /** The user presses play / pause. */
   userPlay(): void
   userPause(): void
+  /**
+   * The user presses **next episode**: the element rebinds to a new source and
+   * `activeEpisodeIndex` moves.
+   *
+   * Deliberately only those two writes. Everything else an episode change does
+   * to the room is the composable's own watcher on
+   * `[activeEpisodeIndex, activeTranslationId]` — `clearPendingUserPause()`,
+   * `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()` and the
+   * `pushSyncplayFile()` that main turns into a de-adoption — so driving the
+   * refs is what puts the shipped path under test. A harness that called
+   * `ui.pushSyncplayFile()` directly would announce the file and skip the three
+   * resets, which is a shape no episode change produces.
+   *
+   * The index is bumped rather than set: nothing downstream reads its *value*
+   * (PlayerView resolves the source before writing it, and the composable only
+   * watches for a change), so a monotone counter is the honest model and spares
+   * every caller from tracking an index it has no other use for.
+   *
+   * The `src` defaults to a per-episode identity so two calls never collide;
+   * pass one to pin an exact `v.src` an assertion reads back.
+   */
+  goToEpisode(episodeInt: string, src?: string): void
   /** Deliver whatever the element has queued, into the composable. */
   tick(): void
   unmount(): void
@@ -555,6 +691,16 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
     ;(globalThis as unknown as { window: { api: Api } }).window.api = graph.api
 
     let ui: RendererSyncplayClient | null = null
+    // Per-peer and mutable, where these three used to be constants closed over
+    // `peerOpts`. An episode is not a property of the seat: `goToEpisode()` has
+    // to move it *between* `pushSyncplayFile()` calls, and a constant made the
+    // one thing a file-change fixture needs to say unsayable — every push
+    // announced the episode the peer was seated on, so main's `setFile()` never
+    // saw `identityChanged` and the de-adoption it drives was unreachable.
+    let episodeInt = peerOpts.episodeInt ?? '7'
+    const activeEpisodeIndex = ref(0)
+    const activeTranslationId = ref<number | null>(3)
+    const remoteEpisodes: SyncplayRemoteEpisode[] = []
     const deps: SyncplayDeps = {
       api: graph.api,
       getVideoEl: () => el as unknown as HTMLVideoElement,
@@ -562,12 +708,14 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       getAnimeId: () => 1,
       getMalId: () => 2,
       getAnimeName: () => peerOpts.animeName ?? 'Some Anime',
-      getCurrentEpisodeInt: () => peerOpts.episodeInt ?? '7',
-      getActiveEpisodeLabel: () => peerOpts.episodeInt ?? '7',
-      activeTranslationId: ref(3),
-      activeEpisodeIndex: ref(0),
+      getCurrentEpisodeInt: () => episodeInt,
+      getActiveEpisodeLabel: () => episodeInt,
+      activeTranslationId,
+      activeEpisodeIndex,
       formatTime: (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`,
-      onRemoteEpisodeChange: () => {}
+      onRemoteEpisodeChange: (ep) => {
+        remoteEpisodes.push(ep)
+      }
     }
     const Host = defineComponent({
       setup() {
@@ -583,7 +731,10 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       for (const event of el.tick()) {
         if (event === 'seeked') ui!.onVideoSeeked()
         else if (event === 'play') ui!.onLocalPlay()
-        else ui!.onLocalPause()
+        else if (event === 'pause') ui!.onLocalPause()
+        // `src/renderer/src/components/views/PlayerView.vue:2835` is the
+        // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
+        else ui!.onVideoLoadedMetadata()
       }
     }
 
@@ -595,6 +746,8 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       el,
       frames,
       broadcasts: graph.broadcasts,
+      remoteEpisodes,
+      episode: () => episodeInt,
       status: () => client.getStatus(),
       seekIntent: () => seekIntentOf(client),
       counters: () => countersOf(client),
@@ -606,6 +759,11 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       },
       userPause: () => {
         el.pause()
+      },
+      goToEpisode: (ep: string, src?: string) => {
+        episodeInt = ep
+        el.reload(src ?? `harness://${peerOpts.username}/ep-${ep}`)
+        activeEpisodeIndex.value += 1
       },
       tick: deliver,
       unmount: () => wrapper.unmount()
@@ -697,10 +855,11 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
 // `composite` only trims noise: kept, the same run adds four TS6307 for the
 // files reached by import but not listed, and still reports the real error
 // beside them.
-// What that config does *not* need is a strictness flag: TS7053 is a
-// `noImplicitAny` diagnostic, and the TypeScript 6 pinned here defaults
-// `noImplicitAny` on — measured both with no config at all and under a
-// `tsconfig.json` that omits `strict`, as both of ours do — so it is an
+// What that config does *not* need is a strictness flag: both codes come from
+// the same `noImplicitAny` check on the element access — TS7053 is its plain
+// form, TS2551 the same check with a spelling suggestion attached — and the
+// TypeScript 6 pinned here defaults it on, measured with no config at all and
+// under a `tsconfig.json` that omits `strict`, as both of ours do. So it is an
 // explicit `--noImplicitAny false` (or `--strict false`), not the default,
 // that turns the rename back into a clean run.
 //

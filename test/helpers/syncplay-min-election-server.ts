@@ -42,6 +42,16 @@
 //    player close — while `Set: {file: {}}` stores a non-`None` empty mapping
 //    that `__lt__`'s `is None` test still counts as file-bearing. An absent
 //    `file` key is not a command at all. All three are modelled separately.
+//  - `sendFileUpdate` (`server.py:175-178`) relays a watcher's `Set: {file}` on
+//    to the room as `Set: {user: {…}}`, whole and with no sender exclusion, and
+//    refuses to send anything at all for a falsey file. Added for #361's
+//    file-change scenarios: it is the only path a peer's episode reaches
+//    `absorbRemoteFile`, and therefore the only path `remote-episode-change`
+//    has. Note the asymmetry it leaves standing — `sendList` below synthesises
+//    its file entries and carries no `features`, where the reference renders
+//    the stored file — so `animeDlAppMeta` reaches a peer on the announcement
+//    and is dropped again by the next `List`. Fixtures read the episode change
+//    at arrival, never off the roster.
 //  - `List` (`protocols.py:695`) renders a `None` file as `file: {}` rather
 //    than omitting the key.
 //  - A `doSeek` or a pause change forces a room update (`server.py:180-187`)
@@ -516,9 +526,14 @@ export class MinElectionServer {
     if (isRecord(set.file)) {
       w.file = typeof set.file.name === 'string' ? set.file.name : ''
       rosterDirty = true
+      this.sendFileUpdate(username, set.file)
     } else if (set.file === null) {
       w.file = null
       rosterDirty = true
+      // No broadcast: `sendFileUpdate` (`server.py:175-178`) refuses a falsey
+      // file, which is exactly why `sendClearFile()`'s own comment in
+      // `src/main/syncplay.ts` says peers converge on the next `List` instead.
+      // The roster refresh below is that `List`.
     }
     if (isRecord(set.ready) && typeof set.ready.isReady === 'boolean') {
       w.ready = set.ready.isReady
@@ -527,6 +542,29 @@ export class MinElectionServer {
     // A fresh `List` to everyone stands in for the reference's `Set: {user}`
     // broadcast — same effect on `roomUsers`, one code path.
     if (rosterDirty) for (const other of this.watchers.keys()) this.sendList(other)
+  }
+
+  /**
+   * `sendFileUpdate` (`server.py:175-178`): a watcher's `Set: {file}` is pushed
+   * on to the room as `Set: {user: {<name>: {room, file}}}`, the file object
+   * relayed **whole** — `features.animeDlAppMeta` and all, which is what makes
+   * it the one and only path `remote-episode-change` has. The `List` refresh
+   * `applySet` sends alongside is the roster; this is the announcement, and the
+   * two are not interchangeable: this repo's `List` reply synthesises its file
+   * entries and carries no `features`, so a fixture reading the episode change
+   * off `roomUsers` would read `undefined`.
+   *
+   * **No sender exclusion**, which is the reference's own shape rather than an
+   * oversight here: `handleSet`'s Rule 0 in `src/main/syncplay.ts` states it and
+   * depends on it ("our own file push is broadcast back to us without sender
+   * exclusion, and absorbRemoteFile is what keeps our roster row's file current
+   * between `List` replies"). Main's own `username !== this.config?.username`
+   * guard is what keeps that echo from announcing an episode change to the peer
+   * that made it, and modelling an exclusion here would hide a regression in it.
+   */
+  private sendFileUpdate(username: string, file: JsonRecord): void {
+    const payload = { Set: { user: { [username]: { room: { name: this.room }, file } } } }
+    for (const w of this.watchers.values()) this.send(w.username, payload, w.delayMs)
   }
 
   private applyState(username: string, state: JsonRecord): void {

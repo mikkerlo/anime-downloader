@@ -124,12 +124,20 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   two interleaved mounts. Same non-emulation caveat as the IPC loop: payloads
   cross by reference, not structured-cloned. `HarnessVideo` models a playhead on
   the fake clock, a seek that takes `seekLandMs` to land, and queued
-  `play`/`pause`/`seeked` tasks — deliberately not the composable test file's
-  `fakeVideo`, which models a static playhead for 205 single-frame cases. Only
-  the *first* write of a burst freezes the reported position — a second write
-  arriving before the first lands replaces the target but must not re-read the
-  walking playhead, or a stalled laggard drifts forward and under-reports its own
-  lateness into the server's `min()` election.
+  `play`/`pause`/`seeked`/`loadedmetadata` tasks — deliberately not the composable
+  test file's `fakeVideo`, which models a static playhead for 205 single-frame
+  cases. Only the *first* write of a burst freezes the reported position — a
+  second write arriving before the first lands replaces the target but must not
+  re-read the walking playhead, or a stalled laggard drifts forward and
+  under-reports its own lateness into the server's `min()` election.
+  It also carries a file identity, because losing one is a scenario rather than a
+  detail: `reload(src)` rebinds the element the way an episode change does,
+  dropping it to `HAVE_NOTHING` and bringing it back on a `loadedmetadata` that
+  lands `metadataMs` later. That closes `hasAnnounceablePosition()` (#284) for the
+  gap, which stops the peer's snapshots and is how a fixture walks main across the
+  staleness thresholds without faking a clock. The element records its own seek
+  writes, `readyState` transitions and loads, so "it was never written while it
+  could not honour a write" is a claim read off the element rather than inferred.
   Callers own `vi.useFakeTimers()`; `advance()` steps the one shared clock in
   50 ms slices and drains microtasks between them, because Vue's scheduler
   flushes on microtasks rather than on the timer queue. Three of the helper's
@@ -145,20 +153,27 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
   three guards, the first-write freeze above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
-  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Three more
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Four more
   scenario files sit on the same harness (#361 step 4):
   `syncplay-two-peer-playpause.test.ts` (both directions, a peer
   joining a room that is already paused, and a peer's own pause not coming
   back), `syncplay-two-peer-seek-echo.test.ts` (a drag propagating, its echo
   suppressed on the originator, and the re-assert behind
   `SEEK_REASSERT_TOLERANCE_S` — the two cases there go red under *opposite*
-  moves of that literal, which is what pins it as the cause) and
+  moves of that literal, which is what pins it as the cause),
   `syncplay-two-peer-ignore-counters.test.ts` (the `ignoringOnTheFly`
   bookkeeping across a clean round trip, two changes in flight, and a peer's
-  forced update crossing our window). Each file's header records what it
+  forced update crossing our window) and
+  `syncplay-two-peer-adoption.test.ts` (the spectator mirror and the adoption
+  latch, reached through a seek that never lands, an element that drops to
+  `HAVE_NOTHING`, and an episode change). That last one reads the mirror
+  straight off the wire — an asserting frame carries a `paused` key and a
+  mirror does not — which is what makes "this peer cannot drag the room to 0"
+  an observation rather than an inference. Each file's header records what it
   cannot isolate on this harness rather than asserting around it — the
   pause-on-join case is guarded twice, `pendingServerAck` is never observable
-  as non-zero, and the server never echoes a `client` key.
+  as non-zero, the server never echoes a `client` key, and the two staleness
+  thresholds produce the same frame, so only the first is pinned.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence

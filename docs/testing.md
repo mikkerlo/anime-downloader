@@ -77,8 +77,11 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
 - **In-process IPC loop** (`test/setup/electron-mock.ts` → `test/ipc/`) — the
   global `electron` mock can close the bridge on itself: `ipcMain.handle`
   registrations are always recorded, and `__enableIpcLoop()` makes
-  `ipcRenderer.invoke` route into them and return the handler's result (a
-  rejection if it throws, the way real `invoke` does). The main→renderer half
+  `ipcRenderer.invoke` route into them and return the handler's result. Both
+  failure paths reject with the string a renderer actually sees — `Error
+  invoking remote method '<channel>': <Name>: <message>` — for a handler that
+  throws and for a channel nobody handled; `syncplay-bridge.test.ts` pins both
+  shapes verbatim. The main→renderer half
   was already closed — a broadcaster that calls `__emit` lands on the same
   `ipcRenderer.on` registry the preload's `subscribe()` writes to — so a test
   can drive a real router, the real `src/preload/index.ts` and a real
@@ -105,7 +108,9 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
   `src/renderer/src/composables/use-syncplay-client.ts:1411` could drift from it
   and nothing would notice. Both peers now run the shipped rule, and mutating
-  that literal in either direction reds the file.
+  that literal reds the file for any narrowing and for any widening past 4.0 s —
+  every drift in that run lands on an exact integer, so what the file pins the
+  literal into is the window `(3.0, 4.0]` rather than a point.
 
   The loop is **not** built on the in-process IPC loop above, because that mock's
   registries are process-wide and keyed by channel name — two peers would
@@ -132,9 +137,9 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   that is not a whole number of slices, and `seat()` refuses re-entry, because
   two seats in flight at once interleave `vi.resetModules()` and the `window.api`
   swap and hand back two silently cross-wired peers.
-  `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself —
-  including those three guards — and `syncplay-seek-crossfire.test.ts` is the
-  first scenario on it.
+  `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
+  two guards and the first-write freeze above — and
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence

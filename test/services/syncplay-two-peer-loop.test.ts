@@ -3,10 +3,12 @@
 // The two-peer harness, end to end (#361 step 3).
 //
 // Deliberately thin. `test/helpers/syncplay-two-peer.ts` is the subject here,
-// not the syncplay protocol: these four cases say "a user action on one peer's
-// element reaches the other peer's element, through the real composable, the
-// real preload bridge, the real IPC router, the real `SyncplayClient` and the
-// modelled server" — the claim every fixture built on the harness rests on.
+// not the syncplay protocol: the first four cases say "a user action on one
+// peer's element reaches the other peer's element, through the real composable,
+// the real preload bridge, the real IPC router, the real `SyncplayClient` and
+// the modelled server" — the claim every fixture built on the harness rests on.
+// The fifth pins the failure half of that bridge: the rejection shape a
+// renderer sees when nobody handled the channel.
 // #362's bridge test covers one loop; this covers two of them side by side, and
 // the scenario work lives in the files that use it
 // (`syncplay-seek-crossfire.test.ts` is the first).
@@ -18,7 +20,7 @@
 // sharper for that, and duplicating them here would buy a slower copy.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
+import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { createTwoPeerRoom, HarnessVideo } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom } from '../helpers/syncplay-two-peer'
 
@@ -151,6 +153,30 @@ describe('two-peer syncplay harness', () => {
     expect(remoteStates(host).length).toBeGreaterThan(0)
     expect(remoteStates(joiner).length).toBeGreaterThan(0)
     expect(host.broadcasts).not.toBe(joiner.broadcasts)
+  })
+
+  it('rejects an unhandled channel the way the shared mock does', async () => {
+    // The loop's other rejection shape. `test/setup/electron-mock.ts` is the
+    // source of truth for it, but a per-peer `vi.doMock('electron')` replaces
+    // that module wholesale, so the harness carries its own copy of the wrapper
+    // — and until this case nothing pinned that copy: mutating its
+    // `Error invoking remote method` prefix left the whole suite green. A peer
+    // graph registers `syncplay.ipc.ts`, `syncplay-broadcasts.ts` and
+    // `settings.ipc.ts` and nothing else; `CHANNELS.APP_VERSION` is handled by
+    // `src/main/ipc/app.ipc.ts`, which never loads here, so the channel is
+    // genuinely unhandled — the same construction `test/ipc/syncplay-bridge.test.ts`
+    // uses against the shared mock.
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    const host = await room.seat({
+      username: 'hostuser',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    await expect(host.api.appVersion()).rejects.toThrow(
+      `Error invoking remote method '${CHANNELS.APP_VERSION}': ` +
+        `Error: No handler registered for '${CHANNELS.APP_VERSION}'`
+    )
   })
 
   // The three guards below are about the harness as an instrument rather than

@@ -347,6 +347,11 @@ async function buildPeerGraph(observe: (client: MainSyncplayClient) => void): Pr
       // main and comes back through the very same renderer-side wrapper as a
       // handler throw, so a renderer sees
       // `Error invoking remote method '<channel>': <Name>: <message>` either way.
+      //
+      // "Keep them in step" is enforced rather than asked for: the no-handler
+      // shape below is pinned by `test/services/syncplay-two-peer-loop.test.ts`,
+      // which reds on a mutated prefix here. Before it existed this copy was
+      // unobserved and the drift it warns about would have been silent.
       invoke: (channel: string, ...args: unknown[]) => {
         const handler = mainHandlers.get(channel)
         const asRemoteError = (err: unknown): Error =>

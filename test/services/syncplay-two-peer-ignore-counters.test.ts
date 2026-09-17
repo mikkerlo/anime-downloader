@@ -25,7 +25,14 @@
 //    itself carries no playstate, and `MinElectionServer.wire` records only
 //    playstate-bearing frames, so it is invisible from the server side too. The
 //    assertions below say "0 at every boundary", which is the true statement;
-//    they are not evidence the counter was ever set.
+//    they are not evidence the counter was ever set. They are not inert either,
+//    and the distinction matters to anyone tempted to drop the field from the
+//    triple: stub out the `this.pendingServerAck = 0` in `sendAck()`
+//    (`src/main/syncplay.ts:2708`) so the counter latches instead of being spent,
+//    and two cases below go red on the triple — the clean round trip and the
+//    crossing case, each reading `pendingServerAck: 1`. What the zeros pin is
+//    "cleared before every boundary", i.e. the counter never latches, which is a
+//    different regression class from "it was set at some point".
 //  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1792`)
 //    is unreachable here.** `MinElectionServer` never writes a `client` key —
 //    the reference only writes one when its own counter is truthy
@@ -36,26 +43,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
-import type { TwoPeerRoom, Peer } from '../helpers/syncplay-two-peer'
+import type { TwoPeerRoom, Peer, IgnoreCounters } from '../helpers/syncplay-two-peer'
 
 const ROOM_START = 100
 const DELAY_MS = 50
 
-interface IgnoreCounters {
-  clientIgnoreCounter: number
-  pendingClientAck: number
-  pendingServerAck: number
-}
-
 /** The three private counters, read the way the harness reads `seekIntent`. */
-const counters = (p: Peer): IgnoreCounters => {
-  const c = p.client as unknown as IgnoreCounters
-  return {
-    clientIgnoreCounter: c.clientIgnoreCounter,
-    pendingClientAck: c.pendingClientAck,
-    pendingServerAck: c.pendingServerAck
-  }
-}
+const counters = (p: Peer): IgnoreCounters => p.counters()
 
 describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
   let room: TwoPeerRoom

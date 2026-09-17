@@ -263,6 +263,16 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
   episodeInt?: string
 }
 
+/** `SyncplayClient`'s three `ignoringOnTheFly` counters, sampled together. */
+export interface IgnoreCounters {
+  /** Monotonic; bumped once per *discrete* change the client originates. */
+  clientIgnoreCounter: number
+  /** The counter of our newest outstanding change, or 0. */
+  pendingClientAck: number
+  /** The server counter we owe an answer for. */
+  pendingServerAck: number
+}
+
 export interface Peer {
   readonly username: string
   /** This peer's real main-process client. */
@@ -281,6 +291,11 @@ export interface Peer {
    *  rather than re-derived, because the fixtures that care about it are about
    *  the exact instant it is retired. */
   seekIntent(): { at: number; attempts: number } | null
+  /** `SyncplayClient`'s private `ignoringOnTheFly` counters, as one triple.
+   *  Surfaced here for the same reason as `seekIntent()`, and so the fixtures
+   *  that read them spell the field names in one place rather than one per
+   *  scenario file. */
+  counters(): IgnoreCounters
   /** The user drags the scrubber: a bare `currentTime` write with no
    *  programmatic operation armed, so the resulting `seeked` reaches the room as
    *  the user's own seek. */
@@ -580,6 +595,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       broadcasts: graph.broadcasts,
       status: () => client.getStatus(),
       seekIntent: () => seekIntentOf(client),
+      counters: () => countersOf(client),
       userSeek: (to: number) => {
         el.currentTime = to
       },
@@ -650,5 +666,27 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
   }
 }
 
+// The two readers below reach into `SyncplayClient`'s private state, and they
+// are the only place in the two-peer fixtures that does. Element access rather
+// than `as unknown as { … }`: TypeScript resolves `client['seekIntent']`
+// against the real class — the escape hatch it leaves open for private members
+// — so the field name and its type are checked against the declaration, where a
+// structural cast invents whatever shape it is handed and a renamed field goes
+// on compiling. Verified: rename `clientIgnoreCounter` and `tsc` reports TS7053
+// here and nowhere else.
+//
+// One caveat, so nobody reads more into this than it gives: `npm run typecheck`
+// does not cover it. Neither `tsconfig.node.json` nor `tsconfig.web.json`
+// includes `test/**`, so the error above is one an editor or an explicit `tsc`
+// on this file surfaces, not one the CI gate fails on. What the single reader
+// buys unconditionally is the blast radius — a rename breaks one line here
+// instead of failing at runtime in every scenario file that spelled the field
+// out for itself.
 const seekIntentOf = (client: MainSyncplayClient): { at: number; attempts: number } | null =>
-  (client as unknown as { seekIntent: { at: number; attempts: number } | null }).seekIntent
+  client['seekIntent']
+
+const countersOf = (client: MainSyncplayClient): IgnoreCounters => ({
+  clientIgnoreCounter: client['clientIgnoreCounter'],
+  pendingClientAck: client['pendingClientAck'],
+  pendingServerAck: client['pendingServerAck']
+})

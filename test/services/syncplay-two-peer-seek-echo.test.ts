@@ -119,6 +119,14 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // dragged nothing, produces none and holds no intent at any point.
     expect(seekFrames(host)).toBe(1)
     expect(seekFrames(joiner)).toBe(0)
+    // The set is counted before it is quantified over (`docs/testing.md:178`):
+    // `every()` on an empty array is `true`, so without the pin a harness change
+    // that stopped handing the joiner frames at all — a widened drop guard, a
+    // rewired observer — would leave the line below green while asserting
+    // nothing. Eleven is what this fixture delivers: the ten 1 Hz periodics of
+    // the run, at t=1050 through t=10050, plus the forced update at t=4150 that
+    // carried the drag.
+    expect(joiner.frames).toHaveLength(11)
     expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
   })
 

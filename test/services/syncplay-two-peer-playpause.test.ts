@@ -33,11 +33,10 @@ const DELAY_MS = 50
  * `SyncplayClient`'s `clientIgnoreCounter` — bumped once per *discrete* change
  * the client originates, and by nothing else. Read here to say "this peer
  * announced nothing of its own", which is what distinguishes following a room
- * from arguing with it. Private by design; the same reach-in the harness makes
- * for `seekIntent`.
+ * from arguing with it. Private by design, so it arrives through the harness's
+ * `Peer.counters()` rather than a cast spelled out per file.
  */
-const discreteSends = (p: Peer): number =>
-  (p.client as unknown as { clientIgnoreCounter: number }).clientIgnoreCounter
+const discreteSends = (p: Peer): number => p.counters().clientIgnoreCounter
 
 describe('SyncplayClient — play/pause across two peers', () => {
   let room: TwoPeerRoom

@@ -161,13 +161,13 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // hypothetical server — the reference derives `_forwardDelay` from *our* echo
   // of its `latencyCalculation`, docs/syncplay.md:246 ("which we echo back on
   // our next outbound `State` so it can measure the same round trip in its
-  // direction"), which is absent for
-  // the first round trips of every session and permanently whenever
-  // `consumeServerLatencyEcho()`'s hold guard drops the pair. The echo's hold
-  // correction — the same server's *other*, independent half — is left at the
-  // harness default, which is `true`, the reference's actual behaviour: without
-  // it this client's `serverRtt` reads the broadcast interval rather than the
-  // network RTT and #279's clamp — correctly — refuses to trust it.
+  // direction"), which is absent for the first round trips of every session and
+  // permanently whenever `consumeServerLatencyEcho()`'s hold guard drops the
+  // pair. The echo's hold correction — the same server's *other*, independent
+  // half — is left at the harness default, which is `true`, the reference's
+  // actual behaviour: without it this client's `serverRtt` reads the broadcast
+  // interval rather than the network RTT and #279's clamp — correctly — refuses
+  // to trust it.
   const rebuildServer = (opts: Partial<MinElectionServerOptions>): void => {
     server.stop()
     server = new MinElectionServer({ position: ROOM_START, paused: false, ...opts })

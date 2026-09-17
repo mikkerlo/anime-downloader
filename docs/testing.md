@@ -264,8 +264,8 @@ either direction (all 16 brace matches sit inside fenced code blocks, and no
 markdown line starts with `<!--`); they stay exempt on the argument that a
 fenced `}` carries code semantics and that markup is not cited deliberately.
 
-Two pinned counts are what give that teeth, for the reasons in *Structural
-tests* above:
+Three pinned counts are what give that teeth, for the reasons in *Structural
+tests* above — two exact, one a floor:
 
 - **Suspicious landings, pinned at 0.** Every such landing on this tree was
   stale: #336 repaired all thirteen, and #344 repaired the two the narrowing
@@ -288,6 +288,9 @@ tests* above:
   pin bounds how much the gate is blind to. Adding one reds the build; the fix
   is almost always to give the anchor a resolvable path rather than raise the
   number.
+- **Marked citations, floored at 12.** The only one-sided count here, because
+  the marked class can only shrink silently — see *The marked form* below.
+  Falling below the floor reds; rising above it is free.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -331,14 +334,16 @@ include or omit the target's `**`. This is the one part of the gate that judges
 meaning, and it can, because the comparison is a substring test against a string
 the comment already contains rather than a judgement about prose.
 
-- **It hard-fails, and there is no pin.** A pin bounds a class that can grow
-  silently; this one cannot, because marking is opt-in — the population is
-  exactly the anchors that volunteered. A quote found elsewhere in the file is
-  reported as **drift**, with the corrected line named, which makes the repair
-  mechanical; a quote found nowhere is reported as **stale**. If a drifted quote
-  matches several lines the gate names them all and refuses to guess. The escape
-  hatch for a citation that genuinely means "around here" is to not mark it,
-  which degrades to the rest of this gate rather than to a silenced failure.
+- **It hard-fails, and the count has a floor rather than a pin.** A quote found
+  elsewhere in the file is reported as **drift**, with the corrected line named,
+  which makes the repair mechanical; a quote found nowhere is reported as
+  **stale**. If a drifted quote matches several lines the gate names them all and
+  refuses to guess. The escape hatch for a citation that genuinely means "around
+  here" is to not mark it, which degrades to the rest of this gate rather than to
+  a silenced failure — but since #372 that costs a deliberate lowering of
+  `MARKED_PIN` rather than nothing, because the class is one-sided: it cannot
+  grow silently (marking is opt-in, so every arrival is deliberate) but it *can*
+  shrink silently, and shrinking is the direction that costs coverage.
 - **Multiplicity governs the drift report only.** If the quote is at the cited
   span, the citation is right and how many other lines carry the same text is
   not a question anyone asked. Fifteen of the tree's single-line anchors target
@@ -359,8 +364,10 @@ code-target anchors are not: they keep the landing heuristic as partial cover,
 and each retrofit would be a fresh claim about what a line means, so they are a
 separate job. A range is still classified by its **start line** for the brace and
 comment predicates — thirteen legitimate ranges close on a `}` — but since #366
-the **blank-line** predicate also runs on a range's interior, which measures zero
-hits today and catches a range that has slid across a paragraph gap.
+the **blank-line** predicate also runs on every line of a range after its start,
+its **end line included** — a range whose last line is a paragraph gap has slid
+just as surely as one with a gap in the middle. That measures zero hits today and
+catches a range that has slid across a paragraph gap.
 
 ## Evidence retention
 

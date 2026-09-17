@@ -366,6 +366,30 @@ describe('check-line-citations', () => {
     ])
   })
 
+  it('judges a range whose LAST line is the blank one', () => {
+    // THE CASE THAT DECIDES THE BOUND. `interiorBlankLine()` runs `n <= endLine`,
+    // and nothing in this file used to distinguish that from `n < endLine` — the
+    // whole suite stayed green with the end line dropped out of scope, so a later
+    // cleanup could have narrowed the rule to match the word "interior" and taken
+    // the coverage with it. `src/target.ts:3-4` is the minimal decider: line 3 is
+    // code, so the start-line predicates pass it, and line 4 — the range's last
+    // line — is the blank. A range whose final line is a paragraph gap has slid
+    // just as surely as one with a gap in the middle, which is why the end line
+    // is in scope and why the prose now says so.
+    const r = run(base({ 'src/caller.ts': '// the declaration (src/target.ts:3-4)' }))
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'src/target.ts:3-4',
+        target: 'src/target.ts',
+        start: 4,
+        why: 'blank line'
+      }
+    ])
+  })
+
   it('reports a range with two interior gaps once, not once per gap', () => {
     // The pin counts citations that look stale, not lines, so a range crossing
     // several paragraph boundaries must not move `SUSPICIOUS_LANDING_PIN` by
@@ -382,10 +406,10 @@ describe('check-line-citations', () => {
 
   it('reds on a broken anchor and goes green once it is repaired', () => {
     const broken = run(base({ 'src/caller.ts': '// the increment (src/target.ts:993)' }))
-    expect(report(broken, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
+    expect(report(broken, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(false)
 
     const repaired = run(base({ 'src/caller.ts': '// the increment (src/target.ts:3)' }))
-    expect(report(repaired, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(repaired, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   // --- the marked form (#366) -------------------------------------------------
@@ -427,8 +451,8 @@ describe('check-line-citations', () => {
       elsewhere: [2]
     })
     // Hard failure, no pin: there is no pin value that makes this pass.
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
-    expect(report(r, { suspiciousLanding: 1, uncheckable: 1 }).ok).toBe(false)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(false)
+    expect(report(r, { suspiciousLanding: 1, uncheckable: 1, marked: 0 }).ok).toBe(false)
   })
 
   it('distinguishes a stale quote from a drifted one', () => {
@@ -441,7 +465,7 @@ describe('check-line-citations', () => {
     // Empty `elsewhere` is what the report reads as *stale* rather than *drift*:
     // there is no corrected line to offer, so the repair is a requote.
     expect(r.quoteFailures[0].elsewhere).toEqual([])
-    const { err } = report(r, { suspiciousLanding: 0, uncheckable: 0 })
+    const { err } = report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 })
     expect(err.join('\n')).toContain('stale — that text is nowhere in docs/prose.md')
     expect(err.join('\n')).not.toContain('drift —')
   })
@@ -454,7 +478,7 @@ describe('check-line-citations', () => {
 
     expect(r.quoteFailures).toEqual([])
     expect(r.marked).toHaveLength(1)
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   it('leaves a quoted string that is not a citation of the target alone', () => {
@@ -474,7 +498,7 @@ describe('check-line-citations', () => {
 
     expect(r.marked).toEqual([])
     expect(r.quoteFailures).toEqual([])
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   it('refuses to guess when a drifted quote matches more than one line', () => {
@@ -485,7 +509,7 @@ describe('check-line-citations', () => {
 
     expect(r.quoteFailures).toHaveLength(1)
     expect(r.quoteFailures[0].elsewhere).toEqual([2, 5])
-    const { err } = report(r, { suspiciousLanding: 0, uncheckable: 0 })
+    const { err } = report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 })
     expect(err.join('\n')).toContain('docs/prose.md:2, docs/prose.md:5')
     expect(err.join('\n')).toContain('more than one match')
   })
@@ -502,7 +526,7 @@ describe('check-line-citations', () => {
     })
 
     expect(r.quoteFailures).toEqual([])
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   it('stays green on a self-file citation whose quote is also on the citing line', () => {
@@ -522,7 +546,7 @@ describe('check-line-citations', () => {
 
     expect(r.marked).toHaveLength(1)
     expect(r.quoteFailures).toEqual([])
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   it('excludes the citing line from a self-file drift report', () => {
@@ -632,7 +656,7 @@ describe('check-line-citations', () => {
 
     expect(r.marked).toEqual([])
     expect(r.quoteFailures).toEqual([])
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
   it('reds when a marked anchor rots and goes green once it is repointed', () => {
@@ -640,23 +664,70 @@ describe('check-line-citations', () => {
       'docs/prose.md': PROSE,
       'src/caller.ts': '// per docs/prose.md:1 ("Pin the count, never just loop over the set")'
     })
-    expect(report(rotted, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
+    expect(report(rotted, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(false)
 
     const repaired = run({
       'docs/prose.md': PROSE,
       'src/caller.ts': '// per docs/prose.md:2 ("Pin the count, never just loop over the set")'
     })
-    expect(report(repaired, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(true)
+    expect(report(repaired, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
+  })
+
+  it('reds when a marked anchor is quietly de-marked, and stays green on a new one', () => {
+    // `marked` was printed and asserted nowhere, so an anchor could leave the
+    // verified population with the gate green and exit 0 — and a floor, not an
+    // exact pin, is the fix: the class cannot grow silently (marking is opt-in)
+    // but it can shrink silently, and shrinking is what costs coverage.
+    const marked = run({
+      'docs/prose.md': PROSE,
+      'src/caller.ts': '// per docs/prose.md:2 ("Pin the count, never just loop over the set")'
+    })
+    expect(marked.marked).toHaveLength(1)
+    expect(report(marked, { suspiciousLanding: 0, uncheckable: 0, marked: 1 }).ok).toBe(true)
+
+    // Each of these leaves the quote text intact and still takes the anchor out
+    // of the population, because the spelling admits no slack: the reader sees a
+    // sentence that still names its target and the gate sees an unmarked anchor.
+    const demarked = {
+      'a trailing clause before the paren':
+        '// per docs/prose.md:2, which says ("Pin the count, never just loop over the set")',
+      'single quotes': "// per docs/prose.md:2 ('Pin the count, never just loop over the set')",
+      'a doubled space': '// per docs/prose.md:2  ("Pin the count, never just loop over the set")'
+    }
+    for (const [shape, citing] of Object.entries(demarked)) {
+      const r = run({ 'docs/prose.md': PROSE, 'src/caller.ts': citing })
+      expect(r.marked, shape).toEqual([])
+      expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 1 }).ok, shape).toBe(false)
+    }
+
+    // The `("` wrapped onto the next line is the fourth shape — the continuation
+    // rule joins a wrapped *quote*, not a wrapped opener.
+    const wrapped = run({
+      'docs/prose.md': PROSE,
+      'src/caller.ts': '// per docs/prose.md:2\n// ("Pin the count, never just loop over the set")'
+    })
+    expect(wrapped.marked).toEqual([])
+    expect(report(wrapped, { suspiciousLanding: 0, uncheckable: 0, marked: 1 }).ok).toBe(false)
+
+    // Growth is the safe direction and must not cost a bump on every retrofit.
+    const grown = run({
+      'docs/prose.md': PROSE,
+      'src/caller.ts':
+        '// per docs/prose.md:2 ("Pin the count, never just loop over the set")\n' +
+        '// and again per docs/prose.md:5 ("Pin the count, never just loop over the set")'
+    })
+    expect(grown.marked).toHaveLength(2)
+    expect(report(grown, { suspiciousLanding: 0, uncheckable: 0, marked: 1 }).ok).toBe(true)
   })
 
   it('reds when a pin drifts in either direction, not just upward', () => {
     const r = run(base({ 'src/caller.ts': '// blank (src/target.ts:4)' }))
 
-    expect(report(r, { suspiciousLanding: 0, uncheckable: 0 }).ok).toBe(false)
+    expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(false)
     // Pinned at the measured value: a real but deliberate landing.
-    expect(report(r, { suspiciousLanding: 1, uncheckable: 0 }).ok).toBe(true)
+    expect(report(r, { suspiciousLanding: 1, uncheckable: 0, marked: 0 }).ok).toBe(true)
     // And a pin left behind by a repair that removed the landing reds too, so a
     // stale pin cannot quietly license a new one.
-    expect(report(run(base()), { suspiciousLanding: 1, uncheckable: 0 }).ok).toBe(false)
+    expect(report(run(base()), { suspiciousLanding: 1, uncheckable: 0, marked: 0 }).ok).toBe(false)
   })
 })

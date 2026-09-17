@@ -65,6 +65,22 @@ export const SUSPICIOUS_LANDING_PIN = 0
 // 11 ambiguous basenames + 106 pathless anchors on this tree.
 export const UNCHECKABLE_PIN = 117
 
+// A FLOOR, not an exact count — the only pin here that is one-sided, because
+// the marked class is asymmetric. It cannot grow silently: marking is opt-in,
+// so every arrival is someone deliberately writing `("…")`. It can shrink
+// silently, and shrinking is the direction that costs coverage — an anchor
+// leaves the verified population, `marked` prints one lower, and nobody diffs
+// a printed number. Four ordinary edits do it with the quote text left intact
+// and the gate still green, measured against the extractor above: writing
+// `path:2, which says ("…")`, wrapping the `("` onto the next line, closing
+// with `('…')`, or leaving two spaces before the paren. All four are what
+// rewriting the surrounding sentence produces, and the strictness that earns
+// `MARKED_OPEN` its zero false-positive rate is exactly what makes them quiet.
+// Growth must not cost a bump on every retrofit, so only the fall reds.
+//
+// 12 marked citations on this tree.
+export const MARKED_PIN = 12
+
 // --- configuration ------------------------------------------------------------
 
 // `'.'` is the repo root itself — files with no directory component, which a
@@ -232,15 +248,16 @@ export function extractMarkedQuote(lines, i, rest) {
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  *
- * Since #366 the BLANK-LINE predicate alone also runs on a range's interior
- * lines, via `interiorBlankLine()` below — the other three stay on the start
- * line. That split is measured, not aesthetic: applying this function whole to
- * every line of every range turns 13 of the 28 resolved ranges suspicious, all
- * of them legitimate, because a cited block's last line is a closing brace by
- * construction — and three of the 13 are inside this very docstring, so the
- * text explaining why ranges are start-line-only would itself red the gate.
- * Blank-line-only on interior lines measures 0 hits, so the pin stays at 0 and
- * a range that slid onto a paragraph gap is still caught.
+ * Since #366 the BLANK-LINE predicate alone also runs on every line of a range
+ * after its start, its end line included, via `interiorBlankLine()` below — the
+ * other three stay on the start line. That split is measured, not aesthetic:
+ * applying this function whole to every line of every range turns 13 of the 28
+ * resolved ranges suspicious, all of them legitimate, because a cited block's
+ * last line is a closing brace by construction — and three of the 13 are inside
+ * this very docstring, so the text explaining why ranges are start-line-only
+ * would itself red the gate. Blank-line-only past the start measures 0 hits, so
+ * the pin stays at 0 and a range that slid onto a paragraph gap is still
+ * caught.
  */
 function suspiciousLanding(lines, targetPath, startLine) {
   const text = (lines[startLine - 1] ?? '').trim()
@@ -250,9 +267,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:251 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:268 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:275 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:292 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -261,8 +278,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:274 and the `<!--` test at
-  // scripts/check-line-citations.mjs:280 have no measured false positive in
+  // scripts/check-line-citations.mjs:291 and the `<!--` test at
+  // scripts/check-line-citations.mjs:297 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and
@@ -282,10 +299,12 @@ function suspiciousLanding(lines, targetPath, startLine) {
 }
 
 /**
- * The interior half of the rule above: the first blank line strictly inside a
- * cited range, or null. Only the first, so one citation contributes at most one
- * suspicious entry however many gaps it spans — the pin counts citations that
- * look stale, not lines.
+ * The interior half of the rule above: the first blank line after a cited
+ * range's start line, up to and including its end line, or null. The end line
+ * is in scope deliberately — a range whose last line is a paragraph gap has
+ * slid just as surely as one with a gap in the middle. Only the first, so one
+ * citation contributes at most one suspicious entry however many gaps it spans
+ * — the pin counts citations that look stale, not lines.
  */
 function interiorBlankLine(lines, startLine, endLine) {
   if (endLine === null) return null
@@ -494,6 +513,7 @@ export function analyze({
 export function report(r, pins = {}) {
   const landingPin = pins.suspiciousLanding ?? SUSPICIOUS_LANDING_PIN
   const uncheckablePin = pins.uncheckable ?? UNCHECKABLE_PIN
+  const markedPin = pins.marked ?? MARKED_PIN
   const out = []
   const err = []
 
@@ -509,18 +529,40 @@ export function report(r, pins = {}) {
   )
   out.push(`  suspicious landings: ${r.suspicious.length} — pin ${landingPin}`)
   out.push(
-    `  marked quotes: ${r.marked?.length ?? 0} verified against their target ` +
-      `(${r.quoteFailures?.length ?? 0} failing)`
+    `  marked quotes: ${r.marked.length} verified against their target ` +
+      `(${r.quoteFailures.length} failing) — floor ${markedPin}`
   )
 
   let ok = true
 
-  // No pin here, deliberately. A pin guards a class that can grow silently;
-  // this one cannot, because marking is opt-in — the population is exactly the
-  // anchors that volunteered. The escape hatch for a citation that genuinely
-  // points at "around here" is to not mark it, which degrades to the rest of
-  // this gate rather than to a silenced failure.
-  if (r.quoteFailures && r.quoteFailures.length > 0) {
+  // A floor rather than an exact pin, because the two directions are not alike.
+  // The class cannot grow silently — marking is opt-in, so the population is
+  // exactly the anchors that volunteered, and a new one arriving is a retrofit
+  // nobody should have to bump a number for. It can shrink silently, which is
+  // the direction that costs coverage: `marked` was printed and asserted
+  // nowhere, so an anchor could leave the verified population with the gate
+  // green and exit 0. See `MARKED_PIN` for the four edits that do it.
+  //
+  // The escape hatch for a citation that genuinely points at "around here" is
+  // still to not mark it — that degrades to the rest of this gate rather than
+  // to a silenced failure — but it now costs a deliberate lowering of the
+  // floor rather than nothing at all.
+  if (r.marked.length < markedPin) {
+    ok = false
+    err.push(
+      '',
+      `Marked-citation count fell: ${r.marked.length}, floor at ${markedPin}.`,
+      'An anchor left the verified population. Usually the `("…")` was dropped or',
+      'reshaped while the surrounding sentence was rewritten: the spelling is fixed at',
+      'one space, one open paren, one double quote, so `, which says ("…")`, a `("`',
+      "wrapped onto the next line, `('…')` and a doubled space all de-mark it",
+      'silently. Restore the marked form, or, if the anchor was genuinely de-marked on',
+      'purpose, lower MARKED_PIN in scripts/check-line-citations.mjs and say why in the',
+      'commit message.'
+    )
+  }
+
+  if (r.quoteFailures.length > 0) {
     ok = false
     err.push('', `${r.quoteFailures.length} marked citation(s) no longer quote their target:`, '')
     for (const q of r.quoteFailures) {

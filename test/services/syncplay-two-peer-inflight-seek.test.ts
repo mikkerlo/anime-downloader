@@ -202,8 +202,11 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     // write — the four `seekLandMs: 0` files included. The mid-slice
     // `currentTime` read is the other direction: that getter deliberately has
     // no such conjunct, so it still reads the target `300` against a `live()`
-    // of `300.05`, and giving it one as a tidy-up reds here rather than in four
-    // files whose subject is not this getter.
+    // of `300.05`. Giving it one as a tidy-up reds this line and nothing else
+    // in the suite — the four `seekLandMs: 0` files stay green through it for
+    // the reason the setter records: `pending.target` and `live()` are
+    // bit-identical inside a slice on the fake clock. Without the read below
+    // the tidy-up is invisible.
     const el = new HarnessVideo({ position: 100, paused: false, seekLandMs: 0 })
     expect(el.seeking).toBe(false)
 

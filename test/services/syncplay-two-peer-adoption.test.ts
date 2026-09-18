@@ -70,11 +70,27 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
   })
 
   it('mirrors a room its element cannot reach, and never elects itself with a position it is not at', async () => {
-    // The joiner is 600 s behind and its element takes 1.2 s to honour a seek —
-    // longer than the 1 Hz remote cadence, so each landing is superseded by the
-    // next arriving state and `currentTime` never moves at all. That is the
+    // The joiner is 600 s behind and its element is **not ready**: it reloads at
+    // mount and its `loadedmetadata` is 30 s out, well past this run, so it sits
+    // at `HAVE_NOTHING` reporting 0 for the whole of it. That is the
     // pathological shape on purpose: a peer that is *permanently* at 0 while the
     // room plays on.
+    //
+    // This used to be built on a seek that never landed — `seekLandMs: 1200`,
+    // longer than the 1 Hz cadence, so every write was superseded before it
+    // could take. #368 retired that premise. A real element reports the seek
+    // **target** the moment `currentTime` is assigned, not a frozen pre-write
+    // position, so a peer whose seeks are merely slow is not at 0 at all; it is
+    // up at the room, and it announces the room's own position back. The door
+    // that actually holds an element at 0 while the room plays is readiness, so
+    // that is the door this case now comes through, and the outbound gate it
+    // exercises is `hasAnnounceablePosition()`'s `readyState >= 1`
+    // (`use-syncplay-client.ts:770`).
+    //
+    // The slow-seek version of this peer is not harmless — it is *worse*, and
+    // it is the subject of `syncplay-two-peer-inflight-seek.test.ts`: under the
+    // correction it elects itself with a position it is not at, which is the
+    // exact failure this case's title says must not happen.
     room = await createTwoPeerRoom({ position: 600, paused: false })
     const host = await room.seat({
       username: 'hostuser',
@@ -87,15 +103,19 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       position: 0,
       paused: false,
       delayMs: DELAY_MS,
-      seekLandMs: 1200
+      metadataMs: 30_000
     })
+    joiner.el.reload('harness://reloading')
     await room.advance(8)
 
-    // The premise: the element really never arrived. Seven writes, none of them
-    // taken. Without this the rest would be vacuously true of a peer that had
-    // simply caught up.
+    // The premise: the element really never arrived, and this time it is
+    // readiness that holds it there. It dropped to `HAVE_NOTHING` and never came
+    // back, and with the outbound door shut it was never even written to.
+    // Without this the rest would be vacuously true of a peer that had simply
+    // caught up.
     expect(joiner.el.currentTime).toBe(0)
-    expect(joiner.el.seekWrites).toHaveLength(7)
+    expect(joiner.el.readyStates).toEqual([1, 0])
+    expect(joiner.el.seekWrites).toHaveLength(0)
 
     // The claim. Every frame the joiner put on the wire is a mirror, counted
     // rather than sampled — an `every()` over a set that turned out empty would
@@ -128,11 +148,22 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     expect(joiner.counters().clientIgnoreCounter).toBe(0)
   })
 
-  it('starts asserting on the frame after its element lands on the room', async () => {
-    // The same joiner, with a seek that lands inside one cadence. The mirror is
-    // supposed to be a state it *leaves*, and this is the transition: the drift
-    // falls inside `ADOPT_TOLERANCE_S`, adoption latches, and the peer starts
-    // making pause claims of its own.
+  it('asserts from its very first frame when the seek is merely slow, with no mirror at all', async () => {
+    // The same joiner, with a seek that lands inside one cadence — and under
+    // the corrected element there is **no mirror phase left to leave**.
+    //
+    // This case used to pin a transition: one mirror frame sent "while the
+    // element was still in flight", then six asserting frames after it landed.
+    // That one mirror was an artefact of the freeze. A real element reports the
+    // target as soon as `currentTime` is assigned (#368), so the drift falls
+    // inside `ADOPT_TOLERANCE_S` on the *write*, not 300 ms later on the
+    // landing; adoption latches before the first snapshot goes out and all
+    // seven frames are assertions.
+    //
+    // So the boundary this file is about does not live where seek latency puts
+    // it. Read with the case above, the pair is what pins that: a slow seek
+    // produces no mirror however slow it is, and an unready element produces
+    // nothing but mirrors. The mirror is keyed on readiness, full stop.
     room = await createTwoPeerRoom({ position: 600, paused: false })
     await room.seat({ username: 'hostuser', position: 600, paused: false, delayMs: DELAY_MS })
     const joiner = await room.seat({
@@ -149,17 +180,24 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     expect(joiner.el.seekWrites[0]).toBeCloseTo(601, 2)
     expect(joiner.el.currentTime).toBeCloseTo(607.65, 2)
 
-    // Exactly one mirror — the frame sent while the element was still in
-    // flight — and every frame after it asserts. The counts are pinned on both
-    // sides of the boundary so neither half can drift into the other unnoticed.
+    // No mirror at all, and seven assertions where there used to be six. The
+    // counts are pinned on both sides so neither half can drift into the other
+    // unnoticed, and the total is pinned too so "no mirrors" cannot be bought by
+    // the peer having gone quiet.
     const wire = room.server.wireOf('joinuser')
     expect(wire).toHaveLength(7)
-    expect(mirroring(wire)).toHaveLength(1)
-    expect(asserting(wire)).toHaveLength(6)
-    // And the boundary is where it is claimed to be: the mirror is the first
-    // frame, not one somewhere in the middle of a run that flickered.
-    expect(wire.indexOf(mirroring(wire)[0])).toBe(0)
-    expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(6)
+    expect(mirroring(wire)).toHaveLength(0)
+    expect(asserting(wire)).toHaveLength(7)
+    // The boundary — the very first frame — restated where a reader looks for
+    // it rather than left as a claim with nothing written under it. The two
+    // lengths above already force it: `asserting` is an order-preserving
+    // filter, so both arrays being 7 makes them the same frames, reference for
+    // reference. It stands where an `indexOf(mirroring(wire)[0]) === 0` used to,
+    // which did carry its own information against an unpinned `mirroring` set
+    // but would read `-1` here — green-looking and meaningless — if it had
+    // merely been left in place.
+    expect(asserting(wire)[0]).toBe(wire[0])
+    expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(7)
 
     // Adopting does not make it a leader. It agrees with the room rather than
     // arguing with it, so the host keeps setting the position and the joiner

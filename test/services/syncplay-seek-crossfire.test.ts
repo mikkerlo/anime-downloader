@@ -8,26 +8,60 @@
 // **the room never took our seek**, so the intent is still live when the
 // contradicting periodic lands.
 //
-// This file pins the other shape, and it is a test that the bug **survives**:
-// the host's big forward seek is *accepted*, the room agrees for one tick, and
-// then `Room.getPosition()`'s `min()` over watchers (`server.py:597-604`)
-// re-elects the room onto a joiner whose element has not landed yet and is
-// still reporting its stalled `currentTime`. By the time that frame arrives the
-// host's `seekIntent` has already been retired by the server's own reflected
-// forced update — "the recovery fired" and "the intent exists" go false on the
-// *same* tick — so no intent-keyed rule can reach it, whatever its lifetime.
+// This file pins the other shape, and it is a test that the bug **survives**.
+//
+// The peer that scrubs is the peer with the unbuffered element, which is the
+// role assignment the #368 capture forced: its big forward seek is *accepted*,
+// the room agrees for one tick, and then its own 1 Hz snapshot goes out
+// carrying the seek **target** — 645, the position a real element reports the
+// moment `currentTime` is assigned and for the whole of the flight, with
+// nothing buffered within hundreds of seconds of it. On that `doSeek: false`
+// periodic `Room.getPosition()`'s `min()` over watchers (`server.py:597-604`)
+// elects the *buffered* peer instead, genuinely down at ~105, and the losing
+// frame comes back and drags the scrubber off its own target — measured here as
+// `t=7050 host <- 104.99 setBy=joinuser doSeek=false el=645`, a 540 s backwards
+// jump on the peer that was scrubbing.
+//
+// The victim is therefore the scrubber, not the laggard. Before #368 this file
+// modelled it the other way round — a joiner frozen at its pre-write position
+// dragging the host down — and that had the sign of the error backwards: a
+// mid-seek element announces too *high*, not too low, so it loses the election
+// rather than winning it.
+//
+// No intent-keyed rule reaches it, and the reason is stronger than a lifetime
+// argument. The scrubber's `seekIntent` is **never armed at all** — zero armed
+// samples across the run, on any frame. Its element fires exactly one `seeked`,
+// at t=13050 and on 104.99, which is the *apply's* target and not the user's
+// 645: the yank replaced the in-flight write before it came due, and an
+// interrupted seek fires none of its own. That surviving `seeked` matches a
+// registered `value` seek operation, so `onVideoSeeked` returns inside
+// `consumeSeekOp` (`use-syncplay-client.ts:1963`) without ever reaching
+// `sendSyncplayLocalState('seek')`. The user's 645 never gets a `seeked` of its
+// own, so it never arms an intent, so there is no lifetime for a rule of this
+// shape to extend. #278's rewrite is keyed on exactly that value.
 //
 // This is deliberately a characterisation, not a regression test. It is
 // expected to start failing, and to be rewritten rather than deleted, when
 // either of its two real causes lands:
 //
-//  - **#284** — pushing the snapshot from the element's `seeking` *target*
-//    rather than its stalled `currentTime`, which is what keeps a mid-seek
-//    laggard out of the `min()` election in the first place. Symptom 2's
-//    primary fix.
+//  - **#284** — which has already **shipped**, and is not the fix for this
+//    shape. What it added is a readiness term on the two outbound doors for a
+//    reloading `HAVE_NOTHING` element (`docs/syncplay.md:121`), and that is
+//    correct for what it covers. What this header used to claim it would do —
+//    push the element's `seeking` *target* rather than its stalled
+//    `currentTime` — is backwards twice over: `sendSyncplayLocalState()`
+//    already sends `position: v.currentTime`, and on a mid-seek element
+//    `v.currentTime` **is** the target. Pushing the target is the cause here,
+//    not the cure. The door it leaves through is `hasAnnounceablePosition()`'s
+//    `readyState >= 1` (`use-syncplay-client.ts:770`), which admits an element
+//    sitting at exactly HAVE_METADATA with no data at the position it is
+//    announcing. Widening that door is a production change and is out of scope
+//    for #368.
 //  - **#279** — the room's position ratcheting backwards under a mirror
 //    `min()`; a `doSeek: false` frame should not be allowed to move the room
-//    backwards by minutes at all.
+//    backwards by minutes at all. On the #368 capture this is the framing that
+//    matches: it is precisely and only what would have prevented the jump
+//    measured above.
 //
 // ── Why this runs on the two-peer harness (#361 step 3) ───────────────────────
 //
@@ -45,8 +79,9 @@
 // than by hand: the laggy landing is `HarnessVideo`'s `seekLandMs`, the 1 Hz
 // snapshot push is the composable's own interval instead of the fixture's
 // manual `updateSnapshot`, and the seek that starts the crossfire is a scrubber
-// drag — a bare `currentTime` write whose `seeked` the composable classifies as
-// the user's — instead of a direct `sendLocalState` call.
+// drag — a bare `currentTime` write, which on this unbuffered host queues no
+// `seeked` for the composable to classify at all — instead of a direct
+// `sendLocalState` call.
 //
 // Still driven by `test/helpers/syncplay-min-election-server.ts` (landed on #282
 // for #277), because "who the server says set the room" is the *result* here
@@ -61,7 +96,15 @@ import type { TwoPeerRoom } from '../helpers/syncplay-two-peer'
 const ROOM_START = 100
 const SEEK_TO = 645
 const DELAY_MS = 50
-/** How long the joiner's unbuffered seek takes to land — an MKV/MSE respawn. */
+/** How long the **host's** unbuffered seek takes to land. Deliberately not
+ *  labelled "what an MKV/MSE respawn takes", which is what this used to claim
+ *  and what #368 retired: a real single scrub off a warm local file landed in
+ *  ~283 ms, so 6000 is a worst case — a slow disk, a network share — rather
+ *  than a typical cost. It is kept at 6000 by sweep rather than by default. The
+ *  yank reproduces at 6000 / 12000 / 20000 and is absent at 300 / 600 / 1200 /
+ *  2000 / 3000, so 6000 is the smallest swept value that still produces the
+ *  captured shape, and the value carries that provenance here the way the
+ *  constants in `vitest.config.ts` carry theirs. */
 const LAND_MS = 6000
 
 describe('SyncplayClient — the post-agreement re-election #278 does not reach', () => {
@@ -79,54 +122,73 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     vi.useRealTimers()
   })
 
-  it('yanks a host whose seek the room accepted, with no seekIntent left to key on', async () => {
+  it('yanks a host whose seek the room accepted, with no seekIntent ever armed', async () => {
     room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
 
     // Both elements start converged on the room and both clients adopt: this is
-    // an ordinary two-watcher session, not #277's unadopted mirror. The host's
-    // element is buffered and lands its writes on the spot; the joiner's takes
-    // LAND_MS and reports its stalled position the whole time.
+    // an ordinary two-watcher session, not #277's unadopted mirror. The roles
+    // are the way round the #368 capture forced: the **host** is the scrubber
+    // and the unbuffered one, so its writes take LAND_MS and it reports the
+    // seek target the whole time; the joiner is buffered, lands on the spot,
+    // performs no UI action at all, and is the peer that wins the election
+    // honestly.
     const host = await room.seat({
       username: 'hostuser',
       position: ROOM_START,
       paused: false,
       delayMs: DELAY_MS,
-      seekLandMs: 0
+      seekLandMs: LAND_MS
     })
     const joiner = await room.seat({
       username: 'joinuser',
       position: ROOM_START,
       paused: false,
       delayMs: DELAY_MS,
-      seekLandMs: LAND_MS
+      seekLandMs: 0
     })
 
     await room.advance(4)
     expect(host.status().playbackAdopted).toBe(true)
     expect(joiner.status().playbackAdopted).toBe(true)
 
-    // t=4000: the user drags the host's scrubber 545 s forward. No programmatic
-    // operation is armed, so the `seeked` the element queues is classified as
-    // the user's and leaves through `sendLocalState('seek')` — the same door the
-    // shipped player uses.
+    // t=4000: the user drags the host's scrubber 545 s forward. With the host
+    // seated unbuffered at `seekLandMs: LAND_MS` above, the drag queues no
+    // `seeked` at all — `userSeek` only assigns `currentTime` — so nothing
+    // leaves through `sendLocalState('seek')` and no `seek` frame is ever
+    // written for this target. What reaches the wire is the ordinary 1 Hz
+    // snapshot, now carrying the in-flight target because the element reports
+    // it, and that is the whole difference: the room is told 645 by a peer that
+    // has no data there, without a single frame marked as a seek.
     const seekedAt = Date.now()
     host.frames.length = 0
     host.userSeek(SEEK_TO)
     await room.advance(0.05)
-    expect(host.seekIntent()).not.toBeNull()
+    // And the intent is **not** armed, here or ever. Before the #368 role swap
+    // this line read `not.toBeNull()`: the scrubber was the buffered peer, its
+    // write landed on the spot, and the `seeked` that landing fired was
+    // classified as the user's and armed an intent. With the scrubber
+    // unbuffered the write is still in flight, no `seeked` has fired, and none
+    // ever will for this target — the yank replaces it before it comes due. The
+    // header explains why that is the stronger version of the same point.
+    expect(host.seekIntent()).toBeNull()
 
     await room.advance(15.95)
 
-    // The frame that is the whole point: the host's element is at ~645 and it is
-    // handed the room's collapsed ~104 on a `doSeek: false` periodic. Measured
-    // on this fixture — `t=6050 host <- 104.15 setBy=joinuser doSeek=false
-    // el=647.05`, and the room never returning above ~114 by t=20000, which is
-    // the trace in #278's Motivation on the instant and on the element to two
-    // decimal places. The room position it carries is the one number the port
-    // moved: 104.15 where the hand-rolled fixture read 105.52, because the
-    // snapshot that wins the election is now the composable's own 1 Hz push off
-    // a stalled `HarnessVideo` rather than a manual `updateSnapshot` on a
-    // 50 ms fixture step, and the two land one slice apart.
+    // The frame that is the whole point: the host's element reports 645 — its
+    // own in-flight seek target — and it is handed the room's collapsed ~105 on
+    // a `doSeek: false` periodic. Re-measured on the swapped fixture:
+    // `t=7050 host <- 104.99999995231629 setBy=joinuser doSeek=false el=645`,
+    // with the room never returning above ~110 by t=20000. That is the shape of
+    // the #368 capture — a scrubber announcing a forward position it has no
+    // data for, losing `min()` to a peer genuinely behind it, and being seeked
+    // backwards by the difference — at a tenth of the capture's 1171.97 s
+    // because this room starts at 100 rather than at 20.
+    //
+    // The numbers moved from the pre-#368 fixture (`t=6050 … 104.15 … el
+    // 647.05`) for two reasons worth keeping apart: the roles are swapped, so
+    // the element under the yank is the other one, and the element no longer
+    // freezes, so the position it announces is the target rather than a walked
+    // pre-write reading.
     const yank = host.frames.find(
       (f) => f.element > SEEK_TO - 5 && f.state.position < SEEK_TO - 100
     )
@@ -136,12 +198,16 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     //    the server's own `_position` is down there too.
     expect(room.server.roomState().position).toBeLessThan(SEEK_TO - 100)
 
-    // 2. **The intent is already null when it lands.** It was retired by the
-    //    server's own reflected forced update (`syncplay.ts:2143-2148`, drift ≈
-    //    0) one round trip after the seek — i.e. "the recovery fired" and "the
-    //    intent exists" go false on the same tick. #278's rewrite is keyed on
-    //    exactly this value, so it cannot fire here however long the window is
-    //    held open.
+    // 2. **The intent is null when it lands — because it was never armed.**
+    //    Not, as this file said before #368, because the server's reflected
+    //    forced update (`syncplay.ts:2143-2148`, drift ≈ 0) retired it one round
+    //    trip after the seek. That retirement path is real and still reachable,
+    //    but it is not what happens here: with the scrubber unbuffered there is
+    //    no `seeked` for the user's 645 to arm an intent from in the first
+    //    place, so there is nothing to retire. Either way #278's rewrite is
+    //    keyed on exactly this value and cannot fire, and the "never armed"
+    //    version is the stronger statement — it holds however long the window
+    //    is held open *and* however the server replies.
     expect(yank!.intent).toBeNull()
     expect(yank!.at).toBeGreaterThan(seekedAt - t0)
 
@@ -153,31 +219,34 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     expect(yank!.state.doSeek).toBe(false)
     expect(host.el.seekWrites.some((w) => w < SEEK_TO - 100)).toBe(true)
 
-    // The tolerance itself, pinned — and this is the line that makes the file a
-    // test of the shipped rule rather than of a copy of it.
+    // The cross-check below still says the applies and the over-tolerance
+    // frames are the same set, but this file no longer pins the **tolerance
+    // literal**, and that has to be said out loud because it used to.
     //
-    // The `3.0` below is not a reimplementation of the apply rule the way
-    // `LaggyElement.apply()` was; it is an assertion *about* it, from outside.
-    // Every frame here is `doSeek: false` and well inside the file, so the rule
-    // reduces to "diff > the literal", and the element's write history says which
-    // frames cleared it. Over this run that is two — the yank at t=6050
-    // (diff ≈ 542.9) and one re-seek at t=10050 when free-running drift reached
-    // exactly 4.0 s — out of eight periodics, the other six sitting on exact
-    // 1.0/2.0/3.0 and moving nothing. Mutating the literal at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1411` reds this for any
-    // narrowing and for any widening to 4.0 or beyond, and the three checked are
-    // worth naming because the failure is a different one each time. `4.0` leaves
-    // the t=10050 frame at exactly the tolerance, so it stops qualifying, the
-    // element is not re-seeked, and the run free-runs further apart: 2 applied
-    // writes against 3 frames this filter counts — `to have a length of 3 but got
-    // 2`. `2.0` applies frames this filter skips and the run stays converged: 3
-    // applied writes against 1 — `to have a length of 1 but got 3`. `1000.0`
-    // refuses the yank itself and the room never comes back down, so it is
-    // assertion 1 that goes first — `expected 654.00… to be less than 545`.
-    // The asymmetry is worth writing down rather than rounding off: every drift
-    // in this run lands on an exact integer, so `3.5` and `3.9999` both survive
-    // green while `4.0` does not. What this file pins the literal into is the
-    // half-open window `[3.0, 4.0)`, not a point.
+    // Before the #368 role swap this run produced two applies against two
+    // qualifying frames, so mutating the `3.0` at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` moved the two
+    // sides apart and red this file. On the swapped fixture both sides are 1,
+    // so the cross-check agrees with itself under a `3.0` → `4.0` mutation and
+    // stops being the thing that catches it. The file still reds under that
+    // mutation, on `expect(host.frames).toHaveLength(5)` reading 2 — a frame
+    // census reacting to the widened tolerance, which says nothing about what
+    // the literal is. Re-deriving the window here does not work either: after the
+    // yank the swapped run reaches a fixed point at a drift of exactly 1.9500 s
+    // and holds it — both peers free-run at 1 s/s with a constant link and
+    // election offset, so the drift never accumulates — and extending the run
+    // to 60 s, 180 s and 600 s leaves `maxDrift` at 1.9500 and the apply count
+    // at 1. No run length puts a frame on the widened edge.
+    //
+    // **The pin is not lost; it moved.**
+    // `use-syncplay-client.test.ts:5085 ("expect(v.currentTime).toBe(604)")`
+    // pins the same half-open `[3.0, 4.0)` window and pins it more tightly, on
+    // a fake element parked at 600 handed seven 1 Hz frames at 601…607: the
+    // first frame clearing the literal is 604 for any tolerance in `[3.0,
+    // 4.0)`, 605 at `4.0` and 606 under `2.0`. The two files are a pair, and
+    // anyone trimming either should know it. Note that the surviving site lives
+    // outside `test/services/`, so `npx vitest run test/services/` cannot see
+    // the mutation control at all — run the whole suite.
     const overTolerance = host.frames.filter(
       (f) => !f.state.doSeek && Math.abs(f.element - f.state.position) > 3.0
     )
@@ -190,23 +259,35 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // narrowed literal.
     const appliedWrites = host.el.seekWrites.slice(1)
     expect(appliedWrites).toHaveLength(overTolerance.length)
-    expect(appliedWrites).toHaveLength(2)
+    // One, not the pre-#368 two: `[104.99999995231629]`. The second write in
+    // the old fixture was a re-seek at t=10050 off accumulated free-running
+    // drift, and the swapped run never accumulates any — see the fixed point
+    // described above.
+    expect(appliedWrites).toHaveLength(1)
 
-    // 4. The joiner is yanked too — at t≈14050, once the room's `setBy` swings
-    //    back to the host and its self-guard stops eating the periodics — and it
-    //    **never seeked at all**. It holds no intent at any point in the run, so
-    //    there is no lifetime on its side for any rule of this shape to key to.
-    //    That is the fact that closes the question rather than merely bounding
-    //    it: even an unbounded window would protect the host and leave the
-    //    joiner exactly as it is today.
-    const joinerYank = joiner.frames.find(
-      (f) => f.at > seekedAt - t0 && f.state.position < SEEK_TO - 100 && f.element > SEEK_TO - 5
-    )
-    expect(
-      joinerYank,
-      'the joiner was never yanked — the fixture stopped reproducing'
-    ).toBeDefined()
-    expect(joinerYank!.intent).toBeNull()
+    // 4. **Neither peer ever holds an intent, so an unbounded window would
+    //    protect neither.** This used to be argued through the joiner: it was
+    //    the laggard, it was yanked too at t≈14050, and it had never seeked, so
+    //    there was nothing on its side for an intent-keyed rule to reach. The
+    //    #368 swap takes that assertion's subject away — the joiner is the
+    //    *buffered* peer now, it sits between ~100 and ~110 for the whole run,
+    //    and it is never dragged anywhere at all.
+    //
+    //    The argument survives on the victim instead, and in a stronger form.
+    //    The host is the peer that scrubbed, it is the peer that gets yanked,
+    //    and its intent is null on **every** frame of the run rather than
+    //    merely retired by the time the yank lands. So the question is closed
+    //    rather than bounded, and it is closed on both sides at once.
+    expect(host.frames.every((f) => f.intent === null)).toBe(true)
     expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
+    // Counted, not sampled, on both sides: an `every()` over a set that turned
+    // out empty would report green while asserting nothing.
+    expect(host.frames).toHaveLength(5)
+    expect(joiner.frames).toHaveLength(14)
+    // And the joiner's non-participation is a fact about the run rather than a
+    // filter that happened to miss: it never reported a position within 100 s
+    // of the scrubber's target, which is what "it was never the victim" means
+    // here.
+    expect(joiner.frames.every((f) => f.element < SEEK_TO - 100)).toBe(true)
   })
 })

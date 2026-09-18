@@ -1729,7 +1729,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // hold is waiting for"), and a gate here contradicted it.
     //
     // The gate never withheld a payload in any case, only delayed one: the 1 s
-    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2162) is
+    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2340) is
     // unconditional and `pushSyncplaySnapshot` has no `holding` term of its
     // own, so the identical snapshot reached main within a second regardless.
     // Dropping it is a latency change, not a semantic one.

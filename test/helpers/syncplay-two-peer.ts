@@ -124,9 +124,19 @@ export interface HarnessVideoOptions {
    *  — the same reasoning as `fakeVideo`'s in the composable's own test file. */
   readyState?: number
   /** How long a `currentTime` write takes to land. While one is in flight the
-   *  element reports its **stalled** pre-write position, which is what the 1 Hz
-   *  snapshot pushes to main and what wins the server's `min()` election — the
-   *  property the crossfire fixture is built on. `0` lands on the write. */
+   *  element reports the **seek target**, not a stalled pre-write position:
+   *  setting `currentTime` updates the official playback position
+   *  synchronously, and the getter returns it while the seek is still pending,
+   *  so it is only *readiness* that lags. Captured against the stock build
+   *  (#368) — four drags 110 ms apart on a real seek bar, each read taken
+   *  immediately before the next write, returned 1107.7 / 1136.1 / 1164.5, i.e.
+   *  the preceding target exactly, at `readyState` 1 with nothing buffered
+   *  within a thousand seconds of the reported position. A frozen element would
+   *  have read the pre-drag 20.686 on all four. That target is what the 1 Hz
+   *  snapshot pushes to main, and it makes a mid-seek peer announce *too high*
+   *  and lose the server's `min()` election to a peer genuinely behind it — the
+   *  opposite sign from what this harness modelled before #368. `0` lands on
+   *  the write. */
   seekLandMs?: number
   /** `v.src`. Identity only — nothing here fetches it — but identity is the
    *  whole subject of #360, where a frame describing the *previous* episode is
@@ -183,8 +193,8 @@ export class HarnessVideo {
   private pausedFlag: boolean
   private anchor: number
   private anchorAt: number
-  /** Non-null while a write is in flight: what the element reports meanwhile. */
-  private stalled: number | null = null
+  /** Non-null while a write is in flight: the clamped target the element
+   *  reports meanwhile, and when it is due to land. */
   private pending: { target: number; dueAt: number } | null = null
   /** Non-null while a load is running: when `loadedmetadata` is due. */
   private metadataDueAt: number | null = null
@@ -228,8 +238,37 @@ export class HarnessVideo {
     this.anchorAt = Date.now()
   }
 
+  /** The **clamped** target while a write is in flight, the walking playhead
+   *  otherwise. Clamped rather than raw because Chromium clamps to the seekable
+   *  range before setting the official position, and #281's out-of-file arm
+   *  reads downstream of this; `seekWrites` keeps the raw pre-clamp value, so
+   *  "our code wrote X" stays separable from "the element landed on X". */
   get currentTime(): number {
-    return this.stalled ?? this.live()
+    return this.pending !== null ? this.pending.target : this.live()
+  }
+
+  /** True while a write is in flight, the way a real element reports it through
+   *  the whole of the capture in #368. Nothing reads it yet: the outbound
+   *  announceability door is `readyState` alone
+   *  (`use-syncplay-client.ts:770`), which is exactly why a mid-seek element at
+   *  `readyState` 1 gets into the election holding a position it has no data
+   *  for. Any fix on that door gates on this, and a harness that could not say
+   *  `seeking` could not express the fix.
+   *
+   *  The `seekLandMs > 0` conjunct is not redundant with `pending !== null`, and
+   *  dropping it inverts the reading on every element the harness has: the arm
+   *  in the setter below is *unconditional*, outside its `seekLandMs <= 0`
+   *  branch, so a `seekLandMs: 0` element — one the setter has already
+   *  re-anchored onto its target — still holds a `pending` from the write until
+   *  the `tick()` that clears it. A bare `pending !== null` therefore says
+   *  `seeking` on an element that is not in flight and whose `currentTime` has
+   *  already taken the target, which is the file's own `seekLandMs` doc ("`0`
+   *  lands on the write") read backwards. It is the same condition `tick()`
+   *  spends fourteen lines defending, and a production gate written against
+   *  `seeking` would otherwise silence every landed element in the suite for
+   *  the slice after any write. */
+  get seeking(): boolean {
+    return this.pending !== null && this.seekLandMs > 0
   }
 
   set currentTime(t: number) {
@@ -238,17 +277,26 @@ export class HarnessVideo {
     if (this.seekLandMs <= 0) {
       this.anchor = target
       this.anchorAt = Date.now()
-      this.stalled = null
-    } else if (this.stalled === null) {
-      // Only the *first* in-flight write freezes the reading. A second write
-      // arriving before the first lands must not re-read `live()`: `live()`
-      // walks from the old anchor, so re-reading un-freezes the playhead and
-      // jumps it forward by however long the first seek had been pending. A
-      // real element stays where the first seek left it until one of them
-      // lands. Replacing `pending` outright *is* right — an interrupted seek
-      // fires no `seeked` of its own.
-      this.stalled = this.live()
     }
+    // A second write arriving before the first lands replaces the target
+    // outright, and that is right on both halves. The reported position follows
+    // the *latest* target rather than staying where an earlier one left it —
+    // the getter above reads `pending.target`, so there is nothing to freeze
+    // here — and an interrupted seek fires no `seeked` of its own, so only the
+    // survivor's landing is announced.
+    //
+    // The arm below is unconditional — it is outside the `seekLandMs <= 0`
+    // branch — so `pending` stays set on *landed* elements too, in the window
+    // between the write and the `tick()` that clears it. `seeking` carries its
+    // own `seekLandMs > 0` conjunct against that; `currentTime` above does not,
+    // and reads `pending.target` through that window. The `seekLandMs: 0` files
+    // (seek-echo, ignore-counters, rtt, playpause) stay green through it only
+    // because `Date.now()` is the fake clock and does not move inside a slice,
+    // so `pending.target` and `live()` are bit-identical. It keys on the
+    // clock's granularity, not on `seekLandMs`: a fixture reading `currentTime`
+    // across an `advance()` boundary before the landing tick gets the target
+    // where it used to get the walked playhead, at the same ~0.05 s scale as
+    // the artifacts named on the guard in `tick()`.
     this.pending = { target, dueAt: Date.now() + this.seekLandMs }
   }
 
@@ -313,7 +361,9 @@ export class HarnessVideo {
     }
     this.anchor = 0
     this.anchorAt = Date.now()
-    this.stalled = null
+    // Dropping `pending` is also what makes the inverted getter need no
+    // reload-specific arm: a reloaded element falls straight back to `live()`,
+    // which is 0 here, and that is what a real one reports too.
     this.pending = null
     this.readyState = 0
     this.metadataDueAt = Date.now() + this.metadataMs
@@ -359,10 +409,24 @@ export class HarnessVideo {
       this.queued.push('loadedmetadata')
     }
     if (this.pending !== null && Date.now() >= this.pending.dueAt) {
-      if (this.stalled !== null) {
+      // `seekLandMs > 0` is what the deleted `stalled !== null` null-check was
+      // always standing in for, and it has to stay. Re-anchoring
+      // unconditionally snaps every `seekLandMs: 0` element back onto its
+      // target on the following slice, discarding the ~0.05 s it has already
+      // walked since the write landed, and reds three files by exactly that
+      // much for reasons with no connection to the mid-seek reading:
+      // `syncplay-two-peer-seek-echo.test.ts:104` reads 400.1000000715256
+      // against a close-to of 400.15, the same shape repeats at
+      // `syncplay-two-peer-seek-echo.test.ts:193` and
+      // `syncplay-two-peer-seek-echo.test.ts:194` (800.1 against 800.15), and
+      // `syncplay-two-peer-ignore-counters.test.ts:230` reads 700.0499999523163
+      // against 700.1 — plus `syncplay-two-peer-rtt.test.ts` and one adoption
+      // test off the same shift. The numbers are written down because keeping
+      // this guard is what makes deleting the field free, and the next person
+      // tidying the field's leftovers away will try exactly this.
+      if (this.seekLandMs > 0) {
         this.anchor = this.pending.target
         this.anchorAt = Date.now()
-        this.stalled = null
       }
       this.pending = null
       this.queued.push('seeked')

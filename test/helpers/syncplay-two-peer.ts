@@ -441,6 +441,17 @@ export interface Peer {
    *  that read them spell the field names in one place rather than one per
    *  scenario file. */
   counters(): IgnoreCounters
+  /** `SyncplayClient`'s private `serverRtt`, in **seconds** — the round trip the
+   *  ping exchange last measured, and the term `handleState()` halves into both
+   *  the position compensation and the room anchor's back-date.
+   *
+   *  Read here for the same reason as `seekIntent()` and `counters()`: it is
+   *  private, it is projected onto nothing — not `SyncplayStatus`, not the
+   *  `Peer` surface before this — and a fixture that re-derived it from the link
+   *  delay would be asserting against its own arithmetic rather than against
+   *  what the client measured. It is 0 until the first echo completes a round
+   *  trip, which is itself worth being able to say. */
+  rtt(): number
   /** The user drags the scrubber: a bare `currentTime` write with no
    *  programmatic operation armed, so the resulting `seeked` reaches the room as
    *  the user's own seek. */
@@ -780,6 +791,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       status: () => client.getStatus(),
       seekIntent: () => seekIntentOf(client),
       counters: () => countersOf(client),
+      rtt: () => rttOf(client),
       userSeek: (to: number) => {
         el.currentTime = to
       },
@@ -855,7 +867,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
   }
 }
 
-// The two readers below reach into `SyncplayClient`'s private state, and they
+// The three readers below reach into `SyncplayClient`'s private state, and they
 // are the only place in the two-peer fixtures that does. Element access rather
 // than `as unknown as { … }`: TypeScript resolves `client['seekIntent']`
 // against the real class — the escape hatch it leaves open for private members
@@ -903,3 +915,5 @@ const countersOf = (client: MainSyncplayClient): IgnoreCounters => ({
   pendingClientAck: client['pendingClientAck'],
   pendingServerAck: client['pendingServerAck']
 })
+
+const rttOf = (client: MainSyncplayClient): number => client['serverRtt']

@@ -153,7 +153,7 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
   three guards, the first-write freeze above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
-  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Four more
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Six more
   scenario files sit on the same harness (#361 step 4):
   `syncplay-two-peer-playpause.test.ts` (both directions, a peer
   joining a room that is already paused, and a peer's own pause not coming
@@ -163,17 +163,36 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   moves of that literal, which is what pins it as the cause),
   `syncplay-two-peer-ignore-counters.test.ts` (the `ignoringOnTheFly`
   bookkeeping across a clean round trip, two changes in flight, and a peer's
-  forced update crossing our window) and
+  forced update crossing our window),
   `syncplay-two-peer-adoption.test.ts` (the spectator mirror and the adoption
   latch, reached through a seek that never lands, an element that drops to
-  `HAVE_NOTHING`, and an episode change). That last one reads the mirror
+  `HAVE_NOTHING`, and an episode change),
+  `syncplay-two-peer-rtt.test.ts` (the `serverRtt / 2` position compensation and
+  its pause gate, on a deliberately fat 500 ms link so the term is worth half a
+  second rather than one `advance()` slice) and
+  `syncplay-two-peer-readiness.test.ts` (the ready gate, the one mechanism here
+  with no wire playstate at all — one peer's `setSyncplayLocalReady(false)`
+  travels `Set: {ready}` → `List` → `room-users` → the *other* peer's
+  `watch(syncplayRoomUsers)` and pauses an element that received no state and
+  made no call of its own). The adoption file reads the mirror
   straight off the wire — an asserting frame carries a `paused` key and a
   mirror does not — which is what makes "this peer cannot drag the room to 0"
-  an observation rather than an inference. Each file's header records what it
+  an observation rather than an inference; the readiness file reads the same
+  wire for the opposite claim, that a gate pause is announced as nothing,
+  because the snapshot carries the user's intent rather than `v.paused`.
+  A private-state reader on `Peer` is what makes the RTT file's premise a
+  measurement rather than arithmetic over the link delay — `serverRtt` is
+  projected onto nothing, not even `SyncplayStatus`, so `rtt()` joins
+  `seekIntent()` and `counters()` as an element-access read of the real class.
+  Each file's header records what it
   cannot isolate on this harness rather than asserting around it — the
   pause-on-join case is guarded twice, `pendingServerAck` is never observable
-  as non-zero, the server never echoes a `client` key, and the two staleness
-  thresholds produce the same frame, so only the first is pinned.
+  as non-zero, the server never echoes a `client` key, the two staleness
+  thresholds produce the same frame so only the first is pinned, and the RTT
+  file sees the compensation only through the `doSeek` arm (a periodic carries
+  the identical term and is never applied) and leaves the room-anchor axis of
+  the same `serverRtt` to the single-client files, where the election it
+  otherwise feeds back into can be held still.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence

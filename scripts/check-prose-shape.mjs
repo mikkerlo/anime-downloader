@@ -101,8 +101,18 @@ export const DEFICIT = 20
 // `.github` because a citation can be written in any of them. This set covers
 // prose a human wrapped by hand, which is a different population: agent
 // instruction Markdown under `.claude/`, `.gemini/` and `.github/agents/` is
-// out, and that choice is worth 3.4x on the raw count — 18 of the 44 tracked
-// `.md` live under those roots and every front-matter hit comes from them.
+// out, excluded on THAT ground and not on a hit count.
+//
+// An earlier draft of this comment defended the boundary as "worth 3.4x on the
+// raw count". #370 RETRACTED that and this line is the correction. The 3.4x
+// prices the FRONT-MATTER exclusion, not the scope: re-measured at this commit
+// with `.claude`, `.gemini` and `.github/agents` added to the roots, the
+// committed predicate reports the same 9 over 42 files instead of 23 — scope
+// moves the committed count by 1.00x, and 3.4x was never its price. 19 of the
+// 44 tracked `.md` live under those roots and every front-matter hit comes from
+// them, which is a fact about where the front matter sits, not an argument for
+// the boundary. The issue is explicit that the count must not be used to defend
+// the exclusion at all; docs/testing.md says the same thing beside this file.
 export const SCAN_ROOTS = ['.', 'docs']
 
 // The one prose class outside those roots. `src/**/README.md` is hand-wrapped
@@ -434,6 +444,26 @@ export function raggedLines(lines, deficit = DEFICIT) {
       // clause means, not because it currently differs — measured, and a
       // fixture pinning the difference cannot be constructed. Clause (b) is
       // what stops this reading past the block's end.
+      //
+      // THE OTHER END OF THE SAME ARITHMETIC IS NOT FIXED BY THIS CLAUSE, and
+      // saying so here is the point of this paragraph. `blockMax` is the
+      // reference for (c) as well as for (e), and it is set by whatever the
+      // longest line in the paragraph happens to be — including a line that is
+      // long BECAUSE no wrapper could break it. So an unbreakable token is
+      // pardoned at its own break point by (e) and then raises the bar for every
+      // neighbour through (c): a six-line paragraph wrapped at 76-77 columns
+      // around a 103-column bare URL reports four hits, all four of them
+      // correctly wrapped lines, and removing the URL takes it to zero. Latent
+      // rather than live — the widest scanned block on this tree is 88 columns,
+      // and only two exceed 84.
+      //
+      // LEFT ALONE DELIBERATELY. Teaching `blockMax` to ignore a line no wrapper
+      // could have produced is a PREDICATE change, and the issue's Risks section
+      // forbids moving the predicate once the count is known — the same rule
+      // clause (e) is recorded against above. It is written down in
+      // docs/testing.md under "What it over-reports" and the `rose` failure text
+      // below names it, so an author who hits it is told not to rewrap. Changing
+      // it belongs in its own issue with its own measurement.
       const next = block[b + 1]
       if (len + 1 + firstToken(lines[next]).length > blockMax) continue
       hits.push({ line: i + 1, len, blockMax, text: lines[i].trim() })
@@ -527,9 +557,19 @@ export function report(r, pins = {}) {
         '',
         'A line listed above is at least 20 columns shorter than the longest line',
         'in its own paragraph, does not end a sentence, and the next word in the',
-        'paragraph would have fitted on it — so a wrapper did not produce that',
-        'break, an edit did. Rewrap the paragraph. Raise the pin only for a line',
-        'that is genuinely meant to stop there, and say why in the commit message.'
+        'paragraph would have fitted on it. Usually a wrapper did not produce that',
+        'break, an edit did: rewrap the line you just wrote. The dump above is',
+        'every hit and not just the new one, so narrow it with the per-file split',
+        'in the RAGGED_PIN comment, or run this script on your base commit and',
+        'diff the two lists.',
+        '',
+        'First check whether the longest line in that paragraph is one no wrapper',
+        'could break — a bare URL or a long backticked path — because such a line',
+        'raises the bar for every neighbour and the hits around it are not defects.',
+        'See "What it over-reports" in docs/testing.md.',
+        '',
+        'Raise the pin only for a line that is genuinely meant to stop there, and',
+        'say why in the commit message.'
       )
     } else {
       err.push(

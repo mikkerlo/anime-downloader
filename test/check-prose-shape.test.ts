@@ -112,6 +112,12 @@ const CITATION_RUN = [
   ''
 ].join('\n')
 
+// The one repair instruction that belongs to the RISING arm of the pin and must
+// never reach the falling one. Held as a constant because both arms assert on it
+// — the rising arm that it is there, the falling arm that it is not — and a `not`
+// with no positive twin passes against wording nothing produces.
+const REWRAP_ADVICE = 'rewrap the line you just wrote'
+
 describe('check-prose-shape', () => {
   it('reds on the short line a rebase left inside a wrapped bullet', () => {
     // THE REGRESSION CASE. Line 8 is `shapes verbatim. The main→renderer half`:
@@ -936,7 +942,16 @@ describe('check-prose-shape', () => {
     expect.soft(rose.ok).toBe(false)
     expect.soft(rose.err.join('\n')).toContain('Ragged-line count rose: 1, pinned at 0.')
     expect.soft(rose.err.join('\n')).toContain('docs/testing.md:8  41/79')
-    expect.soft(rose.err.join('\n')).toContain('Rewrap the paragraph.')
+    expect.soft(rose.err.join('\n')).toContain(REWRAP_ADVICE)
+    // The rising arm must ALSO name the over-report class (#380 review): a line
+    // no wrapper could break sets `blockMax` for its neighbours, and the
+    // neighbours are then reported although they are wrapped correctly. Advice
+    // to rewrap is wrong for them, so the arm that gives that advice has to say
+    // what to check first, or it sends the author to reflow correct prose.
+    expect.soft(rose.err.join('\n')).toContain('raises the bar for every neighbour')
+    // And it must not send them to a list that does not exist: the RAGGED_PIN
+    // comment carries a per-file split, not a line-by-line baseline.
+    expect.soft(rose.err.join('\n')).toContain('per-file split')
 
     // And one LEAVING reds too, which is the half a one-sided pin would miss: a
     // pin left behind by a repair would otherwise quietly license a new ragged
@@ -946,11 +961,16 @@ describe('check-prose-shape', () => {
     expect.soft(fell.ok).toBe(false)
     expect.soft(fell.err.join('\n')).toContain('Ragged-line count fell: 1, pinned at 2.')
     expect.soft(fell.err.join('\n')).toContain('lower the pin to match')
-    // The one instruction the falling arm must NOT give. Guarded by `ok` being
-    // false and the two assertions above having found real text in `err`, so
-    // this is a claim about a populated string rather than a `not` that passes
-    // against an empty one.
-    expect.soft(fell.err.join('\n')).not.toContain('Rewrap the paragraph.')
+    // The one instruction the falling arm must NOT give. THE `not` IS PAIRED
+    // WITH THE POSITIVE ABOVE ON PURPOSE, and that pairing is the whole of its
+    // value: both read the same `REWRAP_ADVICE` constant, so a reworded or
+    // mistyped instruction fails the rising arm's `toContain` instead of
+    // silently satisfying this one. Before #380 this line held a literal the
+    // rising arm no longer prints, which is the shape that cannot fail — a `not`
+    // against a string nothing produces passes for the wrong reason, and
+    // re-pointing it at the new wording without the twin would have left it
+    // exactly as hollow.
+    expect.soft(fell.err.join('\n')).not.toContain(REWRAP_ADVICE)
   })
 
   it('reports the deficit it actually selected on, not the module default', () => {

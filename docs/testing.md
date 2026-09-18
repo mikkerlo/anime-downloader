@@ -454,6 +454,18 @@ front matter, and it has no opinion on agent-instruction Markdown under
 different audience and a different shape, excluded on that ground and not on a
 hit count.
 
+**What it over-reports.** Clause (c) measures the deficit against `blockMax`, so
+one line a wrapper could not break — a bare URL, a long backticked path — raises
+the bar for every other line in the same paragraph. A six-line paragraph wrapped
+at 76-77 columns around a 103-column link reports four hits, none of them a
+defect, and the failure text's advice to rewrap the paragraph is wrong for all
+four. Nothing on this tree is close: the widest scanned block is 88 columns and
+only two exceed 84. It is a latent class, named here rather than discovered by
+whoever first writes a long link. Narrowing `blockMax` to ignore a line no
+wrapper could have broken is a **predicate change**, and this gate's own rule is
+that a threshold does not move once the count is known — so it belongs in its own
+issue with its own measurement, not in the PR that first measured the count.
+
 `test/check-prose-shape.test.ts` drives `analyze()` over synthetic corpora rather
 than the real tree, for the reason the citation tests give: the real counts are
 the pin itself. The motivating 41-column line is frozen there as a corpus string,

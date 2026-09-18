@@ -81,11 +81,19 @@ import { basename, extname } from 'node:path'
 // happens to say measures nothing, and this one is the only thing between the
 // predicate and a printed figure nobody diffs.
 //
-// 9 on this tree: 8 in docs/testing.md and 1 in src/shared/README.md. Measured
+// 8 on this tree: 7 in docs/testing.md and 1 in src/shared/README.md. Measured
 // at the commit that introduces it, after clause (e), and not carried from the
 // 14 PR 1 quoted, the 18 this tree reports without clause (e), or the 6
 // estimated in review before #379 landed.
-export const RAGGED_PIN = 9
+//
+// Lowered from 9 by #368, which is the "deliberate repair" case above rather
+// than a re-pin to clear a red. The line that left was docs/testing.md:177,
+// "`HAVE_NOTHING`, and an episode change),", in the adoption file's entry in
+// the two-peer scenario list. #368 moved that file's door from "a seek that
+// never lands" to "an element that is not ready" — a real claim change, not a
+// rewrap — and the sentence was rewritten and refilled in the process. Nothing
+// was rewrapped in order to move this number.
+export const RAGGED_PIN = 8
 
 // --- configuration ------------------------------------------------------------
 

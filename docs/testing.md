@@ -134,10 +134,14 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   the fake clock, a seek that takes `seekLandMs` to land, and queued
   `play`/`pause`/`seeked`/`loadedmetadata` tasks — deliberately not the composable
   test file's `fakeVideo`, which models a static playhead for 205 single-frame
-  cases. Only the *first* write of a burst freezes the reported position — a
-  second write arriving before the first lands replaces the target but must not
-  re-read the walking playhead, or a stalled laggard drifts forward and
-  under-reports its own lateness into the server's `min()` election.
+  cases. While a write is in flight the element reports the **seek target**, not
+  a frozen pre-write position: assigning `currentTime` updates the official
+  playback position synchronously and it is only readiness that lags, so a
+  second write arriving before the first lands replaces the target and the
+  reading follows it. #368 corrected this from the opposite model on a capture
+  against the stock build, and the sign is the whole point — a mid-seek peer
+  announces too *high*, so it loses the server's `min()` election to a peer
+  genuinely behind it rather than under-reporting its lateness and winning.
   It also carries a file identity, because losing one is a scenario rather than a
   detail: `reload(src)` rebinds the element the way an episode change does,
   dropping it to `HAVE_NOTHING` and bringing it back on a `loadedmetadata` that
@@ -159,7 +163,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   so the next case's `room?.dispose()` re-ran the same throwing teardown and red
   a neighbour that had nothing wrong with it.
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
-  three guards, the first-write freeze above, and both rejection shapes this
+  three guards, the in-flight target reading above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
   `syncplay-seek-crossfire.test.ts` is the first scenario on it. Six more
   scenario files sit on the same harness (#361 step 4):
@@ -173,8 +177,13 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   bookkeeping across a clean round trip, two changes in flight, and a peer's
   forced update crossing our window),
   `syncplay-two-peer-adoption.test.ts` (the spectator mirror and the adoption
-  latch, reached through a seek that never lands, an element that drops to
-  `HAVE_NOTHING`, and an episode change),
+  latch, reached through an element that is not ready rather than through a seek
+  that never lands — #368 moved that door, because a merely slow seek leaves the
+  peer up at its target and adopted, not down at 0 — plus an element that drops
+  to `HAVE_NOTHING`, and an episode change),
+  `syncplay-two-peer-inflight-seek.test.ts` (the other half of that correction:
+  a peer whose seek is still in flight announces the target, adopts, and wins
+  `min()` with a position its element has not reached),
   `syncplay-two-peer-rtt.test.ts` (the `serverRtt / 2` position compensation and
   its pause gate, on a deliberately fat 500 ms link so the term is worth half a
   second rather than one `advance()` slice) and

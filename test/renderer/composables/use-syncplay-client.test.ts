@@ -5063,6 +5063,25 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // whose drift cleared the renderer's 3 s apply tolerance (604 against a
     // playhead parked at 600). That write is what lets main's drift test latch
     // adoption and end the hold the honest way.
+    //
+    // **This line is the only mutation control that names the tolerance
+    // literal's value rather than merely tripping over it, and it has to be
+    // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` reds three
+    // tests across the suite, but the other two red on frame counts and
+    // positions a reader cannot invert back into a tolerance —
+    // `syncplay-seek-crossfire.test.ts` reports `expected [...] to have a
+    // length of 5 but got 2` and `syncplay-two-peer-inflight-seek.test.ts`
+    // reports `expected 606.95 to be less than 606.95`. Only this line's
+    // failure states the number.
+    //
+    // What it pins is the half-open window `[3.0, 4.0)`, not a point. The
+    // element is parked at 600 and handed seven 1 Hz frames at 601…607, so the
+    // first frame clearing the literal is 604 for any tolerance in that window,
+    // 605 at `4.0` (`expected 605 to be 604`) and 606 under `2.0` (`expected
+    // 606 to be 604`). All three numbers were re-measured against a full-suite
+    // run, not a file-scoped one; a scoped run is what made an earlier draft of
+    // this comment claim the crossfire file stayed green.
     expect(v.currentTime).toBe(604)
   })
 })

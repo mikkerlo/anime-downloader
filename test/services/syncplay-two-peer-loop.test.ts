@@ -218,23 +218,37 @@ describe('two-peer syncplay harness', () => {
   // The five guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
-  it('freezes a stalled element at the first in-flight write, not the latest', () => {
-    // A second `currentTime` write arriving before the first lands used to
-    // re-read `live()` into `stalled`, and `live()` walks from the *old* anchor
-    // — so the reported position un-froze and jumped forward by however long the
-    // first seek had been pending. This read 102 before the fix. A real element
-    // stays where the first seek left it until one of them lands, and the
-    // crossfire fixture depends on it: a laggard drifting forward while stalled
-    // under-reports its own lateness into the server's `min()` election.
+  it('reports the in-flight seek target, not the pre-write position', () => {
+    // The harness used to freeze the reading at the pre-write position for the
+    // whole flight, and the crossfire fixture was built on that: a laggard
+    // under-reporting its own lateness into the server's `min()` election. #368
+    // captured the opposite against the stock build. Setting `currentTime`
+    // updates the official playback position synchronously, so the getter hands
+    // back the *target* while the seek is still pending and only readiness
+    // lags — four drags 110 ms apart on a real seek bar each read back the
+    // preceding target exactly (1107.7, then 1136.1, then 1164.5), where a
+    // frozen element would have read the pre-drag 20.686 every time.
+    //
+    // So the sign of the modelled error was backwards: the harness had a
+    // mid-seek peer announcing too low and winning the election, and reality
+    // has it announcing too high and *losing* it. These three reads are that
+    // correction, and every one of them read 101 before it.
     const el = new HarnessVideo({ position: 100, paused: false, seekLandMs: 6000 })
     vi.advanceTimersByTime(1000)
     expect(el.currentTime).toBeCloseTo(101, 6)
 
     el.currentTime = 645
-    expect(el.currentTime).toBeCloseTo(101, 6)
+    expect(el.currentTime).toBeCloseTo(645, 6)
+    expect(el.seeking).toBe(true)
+    // Readiness is what lags, not the position: the capture's mid-seek rows are
+    // all `readyState` 1 with nothing buffered anywhere near the reported
+    // position, which is exactly how the element gets into the election.
+    expect(el.readyState).toBe(1)
     vi.advanceTimersByTime(1000)
+    // A second write before the first lands replaces the target and the reading
+    // follows it. The old model pinned 101 here for both writes.
     el.currentTime = 646
-    expect(el.currentTime).toBeCloseTo(101, 6)
+    expect(el.currentTime).toBeCloseTo(646, 6)
 
     // The interrupting write still replaces the target, and only one `seeked`
     // fires — an interrupted seek fires none of its own. 6 s after the *second*

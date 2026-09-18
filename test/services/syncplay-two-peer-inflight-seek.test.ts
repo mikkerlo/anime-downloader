@@ -199,7 +199,11 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     // `tick()` even though the setter has already re-anchored it onto the
     // target. Without the `seekLandMs > 0` conjunct every read below is `true`,
     // which would call a landed element mid-seek for the whole slice after any
-    // write — the four `seekLandMs: 0` files included.
+    // write — the four `seekLandMs: 0` files included. The mid-slice
+    // `currentTime` read is the other direction: that getter deliberately has
+    // no such conjunct, so it still reads the target `300` against a `live()`
+    // of `300.05`, and giving it one as a tidy-up reds here rather than in four
+    // files whose subject is not this getter.
     const el = new HarnessVideo({ position: 100, paused: false, seekLandMs: 0 })
     expect(el.seeking).toBe(false)
 
@@ -209,6 +213,7 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
 
     vi.advanceTimersByTime(50)
     expect(el.seeking).toBe(false)
+    expect(el.currentTime).toBeCloseTo(300, 6)
 
     expect(el.tick()).toEqual(['seeked'])
     expect(el.seeking).toBe(false)

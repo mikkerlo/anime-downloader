@@ -188,10 +188,14 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     expect(wire).toHaveLength(7)
     expect(mirroring(wire)).toHaveLength(0)
     expect(asserting(wire)).toHaveLength(7)
-    // And the boundary is where it is now claimed to be — at the very first
-    // frame. This replaces an `indexOf(mirroring(wire)[0]) === 0` that pinned
-    // the old mirror's position and would read `-1` here, i.e. green-looking
-    // and meaningless, if it had merely been left in place.
+    // The boundary — the very first frame — restated where a reader looks for
+    // it rather than left as a claim with nothing written under it. The two
+    // lengths above already force it: `asserting` is an order-preserving
+    // filter, so both arrays being 7 makes them the same frames, reference for
+    // reference. It stands where an `indexOf(mirroring(wire)[0]) === 0` used to,
+    // which did carry its own information against an unpinned `mirroring` set
+    // but would read `-1` here — green-looking and meaningless — if it had
+    // merely been left in place.
     expect(asserting(wire)[0]).toBe(wire[0])
     expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(7)
 

@@ -13,7 +13,7 @@
 // split into unambiguous failures plus a heuristic that only warns — and two
 // pinned counts, which are what give the warn teeth and what stop the gate
 // from passing by seeing nothing. A printed-only number is the shape check
-// docs/testing.md:218-222 ("it is never the assertion that catches set rot")
+// docs/testing.md:286-290 ("it is never the assertion that catches set rot")
 // warns about: nobody diffs it.
 //
 // The one case where meaning *is* decidable is #366's marked form: a citation
@@ -29,7 +29,7 @@ import { basename, extname } from 'node:path'
 
 // --- pins ---------------------------------------------------------------------
 //
-// Exact-match assertions, per docs/testing.md:212 ("Pin the count, never just
+// Exact-match assertions, per docs/testing.md:280 ("Pin the count, never just
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 
@@ -91,7 +91,7 @@ export const MARKED_PIN = 12
 // learns it exists. Naming the root files individually would rot the first time
 // a root doc is added, so the root is a root instead. Nine root files join the
 // scan under this arm and none carries an anchor today.
-export const SCAN_ROOTS = ['.', 'src', 'test', 'docs', 'e2e', 'scripts', '.github']
+export const SCAN_ROOTS = ['.', 'src', 'test', 'docs', 'e2e', 'scripts', '.github', 'conformance']
 
 // `src/renderer/public/` is vendored minified libass: noise under any rule, and
 // its worker bundles carry `node.id:1` tokens that match the citation shape

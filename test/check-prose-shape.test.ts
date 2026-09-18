@@ -53,8 +53,8 @@ const linesOf = (r: Result): number[] => r.hits.map((h) => h.line)
 // tidied-up imitation would be a test of a shape nobody wrote.
 //
 // THE UPPER CUT IS LOAD-BEARING. The excerpt runs to
-// `docs/testing.md:93` ("replaces this module wholesale") and must, because
-// `docs/testing.md:92` ("structured-clones them") is the 79-column line that
+// `docs/testing.md:101` ("replaces this module wholesale") and must, because
+// `docs/testing.md:100` ("structured-clones them") is the 79-column line that
 // SETS `blockMax`. Every other line of the bullet is 66-78. Cut the excerpt
 // anywhere above that line and `blockMax` falls with it, the assertion below
 // silently stops being 41/79, and the case STILL REDS — on a different deficit,

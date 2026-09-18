@@ -1,0 +1,113 @@
+name: Syncplay conformance
+
+# Replays `conformance/` against a real Syncplay 1.7.6 server and asserts the
+# model in `test/helpers/syncplay-min-election-server.ts` agrees with it.
+#
+# Deliberately NOT part of the `quality` job in `check.yml`. It provisions a
+# Python server, takes about four minutes, and its subject is an upstream
+# project rather than this PR's diff — a red here means the model has drifted
+# from the reference, which is real news but not a reason to block a renderer
+# change. Nightly plus manual dispatch; see `conformance/README.md`.
+
+on:
+  schedule:
+    # 04:20 UTC — off the hour, so it does not queue behind the GitHub-wide
+    # cron spike that every `0 * * * *` workflow on the platform shares.
+    - cron: '20 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    # `check.yml` declares `permissions: contents: read` at the top level and
+    # this file does the same, so the filing step below gets its write scope
+    # here, on the one job that needs it, rather than widening the workflow.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Syncplay 1.7.6 from the pinned commit
+        # The commit, not the tag: the PyPI 1.7.6 artefact is not the 1.7.6
+        # source tree, and the suite's whole claim is about a known `server.py`.
+        # `conformance/helpers/real-server.ts` holds the same SHA so a run can
+        # say what it proved anything against.
+        #
+        # `--no-deps` plus the three the server actually imports: the declared
+        # dependency set pulls PySide6 and PySide6_Addons, ~255 MB of Qt for a
+        # GUI this entry point never starts, and takes the venv from 58 MB to
+        # 726 MB. Verified by running the election suite green against exactly
+        # this install. `pip check` still reports the missing PySide6 marker —
+        # that is the point, not a warning to fix.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sp176"
+          "$RUNNER_TEMP/sp176/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/sp176/bin/pip" install --no-deps \
+            'git+https://github.com/Syncplay/syncplay@993232ab095bb810593459bc705b3e6fc64ad161'
+          "$RUNNER_TEMP/sp176/bin/pip" install twisted certifi pem
+          "$RUNNER_TEMP/sp176/bin/syncplay-server" --help > /dev/null
+
+      - run: npm ci
+
+      - name: Run the conformance suite
+        id: conformance
+        # `shell: bash` is load-bearing, not style. A `run` with no `shell:` is
+        # `bash -e {0}`, which does **not** set `pipefail`, so the pipeline below
+        # would exit with `tee`'s 0 and a divergence would land as a green
+        # nightly with no issue filed. `shell: bash` expands to
+        # `bash --noprofile --norc -eo pipefail {0}`. `test/conformance-workflow.test.ts`
+        # pins this for every piped step in this file.
+        shell: bash
+        env:
+          SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
+        run: npm run test:conformance 2>&1 | tee conformance.log
+
+      - name: Upload the transcripts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-log
+          path: conformance.log
+          retention-days: 30
+
+      - name: File a divergence issue
+        # The route for a red nightly, so it does not sit unread in a workflow
+        # list: one open issue at a time, reopened and commented rather than
+        # duplicated, carrying the run URL that holds the transcripts. A
+        # divergence is a claim about the reference and the frames are the
+        # evidence, so the issue points at them rather than restating them.
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --state open --label syncplay-conformance \
+            --json number --jq '.[0].number // empty')
+          body="The nightly Syncplay conformance run diverged from the real 1.7.6 server.
+
+          Run (transcripts attached as \`conformance-log\`): $RUN_URL
+
+          Either the model in \`test/helpers/syncplay-min-election-server.ts\` has
+          drifted from the reference, or the reference behaves differently from
+          what \`conformance/\` asserts. \`conformance/README.md\` has the
+          provisioning line for reproducing it locally."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title 'Syncplay conformance: model diverged from 1.7.6' \
+              --label syncplay-conformance --assignee mikkerlo --body "$body"
+          fi

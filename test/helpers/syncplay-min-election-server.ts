@@ -526,7 +526,13 @@ export class MinElectionServer {
     if (isRecord(set.file)) {
       w.file = typeof set.file.name === 'string' ? set.file.name : ''
       rosterDirty = true
-      this.sendFileUpdate(username, set.file)
+      // `sendFileUpdate`'s guard is `if watcher.getFile():` — a *truthiness*
+      // test, and `{}` is falsey in Python just as `None` is. So the empty
+      // mapping keeps its seat in the election and still announces nothing.
+      // Found by `conformance/syncplay-file-membership.conformance.ts`, which
+      // captured `real=[] model=[{"user":"bravo","file":null}]`: this branch
+      // used to relay unconditionally.
+      if (Object.keys(set.file).length > 0) this.sendFileUpdate(username, set.file)
     } else if (set.file === null) {
       w.file = null
       rosterDirty = true

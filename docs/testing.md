@@ -1,12 +1,14 @@
 # Testing
 
-Two runners, split by what they touch (refactor epic #84, Phase 7):
+Two runners gate a PR, split by what they touch (refactor epic #84, Phase 7),
+and a third runs outside the gate against a real Syncplay server (#367):
 
 ```bash
 npm run test            # Vitest: unit + integration (no Electron)
 npm run test:watch      # Vitest in watch mode
 npm run test:coverage   # Vitest + v8 coverage; enforces per-seam thresholds
 npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run build` first)
+npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLAY_SERVER_BIN
 ```
 
 ## Layers
@@ -42,7 +44,13 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   it is a record of the comparison rather than of who holds a file. `Set: {file:
   null}` clears membership, `Set: {file: {}}` is non-`None` membership and does
   not, an absent `file` key is no command at all, and modelled `List` renders a
-  `None` file as `file: {}` as the reference does. The **unknown-position** arm
+  `None` file as `file: {}` as the reference does. `Set: {file: {}}` also
+  *announces* nothing, which the conformance layer below is what found:
+  `sendFileUpdate`'s guard (`server.py:175-178`) is `if watcher.getFile():`, a
+  truthiness test that `{}` fails in Python exactly as `None` does, and the model
+  relayed it unconditionally until #367.
+  `test/services/syncplay-file-announcement.test.ts` holds that line in the PR
+  gate so the nightly does not have to find it twice. The **unknown-position** arm
   of `__lt__` is deliberately unmodelled (`Watcher.position` is a non-nullable
   `number`), stated in the helper header rather than silently assumed
   equivalent. A `doSeek` or a pause change takes the reference's other path instead:
@@ -200,6 +208,66 @@ npm run test:e2e        # Playwright: drives the built app in out/ (run `npm run
   player seek, live Shikimori sync) are deliberately excluded to keep CI
   deterministic; their underlying logic is covered at the unit + integration
   layers.
+- **Conformance** (`conformance/`, #367) — the only layer whose subject is
+  `MinElectionServer` itself rather than our code. Every fixture above believes
+  the model; this one replays two-peer scenarios through real sockets against a
+  real Syncplay 1.7.6 server and against the model in turn, and compares the two
+  **on the wire** — `State.playstate`, the `Set: {user}` file relays, the `List`
+  roster. Reaching into the model to ask what it thinks it did would be asking
+  the thing under test. `conformance/helpers/trace-diff.ts` holds both position
+  tolerances with the measurement each is sized from and a field-level ignore
+  list, one entry per field naming its seam; a field the reference puts on the
+  wire that nobody has decided about reds the suite
+  (`syncplay-field-coverage.conformance.ts`). Full detail, including the two
+  declared cadence differences and the scenarios loopback cannot reach, is in
+  `conformance/README.md`.
+
+  It runs nightly and on demand (`.github/workflows/syncplay-conformance.yml`),
+  **not** in `quality`. It needs a Python server provisioned on the machine
+  (`python3 -m venv` + `pip install --no-deps` from the pinned commit
+  `993232ab095bb810593459bc705b3e6fc64ad161` — `--no-deps` because the declared
+  set pulls 255 MB of PySide6 for a GUI the server entry point never starts), it
+  takes about four minutes of wall clock, and a red there is a claim about an
+  upstream project rather than about the PR's diff. If `SYNCPLAY_SERVER_BIN` is
+  unset and nothing named `syncplay-server` is on `PATH` the harness **throws**
+  rather than skipping — a conformance suite that quietly passes because it
+  never ran is the failure mode it exists to rule out.
+
+  Three of this layer's own properties are pinned from `quality`, because a
+  nightly-only layer is not exercised by the pull request that breaks it.
+  `test/conformance-workflow.test.ts` asserts that every piped step in the
+  workflow runs under a shell that sets `pipefail`: without it a diverged suite
+  exits with `tee`'s status and lands as a green nightly with nothing filed.
+  `test/conformance-harness.test.ts` asserts the throw above actually happens —
+  it did not, until #381: a missing binary reports `ENOENT` asynchronously, and
+  the port `freePort()` handed out still answered for ~10 ms after its probe
+  socket closed, so the readiness check passed against the probe's own corpse
+  and `bootRealServer()` resolved in 9 ms against no server at all. The same
+  file pins `reachesFieldPath()`, the predicate behind "reaches every compared
+  field at least once", on the case that made its predecessor weaker than it
+  read: a join notice satisfying `Set.user.[].file.name` with no `file` in it.
+
+  What this does and does not underwrite in the layers above. The mirror and
+  two-peer fixtures split by what their *expected value* is derived from. One
+  group is conditional on the model's election being the reference's, because
+  the number or the name being asserted is the election's output: the whole of
+  `syncplay-mirror-election.test.ts`, the drift arithmetic in
+  `syncplay-mirror-drift.test.ts`, and everywhere a fixture says which peer the
+  room ended up following. Those are what `conformance/` now backs, and what
+  would move if the model turned out to be wrong. The other group is not
+  conditional on it at all, because the quantity under test is our own client's
+  rule and the server is only the courier that delivers a frame to it — the
+  `SEEK_REASSERT_TOLERANCE_S` window, the `Math.abs(…) <= 3` apply rule, the
+  `ignoringOnTheFly` bookkeeping, the readiness gate that produces no playstate
+  at all. A wrong model would change which frames arrive in those files but not
+  what the assertions mean.
+
+  Three terms are conditional on *nothing* here and stay owned where they were,
+  because loopback RTT measured 0.0003-0.0013 s across every run and cannot show
+  them: `messageAge`, `forwardDelay` and `echoHoldCorrection`.
+  `conformance/README.md` records them as unreached rather than as agreeing,
+  which is the distinction that matters — a suite that reported agreement on a
+  term it cannot observe would be worse than one that reports nothing.
 
 ## Structural (source-scanning) tests
 

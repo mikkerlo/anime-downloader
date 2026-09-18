@@ -232,6 +232,18 @@ notes in that test file.
 referenced as a symbol on both sides, has a registered `ipcMain.handle`, and has
 a matching preload binding — so deleting a handler or binding fails the build.
 
+## Version-ordering gate
+
+`npm run check:version-not-lower` (`scripts/check-version-not-lower.mjs`, the
+first `run` step of the CI `quality` job) fails a PR whose `package.json` version
+is strictly below its base branch's; equal and greater both pass. The comparison
+is numeric per component, not lexical, and the script splits into a pure
+`check({ base, head })` plus a CLI that fetches the base's `package.json` — so
+`test/check-version-not-lower.test.ts` drives the decision directly instead of
+the four throwaway branches the alternative would need, and the 9-to-10 boundary
+gets a real assertion rather than a case nobody constructs. Why the ordering
+matters at all is in `docs/build.md`, "Version numbers and merge order".
+
 ## Line-citation gate
 
 `npm run check:line-citations` (`scripts/check-line-citations.mjs`, in the CI

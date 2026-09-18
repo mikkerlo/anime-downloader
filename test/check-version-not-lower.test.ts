@@ -3,10 +3,17 @@
 // "is the head strictly below the base?" — is tested here rather than by pushing
 // throwaway branches, where the one case most likely to be written backwards
 // (9 vs 10) is also the one nobody thinks to construct.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// `baseRevision` is the one part of the script that talks to git, so the process
+// boundary is stubbed rather than crossed: no clone is made, no ref is fetched,
+// and the cases below are the three answers git can give.
+const execFileSync = vi.hoisted(() => vi.fn())
+vi.mock('node:child_process', () => ({ execFileSync }))
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import {
+  baseRevision,
   check,
   compareVersions,
   nextPatch,
@@ -122,6 +129,64 @@ describe('check-version-not-lower', () => {
       const r = run('not-a-version', '4.6.97')
       expect(r.ok).toBe(false)
       expect(r.err.join('\n')).toContain('not-a-version')
+    })
+  })
+
+  describe('baseRevision', () => {
+    let errors: string[]
+    let exit: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      errors = []
+      execFileSync.mockReset()
+      vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+        errors.push(String(m))
+      })
+      // The real one does not return, so neither does this: letting it fall
+      // through would run the `return 'FETCH_HEAD'` after the failure and hide
+      // exactly the bug the case is about.
+      exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        throw new Error(`process.exit(${code})`)
+      }) as never)
+    })
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('prefers the remote-tracking ref when it is already here', () => {
+      execFileSync.mockReturnValueOnce('')
+      expect(baseRevision('main')).toBe('refs/remotes/origin/main')
+      expect(execFileSync).toHaveBeenCalledTimes(1)
+      expect(execFileSync.mock.calls[0][1]).toContain('rev-parse')
+    })
+
+    it('falls back to one shallow fetch when the tracking ref is absent', () => {
+      execFileSync.mockImplementationOnce(() => {
+        throw new Error('not a valid ref')
+      })
+      execFileSync.mockReturnValueOnce('')
+      expect(baseRevision('main')).toBe('FETCH_HEAD')
+      expect(execFileSync.mock.calls[1][1]).toEqual(['fetch', '--depth=1', 'origin', 'main'])
+    })
+
+    // Before this was guarded the same input exited on an unhandled
+    // `execFileSync` throw — a node stack trace through `baseRevision`, which
+    // reads like the gate crashed rather than like the base could not be
+    // resolved. Every other failure in this script explains itself in prose.
+    it('explains itself and fails closed when the fetch fails too', () => {
+      execFileSync.mockImplementation(() => {
+        throw new Error("fatal: couldn't find remote ref no-such-ref")
+      })
+
+      expect(() => baseRevision('no-such-ref')).toThrow('process.exit(1)')
+
+      expect(exit).toHaveBeenCalledWith(1)
+      const said = errors.join('\n')
+      expect(said).toContain('Could not read the base branch')
+      expect(said).toContain('refs/remotes/origin/no-such-ref')
+      expect(said).toContain('no-such-ref')
+      expect(said).not.toMatch(/at baseRevision|node:internal/)
     })
   })
 })

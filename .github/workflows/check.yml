@@ -159,9 +159,18 @@ jobs:
       # below the base is a mistake to report in seconds rather than after the
       # e2e run. Unconditional rather than gated on `package.json` being in the
       # diff: a PR that does not touch it is equal to the base and passes
-      # trivially, so the gate would buy nothing, and running always is what
-      # catches a version lowered by a bad merge resolution — the way this
-      # happens by accident rather than on purpose.
+      # trivially, so the gate would buy nothing.
+      #
+      # That "equal to the base" premise rests on this job's checkout taking no
+      # `ref`. On a `pull_request` event it therefore lands on
+      # `refs/pull/N/merge` — the head merged into the *current* base tip, not
+      # the head commit — so a PR that leaves `package.json` alone reads the base
+      # tip's version verbatim, however far behind its branch point is. Against
+      # the head commit the premise is false: a docs-only branch cut at 4.6.93
+      # while `main` moved to 4.6.96 would read 4.6.93 and fail, with a
+      # diagnostic that is a lie, since the merge keeps 4.6.96. The `build` job's
+      # `Get PR branch` step pins `refs/pull/N/head` for its `/build` runs, so
+      # this step does not survive being moved or copied there unchanged.
       #
       # The checkout above is depth 1 and fetches only the PR ref, so
       # `origin/$GITHUB_BASE_REF` does not resolve and the base's `package.json`

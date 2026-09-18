@@ -177,13 +177,20 @@ export function check({ base, head, baseRef = 'main' }) {
  * @param {string} baseRef
  * @returns {string} a revision `git show <rev>:package.json` accepts
  */
-function baseRevision(baseRef) {
+export function baseRevision(baseRef) {
   const tracking = `refs/remotes/origin/${baseRef}`
   try {
     execFileSync('git', ['rev-parse', '--verify', '--quiet', tracking], { stdio: 'ignore' })
     return tracking
   } catch {
-    execFileSync('git', ['fetch', '--depth=1', 'origin', baseRef], { stdio: 'inherit' })
+    try {
+      execFileSync('git', ['fetch', '--depth=1', 'origin', baseRef], { stdio: 'inherit' })
+    } catch {
+      console.error(
+        `\nCould not read the base branch: ${tracking} is absent and fetching '${baseRef}' from origin failed.`
+      )
+      process.exit(1)
+    }
     return 'FETCH_HEAD'
   }
 }

@@ -195,12 +195,15 @@ describe('check-version-not-lower', () => {
     })
   })
 
-  // The other half of the same failure. `baseRevision` can hand back a revision
-  // that resolves and still not carry a `package.json` — a base branch older
-  // than the file, or a `FETCH_HEAD` pointing at something that is not this
-  // project — and bare, `git show` exited on an unhandled throw with the node
-  // stack trace the case above forbids for `baseRevision`. Hence the same
-  // assertion here.
+  // The other half of the same failure, and it has two shapes: `baseRevision`
+  // can hand back a revision that resolves and still not carry a `package.json`
+  // — a base branch older than the file — or one carrying bytes that are not
+  // JSON. Bare, both exited on an unhandled throw with the node stack trace the
+  // case above forbids for `baseRevision`. Hence the same assertions here.
+  //
+  // What is deliberately not covered: a revision carrying some *other*
+  // project's valid `package.json`. That reaches `check()` with an `undefined`
+  // version and fails there, which the `check` cases already cover.
   describe('baseVersionFromOrigin', () => {
     let errors: string[]
     let exit: ReturnType<typeof vi.spyOn>
@@ -246,6 +249,35 @@ describe('check-version-not-lower', () => {
       expect(said).toContain('Could not read package.json from the base branch')
       expect(said).toContain('refs/remotes/origin/main')
       expect(said).not.toMatch(/at baseVersionFromOrigin|node:internal/)
+    })
+
+    // Third answer git can give: the revision resolves, `git show` succeeds, and
+    // the bytes are not JSON. `JSON.parse` used to sit one line outside the
+    // `try`, so this escaped as a raw `SyntaxError` — the same node stack trace
+    // through this function that the two cases above forbid. Reproduced against
+    // a base commit whose `package.json` read `not json at all`.
+    //
+    // This one inspects the thrown value rather than using `toThrow`, because
+    // the claim is about its *type*: a `SyntaxError` reaching the caller is the
+    // bug, and a message assertion alone would not say so.
+    it('explains itself and fails closed when the revision carries invalid JSON', () => {
+      execFileSync.mockReturnValueOnce('')
+      execFileSync.mockReturnValueOnce('not json at all\n')
+
+      let thrown: unknown
+      try {
+        baseVersionFromOrigin('main')
+      } catch (e) {
+        thrown = e
+      }
+
+      expect(thrown).not.toBeInstanceOf(SyntaxError)
+      expect((thrown as Error | undefined)?.message).toBe('process.exit(1)')
+
+      expect(exit).toHaveBeenCalledWith(1)
+      const said = errors.join('\n')
+      expect(said).toContain('Could not read package.json from the base branch')
+      expect(said).toContain('refs/remotes/origin/main')
     })
   })
 })

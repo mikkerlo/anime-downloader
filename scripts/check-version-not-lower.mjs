@@ -198,26 +198,33 @@ export function baseRevision(baseRef) {
 /**
  * The base branch's declared version.
  *
- * `git show` is the other half of `baseRevision`'s failure: the revision can
- * resolve and still not carry a `package.json` — a base branch from before the
- * file existed, or a `FETCH_HEAD` pointing at something that is not this
- * project. Bare, that exits on an unhandled throw, and the node stack trace
+ * Reading the blob is the other half of `baseRevision`'s failure, and it fails
+ * two ways: the revision can resolve and still not carry a `package.json` — a
+ * base branch from before the file existed — or carry bytes that are not valid
+ * JSON. Bare, either exits on an unhandled throw, and the node stack trace
  * through this function reads like the gate crashed rather than like the base
- * could not be read. Both halves fail closed; only one of them used to say why.
+ * could not be read. Both halves fail closed; only one of them used to say why,
+ * which is why the `JSON.parse` sits inside the `try` and not after it.
+ *
+ * The guard stops at unreadable, not at wrong. A revision carrying some *other*
+ * project's perfectly valid `package.json` gets through both steps, yields
+ * `undefined` for `.version`, and fails in `check()` instead — still closed, but
+ * under a message that blames a PR-build rewrite that never happened. Catching
+ * that properly means deciding what identifies "this project", which is a
+ * larger question than this function.
  *
  * @param {string} baseRef
  * @returns {string}
  */
 export function baseVersionFromOrigin(baseRef) {
   const rev = baseRevision(baseRef)
-  let json
   try {
-    json = execFileSync('git', ['show', `${rev}:package.json`], { encoding: 'utf8' })
+    const json = execFileSync('git', ['show', `${rev}:package.json`], { encoding: 'utf8' })
+    return JSON.parse(json).version
   } catch {
     console.error(`\nCould not read package.json from the base branch at ${rev}.`)
     process.exit(1)
   }
-  return JSON.parse(json).version
 }
 
 function main() {

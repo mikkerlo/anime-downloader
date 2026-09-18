@@ -400,6 +400,65 @@ its **end line included** — a range whose last line is a paragraph gap has sli
 just as surely as one with a gap in the middle. That measures zero hits today and
 catches a range that has slid across a paragraph gap.
 
+## Prose-shape gate
+
+`npm run check:prose-shape` (`scripts/check-prose-shape.mjs`, in the CI `quality`
+job beside `check:line-citations`) measures the shape of the ragged edge in
+hand-wrapped Markdown. Nothing else in the job reads prose shape at all:
+`.prettierignore` carries `**/*.md`, and removing that line changes nothing here,
+because `.prettierrc` sets no `proseWrap` and the default is `preserve` —
+Prettier does not reflow prose. The defect that motivated it is a line a rebase
+conflict left at 41 columns in the middle of a sentence, inside a block whose
+longest line is 79. A max-column check cannot see that by construction: the line
+is too **short**, not too long.
+
+A line is **ragged** when all five hold: (a) it is inside a block — a maximal run
+of prose lines, broken by a blank line, a heading, a table row, a blockquote, a
+`---` rule, a list-item start, and a fence, whose contents are not scanned at
+all; (b) it is not the block's last line; (c) it is at least **20 columns**
+shorter than the longest line in its own block; (d) it does not end in `.`, `:`,
+`;`, `!` or `?`; and (e) a greedy wrapper could have appended the first token of
+the next line, i.e. `len + 1 + token <= blockMax`.
+
+**(e) is what keeps the rest honest, and it arrived after the population was
+measured.** The first run reported 14 lines and claimed no false positives.
+Asking _why_ each line was short showed that 8 of the 14 were short only because
+the next thing in the paragraph was an unbreakable backticked path — the shape
+every greedy wrapper produces, reported as a defect. The rule is content-free:
+two lengths and a space, with no knowledge of citations, URLs or any other
+content class. Adding it after the count was known is recorded rather than waved
+through, on the argument that it moves no threshold (the deficit is still 20) and
+that it moves the count in the unflattering direction.
+
+The count is **pinned exactly**, following `UNCHECKABLE_PIN` rather than
+`SUSPICIOUS_LANDING_PIN`, and the choice is about the instruction the pin carries
+to whoever next reds it. A landing pin of 0 says _what you just added is a
+defect, repair it_. This pin is non-zero because the lines under it are real,
+unrepaired, and not repairable here: rewrapping them reflows `docs/testing.md`
+and renumbers the very anchors the gate above pins. So it says _bound the
+blindness_ instead — a new ragged line reds the build and the fix is to rewrap
+the line you just wrote, while lowering the pin is what a deliberate repair does.
+**Never re-pin to clear a red.** A number moved to match whatever the tree
+happens to say measures nothing at all.
+
+**What it does not police.** It is **vacuous on prose that is not hand-wrapped**.
+Several pages put one long line per paragraph, so the block holds a single line,
+clause (b) exempts it, and nothing is measured however long that line is. That is
+accepted rather than fixed, because the predicate reads the shape of a wrap and a
+file nobody wrapped has no shape to read. The consequence is the one worth
+writing down: **silence here is not coverage**, and a page that drifts from
+wrapped to unwrapped prose leaves the measured population without redding
+anything. It is likewise silent inside fenced blocks, raw HTML blocks and YAML
+front matter, and it has no opinion on agent-instruction Markdown under
+`.claude/`, `.gemini/` and `.github/agents/` — machine-read files with a
+different audience and a different shape, excluded on that ground and not on a
+hit count.
+
+`test/check-prose-shape.test.ts` drives `analyze()` over synthetic corpora rather
+than the real tree, for the reason the citation tests give: the real counts are
+the pin itself. The motivating 41-column line is frozen there as a corpus string,
+copied verbatim, because the widths **are** the fixture.
+
 ## Evidence retention
 
 Some findings are settled by a capture rather than by a test: two instrumented

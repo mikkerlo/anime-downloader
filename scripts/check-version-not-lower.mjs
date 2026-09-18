@@ -196,13 +196,27 @@ export function baseRevision(baseRef) {
 }
 
 /**
+ * The base branch's declared version.
+ *
+ * `git show` is the other half of `baseRevision`'s failure: the revision can
+ * resolve and still not carry a `package.json` — a base branch from before the
+ * file existed, or a `FETCH_HEAD` pointing at something that is not this
+ * project. Bare, that exits on an unhandled throw, and the node stack trace
+ * through this function reads like the gate crashed rather than like the base
+ * could not be read. Both halves fail closed; only one of them used to say why.
+ *
  * @param {string} baseRef
  * @returns {string}
  */
-function baseVersionFromOrigin(baseRef) {
-  const json = execFileSync('git', ['show', `${baseRevision(baseRef)}:package.json`], {
-    encoding: 'utf8'
-  })
+export function baseVersionFromOrigin(baseRef) {
+  const rev = baseRevision(baseRef)
+  let json
+  try {
+    json = execFileSync('git', ['show', `${rev}:package.json`], { encoding: 'utf8' })
+  } catch {
+    console.error(`\nCould not read package.json from the base branch at ${rev}.`)
+    process.exit(1)
+  }
   return JSON.parse(json).version
 }
 

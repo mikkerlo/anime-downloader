@@ -5,15 +5,20 @@
 // (9 vs 10) is also the one nobody thinks to construct.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// `baseRevision` is the one part of the script that talks to git, so the process
-// boundary is stubbed rather than crossed: no clone is made, no ref is fetched,
-// and the cases below are the three answers git can give.
+// `baseRevision` and `baseVersionFromOrigin` are the two parts of the script
+// that talk to git, so the process boundary is stubbed rather than crossed: no
+// clone is made, no ref is fetched, and the cases below are the answers git can
+// give to each.
 const execFileSync = vi.hoisted(() => vi.fn())
-vi.mock('node:child_process', () => ({ execFileSync }))
+vi.mock('node:child_process', async (importActual) => ({
+  ...(await importActual<typeof import('node:child_process')>()),
+  execFileSync
+}))
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import {
   baseRevision,
+  baseVersionFromOrigin,
   check,
   compareVersions,
   nextPatch,
@@ -187,6 +192,60 @@ describe('check-version-not-lower', () => {
       expect(said).toContain('refs/remotes/origin/no-such-ref')
       expect(said).toContain('no-such-ref')
       expect(said).not.toMatch(/at baseRevision|node:internal/)
+    })
+  })
+
+  // The other half of the same failure. `baseRevision` can hand back a revision
+  // that resolves and still not carry a `package.json` — a base branch older
+  // than the file, or a `FETCH_HEAD` pointing at something that is not this
+  // project — and bare, `git show` exited on an unhandled throw with the node
+  // stack trace the case above forbids for `baseRevision`. Hence the same
+  // assertion here.
+  describe('baseVersionFromOrigin', () => {
+    let errors: string[]
+    let exit: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      errors = []
+      execFileSync.mockReset()
+      vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+        errors.push(String(m))
+      })
+      exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+        throw new Error(`process.exit(${code})`)
+      }) as never)
+    })
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('reads the version out of the base revision', () => {
+      execFileSync.mockReturnValueOnce('')
+      execFileSync.mockReturnValueOnce('{ "version": "4.6.96" }')
+
+      expect(baseVersionFromOrigin('main')).toBe('4.6.96')
+      expect(execFileSync.mock.calls[1][1]).toEqual([
+        'show',
+        'refs/remotes/origin/main:package.json'
+      ])
+    })
+
+    it('explains itself and fails closed when the revision carries no package.json', () => {
+      execFileSync.mockReturnValueOnce('')
+      execFileSync.mockImplementationOnce(() => {
+        throw new Error(
+          "fatal: path 'package.json' exists on disk, but not in 'refs/remotes/origin/main'"
+        )
+      })
+
+      expect(() => baseVersionFromOrigin('main')).toThrow('process.exit(1)')
+
+      expect(exit).toHaveBeenCalledWith(1)
+      const said = errors.join('\n')
+      expect(said).toContain('Could not read package.json from the base branch')
+      expect(said).toContain('refs/remotes/origin/main')
+      expect(said).not.toMatch(/at baseVersionFromOrigin|node:internal/)
     })
   })
 })

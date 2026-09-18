@@ -46,10 +46,10 @@ function steps(yml: string): string[] {
  * piped and the assertion stops meaning anything.
  *
  * Both spellings of the key are matched. A step written compactly as `- run: …`
- * carries the key on the sequence-dash line, and a pattern anchored at `run:`
- * alone cannot see one — so such a step returns `null` here and drops out of
- * `piped` entirely, without moving the count the assertion below pins. The
- * workflow this reads uses that form for `npm ci`, so the shape is not
+ * carries the key on the sequence-dash line; a pattern anchored at `run:`
+ * alone could not see one, so such a step would return `null` here and drop
+ * out of `piped` entirely, without moving the count the assertion below pins.
+ * The workflow this reads uses that form for `npm ci`, so the shape is not
  * hypothetical.
  */
 function runBody(step: string): string | null {

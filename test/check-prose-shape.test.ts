@@ -522,7 +522,7 @@ describe('check-prose-shape', () => {
     // swallowed 28/74 is present. Under the unfixed predicate this reads
     // `[{ line: 4, len: 14, blockMax: 76, text: 'short code arg' }]` — the wrong
     // line, from inside the sample, with the real one gone.
-    expect(r.hits).toEqual([
+    expect.soft(r.hits).toEqual([
       {
         path: 'docs/notes.md',
         line: 9,
@@ -536,13 +536,13 @@ describe('check-prose-shape', () => {
     // the predicate would have flagged: every line the impostor guards stays
     // fenced code, including the impostor itself.
     const kinds = classify(lines) as Kind[]
-    expect(kinds.slice(2, 5)).toEqual([
+    expect.soft(kinds.slice(2, 5)).toEqual([
       { kind: 'skip', why: 'fenced code' },
       { kind: 'skip', why: 'fenced code' },
       { kind: 'skip', why: 'fenced code' }
     ])
-    expect(kinds[5]).toEqual({ kind: 'skip', why: 'fence' })
-    expect(kinds.slice(7, 10).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
+    expect.soft(kinds[5]).toEqual({ kind: 'skip', why: 'fence' })
+    expect.soft(kinds.slice(7, 10).map((k) => k.kind)).toEqual(['text', 'text', 'text'])
   })
 
   it('does not let an indented marker close the fence it is sitting in', () => {
@@ -606,8 +606,9 @@ describe('check-prose-shape', () => {
     // item indented to column 4 opens and closes at column 4 and is legal.
     //
     // An absolute `^ {0,3}` refuses both markers here, and then every line
-    // between them is scanned as prose: this corpus reports four hits, the raw
-    // `jj` command lines. That is not hypothetical — five
+    // between them is scanned as prose: this corpus gains two hits, the
+    // `` ```bash `` marker at 11/58 and a raw `jj` command line at 32/58, on top
+    // of the genuine one below. That is not hypothetical — five
     // `.gemini/skills/*/SKILL.md` files carry exactly this shape, and the
     // absolute bound takes the broad tree count from 14 to 40, all 26 of them
     // fenced code. The bound exists to stop code leaking into the prose

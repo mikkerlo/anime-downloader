@@ -92,11 +92,13 @@ export const EXCLUDED_PATHS = []
 // page showing a fenced sample with a language tag is exactly the shape that
 // introduces one, and this repo's docs are mostly fenced samples.
 //
-// CommonMark's closing rule has four parts and all four are here: the closer is
-// a run of the SAME character, AT LEAST AS LONG as the opener, carrying NO INFO
-// STRING, and INDENTED AT MOST 3 COLUMNS PAST THE OPENER. Group 1 is the fourth
-// — under an unbounded `^\s*` a 4-space-indented ``` closed the ```markdown
-// fence it was sitting in.
+// CommonMark's closing rule has four parts. THREE are exact here: the closer is
+// a run of the SAME character, AT LEAST AS LONG as the opener, and carrying NO
+// INFO STRING. The fourth — indented at most 3 columns past the CONTAINER's
+// content column — is APPROXIMATED against the OPENER, for the reason below,
+// and it is the one part still open. Group 1 is what measures it: under an
+// unbounded `^\s*` a 4-space-indented ``` closed the ```markdown fence it was
+// sitting in.
 //
 // RELATIVE to the opener, not to the left margin, and that is the whole care in
 // this line. CommonMark measures fence indentation from its CONTAINER's content
@@ -108,6 +110,18 @@ export const EXCLUDED_PATHS = []
 // the same fail-open class this bound exists to close, arriving from the other
 // side. Carrying the opener's own indent is what makes both cases come out
 // right without a container stack.
+//
+// WHAT THE APPROXIMATION STILL LETS THROUGH, measured rather than reasoned: an
+// opener indented 1-3 at top level accepts a closer at 4-6, which CommonMark
+// calls content, because the opener's own indent is the only container evidence
+// there is. With the opener at 3 and the closer at 6, `short code arg` leaks out
+// at 17/77 and the real closer then re-opens a fence that swallows the genuine
+// 28/74 below it — the info-string bug's two-directional shape, one level up.
+// Latent: no tracked `.md` pairs an opener with a closer at a different indent,
+// though CLAUDE.md and GEMINI.md both open at 3. `Math.max(fenceIndent, 3)`
+// closes it and is count-neutral on both measurements, but then refuses a LEGAL
+// closer at 4-5 under a 2-column list container and swallows the rest of the
+// file, trading a fail-open for a silently-unmeasured one. Not taken.
 //
 // Indentation is counted in COLUMNS, so a tab is 4 — which is why a tab-indented
 // marker cannot close a fence opened at the margin either.

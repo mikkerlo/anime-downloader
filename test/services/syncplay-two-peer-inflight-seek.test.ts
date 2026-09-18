@@ -192,6 +192,29 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     expect(el.currentTime).toBeCloseTo(902, 6)
   })
 
+  it('never reports seeking on an element whose write lands immediately', () => {
+    // The other side of the same getter, and the one the bare `pending !== null`
+    // reading got wrong: `pending` is armed unconditionally by the setter, so a
+    // `seekLandMs: 0` element holds one from the write until the clearing
+    // `tick()` even though the setter has already re-anchored it onto the
+    // target. Without the `seekLandMs > 0` conjunct every read below is `true`,
+    // which would call a landed element mid-seek for the whole slice after any
+    // write — the four `seekLandMs: 0` files included.
+    const el = new HarnessVideo({ position: 100, paused: false, seekLandMs: 0 })
+    expect(el.seeking).toBe(false)
+
+    el.currentTime = 300
+    expect(el.currentTime).toBeCloseTo(300, 6)
+    expect(el.seeking).toBe(false)
+
+    vi.advanceTimersByTime(50)
+    expect(el.seeking).toBe(false)
+
+    expect(el.tick()).toEqual(['seeked'])
+    expect(el.seeking).toBe(false)
+    expect(el.currentTime).toBeCloseTo(300.05, 6)
+  })
+
   it('clamps the reported target the way a real seek clamps to the seekable range', () => {
     // #281's out-of-file arm reads downstream of this getter, so the in-flight
     // reading has to be the **clamped** target: Chromium clamps before setting

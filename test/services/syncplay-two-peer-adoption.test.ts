@@ -192,7 +192,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // frame. This replaces an `indexOf(mirroring(wire)[0]) === 0` that pinned
     // the old mirror's position and would read `-1` here, i.e. green-looking
     // and meaningless, if it had merely been left in place.
-    expect(wire[0].paused).not.toBeUndefined()
+    expect(asserting(wire)[0]).toBe(wire[0])
     expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(7)
 
     // Adopting does not make it a leader. It agrees with the room rather than

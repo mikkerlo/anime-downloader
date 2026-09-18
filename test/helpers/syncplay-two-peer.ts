@@ -253,9 +253,22 @@ export class HarnessVideo {
    *  (`use-syncplay-client.ts:770`), which is exactly why a mid-seek element at
    *  `readyState` 1 gets into the election holding a position it has no data
    *  for. Any fix on that door gates on this, and a harness that could not say
-   *  `seeking` could not express the fix. */
+   *  `seeking` could not express the fix.
+   *
+   *  The `seekLandMs > 0` conjunct is not redundant with `pending !== null`, and
+   *  dropping it inverts the reading on every element the harness has: the arm
+   *  in the setter below is *unconditional*, outside its `seekLandMs <= 0`
+   *  branch, so a `seekLandMs: 0` element — one the setter has already
+   *  re-anchored onto its target — still holds a `pending` from the write until
+   *  the `tick()` that clears it. A bare `pending !== null` therefore says
+   *  `seeking` on an element that is not in flight and whose `currentTime` has
+   *  already taken the target, which is the file's own `seekLandMs` doc ("`0`
+   *  lands on the write") read backwards. It is the same condition `tick()`
+   *  spends fourteen lines defending, and a production gate written against
+   *  `seeking` would otherwise silence every landed element in the suite for
+   *  the slice after any write. */
   get seeking(): boolean {
-    return this.pending !== null
+    return this.pending !== null && this.seekLandMs > 0
   }
 
   set currentTime(t: number) {
@@ -271,6 +284,19 @@ export class HarnessVideo {
     // the getter above reads `pending.target`, so there is nothing to freeze
     // here — and an interrupted seek fires no `seeked` of its own, so only the
     // survivor's landing is announced.
+    //
+    // The arm below is unconditional — it is outside the `seekLandMs <= 0`
+    // branch — so `pending` stays set on *landed* elements too, in the window
+    // between the write and the `tick()` that clears it. `seeking` carries its
+    // own `seekLandMs > 0` conjunct against that; `currentTime` above does not,
+    // and reads `pending.target` through that window. The `seekLandMs: 0` files
+    // (seek-echo, ignore-counters, rtt, playpause) stay green through it only
+    // because `Date.now()` is the fake clock and does not move inside a slice,
+    // so `pending.target` and `live()` are bit-identical. It keys on the
+    // clock's granularity, not on `seekLandMs`: a fixture reading `currentTime`
+    // across an `advance()` boundary before the landing tick gets the target
+    // where it used to get the walked playhead, at the same ~0.05 s scale as
+    // the artifacts named on the guard in `tick()`.
     this.pending = { target, dueAt: Date.now() + this.seekLandMs }
   }
 

@@ -79,8 +79,9 @@
 // than by hand: the laggy landing is `HarnessVideo`'s `seekLandMs`, the 1 Hz
 // snapshot push is the composable's own interval instead of the fixture's
 // manual `updateSnapshot`, and the seek that starts the crossfire is a scrubber
-// drag — a bare `currentTime` write whose `seeked` the composable classifies as
-// the user's — instead of a direct `sendLocalState` call.
+// drag — a bare `currentTime` write, which on this unbuffered host queues no
+// `seeked` for the composable to classify at all — instead of a direct
+// `sendLocalState` call.
 //
 // Still driven by `test/helpers/syncplay-min-election-server.ts` (landed on #282
 // for #277), because "who the server says set the room" is the *result* here
@@ -121,7 +122,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     vi.useRealTimers()
   })
 
-  it('yanks a host whose seek the room accepted, with no seekIntent left to key on', async () => {
+  it('yanks a host whose seek the room accepted, with no seekIntent ever armed', async () => {
     room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
 
     // Both elements start converged on the room and both clients adopt: this is
@@ -150,10 +151,14 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     expect(host.status().playbackAdopted).toBe(true)
     expect(joiner.status().playbackAdopted).toBe(true)
 
-    // t=4000: the user drags the host's scrubber 545 s forward. No programmatic
-    // operation is armed, so the `seeked` the element queues is classified as
-    // the user's and leaves through `sendLocalState('seek')` — the same door the
-    // shipped player uses.
+    // t=4000: the user drags the host's scrubber 545 s forward. With the host
+    // seated unbuffered at `seekLandMs: LAND_MS` above, the drag queues no
+    // `seeked` at all — `userSeek` only assigns `currentTime` — so nothing
+    // leaves through `sendLocalState('seek')` and no `seek` frame is ever
+    // written for this target. What reaches the wire is the ordinary 1 Hz
+    // snapshot, now carrying the in-flight target because the element reports
+    // it, and that is the whole difference: the room is told 645 by a peer that
+    // has no data there, without a single frame marked as a seek.
     const seekedAt = Date.now()
     host.frames.length = 0
     host.userSeek(SEEK_TO)

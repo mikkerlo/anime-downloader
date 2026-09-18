@@ -13,7 +13,13 @@
 
 import { describe, expect, it, inject } from 'vitest'
 import { runConformance } from './helpers/conform'
-import { COMPARED_FIELD_PATHS, IGNORED_FIELDS, unlistedFieldPaths } from './helpers/trace-diff'
+import {
+  COMPARED_FIELD_PATHS,
+  IGNORED_FIELDS,
+  observedFieldPaths,
+  reachesFieldPath,
+  unlistedFieldPaths
+} from './helpers/trace-diff'
 import type { Scenario } from './helpers/scenario'
 
 const port = inject('syncplayPort')
@@ -69,13 +75,16 @@ describe('conformance: field coverage', () => {
     // The other half of the guard. Without this, a compared path could be
     // misspelled — or the reference could stop sending it — and the suite would
     // go on reporting agreement about a field nobody was looking at.
+    //
+    // This reads the parsed field paths rather than testing the first and last
+    // segment as free-floating substrings, which is what it used to do and which
+    // was weaker than the paragraph above claims: `"Set"` and `"name"` both
+    // appear in a join notice, so `Set.user.[].file.name` was satisfied by a
+    // frame with no `file` in it at all. `reachesFieldPath()` carries the
+    // subtree rule and the measurement behind it.
     const run = await runConformance(wideScenario, port)
-    const seen = (frames: readonly string[], path: string): boolean => {
-      const head = path.split('.')[0]
-      const leaf = path.split('.').pop() as string
-      return frames.some((f) => f.includes(`"${head}"`) && f.includes(`"${leaf}"`))
-    }
-    const missing = COMPARED_FIELD_PATHS.filter((p) => !seen(run.realFrames, p))
+    const observed = observedFieldPaths(run.realFrames)
+    const missing = COMPARED_FIELD_PATHS.filter((p) => !reachesFieldPath(observed, p))
     expect({ unreachedComparedFields: missing }).toEqual({ unreachedComparedFields: [] })
   })
 

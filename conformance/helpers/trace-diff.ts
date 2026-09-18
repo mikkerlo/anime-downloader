@@ -197,6 +197,36 @@ export function observedFieldPaths(rawFrames: readonly string[]): Set<string> {
   return out
 }
 
+/**
+ * Whether a set of observed leaf paths reaches `path`.
+ *
+ * `observedFieldPaths()` returns **leaves**, and a compared path is not always
+ * one. `Set.user.[].file` is a subtree on the reference's wire and never its own
+ * leaf: `sendUserSetting` (`protocols.py:682-683`) writes the key only when the
+ * file is truthy, so a cleared or empty file omits `file` altogether rather than
+ * sending `null` or `{}`. Measured on the wide scenario, seven of the eight
+ * compared paths arrive as exact leaves and that one arrives only as the parent
+ * of `Set.user.[].file.name`. (`List.[].[].file` does land as a leaf, because
+ * `_addUserOnList` (`protocols.py:695`) substitutes `{}` rather than omitting
+ * the key — the two renderings differ, which is itself why both are compared.)
+ * So a path counts as reached when it is observed exactly or when an observed
+ * leaf sits underneath it.
+ *
+ * The match is anchored and segment-wise, and that is the whole difference from
+ * the first-and-last-substring test this replaces: a
+ * `Set: {user: {…: {room: {name: …}}}}` join notice observes
+ * `Set.user.[].room.name` and reaches neither `Set.user.[].file` nor
+ * `Set.user.[].file.name`, where the substring test accepted both on the
+ * strength of `"Set"` and `"name"` appearing somewhere in the frame.
+ * `test/conformance-harness.test.ts` pins that case in the PR gate, since this
+ * file's own suite runs only in the nightly.
+ */
+export function reachesFieldPath(observed: ReadonlySet<string>, path: string): boolean {
+  if (observed.has(path)) return true
+  for (const seen of observed) if (seen.startsWith(path + '.')) return true
+  return false
+}
+
 function listed(path: string, list: readonly string[]): boolean {
   for (const entry of list) {
     if (entry.endsWith('.*')) {

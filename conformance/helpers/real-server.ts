@@ -26,8 +26,53 @@ export function serverBin(): string {
   return process.env.SYNCPLAY_SERVER_BIN ?? 'syncplay-server'
 }
 
-async function freePort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
+/** One connect attempt. `true` means something completed a handshake on the port. */
+export async function connects(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const sock = net.createConnection({ host: '127.0.0.1', port })
+    sock.once('connect', () => {
+      sock.destroy()
+      resolve(true)
+    })
+    sock.once('error', () => {
+      sock.destroy()
+      resolve(false)
+    })
+  })
+}
+
+/**
+ * Waits until the probe socket is not merely `close()`d but actually refusing.
+ *
+ * `close()`'s callback is not the end of the port's life: for a short window
+ * after it fires the kernel still completes the handshake on that port, so a
+ * connect succeeds against a server that no longer exists. Measured on this
+ * tree's loopback: the window runs 7-11 ms and answers forty-odd consecutive
+ * connects inside it.
+ *
+ * That window is exactly where `waitForListen()` takes its first sample — it is
+ * called a few hundred microseconds after `spawn` — so without this the harness
+ * reads the probe's own corpse as "the server is up". Two observed consequences,
+ * both of which this closes: `bootRealServer()` *succeeded* in 9 ms with
+ * `SYNCPLAY_SERVER_BIN=/nonexistent`, making the header's "this **throws**
+ * rather than skipping" claim false; and on a run where the real server took a
+ * moment longer than usual to bind, the first scenario file started against a
+ * port nothing was listening on yet and failed all five of its tests with
+ * `ECONNREFUSED` while the rest of the suite passed — a dead-reference run
+ * wearing the shape of a partial divergence.
+ */
+async function waitForRefused(port: number, deadlineMs: number): Promise<void> {
+  const until = Date.now() + deadlineMs
+  while (await connects(port)) {
+    if (Date.now() > until) {
+      throw new Error(`port ${port} was still accepting connections after ${deadlineMs}ms`)
+    }
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+export async function freePort(): Promise<number> {
+  const port = await new Promise<number>((resolve, reject) => {
     const probe = net.createServer()
     probe.once('error', reject)
     probe.listen(0, '127.0.0.1', () => {
@@ -36,27 +81,18 @@ async function freePort(): Promise<number> {
         probe.close(() => reject(new Error('could not read an ephemeral port')))
         return
       }
-      const port = addr.port
-      probe.close(() => resolve(port))
+      const p = addr.port
+      probe.close(() => resolve(p))
     })
   })
+  await waitForRefused(port, 2000)
+  return port
 }
 
 async function waitForListen(port: number, deadlineMs: number): Promise<void> {
   const until = Date.now() + deadlineMs
   for (;;) {
-    const open = await new Promise<boolean>((resolve) => {
-      const sock = net.createConnection({ host: '127.0.0.1', port })
-      sock.once('connect', () => {
-        sock.destroy()
-        resolve(true)
-      })
-      sock.once('error', () => {
-        sock.destroy()
-        resolve(false)
-      })
-    })
-    if (open) return
+    if (await connects(port)) return
     if (Date.now() > until) throw new Error(`syncplay-server did not listen on ${port} in time`)
     await new Promise((r) => setTimeout(r, 100))
   }
@@ -87,6 +123,10 @@ export async function bootRealServer(): Promise<RealServer> {
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (err) {
+    // Reachable only for a synchronous `spawn` throw — a malformed argument or
+    // option object. A *missing* binary does not come through here: `spawn`
+    // returns a `ChildProcess` and reports `ENOENT` asynchronously on `error`,
+    // which is what `spawnFailed` below is for.
     throw new Error(`could not spawn ${bin}: ${String(err)} — see conformance/README.md`)
   }
   let stderr = ''
@@ -113,13 +153,32 @@ export async function bootRealServer(): Promise<RealServer> {
       )
     }
   })
-  proc.on('error', (err) => {
-    stderr += `spawn error: ${err.message}\n`
+  // The asynchronous half of a failed `spawn`, raced against `waitForListen()`
+  // below. A wrong or unset `SYNCPLAY_SERVER_BIN` arrives here as `ENOENT`
+  // within a millisecond or two; without the race the harness would ignore it
+  // and spend the full 20 s timeout before reporting "failed to come up", which
+  // says nothing about the one thing that was actually wrong. The `.catch()` is
+  // required rather than tidy: when `waitForListen()` wins the race — the normal
+  // path, every run — this promise stays pending forever, and a later `error`
+  // (a signal delivery failure at teardown, say) would otherwise reject with no
+  // handler attached and take the process down as an unhandled rejection.
+  const spawnFailed = new Promise<never>((_, reject) => {
+    proc.on('error', (err) => {
+      stderr += `spawn error: ${err.message}\n`
+      reject(
+        new Error(
+          `could not spawn ${bin}: ${err.message} — set SYNCPLAY_SERVER_BIN to a ` +
+            `syncplay-server built from ${SYNCPLAY_PINNED_COMMIT}. See conformance/README.md.`
+        )
+      )
+    })
   })
+  spawnFailed.catch(() => {})
 
   try {
-    await waitForListen(port, 20000)
+    await Promise.race([waitForListen(port, 20000), spawnFailed])
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith('could not spawn ')) throw err
     const why = exited ? ` (process exited: ${JSON.stringify(exited)})` : ''
     throw new Error(
       `${bin} failed to come up${why}. stderr:\n${stderr}\n` +
@@ -134,12 +193,20 @@ export async function bootRealServer(): Promise<RealServer> {
       stopping = true
       if (proc.exitCode !== null) return
       await new Promise<void>((resolve) => {
-        proc.once('exit', () => resolve())
-        proc.kill('SIGTERM')
-        setTimeout(() => {
+        // The SIGKILL timer has to be cleared on the normal path. `resolve()`
+        // settles the promise but does not disarm a pending `setTimeout`, so
+        // without this the timer stays on the event loop after teardown, holds
+        // the process open until it fires, and then signals a pid that is
+        // already gone — the shape vitest reports as a leaked handle.
+        const hard = setTimeout(() => {
           proc.kill('SIGKILL')
           resolve()
         }, 3000)
+        proc.once('exit', () => {
+          clearTimeout(hard)
+          resolve()
+        })
+        proc.kill('SIGTERM')
       })
     }
   }

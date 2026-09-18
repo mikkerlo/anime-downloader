@@ -233,6 +233,20 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   rather than skipping — a conformance suite that quietly passes because it
   never ran is the failure mode it exists to rule out.
 
+  Three of this layer's own properties are pinned from `quality`, because a
+  nightly-only layer is not exercised by the pull request that breaks it.
+  `test/conformance-workflow.test.ts` asserts that every piped step in the
+  workflow runs under a shell that sets `pipefail`: without it a diverged suite
+  exits with `tee`'s status and lands as a green nightly with nothing filed.
+  `test/conformance-harness.test.ts` asserts the throw above actually happens —
+  it did not, until #381: a missing binary reports `ENOENT` asynchronously, and
+  the port `freePort()` handed out still answered for ~10 ms after its probe
+  socket closed, so the readiness check passed against the probe's own corpse
+  and `bootRealServer()` resolved in 9 ms against no server at all. The same
+  file pins `reachesFieldPath()`, the predicate behind "reaches every compared
+  field at least once", on the case that made its predecessor weaker than it
+  read: a join notice satisfying `Set.user.[].file.name` with no `file` in it.
+
   What this does and does not underwrite in the layers above. The mirror and
   two-peer fixtures split by what their *expected value* is derived from. One
   group is conditional on the model's election being the reference's, because

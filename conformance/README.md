@@ -38,7 +38,9 @@ Two things worth knowing before wiring this into a runner:
 - if `SYNCPLAY_SERVER_BIN` is unset the harness looks for `syncplay-server` on
   `PATH`, and if it finds nothing it **throws**. It does not skip. A conformance
   suite that quietly passes because it never ran is the failure mode this
-  directory exists to rule out.
+  directory exists to rule out. That claim is checked rather than asserted:
+  `test/conformance-harness.test.ts` runs in `quality` and fails if a missing
+  binary produces anything but a prompt `ENOENT`.
 
 ## What is compared
 

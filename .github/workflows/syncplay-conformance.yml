@@ -64,13 +64,20 @@ jobs:
 
       - name: Run the conformance suite
         id: conformance
+        # `shell: bash` is load-bearing, not style. A `run` with no `shell:` is
+        # `bash -e {0}`, which does **not** set `pipefail`, so the pipeline below
+        # would exit with `tee`'s 0 and a divergence would land as a green
+        # nightly with no issue filed. `shell: bash` expands to
+        # `bash --noprofile --norc -eo pipefail {0}`. `test/conformance-workflow.test.ts`
+        # pins this for every piped step in this file.
+        shell: bash
         env:
           SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
         run: npm run test:conformance 2>&1 | tee conformance.log
 
       - name: Upload the transcripts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: conformance-log
           path: conformance.log

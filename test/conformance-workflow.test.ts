@@ -44,12 +44,19 @@ function steps(yml: string): string[] {
  * The indicator matters: `run: |` is a literal-block marker, not a pipeline, so
  * a naive search for `|` over the raw step text calls every multi-line step
  * piped and the assertion stops meaning anything.
+ *
+ * Both spellings of the key are matched. A step written compactly as `- run: …`
+ * carries the key on the sequence-dash line, and a pattern anchored at `run:`
+ * alone cannot see one — so such a step returns `null` here and drops out of
+ * `piped` entirely, without moving the count the assertion below pins. The
+ * workflow this reads uses that form for `npm ci`, so the shape is not
+ * hypothetical.
  */
 function runBody(step: string): string | null {
   const lines = step.split('\n')
-  const i = lines.findIndex((l) => /^\s+run:/.test(l))
+  const i = lines.findIndex((l) => /^\s+(- )?run:/.test(l))
   if (i === -1) return null
-  const m = lines[i].match(/^(\s*)run:[ \t]*(.*)$/)
+  const m = lines[i].match(/^(\s*(?:- )?)run:[ \t]*(.*)$/)
   if (!m) return null
   const indent = m[1].replace('- ', '  ').length
   const inline = m[2].trim()
@@ -98,9 +105,14 @@ describe('syncplay-conformance workflow', () => {
     // The whole point. `bash -e` without `pipefail` reports the *last* command's
     // status, so a red suite feeding `tee` is a green step and the divergence is
     // never filed.
+    // The compact `- run: …` form never carries a `name:`, so falling back to
+    // the literal `(unnamed step)` would tell whoever reads a red log nothing
+    // about which step to go fix. Print the command instead.
     const nameOf = (step: string): string => {
       const m = step.match(/^\s+- name:[ \t]*(.*)$/m)
-      return m ? m[1] : '(unnamed step)'
+      if (m) return m[1]
+      const cmd = runBody(step)
+      return cmd === null ? '(unnamed step)' : `(unnamed step) run: ${cmd.split('\n')[0]}`
     }
     const unguarded = piped.filter((s) => shellFor(s, yml) !== 'bash').map(nameOf)
 

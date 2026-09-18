@@ -789,6 +789,54 @@ describe('check-prose-shape', () => {
     expect.soft(run(block('z'.repeat(24))).hits[0]).toMatchObject({ len: 55, blockMax: 80 })
   })
 
+  it('reports three hits around a lone unbreakable token and four behind a word', () => {
+    // CLAUSE (e)'S SECOND-ORDER EFFECT, which is the number the script's comment
+    // and docs/testing.md both quote at the reader. Pinned here because nothing
+    // in this suite pinned it and the sentence drifted: both texts called the
+    // four-hit shape a *bare* URL until review on #380, and a bare URL is the
+    // shape that reports three.
+    //
+    // One six-line paragraph wrapped at 76-77 columns whose fourth line is 103
+    // columns EITHER WAY, so `blockMax` is 103 in both corpora and the only
+    // difference between them is what `firstToken` of that line returns:
+    //
+    //   the whole line is one token   -> 3 hits, lines 1, 2 and 5
+    //   a short word, then the token  -> 4 hits, lines 1, 2, 3 and 5
+    //
+    // Line 3 is the one that moves and clause (e) is what takes it. With a
+    // single 103-column token below it, `76 + 1 + 103 > 103`: the break after
+    // line 3 was FORCED, so (e) pardons the line above the token as well as the
+    // token's own break. Put a three-column word in front and `76 + 1 + 3` fits
+    // inside 103, the break becomes a chosen one, and the fourth hit appears.
+    // Four is therefore the count for word-then-link, the commoner shape in
+    // prose, and never for a URL sitting alone on its line.
+    //
+    // Content-free in the idiom of the two cases above: the token is a run of
+    // `z`. On the live tree the class is a bare URL or a long backticked path,
+    // but the rule reads two lengths and consults neither.
+    const paragraph = (fourth: string): Corpus => ({
+      'docs/notes.md': [
+        'a paragraph wrapped by hand at the usual bar, in which every one of these six',
+        'lines sits at seventy-six or seventy-seven columns, and not one of them stops',
+        'early on purpose, so the only line a greedy wrapper could not have broken is',
+        fourth,
+        'and the paragraph itself carries on past the long line for another line or so',
+        'so that the block is comfortably long enough for this deficit to be measured.',
+        ''
+      ].join('\n')
+    })
+
+    const alone = run(paragraph('z'.repeat(103)))
+    const behindAWord = run(paragraph('see ' + 'z'.repeat(99)))
+
+    expect.soft(linesOf(alone)).toEqual([1, 2, 5])
+    expect.soft(linesOf(behindAWord)).toEqual([1, 2, 3, 5])
+    // Both sides measured against the same 103, so the extra hit is clause (e)
+    // and nothing else — and it is the 76-column line, not a wider one.
+    expect.soft(alone.hits[0]).toMatchObject({ len: 77, blockMax: 103 })
+    expect.soft(behindAWord.hits[2]).toMatchObject({ line: 3, len: 76, blockMax: 103 })
+  })
+
   // NO TEST FOR "the next line in the BLOCK, not in the FILE". One was written
   // and then deleted, because it could not fail: a block's line indices are
   // contiguous by construction (every non-`text`/`item` kind flushes the block,

@@ -452,10 +452,13 @@ export function raggedLines(lines, deficit = DEFICIT) {
       // long BECAUSE no wrapper could break it. So an unbreakable token is
       // pardoned at its own break point by (e) and then raises the bar for every
       // neighbour through (c): a six-line paragraph wrapped at 76-77 columns
-      // around a 103-column bare URL reports four hits, all four of them
-      // correctly wrapped lines, and removing the URL takes it to zero. Latent
-      // rather than live — the widest scanned block on this tree is 88 columns,
-      // and only two exceed 84.
+      // around a 103-column link reports four hits, all four of them correctly
+      // wrapped lines, and removing the link takes it to zero. A URL sitting
+      // ALONE on its line reports three, not four — (e) then pardons the line
+      // before it, and the fourth hit needs a short word ahead of the URL.
+      // Latent rather than live: the widest block this loop examines is 88
+      // columns on this tree and only two exceed 84. Blocks of one line run far
+      // wider and are skipped by the guard above.
       //
       // LEFT ALONE DELIBERATELY. Teaching `blockMax` to ignore a line no wrapper
       // could have produced is a PREDICATE change, and the issue's Risks section

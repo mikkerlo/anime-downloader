@@ -459,8 +459,11 @@ one line a wrapper could not break — a bare URL, a long backticked path — ra
 the bar for every other line in the same paragraph. A six-line paragraph wrapped
 at 76-77 columns around a 103-column link reports four hits, none of them a
 defect, and the failure text's advice to rewrap the paragraph is wrong for all
-four. Nothing on this tree is close: the widest scanned block is 88 columns and
-only two exceed 84. It is a latent class, named here rather than discovered by
+four. Nothing on this tree is close: the widest block the predicate examines is
+88 columns and only two exceed 84. Blocks of one line run far wider — there is
+an 8572-column paragraph in `docs/syncplay.md` — but `raggedLines` skips a block
+shorter than two lines outright, so the multi-line figure is the one to compare
+against. It is a latent class, named here rather than discovered by
 whoever first writes a long link. Narrowing `blockMax` to ignore a line no
 wrapper could have broken is a **predicate change**, and this gate's own rule is
 that a threshold does not move once the count is known — so it belongs in its own

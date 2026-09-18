@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Measurement of Markdown prose shape under the prose roots (#370). PRINT-ONLY:
-// it reports and always exits 0. The pin that gives it teeth is PR 2, sequenced
-// after the citation-gate repairs land, because a pin here is a number measured
-// against a file that #366 and #369 are both renumbering.
+// CI gate for Markdown prose shape under the prose roots (#370). PR 1 shipped
+// this print-only, so that a script nobody could red renumbered nothing while
+// #366 and #369 were still moving the file it measures. PR 2 adds clause (e)
+// and the pin below, which is what turns it into a gate.
 //
 // Why a bespoke script rather than the formatter: `.prettierignore` carries
 // `**/*.md`, so `format:check` never opens a Markdown file — but removing that
@@ -15,10 +15,9 @@
 //
 // Run: npm run check:prose-shape
 //
-// THE PREDICATE IS COMMITTED, NOT TUNED. Its form and its value were fixed in
-// the issue before the count was looked at, and the issue's Risks section
-// forbids adjusting either after seeing the number. A line is ragged when all
-// four hold:
+// THE PREDICATE IS COMMITTED, NOT TUNED. (a) through (d) were fixed in the
+// issue before the count was looked at, and the issue's Risks section forbids
+// adjusting them after seeing the number. A line is ragged when all five hold:
 //
 //   (a) it is inside a BLOCK — a maximal run of prose lines, broken by a blank
 //       line, a fence, a heading, a table row, a blockquote, a `---` rule, and
@@ -26,18 +25,29 @@
 //   (b) it is not the block's last line;
 //   (c) `blockMax - len >= 20` — an ABSOLUTE column deficit against the longest
 //       line in its own block;
-//   (d) it does not end in `.`, `:`, `;`, `!` or `?`.
+//   (d) it does not end in `.`, `:`, `;`, `!` or `?`;
+//   (e) `len + 1 + len(first token of the next line) <= blockMax` — a greedy
+//       wrapper COULD have appended the next thing in the paragraph, so the
+//       break was chosen rather than forced. See `raggedLines()` for why this
+//       one arrived after the count was known and why that is recorded here.
 //
-// (a)'s list-item boundary and (d) are the gate, not refinements. Measured
-// three ways at this commit, all of them reproduced rather than inherited:
-// inside these scan roots the predicate reports 14, dropping the list-item
-// boundary alone takes it to 116 (45 of them in TODO.md, which is nothing but
-// short bullets) and dropping the terminal rule alone takes it to 19; over every
-// tracked `.md` with neither, at ratio 0.75 and with no content exclusions
-// bar the fence, it reports 374 — the issue's own sensitivity figure, hit
-// exactly. Those parameters, not the idea, decide whether this is a signal or
-// noise, which is why the Risks section forbids touching them once the count is
-// known.
+// SENSITIVITY, re-measured at this commit rather than carried down from PR 1 —
+// every figure below moved, because clause (e) landed and because #379 added
+// four ragged lines to docs/testing.md. Inside these scan roots the committed
+// predicate reports 9. Dropping clause (e) alone takes it to 18. Dropping the
+// list-item boundary alone takes it to 111, 45 of them in TODO.md, which is
+// nothing but short bullets. Scanning fence contents takes it to 273, 82 from
+// one data-flow diagram and 50 from an ASCII source tree. Those parameters, not
+// the idea, decide whether this is a signal or noise.
+//
+// The honest exception, recorded rather than smoothed over: dropping the
+// terminal rule (d) is now COUNT-NEUTRAL on this tree — still 9, where at PR 1
+// it was 19 against 14. Clause (e) absorbed the difference; every line (d) was
+// holding green is now also a line whose next token could not fit. (d) is still
+// load-bearing as a rule — the test drives a corpus where it alone decides, and
+// a tree with different prose brings its contribution back — but it is no longer
+// evidenced by a live-tree count, and claiming otherwise would be quoting a
+// number that stopped being true.
 //
 // (c) is absolute rather than a ratio deliberately. A ratio makes the bar
 // depend on how long the longest line in the block happens to be, which is
@@ -47,6 +57,35 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { basename, extname } from 'node:path'
+
+// --- pins ---------------------------------------------------------------------
+//
+// An exact-match assertion, per docs/testing.md ("Pin the count, never just loop
+// over the set"). Moving it is a deliberate act with a reason in the commit
+// message, not a side effect of an unrelated edit.
+
+// Ragged lines this tree still carries. The convention is UNCHECKABLE_PIN in
+// scripts/check-line-citations.mjs, NOT SUSPICIOUS_LANDING_PIN, and the two
+// carry opposite instructions to whoever next reds this.
+//
+// A landing pin of 0 can say "what you just added is a defect, repair it",
+// because its measured false-positive rate is zero and every member it ever had
+// was repaired. This one cannot be 0: the lines it counts are real, unrepaired,
+// and not repairable from here — rewrapping them reflows docs/testing.md and
+// renumbers the very citation anchors the sibling gate pins, which is what the
+// issue's Risks section says not to do. So it bounds a known blindness instead.
+// A ragged line ARRIVING reds the build and the fix is to rewrap the line just
+// written; a deliberate repair LOWERS the pin, with its reason.
+//
+// NEVER RE-PIN TO CLEAR A RED. A number moved to match whatever the tree
+// happens to say measures nothing, and this one is the only thing between the
+// predicate and a printed figure nobody diffs.
+//
+// 9 on this tree: 8 in docs/testing.md and 1 in src/shared/README.md. Measured
+// at the commit that introduces it, after clause (e), and not carried from the
+// 14 PR 1 quoted, the 18 this tree reports without clause (e), or the 6
+// estimated in review before #379 landed.
+export const RAGGED_PIN = 9
 
 // --- configuration ------------------------------------------------------------
 
@@ -62,8 +101,18 @@ export const DEFICIT = 20
 // `.github` because a citation can be written in any of them. This set covers
 // prose a human wrapped by hand, which is a different population: agent
 // instruction Markdown under `.claude/`, `.gemini/` and `.github/agents/` is
-// out, and that choice is worth 3.4x on the raw count — 18 of the 44 tracked
-// `.md` live under those roots and every front-matter hit comes from them.
+// out, excluded on THAT ground and not on a hit count.
+//
+// An earlier draft of this comment defended the boundary as "worth 3.4x on the
+// raw count". #370 RETRACTED that and this line is the correction. The 3.4x
+// prices the FRONT-MATTER exclusion, not the scope: re-measured at this commit
+// with `.claude`, `.gemini` and `.github/agents` added to the roots, the
+// committed predicate reports the same 9 over 42 files instead of 23 — scope
+// moves the committed count by 1.00x, and 3.4x was never its price. 19 of the
+// 44 tracked `.md` live under those roots and every front-matter hit comes from
+// them, which is a fact about where the front matter sits, not an argument for
+// the boundary. The issue is explicit that the count must not be used to defend
+// the exclusion at all; docs/testing.md says the same thing beside this file.
 export const SCAN_ROOTS = ['.', 'docs']
 
 // The one prose class outside those roots. `src/**/README.md` is hand-wrapped
@@ -338,6 +387,11 @@ export function blocksOf(kinds) {
   return blocks
 }
 
+// Clause (e). The first whitespace-delimited token of a line — the next thing a
+// greedy wrapper would have had to place. `trim()` first, so a continuation
+// line's own indentation is not mistaken for an empty token.
+const firstToken = (line) => line.trim().split(/\s+/)[0] ?? ''
+
 /**
  * Ragged lines in one file.
  *
@@ -355,10 +409,66 @@ export function raggedLines(lines, deficit = DEFICIT) {
     // because the paragraph ended there, which is the normal case and not a
     // defect — skipping it is what keeps every well-wrapped paragraph in the
     // tree silent.
-    for (const i of block.slice(0, -1)) {
+    for (let b = 0; b < block.length - 1; b++) {
+      const i = block[b]
       const len = lines[i].length
       if (blockMax - len < deficit) continue
       if (SENTENCE_TERMINAL.test(lines[i].trimEnd())) continue
+      // Clause (e): could a greedy wrapper have appended the next token at all?
+      // If `len + 1 + token > blockMax` the break was FORCED — every greedy
+      // wrapper produces this shape — so the line is short for a mechanical
+      // reason rather than a chosen one, and flagging it means flagging the
+      // normal output of the tool everyone uses.
+      //
+      // CONTENT-FREE, and that is the whole of its defence. It knows nothing
+      // about citations, URLs or backticks; it is wrapper arithmetic over two
+      // lengths. The class it happens to catch on this tree is the unbreakable
+      // backticked path, but the rule is not written against that class and
+      // does not consult it. The rejected alternative — "the next line begins
+      // with an opening parenthesis" — WAS written against these lines, and the
+      // two come apart on docs/testing.md:50, which the parenthesis rule
+      // pardons and this one leaves red at exactly blockMax-against-blockMax
+      // because that break really was chosen.
+      //
+      // Added AFTER the population was measured, which the issue's Risks
+      // section otherwise forbids. Recorded rather than waved through: the
+      // prohibition is on moving a THRESHOLD until the number looks acceptable,
+      // and this moves none — the deficit is still 20. It also cuts the count by
+      // more than half, the direction that makes the gate look WORSE, which is
+      // the opposite of the incentive the rule guards against.
+      //
+      // "The next line IN THE BLOCK" and "the next line in the file" are the
+      // same line today, and provably so: every kind that is not `text` or
+      // `item` flushes the block, and `item` starts a new one, so a block's
+      // indices are contiguous. `block[b + 1]` is written because it is what the
+      // clause means, not because it currently differs — measured, and a
+      // fixture pinning the difference cannot be constructed. Clause (b) is
+      // what stops this reading past the block's end.
+      //
+      // THE OTHER END OF THE SAME ARITHMETIC IS NOT FIXED BY THIS CLAUSE, and
+      // saying so here is the point of this paragraph. `blockMax` is the
+      // reference for (c) as well as for (e), and it is set by whatever the
+      // longest line in the paragraph happens to be — including a line that is
+      // long BECAUSE no wrapper could break it. So an unbreakable token is
+      // pardoned at its own break point by (e) and then raises the bar for every
+      // neighbour through (c): a six-line paragraph wrapped at 76-77 columns
+      // around a 103-column link reports four hits, all four of them correctly
+      // wrapped lines, and removing the link takes it to zero. A URL sitting
+      // ALONE on its line reports three, not four — (e) then pardons the line
+      // before it, and the fourth hit needs a short word ahead of the URL.
+      // Latent rather than live: the widest block this loop examines is 88
+      // columns on this tree and only two exceed 84. Blocks of one line run far
+      // wider and are skipped by the guard above.
+      //
+      // LEFT ALONE DELIBERATELY. Teaching `blockMax` to ignore a line no wrapper
+      // could have produced is a PREDICATE change, and the issue's Risks section
+      // forbids moving the predicate once the count is known — the same rule
+      // clause (e) is recorded against above. It is written down in
+      // docs/testing.md under "What it over-reports" and the `rose` failure text
+      // below names it, so an author who hits it is told not to rewrap. Changing
+      // it belongs in its own issue with its own measurement.
+      const next = block[b + 1]
+      if (len + 1 + firstToken(lines[next]).length > blockMax) continue
       hits.push({ line: i + 1, len, blockMax, text: lines[i].trim() })
     }
   }
@@ -417,28 +527,66 @@ export function analyze({
 }
 
 /**
- * @returns {{ ok: boolean, out: string[] }}
+ * @returns {{ ok: boolean, out: string[], err: string[] }}
  */
-export function report(r) {
+export function report(r, pins = {}) {
+  const raggedPin = pins.ragged ?? RAGGED_PIN
   const out = []
+  const err = []
   out.push(`check:prose-shape — scanned ${r.scannedCount} markdown files`)
   out.push(
     `  ragged lines: ${r.hits.length} in ${r.byFile.size} file(s) ` +
-      `(deficit >= ${r.deficit ?? DEFICIT} columns, print-only)`
+      `(deficit >= ${r.deficit ?? DEFICIT} columns) — pin ${raggedPin}`
   )
   for (const h of r.hits) {
     out.push(`  ${h.path}:${h.line}  ${h.len}/${h.blockMax}  ${h.text}`)
   }
-  out.push(
-    '',
-    'PRINT-ONLY (#370 PR 1): this reports and exits 0. The pin that makes it a',
-    'gate is PR 2, and it follows the UNCHECKABLE_PIN convention in',
-    'scripts/check-line-citations.mjs — a non-zero number that bounds a known',
-    'blindness — not the SUSPICIOUS_LANDING_PIN one. The lines above are',
-    'unrepaired, and repairing them reflows docs/testing.md while the citation',
-    'anchors in it are still being repaired, so the pin cannot be zero.'
-  )
-  return { ok: true, out }
+
+  let ok = true
+
+  if (r.hits.length !== raggedPin) {
+    ok = false
+    err.push(
+      '',
+      `Ragged-line count ${r.hits.length > raggedPin ? 'rose' : 'fell'}: ` +
+        `${r.hits.length}, pinned at ${raggedPin}.`,
+      ''
+    )
+    for (const h of r.hits) {
+      err.push(`  ${h.path}:${h.line}  ${h.len}/${h.blockMax}  ${h.text}`)
+    }
+    if (r.hits.length > raggedPin) {
+      err.push(
+        '',
+        'A line listed above is at least 20 columns shorter than the longest line',
+        'in its own paragraph, does not end a sentence, and the next word in the',
+        'paragraph would have fitted on it. Usually a wrapper did not produce that',
+        'break, an edit did: rewrap the line you just wrote. The dump above is',
+        'every hit and not just the new one, so narrow it with the per-file split',
+        'in the RAGGED_PIN comment, or run this script on your base commit and',
+        'diff the two lists.',
+        '',
+        'First check whether the longest line in that paragraph is one no wrapper',
+        'could break — a bare URL or a long backticked path — because such a line',
+        'raises the bar for every neighbour and the hits around it are not defects.',
+        'See "What it over-reports" in docs/testing.md.',
+        '',
+        'Raise the pin only for a line that is genuinely meant to stop there, and',
+        'say why in the commit message.'
+      )
+    } else {
+      err.push(
+        '',
+        'If you rewrapped one of the pinned lines: lower the pin to match, which is',
+        'the whole point of it being exact. Do NOT re-pin to whatever the tree now',
+        'says without reading the list — the pin bounds a known blindness, and a',
+        'number moved to clear a red measures nothing.'
+      )
+    }
+  }
+
+  if (ok) out.push('', 'OK')
+  return { ok, out, err }
 }
 
 // --- CLI ----------------------------------------------------------------------
@@ -451,8 +599,12 @@ function main() {
     .split('\0')
     .filter(Boolean)
 
-  const { out } = report(analyze({ files, readLines: (p) => readFileSync(p, 'utf8').split('\n') }))
+  const { ok, out, err } = report(
+    analyze({ files, readLines: (p) => readFileSync(p, 'utf8').split('\n') })
+  )
   console.log(out.join('\n'))
+  if (err.length > 0) console.error(err.join('\n'))
+  if (!ok) process.exit(1)
 }
 
 if (process.argv[1] && process.argv[1].endsWith('check-prose-shape.mjs')) main()

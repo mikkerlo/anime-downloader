@@ -2,9 +2,12 @@
 // `analyze()` over a synthetic corpus rather than the real tree, for the reason
 // test/check-line-citations.test.ts gives: the real tree's counts are the
 // gate's own pin and move with every repair. Here that is not a general
-// principle but a live constraint — docs/testing.md carries 13 of the 14 hits
-// on this tree and is the file #366 and #369 both renumber, so an assertion
+// principle but a live constraint — docs/testing.md carries 8 of the 9 hits on
+// this tree and is the file #366 and #369 both renumber, so an assertion
 // written against a live line number is a test whose next rebase deletes it.
+// #379 proved the point between PR 1 and PR 2: it added four ragged lines to
+// that file and moved every other one, taking the count from 14 to 18 without
+// touching this gate at all.
 //
 // The corpus lives INLINE, which is also why this file needs no `EXCLUDED_PATHS`
 // entry: its ragged prose is a string handed to `analyze()`, never a file on
@@ -13,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
-import { analyze, classify, report } from '../scripts/check-prose-shape.mjs'
+import { analyze, classify, report, RAGGED_PIN } from '../scripts/check-prose-shape.mjs'
 
 type Corpus = Record<string, string>
 
@@ -48,6 +51,26 @@ const linesOf = (r: Result): number[] => r.hits.map((h) => h.line)
 //
 // Copied verbatim rather than paraphrased: the widths ARE the fixture, and a
 // tidied-up imitation would be a test of a shape nobody wrote.
+//
+// THE UPPER CUT IS LOAD-BEARING. The excerpt runs to
+// `docs/testing.md:93` ("replaces this module wholesale") and must, because
+// `docs/testing.md:92` ("structured-clones them") is the 79-column line that
+// SETS `blockMax`. Every other line of the bullet is 66-78. Cut the excerpt
+// anywhere above that line and `blockMax` falls with it, the assertion below
+// silently stops being 41/79, and the case STILL REDS — on a different deficit,
+// for a different reason, with nobody the wiser. That is why the cut is named
+// here rather than left to look arbitrary to whoever next shortens the fixture.
+// (The last line is 52 columns and contributes nothing: it is the block's last
+// line, so clause (b) exempts it.) Raised in review on #370.
+//
+// The two anchors above are spelled with their path, rather than as a bare
+// colon-and-number. A pathless anchor lands in `UNCHECKABLE_PIN` and reds
+// check:line-citations — measured, not assumed: the first draft of this comment
+// carried three of them and took that pin from 117 to 120, and the rewrite left
+// two behind in this very sentence, which named the bare form by writing it.
+// Marked, so the sibling gate verifies the quote rather than merely the line's
+// existence, which is what keeps this comment honest the next time
+// docs/testing.md is renumbered.
 const RAGGED_BULLET = [
   '- **In-process IPC loop** (`test/setup/electron-mock.ts` → `test/ipc/`) — the',
   '  global `electron` mock can close the bridge on itself: `ipcMain.handle`',
@@ -71,8 +94,9 @@ const RAGGED_BULLET = [
 
 // A hand-formatted run of parenthetical citations, copied from the same file.
 // Four consecutive short lines, each deliberately broken so a citation sits on a
-// line of its own. See the characterisation test at the bottom: two of the four
-// red under the committed threshold, and that is reported rather than tuned away.
+// line of its own. See the characterisation test at the bottom: three of the four
+// red before clause (e) and ONE after it, and each of the three that stay green
+// does so for a different reason, which is what the case is there to record.
 const CITATION_RUN = [
   "  equivalent. A `doSeek` or a pause change takes the reference's other path instead:",
   '  a forced update that bypasses the election, carries the `ignoringOnTheFly`',
@@ -88,6 +112,12 @@ const CITATION_RUN = [
   ''
 ].join('\n')
 
+// The one repair instruction that belongs to the RISING arm of the pin and must
+// never reach the falling one. Held as a constant because both arms assert on it
+// — the rising arm that it is there, the falling arm that it is not — and a `not`
+// with no positive twin passes against wording nothing produces.
+const REWRAP_ADVICE = 'rewrap the line you just wrote'
+
 describe('check-prose-shape', () => {
   it('reds on the short line a rebase left inside a wrapped bullet', () => {
     // THE REGRESSION CASE. Line 8 is `shapes verbatim. The main→renderer half`:
@@ -97,17 +127,23 @@ describe('check-prose-shape', () => {
     // a signal here rather than a census of a hand-wrapped paragraph.
     const r = run({ 'docs/testing.md': RAGGED_BULLET })
 
-    expect(linesOf(r)).toEqual([8])
-    expect(r.hits[0]).toMatchObject({
+    // SOFT, so the 41/79 is observed even when the line set is wrong. A hard
+    // `toEqual` on `linesOf` short-circuits everything under it, and the widths
+    // are the whole fixture: a defect that reports the right line at the wrong
+    // deficit would be invisible behind a green line-set assertion, and a defect
+    // that reports the wrong line would hide the widths rather than show them.
+    expect.soft(linesOf(r)).toEqual([8])
+    expect.soft(r.hits[0]).toMatchObject({
       path: 'docs/testing.md',
       len: 41,
       blockMax: 79,
       text: 'shapes verbatim. The main→renderer half'
     })
-    // Print-only in PR 1: it reports and exits 0. The pin that turns this into
-    // a failure is PR 2, after the citation-anchor repairs stop moving the
-    // number it would be pinned to.
-    expect(report(r).ok).toBe(true)
+    // And it survives clause (e): the next line opens `was already closed`, so a
+    // greedy wrapper had 34 columns of room to pull `was` up. That is what makes
+    // the motivating defect a CHOSEN break rather than a forced one, and it is
+    // the reason clause (e) can remove 9 of the 18 without removing this.
+    expect.soft(report(r, { ragged: 1 }).ok).toBe(true)
   })
 
   // --- the green classes ------------------------------------------------------
@@ -231,8 +267,18 @@ describe('check-prose-shape', () => {
       ].join('\n')
     })
 
-    expect(linesOf(unterminated)).toEqual([3])
-    expect(unterminated.hits[0]).toMatchObject({ len: 28, text: 'a short line that just stops' })
+    // SOFT, both of them, so a defect that moves both is REPORTED as both
+    // rather than as the first alone. Measured honestly, the second half here is
+    // the weakest of the three pairs softened in this PR: the corpus is
+    // unindented, so `len` equals the trimmed length and every defect that moves
+    // `len` also moves the line set the first assertion pins. Only a
+    // report-only width defect reaches it with the first still green (mutating
+    // the pushed `len` to `len - 1` does, and nothing in the predicate does). It
+    // stays as a width record, not as coverage of a seam the first misses.
+    expect.soft(linesOf(unterminated)).toEqual([3])
+    expect
+      .soft(unterminated.hits[0])
+      .toMatchObject({ len: 28, text: 'a short line that just stops' })
 
     // The other half, so the narrowing cannot become a deletion: REAL front
     // matter — an opening `---` with a closing `---` — is still skipped whole,
@@ -291,8 +337,12 @@ describe('check-prose-shape', () => {
 
     // Under the unbounded search this is `[]` — the hit does not move, it
     // disappears.
-    expect(linesOf(fencedSample)).toEqual([3])
-    expect(fencedSample.hits[0]).toMatchObject({
+    // SOFT, and here the second half reaches a seam the first does not: it pins
+    // `blockMax`, which the line set cannot see. A `blockMax` off by one leaves
+    // `[3]` green — the deficit is 46 columns, nowhere near the bar — and reds
+    // only this.
+    expect.soft(linesOf(fencedSample)).toEqual([3])
+    expect.soft(fencedSample.hits[0]).toMatchObject({
       len: 28,
       blockMax: 74,
       text: 'a short line that just stops'
@@ -690,6 +740,111 @@ describe('check-prose-shape', () => {
     expect(linesOf(run(block('a short line that just stops')))).toEqual([2])
   })
 
+  it('leaves a short line alone when the next token could not have fitted on it', () => {
+    // CLAUSE (e), GREEN SIDE, and the boundary is pinned on BOTH sides in the
+    // next case, because a threshold pinned on one side only is satisfied by any
+    // looser rule — including "never report anything".
+    //
+    // `blockMax` is 80 and the short line is 55, so a greedy wrapper had exactly
+    // 24 columns left after the joining space. A 25-column next token does not
+    // fit, no wrapper could have produced any other break here, and the line is
+    // short for a MECHANICAL reason rather than a chosen one.
+    //
+    // Deliberately content-free: the next token is a run of `z`. On the live
+    // tree the class this catches is the unbreakable backticked path, but the
+    // rule is arithmetic over two lengths and does not consult what the token
+    // contains — which is exactly what separates it from the rejected
+    // "next line opens with a parenthesis" rule, written against the very lines
+    // it was meant to pardon.
+    const block = (nextToken: string): Corpus => ({
+      'docs/notes.md': [
+        'x'.repeat(80),
+        'y'.repeat(55),
+        nextToken + ' and the paragraph then runs on for a while yet',
+        'the tail of the paragraph.',
+        ''
+      ].join('\n')
+    })
+
+    expect(run(block('z'.repeat(25))).hits).toEqual([])
+  })
+
+  it('still reds a short line when the next token would have fitted on it', () => {
+    // CLAUSE (e), RED SIDE — the same corpus one column narrower. 55 + 1 + 24 is
+    // exactly 80, so the next token fits the block maximum precisely and the
+    // break was CHOSEN. Written as the pair to the case above: with only the
+    // green half, deleting clause (e)'s condition and always returning "could
+    // not fit" would still pass.
+    const block = (nextToken: string): Corpus => ({
+      'docs/notes.md': [
+        'x'.repeat(80),
+        'y'.repeat(55),
+        nextToken + ' and the paragraph then runs on for a while yet',
+        'the tail of the paragraph.',
+        ''
+      ].join('\n')
+    })
+
+    expect.soft(linesOf(run(block('z'.repeat(24))))).toEqual([2])
+    expect.soft(run(block('z'.repeat(24))).hits[0]).toMatchObject({ len: 55, blockMax: 80 })
+  })
+
+  it('reports three hits around a lone unbreakable token and four behind a word', () => {
+    // CLAUSE (e)'S SECOND-ORDER EFFECT, which is the number the script's comment
+    // and docs/testing.md both quote at the reader. Pinned here because nothing
+    // in this suite pinned it and the sentence drifted: both texts called the
+    // four-hit shape a *bare* URL until review on #380, and a bare URL is the
+    // shape that reports three.
+    //
+    // One six-line paragraph wrapped at 76-77 columns whose fourth line is 103
+    // columns EITHER WAY, so `blockMax` is 103 in both corpora and the only
+    // difference between them is what `firstToken` of that line returns:
+    //
+    //   the whole line is one token   -> 3 hits, lines 1, 2 and 5
+    //   a short word, then the token  -> 4 hits, lines 1, 2, 3 and 5
+    //
+    // Line 3 is the one that moves and clause (e) is what takes it. With a
+    // single 103-column token below it, `76 + 1 + 103 > 103`: the break after
+    // line 3 was FORCED, so (e) pardons the line above the token as well as the
+    // token's own break. Put a three-column word in front and `76 + 1 + 3` fits
+    // inside 103, the break becomes a chosen one, and the fourth hit appears.
+    // Four is therefore the count for word-then-link, the commoner shape in
+    // prose, and never for a URL sitting alone on its line.
+    //
+    // Content-free in the idiom of the two cases above: the token is a run of
+    // `z`. On the live tree the class is a bare URL or a long backticked path,
+    // but the rule reads two lengths and consults neither.
+    const paragraph = (fourth: string): Corpus => ({
+      'docs/notes.md': [
+        'a paragraph wrapped by hand at the usual bar, in which every one of these six',
+        'lines sits at seventy-six or seventy-seven columns, and not one of them stops',
+        'early on purpose, so the only line a greedy wrapper could not have broken is',
+        fourth,
+        'and the paragraph itself carries on past the long line for another line or so',
+        'so that the block is comfortably long enough for this deficit to be measured.',
+        ''
+      ].join('\n')
+    })
+
+    const alone = run(paragraph('z'.repeat(103)))
+    const behindAWord = run(paragraph('see ' + 'z'.repeat(99)))
+
+    expect.soft(linesOf(alone)).toEqual([1, 2, 5])
+    expect.soft(linesOf(behindAWord)).toEqual([1, 2, 3, 5])
+    // Both sides measured against the same 103, so the extra hit is clause (e)
+    // and nothing else — and it is the 76-column line, not a wider one.
+    expect.soft(alone.hits[0]).toMatchObject({ len: 77, blockMax: 103 })
+    expect.soft(behindAWord.hits[2]).toMatchObject({ line: 3, len: 76, blockMax: 103 })
+  })
+
+  // NO TEST FOR "the next line in the BLOCK, not in the FILE". One was written
+  // and then deleted, because it could not fail: a block's line indices are
+  // contiguous by construction (every non-`text`/`item` kind flushes the block,
+  // and `item` opens a new one), so `block[b + 1]` and `i + 1` are the same
+  // index in every corpus that can be built. Mutating the script to `i + 1` left
+  // all cases green and the live-tree count unmoved. Recorded here rather than
+  // kept as a green case that looks like coverage of a seam it never touched.
+
   it('breaks a block on a heading, a table row, a blockquote and a rule', () => {
     // The rest of clause (a). Each of these lines is markup rather than prose,
     // so it is neither scanned nor counted into a neighbour's `blockMax`: the
@@ -740,12 +895,16 @@ describe('check-prose-shape', () => {
       readLines: (p: string) => corpus[p].split('\n')
     }) as Result
 
-    expect(r.scanned).toEqual(['DESIGN.md', 'docs/testing.md', 'src/shared/README.md'])
-    expect(r.hits.map((h) => h.path)).toEqual([
-      'DESIGN.md',
-      'docs/testing.md',
-      'src/shared/README.md'
-    ])
+    // Split, and this is the STRONGEST of the three pairs: `scanned` pins which
+    // files the root filter admits, `hits` pins that each admitted file was
+    // actually read and measured. Restricting the read loop to the first
+    // selected file reds this second assertion and NOTHING ELSE in the file —
+    // every other case drives a one-file corpus — so it is the only thing
+    // standing between "selected the right files" and "measured them".
+    expect.soft(r.scanned).toEqual(['DESIGN.md', 'docs/testing.md', 'src/shared/README.md'])
+    expect
+      .soft(r.hits.map((h) => h.path))
+      .toEqual(['DESIGN.md', 'docs/testing.md', 'src/shared/README.md'])
   })
 
   it('does not scan a file under an excluded path', () => {
@@ -764,56 +923,102 @@ describe('check-prose-shape', () => {
 
   // --- the citation run -------------------------------------------------------
 
-  it('reds two lines of a hand-formatted citation run, which is an open question', () => {
-    // CHARACTERISATION, NOT AN ENDORSEMENT. The issue's Testing Strategy asks
-    // for a hand-formatted citation run as a GREEN class, naming this live
-    // instance: four consecutive short lines, each deliberately broken so a
-    // parenthetical citation sits on a line of its own.
+  it('reds one line of a hand-formatted citation run and clears two by arithmetic', () => {
+    // CHARACTERISATION, AND THE PLACE WHERE CLAUSE (e) EARNS ITS KEEP. PR 1
+    // recorded this corpus reporting three of the four short lines, and left
+    // open the question mikkerlo raised in the third review on #370: are they
+    // true positives, or does the predicate need a citation-run rule?
     //
-    // Under the committed threshold it is not green. Two of the four red — the
-    // 61-column `Drives real …` line and the 55-column `two-peer harness below`
-    // line — while the third escapes only through clause (d)'s trailing `;` and
-    // the fourth only through clause (b), being the block's last line. That is
-    // the contradiction mikkerlo raised in the third review on #370 (question 2:
-    // are they true positives, or does the predicate get a citation-run rule?),
-    // and it is a predicate-shape call reserved to the issue author: the Risks
-    // section forbids settling it by adjusting the threshold once the count is
-    // known.
+    // Clause (e) answers it without a citation-run rule, and the distinction is
+    // the whole point. Lines 7 and 10 go green because the next token is 49 and
+    // 48 columns against a blockMax of 84 — no greedy wrapper could have pulled
+    // it up, so the break was FORCED. That is arithmetic over two lengths; it
+    // would hold identically if the next token were a German compound noun.
     //
-    // So this test records what the committed predicate does, exactly, rather
-    // than asserting what the issue hoped it would do. If the answer is "true
-    // positives", this stays and the citation-run green class is struck from the
-    // issue. If the answer is a citation-run rule, this test is what has to
-    // change, in the open, in the PR that changes the predicate.
+    // Line 3 STAYS RED, at exactly 84-against-84: 63 columns, a joining space
+    // and a 20-column `(`Room.setPosition`)` fit the block maximum precisely, so
+    // that break was CHOSEN. A citation-run rule would have pardoned all three,
+    // because all three are citation runs. Clause (e) pardons two, because only
+    // two were forced — and the one it refuses is the one the amnesty would have
+    // been wrong about.
     const r = run({ 'docs/testing.md': CITATION_RUN })
 
-    expect(r.hits.map((h) => [h.line, h.len, h.blockMax])).toEqual([
-      [3, 63, 84],
-      [7, 61, 84],
-      [10, 55, 84]
-    ])
-    // The two that stay green, named so a later loosening cannot drop them
-    // silently: line 8 ends in `;` and line 11 is the block's last line.
-    expect(linesOf(r)).not.toContain(8)
-    expect(linesOf(r)).not.toContain(11)
+    expect.soft(r.hits.map((h) => [h.line, h.len, h.blockMax])).toEqual([[3, 63, 84]])
+    // The three that stay green, each for a DIFFERENT reason, named so a later
+    // loosening cannot drop them silently: 7 and 10 by clause (e), 8 by clause
+    // (d)'s trailing `;`, 11 by clause (b) being the block's last line.
+    // Positive assertion, not a `not.toContain` on a list that could be empty
+    // for the wrong reason — `hits` is pinned exactly above, so the line set is
+    // already closed.
+    expect.soft(linesOf(r)).toEqual([3])
   })
 
   // --- the report -------------------------------------------------------------
 
-  it('always reports ok, because PR 1 is print-only', () => {
-    // The whole point of shipping the measurement before the pin: a print-only
-    // script renumbers nothing, so it does not queue behind the citation-anchor
-    // repairs that are moving the very lines it would be pinned against. PR 2
-    // adds the non-zero pin, following the UNCHECKABLE_PIN convention rather
-    // than SUSPICIOUS_LANDING_PIN — the hits are real and unrepaired, so zero is
-    // not available.
+  it('reports the count, the files and the pin it was measured against', () => {
     const r = run({ 'docs/testing.md': RAGGED_BULLET })
-    const { ok, out } = report(r)
+    const { ok, out, err } = report(r, { ragged: 1 })
 
-    expect(ok).toBe(true)
-    expect(out.join('\n')).toContain('ragged lines: 1 in 1 file(s)')
-    expect(out.join('\n')).toContain('docs/testing.md:8')
-    expect(out.join('\n')).toContain('PRINT-ONLY')
+    expect.soft(ok).toBe(true)
+    expect.soft(out.join('\n')).toContain('ragged lines: 1 in 1 file(s)')
+    expect.soft(out.join('\n')).toContain('— pin 1')
+    expect.soft(out.join('\n')).toContain('docs/testing.md:8')
+    expect.soft(out.join('\n')).toContain('OK')
+    // Nothing on the error channel when the count is at its pin. Not vacuous:
+    // `ok` is asserted true above, so this is the green arm and an empty `err`
+    // is the claim, not an accident of the failure arm being taken.
+    expect.soft(err).toEqual([])
+    // The default arm CI actually runs: no `pins` argument falls back to the
+    // exported constant. A fallback pointing at some other number would print
+    // the wrong pin here while every injected-pin case above stayed green.
+    expect.soft(report(r).out.join('\n')).toContain(`— pin ${RAGGED_PIN}`)
+  })
+
+  it('reds when the ragged count drifts in either direction, not just upward', () => {
+    // THE PIN, and it is exact-equality in both directions — the UNCHECKABLE_PIN
+    // convention in scripts/check-line-citations.mjs, not SUSPICIOUS_LANDING_PIN.
+    // A landing pin of 0 says "what you just added is a defect"; this one cannot
+    // be 0, because the lines it counts are real, unrepaired, and not repairable
+    // without reflowing docs/testing.md and renumbering the citation anchors the
+    // sibling gate pins. So it bounds a known blindness instead.
+    const r = run({ 'docs/testing.md': RAGGED_BULLET })
+    expect.soft(r.hits).toHaveLength(1)
+
+    // A ragged line ARRIVING reds, with the line named so the repair is
+    // mechanical and the advice is one the author can act on.
+    const rose = report(r, { ragged: 0 })
+    expect.soft(rose.ok).toBe(false)
+    expect.soft(rose.err.join('\n')).toContain('Ragged-line count rose: 1, pinned at 0.')
+    expect.soft(rose.err.join('\n')).toContain('docs/testing.md:8  41/79')
+    expect.soft(rose.err.join('\n')).toContain(REWRAP_ADVICE)
+    // The rising arm must ALSO name the over-report class (#380 review): a line
+    // no wrapper could break sets `blockMax` for its neighbours, and the
+    // neighbours are then reported although they are wrapped correctly. Advice
+    // to rewrap is wrong for them, so the arm that gives that advice has to say
+    // what to check first, or it sends the author to reflow correct prose.
+    expect.soft(rose.err.join('\n')).toContain('raises the bar for every neighbour')
+    // And it must not send them to a list that does not exist: the RAGGED_PIN
+    // comment carries a per-file split, not a line-by-line baseline.
+    expect.soft(rose.err.join('\n')).toContain('per-file split')
+
+    // And one LEAVING reds too, which is the half a one-sided pin would miss: a
+    // pin left behind by a repair would otherwise quietly license a new ragged
+    // line in the repaired one's place, and the printed number nobody diffs
+    // would stay at the pin the whole time.
+    const fell = report(r, { ragged: 2 })
+    expect.soft(fell.ok).toBe(false)
+    expect.soft(fell.err.join('\n')).toContain('Ragged-line count fell: 1, pinned at 2.')
+    expect.soft(fell.err.join('\n')).toContain('lower the pin to match')
+    // The one instruction the falling arm must NOT give. THE `not` IS PAIRED
+    // WITH THE POSITIVE ABOVE ON PURPOSE, and that pairing is the whole of its
+    // value: both read the same `REWRAP_ADVICE` constant, so a reworded or
+    // mistyped instruction fails the rising arm's `toContain` instead of
+    // silently satisfying this one. Before #380 this line held a literal the
+    // rising arm no longer prints, which is the shape that cannot fail — a `not`
+    // against a string nothing produces passes for the wrong reason, and
+    // re-pointing it at the new wording without the twin would have left it
+    // exactly as hollow.
+    expect.soft(fell.err.join('\n')).not.toContain(REWRAP_ADVICE)
   })
 
   it('reports the deficit it actually selected on, not the module default', () => {

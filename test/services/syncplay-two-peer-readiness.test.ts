@@ -162,6 +162,11 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
 
   it('releases both elements when readiness comes back, and the room waited rather than running on', async () => {
     const { host, joiner } = await playingRoom()
+    // Read before the stall, not after: the room is already ~2 s behind wall
+    // time here, because the election is anchored to snapshots a link delay old.
+    // Measuring the deficit from this point keeps the claim about readiness
+    // instead of about that pre-existing lag.
+    const beforeStall = room.server.roomState().position
 
     joiner.ui.setSyncplayLocalReady(false)
     await room.advance(3)
@@ -190,14 +195,19 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
     expect(host.el.seekWrites).toEqual([])
     expect(joiner.el.seekWrites).toEqual([])
 
-    // Which is the point of the mechanism, read as an inequality rather than as
-    // a number: ten seconds of wall time have passed since the room was at 300,
-    // and the room is nowhere near 310. It waited out the stall with the peer
-    // that called it instead of leaving that peer behind — and it did so without
-    // its pause flag ever moving.
+    // Which is the point of the mechanism, read as a deficit rather than as a
+    // position: six seconds of wall time pass across the stall and the release,
+    // and the room advances through three of them. It waited out the stall with
+    // the peer that called it instead of leaving that peer behind — and it did so
+    // without its pause flag ever moving.
+    //
+    // The bound is on the deficit for a reason. Against an absolute position most
+    // of the margin would come from the election lag read at `beforeStall` rather
+    // than from the stall: a room that ignored readiness lands 6 s on from there,
+    // which clears an absolute bound by under a second but misses this one by two.
     const roomNow = room.server.roomState().position
     expect(roomNow).toBeGreaterThan(stalledAt)
-    expect(roomNow).toBeLessThan(START + 7)
+    expect(roomNow - beforeStall).toBeLessThan(4)
     expect(room.server.roomState().paused).toBe(false)
 
     // Still no pause claim anywhere, and still nothing discrete, across the

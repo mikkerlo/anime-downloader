@@ -155,6 +155,22 @@ jobs:
           node-version: 20
           cache: npm
 
+      # Before `npm ci`, because it needs no dependencies and because a version
+      # below the base is a mistake to report in seconds rather than after the
+      # e2e run. Unconditional rather than gated on `package.json` being in the
+      # diff: a PR that does not touch it is equal to the base and passes
+      # trivially, so the gate would buy nothing, and running always is what
+      # catches a version lowered by a bad merge resolution — the way this
+      # happens by accident rather than on purpose.
+      #
+      # The checkout above is depth 1 and fetches only the PR ref, so
+      # `origin/$GITHUB_BASE_REF` does not resolve and the base's `package.json`
+      # is not in the clone; the script fetches one shallow ref for it. This
+      # reads the version *before* the `build` job's `Set PR build version`
+      # rewrite, which lives in that job and never runs here.
+      - name: Check the version is not lower than the base branch
+        run: npm run check:version-not-lower
+
       - run: npm ci
 
       - run: npm run typecheck

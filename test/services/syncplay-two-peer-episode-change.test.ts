@@ -14,10 +14,22 @@
 // other peer presses nothing and never changes file. At the bind gap the
 // shipped app actually runs — `metadataMs: 500`, which is what
 // `syncplay-two-peer-adoption.test.ts` seats — the innocent peer is left alone,
-// and that is the only regime the suite had ever seen. Above it, it is dragged
-// backwards: at a 3 s gap its element is written to 303.05 and ends a 20 s
-// window ~4.95 s behind where the same window leaves it in the control, and at
-// a 7 s gap it is written to 310.00 through a different path. The drag is
+// and that is the only regime the suite had ever seen. Above it the peer is
+// dragged backwards — but **the gap axis is not monotone and there is not one
+// threshold**, so "above the shipped gap" is not a safe summary of it. Swept on
+// this harness with everything except the gap held at the values `seatPair`
+// seats, reading the non-switching peer at a 20 s window: 500 and 1000 ms are
+// clean; the onset falls in (1000, 1025]; from there the peer is dragged through
+// 5000; 5050 to 6000 are **clean again**; 6050 to 7000 drag; and 7050 to 8000
+// are clean once more. Two disjoint drag bands separated by a ~1 s clean
+// corridor. The dragged value is not one number either: it slides from 304.00 at
+// the onset to 303.05 by 2000 ms and holds there to 5000, while the upper band
+// writes 310.00 throughout. **Do not read a threshold out of the two dragging
+// cells pinned below** — they are one cell from each band, and every cell between
+// and beyond them is described in this header only, never asserted. What the
+// pins do establish: at a 3 s gap the element is written to 303.05 and ends a
+// 20 s window ~4.95 s behind where the same window leaves it in the control, and
+// at a 7 s gap it is written to 310.00 through a different path. The drag is
 // shipped, unflagged and unarmed, and it costs playback on a peer that made no
 // input at all.
 //
@@ -46,21 +58,54 @@
 // inbound write that closes the drift and re-latches us one episode's timestamp
 // later.
 //
-// The mirror's *width* is neither of those. `buildPlaystate()` is
+// What that second path does **not** account for is where the upper band stops.
+// A gap outliving `PLAYBACK_STALE_MS` is monotone in the gap; the drag is not.
+// 7050 through 8000 are clean while carrying a *wider* mirror than dragging 7000
+// does, so something further along bounds that band from above and this header
+// does not know what. It is unexplained, it is not pinned, and the 7 s case's
+// name records the path that case enters by — not an account of the band's upper
+// edge.
+//
+// The mirror's *width* is neither of those two paths. `buildPlaystate()` is
 // `canAssertSnapshot() && isAdopted()` with the snapshot timer first, so during
 // the bind gap — when no push arrives at all — `PLAYBACK_ASSERT_STALE_MS` (2 s,
 // `src/main/syncplay.ts:2369`) is what silences us, and the adoption latch does
 // not even run inside that window. That is the whole of "withholds our playstate
-// entirely" on this path: one frame at 3 s, five at 7 s, none at 500 ms.
+// entirely" on this path: one frame at 3 s, five at 7 s, none at 500 ms. Width
+// is monotone non-decreasing in the gap while the drag is not, which means it
+// cannot select the regime: the mirror is **zero frames wide at 500 and 1000 ms,
+// both clean, and still zero at 1025, which drags**, and it rises straight
+// through every band edge above that (four frames on the clean 5050-6000 stretch,
+// five on the dragging 6050-7000 one, six on the clean 7050-8000 one). No reader
+// should take a mirror count as a proxy for whether the peer is dragged.
 //
-// **3000 and 7000 ms, and deliberately not 5000.** The deciding quantity is
-// elapsed time from the old episode's last push to the new element's first
-// push, quantised to the renderer's 1 Hz cadence, so the observable crossing
-// sits somewhere in (4000, 5000] depending on where the switch falls against
-// the push boundary. A cell written at 5000 ms is phase-dependent: measured on
-// this tree it reports no drag at a 6 s window and `[303.05]` at 14 s, i.e. the
-// same run answers the question both ways depending on where the window ends.
-// 3000 and 7000 sit clear of it on both sides.
+// **3000 and 7000 ms — and why the reason this used to give for skipping 5000
+// does not hold.** The old text said the observable crossing "sits somewhere in
+// (4000, 5000]" and that 3000 and 7000 "sit clear of it on both sides". Both are
+// withdrawn. There is no single crossing to sit clear of, because there are two
+// bands; and 7000 is the upper band's top edge, clear on the low side only — the
+// very next cell sampled above it, 7050, is clean.
+//
+// Window dependence is real, but it is a *second* axis rather than the band edge,
+// and it does not separate 5000 from 7000. Read at a 6 s window instead of 20 s,
+// the drag is absent from 4000, 4500 and 5000 — and equally absent from 6500 and
+// 7000. So that crossing falls in (3500, 4000] and it cuts across **both** bands,
+// which makes "the same run answers the question both ways depending on where the
+// window ends" just as true of the 7000 cell this file does pin, where the 6 s
+// window reads `[]` and the 14 s and 20 s windows read `[310.00]` — asserted
+// below in both windows, on purpose. It therefore cannot have been the reason
+// 5000 was left out.
+//
+// What the cells are, measured. 3000 is mid-band and window-stable: the drag is
+// already there at a 6 s window. 5000 is the lower band's **top edge** (5050 is
+// clean) and window-dependent. 7000 is the upper band's **top edge** and
+// window-dependent too; 6500 is that band's robust cell — mid-band, same
+// `[310.00]` — and would have been the better pin. 7000 is retained here because
+// it is the cell that was measured and asserted first, and because its *value* is
+// band-stable even where its *position* is not: every cell from 6050 to 7000
+// writes the same 310.00. Treat it as an edge cell. A change that shifts the
+// upper band by 50 ms flips this case, and that is a fact about where the pin was
+// placed rather than about the tree.
 //
 // The control is not decoration. `seekWrites` staying `[]` at gap 500 is the
 // only thing that makes the two drag rows mean anything — without it they would
@@ -73,6 +118,14 @@
 // `src/renderer/src/composables/use-syncplay-client.ts:1403`). 0.55 s of
 // headroom nobody chose, which is pinned here as a number rather than left as a
 // passing boolean.
+//
+// How little headroom that is, measured rather than argued. At a 1000 ms gap —
+// still inside the clean band, `seekWrites` still `[]` — the same deficit is
+// **2.95 s against the same 3.0, which is 0.05 s of headroom**, and the very next
+// cell sampled above it (1025) drags. The clean band's ceiling and the deficit's
+// approach to that gate end at the same place. This file pins neither the 1000 ms
+// deficit nor that coincidence, and it does not claim the gate is the cause; what
+// the figure rules out is reading the 500 ms control as a comfortable margin.
 //
 // This file asserts against the model server, which is legitimate for these
 // three cases and would not be for an assertion-side fixture: every row here is

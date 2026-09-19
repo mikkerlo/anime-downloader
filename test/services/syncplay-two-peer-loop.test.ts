@@ -215,7 +215,7 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The five guards below are about the harness as an instrument rather than
+  // The six guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
   it('reports the in-flight seek target, not the pre-write position', () => {
@@ -342,5 +342,45 @@ describe('two-peer syncplay harness', () => {
     // And the room is drained, so the `afterEach` dispose is a no-op instead of
     // a second throw landing on whichever case runs next.
     expect(() => room.dispose()).not.toThrow()
+  })
+
+  it('defaults the bind gap into the clean cell, k = ceil(gap / HEARTBEAT_MS) === 1', () => {
+    // The default itself, which nothing in the suite observed until now. Every
+    // reload site seats an explicit gap — the two adoption reloads at
+    // `syncplay-two-peer-adoption.test.ts:108` and
+    // `syncplay-two-peer-adoption.test.ts:237` run under a
+    // `syncplay-two-peer-adoption.test.ts:106 ("bindGapMs: 30_000")` seat, the
+    // case above seats 0, and all six `goToEpisode` sites seat a literal through
+    // `seat()` — so the fallback at
+    // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // was free to be any number at all: editing it to 3000, the exact value that
+    // option's doc block spends its longest paragraph calling a trap, left the
+    // suite at 1822 passed across 122 files. The counterfactual that shipped with
+    // the rename covers the opt-out at
+    // `syncplay-two-peer-loop.test.ts:281 ("bindGapMs: 0")`, which shows the zero
+    // gap stayed reachable — not that the default it opts out of is the right one.
+    //
+    // Pins the regime rather than the literal, because the regime is what that
+    // block argues for: a positive gap is clean iff
+    // `k = ceil(bindGapMs / HEARTBEAT_MS) === 1`, and `HEARTBEAT_MS` is 1000
+    // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`). The two 300 ms
+    // steps bracket that cell from both sides: a `k = 1` default lands
+    // `loadedmetadata` inside the second of them, and any `k >= 2` one — 3000 is
+    // `k = 3`, mid-drag, the regime where #360 pulls the non-switching peer
+    // backwards — carries it past both and leaves that batch empty. So this holds
+    // for any clean default and breaks for any dragging one, which is the property
+    // being defended, rather than the number 500.
+    const el = new HarnessVideo({ position: 100, paused: false })
+    el.reload('harness://ep-8')
+
+    const batches: string[][] = []
+    for (let i = 0; i < 2; i += 1) {
+      vi.advanceTimersByTime(300)
+      batches.push(el.tick())
+    }
+
+    expect(batches).toEqual([['pause'], ['loadedmetadata']])
+    // And the landing moved the gate rather than merely being queued behind it.
+    expect(el.readyState).toBe(1)
   })
 })

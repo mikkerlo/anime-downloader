@@ -195,7 +195,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   made no call of its own) and `syncplay-two-peer-episode-change.test.ts` (the
   one file here whose every assertion is a *characterisation* pin rather than a
   guard: a peer that changes episode drags the peer that did not, backwards, at
-  bind gaps of 3000 ms and 7000 ms, and the 500 ms control is a 0.55 s near miss
+  bind gaps of 3000 ms and 6500 ms, and the 500 ms control is a 0.55 s near miss
   rather than a clean pass — #360 has the analysis, and a red there may well be
   a fix). The adoption file reads the mirror
   straight off the wire — an asserting frame carries a `paused` key and a

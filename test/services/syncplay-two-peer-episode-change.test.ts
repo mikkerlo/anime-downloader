@@ -89,7 +89,7 @@
 // Window dependence is real, but it is a *second* axis rather than the band edge,
 // and it does not separate 5000 from 7000. Read at a 6 s window instead of 20 s,
 // the drag is absent from 4000, 4500 and 5000 — and equally absent from 6500 and
-// 7000. So that crossing falls in (3500, 4000] and it cuts across **both** bands,
+// 7000. So that crossing falls in (3950, 4000] and it cuts across **both** bands,
 // which makes "the same run answers the question both ways depending on where the
 // window ends" just as true of the 7000 cell this file does pin, where the 6 s
 // window reads `[]` and the 14 s and 20 s windows read `[310.00]` — asserted

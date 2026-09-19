@@ -165,8 +165,9 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
   three guards, the in-flight target reading above, and both rejection shapes this
   bridge copy produces, the no-handler one and a handler that throws — and
-  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Six more
-  scenario files sit on the same harness (#361 step 4):
+  `syncplay-seek-crossfire.test.ts` is the first scenario on it. Eight more
+  scenario files sit on the same harness — the count read "six" while seven
+  were listed, because #368 added the in-flight-seek file without moving it:
   `syncplay-two-peer-playpause.test.ts` (both directions, a peer
   joining a room that is already paused, and a peer's own pause not coming
   back), `syncplay-two-peer-seek-echo.test.ts` (a drag propagating, its echo
@@ -191,7 +192,12 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   with no wire playstate at all — one peer's `setSyncplayLocalReady(false)`
   travels `Set: {ready}` → `List` → `room-users` → the *other* peer's
   `watch(syncplayRoomUsers)` and pauses an element that received no state and
-  made no call of its own). The adoption file reads the mirror
+  made no call of its own) and `syncplay-two-peer-episode-change.test.ts` (the
+  one file here whose every assertion is a *characterisation* pin rather than a
+  guard: a peer that changes episode drags the peer that did not, backwards, at
+  bind gaps of 3000 ms and 7000 ms, and the 500 ms control is a 0.55 s near miss
+  rather than a clean pass — #360 has the analysis, and a red there may well be
+  a fix). The adoption file reads the mirror
   straight off the wire — an asserting frame carries a `paused` key and a
   mirror does not — which is what makes "this peer cannot drag the room to 0"
   an observation rather than an inference; the readiness file reads the same

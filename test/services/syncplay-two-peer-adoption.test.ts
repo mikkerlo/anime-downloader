@@ -342,15 +342,49 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // present.
     expect(host.remoteEpisodes).toHaveLength(1)
 
-    // De-adoption is what keeps the switch from costing the room its position.
     // The switcher's element is at 0 with the room near 302, so it is placed
-    // back at the room — one write — instead of asserting 0 into the election.
+    // back at the room — one write. That write is #360 verbatim: a brand-new
+    // episode's element seeked to the *previous* episode's timestamp, a position
+    // the new file bears no relation to. Pinned as shipped behaviour, not as a
+    // desired one.
+    //
+    // This comment used to read "de-adoption is what keeps the switch from
+    // costing the room its position", and that stated reason is contradicted at
+    // this fixture's own bind gap. `metadataMs: 500` puts the element back well
+    // inside `PLAYBACK_ASSERT_STALE_MS` (2 s), so the de-adoption
+    // `src/main/syncplay.ts:789` ("if (isNewPlayer) this.playbackAdopted = false")
+    // performs never reaches the wire at all: measured on this exact scenario,
+    // every post-switch frame this peer sends carries a `paused` key — zero
+    // spectator-mirror frames — so it asserts continuously straight through the
+    // switch. The seat is de-adopted for less than one push and re-latches at
+    // `src/main/syncplay.ts:2597` on a drift of 0 taken from the previous
+    // episode's snapshot, before the new element has pushed anything.
+    // `syncplay-two-peer-episode-change.test.ts` sweeps the gap and #360 has the
+    // chain.
     expect(host.el.seekWrites).toHaveLength(1)
     expect(host.el.seekWrites[0]).toBeCloseTo(302, 2)
 
-    // The room is still where six more seconds of playback should have left it,
-    // nowhere near the 0 the switcher's element passed through, and the other
-    // peer was neither paused nor moved.
+    // The room is nowhere near the 0 the switcher's element passed through, and
+    // the other peer was neither paused nor moved. What 306.5 is *not* is "where
+    // six more seconds of playback should have left it" — that is ~308.95, which
+    // is precisely where the untouched peer's element reads at this instant. 306.5
+    // is the switcher's **dragged** value, so this line has been encoding a 2.45 s
+    // room deficit as expected since before anyone had measured it. It is left
+    // exactly as it stands because it is a true statement about shipped behaviour;
+    // it is not a statement that the behaviour is right.
+    //
+    // And that 2.45 is the whole reason `joiner.el.seekWrites` two lines down is
+    // still `[]`. Not de-adoption: the renderer's seek gate is
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` ("const wouldSeek = state.doSeek || diff > 3.0")
+    // over the difference computed at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1403` ("const diff = Math.abs(v.currentTime - state.position)")
+    // — this peer's own element against the state it was handed — and 2.45 clears
+    // 3.0 by 0.55. Measured constant from the switch out to a 20 s window, so it
+    // is a standing near miss rather than a transient one. Raise the bind gap to
+    // 3000 ms and the same shipped code writes 303.05 to that element instead;
+    // `syncplay-two-peer-episode-change.test.ts` pins that. So nothing below is a
+    // guarantee that a non-switching peer is never dragged — it is the 500 ms
+    // corner in which it happens not to be.
     expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
     expect(room.server.roomState().paused).toBe(false)
     expect(joiner.el.seekWrites).toEqual([])

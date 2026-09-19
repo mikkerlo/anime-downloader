@@ -195,11 +195,11 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   made no call of its own) and `syncplay-two-peer-episode-change.test.ts` (the
   one file here whose every assertion is a *characterisation* pin rather than a
   guard: a peer that changes episode drags the peer that did not, backwards, at
-  bind gaps of 3000 ms and 6500 ms, and the 500 ms control is a 0.55 s near miss
-  rather than a clean pass — #360 has the analysis, and a red there may well be
-  a fix). The adoption file reads the mirror
-  straight off the wire — an asserting frame carries a `paused` key and a
-  mirror does not — which is what makes "this peer cannot drag the room to 0"
+  bind gaps of 3000, 6500 and 8500 ms but not 7500, the parity pin, and the 500 ms
+  control is a 0.55 s near miss rather than a clean pass — #360 has the analysis,
+  and a red there may well be a fix). The adoption file reads
+  the mirror straight off the wire — an asserting frame carries a `paused` key and
+  a mirror does not — which is what makes "this peer cannot drag the room to 0"
   an observation rather than an inference; the readiness file reads the same
   wire for the opposite claim, that a gate pause is announced as nothing,
   because the snapshot carries the user's intent rather than `v.paused`.

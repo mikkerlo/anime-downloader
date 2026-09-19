@@ -498,20 +498,26 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // is paused'), and one in `syncplay-mirror-drift.test.ts` — all of them
   // bounding this same arm.
   it('stops asserting a paused snapshot once it is older than PLAYBACK_STALE_MS (#383)', () => {
-    const { switcher, frozenAt, sentBefore } = twoAdoptedWatchers()
+    const { switcher, frozenAt } = twoAdoptedWatchers()
 
     // The single substitution against the fourth case's footing: its last real
     // snapshot is `paused: false`, this one's is paused, so `canAssertSnapshot()`
     // is on its `paused` arm and not on its age compare.
     switcher.updateSnapshot({ position: frozenAt, paused: true })
-    // The horizon's origin, taken here rather than read off the helper's
-    // `lastPushAt`. `src/main/syncplay.ts:910` ("this.lastSnapshotAt = Date.now()")
-    // restamps the snapshot clock on every push with nothing gating it, so the
-    // age `canAssertSnapshot()` compares runs from *this* push and not from the
-    // helper's stamp. Splitting on it here makes the split correct by
-    // construction, rather than by the accident that no fake time is advanced
-    // between `twoAdoptedWatchers()` returning and this line.
+    // The horizon's origin and the wire slice's, re-taken here as a pair rather
+    // than read off the helper's `lastPushAt`/`sentBefore`.
+    // `src/main/syncplay.ts:910` ("this.lastSnapshotAt = Date.now()") restamps
+    // the snapshot clock on every push with nothing gating it, so the age
+    // `canAssertSnapshot()` compares runs from *this* push and not from the
+    // helper's stamp. The wire length has to move with it: sliced from the
+    // helper's count instead, every frame the heartbeat sent between
+    // `twoAdoptedWatchers()` returning and this line — still on the *playing*
+    // assertion arm, so `paused: false` — enters `during` ahead of the paused
+    // push and lands inside the `inside` window, which is the half that reds.
+    // Taking both here makes the split correct by construction, rather than by
+    // the accident that no fake time is advanced across that gap.
     const pausedAt = Date.now()
+    const sentBefore = server.wireOf('switchuser').length
 
     // And then the seat's pushes stop for longer than PLAYBACK_STALE_MS while the
     // peer plays on — `run()`'s `null` is the renderer gate sending nothing.

@@ -215,7 +215,7 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The five guards below are about the harness as an instrument rather than
+  // The six guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
   it('reports the in-flight seek target, not the pre-write position', () => {
@@ -259,10 +259,13 @@ describe('two-peer syncplay harness', () => {
   })
 
   it("hands back a reload's pause before the metadata that reopens the gate", () => {
-    // At the default `metadataMs` of 0 the HAVE_METADATA transition used to be
-    // applied inside the same `tick()` that handed back the `pause` `reload()`
-    // queued, so the caller — which dispatches a whole batch *after* `tick()`
-    // returns — ran `onLocalPause` with the element already reporting
+    // This case passes `bindGapMs: 0` explicitly, and is the only one in the
+    // suite that depends on the zero gap — the harness default is 500, which
+    // would carry `loadedmetadata` past both of the 50 ms ticks sampled below
+    // and empty the second batch. At a zero gap the HAVE_METADATA transition
+    // used to be applied inside the same `tick()` that handed back the `pause`
+    // `reload()` queued, so the caller — which dispatches a whole batch *after*
+    // `tick()` returns — ran `onLocalPause` with the element already reporting
     // HAVE_METADATA. That is the inverse of a real element, where the load's
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
@@ -275,7 +278,7 @@ describe('two-peer syncplay harness', () => {
     // two apart — it is `[1, 0, 1]` either way — so the batching is the
     // assertion, and the `readyState` sampled per batch is what the guards
     // downstream would have seen.
-    const el = new HarnessVideo({ position: 100, paused: false })
+    const el = new HarnessVideo({ position: 100, paused: false, bindGapMs: 0 })
     el.reload('harness://ep-8')
 
     const batches: { events: string[]; readyStateAtDelivery: number }[] = []
@@ -339,5 +342,49 @@ describe('two-peer syncplay harness', () => {
     // And the room is drained, so the `afterEach` dispose is a no-op instead of
     // a second throw landing on whichever case runs next.
     expect(() => room.dispose()).not.toThrow()
+  })
+
+  it('defaults the bind gap to a clean positive one — not 0, not the drag regime', () => {
+    // The default itself, which nothing in the suite observed until now. Every
+    // reload site seats an explicit gap — the two adoption reloads at
+    // `syncplay-two-peer-adoption.test.ts:108` and
+    // `syncplay-two-peer-adoption.test.ts:237` run under their own
+    // `syncplay-two-peer-adoption.test.ts:106 ("bindGapMs: 30_000")` and
+    // `syncplay-two-peer-adoption.test.ts:226 ("bindGapMs: 30_000")` seats, the
+    // case above seats 0, and all six `goToEpisode` sites seat a literal through
+    // `seat()` — so the fallback at
+    // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // was free to be any number at all: editing it to 3000, the exact value that
+    // option's doc block spends its longest paragraph calling a trap, left the
+    // suite at 1822 passed across 122 files. The counterfactual that shipped with
+    // the rename covers the opt-out at
+    // `syncplay-two-peer-loop.test.ts:281 ("bindGapMs: 0")`, which shows the zero
+    // gap stayed reachable — not that the default it opts out of is the right one.
+    //
+    // Pins a band around the default rather than the whole clean cell, and the
+    // band is what the batching can actually resolve: a positive gap is clean iff
+    // `k = ceil(bindGapMs / HEARTBEAT_MS) === 1`, `HEARTBEAT_MS` being 1000
+    // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
+    // than one step is invisible here — a reload queues `pause`, and `tick()`
+    // holds metadata back while that queue is non-empty
+    // (`test/helpers/syncplay-two-peer.ts:429 ("this.queued.length === 0")`), so
+    // 0 and 300 both land in the second batch and read the same. Landing in the
+    // *third* of three 200 ms steps is what says the gap outlived a step it was
+    // given the chance to beat. The case therefore holds for a gap in (400, 600]
+    // and reds on both sides: on a revert to the old `0` default, and on any
+    // `k >= 2` one — 3000 is `k = 3`, mid-drag, the regime where #360 pulls the
+    // non-switching peer backwards.
+    const el = new HarnessVideo({ position: 100, paused: false })
+    el.reload('harness://ep-8')
+
+    const batches: string[][] = []
+    for (let i = 0; i < 3; i += 1) {
+      vi.advanceTimersByTime(200)
+      batches.push(el.tick())
+    }
+
+    expect(batches).toEqual([['pause'], [], ['loadedmetadata']])
+    // And the landing moved the gate rather than merely being queued behind it.
+    expect(el.readyState).toBe(1)
   })
 })

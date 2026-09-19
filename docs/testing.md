@@ -145,20 +145,20 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   It also carries a file identity, because losing one is a scenario rather than a
   detail: `reload(src)` rebinds the element the way an episode change does,
   dropping it to `HAVE_NOTHING` and bringing it back on a `loadedmetadata` that
-  lands `metadataMs` later. That closes `hasAnnounceablePosition()` (#284) for the
-  gap, which stops the peer's snapshots and is how a fixture walks main across the
-  staleness thresholds without faking a clock. The element records its own seek
-  writes, `readyState` transitions and loads, so "it was never written while it
-  could not honour a write" is a claim read off the element rather than inferred.
-  Callers own `vi.useFakeTimers()`; `advance()` steps the one shared clock in
-  50 ms slices and drains microtasks between them, because Vue's scheduler
-  flushes on microtasks rather than on the timer queue. Three of the helper's
-  contracts are enforced rather than documented. `advance()` rejects a duration
-  that is not a whole number of slices. `seat()` refuses re-entry, because two
-  seats in flight at once interleave `vi.resetModules()` and the `window.api`
-  swap and hand back two silently cross-wired peers. And `dispose()` tears down
-  every peer even when an earlier one throws, draining the room before it
-  rethrows the first error — a case that mocks something `dispose()` calls used
+  lands `bindGapMs` (500 ms by default) later, closing `hasAnnounceablePosition()`
+  (#284) for the gap, which stops the peer's snapshots and is how a fixture
+  walks main across the staleness thresholds without faking a clock. The element
+  records its own seek writes, `readyState` transitions and loads, so "it was
+  never written while it could not honour a write" is a claim read off the element
+  rather than inferred. Callers own `vi.useFakeTimers()`; `advance()` steps the
+  one shared clock in 50 ms slices and drains microtasks between them, because
+  Vue's scheduler flushes on microtasks rather than on the timer queue. Three of
+  the helper's contracts are enforced rather than documented. `advance()` rejects
+  a duration that is not a whole number of slices. `seat()` refuses re-entry,
+  because two seats in flight at once interleave `vi.resetModules()` and the
+  `window.api` swap and hand back two silently cross-wired peers. And `dispose()`
+  tears down every peer even when an earlier one throws, draining the room before
+  it rethrows the first error — a case that mocks something `dispose()` calls used
   to abandon the peers queued behind the thrower *and* leave the room populated,
   so the next case's `room?.dispose()` re-ran the same throwing teardown and red
   a neighbour that had nothing wrong with it.

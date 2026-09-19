@@ -345,7 +345,7 @@ describe('two-peer syncplay harness', () => {
   })
 
   it('defaults the bind gap to a clean positive one — not 0, not the drag regime', () => {
-    // The default itself, which nothing in the suite observed until now. Every
+    // The default itself, which nothing in the suite observed until now. Every other
     // reload site seats an explicit gap — the two adoption reloads at
     // `syncplay-two-peer-adoption.test.ts:108` and
     // `syncplay-two-peer-adoption.test.ts:237` run under their own

@@ -344,7 +344,16 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // revert of the renderer push. They are worth keeping on their own terms:
   // they pin `canAssertSnapshot()` following the pushed value in both
   // directions, and the paused arm (`if (this.snapshot.paused) return true`)
-  // has no staleness clock at all, so nothing else in the suite bounds it.
+  // carries no staleness compare of its own. Its clock is `hasLivePlayback()`,
+  // src/main/syncplay.ts:2341 ("Date.now() - this.lastSnapshotAt <=
+  // PLAYBACK_STALE_MS"), so what bounds a paused assert is the 5 s de-adoption
+  // horizon and not the 2 s assert one — which is #383's correction to the line
+  // that used to stand here
+  // ("no staleness clock at all, so nothing else in the suite bounds it"), false
+  // twice over: the clock exists, and `syncplay-room-presence.test.ts` brackets
+  // it in two cells. The cell after this block pins the same horizon on this
+  // harness, band-wide. These two bound the arm from the push side, the other
+  // thing that ends it.
   describe('a snapshot that lands before the heartbeat (#324)', () => {
     it('suppresses the playing assertion once a paused snapshot lands', () => {
       const { switcher, peer } = twoAdoptedWatchers()
@@ -435,5 +444,122 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
       expect(announced.length).toBeGreaterThanOrEqual(1)
       expect(announced.every((f) => f.paused === false)).toBe(true)
     })
+  })
+
+  // The **upper** edge of that same paused arm (#383), and the complement of the
+  // second #324 cell above ('suppresses the paused assertion once a playing
+  // snapshot lands'): that one advances PLAYBACK_ASSERT_STALE_MS past a stale
+  // paused snapshot and pins the explicit `paused` key *surviving*, and says in
+  // terms that it stays under PLAYBACK_STALE_MS throughout so
+  // `hasLivePlayback()` is not what it tests. This one crosses that line.
+  //
+  // What it pins: `src/main/syncplay.ts:2367` returns false once
+  // `hasLivePlayback()` goes false, so the paused arm at
+  // `src/main/syncplay.ts:2368` is never reached, and `buildPlaystate()` falls
+  // through to the keyless spectator mirror. The paused exemption is therefore
+  // bounded — by the de-adoption horizon rather than by nothing.
+  //
+  // **NOT the suite's only bound on it, and #383 was wrong to say so.** That
+  // issue's Testing Strategy states "what nothing pins is the upper edge". Two
+  // cells in `test/services/syncplay-room-presence.test.ts` already do:
+  // 'reverts to mirroring when the player stops pushing snapshots', which jumps
+  // 10 s clean over the horizon, and 're-pauses the room for up to
+  // PLAYBACK_STALE_MS when a paused player crashes', which brackets it at
+  // PLAYBACK_STALE_MS - 2000 and again 3000 later. Both go red on the mutant
+  // below. The claim this cell adds is narrower and is the reason it is still
+  // worth its lines: those two are single-client against a hand-driven server
+  // and read the **last** frame at two instants, and their shape is a crash
+  // nobody else is in the room for. This one runs the band on `MinElectionServer`
+  // with a second adopted peer that paused the room, and asserts on **every**
+  // frame in both halves — `inside.every` and `past.every` — which is what #383's
+  // measurement was actually about (three frames per long-gap cell, and zero
+  // ASSERT frames older than PLAYBACK_STALE_MS).
+  //
+  // MUTATION CONTROL, and the reason the `inside` block below is here rather than
+  // left implicit. **What this cell pins is the `hasLivePlayback()` guard, not the
+  // paused arm below it** — a distinction worth writing down, because #383's Risks
+  // section asks for a cell that fails on a hypothetical unconditional paused arm
+  // and no cell can: past the horizon the guard short-circuits and control never
+  // reaches the arm at all, so that edit is GREEN here and its being green says
+  // nothing about what is pinned. Measured, all four, against this cell:
+  //
+  //   - paused arm made unconditional in place   GREEN (unreachable — see above)
+  //   - paused arm hoisted above the guard       RED
+  //   - the guard deleted outright               RED
+  //   - `paused && lastSnapshotAt > 0` hoisted   RED
+  //
+  // The plain hoist is not isolating: a client that never pushed carries
+  // `snapshot.paused === true` from its initial snapshot, so hoisting past the
+  // guard re-opens #220 and reds seven other cells suite-wide. The last form is
+  // the isolating one — `lastSnapshotAt > 0` keeps a never-pushed client on the
+  // mirror — and it reds four others, which are not collateral: the two cells
+  // named above in `syncplay-room-presence.test.ts`, the #227 hidden-paused
+  // cell in that same file ('mirrors the room position unchanged while the room
+  // is paused'), and one in `syncplay-mirror-drift.test.ts` — all of them
+  // bounding this same arm.
+  it('stops asserting a paused snapshot once it is older than PLAYBACK_STALE_MS (#383)', () => {
+    const { switcher, frozenAt } = twoAdoptedWatchers()
+
+    // The single substitution against the fourth case's footing: its last real
+    // snapshot is `paused: false`, this one's is paused, so `canAssertSnapshot()`
+    // is on its `paused` arm and not on its age compare.
+    switcher.updateSnapshot({ position: frozenAt, paused: true })
+    // The horizon's origin and the wire slice's, re-taken here as a pair rather
+    // than read off the helper's `lastPushAt`/`sentBefore`.
+    // `src/main/syncplay.ts:910` ("this.lastSnapshotAt = Date.now()") restamps
+    // the snapshot clock on every push with nothing gating it, so the age
+    // `canAssertSnapshot()` compares runs from *this* push and not from the
+    // helper's stamp. The wire length has to move with it: sliced from the
+    // helper's count instead, every frame the heartbeat sent between
+    // `twoAdoptedWatchers()` returning and this line — still on the *playing*
+    // assertion arm, so `paused: false` — enters `during` ahead of the paused
+    // push and lands inside the `inside` window, which is the half that reds.
+    // Taking both here makes the split correct by construction, rather than by
+    // the accident that no fake time is advanced across that gap.
+    const pausedAt = Date.now()
+    const sentBefore = server.wireOf('switchuser').length
+
+    // And then the seat's pushes stop for longer than PLAYBACK_STALE_MS while the
+    // peer plays on — `run()`'s `null` is the renderer gate sending nothing.
+    // Deliberately a *playing* room: the pause claim under test is ours alone, so
+    // nothing here depends on `MinElectionServer`'s paused-room modelling (#384),
+    // and the mirror below has a room that genuinely moves to track.
+    run(PLAYBACK_STALE_MS / 1000 + 3, (c) => (c === switcher ? null : trueRoomPosition()))
+    const during = server.wireOf('switchuser').slice(sentBefore)
+
+    const inside = during.filter((f) => f.at - pausedAt <= PLAYBACK_STALE_MS)
+    const past = during.filter((f) => f.at - pausedAt > PLAYBACK_STALE_MS)
+    expect(inside.length).toBeGreaterThanOrEqual(3)
+    expect(past.length).toBeGreaterThanOrEqual(2)
+
+    // Anti-vacuity, not a second copy of the lower-edge pin: the heartbeat is
+    // still talking and still on the assertion arm right up to the horizon, well
+    // past PLAYBACK_ASSERT_STALE_MS, holding the frozen position and the pause
+    // claim. Without this the assertion below would also pass on a seat that had
+    // stopped asserting for some unrelated reason.
+    expect(inside.some((f) => f.at - pausedAt > PLAYBACK_ASSERT_STALE_MS)).toBe(true)
+    expect(inside.every((f) => f.position === frozenAt && f.paused === true)).toBe(true)
+
+    // The bound. Past PLAYBACK_STALE_MS there is no `paused` key at all — the
+    // keyless mirror, the same shape the *playing* direction falls to earlier in
+    // this file, reached here by `hasLivePlayback()` rather than by the assert
+    // threshold.
+    expect(Date.now() - pausedAt).toBeGreaterThan(PLAYBACK_STALE_MS)
+    expect(past.every((f) => f.paused === undefined)).toBe(true)
+
+    // The companion, and it is load-bearing rather than decorative: a missing
+    // `paused` key is also what a **ping-only** frame looks like, since
+    // `buildPlaystate()` returns null with no `lastRoomState` and a null playstate
+    // carries no position either. So pin a real number that tracks the room
+    // forward — that is the mirror, and only the mirror. Paired exactly as the
+    // file's second case ('bounds the frozen claim at PLAYBACK_ASSERT_STALE_MS')
+    // pairs its own `f.paused === undefined`.
+    expect(past.every((f) => f.position > frozenAt)).toBe(true)
+    expect(past[past.length - 1].position).toBeGreaterThan(past[0].position)
+
+    // Precondition rather than a claim — the fourth case owns de-adoption timing.
+    // Stated here only so a future reader knows the fall-through above is
+    // `canAssertSnapshot()` going false and not adoption being lost.
+    expect(switcher.getStatus().playbackAdopted).toBe(true)
   })
 })

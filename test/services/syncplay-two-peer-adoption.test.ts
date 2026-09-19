@@ -103,7 +103,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       position: 0,
       paused: false,
       delayMs: DELAY_MS,
-      metadataMs: 30_000
+      bindGapMs: 30_000
     })
     joiner.el.reload('harness://reloading')
     await room.advance(8)
@@ -214,16 +214,16 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // snapshot; main's view of this peer then ages in place until it crosses
     // `PLAYBACK_ASSERT_STALE_MS` and stops asserting.
     //
-    // `metadataMs` is set past the end of the run so the metadata never lands.
-    // That is deliberate: what happens when a reloaded element comes back into a
-    // room that has moved on is #360, still open, and not this file's subject.
+    // `bindGapMs` is set past the end of the run so the metadata never lands —
+    // deliberate, and not redundant with the 500 ms default. What happens when a
+    // reloaded element comes back into a room that has moved on is #360, still open.
     room = await createTwoPeerRoom({ position: 300, paused: false })
     const host = await room.seat({
       username: 'hostuser',
       position: 300,
       paused: false,
       delayMs: DELAY_MS,
-      metadataMs: 30_000
+      bindGapMs: 30_000
     })
     const joiner = await room.seat({
       username: 'joinuser',
@@ -288,7 +288,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       position: 300,
       paused: false,
       delayMs: DELAY_MS,
-      metadataMs: 500
+      bindGapMs: 500
     })
     const joiner = await room.seat({
       username: 'joinuser',
@@ -350,7 +350,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     //
     // This comment used to read "de-adoption is what keeps the switch from
     // costing the room its position", and that stated reason is contradicted at
-    // this fixture's own bind gap. `metadataMs: 500` puts the element back well
+    // this fixture's own bind gap. `bindGapMs: 500` puts the element back well
     // inside `PLAYBACK_ASSERT_STALE_MS` (2 s), so the de-adoption
     // `src/main/syncplay.ts:789` ("if (isNewPlayer) this.playbackAdopted = false")
     // performs never reaches the wire at all: measured on this exact scenario,

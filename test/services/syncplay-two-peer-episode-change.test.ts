@@ -12,7 +12,7 @@
 //
 // What is pinned, and why it needed pinning. One peer presses next episode; the
 // other peer presses nothing and never changes file. At the bind gap the
-// shipped app actually runs — `metadataMs: 500`, which is what
+// shipped app actually runs — `bindGapMs: 500`, which is what
 // `syncplay-two-peer-adoption.test.ts` seats — the innocent peer is left alone,
 // and that is the only regime the suite had ever seen. Above it the peer is
 // dragged backwards — but **the gap axis is not monotone and there is not one
@@ -64,8 +64,8 @@
 // The four cases are one sweep over one knob — five rows of it, because the last
 // case seats two gaps rather than one: the assertion it carries *is* the
 // difference between them, and splitting it would let either half be deleted with
-// the other still green. `metadataMs` (the harness's bind gap:
-// `test/helpers/syncplay-two-peer.ts:369` arms `metadataDueAt` from it inside
+// the other still green. `bindGapMs` (the harness's bind gap:
+// `test/helpers/syncplay-two-peer.ts:393` arms `metadataDueAt` from it inside
 // `reload()`) is the gap between the media load algorithm's synchronous
 // reset and the `loadedmetadata` task, i.e. how long the switcher's new element
 // sits at `HAVE_NOTHING` reading ~0 while the room walks on. Everything else is
@@ -245,8 +245,8 @@
 // The onset is therefore a knife edge, and a wide one: 1001 through 1050 are
 // **identical** cells, and 1051 steps to the next 0.05 s of `diff` and writes
 // 303.95 where they write 304.00. `diff` moves in a 0.05 s quantum because that
-// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:726`
-// ("const DEFAULT_STEP_MS = 50")), so this axis is a **step function rather than
+// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:750` ("const DEFAULT_STEP_MS = 50")),
+// so this axis is a **step function rather than
 // a line** — a linear fit such as `1.95 + gap/1000` puts the crossing in the
 // wrong place. Rounding the other way would not nudge the onset; it would move it
 // to 1051, the first cell on the next step. None of that is pinned and no case
@@ -306,7 +306,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       position: 300,
       paused: false,
       delayMs: DELAY_MS,
-      metadataMs: bindGapMs
+      bindGapMs
     })
     const innocent = await room.seat({
       username: 'joinuser',

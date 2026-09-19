@@ -145,10 +145,34 @@ export interface HarnessVideoOptions {
   src?: string
   /** How long `reload()` takes to reach HAVE_METADATA, i.e. the gap between the
    *  media load algorithm's synchronous reset and the `loadedmetadata` task.
-   *  Defaults to 0. #284's suppression window, and the staleness this file's
-   *  adoption fixture turns on, both live inside this gap, so a fixture that
-   *  wants either has to seat one. */
-  metadataMs?: number
+   *  #284's suppression window, and the staleness this file's adoption fixture
+   *  turns on, both live inside this gap. The default opens a 500 ms one — enough
+   *  for that suppression, far short of `PLAYBACK_ASSERT_STALE_MS` (2 s) and
+   *  `PLAYBACK_STALE_MS` (5 s), so the adoption fixture still seats 30 s itself.
+   *
+   *  Defaults to **500**, the gap the shipped app actually runs. The value is
+   *  chosen by a criterion rather than by a distance from a measured onset:
+   *  a positive gap is clean iff `k = ceil(bindGapMs / HEARTBEAT_MS) === 1`,
+   *  where `HEARTBEAT_MS` is 1000 (`src/main/syncplay.ts:19`). That is checkable
+   *  against a constant in the tree, which a band map of measured millisecond
+   *  cells would not be. #360's 1 ms sweep indexes the whole drag axis on that
+   *  `k`: `k = 1` is clean, `k = 2` through `k = 5` drag the non-switching peer
+   *  backwards, and `k >= 6` drags iff `k` is odd.
+   *
+   *  Two values the criterion rules out, both counter-intuitive enough to be
+   *  worth recording. **3000 is `k = 3`** — mid-drag — so a 3000 default would
+   *  start every reloading two-peer fixture inside the regime where the innocent
+   *  peer is pulled backwards, silently baking #360's defect into the harness
+   *  baseline: the fixture would pass and what it pinned would be the bug.
+   *  **1000 is `k = 1` and still wrong as a default**, because the drag onset is
+   *  1001, so 1000 clears the gate by one millisecond. 500 sits mid-cell in the
+   *  only clean cell that is unbounded below, with 500 ms of slack on each side
+   *  — that is the property being chosen, not a distance from an onset.
+   *
+   *  `0` stays reachable and is only no longer the default: the one case that
+   *  depends on it seats it explicitly, in a bare `new HarnessVideo({…})` rather
+   *  than through `seat()`. */
+  bindGapMs?: number
 }
 
 type QueuedMediaEvent = 'play' | 'pause' | 'seeked' | 'loadedmetadata'
@@ -200,7 +224,7 @@ export class HarnessVideo {
   private metadataDueAt: number | null = null
   private readonly queued: QueuedMediaEvent[] = []
   private readonly seekLandMs: number
-  private readonly metadataMs: number
+  private readonly bindGapMs: number
 
   constructor(opts: HarnessVideoOptions = {}) {
     this.duration = opts.duration ?? 1440
@@ -212,7 +236,7 @@ export class HarnessVideo {
     this.anchor = opts.position ?? 0
     this.anchorAt = Date.now()
     this.seekLandMs = opts.seekLandMs ?? 0
-    this.metadataMs = opts.metadataMs ?? 0
+    this.bindGapMs = opts.bindGapMs ?? 500
   }
 
   get readyState(): number {
@@ -342,7 +366,7 @@ export class HarnessVideo {
    *    pending user pause. An element that reloaded without queuing one would
    *    leave both guards unobserved.
    *
-   * `loadedmetadata` then arrives asynchronously, `metadataMs` later, and takes
+   * `loadedmetadata` then arrives asynchronously, `bindGapMs` later, and takes
    * `readyState` back to HAVE_METADATA. It is delivered through `tick()` with
    * the other media events, so nothing fires re-entrantly from inside this call.
    *
@@ -366,7 +390,7 @@ export class HarnessVideo {
     // which is 0 here, and that is what a real one reports too.
     this.pending = null
     this.readyState = 0
-    this.metadataDueAt = Date.now() + this.metadataMs
+    this.metadataDueAt = Date.now() + this.bindGapMs
   }
 
   /**

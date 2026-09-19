@@ -259,10 +259,13 @@ describe('two-peer syncplay harness', () => {
   })
 
   it("hands back a reload's pause before the metadata that reopens the gate", () => {
-    // At the default `metadataMs` of 0 the HAVE_METADATA transition used to be
-    // applied inside the same `tick()` that handed back the `pause` `reload()`
-    // queued, so the caller — which dispatches a whole batch *after* `tick()`
-    // returns — ran `onLocalPause` with the element already reporting
+    // This case passes `bindGapMs: 0` explicitly, and is the only one in the
+    // suite that depends on the zero gap — the harness default is 500, which
+    // would carry `loadedmetadata` past both of the 50 ms ticks sampled below
+    // and empty the second batch. At a zero gap the HAVE_METADATA transition
+    // used to be applied inside the same `tick()` that handed back the `pause`
+    // `reload()` queued, so the caller — which dispatches a whole batch *after*
+    // `tick()` returns — ran `onLocalPause` with the element already reporting
     // HAVE_METADATA. That is the inverse of a real element, where the load's
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
@@ -275,7 +278,7 @@ describe('two-peer syncplay harness', () => {
     // two apart — it is `[1, 0, 1]` either way — so the batching is the
     // assertion, and the `readyState` sampled per batch is what the guards
     // downstream would have seen.
-    const el = new HarnessVideo({ position: 100, paused: false })
+    const el = new HarnessVideo({ position: 100, paused: false, bindGapMs: 0 })
     el.reload('harness://ep-8')
 
     const batches: { events: string[]; readyStateAtDelivery: number }[] = []

@@ -81,7 +81,7 @@ export const COMPARED_FIELD_PATHS: readonly string[] = [
 export const IGNORED_FIELDS: readonly IgnoreEntry[] = [
   {
     path: 'State.ignoringOnTheFly.*',
-    seam: 'The ignore window, which the model declares unmodelled in its header and implements as a bare counter stamp — `test/helpers/syncplay-min-election-server.ts:635` is the whole of it, and the window itself never runs — while `test/services/syncplay-ignoring-on-the-fly.test.ts` owns the seam frame by frame. Comparing the counters here would assert parity for a mechanism one side does not implement.'
+    seam: 'The ignore window, which the model declares unmodelled in its header and implements as a bare counter stamp — `test/helpers/syncplay-min-election-server.ts:691` is the whole of it, and the window itself never runs — while `test/services/syncplay-ignoring-on-the-fly.test.ts` owns the seam frame by frame. Comparing the counters here would assert parity for a mechanism one side does not implement.'
   },
   {
     path: 'State.ping.latencyCalculation',

@@ -245,13 +245,34 @@
 // The onset is therefore a knife edge, and a wide one: 1001 through 1050 are
 // **identical** cells, and 1051 steps to the next 0.05 s of `diff` and writes
 // 303.95 where they write 304.00. `diff` moves in a 0.05 s quantum because that
-// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:750` ("const DEFAULT_STEP_MS = 50")),
+// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:779` ("const DEFAULT_STEP_MS = 50")),
 // so this axis is a **step function rather than
 // a line** — a linear fit such as `1.95 + gap/1000` puts the crossing in the
 // wrong place. Rounding the other way would not nudge the onset; it would move it
 // to 1051, the first cell on the next step. None of that is pinned and no case
 // below sits near it; what the figure rules out is reading the 500 ms control as
 // a comfortable margin.
+//
+// **The whole sweep above predates #384's flush and was not re-run.** Every
+// figure in it — the 1001 onset, the 1051 step, the `k`-parity deficits at the
+// 60 s read, the arm-frame census from `k = 6` to `k = 15` — was measured
+// against a `goToEpisode()` that rebound the element without flushing the
+// index bump first. #384 moved three of the five pinned rows below, and what
+// moved in them is `switcher.el.currentTime` only: 0.05 → 0 at 6500, 7500 and
+// 8500. Not one `innocent.el.currentTime` and not one
+// `server.roomState().position` changed at any of the five gaps — written
+// room/innocent in that order, and spelled out rather than carried down from
+// the clause above, they still read 306.5 / 308.95 at 500, 304 / 304 at 3000,
+// and 307.95 / 308.95 at each of the other three. (The 3000 row is the one
+// that reads the same either way, which is what lets a reversed pair survive a
+// spot check.) So the half that moved is the *switching* peer's own parked
+// element, and the comb's subject — the drag on the **non-switching** peer —
+// is the half that did not.
+//
+// That is a reason to re-measure before quoting, not a reason to trust the
+// numbers: nothing above is asserted anywhere. If the flush had shifted the
+// onset off 1001, or flattened the odd/even parity, no case below would have
+// gone red and this block would still read exactly as it does.
 //
 // This file asserts against the model server, which is legitimate for these
 // four cases and would not be for an assertion-side fixture: every row here is
@@ -335,7 +356,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     const { switcher, innocent, wireBefore } = await seatPair(500)
     const server = room!.server
 
-    switcher.goToEpisode('8')
+    await switcher.goToEpisode('8')
     await room!.advance(6)
 
     // The switcher's own element takes #360's write: one seek, to the previous
@@ -389,7 +410,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     const { switcher, innocent, wireBefore } = await seatPair(3000)
     const server = room!.server
 
-    switcher.goToEpisode('8')
+    await switcher.goToEpisode('8')
     await room!.advance(6)
 
     expect(switcher.el.seekWrites).toHaveLength(1)
@@ -457,15 +478,35 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     const { switcher, innocent, wireBefore } = await seatPair(6500)
     const server = room!.server
 
-    switcher.goToEpisode('8')
+    await switcher.goToEpisode('8')
     await room!.advance(6)
 
     // Six seconds in, the switcher's element is still at `HAVE_NOTHING` reading
-    // ~0 with nothing written to it yet, and *nobody* has been dragged. This is
+    // 0 with nothing written to it yet, and *nobody* has been dragged. This is
     // the window a fixture that stopped at the bind gap's release would call a
     // pass.
+    //
+    // **Exactly 0, where this read was 0.05 before #384 made `goToEpisode()`
+    // flush the index bump before the rebind.** The 0.05 was one 50 ms slice of
+    // the element walking, and the flush is what removes it. `reload()` pauses
+    // the element, and what un-pauses it is the ready gate's play arm
+    // (`src/renderer/src/composables/use-syncplay-client.ts:1287`) reached from
+    // `watch(syncplayRoomUsers, …)`
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2295`) — woken, at
+    // this instant, by the roster change the switch's own file push produces.
+    // Unflushed, the push and the reload landed in the same instant with the
+    // reload *first*, so the gate found a paused element and re-anchored it
+    // playing at the switch instant; by the first tick 50 ms later it had walked
+    // 0.05 s and, being re-paused there, kept that reading for the rest of the
+    // window. Flushed, the push is delivered while the element is still bound to
+    // the *old* episode and still playing, so the play arm's `v.paused` guard
+    // skips it; `reload()` then pauses the element and the un-pause waits for the
+    // next roster delivery — the far peer's echo, one `DELAY_MS` later — which
+    // anchors it at the slice boundary instead of 50 ms before it. Asserted
+    // exactly rather than close-to because the element is parked: anchored at 0
+    // and paused in the same slice, it reads 0 for the whole window.
     expect(switcher.el.seekWrites).toEqual([])
-    expect(switcher.el.currentTime).toBeCloseTo(0.05, 2)
+    expect(switcher.el.currentTime).toBe(0)
     expect(innocent.el.seekWrites).toEqual([])
     expect(server.roomState().position).toBeCloseTo(307.95, 1)
     expect(innocent.el.currentTime).toBeCloseTo(308.95, 2)
@@ -533,11 +574,16 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     const even = await seatPair(7500)
     const evenServer = room!.server
 
-    even.switcher.goToEpisode('8')
+    await even.switcher.goToEpisode('8')
     await room!.advance(6)
 
     expect(even.switcher.el.seekWrites).toEqual([])
-    expect(even.switcher.el.currentTime).toBeCloseTo(0.05, 2)
+    // 0 rather than the pre-#384 0.05, for the reason spelled out in full on the
+    // same read in the 6.5 s case above: the flushed index bump lets the ready
+    // gate's play arm see an element that is still playing the old episode, so
+    // the un-pause waits a slice and the element's anchor lands on the read
+    // boundary rather than 50 ms before it.
+    expect(even.switcher.el.currentTime).toBe(0)
     expect(even.innocent.el.seekWrites).toEqual([])
     expect(evenServer.roomState().position).toBeCloseTo(307.95, 1)
     expect(even.innocent.el.currentTime).toBeCloseTo(308.95, 2)
@@ -579,13 +625,15 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     const odd = await seatPair(8500)
     const oddServer = room!.server
 
-    odd.switcher.goToEpisode('8')
+    await odd.switcher.goToEpisode('8')
     await room!.advance(6)
 
     // Indistinguishable from the `k = 8` row at this window, down to the mirror
     // count. A fixture that read only here would report the comb as flat.
     expect(odd.switcher.el.seekWrites).toEqual([])
-    expect(odd.switcher.el.currentTime).toBeCloseTo(0.05, 2)
+    // Same 0, same cause as the `k = 8` row above — which is part of what makes
+    // the two rows indistinguishable at this window.
+    expect(odd.switcher.el.currentTime).toBe(0)
     expect(odd.innocent.el.seekWrites).toEqual([])
     expect(oddServer.roomState().position).toBeCloseTo(307.95, 1)
     expect(odd.innocent.el.currentTime).toBeCloseTo(308.95, 2)

@@ -288,6 +288,17 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       position: 300,
       paused: false,
       delayMs: DELAY_MS,
+      // Explicit although 500 has been the helper's own default since #387, and
+      // kept that way on purpose: this is a **pin**, not a leftover. Every
+      // number this case asserts — the single 302 write, the room's 306.5, the
+      // zero mirror frames the note below measures — belongs to this one cell of
+      // #360's gap axis, and that axis is a comb rather than a slope, so a
+      // default that moved would not degrade these assertions, it would silently
+      // re-measure a different cell and still be green on some of them. The
+      // pin is therefore about *this fixture's* numbers being addressable, not
+      // about disagreeing with the default; the guard that the default itself is
+      // still 500 is `syncplay-two-peer-loop.test.ts`'s own, and deleting this
+      // line would hand that guard a second, undeclared job.
       bindGapMs: 500
     })
     const joiner = await room.seat({
@@ -310,7 +321,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     expect(joiner.remoteEpisodes).toEqual([])
     host.el.seekWrites.length = 0
 
-    host.goToEpisode('8')
+    await host.goToEpisode('8')
     await room.advance(6)
 
     // The switcher really switched: new source, a real `HAVE_NOTHING` dip and

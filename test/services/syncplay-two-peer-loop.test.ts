@@ -215,7 +215,7 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The six guards below are about the harness as an instrument rather than
+  // The ten guards below are about the harness as an instrument rather than
   // about the loop: each one pins a way it used to mismodel or silently degrade,
   // and each fails on the previous behaviour.
   it('reports the in-flight seek target, not the pre-write position', () => {
@@ -351,15 +351,42 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-adoption.test.ts:237` run under their own
     // `syncplay-two-peer-adoption.test.ts:106 ("bindGapMs: 30_000")` and
     // `syncplay-two-peer-adoption.test.ts:226 ("bindGapMs: 30_000")` seats, the
-    // case above seats 0, and all six `goToEpisode` sites seat a literal through
-    // `seat()` — so the fallback at
+    // case above seats 0, and each of the ten `goToEpisode` call sites across
+    // the suite rebinds a switcher that was seated on a literal — so the
+    // fallback at
     // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
     // option's doc block spends its longest paragraph calling a trap, left the
-    // suite at 1822 passed across 122 files. The counterfactual that shipped with
+    // suite at 1822 passed across 122 files. That figure is **historical and no
+    // longer reproducible**, in both of its halves, and the sentence would be
+    // misleading without saying so: it was measured before this case existed —
+    // which is the whole of why it is quoted, nothing caught the edit — and the
+    // suite has grown past 1822 since. Re-running the mutation today does not
+    // hand back a different pass count, it reds *this* case by construction.
+    // Do not refresh the number; it is evidence about a tree that had no guard
+    // here, and refreshing it would quietly turn it into a claim about one that
+    // does. The counterfactual that shipped with
     // the rename covers the opt-out at
     // `syncplay-two-peer-loop.test.ts:281 ("bindGapMs: 0")`, which shows the zero
     // gap stayed reachable — not that the default it opts out of is the right one.
+    //
+    // "Reload site" rather than "seat", because the two populations differ and
+    // only the first one can observe the fallback. Plenty of seats take the
+    // `?? 500` silently — `seatSwitchScenario`'s joiner below passes no
+    // `bindGapMs`, and neither does the innocent peer in
+    // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
+    // the adoption file's switch fixture. All of them are inert, for one
+    // reason: `bindGapMs` is read in exactly one place,
+    // `test/helpers/syncplay-two-peer.ts:393 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
+    // inside `HarnessVideo.reload()`, and a peer that never reloads never
+    // reaches it. So the value they inherit is unobservable rather than
+    // pinned, and moving the default cannot red them.
+    //
+    // Both counts in this file are the same kind of thing and rot together:
+    // this one and the guard census in the block comment above the first guard
+    // ("The ten guards below"). This very change re-derived that one from six
+    // to ten and walked past this one — 136 lines away, still reading six —
+    // which review caught and no gate would have. Re-derive the pair.
     //
     // Pins a band around the default rather than the whole clean cell, and the
     // band is what the batching can actually resolve: a positive gap is clean iff
@@ -386,5 +413,256 @@ describe('two-peer syncplay harness', () => {
     expect(batches).toEqual([['pause'], [], ['loadedmetadata']])
     // And the landing moved the gate rather than merely being queued behind it.
     expect(el.readyState).toBe(1)
+  })
+
+  /**
+   * Seat the 500 ms switch scenario `syncplay-two-peer-adoption.test.ts:285`
+   * runs — room at 300, both peers there, `advance(4)` of agreement, the
+   * switcher on the shipped bind gap — and hand back the switcher plus a log
+   * the four cases below read.
+   *
+   * The log is built **here rather than in the helper**, and by wrapping the
+   * *method* rather than replacing the handle: the composable resolves its
+   * bridge once, at setup, and never re-reads it
+   * (`src/renderer/src/composables/use-syncplay-client.ts:270` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
+   * `peer.api = {…}` would hand the wrapper to nobody and leave a green case
+   * sampling an empty array. Writing one property on the retained object is
+   * seen, because the push site reads `api.syncplaySetFile` at call time.
+   *
+   * Three of the four cases below assert the log is **non-empty**, and those
+   * three are the wrapper's own guard: rebuild it as
+   * `switcher.api = { ...switcher.api, syncplaySetFile: spy }` and all three go
+   * red on `toHaveLength(1)` against an empty array. The fourth cannot be that
+   * guard, because its central assertion is `expect(pushes).toEqual([])` — an
+   * **empty** log is exactly what an unseen wrapper produces, so that rewrite
+   * leaves it green while it has quietly stopped testing the announce half at
+   * all. That is why its `expect(switcher.episode()).toBe('7')` is
+   * load-bearing rather than a second opinion: it is the only assertion in the
+   * throwing case that holds independently of whether the wrapper ever fires.
+   */
+  const seatSwitchScenario = async (): Promise<{
+    switcher: Awaited<ReturnType<TwoPeerRoom['seat']>>
+    pushes: { at: number; readyStateAtPush: number; episodeInt: string }[]
+  }> => {
+    const switcher = await room.seat({
+      username: 'hostuser',
+      position: 300,
+      paused: false,
+      delayMs: DELAY_MS,
+      bindGapMs: 500
+    })
+    await room.seat({
+      username: 'joinuser',
+      position: 300,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    await room.advance(4)
+
+    const pushes: { at: number; readyStateAtPush: number; episodeInt: string }[] = []
+    const realSetFile = switcher.api.syncplaySetFile.bind(switcher.api)
+    switcher.api.syncplaySetFile = (file) => {
+      pushes.push({
+        at: room.elapsed(),
+        readyStateAtPush: switcher.el.readyState,
+        episodeInt: file.episodeInt
+      })
+      return realSetFile(file)
+    }
+    return { switcher, pushes }
+  }
+
+  it('bumps the episode index and flushes it before rebinding the element', async () => {
+    // The seventh harness guard, and the only one whose subject is an *ordering*
+    // the helper used to be unable to express at all.
+    //
+    // In the app, `PlayerView.vue:2279` writes `activeEpisodeIndex.value =
+    // targetIndex` and every source write below it sits behind an `await` on
+    // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
+    // episode-change watcher
+    // (`src/renderer/src/composables/use-syncplay-client.ts:1882`) is a default
+    // **pre-flush** `watch`, so Vue's scheduler runs it inside that suspension —
+    // against the element still bound to the *old* episode, at HAVE_METADATA.
+    // The helper had no suspension, so the watcher only ever ran after
+    // `reload()` had already dropped the element to HAVE_NOTHING, and no fixture
+    // on this harness had ever seen the shipped shape.
+    //
+    // `readyState` at the push is the discriminator, and it is the only one:
+    //
+    //   | `goToEpisode` form                   | `readyStateAtPush` |
+    //   | ------------------------------------ | ------------------ |
+    //   | `reload()` then bump (as shipped)    | 0                  |
+    //   | bump then `reload()`, still sync     | 0                  |
+    //   | bump, `await flushPromises()`, reload| 1                  |
+    //
+    // The middle row is why this case samples the element rather than the wire.
+    // The watcher is pre-flush and therefore *queued*, so it runs after both
+    // statements whichever order they appear in — swapping the two lines is
+    // observably nothing, and an acceptance test that a reorder satisfies is the
+    // no-op this guard exists to rule out. Nothing cheaper separates the three:
+    // the watcher's other three calls (`clearPendingUserPause()`,
+    // `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()`) touch no
+    // element at all; the push's own duration read is
+    // `src/renderer/src/composables/use-syncplay-client.ts:721` ("const dur =
+    // deps.getVideoEl()?.duration || deps.getDuration() || 0") and `reload()`
+    // never writes `duration`, so it is identical in all three; both forms send
+    // inside the same 50 ms slice at the same `Date.now()`, so neither the wire
+    // nor `MinElectionServer` separates them; and `el.readyStates` is `[1, 0, 1]`
+    // in all three, the trap the reload-batching case above already writes down.
+    room = await createTwoPeerRoom({ position: 300, paused: false })
+    const { switcher, pushes } = await seatSwitchScenario()
+
+    await switcher.goToEpisode('8')
+    await room.advance(6)
+
+    // The wrapper fired — see `seatSwitchScenario`'s note on why this is not a
+    // formality — and it fired once: the transition-into-ready push
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2182`, the
+    // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
+    // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2305 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // inside `onMounted`) are both spent by the `advance(4)` above, so this one
+    // is the watcher's. Each anchor carries the construct it lands in because
+    // the two were paired the wrong way round here until #384, and nothing
+    // would have caught it: `check:line-citations` verifies that a marked
+    // citation's quote matches its line, never that the label the prose hangs
+    // on it is the right one.
+    expect(pushes).toHaveLength(1)
+    expect(pushes[0].episodeInt).toBe('8')
+    expect(pushes[0].readyStateAtPush).toBe(1)
+    // The flush costs no fake time: the announce still lands on the switch
+    // instant, the 4 s mark `seatSwitchScenario` leaves the room at, and not a
+    // slice later. So `readyState` above is the *only* thing the flush moves,
+    // which is what makes it the discriminator rather than one of several.
+    expect(pushes[0].at).toBe(4000)
+
+    // And the switch still happened, on the far side of the flush: the element
+    // rebound, dipped to HAVE_NOTHING and came back. Plus the switch footprint
+    // `syncplay-two-peer-adoption.test.ts` reads off this same scenario, so a
+    // flush that moved the scenario rather than only its ordering reds here as
+    // well as there.
+    expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
+    expect(switcher.el.readyStates).toEqual([1, 0, 1])
+    expect(switcher.el.seekWrites).toHaveLength(1)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
+    expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
+  })
+
+  it('is additive at suspendMs = 0 — the same push and the same switch footprint', async () => {
+    // What makes the third parameter safe to add to six existing call sites: at
+    // `0`, the default, it is the flush-only form and nothing else. Every literal
+    // below is copied from the case above on purpose — the claim is that the two
+    // calls are indistinguishable, so a divergence has to red one of them.
+    room = await createTwoPeerRoom({ position: 300, paused: false })
+    const { switcher, pushes } = await seatSwitchScenario()
+
+    await switcher.goToEpisode('8', undefined, 0)
+    await room.advance(6)
+
+    expect(pushes).toHaveLength(1)
+    expect(pushes[0].episodeInt).toBe('8')
+    expect(pushes[0].readyStateAtPush).toBe(1)
+    expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
+    expect(switcher.el.readyStates).toEqual([1, 0, 1])
+    expect(switcher.el.seekWrites).toHaveLength(1)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
+    expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
+  })
+
+  it('keeps the switcher on the old episode for the whole of a non-zero suspension', async () => {
+    // The parameter's reason for existing. In the app the index bump and the
+    // source write are separated by real IPC — `window.api.playerFindLocalFile(…)`
+    // or `playerGetStreamUrl(…)` — and the room does not stop for it: peers keep
+    // ticking, frames keep arriving, and the switcher is still bound to the
+    // **previous** episode's element the whole time, having already announced
+    // the new one. `suspendMs` is that interval, and it runs through the room's
+    // own `advance()` rather than a bare `vi.advanceTimersByTimeAsync`, so each
+    // 50 ms slice still delivers every peer's media events and drains the
+    // watchers — a bare timer jump would elapse the suspension with no frames
+    // delivered at all, which is the blindness this whole parameter exists to
+    // remove.
+    room = await createTwoPeerRoom({ position: 300, paused: false })
+    const { switcher, pushes } = await seatSwitchScenario()
+
+    // Sampled per slice through the element's own `tick()`, which `seat()`'s
+    // `deliver()` calls once per peer per slice. Only the samples taken *inside*
+    // the `await` below are collected, because nothing else is running then.
+    const samples: { src: string; readyState: number; pushesSoFar: number }[] = []
+    const realTick = switcher.el.tick.bind(switcher.el)
+    switcher.el.tick = () => {
+      samples.push({
+        src: switcher.el.src,
+        readyState: switcher.el.readyState,
+        pushesSoFar: pushes.length
+      })
+      return realTick()
+    }
+
+    await switcher.goToEpisode('8', undefined, 500)
+
+    // Ten slices of 50 ms, and on every one of them the element is still the old
+    // episode's, still at HAVE_METADATA — while the new episode has already been
+    // announced. That pairing is the whole shape: the room has been told about
+    // episode 8 and the element is still playing episode 7.
+    expect(samples).toHaveLength(10)
+    expect(samples.every((s) => s.src === 'harness://initial')).toBe(true)
+    expect(samples.every((s) => s.readyState === 1)).toBe(true)
+    expect(samples.every((s) => s.pushesSoFar === 1)).toBe(true)
+
+    // And the rebind did land, once the suspension elapsed.
+    expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
+    expect(switcher.el.readyState).toBe(0)
+  })
+
+  it('refuses a suspension that is not a whole number of slices, and switches nothing', async () => {
+    // A rounded suspension is deliberately not smoothed over: it would silently
+    // run a different scenario than the one the caller wrote down, and the
+    // crossfire timings on this harness are quoted to the slice.
+    //
+    // The teeth are below the throw, not on it. `rejects.toThrow` alone passes
+    // against *both* placements of the check — at the top of `goToEpisode`, and
+    // down inside the `advance()` call between the flush and the reload — and
+    // those two are not the same helper. Validated late, `episodeInt = ep`, the
+    // index bump and `await flushPromises()` have all already run when it
+    // throws: the watcher has fired and the renderer has announced episode 8
+    // while `el` still holds episode 7's source. That is the half-switched state
+    // a late check would *leave behind* — no successful call ends in it, and
+    // this case keeps asserting after catching the rejection, so it would be
+    // asserting against a peer the helper can otherwise never hand it.
+    //
+    // "Leaves behind" is the load-bearing word, because the case 40 lines above
+    // asserts that exact state on all ten of its slices: a `suspendMs > 0` call
+    // *passes through* it deliberately, for the whole suspension, and then exits
+    // it at the rebind. What no successful call produces is that state as a
+    // terminal one. A late throw strands the peer there.
+    //
+    // Two of the four assertions after the `await expect` tell the two
+    // placements apart, and it is worth naming which. Against the late
+    // placement, `advance(0.12)` throws before any slice runs and before
+    // `el.reload()`, so `expect(pushes).toEqual([])` goes red on the watcher's
+    // push and `expect(switcher.episode()).toBe('7')` goes red on the `'8'` the
+    // bump already wrote. The other two — `switcher.el.loads` and
+    // `switcher.el.readyState` — are green under *both* placements, because
+    // neither placement reaches `reload()`. They pin that the element was left
+    // untouched, which is a statement about the call's footprint rather than
+    // about where the guard sits.
+    room = await createTwoPeerRoom({ position: 300, paused: false })
+    const { switcher, pushes } = await seatSwitchScenario()
+
+    await expect(switcher.goToEpisode('8', undefined, 120)).rejects.toThrow(
+      'goToEpisode(8, …, 120): suspendMs must be a whole number of 50ms slices'
+    )
+
+    // Nothing announced. This is the index bump's observable: a bump that had
+    // been flushed would have woken the episode-change watcher, and the
+    // watcher's whole job is a file push — which the wrapper would have caught,
+    // carrying `episodeInt: '8'` at `readyStateAtPush: 1`. An empty log is the
+    // statement that the write never happened.
+    expect(pushes).toEqual([])
+    // Nothing rebound, and nothing even renamed: the peer still reports the
+    // episode it was seated on, so `episodeInt = ep` did not run either.
+    expect(switcher.episode()).toBe('7')
+    expect(switcher.el.loads).toEqual(['harness://initial'])
+    expect(switcher.el.readyState).toBe(1)
   })
 })

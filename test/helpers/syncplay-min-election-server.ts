@@ -84,6 +84,62 @@
 // position for precisely this reason. Making positions nullable is its own
 // refactor and is out of scope here.
 //
+// Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
+// **paused** arm — the `this.roomPaused ? w.position` half of
+// `test/helpers/syncplay-min-election-server.ts:388-393` — is already checked
+// against the real Syncplay 1.7.6 server in both the steady state and the flip
+// into it, so no new scenario is owed for it.
+//  - **Steady.** `conformance/syncplay-election.conformance.ts:27`
+//    (`conf-elect-lowest`) is a paused room holding two watchers at different
+//    positions — alpha `position: 700` at
+//    `conformance/syncplay-election.conformance.ts:34` and bravo
+//    `position: 500` at `conformance/syncplay-election.conformance.ts:39` — and
+//    it samples after `SETTLE_MS = 2600`
+//    (`conformance/syncplay-election.conformance.ts:24`) of elapsed wall time,
+//    against the ±0.05 s paused tolerance
+//    (`conformance/helpers/trace-diff.ts:32`). An arm that advanced with wall
+//    time would read ~2.6 s high by the time that sample is taken, more than
+//    fifty times the tolerance, so the unprojected return is pinned against the
+//    reference rather than assumed — and `conformance/README.md:35` ("verified
+//    by running the election suite green against") puts that suite on the
+//    record green. Every election scenario in that file is a paused room, so
+//    the whole file rides on this arm.
+//  - **The flip.** `conf-forced-pause-change`
+//    (`conformance/syncplay-forced-update.conformance.ts:125`) drives a room
+//    playing and then paused again underneath a stale watcher: alpha states once
+//    (`conformance/syncplay-forced-update.conformance.ts:130`) and never again,
+//    bravo unpauses (`conformance/syncplay-forced-update.conformance.ts:137`),
+//    the room plays through `SETTLE_MS`, and bravo re-pauses at 720
+//    (`conformance/syncplay-forced-update.conformance.ts:139`). The sample at
+//    `conformance/syncplay-forced-update.conformance.ts:141` ("bravo pauses
+//    again at 720, and the room re-seats") is the one taken *after* the flip,
+//    and `assertConforms` puts it beside 1.7.6 like any other — at the paused
+//    tolerance, because that scenario never sets `playing`.
+//  - The clause a reader would otherwise go hunting for, stated rather than left
+//    as a hole: `forcePositionUpdate`'s own write, the
+//    `test/helpers/syncplay-min-election-server.ts:459` ("this.roomPosition =
+//    this.watcherPosition(w)") line, reads through that same paused arm
+//    whenever the change that forced it is a pause, because
+//    `test/helpers/syncplay-min-election-server.ts:660-662` flips `roomPaused`,
+//    refreshes that watcher's `lastUpdatedOn`, and only then calls it, in that
+//    order. Safe for a stated reason rather than by luck: the refresh is what
+//    the *playing* arm would have projected from, and the paused arm ignores the
+//    stamp regardless, so either way that write reads the setter's own position
+//    at that instant. `test/helpers/syncplay-min-election-server.ts:495` then
+//    re-seats every watcher onto the result.
+//  - Option (B) — a scenario built to catch an election *flip* decided inside
+//    the paused arm — is structurally excluded rather than deferred, so nobody
+//    need re-open it. A flip that arm could decide needs the watchers'
+//    positions to differ — the file arm is the other way to move `setBy`, and
+//    `conf-elect-all-fileless` already owns it — and a pause change equalises
+//    those positions by construction, in the same call that sets the flag:
+//    the re-seat above leaves every watcher on the room position. They
+//    diverge again in exactly two ways — a fresh `State`, which is the steady
+//    case above, or the **playing** arm's per-watcher projection once the room
+//    resumes. The second is the seam `conformance/README.md:152-162` already
+//    records as unreachable here, with the reference and the model landing on
+//    different peers at a spread under a millisecond of loopback RTT.
+//
 // Shared rather than file-local because #278 and #279 are written against the
 // same model (#277 review) — they are the cross-fire and the room-slides-
 // backwards halves of the same election.

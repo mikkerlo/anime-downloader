@@ -107,7 +107,7 @@ describe('conformance: Room.getPosition() elects min(watchers)', () => {
   })
 
   it('seats a joiner on the room position, so it can win without ever reporting', async () => {
-    // The `seat()` seed at `test/helpers/syncplay-min-election-server.ts:305`,
+    // The `seat()` seed at `test/helpers/syncplay-min-election-server.ts:361`,
     // and the reference's `Room.addWatcher` (`server.py:634-637`), which calls
     // `watcher.setPosition(self.getPosition())` for any room that is not empty.
     // bravo sends **no** `State` at all, announces a file, and then takes the

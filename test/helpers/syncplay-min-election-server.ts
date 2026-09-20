@@ -125,8 +125,8 @@
 //    order. Safe for a stated reason rather than by luck: the refresh is what
 //    the *playing* arm would have projected from, and the paused arm ignores the
 //    stamp regardless, so either way that write reads the setter's own position
-//    at that instant. `test/helpers/syncplay-min-election-server.ts:495` then
-//    re-seats every watcher onto the result.
+//    at that instant. `test/helpers/syncplay-min-election-server.ts:495` ("for
+//    (const other of this.watchers.values())") then re-seats every watcher.
 //  - Option (B) — a scenario built to catch an election *flip* decided inside
 //    the paused arm — is structurally excluded rather than deferred, so nobody
 //    need re-open it. A flip that arm could decide needs the watchers'

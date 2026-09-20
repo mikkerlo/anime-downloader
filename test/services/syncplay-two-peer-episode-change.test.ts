@@ -253,11 +253,12 @@
 // below sits near it; what the figure rules out is reading the 500 ms control as
 // a comfortable margin.
 //
-// **The whole sweep above predates #384's flush and was not re-run.** Every
-// figure in it — the 1001 onset, the 1051 step, the `k`-parity deficits at the
-// 60 s read, the arm-frame census from `k = 6` to `k = 15` — was measured
-// against a `goToEpisode()` that rebound the element without flushing the
-// index bump first. #384 moved three of the five pinned rows below, and what
+// **The whole sweep above predates #384's flush, and only the cells
+// re-measured below have been re-run against it.** Every figure in it — the
+// 1001 onset, the 1051 step, the `k`-parity deficits at the 60 s read, the
+// arm-frame census from `k = 6` to `k = 15` — was measured against a
+// `goToEpisode()` that rebound the element without flushing the index bump
+// first. #384 moved three of the five pinned rows below, and what
 // moved in them is `switcher.el.currentTime` only: 0.05 → 0 at 6500, 7500 and
 // 8500. Not one `innocent.el.currentTime` and not one
 // `server.roomState().position` changed at any of the five gaps — written
@@ -269,10 +270,16 @@
 // element, and the comb's subject — the drag on the **non-switching** peer —
 // is the half that did not.
 //
-// That is a reason to re-measure before quoting, not a reason to trust the
-// numbers: nothing above is asserted anywhere. If the flush had shifted the
-// onset off 1001, or flattened the odd/even parity, no case below would have
-// gone red and this block would still read exactly as it does.
+// **Re-measured on the flushed harness, and unchanged.** The onset is still
+// 1001 (1000 clean, 1001 writes 304.00), the 0.05 s step is still at 1051
+// (1050 writes 304.00, 1051 writes 303.95), `PLAYBACK_STALE_MS` is still the
+// lower run's top edge (5000 drags, 5001 clean), and the comb above `k = 5`
+// still alternates on parity: 6000 clean / 6001 → 310.00, 7000 → 310.00 /
+// 7001 clean, 8001 → 312.00, 10000 clean / 10001 → 314.00, 11000 → 314.00 /
+// 11001 clean, 13000 → 316.00, 15000 → 318.00, all at the 20 s read. None of
+// it is asserted anywhere, so it still rots silently: had the flush shifted
+// the onset off 1001 or flattened the parity, no case below would have gone
+// red and this block would still read exactly as it does.
 //
 // This file asserts against the model server, which is legitimate for these
 // four cases and would not be for an assertion-side fixture: every row here is

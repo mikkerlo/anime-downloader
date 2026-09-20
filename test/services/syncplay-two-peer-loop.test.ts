@@ -351,8 +351,9 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-adoption.test.ts:237` run under their own
     // `syncplay-two-peer-adoption.test.ts:106 ("bindGapMs: 30_000")` and
     // `syncplay-two-peer-adoption.test.ts:226 ("bindGapMs: 30_000")` seats, the
-    // case above seats 0, and each of the ten `goToEpisode` call sites across
-    // the suite rebinds a switcher that was seated on a literal — so the
+    // case above seats 0, and nine of the ten `goToEpisode` call sites across
+    // the suite rebind a switcher that was seated on a literal — the tenth is
+    // the rejection guard below, which never reaches `reload()` at all — so the
     // fallback at
     // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that

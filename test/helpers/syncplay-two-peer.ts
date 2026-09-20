@@ -567,8 +567,37 @@ export interface Peer {
    *
    * The `src` defaults to a per-episode identity so two calls never collide;
    * pass one to pin an exact `v.src` an assertion reads back.
+   *
+   * **Await it.** The index write is flushed before the rebind, because that is
+   * the order the app runs them in: `PlayerView.vue:2279` writes
+   * `activeEpisodeIndex` and every source write below it sits behind an `await`
+   * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
+   * pre-flush episode-change watcher
+   * (`src/renderer/src/composables/use-syncplay-client.ts:1882`) runs against
+   * the element still bound to the **old** episode. Without the flush the
+   * watcher only ever saw an element `reload()` had already dropped to
+   * HAVE_NOTHING. A forgotten `await` at a call site is a silent mis-sequence
+   * rather than a type error, so check them by eye.
+   *
+   * `suspendMs` models how long the app spends inside that IPC await: the room
+   * keeps running — every peer ticking, every watcher draining — while the
+   * switcher is still bound to the old episode's element. `0`, the default,
+   * keeps every call site behaving as the flush-only form, which is what makes
+   * the parameter additive.
+   *
+   * It runs through the room's own `advance()`, so it **must be a whole number
+   * of 50 ms slices**: a caller passing e.g. 120 gets a loud error rather than
+   * a silently rounded suspension. That is the intended behaviour — a
+   * suspension quietly rounded to the slice would be a different scenario than
+   * the one the caller wrote down.
+   *
+   * The check is made *first*, before a single write, so a rejected call leaves
+   * the peer exactly as it found it: no index bump, no watcher, no file push,
+   * the element still on the old source. Leaving it to `advance()` would put
+   * the throw after the switch had already been announced, and a case that
+   * catches the rejection would then be asserting against a half-switched peer.
    */
-  goToEpisode(episodeInt: string, src?: string): void
+  goToEpisode(episodeInt: string, src?: string, suspendMs?: number): Promise<void>
   /** Deliver whatever the element has queued, into the composable. */
   tick(): void
   unmount(): void
@@ -889,10 +918,51 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       userPause: () => {
         el.pause()
       },
-      goToEpisode: (ep: string, src?: string) => {
+      goToEpisode: async (ep: string, src?: string, suspendMs = 0) => {
+        // Validated *before* anything is written, so a bad `suspendMs` is a
+        // no-op rather than a half-switched room. Letting `advance()` reject it
+        // further down would be too late: `episodeInt`, the index bump and the
+        // flush would all have run, the composable's watcher would have fired
+        // and the renderer would have announced the new episode while `el` still
+        // held the old source — the half-switched state a late check *leaves
+        // behind*. No successful call ends in it. A successful `suspendMs > 0`
+        // call passes straight through it, on purpose, for the whole suspension
+        // and then exits it at the rebind below; what nothing can produce is
+        // that state as the *terminal* one. Harmless when the throw kills the
+        // test, but the throwing case *catches* the rejection and keeps
+        // asserting, so it would be asserting against a peer this helper can
+        // otherwise never hand it.
+        if (!Number.isInteger(suspendMs) || suspendMs < 0 || suspendMs % DEFAULT_STEP_MS !== 0) {
+          throw new Error(
+            `goToEpisode(${ep}, …, ${suspendMs}): suspendMs must be a whole number of ` +
+              `${DEFAULT_STEP_MS}ms slices`
+          )
+        }
         episodeInt = ep
-        el.reload(src ?? `harness://${peerOpts.username}/ep-${ep}`)
         activeEpisodeIndex.value += 1
+        // The flush is the whole point, not tidiness: the composable's
+        // episode-change watcher is a pre-flush `watch`, so it is *queued* by
+        // the write above and runs on the next microtask drain — before the
+        // rebind below, which is where the app runs it too. Reordering the two
+        // statements without this is observably nothing.
+        await flushPromises()
+        // `advance` is declared below `seat()`, and referring to it up here is
+        // safe only because `goToEpisode` is called after `createTwoPeerRoom()`
+        // has returned — by which time the `const` is initialised. Do not
+        // "fix" this by hoisting `advance` above `seat()`: it closes over
+        // `peers`, which `seat()` fills. This is not where a bad duration is
+        // first noticed, either: the guard at the top of `goToEpisode` runs
+        // `advance`'s own multiple-of-`DEFAULT_STEP_MS` test on the same
+        // millisecond value, before any of the writes above, so by the time
+        // control reaches this line the ordering has already settled who
+        // reports. Stated as ordering rather than as a universal over all
+        // doubles on purpose — the `seconds * 1000` round-trip through
+        // `Math.round` is only faithful below the safe-integer range. The one
+        // honest caveat: a magnitude large enough to hang `advance()` hangs it
+        // here exactly as it would at any other `advance()` call site, which is
+        // `advance`'s property and not this parameter's.
+        if (suspendMs > 0) await advance(suspendMs / 1000)
+        el.reload(src ?? `harness://${peerOpts.username}/ep-${ep}`)
       },
       tick: deliver,
       unmount: () => wrapper.unmount()

@@ -163,8 +163,21 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   so the next case's `room?.dispose()` re-ran the same throwing teardown and red
   a neighbour that had nothing wrong with it.
   `test/services/syncplay-two-peer-loop.test.ts` pins the harness itself — those
-  three guards, the in-flight target reading above, and both rejection shapes this
-  bridge copy produces, the no-handler one and a handler that throws — and
+  three guards, the in-flight target reading above, both rejection shapes this
+  bridge copy produces (the no-handler one and a handler that throws), the bind
+  gap's `?? 500` default, held inside `(400, 600]` so neither a revert to the old
+  `0` nor a move into the drag regime passes, and `goToEpisode()`'s ordering: the
+  episode-index bump is flushed before the element rebinds, so the pre-flush
+  episode-change watcher sees the element still bound to the *old* episode at
+  `HAVE_METADATA`, the way it does in the app across `PlayerView`'s IPC await.
+  That last one is sampled at the file push rather than on the wire, because
+  merely swapping the two statements is observably nothing — a queued pre-flush
+  watcher runs after both either way — and an `advance()`-driven `suspendMs`
+  models the length of that await with the room still ticking. `suspendMs` is
+  validated before the first write rather than on the way into `advance()`, and
+  the guard pins that as a *no-op* — nothing announced, nothing rebound — since
+  a bare `rejects.toThrow` passes against a late check too, and a late check
+  leaves behind a half-switched peer no successful call can produce. And
   `syncplay-seek-crossfire.test.ts` is the first scenario on it. Eight more
   scenario files sit on the same harness — the count read "six" while seven
   were listed, because #368 added the in-flight-seek file without moving it:

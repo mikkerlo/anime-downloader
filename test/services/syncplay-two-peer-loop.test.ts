@@ -939,7 +939,8 @@ describe('goToEpisode() call sites across the two-peer glob', () => {
       sites,
       [
         'the classifier and the census disagree on the site set',
-        ...offenders.map((o) => `  ${o}`)
+        ...offenders.map((o) => `  ${o}`),
+        ''
       ].join('\n')
     ).toHaveLength(pinnedTotal)
 

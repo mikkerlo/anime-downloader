@@ -177,7 +177,31 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   validated before the first write rather than on the way into `advance()`, and
   the guard pins that as a *no-op* — nothing announced, nothing rebound — since
   a bare `rejects.toThrow` passes against a late check too, and a late check
-  leaves behind a half-switched peer no successful call can produce. And
+  leaves behind a half-switched peer no successful call can produce. A second
+  `describe` at the foot of that file is a source-text census rather than a
+  harness guard: it reads every `syncplay-two-peer-*.test.ts` sibling, itself
+  included, and pins how many `goToEpisode(` call sites each one holds against
+  source with comments and string *bodies* blanked. On the trunk it landed on,
+  raw text over the glob returned 13 where the blanked form returned 10, so the
+  form the number is a census *of* is half the claim; only the blanked half is
+  pinned, and the guard's own prose names the call often enough to have raised
+  the raw half already. The blanking pass is quote-aware because that decides
+  the number rather than refining it: the glob carries 16 `harness://` literals,
+  and a quote-unaware `//` rule truncates one mid-expression, leaves the quote
+  open and swallows forward over real call sites — fewer than 10, and the
+  adoption file's only site reads 0. The pin is the per-file map rather than
+  the total for the same reason, so that variant reads `adoption: expected 1,
+  got 0` instead of a bare total inviting whoever it reds to re-derive the pin
+  downward against a file the scan can no longer see at all. A second case in
+  that `describe` classifies those sites rather than counting them: each one
+  must read `await` followed by an unconstrained member chain, so `await host.`,
+  `await even.switcher.` and the `await expect(…).rejects` wrapper all pass,
+  while a dropped `await` reds naming the offending `file:line` and the line's
+  own source text. The chain is unconstrained deliberately — none of the ten
+  sites reads `await goToEpisode(` verbatim, so hardcoding one receiver would
+  red the other four shapes. A call Prettier reflowed so that `await` sits on
+  the preceding line reds as unclassifiable rather than being skipped, which is
+  the direction a source-text scan has to fail in. And
   `syncplay-seek-crossfire.test.ts` is the first scenario on it. Eight more
   scenario files sit on the same harness — the count read "six" while seven
   were listed, because #368 added the in-flight-seek file without moving it:

@@ -13,7 +13,7 @@
 // split into unambiguous failures plus a heuristic that only warns — and two
 // pinned counts, which are what give the warn teeth and what stop the gate
 // from passing by seeing nothing. A printed-only number is the shape check
-// docs/testing.md:318 ("it is never the assertion that catches set rot")
+// docs/testing.md:342 ("it is never the assertion that catches set rot")
 // warns about: nobody diffs it.
 //
 // The one case where meaning *is* decidable is #366's marked form: a citation
@@ -29,7 +29,7 @@ import { basename, extname } from 'node:path'
 
 // --- pins ---------------------------------------------------------------------
 //
-// Exact-match assertions, per docs/testing.md:308 ("Pin the count, never just
+// Exact-match assertions, per docs/testing.md:332 ("Pin the count, never just
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 
@@ -42,6 +42,19 @@ import { basename, extname } from 'node:path'
 // heuristic's measured false-positive rate here is zero. The first genuinely
 // deliberate comment landing raises this by one, with its reason.
 //
+// #390 is that first case and it brings three at once, all of them anchors in
+// the `blankCommentsAndStrings` docstring in the two-peer loop test. That
+// guard's subject *is* which `goToEpisode(` matches are comments rather than
+// call sites, so its worked examples can only be comment lines: two are the
+// prose matches it must not count, in the episode-change sibling, and the third
+// is the quote-awareness clause it re-implements rather than lifts, in the
+// player-lifecycle-scope docstring. Pointing any of the three at neighbouring
+// code would name a line the prose does not mean, which is the failure this
+// heuristic exists to catch. Deliberately written without anchors of their own:
+// citing the three targets here would land on the same comment lines again and
+// double the count this pin is trying to state. They are the only comment
+// landings on this tree, so a fourth still reds.
+//
 // What this pin does not cover, and what `resolved` does not attest: an anchor
 // landing on a live code line is checked for existence only. The four
 // same-file anchors in the `suspiciousLanding()` comment below all target
@@ -52,7 +65,7 @@ import { basename, extname } from 'node:path'
 // each at its neighbour's test, green and wrong. #345 kept them for the
 // inbound-anchor coverage on the record that `resolved` counts anchors that
 // resolve, not anchors that are checked.
-export const SUSPICIOUS_LANDING_PIN = 0
+export const SUSPICIOUS_LANDING_PIN = 3
 
 // Anchors that name something in this repo and still cannot be checked:
 // basenames carried by more than one tracked file, plus pathless `:NNN`
@@ -267,9 +280,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:268 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:281 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:292 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:305 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -278,8 +291,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:291 and the `<!--` test at
-  // scripts/check-line-citations.mjs:297 have no measured false positive in
+  // scripts/check-line-citations.mjs:304 and the `<!--` test at
+  // scripts/check-line-citations.mjs:310 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and

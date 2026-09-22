@@ -926,15 +926,22 @@ describe('goToEpisode() call sites across the two-peer glob', () => {
   it('awaits every call site in the census, naming any that is not', () => {
     const sites = classifiedSites()
 
+    const offenders = sites.filter((s) => !s.awaited).map((s) => `${s.path}:${s.line}  ${s.text}`)
+
     // A shape check on the layering, not the assertion — the census above is
     // that, and this only says the classifier walked the same set it pinned.
     // Derived from the map rather than re-pinning 10, so the two cannot drift.
+    // It carries the offender list because it fires *first*: an eleventh,
+    // un-awaited site trips this count before the named-offender assertion
+    // below ever runs, and naming the line is the whole point of the guard.
     const pinnedTotal = Object.values(BLANKED_CENSUS).reduce((a, b) => a + b, 0)
-    expect(sites, 'the classifier and the census disagree on the site set').toHaveLength(
-      pinnedTotal
-    )
-
-    const offenders = sites.filter((s) => !s.awaited).map((s) => `${s.path}:${s.line}  ${s.text}`)
+    expect(
+      sites,
+      [
+        'the classifier and the census disagree on the site set',
+        ...offenders.map((o) => `  ${o}`)
+      ].join('\n')
+    ).toHaveLength(pinnedTotal)
 
     expect(
       offenders,

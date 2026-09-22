@@ -188,11 +188,11 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   the raw half already. The blanking pass is quote-aware because that decides
   the number rather than refining it: the glob carries 16 `harness://` literals,
   and a quote-unaware `//` rule truncates one mid-expression, leaves the quote
-  open and swallows forward over real call sites — 8 instead of 10, with the
-  adoption file's only site reading 0. The pin is the per-file map rather than
+  open and swallows forward over real call sites — fewer than 10, and the
+  adoption file's only site reads 0. The pin is the per-file map rather than
   the total for the same reason, so that variant reads `adoption: expected 1,
   got 0` instead of a bare total inviting whoever it reds to re-derive the pin
-  down to 8 against a file the scan can no longer see at all. A second case in
+  downward against a file the scan can no longer see at all. A second case in
   that `describe` classifies those sites rather than counting them: each one
   must read `await` followed by an unconstrained member chain, so `await host.`,
   `await even.switcher.` and the `await expect(…).rejects` wrapper all pass,

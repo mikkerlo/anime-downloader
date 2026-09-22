@@ -192,7 +192,16 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   adoption file's only site reading 0. The pin is the per-file map rather than
   the total for the same reason, so that variant reads `adoption: expected 1,
   got 0` instead of a bare total inviting whoever it reds to re-derive the pin
-  down to 8 against a file the scan can no longer see at all. And
+  down to 8 against a file the scan can no longer see at all. A second case in
+  that `describe` classifies those sites rather than counting them: each one
+  must read `await` followed by an unconstrained member chain, so `await host.`,
+  `await even.switcher.` and the `await expect(…).rejects` wrapper all pass,
+  while a dropped `await` reds naming the offending `file:line` and the line's
+  own source text. The chain is unconstrained deliberately — none of the ten
+  sites reads `await goToEpisode(` verbatim, so hardcoding one receiver would
+  red the other four shapes. A call Prettier reflowed so that `await` sits on
+  the preceding line reds as unclassifiable rather than being skipped, which is
+  the direction a source-text scan has to fail in. And
   `syncplay-seek-crossfire.test.ts` is the first scenario on it. Eight more
   scenario files sit on the same harness — the count read "six" while seven
   were listed, because #368 added the in-flight-seek file without moving it:

@@ -220,10 +220,11 @@ describe('two-peer syncplay harness', () => {
   // The ten guards below — every remaining `it` in *this* `describe` — are about
   // the harness as an instrument rather than about the loop: each one pins a way
   // it used to mismodel or silently degrade, and each fails on the previous
-  // behaviour. #390's call-site census is a second top-level `describe` at the
-  // foot of the file rather than an eleventh guard here, and the scoping clause
-  // is the reason this count did not have to move for it: it reads source text,
-  // not the harness. Counting `it(` from here to EOF now gives eleven.
+  // behaviour. #390's call-site guards are a second top-level `describe` at the
+  // foot of the file rather than an eleventh and twelfth case here, and the
+  // scoping clause is the reason this count did not have to move for them: they
+  // read source text, not the harness. Counting `it(` from here to EOF gives
+  // twelve.
   it('reports the in-flight seek target, not the pre-write position', () => {
     // The harness used to freeze the reading at the pre-write position for the
     // whole flight, and the crossfire fixture was built on that: a laggard
@@ -374,7 +375,7 @@ describe('two-peer syncplay harness', () => {
     // here, and refreshing it would quietly turn it into a claim about one that
     // does. The counterfactual that shipped with
     // the rename covers the opt-out at
-    // `syncplay-two-peer-loop.test.ts:287 ("bindGapMs: 0")`, which shows the zero
+    // `syncplay-two-peer-loop.test.ts:288 ("bindGapMs: 0")`, which shows the zero
     // gap stayed reachable — not that the default it opts out of is the right one.
     //
     // "Reload site" rather than "seat", because the two populations differ and
@@ -688,7 +689,7 @@ describe('two-peer syncplay harness', () => {
 //
 // This census is the whole of the first half and stands on its own: how many
 // call sites exist, per file, before anything classifies them. Per
-// `docs/testing.md:323 ("Pin the count, never just loop over the set")` a scan
+// `docs/testing.md:332 ("Pin the count, never just loop over the set")` a scan
 // that only walks the occurrences it finds goes green on an eleventh site it
 // never sees, so the count is the assertion and the prefix check is layered on
 // top of it.
@@ -723,7 +724,7 @@ const CALL_NEEDLE = 'goToEpisode('
  * raw matches were not call sites —
  * `test/services/syncplay-two-peer-episode-change.test.ts:260` and
  * `test/services/syncplay-two-peer-episode-change.test.ts:496` are
- * prose, and `test/services/syncplay-two-peer-loop.test.ts:660` is the expected
+ * prose, and `test/services/syncplay-two-peer-loop.test.ts:661` is the expected
  * error string of the rejection guard whose call site on the line *above* it
  * must stay counted. That adjacency is the sharpest single test of this pass.
  * Those two numbers are historical and deliberately not pinned anywhere: this
@@ -740,9 +741,9 @@ const CALL_NEEDLE = 'goToEpisode('
  * comment, and that is not a refinement — it decides the number. The glob
  * carries 16 `harness://` string literals — the mention on this line is prose,
  * not a seventeenth — at
- * `test/services/syncplay-two-peer-loop.test.ts:551`,
- * `test/services/syncplay-two-peer-loop.test.ts:572`,
- * `test/services/syncplay-two-peer-loop.test.ts:620`,
+ * `test/services/syncplay-two-peer-loop.test.ts:552`,
+ * `test/services/syncplay-two-peer-loop.test.ts:573`,
+ * `test/services/syncplay-two-peer-loop.test.ts:621`,
  * `test/services/syncplay-two-peer-adoption.test.ts:242`,
  * `test/services/syncplay-two-peer-adoption.test.ts:330` and elsewhere. A
  * quote-unaware `//` rule truncates `toEqual(['harness:` mid-expression and
@@ -759,10 +760,12 @@ const CALL_NEEDLE = 'goToEpisode('
  * Inherited precondition, and the reason it is written down: a regex literal
  * carrying a quote, a `//` or a `/*` desynchronises this pass, silently. It
  * holds on this tree — the only regex literals in the glob are
- * `test/services/syncplay-two-peer-loop.test.ts:315` and
- * `test/services/syncplay-two-peer-loop.test.ts:325`, and neither
- * `/not re-entrant/` nor `/whole number of slices/` carries any of the three —
- * and this guard's own needle keeps it that way. A fact about the current glob,
+ * `test/services/syncplay-two-peer-loop.test.ts:316`,
+ * `test/services/syncplay-two-peer-loop.test.ts:326` and `AWAITED_PREFIX`
+ * below, and neither `/not re-entrant/` nor `/whole number of slices/` carries
+ * any of the three, nor does the classifier's own prefix pattern — the note
+ * beside it says so, because it is the one literal here that could plausibly
+ * grow a quote. A fact about the current glob,
  * not a property anything enforces. A template substitution containing a
  * backtick would desynchronise it the same way; the three `${…}` in this file
  * are ordinary one-level interpolations.
@@ -851,6 +854,48 @@ const BLANKED_CENSUS: Record<string, number> = {
   loop: 4
 }
 
+// The text between `await` and the call, anchored to end at the call. The member
+// chain is deliberately unconstrained: none of the ten sites reads `await
+// goToEpisode(` verbatim, and they do not share one receiver either — five are
+// `await switcher.`, one is `await host.`, two are `await even.switcher.` and
+// `await odd.switcher.`, and the rejection guard is wrapped in `await expect(`.
+// Hardcoding any one of those reds the other shapes, so the rule is `await` plus
+// a chain rather than `await` plus a name.
+//
+// Carries no quote, no `//` and no `/*`, which is the precondition
+// `blankCommentsAndStrings` documents above: this regex literal has to stay
+// inert under the pass that scans this very file.
+const AWAITED_PREFIX = /\bawait\s+(?:expect\s*\(\s*)?(?:[A-Za-z_$][\w$]*\s*\.\s*)*$/
+
+type CallSite = { path: string; line: number; text: string; awaited: boolean }
+
+// Occurrences are found in the blanked text, so a comment or a string can never
+// become a site, and classified from the blanked text too, so the prefix is real
+// code. Only the reported `text` comes from the raw line — offsets survive
+// blanking, so the two stay aligned, and a reader gets the line as written.
+const classifiedSites = (): CallSite[] => {
+  const sites: CallSite[] = []
+  for (const s of SIBLINGS) {
+    const blanked = s.blanked.split('\n')
+    const raw = s.raw.split('\n')
+    blanked.forEach((line, idx) => {
+      let from = 0
+      for (;;) {
+        const at = line.indexOf(CALL_NEEDLE, from)
+        if (at === -1) break
+        sites.push({
+          path: s.path,
+          line: idx + 1,
+          text: raw[idx].trim(),
+          awaited: AWAITED_PREFIX.test(line.slice(0, at))
+        })
+        from = at + CALL_NEEDLE.length
+      }
+    })
+  }
+  return sites
+}
+
 describe('goToEpisode() call sites across the two-peer glob', () => {
   it('finds exactly the pinned per-file census in comment- and string-blanked source', () => {
     expect(
@@ -876,5 +921,46 @@ describe('goToEpisode() call sites across the two-peer glob', () => {
         'purpose and which reds this literal until someone re-derives it.'
       ].join('\n')
     ).toEqual(BLANKED_CENSUS)
+  })
+
+  it('awaits every call site in the census, naming any that is not', () => {
+    const sites = classifiedSites()
+
+    // A shape check on the layering, not the assertion — the census above is
+    // that, and this only says the classifier walked the same set it pinned.
+    // Derived from the map rather than re-pinning 10, so the two cannot drift.
+    const pinnedTotal = Object.values(BLANKED_CENSUS).reduce((a, b) => a + b, 0)
+    expect(sites, 'the classifier and the census disagree on the site set').toHaveLength(
+      pinnedTotal
+    )
+
+    const offenders = sites.filter((s) => !s.awaited).map((s) => `${s.path}:${s.line}  ${s.text}`)
+
+    expect(
+      offenders,
+      [
+        `A \`${CALL_NEEDLE}\` call site is not awaited.`,
+        '',
+        ...offenders.map((o) => `  ${o}`),
+        '',
+        'Accepted shapes, and the chain between `await` and the call is',
+        'unconstrained — `await peer.`, `await even.switcher.` and a bare',
+        '`await goToEpisode(` all pass:',
+        '  1. `await <member chain>goToEpisode(`',
+        '  2. `await expect(<member chain>goToEpisode(` — the rejection-guard',
+        '     wrapper, `await expect(...).rejects.toThrow(...)`.',
+        '',
+        'A third shape is legitimate JavaScript and is rejected here on purpose:',
+        'detaching the promise and awaiting it later, `const p = peer.goToEpisode(`',
+        '…; `await p`. Nothing in the glob uses it, so this is a choice rather',
+        'than an oversight — if you meant to write it, widen this guard',
+        'deliberately rather than reaching for it to get green.',
+        '',
+        'A site is also reported when it cannot be classified at all — a call',
+        'Prettier reflowed so that `await` sits on the preceding line reds here',
+        'rather than being skipped, which is the direction a source-text scan has',
+        'to fail in.'
+      ].join('\n')
+    ).toEqual([])
   })
 })

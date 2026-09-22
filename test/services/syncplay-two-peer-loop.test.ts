@@ -22,6 +22,8 @@
 // sharper for that, and duplicating them here would buy a slower copy.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync, readdirSync } from 'fs'
+import { resolve } from 'path'
 import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { createTwoPeerRoom, HarnessVideo } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -215,9 +217,13 @@ describe('two-peer syncplay harness', () => {
     )
   })
 
-  // The ten guards below are about the harness as an instrument rather than
-  // about the loop: each one pins a way it used to mismodel or silently degrade,
-  // and each fails on the previous behaviour.
+  // The ten guards below — every remaining `it` in *this* `describe` — are about
+  // the harness as an instrument rather than about the loop: each one pins a way
+  // it used to mismodel or silently degrade, and each fails on the previous
+  // behaviour. #390's call-site census is a second top-level `describe` at the
+  // foot of the file rather than an eleventh guard here, and the scoping clause
+  // is the reason this count did not have to move for it: it reads source text,
+  // not the harness. Counting `it(` from here to EOF now gives eleven.
   it('reports the in-flight seek target, not the pre-write position', () => {
     // The harness used to freeze the reading at the pre-write position for the
     // whole flight, and the crossfire fixture was built on that: a laggard
@@ -368,7 +374,7 @@ describe('two-peer syncplay harness', () => {
     // here, and refreshing it would quietly turn it into a claim about one that
     // does. The counterfactual that shipped with
     // the rename covers the opt-out at
-    // `syncplay-two-peer-loop.test.ts:281 ("bindGapMs: 0")`, which shows the zero
+    // `syncplay-two-peer-loop.test.ts:287 ("bindGapMs: 0")`, which shows the zero
     // gap stayed reachable — not that the default it opts out of is the right one.
     //
     // "Reload site" rather than "seat", because the two populations differ and
@@ -665,5 +671,210 @@ describe('two-peer syncplay harness', () => {
     expect(switcher.episode()).toBe('7')
     expect(switcher.el.loads).toEqual(['harness://initial'])
     expect(switcher.el.readyState).toBe(1)
+  })
+})
+
+// --- the `goToEpisode()` call-site census (#390) -----------------------------
+//
+// Four of the guards above rule out the pre-#384 ordering, and each drives its
+// own correctly-awaited call — so deleting one `await` anywhere else in the glob
+// restores that ordering on the site that lost it while all four stay green.
+// Nothing in the toolchain catches that, which was checked rather than assumed:
+// `eslint.config.mjs:22 ("...tseslint.configs.recommended,")` is the untyped
+// preset, and `eslint.config.mjs:29 ("parserOptions: {")` carries no `project`
+// or `projectService`, so `no-floating-promises` cannot be turned on as
+// configured; `npm run typecheck` is indifferent to a dropped `await` on a
+// `Promise<void>`.
+//
+// This census is the whole of the first half and stands on its own: how many
+// call sites exist, per file, before anything classifies them. Per
+// `docs/testing.md:323 ("Pin the count, never just loop over the set")` a scan
+// that only walks the occurrences it finds goes green on an eleventh site it
+// never sees, so the count is the assertion and the prefix check is layered on
+// top of it.
+//
+// The census is per-file rather than a single total on purpose. A subtly wrong
+// blanking pass reads `adoption: expected 1, got 0` — unmistakably a stripper
+// bug — where a bare total reads `expected 10, got 8` next to a message
+// inviting whoever sees it to re-derive the pin to 8, which is exactly the *no
+// unguarded sites* versus *no sites at all* confusion the rule above is about.
+//
+// Unrelated, and named here because the issue title says "every call site":
+// `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
+// — a different function, called un-awaited on purpose at
+// `src/renderer/src/components/views/PlayerView.vue:1783`,
+// `src/renderer/src/components/views/PlayerView.vue:1786` and
+// `src/renderer/src/components/views/PlayerView.vue:2442`.
+// Nothing in this glob reaches it and nothing here should grow to cover it.
+
+const SIBLING_PREFIX = 'syncplay-two-peer-'
+const SIBLING_SUFFIX = '.test.ts'
+const CALL_NEEDLE = 'goToEpisode('
+
+/**
+ * Blanks every comment and every string *body* in one left-to-right pass,
+ * keeping newlines and the string delimiters so that byte offsets — and
+ * therefore line numbers — survive for the `file:line` reporting below.
+ *
+ * Both halves are load-bearing and the comment half is the harder one.
+ *
+ * Comments: raw text carries matches that are not call sites, and did before
+ * this guard added any of its own. On trunk `f33fac1d`, three of the thirteen
+ * raw matches were not call sites —
+ * `test/services/syncplay-two-peer-episode-change.test.ts:260` and
+ * `test/services/syncplay-two-peer-episode-change.test.ts:496` are
+ * prose, and `test/services/syncplay-two-peer-loop.test.ts:660` is the expected
+ * error string of the rejection guard whose call site on the line *above* it
+ * must stay counted. That adjacency is the sharpest single test of this pass.
+ * Those two numbers are historical and deliberately not pinned anywhere: this
+ * docstring and the failure message below name the call often enough that the
+ * live raw count is now well above 13, which is exactly why `RAW_CENSUS` is
+ * reported and never asserted.
+ *
+ * Strings: this also neutralises `CALL_NEEDLE` and every failure message that
+ * quotes it, which is why the host file stays in the glob. Excluding it instead
+ * would drop the loop file's own four sites — 40% of the census — from the
+ * guard, so the two are not interchangeable.
+ *
+ * The pass is quote-aware, i.e. a `//` inside a string literal does not open a
+ * comment, and that is not a refinement — it decides the number. The glob
+ * carries 16 `harness://` string literals — the mention on this line is prose,
+ * not a seventeenth — at
+ * `test/services/syncplay-two-peer-loop.test.ts:551`,
+ * `test/services/syncplay-two-peer-loop.test.ts:572`,
+ * `test/services/syncplay-two-peer-loop.test.ts:620`,
+ * `test/services/syncplay-two-peer-adoption.test.ts:242`,
+ * `test/services/syncplay-two-peer-adoption.test.ts:330` and elsewhere. A
+ * quote-unaware `//` rule truncates `toEqual(['harness:` mid-expression and
+ * leaves an unterminated quote that the string pass then swallows forward across
+ * real call sites: measured on this tree, that variant reports 8 rather than 10
+ * and takes the adoption file's only site to 0. This is the same carve-out
+ * `test/renderer/components/player-lifecycle-scope.test.ts:90` documents for
+ * `stripComments`, re-implemented here rather than lifted —
+ * `test/renderer/components/player-lifecycle-scope.test.ts:107`'s docstring
+ * scopes that helper to one file and it copies string bodies through verbatim,
+ * so it supplies neither half on its own. Promoting it is a separate change with
+ * its own review surface.
+ *
+ * Inherited precondition, and the reason it is written down: a regex literal
+ * carrying a quote, a `//` or a `/*` desynchronises this pass, silently. It
+ * holds on this tree — the only regex literals in the glob are
+ * `test/services/syncplay-two-peer-loop.test.ts:315` and
+ * `test/services/syncplay-two-peer-loop.test.ts:325`, and neither
+ * `/not re-entrant/` nor `/whole number of slices/` carries any of the three —
+ * and this guard's own needle keeps it that way. A fact about the current glob,
+ * not a property anything enforces. A template substitution containing a
+ * backtick would desynchronise it the same way; the three `${…}` in this file
+ * are ordinary one-level interpolations.
+ */
+function blankCommentsAndStrings(text: string): string {
+  const out = text.split('')
+  const wipe = (from: number, to: number): void => {
+    for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' '
+  }
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1
+      while (j < text.length) {
+        if (text[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (text[j] === ch) break
+        j++
+      }
+      // Body only — the delimiters stay, so offsets do not shift.
+      wipe(i + 1, j)
+      i = j + 1
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      const nl = text.indexOf('\n', i)
+      const end = nl === -1 ? text.length : nl
+      wipe(i, end)
+      i = end
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2)
+      const end = close === -1 ? text.length : close + 2
+      wipe(i, end)
+      i = end
+      continue
+    }
+    i++
+  }
+  return out.join('')
+}
+
+const SIBLINGS = readdirSync(__dirname)
+  .filter((f) => f.startsWith(SIBLING_PREFIX) && f.endsWith(SIBLING_SUFFIX))
+  .sort()
+  .map((f) => {
+    const raw = readFileSync(resolve(__dirname, f), 'utf8')
+    return {
+      path: 'test/services/' + f,
+      key: f.slice(SIBLING_PREFIX.length, f.length - SIBLING_SUFFIX.length),
+      raw,
+      blanked: blankCommentsAndStrings(raw)
+    }
+  })
+
+const occurrences = (text: string): number => text.split(CALL_NEEDLE).length - 1
+
+const censusOf = (pick: (s: (typeof SIBLINGS)[number]) => string): Record<string, number> => {
+  const out: Record<string, number> = {}
+  for (const s of SIBLINGS) {
+    const n = occurrences(pick(s))
+    if (n > 0) out[s.key] = n
+  }
+  return out
+}
+
+// Derived inside the run rather than pinned, because pinning it would red on the
+// prose that legitimately names the call — and a comment mentioning
+// `goToEpisode()` staying green is one of this guard's four mutation controls.
+// It is reported alongside the assertion so the raw/blanked split is visible to
+// whoever the pin reds, rather than being a number they cannot reproduce.
+const RAW_CENSUS = censusOf((s) => s.raw)
+
+// Derived on trunk `f33fac1d`, where raw read 13 (adoption 1, episode-change 7,
+// loop 5) and blanked read 10. Only the blanked half is a pin; this guard's own
+// prose has raised the raw half since, and is expected to. Files with no call
+// site are absent rather than zero, so a new sibling only enters this map once it
+// actually calls the helper.
+const BLANKED_CENSUS: Record<string, number> = {
+  adoption: 1,
+  'episode-change': 5,
+  loop: 4
+}
+
+describe('goToEpisode() call sites across the two-peer glob', () => {
+  it('finds exactly the pinned per-file census in comment- and string-blanked source', () => {
+    expect(
+      SIBLINGS.length,
+      `no ${SIBLING_PREFIX}*${SIBLING_SUFFIX} sibling was read`
+    ).toBeGreaterThan(0)
+
+    const blanked = censusOf((s) => s.blanked)
+
+    expect(
+      blanked,
+      [
+        `The per-file \`${CALL_NEEDLE}\` census moved.`,
+        `  raw, unblanked (informational): ${JSON.stringify(RAW_CENSUS)}`,
+        `  blanked (the assertion):        ${JSON.stringify(blanked)}`,
+        `  pinned:                         ${JSON.stringify(BLANKED_CENSUS)}`,
+        `Scanned ${SIBLINGS.length} files: ${SIBLINGS.map((s) => s.path).join(', ')}`,
+        'A key that went DOWN — `adoption` reaching 0 above all — is a bug in',
+        '`blankCommentsAndStrings`, not a census change. Fix the pass; do not',
+        're-derive the pin to match it.',
+        'A key that went UP, or a new key, is a real change: a new call site, or a',
+        `new ${SIBLING_PREFIX}*${SIBLING_SUFFIX} file, which this glob picks up on`,
+        'purpose and which reds this literal until someone re-derives it.'
+      ].join('\n')
+    ).toEqual(BLANKED_CENSUS)
   })
 })

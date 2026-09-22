@@ -940,7 +940,7 @@ describe('goToEpisode() call sites across the two-peer glob', () => {
       [
         'the classifier and the census disagree on the site set',
         ...offenders.map((o) => `  ${o}`),
-        ''
+        '' // keeps Vitest's `: expected …` suffix off the last offender's source text
       ].join('\n')
     ).toHaveLength(pinnedTotal)
 

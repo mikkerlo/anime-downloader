@@ -312,28 +312,28 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // than demand one of its two branches. Bisected edges, 1000 ms apart and
   // recurring: 4000 / 4001, 5000 / 5001.
   //
-  // THE MEASURED RANGE IS [4000, 11000], and that is a floor as well as a
-  // ceiling. Nothing below 4000 has been swept, so the form is claimed only
-  // inside it; "both ceilings" does not mean "everything under them".
+  // THE MEASURED RANGE IS [4000, 11000], but the form's validated range is only
+  // [4000, 10000] — the top tick is swept and out of regime. Nothing below 4000
+  // has been swept; "both ceilings" does not mean "everything under them".
   //
   // TWO CEILINGS, AND THEY FAIL DIFFERENTLY. The signature is how to tell them
   // apart at a glance if someone widens the set:
   //
-  //   * Window ceiling, METADATA_MS of about 11000 and up — already enforced.
-  //     The driver (test/services/syncplay-mirror-election.test.ts:385 ("run(12, (c) => {"))
-  //     caps the wall clock at 15000, so above it the metadata write never lands
-  //     and the case reds on adoption itself
-  //     (test/services/syncplay-mirror-election.test.ts:400 ("expect(joiner.getStatus().playbackAdopted).toBe(true)")),
-  //     with `expected false to be true`. That is the window running out, not
-  //     the parity rule breaking.
   //   * Regime ceiling, METADATA_MS at most 10000 (T at most 13000) — enforced
   //     by the relation and by nothing else. Past it the room reflects the
   //     just-adopted element directly instead of through the two-tick chain,
   //     q340 snaps to exactly 1, and q340 - q337 goes to -0.95. Measured: 10000
   //     passes, 10001 is the first failure, and it reds on
   //     (test/services/syncplay-mirror-election.test.ts:444 ("regime: q340 = q337 + 1"))
-  //     rather than on a prediction. From METADATA_MS of 12000 adoption fails
-  //     outright and the red moves back to the window signature above.
+  //     rather than on a prediction. The band it owns is exactly one tick wide:
+  //     11000 still reds there, 11001 no longer does.
+  //   * Window ceiling, METADATA_MS of 11001 and up — already enforced, and it
+  //     is two mechanisms under one red. Through 12000 the element IS written
+  //     (q337 = 2.0000000476836703); the write just lands on the driver's last
+  //     tick with none left to converge. From 12001 the 15000 ms cap
+  //     (test/services/syncplay-mirror-election.test.ts:385 ("run(12, (c) => {"))
+  //     stops the write landing at all and q337 jumps to 615. Both red on
+  //     (test/services/syncplay-mirror-election.test.ts:400 ("expect(joiner.getStatus().playbackAdopted).toBe(true)")) with `expected false to be true`.
   //
   // THE PRECISION WINDOW is two-sided, which is why PARITY_PRECISION is chosen
   // rather than defaulted. Below: one ULP at the fixture epoch, 2**-22 =

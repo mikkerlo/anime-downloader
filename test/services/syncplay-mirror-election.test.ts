@@ -443,6 +443,25 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // after them.
       expect(q340 - q337, 'regime: q340 = q337 + 1').toBeCloseTo(1, PARITY_PRECISION)
 
+      // The even arm's `- DELAY_MS / 1000` term is contingent on a known
+      // infidelity in the fixture, named here because two independent changes
+      // destroy it and neither is a production regression. The helper answers
+      // `Hello` with only `Hello`
+      // (test/helpers/syncplay-min-election-server.ts:524 ("if ('Hello' in msg) {")),
+      // where the reference server schedules a State just after the handshake.
+      // Add that join-time State — the same playstate the periodic broadcast
+      // builds — and all eight cells collapse to q337 = 2.0000000476836703 and
+      // q340 = 3.0000000476836703 with no even/odd split at all: the five
+      // even-tick cells red on this assertion, the three odd ones stay green
+      // because the bare 2/3 is exactly what the collapse lands on, and the
+      // q340 = q337 + 1 regime survives in all eight. Measured in both
+      // configurations, and again with the State deferred 100 ms to match the
+      // reference's schedule rather than sent at handshake time — identical.
+      // #384's proposed stamp move removes the same term by a different route,
+      // taking the even cells to 3 and 4 plus the residue, so it gains a room
+      // tick as well. If these five cells red, read the helper before looking
+      // for a convergence change in src/: the repair in both cases is to drop
+      // this term and predict the bare 2/3.
       expect(q337, 'predicted q337').toBeCloseTo(
         evenTick ? 2 - DELAY_MS / 1000 : 2,
         PARITY_PRECISION

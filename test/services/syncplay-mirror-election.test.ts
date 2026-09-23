@@ -289,63 +289,188 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     expect(Math.abs(seed! - trueRoomPosition())).toBeLessThan(ADOPT_TOLERANCE_S)
   })
 
-  it('lets the joiner converge and adopt once its element can honour a write', () => {
-    const { host, joiner, frames } = joinAPlayingRoom()
+  // #394 — METADATA_MS is phase-critical, so it is a parameter with a predicted
+  // value rather than a magic number that happened to land green. Five seconds
+  // was an ordinary MKV prep (probe plus the remux spawn and its buffer-ahead);
+  // the set below is that span swept either way across the transition.
+  //
+  // THE CLOSED FORM. The element write can only land on a whole second, because
+  // `metadataAt` is only ever tested inside a `snapshotOf` callback that `run()`
+  // invokes on its 1 Hz gate
+  // (test/services/syncplay-mirror-election.test.ts:129 ("if (sinceSnapshot >= 1000)")),
+  // and `joinAPlayingRoom()` has already spent 3000 ms
+  // (test/services/syncplay-mirror-election.test.ts:196 ("run(3, (c) => (c === host ?
+  // trueRoomPosition() : null))")). So the write tick is
+  //
+  //     T = 1000 * Math.ceil((3000 + METADATA_MS) / 1000)
+  //
+  // and the room lands one one-way delay low iff `T / 1000` is even — the park
+  // is always exactly one tick stale, so the joiner wins the election iff it won
+  // two seconds earlier, a period-2000 ms recursion. Five of the eight values
+  // are even-tick (4001, 4500, 5000, 6500, 7000) and three odd (4000, 5500,
+  // 6000); all eight are green, because the assertions predict the phase rather
+  // than demand one of its two branches. Bisected edges, 1000 ms apart and
+  // recurring: 4000 / 4001, 5000 / 5001.
+  //
+  // THE MEASURED RANGE IS [4000, 11000], and that is a floor as well as a
+  // ceiling. Nothing below 4000 has been swept, so the form is claimed only
+  // inside it; "both ceilings" does not mean "everything under them".
+  //
+  // TWO CEILINGS, AND THEY FAIL DIFFERENTLY. The signature is how to tell them
+  // apart at a glance if someone widens the set:
+  //
+  //   * Window ceiling, METADATA_MS of about 11000 and up — already enforced.
+  //     The driver (test/services/syncplay-mirror-election.test.ts:385 ("run(12, (c) => {"))
+  //     caps the wall clock at 15000, so above it the metadata write never lands
+  //     and the case reds on adoption itself
+  //     (test/services/syncplay-mirror-election.test.ts:400 ("expect(joiner.getStatus().playbackAdopted).toBe(true)")),
+  //     with `expected false to be true`. That is the window running out, not
+  //     the parity rule breaking.
+  //   * Regime ceiling, METADATA_MS at most 10000 (T at most 13000) — enforced
+  //     by the relation and by nothing else. Past it the room reflects the
+  //     just-adopted element directly instead of through the two-tick chain,
+  //     q340 snaps to exactly 1, and q340 - q337 goes to -0.95. Measured: 10000
+  //     passes, 10001 is the first failure, and it reds on
+  //     (test/services/syncplay-mirror-election.test.ts:444 ("regime: q340 = q337 + 1"))
+  //     rather than on a prediction. From METADATA_MS of 12000 adoption fails
+  //     outright and the red moves back to the window signature above.
+  //
+  // THE PRECISION WINDOW is two-sided, which is why PARITY_PRECISION is chosen
+  // rather than defaulted. Below: one ULP at the fixture epoch, 2**-22 =
+  // 2.384e-7 — this is the binding floor, and it puts precision 7 (5e-8) and 8
+  // (5e-9) *outside* the window, not merely close to its edge. Neither is a
+  // tighter configuration available at a cost; both red the ULP guard before any
+  // prediction runs, so a tighter-precision argument cannot be load-bearing. The
+  // float residue those quantities carry at DELAY_MS = 50 is 4.77e-8, a fifth of
+  // one ULP, so it is bounded by the floor above rather than setting it. Above:
+  // 0.05, `DELAY_MS / 1000`, the gap the tolerance must stay under to
+  // discriminate at all. PARITY_PRECISION = 4 (5e-5) sits three orders under the
+  // top and three over the floor, where the default 2 sits one order from the
+  // top. Both ends are asserted in the body, so neither decays into a comment.
+  //
+  // ORDERING IS GENERAL TO SPECIFIC, and anything added later goes BELOW the
+  // assertions in the body rather than after them. Vitest reports only the first
+  // failure per test: the guards run before the relation and the relation before
+  // the predictions, and appending past the predictions masks the regime control
+  // described above.
+  it.each([4000, 4001, 4500, 5000, 5500, 6000, 6500, 7000])(
+    'lets the joiner converge and adopt once its element can honour a write (%d ms)',
+    (METADATA_MS) => {
+      const { host, joiner, frames } = joinAPlayingRoom()
 
-    // The joiner's element, with the one piece of production timing that
-    // decides whether a *single* frame is enough: it cannot honour a
-    // `currentTime` write until `loadedmetadata`. Below HAVE_METADATA the
-    // renderer parks the state instead (#240) and **overwrites** the park with
-    // each newer one, so what lands at metadata is the freshest state main
-    // emitted — not the first. Five seconds is an ordinary MKV prep (probe plus
-    // the remux spawn and its buffer-ahead), and it is the difference between
-    // "the room told us once, a while ago" and "the room is telling us now".
-    const METADATA_MS = 5000
-    const metadataAt = Date.now() + METADATA_MS
-    let element: { position: number; at: number } | null = null
-    let parked: SyncplayRemoteState | null = null
-    const elementPosition = (): number =>
-      element === null ? 0 : element.position + (Date.now() - element.at) / 1000
+      // The joiner's element, with the one piece of production timing that
+      // decides whether a *single* frame is enough: it cannot honour a
+      // `currentTime` write until `loadedmetadata`. Below HAVE_METADATA the
+      // renderer parks the state instead (#240) and **overwrites** the park with
+      // each newer one, so what lands at metadata is the freshest state main
+      // emitted — not the first. It is the difference between "the room told us
+      // once, a while ago" and "the room is telling us now".
+      const metadataAt = Date.now() + METADATA_MS
+      let element: { position: number; at: number } | null = null
+      let parked: SyncplayRemoteState | null = null
+      const elementPosition = (): number =>
+        element === null ? 0 : element.position + (Date.now() - element.at) / 1000
 
-    joiner.on('remote-state', (s: SyncplayRemoteState) => {
-      if (element === null) {
-        parked = s
-        return
-      }
-      // The renderer's apply rule: seek on `doSeek` or a drift over 3 s.
-      if (s.doSeek || Math.abs(elementPosition() - s.position) > 3) {
-        element = { position: s.position, at: Date.now() }
-      }
-    })
+      joiner.on('remote-state', (s: SyncplayRemoteState) => {
+        if (element === null) {
+          parked = s
+          return
+        }
+        // The renderer's apply rule: seek on `doSeek` or a drift over 3 s.
+        if (s.doSeek || Math.abs(elementPosition() - s.position) > 3) {
+          element = { position: s.position, at: Date.now() }
+        }
+      })
 
-    run(12, (c) => {
-      if (c === host) return trueRoomPosition()
-      if (element === null && Date.now() >= metadataAt) {
-        // loadedmetadata: the freshest parked state is written, once.
-        element = { position: parked ? Math.max(0, parked.position) : 0, at: Date.now() }
-      }
-      // The element exists and reports from the first push either way — at 0
-      // until the write lands, which is the drift that holds adoption off.
-      return elementPosition()
-    })
+      run(12, (c) => {
+        if (c === host) return trueRoomPosition()
+        if (element === null && Date.now() >= metadataAt) {
+          // loadedmetadata: the freshest parked state is written, once.
+          element = { position: parked ? Math.max(0, parked.position) : 0, at: Date.now() }
+        }
+        // The element exists and reports from the first push either way — at 0
+        // until the write lands, which is the drift that holds adoption off.
+        return elementPosition()
+      })
 
-    // On head this is where the joiner is stranded: the only frame it ever
-    // received arrived before it became a candidate, so the park is that many
-    // seconds stale by the time it can be written, the drift stays over
-    // `ADOPT_TOLERANCE_S`, and no later frame ever arrives to correct it.
-    expect(joiner.getStatus().playbackAdopted).toBe(true)
-    expect(Math.abs(elementPosition() - trueRoomPosition())).toBeLessThan(ADOPT_TOLERANCE_S)
-    // Adoption retires the mirror, which is what ends #279's ratchet in this
-    // scenario: the joiner asserts its own converged element from here.
-    expect(Math.abs(server.roomState().position - trueRoomPosition())).toBeLessThan(
-      ADOPT_TOLERANCE_S
-    )
-    // Anti-vacuity: adoption here is driven by the mirror frames rather than
-    // incidental to them. The bounds above hold on a reference server whether or
-    // not the mirror is heard (review of #279), so this is what keeps the case
-    // honest to its own name.
-    expect(frames.some((f) => f.setBy === null)).toBe(true)
-  })
+      // On head this is where the joiner is stranded: the only frame it ever
+      // received arrived before it became a candidate, so the park is that many
+      // seconds stale by the time it can be written, the drift stays over
+      // `ADOPT_TOLERANCE_S`, and no later frame ever arrives to correct it.
+      expect(joiner.getStatus().playbackAdopted).toBe(true)
+      expect(Math.abs(elementPosition() - trueRoomPosition())).toBeLessThan(ADOPT_TOLERANCE_S)
+
+      // Adoption retires the mirror, which is what ends #279's ratchet in this
+      // scenario: the joiner asserts its own converged element from here — at a
+      // phase the write tick decides, which is what the block below predicts
+      // rather than bounds (#394).
+      const PARITY_PRECISION = 4
+      const T = 1000 * Math.ceil((3000 + METADATA_MS) / 1000)
+      const evenTick = (T / 1000) % 2 === 0
+      const q337 = Math.abs(elementPosition() - trueRoomPosition())
+      const q340 = Math.abs(server.roomState().position - trueRoomPosition())
+
+      // Floor: the assertion discriminates only while toBeCloseTo's tolerance
+      // stays under the gap between the two predicted values. At
+      // PARITY_PRECISION = 4 the reachable trigger is the *precision*, not the
+      // delay — no integer DELAY_MS >= 1 clears a 5e-5 tolerance from below — so
+      // this reds on a named line if someone loosens the precision, instead of
+      // quietly turning discriminating cases into vacuous ones. DELAY_MS = 0 does
+      // trip it, and there this guard is also masking a structural break rather
+      // than only a precision one: at zero delay the q340 = q337 + 1 regime
+      // itself collapses (measured 1.0009999999999764). That is a reason to keep
+      // this above the parity lines, not to reorder further.
+      expect(
+        DELAY_MS / 1000,
+        'PARITY_PRECISION is too loose for DELAY_MS: the parity assertions no longer discriminate'
+      ).toBeGreaterThan(10 ** -PARITY_PRECISION / 2)
+
+      // Ceiling on the same axis: the tolerance must still clear one ULP at the
+      // fake epoch, or the assertions are measuring float noise. Reds if the
+      // precision is tightened past 6.
+      expect(
+        10 ** -PARITY_PRECISION / 2,
+        'PARITY_PRECISION is tighter than one ULP at the fixture epoch'
+      ).toBeGreaterThan(2 ** -22)
+
+      // Order is load-bearing, general to specific: Vitest reports only the FIRST
+      // failing assertion per test, so the assertion that *defines the regime*
+      // must run before the two that predict values inside it. Measured with the
+      // relation last, METADATA_MS = 10001 reds on `predicted q340: expected 1 to
+      // be close to 2.95` while q337 passes its even-tick prediction — the regime
+      // control never executes, and an out-of-regime value reads as an ordinary
+      // wrong prediction. Anything added later goes below these, not appended
+      // after them.
+      expect(q340 - q337, 'regime: q340 = q337 + 1').toBeCloseTo(1, PARITY_PRECISION)
+
+      expect(q337, 'predicted q337').toBeCloseTo(
+        evenTick ? 2 - DELAY_MS / 1000 : 2,
+        PARITY_PRECISION
+      )
+      // Replaces this case's old `toBeLessThan(ADOPT_TOLERANCE_S)` on the room,
+      // which cannot survive the odd branch: on 4000, 5500 and 6000 it is
+      // `expected 3.0000000476836703 to be less than 3`. On those ticks the case
+      // now *pins* a value 47.68 ns over the production tolerance rather than
+      // asserting it stays under — the element bound above is what keeps that
+      // honest, being the only bound left in the case that still reads
+      // ADOPT_TOLERANCE_S.
+      //
+      // The 3 is a literal on purpose. ADOPT_TOLERANCE_S is 3 as well and the two
+      // are unrelated: this 3 is 2 + 1 out of the two-tick staleness chain, so
+      // writing `ADOPT_TOLERANCE_S - DELAY_MS / 1000` would read as if the
+      // prediction were derived from the production threshold, and changing that
+      // threshold in src/ would produce reds whose stated cause was wrong.
+      expect(q340, 'predicted q340').toBeCloseTo(
+        evenTick ? 3 - DELAY_MS / 1000 : 3,
+        PARITY_PRECISION
+      )
+      // Anti-vacuity: adoption here is driven by the mirror frames rather than
+      // incidental to them. The bounds above hold on a reference server whether or
+      // not the mirror is heard (review of #279), so this is what keeps the case
+      // honest to its own name.
+      expect(frames.some((f) => f.setBy === null)).toBe(true)
+    }
+  )
 
   it('recovers the room onto the pauser’s playhead, and every election after it', () => {
     rebuildServer(NO_FORWARD_DELAY)

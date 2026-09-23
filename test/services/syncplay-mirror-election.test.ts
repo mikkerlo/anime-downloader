@@ -462,10 +462,17 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // tick as well — but it does not red on this assertion: at 3 plus the
       // residue the element bound above fails first, and the reader sees
       // `expected 3.0000000476836703 to be less than 3` rather than this note,
-      // because `predicted q337` never executes. The five even-tick cells red
-      // *here* only on the join-time State route; when they do, read the helper
-      // before looking for a convergence change in src/. The repair is the same
-      // on both routes: drop this term and predict the bare 2/3.
+      // because `predicted q337` never executes. That route reds six cases in
+      // this file, not five: the five even-tick cells on the element bound
+      // above, plus one in a different case entirely — `delivers the room to
+      // the unadopted joiner at ~1 Hz while the room plays`, whose
+      // strict-monotonicity loop
+      // (test/services/syncplay-mirror-election.test.ts:246 ("expect(positions[i]).toBeGreaterThan(positions[i - 1])"))
+      // reads `expected 602.9999999523163 to be greater than 603`. The five
+      // even-tick cells red *here* only on the join-time State route; when they
+      // do, read the helper before looking for a convergence change in src/.
+      // The repair is the same on both routes: drop this term and predict the
+      // bare 2/3.
       expect(q337, 'predicted q337').toBeCloseTo(
         evenTick ? 2 - DELAY_MS / 1000 : 2,
         PARITY_PRECISION

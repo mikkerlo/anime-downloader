@@ -1,7 +1,7 @@
-// Forced updates: `Watcher.updateState` (`server.py:783-800`) deciding that a
+// Forced updates: `Watcher.updateState` (`server.py:875-884`) deciding that a
 // client's `State` changes the room rather than reports on it, and
-// `Room.setPaused`/`Room.setPosition` (`server.py:606-617`) re-seating every
-// watcher when it does.
+// `Room.setPaused`/`Room.setPosition` (`server.py:610-613` and
+// `server.py:615-620`) re-seating every watcher when it does.
 //
 // This is the seam the client's own seek handling sits on, and the one where a
 // model that merely stored the last playstate would still look right on the
@@ -15,6 +15,7 @@ const port = inject('syncplayPort')
 
 const file = (name: string): Record<string, unknown> => ({ name, duration: 1440, size: 1 })
 const SETTLE_MS = 2600
+const PING_WAIT_MS = 4000
 
 /**
  * The playstate on a raw frame, or `null` if it carries none. Parsed rather
@@ -73,7 +74,7 @@ describe('conformance: forced updates', () => {
 
   it('lets a seek from a losing watcher override the election', async () => {
     // A forced update calls `Room.setPosition`, which writes the new position
-    // onto **every** watcher (`server.py:613-617`). The next election therefore
+    // onto **every** watcher (`server.py:616-618`). The next election therefore
     // re-reads a room where nobody is below the seek target — so the seeker
     // wins even though it lost the ordering a moment earlier. `doSeek` is the
     // only way a higher watcher moves the room.
@@ -209,5 +210,184 @@ describe('conformance: forced updates', () => {
       ]
     }
     assertConforms(await runConformance(scenario, port))
+  })
+
+  it('re-elects the room on a playstate-free frame, because the stamp is unconditional', async () => {
+    // The frame `sendAck()` sends: a `ping` and the server's own
+    // `ignoringOnTheFly` counter, with no `playstate` key at all. That frame's
+    // own comment called it "provably inert server-side" until #392, and it is
+    // not inert. `Watcher.updateState` (`server.py:875-884`) writes
+    // `self._lastUpdatedOn = time.time()` as the second of its five
+    // statements, `server.py:877`, unconditional and above the `position is
+    // not None` guard — so an accepted `State` stamps whatever else it omits.
+    // The other three statements are all conditional and a playstate-free
+    // frame skips every one of them: `handleState` passes `position`, `paused`
+    // and `doSeek` all as `None` (`protocols.py:772`, `protocols.py:780-781`),
+    // so `__hasPauseChanged` returns False at `server.py:866-867`,
+    // `setPosition` is guarded out, and `forcePositionUpdate`
+    // (`server.py:883-884`) is too.
+    //
+    // The stamp is the origin of the position projection, which is what gives
+    // the omission a consequence. `Watcher.getPosition()` (`server.py:780-787`)
+    // returns `_position` plus the time elapsed since the stamp while the room
+    // plays, and `Room.setPosition` (`server.py:615-620`) re-seats every
+    // watcher's `_position` onto the seek target without touching any stamp.
+    // After a forced update the stamp is therefore the only differing term
+    // left, the newest stamp carries the smallest elapsed term, and the `min()`
+    // in `Room.getPosition()` (`server.py:597-604`) hands the room to whoever
+    // stamped last. alpha's ping-only frame takes the room off bravo, and the
+    // room moves *backwards* to roughly where bravo's seek put it.
+    //
+    // The magnitude is `PING_WAIT_MS` rather than an incidental delay, and it
+    // is measured from bravo's stamp, not alpha's: bravo's stamp is its own
+    // acknowledgement of its seek, about a millisecond after it, and nothing
+    // re-stamps bravo before the sample. `Peer` has no heartbeat timer at all;
+    // its automatic acknowledgement is gated on an inbound `ignoringOnTheFly`,
+    // which a periodic `State` does not carry; and alpha's ping-only frame
+    // sets neither `position` nor `paused`, so `server.py:883` forces nothing
+    // off the back of it. Against the 1.6 s floor
+    // (`conformance/helpers/trace-diff.ts:54`, selected by `playing: true`)
+    // that is a floor cleared by a factor of two and a half.
+    //
+    // Which is also why this scenario may sample mid-play where
+    // `conf-forced-pause-change` above deliberately brackets the playing
+    // stretch. That note is about a sub-millisecond `_lastUpdatedOn` spread the
+    // two backends phase independently; here the gap under test dominates that
+    // spread by three orders of magnitude. The margin is this scenario's
+    // property, not an exemption from the note.
+    //
+    // **Red against the model by construction, and that red is the scenario
+    // working rather than a fixture to repair.**
+    // `test/helpers/syncplay-min-election-server.ts:640` returns above its own
+    // stamp at `test/helpers/syncplay-min-election-server.ts:661`, so a
+    // playstate-free frame genuinely is inert in the model — the mirror is
+    // faithful to the old comment rather than to the server, which is why
+    // nothing here caught the claim. Moving that stamp is #384's item 4; this
+    // goes green when it lands, and must merge with it or after it.
+    //
+    // Every step below is load-bearing, because the default failure in this
+    // scenario is not a red. It is a green that measures nothing:
+    //
+    //  - **`setFile` on both peers.** `Watcher.__lt__` is guarded at
+    //    `server.py:835` — false when self's position *or* self's `_file` is
+    //    `None` — and at `server.py:837`, true when the other side's is. Two
+    //    file-less watchers therefore compare `False` every way round and
+    //    `min()` returns insertion order, so "the newest stamp wins" would be
+    //    decided by the seating order whatever the stamps said.
+    //  - **The unpause, and from bravo.** A fresh room is `STATE_PAUSED`
+    //    (`server.py:543`) and `playing: true` only picks a tolerance; the one
+    //    thing that flips the room is `updateState`'s pause-changed branch at
+    //    `server.py:878-879`. While the room is paused `Watcher.getPosition()`
+    //    takes its `timePassedSinceSet = 0` arm (`server.py:785-786`) and the
+    //    stamp has no observable consequence whatsoever — inert on both
+    //    backends, and green. From bravo rather than alpha so that alpha's
+    //    seat-time `state` remains its only accepted frame, which is what makes
+    //    the budget below exact rather than approximate.
+    //  - **A settle between alpha's `state` and bravo's unpause.** Those two
+    //    leave different sockets, with no ordering guarantee. Serviced the
+    //    other way round, the unpause's forced update raises alpha's ignore
+    //    flag before alpha's `state` is read, `protocols.py:788` discards it,
+    //    and alpha's clock dates from `Watcher.__init__` (`server.py:734`) —
+    //    the Hello, not a scripted step. The budget below has a left-hand side
+    //    only while alpha's stamp is pinned to a step the script controls.
+    //  - **A settle between the unpause and the seek.** The unpause is itself a
+    //    forced update (`server.py:883-884`), and `broadcastRoom`
+    //    (`server.py:441-445`) iterates the room with no sender exclusion, so
+    //    bravo raises its *own* `serverIgnoringOnTheFly`
+    //    (`protocols.py:752-753`). Without the settle bravo's seek leaves the
+    //    same socket inside the same `lineReceived`, dies at
+    //    `protocols.py:788`, and the room never leaves the unpause position —
+    //    every run, not a race. Measured against the pin: no seek on the wire,
+    //    and a room sample sitting on the unpause position rather than on the
+    //    seek target. The captured pair is `701.96` without the settle against
+    //    `1201.73` with it, and the left-hand figure is the probe's, from an
+    //    instrumented run whose unpause step used `700`. This script unpauses
+    //    at `500`, so the figure it would produce is the unpause position plus
+    //    the ~2 s of play before the sample — ≈`501.96`. `1201.73` transfers
+    //    unchanged, the seek target being `1200` in both.
+    //  - **The settle before the sample.** While alpha's ignore flag is up the
+    //    server suppresses its periodic `State` to alpha (`protocols.py:761`;
+    //    `forced` broadcasts still get through, which is how alpha learns the
+    //    counter at all), so the frame carrying the re-elected position reaches
+    //    alpha only after the echo clears the flag and the next broadcast
+    //    fires. `conformance/README.md:108-112` states the rule, and states the
+    //    suppression as total rather than inbound-only.
+    //
+    // `manualAckPeers` holds alpha's automatic acknowledgement off, because an
+    // automatic one would stamp at the instant the forced update arrived —
+    // collapsing the very wait this scenario measures — and would carry a full
+    // playstate besides. **That alpha never acknowledges anything until the
+    // scripted frame is safe only by an accident of ordering upstream, one line
+    // wide.** `Watcher.setRoom` (`server.py:745-751`) issues a *forced* update
+    // at join time, and it never reaches the wire because
+    // `protocols.py:558-559` runs `addWatcher` *before* `self._logged = True`,
+    // leaving `Watcher.sendState`'s `isLogged()` guard at `server.py:859`
+    // false. Swap those two lines and alpha would hold a counter it never
+    // clears, every later alpha frame would die at `protocols.py:788`, and this
+    // scenario would go inert on both sides — green, measuring nothing.
+    //
+    // The counter alpha echoes is the *newest* one it was sent, and it is
+    // captured outside the acknowledgement gate for that reason: bravo's seek
+    // increments past the counter the unpause already handed alpha, and
+    // `protocols.py:775-777` clears the ignore window only on an exact match.
+    // A peer that kept the first counter it ever saw would echo a stale one and
+    // be discarded exactly as if it had carried none.
+    //
+    // **The drop budget, written as an inequality rather than as a figure so
+    // that moving a step means re-deriving it instead of trusting a number.** A
+    // suppressed watcher is still on a clock: `Watcher.sendState` drops it once
+    // the span since its stamp exceeds `PROTOCOL_TIMEOUT` (`server.py:861`),
+    // and that test sits *outside* the `isLogged()` guard, so the suppression
+    // above does not pause it. alpha's exposure runs from its last accepted
+    // frame to its ping-only frame, which is the two settles before the seek
+    // plus the wait after it:
+    //
+    //     2 × SETTLE_MS + PING_WAIT_MS < PROTOCOL_TIMEOUT * 1000
+    //
+    // `PROTOCOL_TIMEOUT` is 12.5 s — `constants.py:76` at
+    // `SYNCPLAY_PINNED_COMMIT` (`conformance/helpers/real-server.ts:20`),
+    // spelled out because the constant is unreachable from this repo and that
+    // anchor is one the citation gate can never resolve. The left-hand side is
+    // milliseconds, both terms being `ms:` fields, which is why the conversion
+    // belongs on the right. Keep the inequality strict and do not tune to the
+    // boundary: the drop test is sampled rather than continuous, every forced
+    // update samples it off the 1 Hz grid, and the left-hand side counts
+    // scheduled waits only, so it is a lower bound on the real span. Raising
+    // the wait past what the inequality permits does not fail loudly —
+    // measured, alpha is removed from the room before its ping goes out, its
+    // `lastPlaystate` freezes at the forced-update frame, and the scenario
+    // looks green on the thing under test.
+    const scenario: Scenario = {
+      name: 'conf-forced-ping-stamps',
+      playing: true,
+      peers: ['alpha', 'bravo'],
+      manualAckPeers: ['alpha'],
+      steps: [
+        { kind: 'seat', peer: 'alpha' },
+        { kind: 'setFile', peer: 'alpha', file: file('a.mkv') },
+        { kind: 'seat', peer: 'bravo' },
+        { kind: 'setFile', peer: 'bravo', file: file('b.mkv') },
+        { kind: 'state', peer: 'alpha', position: 500, paused: true },
+        { kind: 'wait', ms: SETTLE_MS },
+        { kind: 'state', peer: 'bravo', position: 500, paused: false },
+        { kind: 'wait', ms: SETTLE_MS },
+        { kind: 'state', peer: 'bravo', position: 1200, paused: false, doSeek: true },
+        { kind: 'wait', ms: PING_WAIT_MS },
+        { kind: 'pingOnly', peer: 'alpha' },
+        { kind: 'wait', ms: SETTLE_MS },
+        { kind: 'sample', label: "alpha's ping-only frame re-elects the room" }
+      ]
+    }
+    const run = await runConformance(scenario, port)
+    // Premises first, and deliberately *before* `assertConforms`: this scenario
+    // is red against the model until #384's item 4 lands, so a premise asserted
+    // after the comparison would be unreachable for exactly as long as it is
+    // most worth knowing.
+    //
+    // The seek reached `updateState` rather than dying inside bravo's own
+    // ignore window — the settle before it exists for this, and without it both
+    // backends agree on a room that never moved.
+    expect(run.realFrames.some((f) => f.includes('"doSeek": true'))).toBe(true)
+    assertConforms(run)
   })
 })

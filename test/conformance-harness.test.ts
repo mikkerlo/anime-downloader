@@ -8,10 +8,20 @@
 // below, which need neither and which decide whether a nightly run means
 // anything: the guard that says a missing server is an error rather than a pass,
 // and the predicate the field-coverage assertion is built on.
+//
+// #392 added a third kind: the `manualAckPeers` / `sendPingOnly` seams. Same
+// rationale, with one more turn of the screw. The nightly is red **by design**
+// until #384's item 4 moves the model's stamp, so "the nightly would have caught
+// it" is not available for this code for as long as that holds — a broken
+// `peerOptions`, or a `sendPingOnly` that dropped its counter, would be
+// invisible behind the red that is supposed to be there. None of it needs a
+// server, a socket or a wait, so it belongs on the gate that actually runs.
 
 import { describe, expect, it } from 'vitest'
 import { bootRealServer, connects, freePort } from '../conformance/helpers/real-server'
 import { COMPARED_FIELD_PATHS, reachesFieldPath } from '../conformance/helpers/trace-diff'
+import { peerOptions, type Scenario } from '../conformance/helpers/scenario'
+import { Peer, type Transport } from '../conformance/helpers/wire-peer'
 
 describe('conformance harness: freePort hands out a port nothing answers on', () => {
   it('returns a port that is already refusing, not one still answering', async () => {
@@ -117,5 +127,169 @@ describe('conformance harness: reachesFieldPath', () => {
     // A run that collected nothing must not report full coverage.
     const none = new Set<string>()
     expect(COMPARED_FIELD_PATHS.filter((p) => reachesFieldPath(none, p))).toEqual([])
+  })
+})
+
+/**
+ * A `Transport` with nothing behind it: `connect()` resolves, `send()` records,
+ * and `push()` hands one frame to whatever `Peer.seat()` registered — the same
+ * shape `RealTransport.absorb` calls the callback with. Every seam below is a
+ * synchronous decision about a single frame, so there is nothing for a server to
+ * do and nothing to wait for.
+ */
+class StubTransport implements Transport {
+  readonly sent: string[] = []
+  private cb: ((raw: string) => void) | null = null
+
+  connect(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  send(raw: string): void {
+    this.sent.push(raw)
+  }
+
+  onLine(cb: (raw: string) => void): void {
+    this.cb = cb
+  }
+
+  close(): void {
+    this.cb = null
+  }
+
+  push(obj: unknown): void {
+    this.cb?.(JSON.stringify(obj))
+  }
+
+  /** Frames sent since `mark`, parsed. `seat()`'s Hello is what `mark` skips. */
+  since(mark: number): Array<Record<string, any>> {
+    return this.sent.slice(mark).map((raw) => JSON.parse(raw) as Record<string, any>)
+  }
+}
+
+/** A forced broadcast as the reference renders it: playstate, ping, counter. */
+const forcedState = (counter: number): unknown => ({
+  State: {
+    playstate: { position: 1200, paused: false, doSeek: true, setBy: 'bravo' },
+    ping: { latencyCalculation: 1, serverRtt: 0 },
+    ignoringOnTheFly: { server: counter }
+  }
+})
+
+const seated = async (
+  name: string,
+  options: { ackForcedUpdates?: boolean }
+): Promise<{ peer: Peer; t: StubTransport; mark: number }> => {
+  const t = new StubTransport()
+  const peer = new Peer(name, t, options)
+  await peer.seat('conf-stub')
+  return { peer, t, mark: t.sent.length }
+}
+
+describe('conformance harness: peerOptions resolves manualAckPeers', () => {
+  const scenario = (manualAckPeers?: string[]): Scenario => ({
+    name: 'conf-stub',
+    peers: ['alpha', 'bravo'],
+    steps: [],
+    ...(manualAckPeers === undefined ? {} : { manualAckPeers })
+  })
+
+  it('acks by default, because a peer that does not ack is not a conforming client', () => {
+    // The default carries every scenario but one. Without the ack
+    // `protocols.py:761` stops the reference sending that watcher its periodic
+    // `State` at all, so its last playstate freezes at the seek and the suite
+    // reports the reference's silence as a model divergence — measured at 1.8 s
+    // and a flipped `setBy`, per `conformance/README.md`.
+    expect(peerOptions(scenario(), 'alpha')).toEqual({ ackForcedUpdates: true })
+  })
+
+  it('turns acking off for a named peer and leaves its room-mate alone', () => {
+    // Both halves, because a sense inversion here fails silently in either
+    // direction: the named peer would ack and collapse the wait
+    // `conf-forced-ping-stamps` measures, the unnamed one would go quiet and
+    // produce the divergence above, and both read as a model bug.
+    const s = scenario(['alpha'])
+    expect(peerOptions(s, 'alpha')).toEqual({ ackForcedUpdates: false })
+    expect(peerOptions(s, 'bravo')).toEqual({ ackForcedUpdates: true })
+  })
+
+  it('acks for every peer when the list is present but empty', () => {
+    // The `?? []` arm reached from the other side: a declared-but-empty list
+    // must not be the same thing as naming everyone.
+    expect(peerOptions(scenario([]), 'alpha')).toEqual({ ackForcedUpdates: true })
+  })
+})
+
+describe('conformance harness: a manual-ack peer captures the counter anyway', () => {
+  it('sends no ack, and still echoes the captured counter on sendPingOnly', async () => {
+    const { peer, t, mark } = await seated('alpha', { ackForcedUpdates: false })
+    t.push(forcedState(7))
+    // Half one: silence. An automatic ack would stamp `_lastUpdatedOn` at the
+    // instant the forced update arrived, collapsing the very wait
+    // `conf-forced-ping-stamps` is built on, and would carry a full playstate
+    // besides — the opposite of the frame under test.
+    expect(t.since(mark)).toEqual([])
+    // Half two: the counter was captured regardless. These two are easy to fuse
+    // by accident, and fusing them is not a weaker test but an empty one — the
+    // hand-driven frame would carry no counter, the reference would discard it
+    // at `protocols.py:788`, the model has no ignore window to discard it with,
+    // and `trace-diff` would report agreement on nothing happening.
+    peer.sendPingOnly()
+    const [ping] = t.since(mark)
+    expect(ping.State.ignoringOnTheFly).toEqual({ server: 7 })
+    expect('playstate' in ping.State).toBe(false)
+  })
+
+  it('echoes the newest counter, not the first one it saw', async () => {
+    // A second forced update increments past the first, and
+    // `protocols.py:775-777` clears the ignore window only on an exact match, so
+    // a peer that kept the first counter it ever saw would echo one that no
+    // longer matches and die at `protocols.py:788` exactly as a counter-less
+    // frame does.
+    const { peer, t, mark } = await seated('alpha', { ackForcedUpdates: false })
+    t.push(forcedState(7))
+    t.push(forcedState(8))
+    peer.sendPingOnly()
+    expect(t.since(mark)[0].State.ignoringOnTheFly).toEqual({ server: 8 })
+  })
+
+  it('still acks when the gate is left on, so the silence above is the gate', async () => {
+    // The control. Same frame, default options, and an ack goes out — without
+    // it the `toEqual([])` above would pass just as well on a `Peer` that had
+    // stopped acking altogether.
+    const { t, mark } = await seated('bravo', {})
+    t.push(forcedState(7))
+    const acks = t.since(mark)
+    expect(acks.length).toBe(1)
+    expect(acks[0].State.ignoringOnTheFly).toEqual({ server: 7 })
+    // Acking a seek is not requesting one.
+    expect(acks[0].State.playstate.doSeek).toBe(false)
+  })
+})
+
+describe('conformance harness: sendPingOnly refuses a counter-less frame', () => {
+  it('throws rather than sending the frame without one', async () => {
+    // Refusing is the point rather than defensiveness. A counter-less
+    // playstate-free frame is discarded by the reference inside the ignore
+    // window and inert in the model, so both backends go inert together — the
+    // one failure mode in `conf-forced-ping-stamps` that reads as evidence.
+    const { peer, t, mark } = await seated('alpha', { ackForcedUpdates: false })
+    expect(() => peer.sendPingOnly()).toThrow(/never received/)
+    expect(t.since(mark)).toEqual([])
+  })
+
+  it('treats a zero counter as none, which is the only value the reference omits', async () => {
+    // `protocols.py:756-757` writes `ignoringOnTheFly.server` only when the
+    // counter is non-zero, so `{server: 0}` is not a frame the reference
+    // produces; echoing a zero would clear nothing at `protocols.py:775-777`
+    // and the throw is the honest outcome.
+    const { peer, t } = await seated('alpha', { ackForcedUpdates: false })
+    t.push({
+      State: {
+        playstate: { position: 500, paused: false, doSeek: false, setBy: 'bravo' },
+        ignoringOnTheFly: { server: 0 }
+      }
+    })
+    expect(() => peer.sendPingOnly()).toThrow(/never received/)
   })
 })

@@ -16,6 +16,12 @@ export type Step =
   /** A `Set` that carries no `file` key at all, which never reaches `setFile`. */
   | { kind: 'setWithoutFile'; peer: string }
   | { kind: 'state'; peer: string; position: number; paused?: boolean; doSeek?: boolean }
+  /**
+   * A `State` with a `ping` and the counter the server last handed this peer,
+   * and no `playstate` key — `sendAck()`'s shape. `state` cannot express it:
+   * its `position` is mandatory, here and in `Peer.sendState`.
+   */
+  | { kind: 'pingOnly'; peer: string }
   | { kind: 'requestList'; peer: string }
   | { kind: 'sample'; label: string }
 
@@ -42,6 +48,13 @@ export interface Scenario {
    * `POSITION_TOLERANCE_PLAYING_S` in `trace-diff.ts`.
    */
   playing?: boolean
+  /**
+   * Peers that do **not** answer a forced update with an automatic
+   * acknowledgement. Everything else does, because that is what a conforming
+   * client does; a scenario that drives the acknowledgement by hand names its
+   * peer here. See `ackForcedUpdates` on `Peer` for what turning it off costs.
+   */
+  manualAckPeers?: string[]
 }
 
 export interface RunResult {
@@ -88,6 +101,9 @@ async function drive(
         case 'state':
           need(step.peer).sendState(step)
           break
+        case 'pingOnly':
+          need(step.peer).sendPingOnly()
+          break
         case 'requestList':
           need(step.peer).requestList()
           break
@@ -126,9 +142,23 @@ async function drive(
   return { trace, transcripts, inboundByPeer }
 }
 
+/**
+ * `manualAckPeers` resolved for one peer. Exported only so
+ * `test/conformance-harness.test.ts` can assert it from the PR gate: getting
+ * this backwards would turn every scenario's peers silent rather than red, and
+ * `conformance/` itself runs nightly.
+ */
+export const peerOptions = (scenario: Scenario, name: string): { ackForcedUpdates: boolean } => ({
+  ackForcedUpdates: !(scenario.manualAckPeers ?? []).includes(name)
+})
+
 /** Runs the scenario against the live `syncplay-server` on `port`. */
 export async function runAgainstReal(scenario: Scenario, port: number): Promise<RunResult> {
-  return await drive(scenario, (name) => new Peer(name, new RealTransport(port)), scenario.name)
+  return await drive(
+    scenario,
+    (name) => new Peer(name, new RealTransport(port), peerOptions(scenario, name)),
+    scenario.name
+  )
 }
 
 /** Runs the same scenario against `MinElectionServer`, over in-memory sockets. */
@@ -141,7 +171,7 @@ export async function runAgainstModel(scenario: Scenario): Promise<RunResult> {
   try {
     return await drive(
       scenario,
-      (name) => new Peer(name, new ModelTransport(server, name)),
+      (name) => new Peer(name, new ModelTransport(server, name), peerOptions(scenario, name)),
       scenario.name
     )
   } finally {

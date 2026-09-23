@@ -459,9 +459,13 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // reference's schedule rather than sent at handshake time — identical.
       // #384's proposed stamp move removes the same term by a different route,
       // taking the even cells to 3 and 4 plus the residue, so it gains a room
-      // tick as well. If these five cells red, read the helper before looking
-      // for a convergence change in src/: the repair in both cases is to drop
-      // this term and predict the bare 2/3.
+      // tick as well — but it does not red on this assertion: at 3 plus the
+      // residue the element bound above fails first, and the reader sees
+      // `expected 3.0000000476836703 to be less than 3` rather than this note,
+      // because `predicted q337` never executes. The five even-tick cells red
+      // *here* only on the join-time State route; when they do, read the helper
+      // before looking for a convergence change in src/. The repair is the same
+      // on both routes: drop this term and predict the bare 2/3.
       expect(q337, 'predicted q337').toBeCloseTo(
         evenTick ? 2 - DELAY_MS / 1000 : 2,
         PARITY_PRECISION

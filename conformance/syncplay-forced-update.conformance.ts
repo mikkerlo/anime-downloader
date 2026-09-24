@@ -433,9 +433,9 @@ describe('conformance: forced updates', () => {
     // whole of what the missing stamp can cost: the model keeps projecting
     // across the ping wait where the reference re-stamps and stops. A gap wider
     // than that is not this divergence grown, it is a second one arriving, and
-    // the floor alone would pass it however far it ran. Measured margin: three
-    // local runs against the pinned server gave 3.910s, 3.919s and 3.923s,
-    // against a floor of 1.6s and this ceiling of 5.6s.
+    // the floor alone would pass it however far it ran. Measured margin: four
+    // local runs against the pinned server gave 3.907s, 3.910s, 3.919s and
+    // 3.923s, against a floor of 1.6s and this ceiling of 5.6s.
     assertPinnedDivergence(run, {
       label: SAMPLE_LABEL,
       fields: ['playstate.setBy', 'playstate.position'],

@@ -20,8 +20,17 @@
 // or a wait, so they belong on the gate that actually runs on a pull request.
 
 import { describe, expect, it } from 'vitest'
+import {
+  assertPinnedDivergence,
+  type ConformanceRun,
+  type PinnedDivergence
+} from '../conformance/helpers/conform'
 import { bootRealServer, connects, freePort } from '../conformance/helpers/real-server'
-import { COMPARED_FIELD_PATHS, reachesFieldPath } from '../conformance/helpers/trace-diff'
+import {
+  COMPARED_FIELD_PATHS,
+  reachesFieldPath,
+  type Divergence
+} from '../conformance/helpers/trace-diff'
 import { peerOptions, type Scenario } from '../conformance/helpers/scenario'
 import { Peer, type Transport } from '../conformance/helpers/wire-peer'
 
@@ -293,5 +302,161 @@ describe('conformance harness: sendPingOnly refuses a counter-less frame', () =>
       }
     })
     expect(() => peer.sendPingOnly()).toThrow(/never received/)
+  })
+})
+
+// The predicate that decides whether the pinned scenario means anything, on the
+// gate for the reason the header gives: it takes a `ConformanceRun` literal, so
+// there is no server, socket or wait, and every case below would otherwise wait
+// a night to be asked.
+describe('conformance harness: assertPinnedDivergence', () => {
+  // The figures are `conf-forced-ping-stamps`'s own, so a case that reds here
+  // reds there: `playing: true` selects the ±1.6 s tolerance, the ceiling is
+  // `PING_WAIT_MS / 1000 + tolerance`, and 3.907 s is what the run measured.
+  const SAMPLE = "alpha's ping-only frame re-elects the room"
+  const REPORT = 'scenario "conf-forced-ping-stamps" — 2 divergence(s)\n--- real server ---\n…'
+
+  const PIN: PinnedDivergence = {
+    label: SAMPLE,
+    fields: ['playstate.setBy', 'playstate.position'],
+    setBy: { real: 'alpha', model: 'bravo' },
+    positionDeltaCeiling: 4000 / 1000 + 1.6
+  }
+
+  const divergence = (over: Partial<Divergence> = {}): Divergence => ({
+    label: SAMPLE,
+    peer: 'alpha',
+    field: 'playstate.setBy',
+    real: 'alpha',
+    model: 'bravo',
+    ...over
+  })
+
+  const positionDiverged = divergence({ field: 'playstate.position', real: 1204, model: 1200 })
+
+  // The pinned shape, so each case below states only the one thing it changes.
+  const run = (over: Partial<ConformanceRun> = {}): ConformanceRun => ({
+    divergences: [divergence(), positionDiverged],
+    tolerance: 1.6,
+    maxPositionDelta: 3.907,
+    realFrames: [],
+    modelFrames: [],
+    realByPeer: {},
+    modelByPeer: {},
+    report: REPORT,
+    ...over
+  })
+
+  /**
+   * The message of the red a case expects, and a failure of its own if the run
+   * passed. Every red is checked for `run.report` here rather than case by
+   * case: carrying the transcripts is a documented property of the helper, and
+   * one `fail()` arm built without them would be the one that goes unnoticed.
+   */
+  const redFor = (over: Partial<ConformanceRun>, pin: PinnedDivergence = PIN): string => {
+    let message: string | null = null
+    try {
+      assertPinnedDivergence(run(over), pin)
+    } catch (e) {
+      message = (e as Error).message
+    }
+    expect(message).not.toBe(null)
+    expect(message).toContain(REPORT)
+    return message as string
+  }
+
+  it('passes on the shape the scenario pins', () => {
+    // The control for all eight reds below. Without it a helper that threw on
+    // everything would satisfy every other case in this block.
+    expect(() => assertPinnedDivergence(run(), PIN)).not.toThrow()
+  })
+
+  it('reds when the run conforms, because a stale pin is news too', () => {
+    // The direction a `it.fails` or a skip cannot report at all: #384's item 4
+    // moves the model's stamp, the divergence goes away, and the caller has to
+    // be told to swap back to `assertConforms` rather than left green forever.
+    expect(redFor({ divergences: [] })).toContain(
+      'the run conforms — the pin is stale, switch back to assertConforms(run)'
+    )
+  })
+
+  it('reds on a divergence from a sample the pin does not name', () => {
+    // The scenario takes one sample, so a second label is a second moment
+    // diverging. The pinned fields are unchanged here, which is the point: a
+    // field-set check alone would wave this through.
+    const stray = divergence({ label: 'bravo pauses again', field: 'playstate.position' })
+    expect(redFor({ divergences: [divergence(), positionDiverged, stray] })).toContain(
+      `samples other than ${JSON.stringify(SAMPLE)} diverged: ["bravo pauses again"]`
+    )
+  })
+
+  it('reds on a field the pin does not list', () => {
+    // A second divergence arriving alongside the pinned one — the membership
+    // half of the room going wrong while the playstate half stays as pinned.
+    const roster = divergence({ field: 'roster', real: ['alpha'], model: ['alpha', 'bravo'] })
+    expect(redFor({ divergences: [divergence(), positionDiverged, roster] })).toContain(
+      'diverging fields are ["playstate.position","playstate.setBy","roster"], pinned as ' +
+        '["playstate.position","playstate.setBy"]'
+    )
+  })
+
+  it('reds on a pinned field that stopped diverging', () => {
+    // The same check from the other side, and the one that matters as the model
+    // catches up in pieces: `position` converging while `setBy` still diverges
+    // is a partial fix, not the pinned shape, and an "every divergence is
+    // listed" check would call it green.
+    expect(redFor({ divergences: [divergence()] })).toContain(
+      'diverging fields are ["playstate.setBy"], pinned as ' +
+        '["playstate.position","playstate.setBy"]'
+    )
+  })
+
+  it('reds when setBy diverges the other way round', () => {
+    // Which side elected whom is the claim the `sendAck()` comment in
+    // `src/main/syncplay.ts` rests on. A run where the *model* re-elects and
+    // the reference does not carries the pinned label and the pinned fields, so
+    // nothing above this check would notice the inversion.
+    const flipped = divergence({ real: 'bravo', model: 'alpha' })
+    expect(redFor({ divergences: [flipped, positionDiverged] })).toContain(
+      'playstate.setBy is real="bravo" model="alpha", pinned as real="alpha" model="bravo"'
+    )
+  })
+
+  it('reds when the run sampled no position at all', () => {
+    // The "green that measures nothing" shape: a run whose sample step never
+    // landed reports no delta, and treating that as within bounds would pass
+    // the pin on a scenario that never measured the collapse.
+    expect(redFor({ maxPositionDelta: null })).toContain(
+      'the run sampled no positions, so the position collapse was never measured'
+    )
+  })
+
+  it('reds on a gap that has shrunk inside the tolerance', () => {
+    // The floor. `diffTraces` only pushes `playstate.position` past the
+    // tolerance, so this pairs a field set that still says "diverged" with a
+    // delta that says "agreed" — the shape a half-landed item 4 would produce.
+    expect(redFor({ maxPositionDelta: 1.5 })).toContain(
+      'max |real-model| position 1.500s is inside the ±1.6s tolerance — the collapse is gone'
+    )
+  })
+
+  // The next two are a deliberate adjacent pair — 1 ms under the ceiling and
+  // exactly on it — so the bound cannot be quietly dropped again: loosening
+  // `>=` to `>`, or deleting the arm outright, reds one of the two rather than
+  // neither. Verified by mutation: `>` reds the second case on its own.
+  it('passes just under the ceiling', () => {
+    expect(() => assertPinnedDivergence(run({ maxPositionDelta: 5.599 }), PIN)).not.toThrow()
+  })
+
+  it('reds at the ceiling exactly, and on a gap nowhere near the pinned cause', () => {
+    expect(redFor({ maxPositionDelta: 5.6 })).toContain(
+      'max |real-model| position 5.600s is at or above the pinned ceiling of 5.6s — the gap ' +
+        'is wider than the pinned cause accounts for'
+    )
+    // Ten minutes of drift, on the same two fields and the same label: the
+    // shape the floor alone would report as the pinned divergence.
+    expect(redFor({ maxPositionDelta: 600 })).toContain(
+      '600.000s is at or above the pinned ceiling'
+    )
   })
 })

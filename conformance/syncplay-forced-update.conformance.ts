@@ -74,7 +74,7 @@ describe('conformance: forced updates', () => {
 
   it('lets a seek from a losing watcher override the election', async () => {
     // A forced update calls `Room.setPosition`, which writes the new position
-    // onto **every** watcher (`server.py:616-618`). The next election therefore
+    // onto **every** watcher (`server.py:617-619`). The next election therefore
     // re-reads a room where nobody is below the seek target — so the seeker
     // wins even though it lost the ordering a moment earlier. `doSeek` is the
     // only way a higher watcher moves the room.

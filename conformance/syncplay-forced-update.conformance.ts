@@ -8,7 +8,7 @@
 // election suite. The observable is who gets told, and what they are told.
 
 import { describe, expect, it, inject } from 'vitest'
-import { assertConforms, runConformance } from './helpers/conform'
+import { assertConforms, assertPinnedDivergence, runConformance } from './helpers/conform'
 import type { Scenario } from './helpers/scenario'
 
 const port = inject('syncplayPort')
@@ -256,14 +256,21 @@ describe('conformance: forced updates', () => {
     // spread by three orders of magnitude. The margin is this scenario's
     // property, not an exemption from the note.
     //
-    // **Red against the model by construction, and that red is the scenario
-    // working rather than a fixture to repair.**
+    // **The model diverges here, and that divergence is the scenario working
+    // rather than a fixture to repair — so it is pinned as an expected
+    // divergence rather than compared for agreement.**
     // `test/helpers/syncplay-min-election-server.ts:640` returns above its own
     // stamp at `test/helpers/syncplay-min-election-server.ts:661`, so a
     // playstate-free frame genuinely is inert in the model — the mirror is
     // faithful to the old comment rather than to the server, which is why
-    // nothing here caught the claim. Moving that stamp is #384's item 4; this
-    // goes green when it lands, and must merge with it or after it.
+    // nothing here caught the claim. Moving that stamp is #384's item 4. Until
+    // it lands this scenario runs nightly and **passes**, holding the shape of
+    // that one divergence exactly: the model lags the reference by roughly
+    // `PING_WAIT_MS`, which is the projection term the missing stamp leaves in
+    // place. When item 4 lands the pin stops holding and the scenario reds,
+    // which is the signal to swap the pin back to a plain agreement check. See
+    // the pin at the foot of this test for the full statement. This therefore
+    // does not have to merge with item 4 or after it.
     //
     // Every step below is load-bearing, because the default failure in this
     // scenario is not a red. It is a green that measures nothing:
@@ -299,12 +306,18 @@ describe('conformance: forced updates', () => {
     //    `protocols.py:788`, and the room never leaves the unpause position —
     //    every run, not a race. Measured against the pin: no seek on the wire,
     //    and a room sample sitting on the unpause position rather than on the
-    //    seek target. The captured pair is `701.96` without the settle against
-    //    `1201.73` with it, and the left-hand figure is the probe's, from an
-    //    instrumented run whose unpause step used `700`. This script unpauses
-    //    at `500`, so the figure it would produce is the unpause position plus
-    //    the ~2 s of play before the sample — ≈`501.96`. `1201.73` transfers
-    //    unchanged, the seek target being `1200` in both.
+    //    seek target. **Both halves of the pair `701.96` without the settle
+    //    against `1201.73` with it are the *probe's*** — an instrumented run
+    //    whose unpause step used `700` — and neither is a capture of this
+    //    script. This script unpauses at `500`, so the figure it would produce
+    //    without the settle is the unpause position plus the ~2 s of play
+    //    before the sample, ≈`501.96`. What transfers is the seek target,
+    //    `1200` in both, not the digits after it: one local run of this
+    //    scenario against the pinned server sampled the real room at
+    //    `1201.901` on both peers, where the probe read `1201.73`. The ~1.9 s
+    //    is where the sample lands on the 1 Hz broadcast grid, so it moves run
+    //    to run; the load-bearing part is which of the two positions the
+    //    sample sits on, not its fractional part.
     //  - **The settle before the sample.** While alpha's ignore flag is up the
     //    server suppresses its periodic `State` to alpha (`protocols.py:761`;
     //    `forced` broadcasts still get through, which is how alpha learns the
@@ -357,6 +370,10 @@ describe('conformance: forced updates', () => {
     // measured, alpha is removed from the room before its ping goes out, its
     // `lastPlaystate` freezes at the forced-update frame, and the scenario
     // looks green on the thing under test.
+    //
+    // Named rather than repeated: the pin below asserts that *every* divergence
+    // carries this label, and a typo in either copy would assert nothing.
+    const SAMPLE_LABEL = "alpha's ping-only frame re-elects the room"
     const scenario: Scenario = {
       name: 'conf-forced-ping-stamps',
       playing: true,
@@ -375,19 +392,55 @@ describe('conformance: forced updates', () => {
         { kind: 'wait', ms: PING_WAIT_MS },
         { kind: 'pingOnly', peer: 'alpha' },
         { kind: 'wait', ms: SETTLE_MS },
-        { kind: 'sample', label: "alpha's ping-only frame re-elects the room" }
+        { kind: 'sample', label: SAMPLE_LABEL }
       ]
     }
     const run = await runConformance(scenario, port)
-    // Premises first, and deliberately *before* `assertConforms`: this scenario
-    // is red against the model until #384's item 4 lands, so a premise asserted
-    // after the comparison would be unreachable for exactly as long as it is
-    // most worth knowing.
+    // Premises first, and deliberately *before* the comparison: the divergence
+    // below is pinned rather than absent, so a premise asserted after it would
+    // be unreachable for exactly as long as it is most worth knowing.
     //
     // The seek reached `updateState` rather than dying inside bravo's own
     // ignore window — the settle before it exists for this, and without it both
     // backends agree on a room that never moved.
     expect(run.realFrames.some((f) => f.includes('"doSeek": true'))).toBe(true)
-    assertConforms(run)
+    // **A pinned expected divergence, not `assertConforms`.** What is pinned is
+    // the whole shape of the one difference this scenario produces: every
+    // divergence carries this scenario's single sample label, the diverging
+    // fields are exactly `playstate.setBy` and `playstate.position`, the
+    // reference elects alpha where the model leaves bravo, and the position gap
+    // still clears the tolerance. Only the projection term is lost, so the gap
+    // is about `PING_WAIT_MS` wide and the scenario passes while the model lags
+    // by roughly that much.
+    //
+    // Pinned rather than skipped because a skip stops the *reference* half
+    // running, and that half is the evidence the `sendAck()` comment in
+    // `src/main/syncplay.ts` rests on — the reference really does re-elect on a
+    // playstate-free frame, and this nightly is where that is measured against
+    // the pinned server rather than asserted from a reading of `server.py`.
+    // Pinned rather than landed red because the nightly workflow comments on
+    // one standing `syncplay-conformance` issue: a known red on `main` would
+    // make a genuine divergence in any of the other scenarios arrive as one
+    // more copy of a comment already learned to be ignorable.
+    //
+    // This goes red on its own when #384's item 4 moves the model's stamp: the
+    // model then re-elects too, `setBy` and `position` converge, and the pin
+    // stops holding. **That red is the signal to swap these lines back to
+    // `assertConforms(run)`**, and that swap belongs in item 4's own PR. It is
+    // not a fixture to repair, and re-pinning it to whatever the run prints
+    // would throw away the only notification that item 4 landed.
+    // The ceiling is `PING_WAIT_MS` past the tolerance because that is the
+    // whole of what the missing stamp can cost: the model keeps projecting
+    // across the ping wait where the reference re-stamps and stops. A gap wider
+    // than that is not this divergence grown, it is a second one arriving, and
+    // the floor alone would pass it however far it ran. Measured margin: three
+    // local runs against the pinned server gave 3.910s, 3.919s and 3.923s,
+    // against a floor of 1.6s and this ceiling of 5.6s.
+    assertPinnedDivergence(run, {
+      label: SAMPLE_LABEL,
+      fields: ['playstate.setBy', 'playstate.position'],
+      setBy: { real: 'alpha', model: 'bravo' },
+      positionDeltaCeiling: PING_WAIT_MS / 1000 + run.tolerance
+    })
   })
 })

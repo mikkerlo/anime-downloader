@@ -10,12 +10,14 @@
 // and the predicate the field-coverage assertion is built on.
 //
 // #392 added a third kind: the `manualAckPeers` / `sendPingOnly` seams. Same
-// rationale, with one more turn of the screw. The nightly is red **by design**
-// until #384's item 4 moves the model's stamp, so "the nightly would have caught
-// it" is not available for this code for as long as that holds — a broken
-// `peerOptions`, or a `sendPingOnly` that dropped its counter, would be
-// invisible behind the red that is supposed to be there. None of it needs a
-// server, a socket or a wait, so it belongs on the gate that actually runs.
+// rationale, with one more turn of the screw. The one scenario that drives them
+// does not compare the two backends for agreement: it holds a **pinned expected
+// divergence** until #384's item 4 moves the model's stamp. That pin does fail
+// in both directions — a `sendPingOnly` that dropped its counter makes both
+// backends inert together, which reads as agreement, which the pin rejects as a
+// stale pin — but it fails a night later, on a machine with a provisioned server
+// and four minutes to spend. Neither of the seams below needs a server, a socket
+// or a wait, so they belong on the gate that actually runs on a pull request.
 
 import { describe, expect, it } from 'vitest'
 import { bootRealServer, connects, freePort } from '../conformance/helpers/real-server'

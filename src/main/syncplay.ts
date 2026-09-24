@@ -2708,10 +2708,10 @@ export class SyncplayClient extends EventEmitter {
   // and None is falsy — so it reintroduces the paused-room creep, to assert a
   // position we received milliseconds earlier. Measured against the pinned
   // server by the conf-forced-ping-stamps scenario in
-  // conformance/syncplay-forced-update.conformance.ts — which is red against
-  // our own model until #384's item 4 moves its stamp, by construction and not
-  // as a fixture to repair. The reference half of that comparison is what this
-  // paragraph rests on; the scenario does not go green until that lands.
+  // conformance/syncplay-forced-update.conformance.ts, which pins the model's
+  // lag as an expected divergence and so passes nightly until #384's item 4
+  // moves that stamp. The reference half of that comparison is what this
+  // paragraph rests on, and pinning rather than skipping keeps it running.
   //
   // Not a storm: while serverIgnoringOnTheFly != 0 the server suppresses its own
   // periodic State (protocols.py:761) and only increments on `forced`, so this

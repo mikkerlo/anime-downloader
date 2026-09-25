@@ -447,7 +447,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // infidelity in the fixture, named here because two independent changes
       // destroy it and neither is a production regression. The helper answers
       // `Hello` with only `Hello`
-      // (test/helpers/syncplay-min-election-server.ts:524 ("if ('Hello' in msg) {")),
+      // (test/helpers/syncplay-min-election-server.ts:592 ("if ('Hello' in msg) {")),
       // where the reference server schedules a State just after the handshake.
       // Add that join-time State — the same playstate the periodic broadcast
       // builds — and all eight cells collapse to q337 = 2.0000000476836703 and

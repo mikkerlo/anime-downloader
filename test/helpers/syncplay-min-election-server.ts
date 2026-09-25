@@ -86,7 +86,7 @@
 //
 // Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
 // **paused** arm — the `this.roomPaused ? w.position` half of
-// `test/helpers/syncplay-min-election-server.ts:388-393` — is already checked
+// `test/helpers/syncplay-min-election-server.ts:456-461` — is already checked
 // against the real Syncplay 1.7.6 server in both the steady state and the flip
 // into it, so no new scenario is owed for it.
 //  - **Steady.** `conformance/syncplay-election.conformance.ts:27`
@@ -117,15 +117,15 @@
 //    tolerance, because that scenario never sets `playing`.
 //  - The clause a reader would otherwise go hunting for, stated rather than left
 //    as a hole: `forcePositionUpdate`'s own write, the
-//    `test/helpers/syncplay-min-election-server.ts:459` ("this.roomPosition =
+//    `test/helpers/syncplay-min-election-server.ts:527` ("this.roomPosition =
 //    this.watcherPosition(w)") line, reads through that same paused arm
 //    whenever the change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:660-662` flips `roomPaused`,
+//    `test/helpers/syncplay-min-election-server.ts:728-730` flips `roomPaused`,
 //    refreshes that watcher's `lastUpdatedOn`, and only then calls it, in that
 //    order. Safe for a stated reason rather than by luck: the refresh is what
 //    the *playing* arm would have projected from, and the paused arm ignores the
 //    stamp regardless, so either way that write reads the setter's own position
-//    at that instant. `test/helpers/syncplay-min-election-server.ts:495` ("for
+//    at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
 //    (const other of this.watchers.values())") then re-seats every watcher.
 //  - Option (B) — a scenario built to catch an election *flip* decided inside
 //    the paused arm — is structurally excluded rather than deferred, so nobody
@@ -162,12 +162,78 @@ import type { EventEmitter } from 'events'
 // bytes back with `emit('data', …)`.
 export type ModelSocket = EventEmitter & { write: (data: string) => void }
 
+/**
+ * The `setBy` a **playing** room is seeded with when the caller names none.
+ *
+ * Upstream pairs playing-ness with a setter rather than leaving the two free:
+ * `Room.setPaused` writes `_playState` and `_setBy` in the same two statements
+ * (`server.py:611-612`), it is reached only from `Watcher.updateState`
+ * (`server.py:879`), and a fresh room is `STATE_PAUSED` by construction
+ * (`server.py:543`) with `_setBy = None` beside it (`server.py:544`). So the
+ * reference cannot put `paused: false` on the wire next to a null `setBy` —
+ * `protocols.py:739` renders the stored watcher's own name — and this fixture's
+ * former ability to do so was an infidelity rather than a degree of freedom.
+ *
+ * The history the sentinel stands in for, stated precisely because a looser
+ * reading of it sounds impossible: a **playing, persistent room with a
+ * non-empty playlist** whose position was last set by a watcher who has since
+ * left, rejoined within one election age of the last `_lastUpdate` write.
+ * `removeWatcher` (`server.py:640-647`) leaves `_setBy` and `_playState` alone;
+ * `_deleteRoomIfEmpty` (`server.py:496`) spares an empty room that is permanent
+ * (`server.py:497`) or persistent with a non-empty playlist
+ * (`server.py:499`); and `removeWatcher` zeroes `_position`
+ * (`server.py:645-646`) only when the room is not persistent. The window is
+ * narrow because `Room.getPosition` (`server.py:597-603`) overwrites `_setBy`
+ * with `min(watchers)` (`server.py:601`) as soon as anyone is seated and the
+ * room state is older than the election age. It is also strictly
+ * **in-process**: a DB reload cannot produce a departed name, because
+ * `loadRooms` builds a fresh `Room` (`server.py:427`) and `loadRoom`
+ * (`server.py:586-592`) restores name, playlist, index, position and saved
+ * stamp — never `_setBy`.
+ *
+ * So the constructor's `_lastUpdate` stamp plus this seed models **a
+ * `server.py:603` election whose winner has since left**. It does *not* model
+ * `Room.__init__`, which can never open a window carrying a *name*, since
+ * `server.py:547`'s stamp always comes paired with `server.py:544`'s `None` —
+ * and the census of `_lastUpdate`'s writers that argument rests on is already
+ * recorded in `forcePositionUpdate`'s own comment below.
+ *
+ * The value has to be a username **no seated watcher holds**, or a fixture
+ * asserting "the room is not ours" would pass for the wrong reason. That is a
+ * standing constraint on the fixtures rather than a property of this line, so
+ * `test/services/syncplay-min-election-setby.test.ts` censuses the seated names
+ * and holds it.
+ */
+export const DEFAULT_PLAYING_SET_BY = 'departeduser'
+
 export interface MinElectionServerOptions {
   /** The room name the `Hello` and `List` replies are keyed to. */
   room?: string
   /** Where the room already is when the fixture starts. */
   position?: number
   paused?: boolean
+  /**
+   * Who the room's position was last set by, before the first election. The
+   * default is the reference's pairing rule rather than a free field: a paused
+   * room seeds `null`, as `Room.__init__` does (`server.py:543-544`), and a
+   * playing one seeds `DEFAULT_PLAYING_SET_BY` — see that constant for why the
+   * playing-and-nameless combination the fixture used to allow is a state the
+   * reference cannot reach.
+   *
+   * Pass a name to model a particular departed setter. An explicit `null` is
+   * **not** an escape hatch — `??` reads it as "unset", so it lands back on the
+   * pairing rule — and that is deliberate rather than an oversight of the
+   * nullable type: a nameless *playing* room is exactly the state the reference
+   * cannot reach, so nothing should be able to ask for one. The `| null` is
+   * there so a caller can spell the paused default out at a call site that also
+   * chooses `paused`, without the two options disagreeing.
+   *
+   * Either way the seed survives only until the first `Room.getPosition()`
+   * election, which overwrites it with the elected watcher (`server.py:601`);
+   * with the default 1 s `electionAgeMs` and a watcher already seated, that is
+   * one tick.
+   */
+  setBy?: string | null
   /** `SERVER_STATE_INTERVAL` — the reference's 1 s periodic `State`. */
   stateIntervalMs?: number
   /** `Room.getPosition()` re-elects when the room state is older than this. */
@@ -304,7 +370,7 @@ export class MinElectionServer {
   private readonly watchers = new Map<string, Watcher>()
   private roomPosition: number
   private roomPaused: boolean
-  private roomSetBy: string | null = null
+  private roomSetBy: string | null
   private roomLastUpdate: number
   private serverCounter = 0
   private timer: ReturnType<typeof setInterval> | null = null
@@ -313,6 +379,8 @@ export class MinElectionServer {
     this.room = opts.room ?? 'cinema'
     this.roomPosition = opts.position ?? 0
     this.roomPaused = opts.paused ?? false
+    // Paired with the pause flag, never free: see `DEFAULT_PLAYING_SET_BY`.
+    this.roomSetBy = opts.setBy ?? (this.roomPaused ? null : DEFAULT_PLAYING_SET_BY)
     this.stateIntervalMs = opts.stateIntervalMs ?? 1000
     this.electionAgeMs = opts.electionAgeMs ?? 1000
     this.forwardDelay = opts.forwardDelay ?? 'avrRtt/2'

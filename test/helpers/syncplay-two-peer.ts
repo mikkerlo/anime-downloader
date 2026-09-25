@@ -443,7 +443,7 @@ export class HarnessVideo {
       // against a close-to of 400.15, the same shape repeats at
       // `syncplay-two-peer-seek-echo.test.ts:193` and
       // `syncplay-two-peer-seek-echo.test.ts:194` (800.1 against 800.15), and
-      // `syncplay-two-peer-ignore-counters.test.ts:230` reads 700.0499999523163
+      // `syncplay-two-peer-ignore-counters.test.ts:239` reads 700.0499999523163
       // against 700.1 — plus `syncplay-two-peer-rtt.test.ts` and one adoption
       // test off the same shift. The numbers are written down because keeping
       // this guard is what makes deleting the field free, and the next person

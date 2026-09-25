@@ -256,21 +256,21 @@ describe('conformance: forced updates', () => {
     // spread by three orders of magnitude. The margin is this scenario's
     // property, not an exemption from the note.
     //
-    // **The model diverges here, and that divergence is the scenario working
-    // rather than a fixture to repair — so it is pinned as an expected
-    // divergence rather than compared for agreement.**
-    // `test/helpers/syncplay-min-election-server.ts:745` returns above its own
-    // stamp at `test/helpers/syncplay-min-election-server.ts:744`, so a
-    // playstate-free frame genuinely is inert in the model — the mirror is
-    // faithful to the old comment rather than to the server, which is why
-    // nothing here caught the claim. Moving that stamp is #384's item 4. Until
-    // it lands this scenario runs nightly and **passes**, holding the shape of
-    // that one divergence exactly: the model lags the reference by roughly
-    // `PING_WAIT_MS`, which is the projection term the missing stamp leaves in
-    // place. When item 4 lands the pin stops holding and the scenario reds,
-    // which is the signal to swap the pin back to a plain agreement check. See
-    // the pin at the foot of this test for the full statement. This therefore
-    // does not have to merge with item 4 or after it.
+    // **The pin at the foot of this test no longer holds, and that is the
+    // signal it was built to send rather than a fixture to repair.** Until
+    // #384's item 4 landed, `test/helpers/syncplay-min-election-server.ts`
+    // returned above its own `lastUpdatedOn` stamp, so a playstate-free frame
+    // was genuinely inert in the model — the mirror was faithful to the old
+    // comment rather than to the server, which is why nothing here caught the
+    // claim — and this scenario ran nightly and **passed**, holding the shape
+    // of that one divergence exactly: the model lagged the reference by roughly
+    // `PING_WAIT_MS`, the projection term the missing stamp left in place.
+    // Item 4 is `test/helpers/syncplay-min-election-server.ts:744`, the stamp
+    // now sitting above the `if (!ps) return` at
+    // `test/helpers/syncplay-min-election-server.ts:745`, so the divergence is
+    // gone and the pin reds. Swapping it back to a plain agreement check is
+    // tracked as its own #384 checkbox and does not have to land with item 4 —
+    // see the pin at the foot of this test for the full statement.
     //
     // Every step below is load-bearing, because the default failure in this
     // scenario is not a red. It is a green that measures nothing:

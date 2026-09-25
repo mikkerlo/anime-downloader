@@ -446,12 +446,13 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // The even arm's `- DELAY_MS / 1000` term is contingent on a known
       // infidelity in the fixture, named here because two independent changes
       // destroy it and neither is a production regression. The helper answers
-      // `Hello` with only `Hello`
+      // `Hello` with `Hello` *and* the reference's join-time `State`
       // (test/helpers/syncplay-min-election-server.ts:592 ("if ('Hello' in msg) {")),
-      // where the reference server schedules a State just after the handshake.
-      // Add that join-time State — the same playstate the periodic broadcast
-      // builds — and all eight cells collapse to q337 = 2.0000000476836703 and
-      // q340 = 3.0000000476836703 with no even/odd split at all: the five
+      // delivered through `sendState` so that frame pays the link delay like
+      // every other `State`; the reference schedules its own just after the
+      // handshake. With that join-time State — the same playstate the periodic
+      // broadcast builds — all eight cells collapse to q337 = 2.0000000476836703
+      // and q340 = 3.0000000476836703 with no even/odd split at all: the five
       // even-tick cells red on this assertion, the three odd ones stay green
       // because the bare 2/3 is exactly what the collapse lands on, and the
       // q340 = q337 + 1 regime survives in all eight. Measured in both

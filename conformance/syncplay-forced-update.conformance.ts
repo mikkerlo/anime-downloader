@@ -112,7 +112,7 @@ describe('conformance: forced updates', () => {
     // not forced at all.
     //
     // The samples deliberately bracket the playing stretch rather than sit
-    // inside it. In a paused room `Watcher.getPosition()` (`server.py:779-787`)
+    // inside it. In a paused room `Watcher.getPosition()` (`server.py:780-787`)
     // returns `_position` verbatim, so the post-`setPosition` tie is broken by
     // insertion order and the election is deterministic. Once the room plays,
     // the same call adds `time.time() - self._lastUpdatedOn` — a per-watcher

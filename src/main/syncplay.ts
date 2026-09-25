@@ -2043,7 +2043,7 @@ export class SyncplayClient extends EventEmitter {
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
-    // to the setter too (server.py:180-186, no sender filter), so the scrubbing
+    // to the setter too (server.py:180-187, no sender filter), so the scrubbing
     // user's own connection is the deaf one — and a call placed under that
     // guard would be dead code for the whole bug.
     this.maybeReassertSeek()
@@ -2763,7 +2763,7 @@ export class SyncplayClient extends EventEmitter {
   // Why a re-assert rather than the reference's answer: mpv's client *applies*
   // the forced state back to its own player (`updateGlobalState()` →
   // `_changePlayerStateAccordingToGlobalState()` → `_serverSeeked()`,
-  // client.py:454-484, :416-447, with no self-`setBy` filter anywhere), so
+  // client.py:454-465, :416-447, with no self-`setBy` filter anywhere), so
   // there the discarded seek is undone on the seeker's screen too and the two
   // sides never diverge. We deliberately drop our own reflected states at the
   // self-`setBy` guard, which is the better UX — the user's scrub sticks — but

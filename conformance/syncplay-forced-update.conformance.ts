@@ -410,8 +410,8 @@ describe('conformance: forced updates', () => {
     // fields are exactly `playstate.setBy` and `playstate.position`, the
     // reference elects alpha where the model leaves bravo, and the position gap
     // still clears the tolerance. Only the projection term is lost, so the gap
-    // is about `PING_WAIT_MS` wide and the scenario passes while the model lags
-    // by roughly that much.
+    // was about `PING_WAIT_MS` wide, and the scenario passed while the model
+    // lagged by roughly that much — until item 4 landed and closed it.
     //
     // Pinned rather than skipped because a skip stops the *reference* half
     // running, and that half is the evidence the `sendAck()` comment in
@@ -423,12 +423,12 @@ describe('conformance: forced updates', () => {
     // make a genuine divergence in any of the other scenarios arrive as one
     // more copy of a comment already learned to be ignorable.
     //
-    // This goes red on its own when #384's item 4 moves the model's stamp: the
-    // model then re-elects too, `setBy` and `position` converge, and the pin
-    // stops holding. **That red is the signal to swap these lines back to
-    // `assertConforms(run)`**, and that swap belongs in item 4's own PR. It is
-    // not a fixture to repair, and re-pinning it to whatever the run prints
-    // would throw away the only notification that item 4 landed.
+    // This has gone red on its own, as designed: #384's item 4 moved the model's stamp above the
+    // playstate guard in the fixture — anchored in the block at the head of this test — so the
+    // model re-elects too, `setBy` and `position` converge, and the pin no longer holds. **That
+    // red is the signal to swap these lines back to `assertConforms(run)`**, tracked as its own
+    // #384 checkbox rather than required to land with it. It is not a fixture to repair, and
+    // re-pinning it to whatever the run prints would throw away that notification.
     // The ceiling is `PING_WAIT_MS` past the tolerance because that is the
     // whole of what the missing stamp can cost: the model keeps projecting
     // across the ping wait where the reference re-stamps and stops. A gap wider

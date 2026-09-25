@@ -458,9 +458,17 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // q340 = q337 + 1 regime survives in all eight. Measured in both
       // configurations, and again with the State deferred 100 ms to match the
       // reference's schedule rather than sent at handshake time — identical.
-      // #384's proposed stamp move removes the same term by a different route,
-      // taking the even cells to 3 and 4 plus the residue, so it gains a room
-      // tick as well — but it does not red on this assertion: at 3 plus the
+      //
+      // #384's stamp move removes the same term by a different route, and it has
+      // now landed alongside that join-time State — the stamp sits above the
+      // playstate guard in the same helper. **The figures in the rest of this
+      // paragraph are that route measured ON ITS OWN**: a tree carrying the
+      // stamp move WITHOUT the join-time State above, and predating #404's
+      // seeding of a playing room with a setter. They have not been re-measured
+      // at this combined tip, so they describe a configuration this file is no
+      // longer in, and they are not a prediction about it. On that route alone
+      // the even cells go to 3 and 4 plus the residue, so it gains a room tick
+      // as well — but it does not red on this assertion: at 3 plus the
       // residue the element bound above fails first, and the reader sees
       // `expected 3.0000000476836703 to be less than 3` rather than this note,
       // because `predicted q337` never executes. That route reds six cases in
@@ -469,11 +477,19 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // the unadopted joiner at ~1 Hz while the room plays`, whose
       // strict-monotonicity loop
       // (test/services/syncplay-mirror-election.test.ts:246 ("expect(positions[i]).toBeGreaterThan(positions[i - 1])"))
-      // reads `expected 602.9999999523163 to be greater than 603`. The five
-      // even-tick cells red *here* only on the join-time State route; when they
-      // do, read the helper before looking for a convergence change in src/.
-      // The repair is the same on both routes: drop this term and predict the
-      // bare 2/3.
+      // reads `expected 602.9999999523163 to be greater than 603`.
+      //
+      // This tip is the OTHER configuration — both halves — and a full
+      // `npm run test` here reds differently from the isolated route above, in
+      // two places, which is why those figures are labelled rather than
+      // rewritten to match: the five even-tick cells red on THIS assertion with
+      // `predicted q337: expected 2.0000000476836703 to be close to 1.95`, not
+      // on the element bound; and the sixth red in the file is `stays deaf to
+      // its own echo when we are alone in the room`, while the `~1 Hz` case
+      // named above stays green. Rewriting the isolated route's predictions
+      // into these would attribute this tip's behaviour to a route it did not
+      // take. The repair is the same on either route: drop this term and predict
+      // the bare 2/3.
       expect(q337, 'predicted q337').toBeCloseTo(
         evenTick ? 2 - DELAY_MS / 1000 : 2,
         PARITY_PRECISION

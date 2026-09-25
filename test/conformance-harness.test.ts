@@ -11,8 +11,8 @@
 //
 // #392 added a third kind: the `manualAckPeers` / `sendPingOnly` seams. Same
 // rationale, with one more turn of the screw. The one scenario that drives them
-// does not compare the two backends for agreement: it holds a **pinned expected
-// divergence** until #384's item 4 moves the model's stamp. That pin does fail
+// does not compare the two backends for agreement: it holds a **pinned expected divergence** whose
+// terminus has been reached: #384's item 4 moved the model's stamp, so it reds. That pin does fail
 // in both directions — a `sendPingOnly` that dropped its counter makes both
 // backends inert together, which reads as agreement, which the pin rejects as a
 // stale pin — but it fails a night later, on a machine with a provisioned server

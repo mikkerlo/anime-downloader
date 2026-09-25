@@ -1968,7 +1968,7 @@ describe('SyncplayClient room presence on join (#220)', () => {
       expect(roomUsers.at(-1)!.find((u) => u.username === 'latecomer')!.isReady).toBe(false)
     })
 
-    // Test 4. `broadcastRoom` has no sender filter, so our own `sendSetReady`
+    // Test 4. `server.py:232` hands our own frame to `broadcastRoom()`, which has no sender filter (`server.py:441-445`), so our own `sendSetReady`
     // echoes straight back with our username stamped on it. That echo compares
     // equal and must do nothing at all — no wire write, no roster write.
     // (The case-only spelling is pinned in the override test below, not here:

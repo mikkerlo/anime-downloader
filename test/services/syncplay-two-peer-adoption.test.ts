@@ -347,7 +347,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     })
 
     // And the switcher was *not* told about its own change. The reference server
-    // applies no sender filter to a file update, so that frame came back to this
+    // applies no sender filter to a file update: `sendFileUpdate` (`server.py:175-178`) hands it to `RoomManager.broadcast` (`server.py:447-450`), so that frame came back to this
     // peer and was dropped on the `username !== config.username` guard in
     // `handleSet` — a guard that is only ever exercised by a second peer being
     // present.

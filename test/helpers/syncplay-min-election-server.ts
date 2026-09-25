@@ -54,8 +54,8 @@
 //    at arrival, never off the roster.
 //  - `List` (`protocols.py:695`) renders a `None` file as `file: {}` rather
 //    than omitting the key.
-//  - A `doSeek` or a pause change forces a room update (`server.py:180-187`)
-//    broadcast to everyone including the setter (no sender filter), and
+//  - A `doSeek` or a pause change forces a room update (`server.py:883-884`)
+//    broadcast to everyone including the setter (no sender filter, `server.py:441-445`), and
 //    `Room.setPosition()` re-seats every watcher onto that position
 //    (`server.py:615-620`) without refreshing their `_lastUpdatedOn`. That is
 //    the moment the room stops being the laggard's, and the reason a pause

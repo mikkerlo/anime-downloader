@@ -2043,7 +2043,7 @@ export class SyncplayClient extends EventEmitter {
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
-    // to the setter too (server.py:180-187, no sender filter), so the scrubbing
+    // to the setter too (server.py:187, server.py:441-445, no sender filter), so the scrubbing
     // user's own connection is the deaf one — and a call placed under that
     // guard would be dead code for the whole bug.
     this.maybeReassertSeek()

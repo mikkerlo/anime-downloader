@@ -7,7 +7,7 @@
 //  1. a scrubber drag on one peer reaches the other peer's element;
 //  2. the *same* drag, broadcast back to the peer that made it, moves nothing
 //     there — the reference server has no sender filter
-//     (`server.py:184`, `server.py:441-445`), so every discrete change returns
+//     (`server.py:187`, `server.py:441-445`), so every discrete change returns
 //     to its own
 //     socket one round trip later;
 //  3. a drag the room did **not** take is re-asserted, and `seekIntent` is the

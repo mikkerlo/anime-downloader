@@ -15,9 +15,9 @@
 //    to be placed into it and stopped;
 //  - **a peer's own action coming back**, which must propagate *nowhere*. The
 //    reference server broadcasts its forced update to the setter too
-//    (`server.py:184`, no sender filter), so every discrete change a peer makes
-//    arrives back at its own socket a round trip later. `src/main/syncplay.ts:2097`
-//    is the line that eats it.
+//    (`server.py:187` hands it to `broadcastRoom()`, which has no sender filter,
+//    `server.py:441-445`), so every discrete change a peer makes arrives back at
+//    its own socket a round trip later. `src/main/syncplay.ts:2097` eats it.
 //
 // The third is the one worth having. The first two would survive a good deal of
 // damage to the echo path; only the third goes red when the drop guard does.

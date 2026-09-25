@@ -35,10 +35,10 @@ export const POSITION_TOLERANCE_PAUSED_S = 0.05
  * Sampled positions in a **playing** room. A sample reads the most recent
  * broadcast each peer received, and the two backends' broadcast cadences are
  * independently phased: the reference schedules one `LoopingCall` per watcher
- * (`server.py:847-849`, armed 0.1 s after that watcher's connection), the model
- * one shared `setInterval`. The sampled frame can therefore be anything from
- * fresh to a full `SERVER_STATE_INTERVAL` old on either side, and in a playing
- * room that age is position.
+ * (`server.py:841-843`, armed by `Watcher.__init__`'s last line 0.1 s after
+ * connection, `server.py:737`), the model one shared `setInterval`. The sampled
+ * frame can therefore be anything from fresh to a full `SERVER_STATE_INTERVAL`
+ * old on either side, and in a playing room that age is position.
  *
  * Measured across the playing scenarios in this suite, over four full runs: the
  * largest |real − model| observed was 1.102 s, which is the 1 s interval plus

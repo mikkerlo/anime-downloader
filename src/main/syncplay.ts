@@ -1784,7 +1784,7 @@ export class SyncplayClient extends EventEmitter {
       // *inside* this branch on purpose: four early returns sit between here
       // and the remote-state emit, and the self-`setBy` one is the dominant
       // path for a counter-bearing frame — the server broadcasts its forced
-      // update back to the setter too (server.py:184, :441-445, no sender
+      // update back to the setter too (server.py:184, server.py:187, :441-445, no sender
       // filter). An ack at the end of handleState() would therefore never fire
       // for our own seeks, which is exactly the deaf window it exists to close.
       this.sendAck()

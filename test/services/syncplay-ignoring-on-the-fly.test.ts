@@ -132,7 +132,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
   // pass while still shipping the bug.
   //
   // `doSeek` is an option rather than a constant because the server forces a
-  // room update on a seek *or* a pause change (server.py:180-187), and the two
+  // room update on a seek *or* a pause change (server.py:883-884), and the two
   // are different frames on the wire: only the seek carries `doSeek: true`, and
   // only the seek is a claim that somebody moved the room. Hardcoding it made
   // every fixture here a peer *seek* whether it meant to be one or not.

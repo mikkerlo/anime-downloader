@@ -259,8 +259,8 @@ describe('conformance: forced updates', () => {
     // **The model diverges here, and that divergence is the scenario working
     // rather than a fixture to repair — so it is pinned as an expected
     // divergence rather than compared for agreement.**
-    // `test/helpers/syncplay-min-election-server.ts:640` returns above its own
-    // stamp at `test/helpers/syncplay-min-election-server.ts:661`, so a
+    // `test/helpers/syncplay-min-election-server.ts:708` returns above its own
+    // stamp at `test/helpers/syncplay-min-election-server.ts:729`, so a
     // playstate-free frame genuinely is inert in the model — the mirror is
     // faithful to the old comment rather than to the server, which is why
     // nothing here caught the claim. Moving that stamp is #384's item 4. Until

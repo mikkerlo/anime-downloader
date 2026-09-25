@@ -67,12 +67,12 @@ Two cadence differences are known, deliberate, and not compared. Both are about
 *when* a frame is sent rather than what it says.
 
 **Broadcast phase.** The reference schedules one `LoopingCall` per watcher
-(`server.py:847-849`), armed 0.1 s after that watcher connects; the model runs a
-single shared `setInterval`. The two are independently phased, so a sampled
-frame can be anywhere from fresh to a full `SERVER_STATE_INTERVAL` old on either
-side. In a paused room that costs nothing — the reference freezes the playhead
-outright — and in a playing room it is what
-`POSITION_TOLERANCE_PLAYING_S` is sized for.
+(`server.py:841-843`), armed by the last line of `Watcher.__init__`
+(`server.py:737`) 0.1 s after that watcher connects; the model runs a single
+shared `setInterval`. The two are independently phased, so a sampled frame can
+be anywhere from fresh to a full `SERVER_STATE_INTERVAL` old on either side. In
+a paused room that costs nothing — the reference freezes the playhead outright —
+and in a playing room it is what `POSITION_TOLERANCE_PLAYING_S` is sized for.
 
 **`List` cadence.** `MinElectionServer.applySet` pushes a fresh `List` to the
 whole room whenever the roster changes, standing in for the reference's
@@ -150,7 +150,7 @@ scenario in which both sides are delayed by the same harness is measuring the
 harness.
 
 **Multi-peer `setBy` while the room plays.** In a paused room
-`Watcher.getPosition()` (`server.py:779-787`) returns `_position` verbatim, so
+`Watcher.getPosition()` (`server.py:780-787`) returns `_position` verbatim, so
 after a forced update every watcher ties and the election is decided by
 insertion order — deterministic, and asserted. Once the room plays the same call
 adds `time.time() - self._lastUpdatedOn`, a per-watcher stamp that

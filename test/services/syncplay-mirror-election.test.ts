@@ -1192,13 +1192,21 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
   it('still drops a setBy-less frame, which carries no claim about who moved the room', () => {
     handshake()
     roster({ me: { isReady: true, file: {} }, peer: { isReady: true, file: {} } })
+    // A setter-less frame is a paused frame. Upstream opens a room with
+    // `STATE_PAUSED` and `_setBy = None` together (`server.py:543-544`), and the
+    // only path to PLAYING stamps the watcher that caused it (`server.py:879`,
+    // through the pair at `server.py:611-612`), so `paused: false` with
+    // `setBy: null` is not a frame the reference can send. `606` is a legal
+    // restored position — `Room.loadRoom` (`server.py:586-592`) restores
+    // `_position` and never touches `_playState` — so `paused: true` is the
+    // faithful shape here, and the assertion below is green either way.
     tls().emit(
       'data',
       Buffer.from(
         JSON.stringify({
           State: {
             ping: { latencyCalculation: 1_770_000_000.25 },
-            playstate: { position: 606, paused: false, doSeek: false, setBy: null }
+            playstate: { position: 606, paused: true, doSeek: false, setBy: null }
           }
         }) + '\r\n'
       )

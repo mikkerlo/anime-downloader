@@ -218,13 +218,40 @@ export class Peer {
    * is what a client that *accepted* the forced update reports, so it claims
    * nothing new and perturbs no election. The counters themselves are still not
    * compared — see `IGNORED_FIELDS` in `trace-diff.ts`.
+   *
+   * Per-peer rather than a constant, because one scenario needs a peer that
+   * does **not** ack: `conf-forced-ping-stamps` drives the acknowledgement by
+   * hand, and an automatic one would both stamp `_lastUpdatedOn` the instant
+   * the forced update arrived — collapsing the wait that scenario is built on
+   * — and carry a full playstate, which is the opposite of the frame under
+   * test. The default stays on, so every other scenario is unaffected.
    */
-  private readonly ackForcedUpdates = true
+  private readonly ackForcedUpdates: boolean
+
+  /**
+   * The newest `ignoringOnTheFly.server` counter the server has sent us, or
+   * `null` if none has arrived. Captured **outside** the `ackForcedUpdates`
+   * gate below, and the two are easy to fuse by accident: a peer with acking
+   * off still has to be able to carry the counter on a hand-driven frame,
+   * because `protocols.py:788-789` runs `updateState` only while
+   * `serverIgnoringOnTheFly == 0` and only an echo whose counter matches
+   * exactly (`protocols.py:775-777`) clears it. A counter-less frame sent
+   * inside that window is discarded by the reference and inert in the model,
+   * which is agreement that measures nothing.
+   *
+   * Newest wins, deliberately: a second forced update increments past the
+   * first, so a peer that kept the first counter it ever saw would echo one
+   * that no longer matches and be dropped exactly as if it had carried none.
+   */
+  private lastServerCounter: number | null = null
 
   constructor(
     readonly name: string,
-    private readonly transport: Transport
-  ) {}
+    private readonly transport: Transport,
+    options: { ackForcedUpdates?: boolean } = {}
+  ) {
+    this.ackForcedUpdates = options.ackForcedUpdates ?? true
+  }
 
   async seat(room: string): Promise<void> {
     await this.transport.connect()
@@ -263,10 +290,17 @@ export class Peer {
         doSeek: ps.doSeek === true,
         setBy: typeof ps.setBy === 'string' ? ps.setBy : null
       }
-      if (this.ackForcedUpdates && isRecord(msg.State.ignoringOnTheFly)) {
+      // Latent gap: this capture sits inside the `playstate` guard above, so a
+      // genuinely playstate-free inbound counter would not be captured. The
+      // reference only ever raises the flag on a `forced` broadcast, which
+      // always carries a playstate (`protocols.py:748-757`), so no scenario has
+      // reached it — it is a shape this helper does not handle, not a bug it
+      // has hit.
+      if (isRecord(msg.State.ignoringOnTheFly)) {
         const counter = msg.State.ignoringOnTheFly.server
         if (typeof counter === 'number' && counter > 0) {
-          this.ack(counter, this.lastPlaystate)
+          this.lastServerCounter = counter
+          if (this.ackForcedUpdates) this.ack(counter, this.lastPlaystate)
         }
       }
     }
@@ -328,6 +362,47 @@ export class Peer {
           clientLatencyCalculation: Date.now() / 1000,
           latencyCalculation: Date.now() / 1000
         }
+      }
+    })
+  }
+
+  /**
+   * A `State` carrying `ping` and the retained counter and **no `playstate`
+   * key at all** — the production sender's frame, copied rather than invented:
+   * `sendAck()`'s literal is `src/main/syncplay.ts:2737-2745`, and that object
+   * holds the ping, the counter, and nothing else. The absence of a playstate
+   * is the thing under test, so an emitter that added one would be testing a
+   * different frame.
+   *
+   * Throws when no counter has been retained rather than sending the frame
+   * without one, because a counter-less frame is not merely weaker: inside the
+   * ignore window the reference discards it and the model has no ignore window
+   * to begin with, so both backends go inert together and `trace-diff` reports
+   * agreement — the one failure mode here that reads as evidence.
+   *
+   * Does **not** clear `lastServerCounter`, where production `sendAck()` zeroes
+   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2746`), so a second
+   * `pingOnly` step would re-echo a counter the first one already spent. Benign
+   * today rather than harmless in general: with no forced update in between the
+   * server's flag is already 0, `protocols.py:775-777` simply does not match,
+   * and the frame reaches `updateState` anyway — a redundant key, not a dropped
+   * frame. With one in between the capture above has already advanced the
+   * counter, because `protocols.py:761` lets `forced` broadcasts through a
+   * raised flag. What the missing clear costs is the property production has by
+   * construction: that a retained counter is echoed exactly once. A scenario
+   * that leans on that ordering should clear it here first.
+   */
+  sendPingOnly(): void {
+    if (this.lastServerCounter === null) {
+      throw new Error(`peer ${this.name} was asked to echo a counter it never received`)
+    }
+    this.write({
+      State: {
+        ping: {
+          clientLatencyCalculation: Date.now() / 1000,
+          latencyCalculation: Date.now() / 1000
+        },
+        ignoringOnTheFly: { server: this.lastServerCounter }
       }
     })
   }

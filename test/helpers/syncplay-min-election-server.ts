@@ -105,13 +105,13 @@
 //    record green. Every election scenario in that file is a paused room, so
 //    the whole file rides on this arm.
 //  - **The flip.** `conf-forced-pause-change`
-//    (`conformance/syncplay-forced-update.conformance.ts:125`) drives a room
+//    (`conformance/syncplay-forced-update.conformance.ts:126`) drives a room
 //    playing and then paused again underneath a stale watcher: alpha states once
-//    (`conformance/syncplay-forced-update.conformance.ts:130`) and never again,
-//    bravo unpauses (`conformance/syncplay-forced-update.conformance.ts:137`),
+//    (`conformance/syncplay-forced-update.conformance.ts:131`) and never again,
+//    bravo unpauses (`conformance/syncplay-forced-update.conformance.ts:138`),
 //    the room plays through `SETTLE_MS`, and bravo re-pauses at 720
-//    (`conformance/syncplay-forced-update.conformance.ts:139`). The sample at
-//    `conformance/syncplay-forced-update.conformance.ts:141` ("bravo pauses
+//    (`conformance/syncplay-forced-update.conformance.ts:140`). The sample at
+//    `conformance/syncplay-forced-update.conformance.ts:142` ("bravo pauses
 //    again at 720, and the room re-seats") is the one taken *after* the flip,
 //    and `assertConforms` puts it beside 1.7.6 like any other — at the paused
 //    tolerance, because that scenario never sets `playing`.

@@ -11,7 +11,7 @@
 //     to its own
 //     socket one round trip later;
 //  3. a drag the room did **not** take is re-asserted, and `seekIntent` is the
-//     record of that. `src/main/syncplay.ts:2746` retires the intent the moment
+//     record of that. `src/main/syncplay.ts:2784` retires the intent the moment
 //     the room agrees, so a fixture can pin the exact instant it is spent.
 //
 // (2) and (3) are the ones with teeth, and they are two sides of one predicate:

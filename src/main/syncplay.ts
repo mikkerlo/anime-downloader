@@ -2671,9 +2671,47 @@ export class SyncplayClient extends EventEmitter {
   // reference client does ship a playstate on its echo frame (protocols.py:
   // 304-305 — both disjuncts are true right after :287-288). We diverge because
   // our seek latency and 1 s snapshot cadence make our stale window far wider
-  // than mpv's, and because a playstate-free State is provably inert
-  // server-side: updateState(None, None, None, …) reads __hasPauseChanged(None)
-  // as False and skips setPosition (server.py:865-868, :880-882).
+  // than mpv's — and NOT because the frame is inert server-side. It is not, and
+  // the claim that stood here until #392 was false. updateState is five
+  // statements (server.py:875-884): a pauseChanged assignment, the stamp, and
+  // three guarded effects. Its stamp, self._lastUpdatedOn = time.time(), is the
+  // second of the five at server.py:877 — unconditional, above the `position
+  // is not None` guard. All three of the guarded effects are skipped on a
+  // playstate-free frame, because handleState passes position, paused and
+  // doSeek all as None (protocols.py:772, protocols.py:780-781):
+  // __hasPauseChanged(None) is False so setPaused never runs, setPosition is
+  // guarded out, and forcePositionUpdate (server.py:883-884) is guarded out
+  // with them — a third skipped effect the count here used to omit when it
+  // said two of three. The stamp is the one thing that is not skipped, and it
+  // is the one with a position consequence.
+  //
+  // Position-affecting, then, rather than inert: Watcher.getPosition() returns
+  // _position + (now − _lastUpdatedOn) while the room plays, so re-stamping
+  // collapses that term and our projected position falls back to the last
+  // explicitly-set _position — which, just after a forced update, is the seek
+  // target the server re-seated every watcher onto. The newest stamp is the
+  // smallest elapsed term, so it makes us the strict minimum of a room whose
+  // watchers now share one _position, and Room.getPosition() takes
+  // min(watchers). Narrowly, because the replacement claim must not overreach
+  // in its turn: _lastUpdatedOn has a second reader, the PROTOCOL_TIMEOUT drop
+  // at server.py:861, and that one has no consequence for position or election.
+  //
+  // We keep the playstate-free shape anyway, with the true cost on the table.
+  // It never writes a *wrong* _position — the guard skips setPosition — so it
+  // loses only the projection term, for one heartbeat plus the deaf interval,
+  // and the next position-bearing heartbeat restores both. Attaching a
+  // playstate would write our pre-seek position through the guard instead and
+  // drag the room back to where the peer seeked from, bounded only by the file
+  // duration. The middle option, position without paused (buildPlaystate()'s
+  // shape), loses too: _updatePositionByAge reads a missing paused as
+  // not-paused — server.py:870-873 is `if not paused: position += messageAge`
+  // and None is falsy — so it reintroduces the paused-room creep, to assert a
+  // position we received milliseconds earlier. Measured against the pinned
+  // server by the conf-forced-ping-stamps scenario in
+  // conformance/syncplay-forced-update.conformance.ts, which pins the model's
+  // lag as an expected divergence and so passes nightly until #384's item 4
+  // moves that stamp. The reference half of that comparison is what this
+  // paragraph rests on, and pinning rather than skipping keeps it running.
   //
   // Not a storm: while serverIgnoringOnTheFly != 0 the server suppresses its own
   // periodic State (protocols.py:761) and only increments on `forced`, so this

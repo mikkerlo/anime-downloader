@@ -28,7 +28,7 @@
 //    they are not evidence the counter was ever set. They are not inert either,
 //    and the distinction matters to anyone tempted to drop the field from the
 //    triple: stub out the `this.pendingServerAck = 0` in `sendAck()`
-//    (`src/main/syncplay.ts:2708`) so the counter latches instead of being spent,
+//    (`src/main/syncplay.ts:2746`) so the counter latches instead of being spent,
 //    and two cases below go red on the triple — the clean round trip and the
 //    crossing case, each reading `pendingServerAck: 1`. What the zeros pin is
 //    "cleared before every boundary", i.e. the counter never latches, which is a

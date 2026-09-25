@@ -75,8 +75,15 @@ export const SUSPICIOUS_LANDING_PIN = 3
 // an anchor the gate cannot see reds this, and the fix is almost always to
 // spell the path out rather than to raise the number.
 //
-// 11 ambiguous basenames + 106 pathless anchors on this tree.
-export const UNCHECKABLE_PIN = 117
+// 11 ambiguous basenames + 105 pathless anchors on this tree.
+//
+// #392 is the first move in the reducing direction: four anchors that had been
+// leaning on a neighbouring line for their path — one `server.py:877` and three
+// `protocols.py:780-781` — were spelled out onto the pinned reference sources,
+// which are foreign extensions. Spelled out they are unresolvable by
+// construction rather than uncheckable, so they left this class outright and
+// the pin falls with them rather than absorbing them.
+export const UNCHECKABLE_PIN = 116
 
 // A FLOOR, not an exact count — the only pin here that is one-sided, because
 // the marked class is asymmetric. It cannot grow silently: marking is opt-in,
@@ -280,9 +287,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:281 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:288 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:305 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:312 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -291,8 +298,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:304 and the `<!--` test at
-  // scripts/check-line-citations.mjs:310 have no measured false positive in
+  // scripts/check-line-citations.mjs:311 and the `<!--` test at
+  // scripts/check-line-citations.mjs:317 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and

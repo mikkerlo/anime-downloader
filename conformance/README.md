@@ -161,6 +161,13 @@ millisecond, with the reference and the model landing on different peers.
 the unpause on the frames it produced, and `conf-forced-playing-clock` runs the
 playing clock with a single watcher so the election has one candidate.
 
+One scenario does sample a two-peer playing room: `conf-forced-ping-stamps`,
+which has to, because the stamp is the thing it measures. It is not an exception
+to the above — the gap it looks for is `PING_WAIT_MS`, four seconds, which
+dominates a sub-millisecond phase spread by three or four orders of magnitude.
+The margin is that scenario's own property, so a scenario that samples mid-play
+on a smaller margin than that is back in the not-covered case.
+
 **The `List` render of an empty file name.** `protocols.py:695` is
 `"file": watcher.getFile() if watcher.getFile() else {}`, another truthiness
 test, so the reference renders `{name: ""}` as a real object while the model
@@ -176,11 +183,18 @@ has an entry in `IGNORED_FIELDS` naming the fixture that does own it.
 
 ## Runtime
 
-18 scenarios across 4 files, 249 s wall clock on a warm WSL2 box, run
-sequentially — `fileParallelism: false` and `maxConcurrency: 1`, because both
-backends are wall-clock-driven and a second suite running beside them becomes
-their jitter. Most of that is `wait` steps: a scenario has to let both backends
-re-elect at least once after the step under test before it looks.
+19 scenarios across 4 files — 5 election, 5 file-membership, 6 forced-update,
+3 field-coverage — at about 273 s wall clock, run sequentially —
+`fileParallelism: false` and `maxConcurrency: 1`, because both backends are
+wall-clock-driven and a second suite running beside them becomes their jitter.
+Most of that is `wait` steps: a scenario has to let both backends re-elect at
+least once after the step under test before it looks.
+
+The 273 s is derived, not freshly measured. 249 s is the measurement, taken on a
+warm WSL2 box when this suite held 18 scenarios; `conf-forced-ping-stamps` then
+added `2 × SETTLE_MS + PING_WAIT_MS + SETTLE_MS` — 11.8 s of scheduled waits,
+paid once per backend, so 23.6 s. Re-measure rather than keep adding to it if the
+number starts mattering.
 
 Give it the box. Running it alongside `npm run test:coverage` and an Electron
 build killed the server process outright part-way through, and the shape that

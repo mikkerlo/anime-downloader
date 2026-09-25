@@ -1457,7 +1457,7 @@ export class SyncplayClient extends EventEmitter {
   //     Readiness in this app is a measured fact, not a preference: its single
   //     writer is the renderer's `syncplayLocalReady`, edge-triggered off MSE
   //     buffering, and there is no main→renderer path to reset it. So an equal
-  //     value (our own echo — `broadcastRoom` has no sender filter) is silent,
+  //     value (our own echo — `server.py:232` hands it to `broadcastRoom()`, which has no sender filter, `server.py:441-445`) is silent,
   //     and an unequal one — a peer's `setOthersReadiness`, which the server
   //     *stores* against our watcher — gets exactly one `sendSetReady` of our
   //     own value back. Adopting it instead is a dead end: the roster self row

@@ -415,7 +415,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
 
     // The forced update the room sent while it was still at its pre-seek
     // position. `setBy: 'me'` is the default because that is the dominant shape
-    // of this bug: broadcastRoom() has no sender filter (server.py:180-187), so
+    // of this bug: broadcastRoom() has no sender filter (server.py:441-445), so
     // the scrubbing user's own connection is the deaf one — and it is the shape
     // that proves the recovery sits *above* handleState()'s self-`setBy` guard
     // rather than below it, where it would be dead code.

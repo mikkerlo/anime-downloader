@@ -4,15 +4,24 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDetailView.vue'
 
+/** A callable that also carries `then`/`catch`/`finally`. The three are optional
+ *  so the bare arrow can be assigned before they are filled in below. */
+type CallableThenable = {
+  (): unknown
+  then?: unknown
+  catch?: unknown
+  finally?: unknown
+}
+
 // Callable + thenable stub for any window.api.* method not explicitly mocked.
 function makeThenable(): unknown {
-  const fn = (): unknown => fn
-  ;(fn as { then: unknown }).then = (res?: (v: unknown) => void): unknown => {
+  const fn: CallableThenable = (): unknown => fn
+  fn.then = (res?: (v: unknown) => void): unknown => {
     res?.(undefined)
     return fn
   }
-  ;(fn as { catch: unknown }).catch = (): unknown => fn
-  ;(fn as { finally: unknown }).finally = (f?: () => void): unknown => {
+  fn.catch = (): unknown => fn
+  fn.finally = (f?: () => void): unknown => {
     f?.()
     return fn
   }

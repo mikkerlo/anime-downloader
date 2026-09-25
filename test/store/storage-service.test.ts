@@ -48,7 +48,7 @@ describe('createStorageService — in-memory snapshot over electron-store', () =
   })
 
   function create(options?: {
-    writeThroughKeys?: readonly string[]
+    writeThroughKeys?: readonly (keyof typeof DEFAULTS)[]
   }): ReturnType<typeof createStorageService<typeof DEFAULTS>> {
     return createStorageService(DEFAULTS, { cwd: dir, ...options })
   }

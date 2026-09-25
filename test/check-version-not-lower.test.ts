@@ -4,6 +4,7 @@
 // throwaway branches, where the one case most likely to be written backwards
 // (9 vs 10) is also the one nobody thinks to construct.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { MockInstance } from 'vitest'
 
 // `baseRevision` and `baseVersionFromOrigin` are the two parts of the script
 // that talk to git, so the process boundary is stubbed rather than crossed: no
@@ -15,7 +16,6 @@ vi.mock('node:child_process', async (importActual) => ({
   execFileSync
 }))
 
-// @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import {
   baseRevision,
   baseVersionFromOrigin,
@@ -23,6 +23,9 @@ import {
   compareVersions,
   nextPatch,
   parseVersion
+  // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig
+  // graph. The directive sits on the module specifier, not on `import`, because
+  // TS7016 is reported at the `from` clause.
 } from '../scripts/check-version-not-lower.mjs'
 
 type Result = { ok: boolean; out: string[]; err: string[] }
@@ -139,7 +142,7 @@ describe('check-version-not-lower', () => {
 
   describe('baseRevision', () => {
     let errors: string[]
-    let exit: ReturnType<typeof vi.spyOn>
+    let exit: MockInstance<typeof process.exit>
 
     beforeEach(() => {
       errors = []
@@ -206,7 +209,7 @@ describe('check-version-not-lower', () => {
   // version and fails there, which the `check` cases already cover.
   describe('baseVersionFromOrigin', () => {
     let errors: string[]
-    let exit: ReturnType<typeof vi.spyOn>
+    let exit: MockInstance<typeof process.exit>
 
     beforeEach(() => {
       errors = []

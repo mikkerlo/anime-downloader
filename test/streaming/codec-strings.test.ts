@@ -6,8 +6,18 @@ import {
   aacCodecString
 } from '../../src/main/streaming/codec-strings'
 
-function stream(s: Partial<Ffmpeg.FfprobeStream>): Ffmpeg.FfprobeStream {
-  return s as Ffmpeg.FfprobeStream
+// `@types/fluent-ffmpeg` has these two fields the wrong way round — it declares
+// `profile?: number` and `level?: string`, while ffprobe reports a profile name
+// ("High") and a numeric level (40). That real shape is what the functions under
+// test parse, so describe it here and keep the cast to the upstream type in the
+// one place it has always lived.
+type ProbedStream = Omit<Partial<Ffmpeg.FfprobeStream>, 'profile' | 'level'> & {
+  profile?: string
+  level?: number
+}
+
+function stream(s: ProbedStream): Ffmpeg.FfprobeStream {
+  return s as unknown as Ffmpeg.FfprobeStream
 }
 
 describe('avcCodecString', () => {

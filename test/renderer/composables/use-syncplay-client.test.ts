@@ -184,7 +184,12 @@ async function mountWithRemoteState(
 // past the download frontier unclamped" still legible.
 const rawCurrentTimeWrites = new WeakMap<object, number[]>()
 
-function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement {
+// The fake's `paused` is a plain data field, not the DOM's readonly accessor:
+// tests flip it by hand to stand in for the element actually reacting to a
+// `play()`/`pause()` call, since the mocks do not move it themselves.
+type FakeVideo = HTMLVideoElement & { paused: boolean }
+
+function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): FakeVideo {
   const v: Record<string, unknown> = {
     currentTime: 0,
     duration: 1440,
@@ -208,7 +213,7 @@ function fakeVideo(overrides: Partial<HTMLVideoElement> = {}): HTMLVideoElement 
       position = Math.min(Math.max(0, t), end)
     }
   })
-  return v as unknown as HTMLVideoElement
+  return v as unknown as FakeVideo
 }
 
 describe('useSyncplayClient — initial state', () => {
@@ -927,7 +932,7 @@ describe('useSyncplayClient — user presses survive a readiness gate cycle (#30
     // A peer is buffering, so `syncplayAllUsersReady()` is false while
     // everything else `shouldPlay` reads is about to be forced true by the
     // press itself.
-    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: false } as SyncplayRoomUser]
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
     await nextTick()
     expect(v.pause).toHaveBeenCalled()
     ;(v as { paused: boolean }).paused = true
@@ -957,7 +962,7 @@ describe('useSyncplayClient — user presses survive a readiness gate cycle (#30
     // user command — no duplicate discrete send when readiness returns.
     sendLocalState.mockClear()
     ;(v.play as ReturnType<typeof vi.fn>).mockClear()
-    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: true } as SyncplayRoomUser]
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
     await nextTick()
     expect(v.play).toHaveBeenCalled()
     ;(v as { paused: boolean }).paused = false
@@ -1889,7 +1894,7 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
   //
   // `v.paused` in the guard removes the case by construction. The fake's `pause`
   // is rewired below to the HTML internal pause steps, because the bare
-  // `vi.fn()` at `test/renderer/composables/use-syncplay-client.test.ts:194`
+  // `vi.fn()` at `test/renderer/composables/use-syncplay-client.test.ts:199`
   // fires no event and the whole point here is what the event would do.
   it('does not announce a pause when a buffering element takes a playing state', async () => {
     const sendLocalState = vi.fn()
@@ -2023,7 +2028,7 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
   //
   // "Exactly once" is a real assertion about the guard and not an artifact of
   // the fake, and the natural reading is the opposite: `fakeVideo`'s `pause` is a
-  // bare `vi.fn()` (test/renderer/composables/use-syncplay-client.test.ts:194)
+  // bare `vi.fn()` (test/renderer/composables/use-syncplay-client.test.ts:199)
   // that does **not** flip `paused`, so nothing about the fake would stop a
   // second call from landing. Only `v.paused` in the disarm's guard does — and
   // here it is what excludes the disarm, since the element is playing.
@@ -3506,14 +3511,14 @@ describe('useSyncplayClient — playback operations are individually tracked (#3
     })
 
     // A peer goes not-ready: the gate down-arms and registers its pause.
-    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: false } as SyncplayRoomUser]
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: false }]
     await nextTick()
     expect(v.pause).toHaveBeenCalled()
 
     // Before the element gets around to firing `pause`, the room sends a state
     // that registers an operation of its own.
     v.paused = true
-    client.syncplayRoomUsers.value = [{ name: 'peer', isReady: true } as SyncplayRoomUser]
+    client.syncplayRoomUsers.value = [{ username: 'peer', file: null, isReady: true }]
     await nextTick()
     emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
     await flushPromises()

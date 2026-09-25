@@ -932,7 +932,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // while the roster says we are alone, so the two bookkeeping cases below
       // need a peer — and adoption has to have latched *before* it arrives,
       // since with a peer listed `isAdopted()` stops taking the alone shortcut.
-      const withPeerInRoom = (): void =>
+      const withPeerInRoom = (): void => {
         lastTlsSocket!.emit(
           'data',
           Buffer.from(
@@ -946,6 +946,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
             }) + '\r\n'
           )
         )
+      }
 
       // Latch adoption while the roster still says we are alone, with a file
       // open so `getRoomPosition()` has something to key on.

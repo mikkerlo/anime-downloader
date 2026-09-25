@@ -33,7 +33,7 @@ async function bootCtx(
   opts: {
     initialStore?: Record<string, unknown>
     loggedIn?: boolean
-    refreshReturns?: unknown
+    refreshReturns?: Partial<ShikiAnimeDetails> | null
   } = {}
 ): Promise<Ctx> {
   vi.resetModules()
@@ -47,7 +47,13 @@ async function bootCtx(
   })
   const smotret = makeSmotretApiStub()
   const dlMgr = makeDownloadManagerStub()
-  const refreshShikimoriDetails = vi.fn(async () => opts.refreshReturns ?? null)
+  // The fixture names only the fields the tick reads (`episodes_aired`,
+  // `episodes`), so the partial is widened here, once, rather than every case
+  // spelling out the other fifteen.
+  const refreshShikimoriDetails = vi.fn(
+    async (_malId: number): Promise<ShikiAnimeDetails | null> =>
+      (opts.refreshReturns ?? null) as ShikiAnimeDetails | null
+  )
   const isShikimoriLoggedIn = vi.fn(() => opts.loggedIn ?? true)
   const autoDl: AutoDownloaderModule = await import('../../src/main/auto-downloader')
   autoDl.initAutoDownloader({

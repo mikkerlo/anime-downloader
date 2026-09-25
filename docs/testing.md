@@ -365,6 +365,48 @@ scans read comment-stripped source; negative (`not.toContain`) scans read raw,
 where stripping could only loosen them. See #302 and #321, and the per-site
 notes in that test file.
 
+## Typechecking the test tree
+
+`npm run typecheck` is three projects, not two: `tsconfig.node.json` (main +
+preload), `tsconfig.web.json` (renderer), and `tsconfig.test.json` (#400), which
+covers `test/`, `conformance/` and `e2e/` plus the three runner configs
+(`vitest.config.ts`, `vitest.conformance.config.ts`, `playwright.config.ts`).
+Until #400 the test tree was only ever compiled by Vitest's esbuild transform,
+which strips types without checking them — so a test could assert against a
+shape the source had not had for months and still report green, and 90 real type
+errors had accumulated behind that.
+
+It runs under `vue-tsc`, matching `typecheck:web`, because tests mount real
+SFCs. `tsc` happens to report the same diagnostics today (the `*.vue` shim in
+`src/renderer/src/env.d.ts` is what resolves the imports either way), but only
+`vue-tsc` gives a mounted component its real prop types, so `tsc` would be the
+weaker of the two as soon as a test asserts on one.
+
+The include set carries three ambient declaration sets alongside the test
+directories — `src/shared/types/**/*.d.ts`, `src/preload/types.d.ts` and
+`src/renderer/src/env.d.ts`. They are not decoration: a test importing a `src/`
+module pulls that module into the program, and without the globals every
+`SyncplayStatus` / `window.api` / `*.vue` reference inside it fails to resolve.
+
+`scripts/` is deliberately outside the project. Those are plain `.mjs` CI
+scripts: checking them would mean either `allowJs` or hand-written `.d.mts`
+siblings that nothing verifies against the `.mjs` they describe, which is a
+maintenance trap rather than a check. The seam shows in exactly one place —
+`test/check-version-not-lower.test.ts` imports its subject through a
+`@ts-expect-error` on the module specifier (where `TS7016` is reported, not on
+the `import` keyword).
+
+The `--composite false` asymmetry is deliberate: `typecheck:node` and
+`typecheck:web` pass the flag, `typecheck:test` does not, because
+`tsconfig.test.json` sets no `composite`. `TS6307` ("not listed within the file
+list of project") is a composite-project diagnostic, so with `composite` absent
+there is nothing for the flag to suppress — measured on a green tree: no
+`composite` and no flag reports 0 errors, `composite: true` plus the flag also 0,
+and `composite: true` without the flag reports 125 `TS6307`s from the 55 `src/`
+files the test tree reaches transitively. `composite`, a root `references` entry
+and the flag are one decision, not three: add any one of them and the other two
+become necessary.
+
 ## IPC contract guard
 
 `test/ipc-channels.test.ts` asserts every `CHANNELS` / `EVENT_CHANNELS` entry is

@@ -609,8 +609,12 @@ describe('useSkipMarkers — stream detection deadline (#222)', () => {
 
   const STREAM_URL = 'https://cdn.example/anime/ep1_1080.mp4'
 
-  /** Flush pending microtasks (watcher jobs, awaited IPC) without moving the clock. */
-  function settle(): Promise<void> {
+  /**
+   * Flush pending microtasks (watcher jobs, awaited IPC) without moving the
+   * clock. Returns vitest's own promise unchanged — wrapping it to narrow the
+   * resolved value to `void` would add a microtask hop to every flush.
+   */
+  function settle(): Promise<unknown> {
     return vi.advanceTimersByTimeAsync(0)
   }
 

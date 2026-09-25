@@ -406,7 +406,8 @@ describe('useMsePlayer — buffer-ahead gate on respawn (#127)', () => {
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      timestampOffset: 0
+      timestampOffset: 0,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
     expect(m._internal.getSourceBuffer()).not.toBeNull()
@@ -526,7 +527,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      timestampOffset: 0
+      timestampOffset: 0,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -566,7 +568,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      timestampOffset: 0
+      timestampOffset: 0,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -600,7 +603,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       duration: 1421,
       mimeType: 'video/mp4',
       resumeTarget: 600,
-      timestampOffset: 595
+      timestampOffset: 595,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -636,7 +640,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       duration: 1421,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      timestampOffset: 0
+      timestampOffset: 0,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -684,7 +689,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
       duration: 1421,
       mimeType: 'video/mp4',
       resumeTarget: 600,
-      timestampOffset: 595
+      timestampOffset: 595,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -701,7 +707,15 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
   // The mark must track the *write*, not the intent to land: a mark armed for a
   // write that never happens has no `seeked` to consume it and latches, so the
   // user's next real seek is swallowed for the whole TTL.
-  it.each([
+  // `ranges` is annotated because `SourceBuffer.buffered.ranges` wants pairs, and
+  // an inferred table would widen `[[0, 2]]` to `number[][]`.
+  it.each<{
+    label: string
+    resumeTarget: number
+    offset: number
+    at: number
+    ranges: [number, number][]
+  }>([
     // resumeTarget 0 → no land pending at all.
     { label: 'play-from-start', resumeTarget: 0, offset: 0, at: 0, ranges: [[0.0, 2.0]] },
     // Land pending, but the playhead already sits past the target, so the
@@ -742,7 +756,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
         duration: 1421,
         mimeType: 'video/mp4',
         resumeTarget,
-        timestampOffset: offset
+        timestampOffset: offset,
+        refusedSeek: false
       })
       fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -799,7 +814,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
         duration: 1421,
         mimeType: 'video/mp4',
         resumeTarget: opts.resumeTarget,
-        timestampOffset: 1395
+        timestampOffset: 1395,
+        refusedSeek: false
       })
       fakeMs.dispatchEvent(new Event('sourceopen'))
       return { video, beginProgrammaticSeek, fakeSb, m }
@@ -854,7 +870,8 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
         duration: 1421,
         mimeType: 'video/mp4',
         resumeTarget: 1400,
-        timestampOffset: 1395
+        timestampOffset: 1395,
+        refusedSeek: false
       })
       fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -967,6 +984,11 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
           beginProgrammaticSeek
         })
       )
+      // @ts-expect-error `refusedSeek` is required on `StartMseSessionOpts`, and this
+      // one harness has to be able to leave it genuinely absent: the fail-open case
+      // below asserts what the runtime does with no value at all, which no
+      // type-satisfying argument can express. Every other call site in this file
+      // passes it.
       m.startMseSession({
         sessionId: 's1',
         generation: 0,
@@ -1100,11 +1122,11 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
 
     it('is fail-open: an omitted refusedSeek leaves the land unchanged', () => {
       // `refusedSeek` is *required* on `StartMseSessionOpts`, so a typechecked
-      // caller cannot omit it — but `test/**` is outside both typecheck
-      // projects, so the nine other `startMseSession` call sites in this file
-      // do omit it, and this pins that they still land. The runtime direction
-      // is deliberate (#295): were the field ever to go missing, the
-      // degradation is the pre-#275 behaviour, not a stall.
+      // caller cannot omit it — `landHarness` above carries the one
+      // `@ts-expect-error` in this file so that this case can hand the
+      // composable no value at all. The runtime direction is deliberate (#295):
+      // were the field ever to go missing, the degradation is the pre-#275
+      // behaviour, not a stall.
       const { video, beginProgrammaticSeek, m } = landHarness({
         resumeTarget: 600,
         timestampOffset: 595,
@@ -1246,7 +1268,8 @@ describe('useMsePlayer — refill playback operations are exact (#306)', () => {
       duration: 200,
       mimeType: 'video/mp4',
       resumeTarget: 0,
-      timestampOffset: 0
+      timestampOffset: 0,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
     await m._internal.handleUnbufferedSeek()
@@ -1402,7 +1425,8 @@ describe('useMsePlayer — the resume land retracts its own seek operation (#306
       duration: 1421,
       mimeType: 'video/mp4',
       resumeTarget: 1400,
-      timestampOffset: 1395
+      timestampOffset: 1395,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 
@@ -1475,7 +1499,8 @@ describe('useMsePlayer — the resume land retracts its own seek operation (#306
       duration: 1421,
       mimeType: 'video/mp4',
       resumeTarget: 1400,
-      timestampOffset: 1395
+      timestampOffset: 1395,
+      refusedSeek: false
     })
     fakeMs.dispatchEvent(new Event('sourceopen'))
 

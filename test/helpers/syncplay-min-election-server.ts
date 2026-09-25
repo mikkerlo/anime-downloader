@@ -120,9 +120,9 @@
 //    `test/helpers/syncplay-min-election-server.ts:527` ("this.roomPosition =
 //    this.watcherPosition(w)") line, reads through that same paused arm
 //    whenever the change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:757-759` flips `roomPaused`,
-//    refreshes that watcher's `lastUpdatedOn`, and only then calls it, in that
-//    order. Safe for a stated reason rather than by luck: the refresh is what
+//    `test/helpers/syncplay-min-election-server.ts:744-766` refreshes that
+//    watcher's `lastUpdatedOn`, flips `roomPaused`, and only then calls it, in
+//    that order. Safe for a stated reason rather than by luck: the refresh is what
 //    the *playing* arm would have projected from, and the paused arm ignores the
 //    stamp regardless, so either way that write reads the setter's own position
 //    at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
@@ -734,6 +734,14 @@ export class MinElectionServer {
       w.latencyEchoArrivedAt = Date.now()
     }
     const ps = isRecord(state.playstate) ? state.playstate : null
+    // Stamped at receipt, above the playstate guard. `Watcher.updateState`
+    // (`server.py:875`) writes `_lastUpdatedOn` at `server.py:877` as its second
+    // statement — above the pause flip, above `setPosition` and above the
+    // `if position is not None` guard the position work sits behind — and
+    // `Watcher.sendState` reads that stamp against `PROTOCOL_TIMEOUT`
+    // (`server.py:861`). Kept below this early return it would be the model's own
+    // artefact rather than the reference's.
+    w.lastUpdatedOn = Date.now()
     if (!ps) return
     const position = typeof ps.position === 'number' ? ps.position : 0
     const hasPaused = typeof ps.paused === 'boolean'
@@ -755,7 +763,6 @@ export class MinElectionServer {
     // last stored one — `__hasPauseChanged(None)` is `False` in the reference, so
     // the room's flag survives such a frame untouched.
     if (pausedChanged) this.roomPaused = ps.paused as boolean
-    w.lastUpdatedOn = Date.now()
     if (ps.doSeek === true || pausedChanged) this.forcePositionUpdate(w, ps.doSeek === true)
   }
 

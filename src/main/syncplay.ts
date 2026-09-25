@@ -216,7 +216,7 @@ export type SyncplayState =
   | 'reconnecting'
   | 'disconnected'
 
-export interface SyncplayStatus {
+export interface SyncplayConnectionStatus {
   state: SyncplayState
   host?: string
   port?: number
@@ -376,7 +376,7 @@ export class SyncplayClient extends EventEmitter {
   private config: SyncplayConfig | null = null
   private socket: net.Socket | tls.TLSSocket | null = null
   private rxBuffer = ''
-  private status: SyncplayStatus = { state: 'idle' }
+  private status: SyncplayConnectionStatus = { state: 'idle' }
 
   private heartbeatTimer: NodeJS.Timeout | null = null
   private listPollTimer: NodeJS.Timeout | null = null
@@ -533,7 +533,7 @@ export class SyncplayClient extends EventEmitter {
     this.disconnectInternal(true)
   }
 
-  getStatus(): SyncplayStatus {
+  getStatus(): SyncplayConnectionStatus & ReturnType<SyncplayClient['statusProjection']> {
     return { ...this.status, ...this.statusProjection() }
   }
 
@@ -3060,7 +3060,7 @@ export class SyncplayClient extends EventEmitter {
     }, delay)
   }
 
-  private setStatus(patch: Partial<SyncplayStatus>): void {
+  private setStatus(patch: Partial<SyncplayConnectionStatus>): void {
     // Single point of truth for phase tracking: any transition into one of the
     // five attempt phases advances lastAttemptPhase, so a future phase can't
     // be missed by forgetting a call site. openSocket() resets it per attempt.
@@ -3068,11 +3068,11 @@ export class SyncplayClient extends EventEmitter {
       this.lastAttemptPhase = patch.state as AttemptPhase
     }
     this.status = { ...this.status, ...patch }
-    // Overlaid on the way out, never merged into `this.status` — see
-    // statusProjection() for why a stored copy leaks across sessions.
+    // Overlaid on the way out, never merged into `this.status` — whose narrow
+    // `SyncplayConnectionStatus` type is what makes a stored copy a type error.
     const projection = this.statusProjection()
     this.lastEmittedProjection = projection
-    this.emit('connection-status', { ...this.status, ...projection })
+    this.emit('connection-status', { ...this.status, ...projection } satisfies SyncplayStatus)
   }
 }
 

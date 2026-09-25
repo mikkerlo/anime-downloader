@@ -373,7 +373,7 @@ covers `test/`, `conformance/` and `e2e/` plus the three runner configs
 (`vitest.config.ts`, `vitest.conformance.config.ts`, `playwright.config.ts`).
 Until #400 the test tree was only ever compiled by Vitest's esbuild transform,
 which strips types without checking them — so a test could assert against a
-shape the source had not had for months and still report green, and 90 real type
+shape the source had not had for months and still report green, and 154 real type
 errors had accumulated behind that.
 
 It runs under `vue-tsc`, matching `typecheck:web`, because tests mount real

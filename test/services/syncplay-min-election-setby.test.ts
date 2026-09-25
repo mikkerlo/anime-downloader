@@ -140,7 +140,7 @@ describe('MinElectionServer — the playing/`setBy` pairing', () => {
         for (const p of m[1].matchAll(/'([^']*)'/g)) seated.add(p[1])
       }
       for (const [i, line] of text.split('\n').entries()) {
-        if (!line.includes(`'${DEFAULT_PLAYING_SET_BY}'`)) continue
+        if (!line.toLowerCase().includes(`'${DEFAULT_PLAYING_SET_BY}'`)) continue
         if (file === definition && line.includes('DEFAULT_PLAYING_SET_BY =')) continue
         handWritten.push(`${file}:${i + 1}`)
       }
@@ -149,7 +149,7 @@ describe('MinElectionServer — the playing/`setBy` pairing', () => {
     // A tripwire on the census itself: a pattern that stopped matching would
     // make the assertion below vacuously true.
     expect(seated.size).toBeGreaterThan(10)
-    expect(seated).not.toContain(DEFAULT_PLAYING_SET_BY)
+    expect([...seated].map((s) => s.toLowerCase())).not.toContain(DEFAULT_PLAYING_SET_BY)
     expect(handWritten).toEqual([])
   })
 })

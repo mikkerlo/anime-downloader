@@ -1,10 +1,10 @@
 import { EVENT_CHANNELS } from '@shared/ipc/channels'
+// `SyncplayStatus` below is the ambient one, wider than main's stored `SyncplayConnectionStatus`.
 import type {
   SyncplayRemoteEpisode,
   SyncplayRemoteState,
   SyncplayRoomEvent,
-  SyncplayRoomUser,
-  SyncplayStatus
+  SyncplayRoomUser
 } from '../syncplay'
 
 /** Wire-trace frame, emitted only while the syncplay DEBUG flag is on. */

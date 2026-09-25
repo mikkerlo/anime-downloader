@@ -460,14 +460,14 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
       )
     }
 
-    const outboundStates = (): Array<{ position: number; paused?: boolean; doSeek: boolean }> =>
+    type OutboundPlaystate = { position: number; paused?: boolean; doSeek: boolean }
+
+    const outboundStates = (): OutboundPlaystate[] =>
       (sock.write as unknown as { mock: { calls: [string][] } }).mock.calls
         .map(([raw]) => JSON.parse(raw) as Record<string, unknown>)
         .filter((f) => 'State' in f)
-        .map((f) => (f.State as { playstate?: never }).playstate)
-        .filter(
-          (p): p is { position: number; paused?: boolean; doSeek: boolean } => p !== undefined
-        )
+        .map((f) => (f.State as { playstate?: OutboundPlaystate }).playstate)
+        .filter((p): p is OutboundPlaystate => p !== undefined)
 
     const anchorLagMs = (): number => {
       const room = (client as unknown as { lastRoomState: { at: number } | null }).lastRoomState

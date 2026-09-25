@@ -53,10 +53,10 @@ export interface StartMseSessionOpts {
    * error at the only two places that can get it wrong.
    *
    * The *runtime* handling stays fail-open — an absent value leaves the land
-   * exactly as it is. `test/**` sits outside both typecheck projects
-   * (`tsconfig.node.json` / `tsconfig.web.json` include neither), so the call
-   * sites there still pass nothing and still land; `is fail-open: an omitted
-   * refusedSeek leaves the land unchanged` pins that behaviour.
+   * exactly as it is. `test/**` is typechecked too now (`tsconfig.test.json`), so its
+   * call sites pass the field; the one harness that has to hand the composable no
+   * value at all carries a `@ts-expect-error` saying why, and `is fail-open: an
+   * omitted refusedSeek leaves the land unchanged` pins that behaviour.
    */
   refusedSeek: boolean
 }

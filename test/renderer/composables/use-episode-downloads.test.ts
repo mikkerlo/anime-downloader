@@ -424,7 +424,9 @@ describe('useEpisodeDownloads — downloadGroupChanged', () => {
 
   it('returns true when one side missing', () => {
     const dl = useEpisodeDownloads(makeDeps())
-    expect(dl.downloadGroupChanged(undefined, { mergeStatus: 'idle' } as EpisodeGroup)).toBe(true)
+    expect(
+      dl.downloadGroupChanged(undefined, { mergeStatus: 'idle' } as unknown as EpisodeGroup)
+    ).toBe(true)
   })
 
   it('detects mergeStatus / video.bytesReceived deltas', () => {

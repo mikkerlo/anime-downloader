@@ -426,7 +426,7 @@ function translationArms(): { remux: string; remote: string } {
 }
 
 function stubApi(extra: Record<string, unknown> = {}): void {
-  ;(globalThis as { window?: { api: Record<string, unknown> } }).window = {
+  ;(globalThis as Record<string, unknown>).window = {
     api: {
       syncplayGetStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
       syncplayGetRoomUsers: vi.fn().mockResolvedValue([]),

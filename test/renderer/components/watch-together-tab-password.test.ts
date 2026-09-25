@@ -16,10 +16,13 @@ const api = {
     username: 'u',
     autoReconnect: true
   })),
-  setSetting: vi.fn(async () => undefined),
+  // The two stubs whose *arguments* are asserted on below carry the real
+  // parameter lists, so `mock.calls` is the tuple the preload would have
+  // recorded rather than an empty one.
+  setSetting: vi.fn(async (_key: string, _value: unknown) => undefined),
   syncplayHasPassword: vi.fn(async () => false),
-  syncplaySetPassword: vi.fn(async () => undefined),
-  syncplayConnect: vi.fn(async () => undefined),
+  syncplaySetPassword: vi.fn(async (_password: string) => undefined),
+  syncplayConnect: vi.fn(async (_cfg: SyncplayConnectConfig) => undefined),
   syncplayDisconnect: vi.fn(async () => undefined),
   onSyncplayConnectionStatus: vi.fn(() => () => {})
 }
@@ -68,7 +71,7 @@ describe('WatchTogetherTab password handling (#216)', () => {
 
     // Flushed before connecting, so a just-typed password still applies.
     expect(api.syncplaySetPassword).toHaveBeenCalledWith('hunter2')
-    const cfg = api.syncplayConnect.mock.calls[0]?.[0] as Record<string, unknown>
+    const cfg = api.syncplayConnect.mock.calls[0]?.[0]
     expect(cfg).toBeDefined()
     expect(cfg).not.toHaveProperty('password')
   })

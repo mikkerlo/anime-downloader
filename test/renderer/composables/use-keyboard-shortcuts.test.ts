@@ -11,7 +11,7 @@ vi.mock('vue', async () => {
     onBeforeUnmount: (fn: () => void) => {
       // Run on test teardown via beforeEach reset; expose for direct invocation
       ;(globalThis as { __unmountFns?: (() => void)[] }).__unmountFns ??= []
-      ;(globalThis as { __unmountFns: (() => void)[] }).__unmountFns.push(fn)
+      ;(globalThis as typeof globalThis & { __unmountFns: (() => void)[] }).__unmountFns.push(fn)
     }
   }
 })
@@ -109,9 +109,10 @@ describe('useKeyboardShortcuts', () => {
 
   it('registers a window keydown listener on mount', () => {
     setup({ bindings: { back: 'Escape' } })
-    expect(
-      (globalThis.window as { addEventListener: ReturnType<typeof vi.fn> }).addEventListener
-    ).toHaveBeenCalledWith('keydown', expect.any(Function))
+    expect(vi.mocked(globalThis.window.addEventListener)).toHaveBeenCalledWith(
+      'keydown',
+      expect.any(Function)
+    )
     expect(added).not.toBeNull()
   })
 
@@ -170,9 +171,10 @@ describe('useKeyboardShortcuts', () => {
     const fns = (globalThis as { __unmountFns?: (() => void)[] }).__unmountFns ?? []
     expect(fns.length).toBeGreaterThan(0)
     fns[fns.length - 1]()
-    expect(
-      (globalThis.window as { removeEventListener: ReturnType<typeof vi.fn> }).removeEventListener
-    ).toHaveBeenCalledWith('keydown', expect.any(Function))
+    expect(vi.mocked(globalThis.window.removeEventListener)).toHaveBeenCalledWith(
+      'keydown',
+      expect.any(Function)
+    )
     expect(removed).not.toBeNull()
   })
 })

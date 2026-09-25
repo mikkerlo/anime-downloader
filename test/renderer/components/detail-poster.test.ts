@@ -7,14 +7,23 @@ import AnimeDetailView from '../../../src/renderer/src/components/views/AnimeDet
 // A callable + thenable stub: unknown window.api.* methods return this, so both
 // `await api.x()` (resolves undefined) and `unsub = api.onX(cb); unsub()` (callable)
 // work without having to enumerate every channel the mount touches.
+// The three call-chain members are optional so the bare arrow can be assigned
+// before they are filled in below.
+type CallableThenable = {
+  (): unknown
+  then?: unknown
+  catch?: unknown
+  finally?: unknown
+}
+
 function makeThenable(): unknown {
-  const fn = (): unknown => fn
-  ;(fn as { then: unknown }).then = (res?: (v: unknown) => void): unknown => {
+  const fn: CallableThenable = (): unknown => fn
+  fn.then = (res?: (v: unknown) => void): unknown => {
     res?.(undefined)
     return fn
   }
-  ;(fn as { catch: unknown }).catch = (): unknown => fn
-  ;(fn as { finally: unknown }).finally = (f?: () => void): unknown => {
+  fn.catch = (): unknown => fn
+  fn.finally = (f?: () => void): unknown => {
     f?.()
     return fn
   }

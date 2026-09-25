@@ -89,11 +89,11 @@ import { useSyncplayClient } from '../../src/renderer/src/composables/use-syncpl
 import { MinElectionServer } from './syncplay-min-election-server'
 import { InMemoryStorage } from './in-memory-storage'
 import type { MinElectionServerOptions } from './syncplay-min-election-server'
+// `SyncplayStatus` below is the ambient one, as wide as `getStatus()` really returns.
 import type {
   SyncplayClient as MainSyncplayClient,
   SyncplayRemoteEpisode,
-  SyncplayRemoteState,
-  SyncplayStatus
+  SyncplayRemoteState
 } from '../../src/main/syncplay'
 import type {
   SyncplayClient as RendererSyncplayClient,

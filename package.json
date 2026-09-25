@@ -1,6 +1,6 @@
 {
   "name": "anime-dl-app",
-  "version": "4.6.116",
+  "version": "4.6.117",
   "description": "Anime episode downloader",
   "main": "./out/main/index.js",
   "engines": {
@@ -15,7 +15,8 @@
     "pack:mac": "electron-vite build && electron-builder --mac --dir",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "typecheck:test": "vue-tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

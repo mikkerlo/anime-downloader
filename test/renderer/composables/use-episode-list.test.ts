@@ -89,7 +89,7 @@ beforeEach(() => {
   setApi({})
   // Minimal DOM stubs so applyFocusEpisode (which queries the episode-row by
   // dataset) can run in the node test environment.
-  ;(globalThis as { document?: { querySelector: () => null } }).document = {
+  ;(globalThis as Record<string, unknown>).document = {
     querySelector: () => null
   }
   ;(globalThis as { CSS?: { escape: (s: string) => string } }).CSS = {
@@ -275,7 +275,11 @@ describe('useEpisodeList — loadPageEpisodes', () => {
     const eps = [mkEpisode(1, '1'), mkEpisode(2, '2'), mkEpisode(3, '3'), mkEpisode(4, '4')]
     const cachedSet = new Set([1, 2]) // only a subset of translations is cached
     // Network batch stays in flight so the second load observes the in-flight ids.
-    const getEpisodesBatch = vi.fn(() => new Promise<{ data: EpisodeDetail[] }>(() => {}))
+    // The parameter is named even though the stub never resolves: the case reads
+    // the recorded ids back out of `mock.calls` below.
+    const getEpisodesBatch = vi.fn(
+      (_ids: number[]) => new Promise<{ data: EpisodeDetail[] }>(() => {})
+    )
     const getEpisodesBatchCached = vi.fn(async (ids: number[]) => ({
       data: ids
         .filter((id) => cachedSet.has(id))
@@ -310,7 +314,7 @@ describe('useEpisodeList — loadPageEpisodes', () => {
 
     // Each un-cached id must be fetched at most once. On the pre-fix code the
     // second load re-fetches ids 3 & 4 (they aren't tracked as in-flight).
-    const fetchedIds = getEpisodesBatch.mock.calls.flatMap((c) => c[0] as number[])
+    const fetchedIds = getEpisodesBatch.mock.calls.flatMap((c) => c[0])
     const count = (id: number): number => fetchedIds.filter((x) => x === id).length
     expect(count(3)).toBeLessThanOrEqual(1)
     expect(count(4)).toBeLessThanOrEqual(1)

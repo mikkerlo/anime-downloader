@@ -1200,6 +1200,13 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     // restored position — `Room.loadRoom` (`server.py:586-592`) restores
     // `_position` and never touches `_playState` — so `paused: true` is the
     // faithful shape here, and the assertion below is green either way.
+    // The drop is deliberate and costs one tick, not the position:
+    // `Room.addWatcher` seeds the joiner from the room before inserting it
+    // (`server.py:636`, then `server.py:637`), so the next election returns
+    // this same position. Nor can the drop move the room: un-adopted,
+    // `buildPlaystate()` never asserts our own snapshot
+    // (`src/main/syncplay.ts:2403`) — it mirrors the room's own last state, or
+    // sends no playstate at all (`src/main/syncplay.ts:2410-2411`).
     tls().emit(
       'data',
       Buffer.from(

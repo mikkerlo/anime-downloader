@@ -889,7 +889,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
         if (event === 'seeked') ui!.onVideoSeeked()
         else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
-        // `src/renderer/src/components/views/PlayerView.vue:2835` is the
+        // `src/renderer/src/components/views/PlayerView.vue:2894` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
         else ui!.onVideoLoadedMetadata()
       }

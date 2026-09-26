@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
-import { analyze, report } from '../scripts/check-line-citations.mjs'
+import { analyze, report, driftBasePlan } from '../scripts/check-line-citations.mjs'
 
 type Corpus = Record<string, string>
 
@@ -28,6 +28,18 @@ type Result = {
     quote: string
     elsewhere: number[]
   }[]
+  drift: {
+    at: string
+    cited: string
+    target: string
+    line: number
+    end: boolean
+    elsewhere: number[]
+    baseText: string
+  }[]
+  driftChecked: number
+  driftBase: string | null
+  driftEnabled: boolean
   ambiguous: { at: string; cited: string; candidates: string[] }[]
   pathless: { at: string; anchor: string }[]
   uncheckable: number
@@ -729,5 +741,463 @@ describe('check-line-citations', () => {
     // And a pin left behind by a repair that removed the landing reds too, so a
     // stale pin cannot quietly license a new one.
     expect(report(run(base()), { suspiciousLanding: 1, uncheckable: 0, marked: 0 }).ok).toBe(false)
+  })
+
+  // --- drift (#407) -----------------------------------------------------------
+  //
+  // The class every case above is blind to by construction: an anchor that
+  // resolves, lands on a live code line, and names the WRONG line because the
+  // target grew above it. Nothing in the head tree tells that apart from a
+  // correct anchor, so each fixture here is TWO corpora — a base and a head —
+  // driven through the injected `readBaseLines` so none of them touches git.
+  //
+  // Every fixture is also run through the pre-#407 reader-less path, because
+  // "the new check catches it" is only half a claim: the other half is that the
+  // old one did not, and that is what makes the diff self-documenting.
+
+  const runDrift = (baseCorpus: Corpus, head: Corpus): Result =>
+    analyze({
+      files: Object.keys(head),
+      readLines: (p: string) => head[p].split('\n'),
+      readBaseLines: (p: string) => (p in baseCorpus ? baseCorpus[p].split('\n') : null),
+      baseLabel: 'base',
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+
+  const noPins = { suspiciousLanding: 0, uncheckable: 0, marked: 0 }
+
+  // #371's fixture at its REAL line numbers, so the assertion below is `2894`
+  // rather than a number invented to make a small fixture come out even. Padding
+  // is the cheapest thing that keeps them honest: the check reads two lines and
+  // counts one string, so the 2800 lines of template around them do not
+  // participate in the decision and are not worth inventing.
+  const PLAYER = 'src/renderer/src/components/views/PlayerView.vue'
+  const LOADED = '        @loadedmetadata="syncplay.onVideoLoadedMetadata"'
+  const MODAL = '      <div class="auto-advance-modal">'
+  const pad = (n: number): string[] => Array.from({ length: n }, () => '  <span />')
+  const vue = (lines: string[]): string => [...lines, ''].join('\n')
+
+  // The citing comment, byte for byte what `test/helpers/syncplay-two-peer.ts`
+  // carries — and identical in both trees, which is what makes the token
+  // unchanged and the anchor eligible.
+  const TWO_PEER = [
+    "        else if (event === 'pause') ui!.onLocalPause()",
+    `        // \`${PLAYER}:2835\` is the`,
+    '        // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.',
+    '        else ui!.onVideoLoadedMetadata()',
+    ''
+  ].join('\n')
+
+  it('reds the #371 shift that the resolver passes, and names the corrected line', () => {
+    // THE REGRESSION CASE, and the whole reason #407 exists. #371 inserted the
+    // auto-advance overlay above the `<video>` bindings: `PlayerView.vue:2835`
+    // stopped being the `@loadedmetadata` binding and became the modal div, with
+    // the binding now at `:2894`, while the anchor in the two-peer helper never
+    // moved. Both trees resolve, both land on live markup, and
+    // `check:line-citations` was green across the whole incident and is still
+    // green on it today — which the first half of this test asserts rather than
+    // asserting the fix alone.
+    const baseCorpus: Corpus = {
+      [PLAYER]: vue([...pad(2834), LOADED, ...pad(100)]),
+      'test/helpers/syncplay-two-peer.ts': TWO_PEER
+    }
+    const head: Corpus = {
+      [PLAYER]: vue([...pad(2834), MODAL, ...pad(58), LOADED, ...pad(41)]),
+      'test/helpers/syncplay-two-peer.ts': TWO_PEER
+    }
+
+    // The base and head shapes, asserted rather than trusted to the padding
+    // arithmetic — a fixture whose own line numbers are wrong would prove the
+    // opposite of what it claims in a test about wrong line numbers.
+    expect(baseCorpus[PLAYER].split('\n')[2834]).toBe(LOADED)
+    expect(head[PLAYER].split('\n')[2834]).toBe(MODAL)
+    expect(head[PLAYER].split('\n')[2893]).toBe(LOADED)
+
+    // The old behaviour: no `readBaseLines`, and the gate is green.
+    const old = analyze({
+      files: Object.keys(head),
+      readLines: (p: string) => head[p].split('\n'),
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+    expect(old.failures).toEqual([])
+    expect(old.suspicious).toEqual([])
+    expect(old.driftEnabled).toBe(false)
+    expect(report(old, noPins).ok).toBe(true)
+
+    // The new behaviour: the same head tree, plus the base it came from.
+    const r = runDrift(baseCorpus, head)
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([])
+    expect(r.drift).toHaveLength(1)
+    expect(r.drift[0]).toMatchObject({
+      at: 'test/helpers/syncplay-two-peer.ts:2',
+      cited: `${PLAYER}:2835`,
+      target: PLAYER,
+      line: 2835,
+      elsewhere: [2894]
+    })
+
+    // Hard failure: no pin value makes it pass, because there is no legitimate
+    // steady-state population of anchors naming the wrong line.
+    expect(report(r, noPins).ok).toBe(false)
+    expect(report(r, { suspiciousLanding: 9, uncheckable: 9, marked: 0 }).ok).toBe(false)
+    expect(report(r, noPins).err.join('\n')).toContain(`drift — it is at ${PLAYER}:2894`)
+  })
+
+  // Three identical calls, a fixture-sized version of the real multiplicity a
+  // bare call reaches on this tree: `clearPendingUserPause()` sits at ten lines
+  // of `src/renderer/src/composables/use-syncplay-client.ts`, five of which are
+  // the bare call and the same normalized LINE. The other five — the
+  // declaration, a one-line `if`, three backticked comment mentions — are what
+  // whole-line equality excludes and a substring match would not.
+  const CALL = '      clearPendingUserPause()'
+
+  it('lists every head line a drifted anchor could mean instead of picking one', () => {
+    // The count has to SURVIVE for this to be reportable at all — the next case
+    // is an in-place edit of the same shape and passes — so the fixture
+    // relocates the anchored copy while keeping all three present in head.
+    const baseCorpus = {
+      'src/svc.ts': ['const a = 1', CALL, 'const b = 2', CALL, 'const c = 3', CALL, ''].join('\n'),
+      'src/caller.ts': '// the reset (src/svc.ts:2)'
+    }
+    const head = {
+      'src/svc.ts': [
+        'const a = 1',
+        'const inserted = 0',
+        'const b = 2',
+        CALL,
+        'const c = 3',
+        CALL,
+        'const d = 4',
+        CALL,
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the reset (src/svc.ts:2)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.drift).toHaveLength(1)
+    expect(r.drift[0].elsewhere).toEqual([4, 6, 8])
+
+    const { err } = report(r, noPins)
+    expect(err.join('\n')).toContain('src/svc.ts:4, src/svc.ts:6, src/svc.ts:8')
+    expect(err.join('\n')).toContain('more than one match')
+  })
+
+  it('passes an in-place edit whose old content is nowhere else in head', () => {
+    // CRITICAL 3's NARROWING. Rename an identifier on a cited line and the token
+    // is unchanged while the content differs — the naive rule hard-fails the most
+    // ordinary edit there is, and the author has no retarget available to go
+    // green with. "Nowhere in head" is what distinguishes a reword from a shift.
+    const baseCorpus = {
+      'src/svc.ts': ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    }
+    const head = {
+      'src/svc.ts': ['const a = 1', '  const total = a + b + carry', 'const c = 3', ''].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.drift).toEqual([])
+    expect(r.driftChecked).toBe(1)
+    expect(report(r, noPins).ok).toBe(true)
+  })
+
+  it('passes an in-place edit of a line whose old content also sits elsewhere', () => {
+    // THE ROUND-2 CASE, and the one the multi-match test above must not be built
+    // to contradict. The narrowing alone does not protect content that repeats:
+    // reword one of three identical lines where it stands and the
+    // elsewhere-search still finds the other two, so the gate would report "pick
+    // one of two" on an anchor that never moved. Base count 3, head count 2 — the
+    // anchored copy did not relocate, it went away — so this passes.
+    const baseCorpus = {
+      'src/svc.ts': ['const a = 1', CALL, 'const b = 2', CALL, 'const c = 3', CALL, ''].join('\n'),
+      'src/caller.ts': '// the reset (src/svc.ts:2)'
+    }
+    const head = {
+      'src/svc.ts': [
+        'const a = 1',
+        '      clearPendingUserPause(room)',
+        'const b = 2',
+        CALL,
+        'const c = 3',
+        CALL,
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the reset (src/svc.ts:2)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.drift).toEqual([])
+    expect(report(r, noPins).ok).toBe(true)
+  })
+
+  it('pins whole-line equality rather than the substring match verifyQuote uses', () => {
+    // ROUND 3'S FIXTURE, and the only case here whose purpose is to fail if a
+    // later hand swaps the comparison back for `.includes`. Base: the anchored
+    // line is a bare `foo()` appearing nowhere else. Head: that line is edited in
+    // place and the same commit adds a comment mentioning `foo()` elsewhere.
+    // Whole-line equality gives base count 1 and head count 0, so it passes.
+    // A substring matcher holds the head count at 1, reports drift onto the
+    // comment, and reds — which is the point of the fixture. That matcher also
+    // makes every `}` and `return` match half its file, and an empty base line
+    // match all of it.
+    const baseCorpus = {
+      'src/svc.ts': ['const guard = true', '  foo()', 'const after = 1', ''].join('\n'),
+      'src/caller.ts': '// the call (src/svc.ts:2)'
+    }
+    const head = {
+      'src/svc.ts': [
+        'const guard = true',
+        '  foo(nextEpisode)',
+        'const after = 1',
+        '// calls foo() here',
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the call (src/svc.ts:2)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.drift).toEqual([])
+    expect(report(r, noPins).ok).toBe(true)
+  })
+
+  it('exempts an anchor this commit retargeted, because its token changed', () => {
+    // The gate's stated limit, asserted so nobody reads its silence as coverage:
+    // a hand retarget is exempt BY CONSTRUCTION, and one that lands a line short
+    // goes through green. The workflow is what changes — leave the old token in
+    // place and the failure names the correct line, so the number is copied out
+    // of the message rather than counted.
+    const baseCorpus = {
+      'src/svc.ts': ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    }
+    const head = {
+      'src/svc.ts': [
+        'const a = 1',
+        'const inserted = 0',
+        '  const total = a + b',
+        'const c = 3',
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:3)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.drift).toEqual([])
+    expect(r.driftChecked).toBe(0)
+
+    // And the control, on the same two trees: leave the token alone and it reds
+    // while naming 3. Without this the case above would pass for a corpus in
+    // which nothing shifted at all.
+    const unretargeted = runDrift(baseCorpus, {
+      ...head,
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    })
+    expect(unretargeted.drift).toHaveLength(1)
+    expect(unretargeted.drift[0].elsewhere).toEqual([3])
+  })
+
+  it('passes a citing comment widened on its own line', () => {
+    // #405 and #406 were both authored same-line — widening comment text without
+    // wrapping it — to avoid shifting anchors. The token test is "the same string
+    // ANYWHERE in the base citing file", not "at the same line", so wrapping is
+    // free here too: what matters is the target, and the target did not move.
+    const target = ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n')
+    const r = runDrift(
+      { 'src/svc.ts': target, 'src/caller.ts': '// the sum (src/svc.ts:2)' },
+      {
+        'src/svc.ts': target,
+        'src/caller.ts': '// a leading paragraph\n// the sum of both halves (src/svc.ts:2)'
+      }
+    )
+
+    expect(r.drift).toEqual([])
+    expect(r.driftChecked).toBe(1)
+  })
+
+  it('passes a target grown entirely below its anchors', () => {
+    const baseCorpus = {
+      'src/svc.ts': ['const a = 1', '  const total = a + b', ''].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    }
+    const r = runDrift(baseCorpus, {
+      'src/svc.ts': ['const a = 1', '  const total = a + b', 'const added = 3', ''].join('\n'),
+      'src/caller.ts': '// the sum (src/svc.ts:2)'
+    })
+
+    expect(r.drift).toEqual([])
+    expect(r.driftChecked).toBe(1)
+  })
+
+  it('reds a range whose END moved while its start stayed put', () => {
+    // `path:N-M` claims both ends, so both are checked — which is NOT the rule
+    // `suspiciousLanding()` follows. Its start-line-only classification has a
+    // reason peculiar to itself (a cited block's last line is a closing brace by
+    // construction, so judging the interior would red the legitimate ranges), and
+    // content equality against the base has no such collision.
+    const baseCorpus = {
+      'src/svc.ts': [
+        'const head = 0',
+        '  const a = 1',
+        '  const b = 2',
+        '  const tail = 3',
+        'const after = 9',
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the middle (src/svc.ts:2-4)'
+    }
+    const head = {
+      'src/svc.ts': [
+        'const head = 0',
+        '  const a = 1',
+        '  const b = 2',
+        '  const inserted = 7',
+        '  const tail = 3',
+        'const after = 9',
+        ''
+      ].join('\n'),
+      'src/caller.ts': '// the middle (src/svc.ts:2-4)'
+    }
+
+    const r = runDrift(baseCorpus, head)
+    expect(r.suspicious).toEqual([])
+    expect(r.drift).toHaveLength(1)
+    expect(r.drift[0]).toMatchObject({ line: 4, end: true, elsewhere: [5] })
+    expect(report(r, noPins).err.join('\n')).toContain('(range end)')
+  })
+
+  it('does not see a whitespace-only reflow of the anchored line as a change', () => {
+    // TRUE BY CONSTRUCTION SINCE STEP 6, not as a downstream consequence:
+    // `normalizeQuote()` collapses whitespace, so a reindent is not a change at
+    // step 1 and the pass never depended on the elsewhere-search missing it. The
+    // head copy here is indented differently AND the file grew above it, so a
+    // raw comparison would both see a change and find the old text elsewhere.
+    const r = runDrift(
+      {
+        'src/svc.ts': ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n'),
+        'src/caller.ts': '// the sum (src/svc.ts:2)'
+      },
+      {
+        'src/svc.ts': ['const a = 1', '      const  total = a + b', 'const c = 3', ''].join('\n'),
+        'src/caller.ts': '// the sum (src/svc.ts:2)'
+      }
+    )
+
+    expect(r.drift).toEqual([])
+  })
+
+  it('skips an anchored line the base left blank rather than matching every gap', () => {
+    // An empty needle is `suspiciousLanding()`'s business, and under equality it
+    // would match every blank line in the file — so the drift check declines the
+    // case outright instead of reporting a landing that gate already owns.
+    const r = runDrift(
+      {
+        'docs/notes.md': ['The room mirror.', '', 'A later section.', ''].join('\n'),
+        'src/caller.ts': '// see docs/notes.md:2'
+      },
+      {
+        'docs/notes.md': ['The room mirror.', 'Now filled in.', '', 'A later section.', ''].join(
+          '\n'
+        ),
+        'src/caller.ts': '// see docs/notes.md:2'
+      }
+    )
+
+    expect(r.drift).toEqual([])
+  })
+
+  it('exempts an anchor whose citing or target file the base does not carry', () => {
+    // A file this branch adds has no base content to compare, and a renamed
+    // target is already the resolver's business. Neither may crash the check.
+    const added = runDrift(
+      {},
+      {
+        'src/svc.ts': ['const a = 1', '  const total = a + b', ''].join('\n'),
+        'src/caller.ts': '// the sum (src/svc.ts:2)'
+      }
+    )
+    expect(added.drift).toEqual([])
+    expect(added.driftChecked).toBe(0)
+    expect(added.driftEnabled).toBe(true)
+  })
+
+  it('truncates a multi-thousand-character base line in the failure message', () => {
+    // `docs/syncplay.md`'s bullets are single lines running to several thousand
+    // characters. Echoing one whole scrolls every other failure out of the
+    // terminal, in a gate whose entire output is numbers to copy.
+    const long = `- ${'the room mirror re-seats every watcher '.repeat(80)}`
+    const r = runDrift(
+      {
+        'docs/wide.md': [long, 'A later line.', ''].join('\n') as string,
+        'src/c.ts': '// (docs/wide.md:1)'
+      },
+      {
+        'docs/wide.md': ['A new opening line.', long, 'A later line.', ''].join('\n'),
+        'src/c.ts': '// (docs/wide.md:1)'
+      }
+    )
+
+    expect(r.drift).toHaveLength(1)
+    const line = report(r, noPins).err.find((l: string) => l.includes('the base had'))!
+    expect(line.length).toBeLessThan(140)
+    expect(line).toContain('…')
+  })
+
+  it('prints "not compared" rather than a zero when there is no base', () => {
+    // The two outcomes a reader must be able to tell apart: the gate working and
+    // finding nothing, and the gate not running at all. A single line reading
+    // `drift: 0` renders them identical, which is the shape a printed-only number
+    // always takes.
+    const withBase = runDrift(
+      { 'src/svc.ts': 'const a = 1\n', 'src/caller.ts': '// (src/svc.ts:1)' },
+      { 'src/svc.ts': 'const a = 1\n', 'src/caller.ts': '// (src/svc.ts:1)' }
+    )
+    expect(report(withBase, noPins).out.join('\n')).toContain('1 anchor(s) compared against base')
+
+    const without = run(base({ 'src/caller.ts': '// the increment (src/target.ts:3)' }))
+    expect(report(without, noPins).out.join('\n')).toContain('drift: not compared')
+  })
+
+  it('fails on a missing base in CI and skips loudly only where there is no base', () => {
+    // THE ONE DECISION CI CAN SILENTLY GET WRONG. A missing base must red rather
+    // than skip, because a skip turns this gate off in the one place it has to
+    // run. The merge-base/tip asymmetry is the other half: the tip locally blames
+    // the branch for every shift that landed on `main` since the fork, and the tip
+    // in CI is right because `refs/pull/N/merge` already contains base.
+    expect(driftBasePlan({ haveTracking: true, haveOrigin: true, ci: false })).toEqual({
+      path: 'merge-base'
+    })
+    expect(driftBasePlan({ haveTracking: false, haveOrigin: true, ci: false })).toEqual({
+      path: 'tip'
+    })
+    expect(driftBasePlan({ haveTracking: false, haveOrigin: true, ci: true })).toEqual({
+      path: 'tip'
+    })
+    expect(driftBasePlan({ haveTracking: false, haveOrigin: false, ci: true }).path).toBe('fail')
+    expect(driftBasePlan({ haveTracking: false, haveOrigin: false, ci: false }).path).toBe('skip')
+  })
+
+  it('takes the tip in CI even though the tracking ref is there by then', () => {
+    // THE ROW THAT WAS WRONG, and it was a hard red on every PR rather than a
+    // silent skip. Routing on `haveTracking` before `ci` reads as safe only under
+    // the premise that CI has no tracking ref. It has one: `check:version-not-lower`
+    // runs earlier in the same `quality` job and takes `baseRevision()`'s fetching
+    // branch, and `git fetch --depth=1 origin <base>` writes
+    // `refs/remotes/origin/<base>` — `actions/checkout` builds the clone with
+    // `git remote add`, whose `remote.origin.fetch` wildcard makes the fetch
+    // update it opportunistically. Measured against a simulated depth-1 checkout
+    // of a `refs/pull/N/merge`: the tracking ref is present, and
+    // `git merge-base HEAD refs/remotes/origin/main` then exits 1 with no output,
+    // because at depth 1 HEAD's parents are outside the shallow boundary.
+    //
+    // So this is the case the pinned table above cannot state, since `ci: true`
+    // with a tracking ref is exactly the combination CI presents.
+    expect(driftBasePlan({ haveTracking: true, haveOrigin: true, ci: true })).toEqual({
+      path: 'tip'
+    })
   })
 })

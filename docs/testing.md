@@ -562,6 +562,82 @@ its **end line included** — a range whose last line is a paragraph gap has sli
 just as surely as one with a gap in the middle. That measures zero hits today and
 catches a range that has slid across a paragraph gap.
 
+### Drift: the anchor that resolves and is still wrong
+
+The class above has a second half, and unlike "landed on live prose" it is
+decidable. When a file grows above a cited line the anchor does not break: it
+resolves, it lands on live code, and it names something else. #371 inserted the
+auto-advance overlay above `PlayerView.vue`'s `<video>` bindings, so line 2835
+stopped being the `@loadedmetadata` binding and became a modal `<div>`, with the
+binding pushed 59 lines down; the anchor in `test/helpers/syncplay-two-peer.ts`
+never moved, and this gate was green throughout. On #408 one editing
+round left three anchors a line short and the gate flagged exactly the one that
+happened to land on a comment — the other two resolved, cleanly, onto the wrong
+lines.
+
+Since #407 the gate reads each cited line **as the base revision of this branch
+had it** and compares. The rule is an occurrence count rather than a resolution
+check, because resolution is precisely the part that already passes:
+
+- **The precondition is an unchanged anchor token.** The same `path:N` string has
+  to occur somewhere in the base version of the citing file. An anchor this
+  branch wrote or retargeted has no base claim to hold it to and is exempt.
+  Ranges are compared at **both** ends here, unlike the landing heuristics, whose
+  start-line-only rule exists to avoid redding the ranges that legitimately close
+  on a `}`.
+- **The comparison is whole-line equality**, after the same normalization the
+  marked form uses. A substring test would make every `}` and `return` match half
+  its file and an empty line match all of it. Since normalization collapses
+  whitespace, reindenting a cited line is not a change.
+- **An in-place edit passes.** If the base content appears nowhere else in the
+  head file, the line was reworded where it stands and there is no other line the
+  anchor could have meant instead. Rewording a cited line is the most ordinary
+  edit in the repo, and the author would have no number to copy in response.
+- **So does an edit to one of several identical lines.** The elsewhere-search
+  alone reds that, having found the other copies, so a count decides it: drift is
+  reported only when the head file holds **at least as many** copies of the old
+  content as the base did. One fewer means the cited copy went away rather than
+  moved.
+- **It is a hard failure and carries no pin.** Every other class here is a
+  population with a legitimate steady state. This one has none, and a pin would
+  do nothing but record how many wrong numbers the tree is currently carrying.
+
+**What it does not catch**, all three by construction rather than by oversight:
+
+- **A hand retarget that lands short.** Editing the number changes the token, the
+  token is the precondition, and so the gate has nothing to compare and says
+  nothing. The practice that follows is the point of the whole gate: **let the
+  gate tell you the new line; do not pre-count it.** Leave the stale number where
+  it is, run the gate, and copy the line out of the failure it prints.
+- **Drift that is already on `main`.** The comparison is diff-scoped, so an
+  anchor that went stale in some earlier branch reads identically in base and
+  head and is invisible here. That is deliberate: it keeps the gate from opening
+  with a backlog that nobody in the current PR caused, at the cost of never
+  finding one.
+- **The semantic case, still.** A line whose content is untouched but whose
+  meaning moved — the function around it renamed, the condition it sits under
+  inverted — is not a string comparison away from being caught, and nothing in
+  #407 changes that.
+
+`test/check-line-citations.test.ts` drives both trees as synthetic corpora
+through injected readers, so nothing in the suite shells out to git, and the
+`#371` fixture is built at that file's real line numbers so the assertion reads
+`2894`. The base plan is a pure function with its own table — merge-base against
+the tracking ref locally, the base tip in CI, and failure rather than a skip when
+CI has neither — because a wrong answer there breaks the gate in the one place it
+has to run.
+
+That table routes on `CI` **before** the tracking ref, which is the opposite of
+how it reads. In CI the tracking ref is present by the time this gate runs, even
+though the checkout is depth 1 with only the PR ref: `check:version-not-lower`
+runs earlier in the same job and fetches one shallow base ref, and that fetch
+also writes `refs/remotes/origin/<base>`, because `actions/checkout` builds the
+clone with `git remote add` and its `remote.origin.fetch` wildcard makes the
+update opportunistic. Routing on the ref would therefore send CI down
+`merge-base`, where `git merge-base` exits 1 having found nothing — at depth 1
+HEAD's parents are outside the shallow boundary. A row in the table pins that
+case on its own, because it is the combination CI actually presents.
+
 ## Prose-shape gate
 
 `npm run check:prose-shape` (`scripts/check-prose-shape.mjs`, in the CI `quality`

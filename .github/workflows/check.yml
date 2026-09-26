@@ -194,6 +194,26 @@ jobs:
       # that cannot resolve, and pins the count of anchors that land on a blank
       # line, a brace or a comment — the shape a stale one almost always takes
       # (#336). Nothing else in this job reads a number inside a comment.
+      #
+      # Since #407 it also compares each anchor's target against the base, which
+      # catches the anchor that resolves and still names the wrong line. That
+      # makes it the second step here needing the base ref, and it reuses
+      # `check:version-not-lower`'s resolver to get it. HEAD being
+      # `refs/pull/N/merge` is what makes the base *tip* the right thing to
+      # compare against here, where a local run has to take the merge base
+      # instead. A checkout that grew a `ref:` or lost its `origin` would not fail
+      # this step loudly on its own — the gate exits 1 rather than skipping when
+      # CI has no base, which is the only reason it would not go quietly green.
+      #
+      # ORDER-DEPENDENT ON THE STEP ABOVE, and not in the direction it looks.
+      # `check:version-not-lower` runs first and fetches one shallow base ref,
+      # which ALSO writes `refs/remotes/origin/$GITHUB_BASE_REF` — the clone's
+      # `remote.origin.fetch` wildcard, left by `actions/checkout`'s
+      # `git remote add`, makes the fetch update it opportunistically. So this
+      # step does not see the tracking-ref-absent tree the depth-1 checkout
+      # started as, and it must route on `CI` rather than on that ref's presence:
+      # asking for a merge base here exits 1, because at depth 1 HEAD's parents
+      # are outside the shallow boundary. See `driftBasePlan()`.
       - run: npm run check:line-citations
 
       # The shape of hand-wrapped Markdown prose, pinned exactly (#370).

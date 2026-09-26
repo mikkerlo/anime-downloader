@@ -392,7 +392,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // — this peer's own element against the state it was handed — and 2.45 clears
     // 3.0 by 0.55. Measured constant from the switch out to a 20 s window, so it
     // is a standing near miss rather than a transient one. Raise the bind gap to
-    // 3000 ms and the same shipped code writes 303.05 to that element instead;
+    // 3000 ms and the same shipped code writes 304.05 to that element instead;
     // `syncplay-two-peer-episode-change.test.ts` pins that. So nothing below is a
     // guarantee that a non-switching peer is never dragged — it is the 500 ms
     // corner in which it happens not to be.

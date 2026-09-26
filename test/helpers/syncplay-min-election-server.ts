@@ -120,9 +120,9 @@
 //    `test/helpers/syncplay-min-election-server.ts:527` ("this.roomPosition =
 //    this.watcherPosition(w)") line, reads through that same paused arm
 //    whenever the change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:728-730` flips `roomPaused`,
-//    refreshes that watcher's `lastUpdatedOn`, and only then calls it, in that
-//    order. Safe for a stated reason rather than by luck: the refresh is what
+//    `test/helpers/syncplay-min-election-server.ts:744-766` refreshes that
+//    watcher's `lastUpdatedOn`, flips `roomPaused`, and only then calls it, in
+//    that order. Safe for a stated reason rather than by luck: the refresh is what
 //    the *playing* arm would have projected from, and the paused arm ignores the
 //    stamp regardless, so either way that write reads the setter's own position
 //    at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
@@ -593,6 +593,35 @@ export class MinElectionServer {
         this.send(username, {
           Hello: { username, room: { name: this.room }, version: '1.7.6' }
         })
+        // The reference's **join-time** `State`, which this fixture used to omit
+        // entirely. `Watcher.__init__` schedules `_scheduleSendState` through
+        // `reactor.callLater(0.1, ...)` (`server.py:737`), and the `LoopingCall`
+        // that call starts (`server.py:841-843`) fires its first tick
+        // immediately rather than one interval in — so a watcher gets a full
+        // `State` about 0.1 s after connecting, well before the room's first
+        // periodic second. The *other* immediate tick, the one `setRoom`'s
+        // `_resetStateTimer` forces, is swallowed by `Watcher.sendState`'s
+        // `isLogged()` guard (`server.py:858-860`), so the reference emits
+        // exactly one such frame and the `Hello` reply — the login — is where it
+        // belongs.
+        //
+        // Delivered through `sendState`, so it pays the link delay like every
+        // other `State`: `seat()`'s doc comment exempts the *handshake* from the
+        // delay, and a frame carrying a room position is not handshake.
+        const joined = this.watchers.get(username)
+        if (joined) {
+          this.sendState(joined, {
+            // `SyncFactory.sendState` reads `room.getPosition()` (`server.py:85`)
+            // — the election, not a bare projection — and `room.getSetBy()` only
+            // after it (`server.py:86`). So a join landing inside the election
+            // age holds no election and carries the `setBy` the room already had,
+            // which on a fresh room is whatever the constructor seeded.
+            position: this.electRoomPosition(),
+            paused: this.roomPaused,
+            doSeek: false,
+            setBy: this.roomSetBy
+          })
+        }
         continue
       }
       if ('List' in msg) {
@@ -705,6 +734,14 @@ export class MinElectionServer {
       w.latencyEchoArrivedAt = Date.now()
     }
     const ps = isRecord(state.playstate) ? state.playstate : null
+    // Stamped at receipt, above the playstate guard. `Watcher.updateState`
+    // (`server.py:875`) writes `_lastUpdatedOn` at `server.py:877` as its second
+    // statement — above the pause flip, above `setPosition` and above the
+    // `if position is not None` guard the position work sits behind — and
+    // `Watcher.sendState` reads that stamp against `PROTOCOL_TIMEOUT`
+    // (`server.py:861`). Kept below this early return it would be the model's own
+    // artefact rather than the reference's.
+    w.lastUpdatedOn = Date.now()
     if (!ps) return
     const position = typeof ps.position === 'number' ? ps.position : 0
     const hasPaused = typeof ps.paused === 'boolean'
@@ -726,7 +763,6 @@ export class MinElectionServer {
     // last stored one — `__hasPauseChanged(None)` is `False` in the reference, so
     // the room's flag survives such a frame untouched.
     if (pausedChanged) this.roomPaused = ps.paused as boolean
-    w.lastUpdatedOn = Date.now()
     if (ps.doSeek === true || pausedChanged) this.forcePositionUpdate(w, ps.doSeek === true)
   }
 

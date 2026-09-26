@@ -37,11 +37,15 @@
 // here pretends otherwise.
 //
 // Both peers are seated before the room is advanced in every case, which is not
-// stylistic. Measured: a peer left alone in the room receives no `remote-state`
-// at all — the room's `setBy` is itself, so every frame dies at the self-echo
-// guard — and the pause the ready gate applies at mount is therefore never
-// released, latching the room paused around it. A far joiner seated late would
-// be measuring that instead of this.
+// stylistic. Measured: a peer left alone in the room receives exactly one
+// `remote-state` — the join-time frame the helper answers `Hello` with, whose
+// `setBy` is the departed seeder rather than itself, so it clears the self-echo
+// guard, releases the pause the ready gate applies at mount, and leaves the lone
+// peer running on from the room's last position. Every subsequent periodic is
+// self-`setBy` and does die at that guard, so a far joiner seated late would be
+// measuring the handshake rather than the cadence this file is about. This used
+// to read "receives no `remote-state` at all … latching the room paused around
+// it", which was true of the helper before it replied with a join-time `State`.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -72,9 +76,18 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
   it('mirrors a room its element cannot reach, and never elects itself with a position it is not at', async () => {
     // The joiner is 600 s behind and its element is **not ready**: it reloads at
     // mount and its `loadedmetadata` is 30 s out, well past this run, so it sits
-    // at `HAVE_NOTHING` reporting 0 for the whole of it. That is the
-    // pathological shape on purpose: a peer that is *permanently* at 0 while the
-    // room plays on.
+    // at `HAVE_NOTHING` for the whole of it and never announces a position at
+    // all. That is the pathological shape on purpose: a peer 600 s from the room
+    // with nothing loaded, while the room plays on.
+    //
+    // This paragraph used to end "reporting 0 for the whole of it … permanently
+    // at 0", and the 0 was never the load-bearing half — the closed outbound
+    // door is. It is also no longer true of the harness: the join-time `State`
+    // gets this element playing (see the premise below), and a `HarnessVideo`
+    // walks its playhead on the wall clock whether or not it has data, so
+    // `currentTime` climbs while `readyState` stays at `HAVE_NOTHING`. Nothing
+    // reaches the wire either way, which is why the claim survives the
+    // correction unchanged.
     //
     // This used to be built on a seek that never landed — `seekLandMs: 1200`,
     // longer than the 1 Hz cadence, so every write was superseded before it
@@ -82,10 +95,10 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // **target** the moment `currentTime` is assigned, not a frozen pre-write
     // position, so a peer whose seeks are merely slow is not at 0 at all; it is
     // up at the room, and it announces the room's own position back. The door
-    // that actually holds an element at 0 while the room plays is readiness, so
-    // that is the door this case now comes through, and the outbound gate it
-    // exercises is `hasAnnounceablePosition()`'s `readyState >= 1`
-    // (`use-syncplay-client.ts:770`).
+    // that actually keeps a peer's own position out of the room while the room
+    // plays on is readiness, so that is the door this case now comes through,
+    // and the outbound gate it exercises is `hasAnnounceablePosition()`'s
+    // `readyState >= 1` (`use-syncplay-client.ts:770`).
     //
     // The slow-seek version of this peer is not harmless — it is *worse*, and
     // it is the subject of `syncplay-two-peer-inflight-seek.test.ts`: under the
@@ -113,36 +126,77 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // back, and with the outbound door shut it was never even written to.
     // Without this the rest would be vacuously true of a peer that had simply
     // caught up.
-    expect(joiner.el.currentTime).toBe(0)
+    //
+    // The premise is `readyStates` and `seekWrites`, *not* `currentTime`, and
+    // that is the correction the join-time `State` forced here. This used to
+    // assert `currentTime === 0` as part of the premise. It no longer is one:
+    // the join-time frame arrives carrying `paused: false`, `recordRemoteState`
+    // writes `syncplayLastRemotePlaying = true` **above** the `readyState < 1`
+    // park (`use-syncplay-client.ts:1774`), and the roster watch's ready-gate
+    // pass then calls `play()` on a dataless element — the play arm carries no
+    // readiness floor. The harness's playhead has no `readyState` term either,
+    // so it walks on the wall clock and reads 7.95 with nothing behind it. The
+    // number is pinned as the harness's own arithmetic on an unplayable element,
+    // not as a position this peer reached; it is 0 without that frame.
+    //
+    // The premise proper is the first two lines. **The last two are a
+    // characterisation pin and not a premise at all** — measured, not reasoned:
+    // add `&& v.readyState >= 1` to that play arm and `paused` is the only
+    // assertion in this file that goes red, and with these two lines demoted the
+    // whole file passes *under* the floor — all four cases, including every claim
+    // below. So the claim holds whether or not the element is trying to play, and
+    // an earlier draft of this comment was wrong to say it turned on
+    // `paused === false`.
+    //
+    // They stay because this is the only case in the suite placed to notice that
+    // floor landing, and **the pin is deliberately silent on whether landing it
+    // would be right.** It is not obviously either: the asymmetry with the two
+    // pause arms above it is defensible, since their floor disarms `autoplay`
+    // (#348) while `play()` on a dataless element is only a request the browser
+    // honours once data arrives, and its one real cost — announcing `position: 0`
+    // — is already contained outbound by `hasAnnounceablePosition()`
+    // (`use-syncplay-client.ts:770`), in whose preceding comment `play()` firing
+    // at `HAVE_NOTHING` from PlayerView's restore is recorded as deliberately
+    // swallowed rather than as a defect.
+    //
+    // So whoever reds these two lines has to decide which they are doing. If the
+    // floor is the fix, re-tense them — the element then parks at 0 and stays
+    // paused. If it is a regression, this red is the pin working. What is not
+    // available is deleting the case to get green, and an earlier draft of this
+    // paragraph pointed at the first answer as though it were settled.
     expect(joiner.el.readyStates).toEqual([1, 0])
     expect(joiner.el.seekWrites).toHaveLength(0)
+    expect(joiner.el.paused).toBe(false)
+    expect(joiner.el.currentTime).toBeCloseTo(7.95, 2)
 
     // The claim. Every frame the joiner put on the wire is a mirror, counted
     // rather than sampled — an `every()` over a set that turned out empty would
     // report green while asserting nothing.
     const wire = room.server.wireOf('joinuser')
-    expect(wire).toHaveLength(7)
-    expect(mirroring(wire)).toHaveLength(7)
+    expect(wire).toHaveLength(8)
+    expect(mirroring(wire)).toHaveLength(8)
     expect(asserting(wire)).toHaveLength(0)
 
     // And the mirror echoed the *room*, not the element: every one of those
-    // seven positions is up at 600, where the room is, not down at 0, where the
+    // eight positions is up at 600, where the room is, not down at 0, where the
     // element is. Same count on both sides, so the filter cannot pass by being
-    // empty.
-    expect(mirroring(wire).filter((f) => f.position >= 600)).toHaveLength(7)
+    // empty. Eight rather than seven because the join-time `State` starts this
+    // peer's 1 Hz cadence a tick earlier: the first frame is at +1000 ms, where
+    // it used to be +2000.
+    expect(mirroring(wire).filter((f) => f.position >= 600)).toHaveLength(8)
 
     // Which is the whole point: the room was never dragged. The joiner won no
     // election for the entire run, the host set every one of them, and the room
     // is where 8 s of playback from 600 should have put it.
     expect(room.server.electionsSetBy('joinuser')).toHaveLength(0)
     expect(room.server.electionsSetBy('hostuser')).toHaveLength(room.server.elections.length)
-    expect(room.server.roomState().position).toBeCloseTo(605.95, 2)
+    expect(room.server.roomState().position).toBeCloseTo(606.95, 2)
     expect(room.server.roomState().setBy).toBe('hostuser')
 
     // The host is untouched by any of it — still playing, still where it should
     // be. A peer that had asserted 0 would have pulled this back with it.
     expect(host.el.paused).toBe(false)
-    expect(host.el.currentTime).toBeCloseTo(606.95, 2)
+    expect(host.el.currentTime).toBeCloseTo(607.95, 2)
 
     // A mirror is not a discrete change, so nothing was announced.
     expect(joiner.counters().clientIgnoreCounter).toBe(0)
@@ -157,8 +211,8 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // That one mirror was an artefact of the freeze. A real element reports the
     // target as soon as `currentTime` is assigned (#368), so the drift falls
     // inside `ADOPT_TOLERANCE_S` on the *write*, not 300 ms later on the
-    // landing; adoption latches before the first snapshot goes out and all
-    // seven frames are assertions.
+    // landing; adoption latches before the first snapshot goes out and every
+    // frame is an assertion.
     //
     // So the boundary this file is about does not live where seek latency puts
     // it. Read with the case above, the pair is what pins that: a slow seek
@@ -175,36 +229,59 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     })
     await room.advance(8)
 
-    // One write, taken this time.
+    // One write, taken this time — and the target is the join-time `State`'s
+    // 600, not the t=1000 periodic's 601. That one-second drop is not a shift of
+    // the whole scenario: the *first inbound state is a different frame*. The
+    // landing position it produces is 0.30 s **behind** the host instead of
+    // 1.00 s ahead, which is what inverts the election pinned at the bottom of
+    // this case. `currentTime` is unmoved by it — the element walks the same
+    // 7.65 s from wherever it was put.
     expect(joiner.el.seekWrites).toHaveLength(1)
-    expect(joiner.el.seekWrites[0]).toBeCloseTo(601, 2)
+    expect(joiner.el.seekWrites[0]).toBeCloseTo(600, 2)
     expect(joiner.el.currentTime).toBeCloseTo(607.65, 2)
 
-    // No mirror at all, and seven assertions where there used to be six. The
+    // No mirror at all, and eight assertions where there used to be seven. The
     // counts are pinned on both sides so neither half can drift into the other
     // unnoticed, and the total is pinned too so "no mirrors" cannot be bought by
-    // the peer having gone quiet.
+    // the peer having gone quiet. Eight for the same reason as the case above:
+    // the join-time reply starts the cadence one tick earlier.
     const wire = room.server.wireOf('joinuser')
-    expect(wire).toHaveLength(7)
+    expect(wire).toHaveLength(8)
     expect(mirroring(wire)).toHaveLength(0)
-    expect(asserting(wire)).toHaveLength(7)
+    expect(asserting(wire)).toHaveLength(8)
     // The boundary — the very first frame — restated where a reader looks for
     // it rather than left as a claim with nothing written under it. The two
     // lengths above already force it: `asserting` is an order-preserving
-    // filter, so both arrays being 7 makes them the same frames, reference for
+    // filter, so both arrays being 8 makes them the same frames, reference for
     // reference. It stands where an `indexOf(mirroring(wire)[0]) === 0` used to,
     // which did carry its own information against an unpinned `mirroring` set
     // but would read `-1` here — green-looking and meaningless — if it had
     // merely been left in place.
     expect(asserting(wire)[0]).toBe(wire[0])
-    expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(7)
+    expect(asserting(wire).filter((f) => f.paused === false)).toHaveLength(8)
 
-    // Adopting does not make it a leader. It agrees with the room rather than
-    // arguing with it, so the host keeps setting the position and the joiner
-    // still announces nothing discrete.
-    expect(room.server.electionsSetBy('joinuser')).toHaveLength(0)
+    // Adopting does not make it a leader — and it does not make it a follower
+    // either, which is the one claim on this case that had to be withdrawn. This
+    // read "the host keeps setting the position", pinned as
+    // `electionsSetBy('joinuser')` being empty for the whole run. It is not: the
+    // landing above is 0.30 s short of the host rather than 1.00 s past it, so
+    // from the third tick on the joiner **is** the laggard and
+    // `Room.getPosition()`'s `min()` elects it, six of eight. The first two
+    // still go to the host, because the joiner's first frame is still in the
+    // 50 ms link when tick one is taken and its landing has not overtaken the
+    // host by tick two.
+    //
+    // Which is not the failure this file is about, and the distinction is the
+    // point: winning the election on a position your element really holds — a
+    // link delay behind it, as every peer's frames are — is the election
+    // working. The room follows the joiner down by 0.30 s, not back to 0, which
+    // is the same 0.30 s the seek left on the table. Nothing discrete is
+    // announced either way.
+    expect(room.server.electionsSetBy('joinuser')).toHaveLength(6)
+    expect(room.server.electionsSetBy('hostuser')).toHaveLength(2)
+    expect(room.server.roomState().setBy).toBe('joinuser')
     expect(joiner.counters().clientIgnoreCounter).toBe(0)
-    expect(room.server.roomState().position).toBeCloseTo(605.95, 2)
+    expect(room.server.roomState().position).toBeCloseTo(606.65, 2)
   })
 
   it('stops asserting when its element drops to HAVE_NOTHING, and the room runs on without it', async () => {
@@ -246,15 +323,27 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // 2000 ms after the reload and the first mirror 3000 ms after it — the
     // 1 Hz frame at exactly +2000 still asserts, because the comparison is a
     // strict `>` against a 2000 ms budget.
+    //
+    // Six assertions where this said five, and the boundary is untouched: both
+    // offsets below are the same as they were. The extra frame is at the *head*,
+    // not the tail — the join-time `State` starts this peer's cadence a tick
+    // earlier, so its first frame is at −3000 relative to the reload instead of
+    // −2000, and that tick falls inside the pre-threshold asserting run. The
+    // mirror count is unchanged at 6, which is what makes the boundary reading
+    // rather than the count the thing this case pins.
     const wire = room.server.wireOf('hostuser')
-    expect(asserting(wire)).toHaveLength(5)
+    expect(asserting(wire)).toHaveLength(6)
     expect(mirroring(wire)).toHaveLength(6)
+    expect(asserting(wire)[0].at - reloadAt).toBe(-3000)
     expect(asserting(wire).at(-1)!.at - reloadAt).toBe(2000)
     expect(mirroring(wire)[0].at - reloadAt).toBe(3000)
 
     // The mirror still echoes the room — six frames up where the room is, not
-    // the 0 the element is actually sitting at.
-    expect(mirroring(wire).filter((f) => f.position >= 304)).toHaveLength(6)
+    // the 0 the element is actually sitting at. The floor is 305 rather than the
+    // 304 it was: the mirrored positions moved up a second with the room, and
+    // 304 would now be clear of all six at either helper, so it would have
+    // stopped separating anything.
+    expect(mirroring(wire).filter((f) => f.position >= 305)).toHaveLength(6)
 
     // And the element was never written while it could not honour a write: no
     // seek landed on a `HAVE_NOTHING` element for the whole 8 s (#284).
@@ -263,11 +352,11 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
 
     // Meanwhile the room ran on, undisturbed, and so did the other peer — it was
     // never paused, never seeked, never told anything had gone wrong.
-    expect(room.server.roomState().position).toBeCloseTo(309.95, 2)
+    expect(room.server.roomState().position).toBeCloseTo(310.95, 2)
     expect(room.server.roomState().paused).toBe(false)
     expect(joiner.el.paused).toBe(false)
     expect(joiner.el.seekWrites).toEqual([])
-    expect(joiner.el.currentTime).toBeCloseTo(310.95, 2)
+    expect(joiner.el.currentTime).toBeCloseTo(311.95, 2)
 
     // Going quiet is not an announcement.
     expect(host.counters().clientIgnoreCounter).toBe(0)
@@ -290,7 +379,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       delayMs: DELAY_MS,
       // Explicit although 500 has been the helper's own default since #387, and
       // kept that way on purpose: this is a **pin**, not a leftover. Every
-      // number this case asserts — the single 302 write, the room's 306.5, the
+      // number this case asserts — the single 303 write, the room's 307.5, the
       // zero mirror frames the note below measures — belongs to this one cell of
       // #360's gap axis, and that axis is a comb rather than a slope, so a
       // default that moved would not degrade these assertions, it would silently
@@ -353,7 +442,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // present.
     expect(host.remoteEpisodes).toHaveLength(1)
 
-    // The switcher's element is at 0 with the room near 302, so it is placed
+    // The switcher's element is at 0 with the room near 303, so it is placed
     // back at the room — one write. That write is #360 verbatim: a brand-new
     // episode's element seeked to the *previous* episode's timestamp, a position
     // the new file bears no relation to. Pinned as shipped behaviour, not as a
@@ -373,16 +462,22 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // `syncplay-two-peer-episode-change.test.ts` sweeps the gap and #360 has the
     // chain.
     expect(host.el.seekWrites).toHaveLength(1)
-    expect(host.el.seekWrites[0]).toBeCloseTo(302, 2)
+    expect(host.el.seekWrites[0]).toBeCloseTo(303, 2)
 
     // The room is nowhere near the 0 the switcher's element passed through, and
-    // the other peer was neither paused nor moved. What 306.5 is *not* is "where
-    // six more seconds of playback should have left it" — that is ~308.95, which
-    // is precisely where the untouched peer's element reads at this instant. 306.5
+    // the other peer was neither paused nor moved. What 307.5 is *not* is "where
+    // six more seconds of playback should have left it" — that is ~309.95, which
+    // is precisely where the untouched peer's element reads at this instant. 307.5
     // is the switcher's **dragged** value, so this line has been encoding a 2.45 s
-    // room deficit as expected since before anyone had measured it. It is left
-    // exactly as it stands because it is a true statement about shipped behaviour;
-    // it is not a statement that the behaviour is right.
+    // room deficit as expected since before anyone had measured it. It is kept as
+    // an assertion — renumbered, never widened — because it is a true statement
+    // about shipped behaviour; it is not a statement that the behaviour is right.
+    //
+    // Every absolute figure in this case is one second higher than it was, and
+    // that is the *only* thing that changed here: the join-time `State` un-pauses
+    // each element at t=50 rather than t=1050, banking 1000 ms of playback before
+    // the run starts. It is a rigid translation — the 2.45 s deficit and the
+    // 0.55 s margin below are both differences, and both are unmoved.
     //
     // And that 2.45 is the whole reason `joiner.el.seekWrites` two lines down is
     // still `[]`. Not de-adoption: the renderer's seek gate is
@@ -392,11 +487,11 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // — this peer's own element against the state it was handed — and 2.45 clears
     // 3.0 by 0.55. Measured constant from the switch out to a 20 s window, so it
     // is a standing near miss rather than a transient one. Raise the bind gap to
-    // 3000 ms and the same shipped code writes 303.05 to that element instead;
+    // 3000 ms and the same shipped code writes 304.05 to that element instead;
     // `syncplay-two-peer-episode-change.test.ts` pins that. So nothing below is a
     // guarantee that a non-switching peer is never dragged — it is the 500 ms
     // corner in which it happens not to be.
-    expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
+    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
     expect(room.server.roomState().paused).toBe(false)
     expect(joiner.el.seekWrites).toEqual([])
     expect(joiner.el.paused).toBe(false)

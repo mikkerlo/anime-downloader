@@ -256,21 +256,21 @@ describe('conformance: forced updates', () => {
     // spread by three orders of magnitude. The margin is this scenario's
     // property, not an exemption from the note.
     //
-    // **The model diverges here, and that divergence is the scenario working
-    // rather than a fixture to repair — so it is pinned as an expected
-    // divergence rather than compared for agreement.**
-    // `test/helpers/syncplay-min-election-server.ts:708` returns above its own
-    // stamp at `test/helpers/syncplay-min-election-server.ts:729`, so a
-    // playstate-free frame genuinely is inert in the model — the mirror is
-    // faithful to the old comment rather than to the server, which is why
-    // nothing here caught the claim. Moving that stamp is #384's item 4. Until
-    // it lands this scenario runs nightly and **passes**, holding the shape of
-    // that one divergence exactly: the model lags the reference by roughly
-    // `PING_WAIT_MS`, which is the projection term the missing stamp leaves in
-    // place. When item 4 lands the pin stops holding and the scenario reds,
-    // which is the signal to swap the pin back to a plain agreement check. See
-    // the pin at the foot of this test for the full statement. This therefore
-    // does not have to merge with item 4 or after it.
+    // **The pin at the foot of this test no longer holds, and that is the
+    // signal it was built to send rather than a fixture to repair.** Until
+    // #384's item 4 landed, `test/helpers/syncplay-min-election-server.ts`
+    // returned above its own `lastUpdatedOn` stamp, so a playstate-free frame
+    // was genuinely inert in the model — the mirror was faithful to the old
+    // comment rather than to the server, which is why nothing here caught the
+    // claim — and this scenario ran nightly and **passed**, holding the shape
+    // of that one divergence exactly: the model lagged the reference by roughly
+    // `PING_WAIT_MS`, the projection term the missing stamp left in place.
+    // Item 4 is `test/helpers/syncplay-min-election-server.ts:744`, the stamp
+    // now sitting above the `if (!ps) return` at
+    // `test/helpers/syncplay-min-election-server.ts:745`, so the divergence is
+    // gone and the pin reds. Swapping it back to a plain agreement check is
+    // tracked as its own #384 checkbox and does not have to land with item 4 —
+    // see the pin at the foot of this test for the full statement.
     //
     // Every step below is load-bearing, because the default failure in this
     // scenario is not a red. It is a green that measures nothing:
@@ -410,8 +410,8 @@ describe('conformance: forced updates', () => {
     // fields are exactly `playstate.setBy` and `playstate.position`, the
     // reference elects alpha where the model leaves bravo, and the position gap
     // still clears the tolerance. Only the projection term is lost, so the gap
-    // is about `PING_WAIT_MS` wide and the scenario passes while the model lags
-    // by roughly that much.
+    // was about `PING_WAIT_MS` wide, and the scenario passed while the model
+    // lagged by roughly that much — until item 4 landed and closed it.
     //
     // Pinned rather than skipped because a skip stops the *reference* half
     // running, and that half is the evidence the `sendAck()` comment in
@@ -423,12 +423,12 @@ describe('conformance: forced updates', () => {
     // make a genuine divergence in any of the other scenarios arrive as one
     // more copy of a comment already learned to be ignorable.
     //
-    // This goes red on its own when #384's item 4 moves the model's stamp: the
-    // model then re-elects too, `setBy` and `position` converge, and the pin
-    // stops holding. **That red is the signal to swap these lines back to
-    // `assertConforms(run)`**, and that swap belongs in item 4's own PR. It is
-    // not a fixture to repair, and re-pinning it to whatever the run prints
-    // would throw away the only notification that item 4 landed.
+    // This has gone red on its own, as designed: #384's item 4 moved the model's stamp above the
+    // playstate guard in the fixture — anchored in the block at the head of this test — so the
+    // model re-elects too, `setBy` and `position` converge, and the pin no longer holds. **That
+    // red is the signal to swap these lines back to `assertConforms(run)`**, tracked as its own
+    // #384 checkbox rather than required to land with it. It is not a fixture to repair, and
+    // re-pinning it to whatever the run prints would throw away that notification.
     // The ceiling is `PING_WAIT_MS` past the tolerance because that is the
     // whole of what the missing stamp can cost: the model keeps projecting
     // across the ping wait where the reference re-stamps and stops. A gap wider

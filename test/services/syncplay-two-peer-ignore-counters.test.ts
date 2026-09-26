@@ -44,6 +44,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom, Peer, IgnoreCounters } from '../helpers/syncplay-two-peer'
+import { DEFAULT_PLAYING_SET_BY } from '../helpers/syncplay-min-election-server'
 
 const ROOM_START = 100
 const DELAY_MS = 50
@@ -220,20 +221,28 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
       pendingClientAck: 0,
       pendingServerAck: 0
     })
-    expect(host.frames).toHaveLength(1)
-    expect(host.frames[0].state.setBy).toBe('joinuser')
-    expect(host.frames[0].state.doSeek).toBe(true)
-    expect(host.frames[0].at).toBe(4100)
+    // Two, not one: the periodic the server broadcast at t=4000 arrives at 4050,
+    // a slice *before* our press is classified, so the window is not open yet
+    // and it is foreign — #384's join-time State moved the 4000 election from us
+    // (`hostuser` by 49 ms) to the joiner (by 951 ms), so this periodic no longer
+    // dies at `src/main/syncplay.ts:2097`. It moves nothing: |102.049 − 103.95|
+    // < 3, so the renderer applies no seek.
+    expect(host.frames).toHaveLength(2)
+    expect(host.frames[0].at).toBe(4050)
+    expect(host.frames[0].state.doSeek).toBe(false)
+    expect(host.frames[1].state.setBy).toBe('joinuser')
+    expect(host.frames[1].state.doSeek).toBe(true)
+    expect(host.frames[1].at).toBe(4100)
     // And it was applied: the host's element, which the user had just paused at
     // ~103, is written to the peer's target.
     expect(host.el.seekWrites).toHaveLength(1)
     expect(host.el.seekWrites[0]).toBeCloseTo(700.1, 1)
 
     // Our own echo, arriving a slice later, adds nothing — it is `setBy` us and
-    // dies at `src/main/syncplay.ts:2097`. One delivered frame for the whole
-    // exchange.
+    // dies at `src/main/syncplay.ts:2097`. One delivered frame for the crossing,
+    // beside the pre-window periodic, and nothing more.
     await room.advance(0.05)
-    expect(host.frames).toHaveLength(1)
+    expect(host.frames).toHaveLength(2)
   })
 
   it('drops the foreign periodics that land while our change is unacked', async () => {
@@ -258,27 +267,42 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
       paused: false,
       delayMs: 1500
     })
-    await room.advance(8)
+    await room.advance(4)
 
     // The cadence before the change: one foreign frame per second, arriving
     // 1500 ms after the server sent it.
     const before = host.frames.map((f) => f.at)
-    expect(before).toEqual([2500, 3500, 4500, 5500, 6500, 7500])
-    expect(host.frames.every((f) => f.state.setBy === 'joinuser')).toBe(true)
+    expect(before).toEqual([1500, 2500, 3500])
+    // The first is the reference's join-time `State`, 1500 ms of link behind the
+    // connect; the rest are the periodics. All foreign either way.
+    expect(host.frames[0].state.setBy).toBe(DEFAULT_PLAYING_SET_BY)
+    expect(host.frames.slice(1).every((f) => f.state.setBy === 'joinuser')).toBe(true)
     host.frames.length = 0
 
+    // The press is at t=4000, not the t=8000 this case used before #384's
+    // join-time `State`. That frame moves the host's mirror anchor a second
+    // earlier, and the joiner's win above is therefore not eternal: left
+    // unpressed, the host takes the `min()` election from the server's t=6000
+    // broadcast onward — visible as the frame that would land at 7500 going
+    // missing, dropped as self-`setBy`. A press at t=8000 gives a window over the
+    // broadcasts at 7000, 8000 and 9000, all past that flip, so all three die at
+    // `src/main/syncplay.ts:2097` before the ack guard at
+    // `src/main/syncplay.ts:2098` is ever reached — and the case then passes with
+    // the ack guard deleted, which is the one thing it exists to hold. Pressing
+    // at t=4000 puts the window over the broadcasts at 3000, 4000 and 5000
+    // instead, all still the joiner's, so the ack guard is what drops them.
     host.userPause()
     await room.advance(0.05)
     expect(counters(host).pendingClientAck).toBe(1)
 
-    // The window is [8050, 11050): out at 9550, back at 11050. The periodics the
-    // server sends at 7000, 8000 and 9000 arrive at 8500, 9500 and 10500 — all
+    // The window is [4050, 7050): out at 5550, back at 7050. The periodics the
+    // server sends at 3000, 4000 and 5000 arrive at 4500, 5500 and 6500 — all
     // three inside it, all three foreign, and none of them reaches the renderer.
     await room.advance(2.95)
     expect(counters(host).pendingClientAck).toBe(1)
     expect(host.frames).toEqual([])
 
-    // t=11050: our own forced update returns, closes the window and is itself
+    // t=7050: our own forced update returns, closes the window and is itself
     // dropped as self-`setBy`.
     await room.advance(0.05)
     expect(counters(host).pendingClientAck).toBe(0)
@@ -288,7 +312,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // three frames the guard ate, and the assertion is a gap rather than an
     // absence, so a fixture that simply stopped producing frames cannot pass it.
     await room.advance(1)
-    expect(host.frames.map((f) => f.at)).toEqual([11500])
+    expect(host.frames.map((f) => f.at)).toEqual([7500])
     expect(host.frames[0].state.setBy).toBe('joinuser')
     expect(host.frames[0].at - before[before.length - 1]).toBe(4000)
     expect(joiner.el.paused).toBe(true)

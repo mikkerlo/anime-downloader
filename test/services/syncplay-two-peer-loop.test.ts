@@ -354,10 +354,10 @@ describe('two-peer syncplay harness', () => {
   it('defaults the bind gap to a clean positive one — not 0, not the drag regime', () => {
     // The default itself, which nothing in the suite observed until now. Every other
     // reload site seats an explicit gap — the two adoption reloads at
-    // `syncplay-two-peer-adoption.test.ts:108` and
-    // `syncplay-two-peer-adoption.test.ts:237` run under their own
-    // `syncplay-two-peer-adoption.test.ts:106 ("bindGapMs: 30_000")` and
-    // `syncplay-two-peer-adoption.test.ts:226 ("bindGapMs: 30_000")` seats, the
+    // `syncplay-two-peer-adoption.test.ts:121` and
+    // `syncplay-two-peer-adoption.test.ts:314` run under their own
+    // `syncplay-two-peer-adoption.test.ts:119 ("bindGapMs: 30_000")` and
+    // `syncplay-two-peer-adoption.test.ts:303 ("bindGapMs: 30_000")` seats, the
     // case above seats 0, and nine of the ten `goToEpisode` call sites across
     // the suite rebind a switcher that was seated on a literal — the tenth is
     // the rejection guard below, which never reaches `reload()` at all — so the
@@ -424,7 +424,7 @@ describe('two-peer syncplay harness', () => {
   })
 
   /**
-   * Seat the 500 ms switch scenario `syncplay-two-peer-adoption.test.ts:285`
+   * Seat the 500 ms switch scenario `syncplay-two-peer-adoption.test.ts:374`
    * runs — room at 300, both peers there, `advance(4)` of agreement, the
    * switcher on the shipped bind gap — and hand back the switcher plus a log
    * the four cases below read.
@@ -744,8 +744,8 @@ const CALL_NEEDLE = 'goToEpisode('
  * `test/services/syncplay-two-peer-loop.test.ts:552`,
  * `test/services/syncplay-two-peer-loop.test.ts:573`,
  * `test/services/syncplay-two-peer-loop.test.ts:621`,
- * `test/services/syncplay-two-peer-adoption.test.ts:242`,
- * `test/services/syncplay-two-peer-adoption.test.ts:330` and elsewhere. A
+ * `test/services/syncplay-two-peer-adoption.test.ts:319`,
+ * `test/services/syncplay-two-peer-adoption.test.ts:419` and elsewhere. A
  * quote-unaware `//` rule truncates `toEqual(['harness:` mid-expression and
  * leaves an unterminated quote that the string pass then swallows forward across
  * real call sites: measured on this tree, that variant reports 8 rather than 10

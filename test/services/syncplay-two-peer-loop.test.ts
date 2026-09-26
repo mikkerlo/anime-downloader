@@ -552,8 +552,68 @@ describe('two-peer syncplay harness', () => {
     expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
     expect(switcher.el.readyStates).toEqual([1, 0, 1])
     expect(switcher.el.seekWrites).toHaveLength(1)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
-    expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
+    // Both numbers below moved by exactly one second at #384's Half B, and what
+    // moved them is *when the playheads start* rather than any arithmetic about
+    // the switch. `MinElectionServer` now answers a `Hello` with a join-time
+    // `State` as well
+    // (`test/helpers/syncplay-min-election-server.ts:611` ("const joined = this.watchers.get(username)")),
+    // so the first `State` either element ever sees is that one, arriving 50 ms
+    // after the seat, where it used to be the room's periodic tick arriving at
+    // 1050 ms. Both figures are arrivals rather than sends, and the trace below
+    // is what makes that the distinction to quote: the arrival is the event that
+    // moves an element.
+    //
+    // The construction is the opposite of what it looks like, so it is written
+    // out rather than left to be re-derived. `HarnessVideo` is built **unpaused**
+    // here — `seatSwitchScenario` passes `paused: false` — and *production* is
+    // what pauses it before `seat()` returns: the readiness gate's
+    // `src/renderer/src/composables/use-syncplay-client.ts:1260` ("v.pause()"),
+    // under the `!shouldPlay && !v.paused` guard on the line above it, reached
+    // from the `watch(syncplayRoomUsers, …)` call at
+    // `src/renderer/src/composables/use-syncplay-client.ts:2296` ("applySyncplayReadyGate()").
+    // At the instant each seat returns, both elements read `paused === true` at
+    // their seeded 300 with an empty `seekWrites` — on both variants, and the
+    // pause lands at t = 0, inside the seat rather than after it. Measured per
+    // element it is one *effective* pause reached by several raw `pause()` calls
+    // — four on the switcher and two on the joiner with the join-time `State`,
+    // eight and four without it, the extra ones at 50 ms — which is
+    // `HarnessVideo.pause()` being idempotent, not several pauses.
+    //
+    // The first `State` then **un-pauses** that element and does not seek it,
+    // and the difference matters because a seek would produce a one-second
+    // family of numbers too. The `play()` is in `applyRemoteStateToElement`, at
+    // `src/renderer/src/composables/use-syncplay-client.ts:1698` ("v.play().catch(() => op.retract())");
+    // the frame carries `doSeek: false`; the element keeps its own 300 rather
+    // than taking the frame's position; and neither peer takes a single
+    // `currentTime` write, on either variant — traced every 50 ms through
+    // 1200 ms and read again at 2000 ms and at the 4000 ms switch instant, with
+    // exactly **one** `play()` call and zero writes on each element throughout,
+    // differing only in when that call lands.
+    // So the playhead starts walking when the first `State` lands, which the
+    // per-slice trace reads off directly: the un-pause lands at 50 ms with the
+    // join-time `State` and at 1050 ms without it, and at each of those two
+    // samples the position still reads exactly 300 — the first *moved* reading
+    // is one slice later either way, 300.05 at 100 ms against 300.05 at
+    // 1100 ms, and without the frame the flat run at 300 covers every sample
+    // from 50 ms through 1000 ms. One extra second of walking, so every position
+    // gains 1.000 s.
+    //
+    // Nothing else about the switch moved, which is why this is a renumber and
+    // not a scenario change: still exactly one write, still the single frame the
+    // rebind applies, and at the assertion instant — `room.elapsed()` 10000, the
+    // 4 s seat plus this case's `advance(6)` — the room still trails the
+    // switcher's own playhead by the same 1.0 s, on both variants and to the last
+    // digit. The frame and the write want separate timestamps, because they are
+    // 450 ms apart rather than simultaneous: the frame arrives at 4050 ms
+    // carrying 302.9999999523163 against an element the reload has already taken
+    // to HAVE_NOTHING, and the apply lands with `loadedmetadata` at 4500 ms
+    // (`bindGapMs: 500`) — which is where the one `currentTime` write and the
+    // element's only paused → playing flip of the whole post-switch window both
+    // happen. So the shift is bit-for-bit — the write was 301.9999999523163 and
+    // is 302.9999999523163, the room was 306.4999999523163 and is
+    // 307.4999999523163, both deltas exactly 1 with the float noise unchanged.
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
   })
 
   it('is additive at suspendMs = 0 — the same push and the same switch footprint', async () => {
@@ -561,6 +621,11 @@ describe('two-peer syncplay harness', () => {
     // `0`, the default, it is the flush-only form and nothing else. Every literal
     // below is copied from the case above on purpose — the claim is that the two
     // calls are indistinguishable, so a divergence has to red one of them.
+    //
+    // That includes the two figures #384's Half B moved a second: they are
+    // copied down from the case above, for the reason written out there, rather
+    // than re-derived here. A divergence between the two sets is exactly the red
+    // this pairing exists to produce.
     room = await createTwoPeerRoom({ position: 300, paused: false })
     const { switcher, pushes } = await seatSwitchScenario()
 
@@ -573,8 +638,8 @@ describe('two-peer syncplay harness', () => {
     expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
     expect(switcher.el.readyStates).toEqual([1, 0, 1])
     expect(switcher.el.seekWrites).toHaveLength(1)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
-    expect(room.server.roomState().position).toBeCloseTo(306.5, 1)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
   })
 
   it('keeps the switcher on the old episode for the whole of a non-zero suspension', async () => {
@@ -724,7 +789,7 @@ const CALL_NEEDLE = 'goToEpisode('
  * raw matches were not call sites —
  * `test/services/syncplay-two-peer-episode-change.test.ts:260` and
  * `test/services/syncplay-two-peer-episode-change.test.ts:496` are
- * prose, and `test/services/syncplay-two-peer-loop.test.ts:661` is the expected
+ * prose, and `test/services/syncplay-two-peer-loop.test.ts:726` is the expected
  * error string of the rejection guard whose call site on the line *above* it
  * must stay counted. That adjacency is the sharpest single test of this pass.
  * Those two numbers are historical and deliberately not pinned anywhere: this
@@ -742,8 +807,8 @@ const CALL_NEEDLE = 'goToEpisode('
  * carries 16 `harness://` string literals — the mention on this line is prose,
  * not a seventeenth — at
  * `test/services/syncplay-two-peer-loop.test.ts:552`,
- * `test/services/syncplay-two-peer-loop.test.ts:573`,
- * `test/services/syncplay-two-peer-loop.test.ts:621`,
+ * `test/services/syncplay-two-peer-loop.test.ts:638`,
+ * `test/services/syncplay-two-peer-loop.test.ts:686`,
  * `test/services/syncplay-two-peer-adoption.test.ts:319`,
  * `test/services/syncplay-two-peer-adoption.test.ts:419` and elsewhere. A
  * quote-unaware `//` rule truncates `toEqual(['harness:` mid-expression and

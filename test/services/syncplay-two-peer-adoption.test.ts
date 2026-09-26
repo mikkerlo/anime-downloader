@@ -148,10 +148,22 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // an earlier draft of this comment was wrong to say it turned on
     // `paused === false`.
     //
-    // They stay because that floor is arguably the right fix and this is the one
-    // place that would notice it landing. A future author who adds it should
-    // re-tense these two lines — the element then parks at 0 and stays paused —
-    // rather than read the red as a regression or delete the case.
+    // They stay because this is the only case in the suite placed to notice that
+    // floor landing, and **the pin is deliberately silent on whether landing it
+    // would be right.** It is not obviously either: the asymmetry with the two
+    // pause arms above it is defensible, since their floor disarms `autoplay`
+    // (#348) while `play()` on a dataless element is only a request the browser
+    // honours once data arrives, and its one real cost — announcing `position: 0`
+    // — is already contained outbound by `hasAnnounceablePosition()`
+    // (`use-syncplay-client.ts:770`), in whose preceding comment `play()` firing
+    // at `HAVE_NOTHING` from PlayerView's restore is recorded as deliberately
+    // swallowed rather than as a defect.
+    //
+    // So whoever reds these two lines has to decide which they are doing. If the
+    // floor is the fix, re-tense them — the element then parks at 0 and stays
+    // paused. If it is a regression, this red is the pin working. What is not
+    // available is deleting the case to get green, and an earlier draft of this
+    // paragraph pointed at the first answer as though it were settled.
     expect(joiner.el.readyStates).toEqual([1, 0])
     expect(joiner.el.seekWrites).toHaveLength(0)
     expect(joiner.el.paused).toBe(false)

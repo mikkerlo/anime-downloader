@@ -137,9 +137,21 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // readiness floor. The harness's playhead has no `readyState` term either,
     // so it walks on the wall clock and reads 7.95 with nothing behind it. The
     // number is pinned as the harness's own arithmetic on an unplayable element,
-    // not as a position this peer reached; it is 0 without that frame. What
-    // matters for the claim below is `paused === false` with `readyStates`
-    // ending in 0 — an element that is *trying* to play and cannot.
+    // not as a position this peer reached; it is 0 without that frame.
+    //
+    // The premise proper is the first two lines. **The last two are a
+    // characterisation pin and not a premise at all** — measured, not reasoned:
+    // add `&& v.readyState >= 1` to that play arm and `paused` is the only
+    // assertion in this file that goes red, and with these two lines demoted the
+    // whole file passes *under* the floor — all four cases, including every claim
+    // below. So the claim holds whether or not the element is trying to play, and
+    // an earlier draft of this comment was wrong to say it turned on
+    // `paused === false`.
+    //
+    // They stay because that floor is arguably the right fix and this is the one
+    // place that would notice it landing. A future author who adds it should
+    // re-tense these two lines — the element then parks at 0 and stays paused —
+    // rather than read the red as a regression or delete the case.
     expect(joiner.el.readyStates).toEqual([1, 0])
     expect(joiner.el.seekWrites).toHaveLength(0)
     expect(joiner.el.paused).toBe(false)

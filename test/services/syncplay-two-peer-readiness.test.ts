@@ -132,10 +132,22 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
 
     // Stopped, not moved: readiness holds the playhead where it is, and neither
     // element was written at any point in the run.
+    //
+    // Both absolute positions gained exactly 1.00 s at #384's Half B, and what
+    // moved them is *when the playhead starts walking* rather than anything
+    // about readiness. The element is held paused until the room's playstate is
+    // first heard: `use-syncplay-client.ts:468` initialises
+    // `syncplayLastRemotePlaying` to `false` — deliberately, as the doc comment
+    // on `shouldElementPlay()` records — it is the first conjunct of that
+    // function at `use-syncplay-client.ts:1240`, and the only place it is ever
+    // written is the inbound path at `use-syncplay-client.ts:1333`. A join-time
+    // `State` makes that first hearing happen 1000 ms earlier, so the playhead
+    // starts walking 1000 ms earlier and every absolute position below gains
+    // the same second.
     expect(host.el.seekWrites).toEqual([])
     expect(joiner.el.seekWrites).toEqual([])
-    expect(host.el.currentTime).toBe(302.95)
-    expect(joiner.el.currentTime).toBe(302.95)
+    expect(host.el.currentTime).toBe(303.95)
+    expect(joiner.el.currentTime).toBe(303.95)
 
     // The room was never told. Its flag is untouched and it is still running —
     // a peer buffering is not a peer pausing.
@@ -146,12 +158,28 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
     // claims `paused: false`. The gate's pause went through
     // `beginProgrammaticPlayback`, so the snapshot announces the user's intent
     // and not the element's state.
+    //
+    // The widths moved 6 → 7 at that same Half B, and at the **head** of the
+    // observation window rather than at its tail: announcing now begins at
+    // t = 1000 ms instead of t = 2000 ms, because main cannot announce before it
+    // has first heard the room at all, and the window this case opens is a fixed
+    // 7 s — the `advance(4)` of the seated room plus the `advance(3)` above — so
+    // one extra frame fits in front of the old first one.
+    //
+    // Both sides of that are measured rather than one side plus an inference
+    // about which frame is missing. The `at` stamps this case's host puts on the
+    // wire are 1000, 2000, …, 7000 with the join-time `State` (7 frames) and
+    // 2000, 3000, …, 7000 with the `sendState` in
+    // `test/helpers/syncplay-min-election-server.ts`'s `Hello` arm suppressed
+    // (6); the joiner's are the same list on both sides. So it is a window-edge
+    // effect and not a new frame at the end. The unfiltered count and the
+    // filtered one move together, so the discriminator still discriminates.
     const hostWire = room.server.wireOf('hostuser')
     const joinerWire = room.server.wireOf('joinuser')
-    expect(hostWire).toHaveLength(6)
-    expect(joinerWire).toHaveLength(6)
-    expect(hostWire.filter((f) => f.paused === false)).toHaveLength(6)
-    expect(joinerWire.filter((f) => f.paused === false)).toHaveLength(6)
+    expect(hostWire).toHaveLength(7)
+    expect(joinerWire).toHaveLength(7)
+    expect(hostWire.filter((f) => f.paused === false)).toHaveLength(7)
+    expect(joinerWire.filter((f) => f.paused === false)).toHaveLength(7)
     expect([...hostWire, ...joinerWire].filter((f) => f.paused !== false)).toHaveLength(0)
 
     // Readiness is not a discrete change, so neither peer announced one or armed
@@ -162,7 +190,7 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
 
   it('releases both elements when readiness comes back, and the room waited rather than running on', async () => {
     const { host, joiner } = await playingRoom()
-    // Read before the stall, not after: the room is already ~2 s behind wall
+    // Read before the stall, not after: the room is already ~1 s behind wall
     // time here, because the election is anchored to snapshots a link delay old.
     // Measuring the deficit from this point keeps the claim about readiness
     // instead of about that pre-existing lag.
@@ -191,7 +219,7 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
     // They resumed from where they stopped, on the same frame as each other, and
     // neither was seeked to get there — the gate only ever presses play.
     expect(host.el.currentTime).toBe(joiner.el.currentTime)
-    expect(host.el.currentTime).toBe(305.95)
+    expect(host.el.currentTime).toBe(306.95)
     expect(host.el.seekWrites).toEqual([])
     expect(joiner.el.seekWrites).toEqual([])
 
@@ -211,10 +239,32 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
     expect(room.server.roomState().paused).toBe(false)
 
     // Still no pause claim anywhere, and still nothing discrete, across the
-    // whole stall-and-release.
+    // whole stall-and-release. The combined width moved 18 → 20 for the reason
+    // the first case gives — one extra frame at the head of each peer's fixed
+    // 10 s window, 9 → 10 apiece — and not because the stall or the release put
+    // anything new on the wire.
+    //
+    // Which is what makes both cases a renumber rather than a behaviour change:
+    // every claim either of them is actually *about* reads the same either way.
+    // The host-vs-joiner difference stays exactly 0, the room's deficit
+    // `roomNow - beforeStall` stays exactly 3, `seekWrites` stays `[]` on both
+    // peers, `clientIgnoreCounter` stays 0, no wire frame ever acquires
+    // `paused !== false`, and the effective `play()`/`pause()` flip counts are
+    // identical either way.
+    //
+    // That last one is measured on both sides too, per element and on both
+    // peers, by counting transitions of `HarnessVideo`'s own `paused` flag from
+    // construction rather than calls into it: 1 play flip and 2 pause flips in
+    // the first case, 2 and 2 here, the same four numbers with the join-time
+    // `State` and without it. What moves is the idempotent remainder, and only
+    // on `pause()` — the repeat calls that find the element already stopped run
+    // 3 on the host and 5 on the joiner with the join-time `State`, and 7 on
+    // both peers without it, in both cases — while `play()` is called exactly as
+    // often as it flips on either side, so it has no idempotent remainder to
+    // move.
     const wire = [...room.server.wireOf('hostuser'), ...room.server.wireOf('joinuser')]
-    expect(wire).toHaveLength(18)
-    expect(wire.filter((f) => f.paused === false)).toHaveLength(18)
+    expect(wire).toHaveLength(20)
+    expect(wire.filter((f) => f.paused === false)).toHaveLength(20)
     expect(host.counters().clientIgnoreCounter).toBe(0)
     expect(joiner.counters().clientIgnoreCounter).toBe(0)
   })

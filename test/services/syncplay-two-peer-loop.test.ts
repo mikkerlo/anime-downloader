@@ -568,8 +568,8 @@ describe('two-peer syncplay harness', () => {
     // here — `seatSwitchScenario` passes `paused: false` — and *production* is
     // what pauses it before `seat()` returns: the readiness gate's
     // `src/renderer/src/composables/use-syncplay-client.ts:1260` ("v.pause()"),
-    // under the `!shouldPlay && !v.paused` guard on the line above it, reached
-    // from the `watch(syncplayRoomUsers, …)` call at
+    // under the `!shouldPlay && !v.paused` guard at `use-syncplay-client.ts:1258`,
+    // reached from the `watch(syncplayRoomUsers, …)` call at
     // `src/renderer/src/composables/use-syncplay-client.ts:2296` ("applySyncplayReadyGate()").
     // At the instant each seat returns, both elements read `paused === true` at
     // their seeded 300 with an empty `seekWrites` — on both variants, and the

@@ -270,16 +270,16 @@
 // moved is the *switching* peer's own parked element. The join-time `State`
 // this branch adds moved the other half instead: +1.00 s on all ten figures.
 //
-// **Re-measured on the flushed harness, and unchanged there.** The onset was
-// still 1001 (1000 clean, 1001 writes 304.00), the 0.05 s step still at 1051
-// (1050 writes 304.00, 1051 writes 303.95), `PLAYBACK_STALE_MS` still the
-// lower run's top edge (5000 drags, 5001 clean), and the comb above `k = 5`
-// still alternating on parity: 6000 clean / 6001 → 310.00, 7000 → 310.00 /
-// 7001 clean, 8001 → 312.00, 10000 clean / 10001 → 314.00, 11000 → 314.00 /
-// 11001 clean, 13000 → 316.00, 15000 → 318.00, all at the 20 s read. **None
-// of it has been re-run against the join-time `State`**, which moved every
-// pinned row below by +1.00 s. None is asserted either, so it rots silently:
-// had either change flattened the parity, no case below would have gone red.
+// **Re-measured against the join-time `State`** by a gap-axis sweep on this
+// branch's tip, run outside the suite (not a test, not in CI): every boundary,
+// every clean cell, the 1001 onset, the 1051 step, `PLAYBACK_STALE_MS`'s edge
+// (5000 drags, 5001 clean) and the crossing's 1 ms width at (3950, 3951] all
+// hold; only the written values move, each by exactly +1.00 s. At the 20 s
+// read 1001 and 1050 → 305.00, 1051 → 304.95, 6001/7000 → 311.00, 8001 →
+// 313.00, 10001/11000 → 315.00, 13000 → 317.00, 15000 → 319.00; at the 6 s
+// read 3950 writes `[304.05]`. **The 60 s-read `k`-parity deficits and the
+// `k = 6`–`k = 15` arm-frame census are not re-run.** None is asserted, so it
+// rots silently: flatten the parity either way and no case below would go red.
 //
 // This file asserts against the model server, which is legitimate for these
 // four cases and would not be for an assertion-side fixture: every row here is

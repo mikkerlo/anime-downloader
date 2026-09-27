@@ -384,9 +384,9 @@ export class Peer {
    * and elects the sender. `assertConforms` therefore reports a loud divergence
    * rather than two inert backends reading as agreement: with `ignoringOnTheFly`
    * dropped from the write below, `conf-forced-ping-stamps` reds with 5
-   * divergences, a widest real-against-model position gap of 4.092s, and `setBy`
-   * reading real `"bravo"` against model `"alpha"` for both peers — the seeker
-   * still elected on one side, alpha's own ping-only frame on the other.
+   * divergences, a widest real-against-model position gap of about 4.09s, and
+   * `setBy` reading real `"bravo"` against model `"alpha"` for both peers — the
+   * seeker still elected on one side, alpha's own ping-only frame on the other.
    * Reverting the drop puts the same run back to green. The throw is the faster
    * verdict on that, not the only one: the pull-request gate instead of a night
    * later.

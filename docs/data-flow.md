@@ -178,9 +178,16 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    d. Add to queue
 4. Anime added to downloadedAnime store (appears in library)
 5. Episode metadata (`downloadedEpisodes[animeId:episodeInt:translationId]`) is
-   written by the `onEpisodeComplete` callback once the video is on disk — NOT
-   at enqueue time. This prevents cancelled or never-finished downloads from
-   leaving a stale ⬇ icon in the UI.
+   written when the VIDEO ITEM lands — by the `onVideoDownloaded` hook, keyed on
+   that one item rather than on the group finishing, and NOT at enqueue time.
+   This prevents cancelled or never-finished downloads from leaving a stale ⬇
+   icon in the UI, and (#412) stops a failed sibling subtitle from suppressing
+   the entry for a video that is already on disk. `onEpisodeComplete` re-writes
+   the same entry afterwards as a repair path for queues persisted before the
+   per-video write existed; both writers take their fields from the video item,
+   so the two agree. It skips a group with no video item at all
+   (`hasVideo === false`), which 3c produces from an embed that has a
+   `subtitlesUrl` and no usable stream.
 6. processQueue(): run up to 2 concurrent downloads
    - Queued subtitles start before queued videos (#63): the .ass must be on
      disk before watch-while-downloading playback begins
@@ -265,8 +272,14 @@ Metadata invariants:
   `downloaded-episodes-get` cross-checks each `downloadedEpisodes` entry against
   disk (tagged `[Author]` .mkv/.mp4, plus legacy untagged, in hot + cold dirs).
   Entries with no matching file and no active download are filtered out and
-  garbage-collected from the store. Combined with the late-write at completion,
-  this makes the ⬇ icon a reliable signal that the file is actually present.
+  garbage-collected from the store. Combined with the write being keyed on the
+  video item landing, this makes the ⬇ icon a reliable signal that the file is
+  actually present — and, since #412, one that appears for every video that is
+  present rather than only for groups whose subtitle also succeeded.
+  `download-cancel` prunes the entry only for a cancelled VIDEO item: the prune
+  keeps an entry alive on `episodeFileExists`, which probes .mkv/.mp4 and never
+  .part, so pruning on a subtitle cancel would delete the entry of a video still
+  deferred under the player lock.
 
 File scan cache (session-level, in-memory):
   fileCheckCache: Map<animeName, fullScanResult>

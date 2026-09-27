@@ -17,9 +17,9 @@
 // moment `currentTime` is assigned and for the whole of the flight, with
 // nothing buffered within hundreds of seconds of it. On that `doSeek: false`
 // periodic `Room.getPosition()`'s `min()` over watchers (`server.py:597-604`)
-// elects the *buffered* peer instead, genuinely down at ~105, and the losing
+// elects the *buffered* peer instead, genuinely down at ~106, and the losing
 // frame comes back and drags the scrubber off its own target — measured here as
-// `t=7050 host <- 104.99 setBy=joinuser doSeek=false el=645`, a 540 s backwards
+// `t=7050 host <- 105.99 setBy=joinuser doSeek=false el=645`, a 539 s backwards
 // jump on the peer that was scrubbing.
 //
 // The victim is therefore the scrubber, not the laggard. Before #368 this file
@@ -31,7 +31,7 @@
 // No intent-keyed rule reaches it, and the reason is stronger than a lifetime
 // argument. The scrubber's `seekIntent` is **never armed at all** — zero armed
 // samples across the run, on any frame. Its element fires exactly one `seeked`,
-// at t=13050 and on 104.99, which is the *apply's* target and not the user's
+// at t=13050 and on 105.99, which is the *apply's* target and not the user's
 // 645: the yank replaced the in-flight write before it came due, and an
 // interrupted seek fires none of its own. That surviving `seeked` matches a
 // registered `value` seek operation, so `onVideoSeeked` returns inside
@@ -175,14 +175,25 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     await room.advance(15.95)
 
     // The frame that is the whole point: the host's element reports 645 — its
-    // own in-flight seek target — and it is handed the room's collapsed ~105 on
+    // own in-flight seek target — and it is handed the room's collapsed ~106 on
     // a `doSeek: false` periodic. Re-measured on the swapped fixture:
-    // `t=7050 host <- 104.99999995231629 setBy=joinuser doSeek=false el=645`,
-    // with the room never returning above ~110 by t=20000. That is the shape of
+    // `t=7050 host <- 105.99999995231629 setBy=joinuser doSeek=false el=645`,
+    // with the room never returning above ~111 by t=20000. That is the shape of
     // the #368 capture — a scrubber announcing a forward position it has no
     // data for, losing `min()` to a peer genuinely behind it, and being seeked
     // backwards by the difference — at a tenth of the capture's 1171.97 s
     // because this room starts at 100 rather than at 20.
+    //
+    // Every absolute position quoted above gained exactly 1.000 s when the
+    // reference server started answering `Hello` with a join-time `State`
+    // (#384): both elements are seated paused, and the frame that un-pauses them
+    // now arrives one link delay after the handshake rather than at the room's
+    // first periodic second, so each element free-runs from t=50 instead of
+    // t=1050. It is a rigid translation of the whole run — the yank still lands
+    // at t=7050 on the same `el=645`, so its *magnitude* moved the other way, to
+    // 539.0000000476837 from 540.0000000476837, and every difference measured
+    // below (the post-yank drift, the apply count, the `LAND_MS` sweep) is
+    // unchanged.
     //
     // The numbers moved from the pre-#368 fixture (`t=6050 … 104.15 … el
     // 647.05`) for two reasons worth keeping apart: the roles are swapped, so
@@ -259,7 +270,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // narrowed literal.
     const appliedWrites = host.el.seekWrites.slice(1)
     expect(appliedWrites).toHaveLength(overTolerance.length)
-    // One, not the pre-#368 two: `[104.99999995231629]`. The second write in
+    // One, not the pre-#368 two: `[105.99999995231629]`. The second write in
     // the old fixture was a re-seek at t=10050 off accumulated free-running
     // drift, and the swapped run never accumulates any — see the fixed point
     // described above.
@@ -270,7 +281,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     //    the laggard, it was yanked too at t≈14050, and it had never seeked, so
     //    there was nothing on its side for an intent-keyed rule to reach. The
     //    #368 swap takes that assertion's subject away — the joiner is the
-    //    *buffered* peer now, it sits between ~100 and ~110 for the whole run,
+    //    *buffered* peer now, it sits between ~100 and ~111 for the whole run,
     //    and it is never dragged anywhere at all.
     //
     //    The argument survives on the victim instead, and in a stronger form.
@@ -282,8 +293,19 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
     // Counted, not sampled, on both sides: an `every()` over a set that turned
     // out empty would report green while asserting nothing.
+    //
+    // The two numbers are asymmetric for a reason, and the asymmetry is the
+    // reason only one of them moved on #384. The host's list is cleared at the
+    // drag above, so it counts only what arrived *after* t=4000 — five periodics
+    // it did not set itself. The joiner's is never cleared, so it counts the
+    // whole session, and the reference's join-time `State` adds exactly one
+    // frame to the front of it: `at=50 pos=100 setBy=departeduser
+    // paused=false doSeek=false el=100`, the room as it stood at the handshake,
+    // one link delay old. Fifteen rather than fourteen is that one frame and
+    // nothing else — the host's five are the same five, at the same
+    // t=7050/8050/17050/18050/19050, before and after.
     expect(host.frames).toHaveLength(5)
-    expect(joiner.frames).toHaveLength(14)
+    expect(joiner.frames).toHaveLength(15)
     // And the joiner's non-participation is a fact about the run rather than a
     // filter that happened to miss: it never reported a position within 100 s
     // of the scrubber's target, which is what "it was never the victim" means

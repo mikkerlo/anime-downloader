@@ -31,7 +31,7 @@
 //    the room backwards onto a position its element has not reached.
 //
 // Measured with the in-flight reading reverted — the `pending.target` branch of
-// the `currentTime` getter taken out, which is the whole of the #368 correction
+// the `currentTime` getter taken out, so it walks where the pre-#368 one froze
 // — the same fixture gives `electionsJoiner 0`, `roomPos 606.95 setBy hostuser`,
 // eight writes `[600, 601, 601.05, 602, 603, 604, 605, 606]`, and a
 // `currentTime` of 7.95 — the joiner's un-honoured playhead, not its target:

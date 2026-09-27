@@ -34,15 +34,15 @@
 // the `currentTime` getter taken out, which is the whole of the #368 correction
 // — the same fixture gives `electionsJoiner 0`, `roomPos 606.95 setBy hostuser`,
 // eight writes `[600, 601, 601.05, 602, 603, 604, 605, 606]`, and a
-// `currentTime` of 7.95 that is the un-honoured playhead rather than the target:
+// `currentTime` of 7.95 — the joiner's un-honoured playhead, not its target:
 // the uncorrected peer never adopts, so it mirrors the room back and wins
 // nothing. On the corrected harness it takes one write and wins six elections.
 // That is the whole difference and it is the reason this file exists.
 //
 // The counterfactual is stated as that mutation rather than as "the stock
 // harness" on purpose. The pre-#368 harness is no longer in the tree, so its
-// figures cannot be re-measured; the getter revert can be, and it reproduces
-// every one of them.
+// figures cannot be re-measured; the getter revert can be, and the reverted
+// figures in the paragraph above were re-measured under it at this tip.
 //
 // The room is dragged back by seconds here rather than by the capture's
 // minutes, and the bound is the point rather than a weakness of the fixture:

@@ -186,9 +186,9 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     //
     // Every absolute position quoted above gained exactly 1.000 s when the
     // reference server started answering `Hello` with a join-time `State`
-    // (#384): both elements are seated paused, and the frame that un-pauses them
-    // now arrives one link delay after the handshake rather than at the room's
-    // first periodic second, so each element free-runs from t=50 instead of
+    // (#384): production pauses both elements at `seat()` (the fixture passes
+    // `paused: false`), and the frame that un-pauses them now lands one link
+    // delay after the handshake, so each element free-runs from t=50 instead of
     // t=1050. It is a rigid translation of the whole run — the yank still lands
     // at t=7050 on the same `el=645`, so its *magnitude* moved the other way, to
     // 539.0000000476837 from 540.0000000476837, and every difference measured

@@ -434,7 +434,7 @@ export function raggedLines(lines, deficit = DEFICIT) {
       // backticked path, but the rule is not written against that class and
       // does not consult it. The rejected alternative — "the next line begins
       // with an opening parenthesis" — WAS written against these lines, and the
-      // two come apart on docs/testing.md:50, which the parenthesis rule
+      // two come apart on docs/testing.md:58, which the parenthesis rule
       // pardons and this one leaves red at exactly blockMax-against-blockMax
       // because that break really was chosen.
       //

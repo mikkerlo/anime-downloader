@@ -14,17 +14,16 @@
 // held a **pinned expected divergence** rather than comparing the two backends
 // for agreement, until #384's item 4 moved the model's stamp and closed that
 // divergence; the pin reddened on its own, as designed, and the same PR swapped
-// it for `assertConforms`. The screw turns further, not less, for the swap: the
-// pin failed in *both* directions, so a `sendPingOnly` that dropped its counter
-// — which makes both backends inert together, and so reads as agreement — was
-// rejected by it as a stale pin, whereas an agreement check is exactly the thing
-// that reads two inert backends as a pass. The nightly's backstop for that one
-// failure mode went with the pin, so the seams below are all that is left of it,
-// and `sendPingOnly refuses a counter-less frame` is now the only place in the
-// tree that catches it. Which is the argument for their being here, strengthened
-// rather than weakened: neither needs a server, a socket or a wait, the verdict
-// they give would otherwise wait a night on a machine with four minutes to
-// spend, and after the swap it would not arrive on that night either.
+// it for `assertConforms`. The pin failed in *both* directions, and so does the
+// agreement check that replaced it, for a reason item 4 itself changed: the
+// model has no ignore window (`test/helpers/syncplay-min-election-server.ts:70`)
+// and now stamps every frame above its playstate guard, so a `sendPingOnly` that
+// dropped its counter leaves the reference inert and the model re-electing — a
+// divergence `assertConforms` reports, measured at 4.094s against the pinned
+// server, rather than two inert backends reading as agreement. The seams below
+// are the faster verdict on that, not the only one: neither needs a server, a
+// socket or a wait, where the nightly that also catches it runs a night later
+// on a machine with four minutes to spend.
 
 import { describe, expect, it } from 'vitest'
 import {

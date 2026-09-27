@@ -375,10 +375,21 @@ export class Peer {
    * different frame.
    *
    * Throws when no counter has been retained rather than sending the frame
-   * without one, because a counter-less frame is not merely weaker: inside the
-   * ignore window the reference discards it and the model has no ignore window
-   * to begin with, so both backends go inert together and `trace-diff` reports
-   * agreement — the one failure mode here that reads as evidence.
+   * without one, because a counter-less frame is not a silent weakening. The
+   * reference discards it inside its ignore window and leaves the room's
+   * election where it was; the model has no ignore window to discard it with —
+   * that window is on the fixture's deliberately-unmodelled list — and since
+   * #384's item 4 it stamps at receipt, above the playstate guard
+   * (`test/helpers/syncplay-min-election-server.ts:744`), so it takes the frame
+   * and elects the sender. `assertConforms` therefore reports a loud divergence
+   * rather than two inert backends reading as agreement: with `ignoringOnTheFly`
+   * dropped from the write below, `conf-forced-ping-stamps` reds with 5
+   * divergences, a widest real-against-model position gap of 4.092s, and `setBy`
+   * reading real `"bravo"` against model `"alpha"` for both peers — the seeker
+   * still elected on one side, alpha's own ping-only frame on the other.
+   * Reverting the drop puts the same run back to green. The throw is the faster
+   * verdict on that, not the only one: the pull-request gate instead of a night
+   * later.
    *
    * Does **not** clear `lastServerCounter`, where production `sendAck()` zeroes
    * `pendingServerAck` on the way out (`src/main/syncplay.ts:2746`), so a second

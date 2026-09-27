@@ -287,9 +287,12 @@ describe('conformance harness: a manual-ack peer captures the counter anyway', (
 describe('conformance harness: sendPingOnly refuses a counter-less frame', () => {
   it('throws rather than sending the frame without one', async () => {
     // Refusing is the point rather than defensiveness. A counter-less
-    // playstate-free frame is discarded by the reference inside the ignore
-    // window and inert in the model, so both backends go inert together — the
-    // one failure mode in `conf-forced-ping-stamps` that reads as evidence.
+    // playstate-free frame is discarded by the reference inside its ignore
+    // window, and the model has no ignore window to discard it with, so since
+    // item 4 made it stamp at receipt it takes the frame and elects the
+    // sender. Dropping the counter is therefore a loud divergence rather than
+    // two inert backends reading as agreement, and this seam reaches the same
+    // verdict without a server or a socket.
     const { peer, t, mark } = await seated('alpha', { ackForcedUpdates: false })
     expect(() => peer.sendPingOnly()).toThrow(/never received/)
     expect(t.since(mark)).toEqual([])

@@ -1186,9 +1186,9 @@ export class DownloadManager {
     const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
     if (allDone) {
       // Prefer the video item rather than whichever row survived the filter
-      // first (#412). Both matter: `startDownload` corrects only the video
-      // item's `quality` to the freshly resolved stream height, so a stale
-      // embed makes the subtitle's copy wrong; and `hasVideo` tells the
+      // first (#412). Both matter: `restart()` corrects only the video item's
+      // `quality` to the freshly re-resolved stream height, so a stale embed
+      // makes the subtitle's copy wrong; and `hasVideo` tells the
       // consumer when the fallback fired, instead of hiding a subtitle-only
       // group behind a payload that looks like a video's.
       const video = items.find((i) => i.kind === 'video')

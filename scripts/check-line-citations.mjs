@@ -640,18 +640,31 @@ export function analyze({
         if (readBaseLines !== null) {
           const baseCiting = baseLinesOf(from)
           const baseTarget = baseLinesOf(target)
-          // "The anchor token is unchanged" means the same `path:N[-M]` string
-          // occurs ANYWHERE in the base version of the citing file — not the same
-          // string at the same line. Position-based matching breaks the moment
-          // the citing file itself gains a line above the citation, which is the
-          // very failure this check exists to catch. A citing or target file the
-          // base does not carry has nothing to compare and is exempt, as is an
-          // anchor whose number this commit changed: a hand retarget is exempt by
-          // construction, which is #407's stated limit and not an oversight.
+          // "The anchor token is unchanged" means the base version of the citing
+          // file PARSES a token equal to this one ANYWHERE in the file — not one
+          // at the same line. Position-based matching breaks the moment the
+          // citing file itself gains a line above the citation, which is the very
+          // failure this check exists to catch. Equality is on the token the base
+          // line PARSES, not on a substring of that line: `a.ts:N` is a substring
+          // of `a.ts:NM`, of the range `a.ts:N-M`, and of `data.ts:N` — spelled
+          // with letters here because a literal example would be an anchor to a
+          // file that does not exist. A substring precondition therefore held a
+          // branch's brand-new anchor to a base claim it never made, and the base
+          // token stays in the base whatever the author does: the failure named a
+          // line the anchor already pointed at and the only way out was rewording
+          // the prose, which is the hard-fail-with-no-way-out class #407 spent
+          // three rounds removing. A citing or target file the base does not carry
+          // has nothing to compare and is exempt, as is an anchor whose number
+          // this commit changed: a hand retarget is exempt by construction, which
+          // is #407's stated limit and not an oversight.
           if (
             baseCiting !== null &&
             baseTarget !== null &&
-            baseCiting.some((l) => l.includes(cited))
+            baseCiting.some((l) =>
+              [...l.matchAll(CITATION)].some(
+                ([, r, s, e]) => `${r}:${e ? `${Number(s)}-${Number(e)}` : Number(s)}` === cited
+              )
+            )
           ) {
             driftChecked++
             // `path:N-M` claims both ends, so both are checked. That is NOT the

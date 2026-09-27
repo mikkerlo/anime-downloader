@@ -570,10 +570,14 @@ resolves, it lands on live code, and it names something else. #371 inserted the
 auto-advance overlay above `PlayerView.vue`'s `<video>` bindings, so line 2835
 stopped being the `@loadedmetadata` binding and became a modal `<div>`, with the
 binding pushed 59 lines down; the anchor in `test/helpers/syncplay-two-peer.ts`
-never moved, and this gate was green throughout. On #408 one editing
-round left three anchors a line short and the gate flagged exactly the one that
-happened to land on a comment — the other two resolved, cleanly, onto the wrong
-lines.
+never moved, and this gate was green throughout. That is the worked example
+here, and deliberately the only one: on #408 one editing round left three
+anchors a line short and the landing heuristic flagged exactly the one that
+happened to sit on a comment, but this gate would not have caught the other two
+either. All three were hand retargets, and a changed number is exempt by
+construction — see "What it does not catch" below. #408 is evidence for the
+practice the gate asks for rather than for the gate: **let the gate tell you the
+new line; do not pre-count it.**
 
 Since #407 the gate reads each cited line **as the base revision of this branch
 had it** and compares. The rule is an occurrence count rather than a resolution

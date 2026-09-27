@@ -1001,9 +1001,56 @@ describe('check-line-citations', () => {
     expect(unretargeted.drift[0].elsewhere).toEqual([3])
   })
 
+  it('reads the base token as a parsed token, not as a substring of a longer one', () => {
+    // ROUND 4'S FIXTURE, and the second one here whose purpose is to fail if a
+    // later hand swaps the comparison back for `.includes` — this time the
+    // precondition rather than the content test. `src/a.ts:12` is a substring of
+    // `src/a.ts:120`, so a substring precondition holds a brand-new `:12` anchor
+    // to a base claim it never made. That is the unsatisfiable shape: the base
+    // token stays in the base whatever the author does, so the only way out of
+    // the failure is rewording the prose around a correct anchor. It is also the
+    // likely shape — a target grows and anchors into it are added in the same
+    // change, which is what #384 did.
+    const step = (n: number): string => `  const step${n} = ${n}`
+    const body = Array.from({ length: 130 }, (_, k) => step(k + 1))
+    const baseCorpus = {
+      'src/a.ts': [...body, ''].join('\n'),
+      'src/b.ts': '// the guard (src/a.ts:120)'
+    }
+    const head = {
+      'src/a.ts': ['const inserted1 = 0', 'const inserted2 = 0', ...body, ''].join('\n'),
+      // The base line, untouched, plus the new anchor this branch adds.
+      'src/b.ts': ['// the guard (src/a.ts:120)', '// the step (src/a.ts:12)'].join('\n')
+    }
+
+    // Head line 12 is base line 10, so the new `:12` is CORRECT and the old
+    // `:120` is two lines short — asserted rather than left to the arithmetic.
+    expect(head['src/a.ts'].split('\n')[11]).toBe(step(10))
+    expect(head['src/a.ts'].split('\n')[121]).toBe(step(120))
+
+    const r = runDrift(baseCorpus, head)
+
+    // Exactly the real drift, and exactly once: the `:12` anchor is exempt
+    // because the base parses no `src/a.ts:12`, while `:120` is checked and reds.
+    expect(r.drift.map((d) => d.cited)).toEqual(['src/a.ts:120'])
+    expect(r.drift[0]).toMatchObject({ at: 'src/b.ts:1', target: 'src/a.ts', line: 120 })
+    expect(r.drift[0].elsewhere).toEqual([122])
+    expect(r.driftChecked).toBe(1)
+    expect(report(r, noPins).ok).toBe(false)
+
+    // And the new anchor did resolve — without this the case above would also
+    // pass for a `:12` that fell out of the accounting for some other reason.
+    expect(r.resolved.some((x) => x.at === 'src/b.ts:2' && x.cited === 'src/a.ts:12')).toBe(true)
+
+    // Under `.includes` the base `:120` line makes `:12` eligible too, the base
+    // line 12 is found at head 14, and the author is handed `it is at
+    // src/a.ts:14` for an anchor that is already right.
+    expect(r.drift.some((d) => d.cited === 'src/a.ts:12')).toBe(false)
+  })
+
   it('passes a citing comment widened on its own line', () => {
     // #405 and #406 were both authored same-line — widening comment text without
-    // wrapping it — to avoid shifting anchors. The token test is "the same string
+    // wrapping it — to avoid shifting anchors. The token test is "the same token
     // ANYWHERE in the base citing file", not "at the same line", so wrapping is
     // free here too: what matters is the target, and the target did not move.
     const target = ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n')

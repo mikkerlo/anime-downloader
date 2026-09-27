@@ -160,10 +160,16 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // swallowed rather than as a defect.
     //
     // So whoever reds these two lines has to decide which they are doing. If the
-    // floor is the fix, re-tense them — the element then parks at 0 and stays
-    // paused. If it is a regression, this red is the pin working. What is not
-    // available is deleting the case to get green, and an earlier draft of this
-    // paragraph pointed at the first answer as though it were settled.
+    // floor is the fix, re-tense them to `paused === true` and `currentTime === 0`
+    // — measured under the floor rather than reasoned to, and both lines move,
+    // not just the first: with the two demoted to a print the element ends the
+    // run at exactly `{paused: true, currentTime: 0}` and all four cases pass.
+    // A red run only ever shows the `paused` one, because `toBe` on it throws
+    // before the `currentTime` line is reached, so "one red" there is
+    // short-circuiting rather than one assertion that moves. If the floor is a
+    // regression instead, this red is the pin working. What is not available is
+    // deleting the case to get green, and an earlier draft of this paragraph
+    // pointed at the first answer as though it were settled.
     expect(joiner.el.readyStates).toEqual([1, 0])
     expect(joiner.el.seekWrites).toHaveLength(0)
     expect(joiner.el.paused).toBe(false)

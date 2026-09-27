@@ -11,13 +11,20 @@
 //
 // #392 added a third kind: the `manualAckPeers` / `sendPingOnly` seams. Same
 // rationale, with one more turn of the screw. The one scenario that drives them
-// does not compare the two backends for agreement: it holds a **pinned expected divergence** whose
-// terminus has been reached: #384's item 4 moved the model's stamp, so it reds. That pin does fail
-// in both directions — a `sendPingOnly` that dropped its counter makes both
-// backends inert together, which reads as agreement, which the pin rejects as a
-// stale pin — but it fails a night later, on a machine with a provisioned server
-// and four minutes to spend. Neither of the seams below needs a server, a socket
-// or a wait, so they belong on the gate that actually runs on a pull request.
+// held a **pinned expected divergence** rather than comparing the two backends
+// for agreement, until #384's item 4 moved the model's stamp and closed that
+// divergence; the pin reddened on its own, as designed, and the same PR swapped
+// it for `assertConforms`. The screw turns further, not less, for the swap: the
+// pin failed in *both* directions, so a `sendPingOnly` that dropped its counter
+// — which makes both backends inert together, and so reads as agreement — was
+// rejected by it as a stale pin, whereas an agreement check is exactly the thing
+// that reads two inert backends as a pass. The nightly's backstop for that one
+// failure mode went with the pin, so the seams below are all that is left of it,
+// and `sendPingOnly refuses a counter-less frame` is now the only place in the
+// tree that catches it. Which is the argument for their being here, strengthened
+// rather than weakened: neither needs a server, a socket or a wait, the verdict
+// they give would otherwise wait a night on a machine with four minutes to
+// spend, and after the swap it would not arrive on that night either.
 
 import { describe, expect, it } from 'vitest'
 import {
@@ -305,14 +312,19 @@ describe('conformance harness: sendPingOnly refuses a counter-less frame', () =>
   })
 })
 
-// The predicate that decides whether the pinned scenario means anything, on the
-// gate for the reason the header gives: it takes a `ConformanceRun` literal, so
-// there is no server, socket or wait, and every case below would otherwise wait
-// a night to be asked.
+// The predicate that decided whether the pinned scenario meant anything, kept
+// after #384's item 4 closed that divergence and `conf-forced-ping-stamps` went
+// back to `assertConforms`. It has no caller under `conformance/` now, so this
+// block is the whole of its coverage rather than the gate half of it — which is
+// a reason to keep the block, not to drop it: the next expected divergence gets
+// a helper that has been held to its contract instead of one last exercised a
+// release ago. On the gate for the reason the header gives besides: it takes a
+// `ConformanceRun` literal, so there is no server, socket or wait.
 describe('conformance harness: assertPinnedDivergence', () => {
-  // The figures are `conf-forced-ping-stamps`'s own, so a case that reds here
-  // reds there: `playing: true` selects the ±1.6 s tolerance, the ceiling is
-  // `PING_WAIT_MS / 1000 + tolerance`, and 3.907 s is what the run measured.
+  // The figures are the ones `conf-forced-ping-stamps` pinned while it diverged,
+  // so the cases below are a real run's shape rather than an invented one:
+  // `playing: true` selected the ±1.6 s tolerance, the ceiling was
+  // `PING_WAIT_MS / 1000 + tolerance`, and 3.907 s is what that run measured.
   const SAMPLE = "alpha's ping-only frame re-elects the room"
   const REPORT = 'scenario "conf-forced-ping-stamps" — 2 divergence(s)\n--- real server ---\n…'
 

@@ -42,6 +42,7 @@ type Internals = {
   processQueue: () => void
   finishDownloadedFile: (item: DownloadItem, filePath: string, partPath: string) => void
   persistQueue: () => void
+  runFfmpeg: (opts: { videoPath: string }) => Promise<void>
 }
 
 function seed(
@@ -251,6 +252,56 @@ describe('DownloadManager — watch while downloading (#63)', () => {
     dm.setFileLockCheck(() => false)
     expect(dm.finalizeDeferred()).toEqual([1])
     expect(dm.getMergeStatus(1)).toBe('pending')
+  })
+
+  it('merges an episode finalized by the player lock while another merge was running (#410)', async () => {
+    // The second caller of mergeCompleted: finalizeDeferredEpisodes in the main
+    // process. finalizeDeferred() has already moved this episode out of
+    // 'deferred' and the lock's onRelease hook will not fire again, so a
+    // dropped call leaves it with no re-trigger of its own.
+    const otherVideo = path.join(downloadDir, 'anime', 'other.mp4')
+    fs.mkdirSync(path.dirname(otherVideo), { recursive: true })
+    fs.writeFileSync(otherVideo, 'video-bytes')
+    putPartOnDisk()
+    seed(
+      dm,
+      [
+        makeItem({ id: 'video-2', translationId: 2, filename: path.join('anime', 'other.mp4') }),
+        makeItem({ status: 'completed' })
+      ],
+      [
+        [2, { status: 'pending' }],
+        [1, { status: 'deferred' }]
+      ]
+    )
+    dm.setFileLockCheck((p) => p === videoPath())
+
+    const internals = dm as unknown as Internals
+    const merged: string[] = []
+    const release: (() => void)[] = []
+    internals.runFfmpeg = (opts) =>
+      new Promise<void>((resolve) => {
+        merged.push(opts.videoPath)
+        release.push(resolve)
+      })
+    const flush = (): Promise<void> => new Promise<void>((r) => setTimeout(r, 0))
+
+    const cycle = dm.mergeCompleted('/fake/ffmpeg', '/fake/ffprobe')
+    await flush()
+    expect(merged).toEqual([otherVideo])
+
+    // Player closes the file mid-merge: the deferred episode is finalized and
+    // the hook asks for a merge, which the running cycle has to pick up.
+    dm.setFileLockCheck(() => false)
+    expect(dm.finalizeDeferred()).toEqual([1])
+    await dm.mergeCompleted('/fake/ffmpeg', '/fake/ffprobe')
+    release[0]()
+    await flush()
+    expect(merged).toEqual([otherVideo, videoPath()])
+    release[1]()
+    await cycle
+
+    expect(dm.getMergeStatus(1)).toBe('completed')
   })
 
   describe('path/queue lookups for the protocol handler and player', () => {

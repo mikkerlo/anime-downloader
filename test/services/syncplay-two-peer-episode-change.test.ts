@@ -36,7 +36,7 @@
 // 8000 really are clean — never the conclusion that the axis ended there.
 //
 // The dragged value is not one number either, every figure in this sentence a
-// 20 s read: 304.00 at the onset, 303.05 from 2000 through 5000, 310.00 across
+// 20 s read: 304.00 at the onset, 304.05 from 2000 through 5000, 311.00 across
 // `k = 7`, and **+2.00 s per dragging run** above that.
 // `PLAYBACK_STALE_MS` (`src/main/syncplay.ts:66` ("const
 // PLAYBACK_STALE_MS = 5000")) is the lower run's top edge exactly — 5000 drags,
@@ -54,9 +54,9 @@
 // out of the three dragging cells pinned below** — they are one cell from each of
 // three runs, and every cell between and beyond them is described in this header
 // only, never asserted. What the pins do establish, each at the window its case
-// names: at a 3 s gap the element is written to 303.05 and ends a 20 s window
+// names: at a 3 s gap the element is written to 304.05 and ends a 20 s window
 // ~4.95 s behind where the same window leaves it in the control; at a 6.5 s gap
-// it is written to 310.00 by the 14 s read; and at an 8.5 s gap to 312.00 by the
+// it is written to 311.00 by the 14 s read; and at an 8.5 s gap to 313.00 by the
 // 14 s read, while a 7.5 s gap one heartbeat below it leaves the element
 // untouched through the same 20 s. The drag is shipped, unflagged and unarmed,
 // and it costs playback on a peer that made no input at all.
@@ -81,7 +81,7 @@
 // projected room from `this.snapshot.position`, and while a reloading element
 // announces nothing both terms are still the old episode's number, so the drift
 // is 0 and `src/main/syncplay.ts:2597` adopts a seat whose element reads ~0. The
-// latched seat then asserts the inbound write's 302 — #360 itself — and wins
+// latched seat then asserts the inbound write's 303 — #360 itself — and wins
 // `min()`. At 6.5 s a second path runs: the gap outlives `PLAYBACK_STALE_MS`
 // (`src/main/syncplay.ts:66`), so by the first post-bind push
 // `src/main/syncplay.ts:902` finds no live playback and
@@ -153,8 +153,8 @@
 //
 // So "the same run answers the question both ways depending on where the window
 // ends" is just as true of the 6500 cell this file does pin, where the 6 s window
-// reads `[]` and the 14 s and 20 s windows read `[310.00]` — asserted below in
-// both windows, on purpose — and of the 8500 cell, `[]` at 6 s against `[312.00]`
+// reads `[]` and the 14 s and 20 s windows read `[311.00]` — asserted below in
+// both windows, on purpose — and of the 8500 cell, `[]` at 6 s against `[313.00]`
 // at 14 s and 20 s, asserted the same way. It therefore cannot have been the
 // reason 5000 was left out.
 //
@@ -166,7 +166,7 @@
 // exactly that reason — a change moving the edge by one millisecond flipped the
 // case, which is a fact about where the pin sat rather than about the tree. The
 // value did not move with the pin, because the run's *value* is stable where its
-// *position* is not: every cell from 6001 to 7000 writes the same 310.00. The
+// *position* is not: every cell from 6001 to 7000 writes the same 311.00. The
 // `k = 8`/`k = 9` pair is chosen the same way. 7500 and 8500 are both mid-run;
 // 8000 and 8001 are the two sides of a 1 ms edge and would have pinned the edge's
 // position where what is wanted is the parity.
@@ -261,25 +261,25 @@
 // first. #384 moved three of the five pinned rows below, and what
 // moved in them is `switcher.el.currentTime` only: 0.05 → 0 at 6500, 7500 and
 // 8500. Not one `innocent.el.currentTime` and not one
-// `server.roomState().position` changed at any of the five gaps — written
-// room/innocent in that order, and spelled out rather than carried down from
-// the clause above, they still read 306.5 / 308.95 at 500, 304 / 304 at 3000,
-// and 307.95 / 308.95 at each of the other three. (The 3000 row is the one
-// that reads the same either way, which is what lets a reversed pair survive a
-// spot check.) So the half that moved is the *switching* peer's own parked
-// element, and the comb's subject — the drag on the **non-switching** peer —
-// is the half that did not.
+// `server.roomState().position` changed at any of the five gaps across that
+// change — written room/innocent in that order, and spelled out rather than
+// carried down from the clause above, they read 306.5 / 308.95 at 500,
+// 304 / 304 at 3000, and 307.95 / 308.95 at each of the other three on both
+// sides of it. (The 3000 row is the one that reads the same either way, which
+// is what lets a reversed pair survive a spot check.) So the half the flush
+// moved is the *switching* peer's own parked element. The join-time `State`
+// this branch adds moved the other half instead: +1.00 s on all ten figures.
 //
-// **Re-measured on the flushed harness, and unchanged.** The onset is still
-// 1001 (1000 clean, 1001 writes 304.00), the 0.05 s step is still at 1051
-// (1050 writes 304.00, 1051 writes 303.95), `PLAYBACK_STALE_MS` is still the
-// lower run's top edge (5000 drags, 5001 clean), and the comb above `k = 5`
-// still alternates on parity: 6000 clean / 6001 → 310.00, 7000 → 310.00 /
-// 7001 clean, 8001 → 312.00, 10000 clean / 10001 → 314.00, 11000 → 314.00 /
-// 11001 clean, 13000 → 316.00, 15000 → 318.00, all at the 20 s read. None of
-// it is asserted anywhere, so it still rots silently: had the flush shifted
-// the onset off 1001 or flattened the parity, no case below would have gone
-// red and this block would still read exactly as it does.
+// **Re-measured against the join-time `State`** by a gap-axis sweep on this
+// branch's tip, run outside the suite (not a test, not in CI): every boundary,
+// every clean cell, the 1001 onset, the 1051 step, `PLAYBACK_STALE_MS`'s edge
+// (5000 drags, 5001 clean) and the crossing's 1 ms width at (3950, 3951] all
+// hold; only the written values move, each by exactly +1.00 s. At the 20 s
+// read 1001 and 1050 → 305.00, 1051 → 304.95, 6001/7000 → 311.00, 8001 →
+// 313.00, 10001/11000 → 315.00, 13000 → 317.00, 15000 → 319.00; at the 6 s
+// read 3950 writes `[304.05]`. **The 60 s-read `k`-parity deficits and the
+// `k = 6`–`k = 15` arm-frame census are not re-run.** None is asserted, so it
+// rots silently: flatten the parity either way and no case below would go red.
 //
 // This file asserts against the model server, which is legitimate for these
 // four cases and would not be for an assertion-side fixture: every row here is
@@ -347,7 +347,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // Measured at all three gaps: neither element is written to before the
     // switch. So nothing below clears `seekWrites`, and every list this file
     // asserts is the switch's whole footprint rather than a window of it — which
-    // is the difference between "one write, to 302" and "one write since we
+    // is the difference between "one write, to 303" and "one write since we
     // stopped looking".
     expect(switcher.el.seekWrites).toEqual([])
     expect(innocent.el.seekWrites).toEqual([])
@@ -370,7 +370,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // episode's timestamp, on a file that has no such position. That is the
     // defect this issue is titled after, and it is present in all three cases.
     expect(switcher.el.seekWrites).toHaveLength(1)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
 
     // And it reaches the wire with no spectator mirror in front of it at all.
     // Not "a short mirror" — zero frames: the seat is de-adopted at
@@ -379,24 +379,24 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(mirroring(server.wireOf('hostuser').slice(wireBefore))).toEqual([])
 
     // The innocent peer is not moved, and the room is the sibling adoption
-    // file's 306.5 — which is the switcher's dragged value, 2.45 s under the
-    // innocent peer's own element, not the 308.95 six more seconds of playback
+    // file's 307.5 — which is the switcher's dragged value, 2.45 s under the
+    // innocent peer's own element, not the 309.95 six more seconds of playback
     // would have left.
     expect(innocent.el.seekWrites).toEqual([])
     expect(innocent.el.paused).toBe(false)
-    expect(server.roomState().position).toBeCloseTo(306.5, 1)
+    expect(server.roomState().position).toBeCloseTo(307.5, 1)
     expect(server.roomState().paused).toBe(false)
-    expect(innocent.el.currentTime).toBeCloseTo(308.95, 2)
+    expect(innocent.el.currentTime).toBeCloseTo(309.95, 2)
 
     await room!.advance(8)
     expect(innocent.el.seekWrites).toEqual([])
-    expect(server.roomState().position).toBeCloseTo(314.5, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(316.95, 2)
+    expect(server.roomState().position).toBeCloseTo(315.5, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(317.95, 2)
 
     await room!.advance(6)
     expect(innocent.el.seekWrites).toEqual([])
-    expect(server.roomState().position).toBeCloseTo(320.5, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(322.95, 2)
+    expect(server.roomState().position).toBeCloseTo(321.5, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(323.95, 2)
 
     // The near miss, as a number. The gate at
     // `src/renderer/src/composables/use-syncplay-client.ts:1411` needs the
@@ -421,50 +421,50 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     await room!.advance(6)
 
     expect(switcher.el.seekWrites).toHaveLength(1)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
 
-    // The innocent peer is seeked, once, to 303.05 — backwards from the 308.95
+    // The innocent peer is seeked, once, to 304.05 — backwards from the 309.95
     // the control leaves it at over the same six seconds.
     expect(innocent.el.seekWrites).toHaveLength(1)
-    expect(innocent.el.seekWrites[0]).toBeCloseTo(303.05, 2)
-    expect(innocent.el.currentTime).toBeCloseTo(304, 2)
+    expect(innocent.el.seekWrites[0]).toBeCloseTo(304.05, 2)
+    expect(innocent.el.currentTime).toBeCloseTo(305, 2)
     expect(server.roomState().paused).toBe(false)
 
-    // The room went with it: 304.00 against the control's 306.5.
-    expect(server.roomState().position).toBeCloseTo(304, 1)
+    // The room went with it: 305.00 against the control's 307.5.
+    expect(server.roomState().position).toBeCloseTo(305, 1)
 
     // The mirror exists here and lasts exactly one frame. This is the whole of
     // `docs/syncplay.md`'s "withholds our playstate entirely" on this path — one
-    // push — and the frame after it is the seat asserting 302.00 into a room
-    // that read 305.95, which is the election that drags the room.
+    // push — and the frame after it is the seat asserting 303.00 into a room
+    // that read 306.95, which is the election that drags the room.
     const post = server.wireOf('hostuser').slice(wireBefore)
     expect(mirroring(post)).toHaveLength(1)
     const mirrorAt = post.findIndex((f) => f.paused === undefined)
     expect(mirrorAt).toBe(2)
-    expect(post[mirrorAt].position).toBeCloseTo(304.95, 2)
+    expect(post[mirrorAt].position).toBeCloseTo(305.95, 2)
     expect(post[mirrorAt + 1].paused).toBe(false)
-    expect(post[mirrorAt + 1].position).toBeCloseTo(302, 2)
-    expect(post[mirrorAt + 1].room).toBeCloseTo(305.95, 2)
-    // …and the next frame reads the room back at the asserted value: 305.95 →
-    // 303.00, a backwards step of ~2.95 s in the room itself.
-    expect(post[mirrorAt + 2].room).toBeCloseTo(303, 2)
+    expect(post[mirrorAt + 1].position).toBeCloseTo(303, 2)
+    expect(post[mirrorAt + 1].room).toBeCloseTo(306.95, 2)
+    // …and the next frame reads the room back at the asserted value: 306.95 →
+    // 304.00, a backwards step of ~2.95 s in the room itself.
+    expect(post[mirrorAt + 2].room).toBeCloseTo(304, 2)
 
     // The drag is not deferred and not repaired. Both later windows are past the
     // bind gap's release *and* past `PLAYBACK_STALE_MS`, and the peer stays one
     // write down and ~4.95 s behind the control for the rest of the session.
     await room!.advance(8)
     expect(innocent.el.seekWrites).toHaveLength(1)
-    expect(server.roomState().position).toBeCloseTo(311, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(312, 2)
+    expect(server.roomState().position).toBeCloseTo(312, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(313, 2)
 
     await room!.advance(6)
     expect(innocent.el.seekWrites).toHaveLength(1)
-    expect(server.roomState().position).toBeCloseTo(317, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(318, 2)
+    expect(server.roomState().position).toBeCloseTo(318, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(319, 2)
     expect(server.roomState().paused).toBe(false)
   })
 
-  it('drags the non-switching peer later at a 6.5 s bind gap, writing it to 310.00 by the 14 s read', async () => {
+  it('drags the non-switching peer later at a 6.5 s bind gap, writing it to 311.00 by the 14 s read', async () => {
     // PINS CURRENT BEHAVIOUR, BELIEVED WRONG. Same outcome as the 3 s case by a
     // different route: the gap outlives `PLAYBACK_STALE_MS`
     // (`src/main/syncplay.ts:66`), so `src/main/syncplay.ts:903` de-adopts on a
@@ -481,7 +481,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // the case for a reason that was about the pin's placement and not about the
     // tree. 6500 is mid-run. Every assertion below is byte-identical at both
     // gaps, because the run's written value is stable where its edges are not —
-    // every cell from 6001 to 7000 writes the same 310.00.
+    // every cell from 6001 to 7000 writes the same 311.00.
     const { switcher, innocent, wireBefore } = await seatPair(6500)
     const server = room!.server
 
@@ -515,21 +515,21 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(switcher.el.seekWrites).toEqual([])
     expect(switcher.el.currentTime).toBe(0)
     expect(innocent.el.seekWrites).toEqual([])
-    expect(server.roomState().position).toBeCloseTo(307.95, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(308.95, 2)
+    expect(server.roomState().position).toBeCloseTo(308.95, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(309.95, 2)
 
     await room!.advance(8)
 
-    // Past the gap, the switcher is placed at the previous episode's 302 and then
-    // at 308, and the innocent peer is written to 310.00 — backwards from the
-    // 316.95 the control has it at over the same fourteen seconds.
+    // Past the gap, the switcher is placed at the previous episode's 303 and then
+    // at 309, and the innocent peer is written to 311.00 — backwards from the
+    // 317.95 the control has it at over the same fourteen seconds.
     expect(switcher.el.seekWrites).toHaveLength(2)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
-    expect(switcher.el.seekWrites[1]).toBeCloseTo(308, 2)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(switcher.el.seekWrites[1]).toBeCloseTo(309, 2)
     expect(innocent.el.seekWrites).toHaveLength(1)
-    expect(innocent.el.seekWrites[0]).toBeCloseTo(310, 2)
-    expect(server.roomState().position).toBeCloseTo(312.95, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(313.95, 2)
+    expect(innocent.el.seekWrites[0]).toBeCloseTo(311, 2)
+    expect(server.roomState().position).toBeCloseTo(313.95, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(314.95, 2)
     expect(server.roomState().paused).toBe(false)
 
     // Five mirror frames, against one at 3 s: the two de-adoption paths are
@@ -539,13 +539,13 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
 
     await room!.advance(6)
     expect(innocent.el.seekWrites).toHaveLength(1)
-    expect(server.roomState().position).toBeCloseTo(318.95, 1)
-    expect(innocent.el.currentTime).toBeCloseTo(319.95, 2)
+    expect(server.roomState().position).toBeCloseTo(319.95, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(320.95, 2)
     expect(innocent.el.paused).toBe(false)
     expect(server.roomState().paused).toBe(false)
   })
 
-  it('alternates by the parity of k above k = 5 — clean at a 7.5 s bind gap, dragged to 312.00 at 8.5 s', async () => {
+  it('alternates by the parity of k above k = 5 — clean at a 7.5 s bind gap, dragged to 313.00 at 8.5 s', async () => {
     // PINS CURRENT BEHAVIOUR, BELIEVED WRONG, in the dragging half — and the
     // clean half is not the desired invariant either, it is the *other* value of
     // a parity nobody chose. When #360 is fixed the 8.5 s half inverts; the 7.5 s
@@ -562,7 +562,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // file. Read at 6 s the two gaps are **indistinguishable** — same room, same
     // untouched elements, same four mirror frames — and they part company at the
     // 14 s read, which is also where the switcher's own footprint turns out to be
-    // identical across the pair (`[302, 310]` at both). So the difference the
+    // identical across the pair (`[303, 311]` at both). So the difference the
     // parity makes is not visible in what the switcher does, and is not visible
     // at all until the second window.
     //
@@ -592,27 +592,27 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // boundary rather than 50 ms before it.
     expect(even.switcher.el.currentTime).toBe(0)
     expect(even.innocent.el.seekWrites).toEqual([])
-    expect(evenServer.roomState().position).toBeCloseTo(307.95, 1)
-    expect(even.innocent.el.currentTime).toBeCloseTo(308.95, 2)
+    expect(evenServer.roomState().position).toBeCloseTo(308.95, 1)
+    expect(even.innocent.el.currentTime).toBeCloseTo(309.95, 2)
     expect(mirroring(evenServer.wireOf('hostuser').slice(even.wireBefore))).toHaveLength(4)
 
     await room!.advance(8)
 
     // The switcher takes both of #360's writes here exactly as it does at 8.5 s,
     // and the innocent peer is left where fourteen seconds of playback put it —
-    // the control's own 316.95.
+    // the control's own 317.95.
     expect(even.switcher.el.seekWrites).toHaveLength(2)
-    expect(even.switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
-    expect(even.switcher.el.seekWrites[1]).toBeCloseTo(310, 2)
+    expect(even.switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(even.switcher.el.seekWrites[1]).toBeCloseTo(311, 2)
     expect(even.innocent.el.seekWrites).toEqual([])
-    expect(evenServer.roomState().position).toBeCloseTo(314.95, 1)
-    expect(even.innocent.el.currentTime).toBeCloseTo(316.95, 2)
+    expect(evenServer.roomState().position).toBeCloseTo(315.95, 1)
+    expect(even.innocent.el.currentTime).toBeCloseTo(317.95, 2)
     expect(mirroring(evenServer.wireOf('hostuser').slice(even.wireBefore))).toHaveLength(6)
 
     await room!.advance(6)
     expect(even.innocent.el.seekWrites).toEqual([])
-    expect(evenServer.roomState().position).toBeCloseTo(320.95, 1)
-    expect(even.innocent.el.currentTime).toBeCloseTo(322.95, 2)
+    expect(evenServer.roomState().position).toBeCloseTo(321.95, 1)
+    expect(even.innocent.el.currentTime).toBeCloseTo(323.95, 2)
     expect(even.innocent.el.paused).toBe(false)
     expect(evenServer.roomState().paused).toBe(false)
 
@@ -642,31 +642,31 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // the two rows indistinguishable at this window.
     expect(odd.switcher.el.currentTime).toBe(0)
     expect(odd.innocent.el.seekWrites).toEqual([])
-    expect(oddServer.roomState().position).toBeCloseTo(307.95, 1)
-    expect(odd.innocent.el.currentTime).toBeCloseTo(308.95, 2)
+    expect(oddServer.roomState().position).toBeCloseTo(308.95, 1)
+    expect(odd.innocent.el.currentTime).toBeCloseTo(309.95, 2)
     expect(mirroring(oddServer.wireOf('hostuser').slice(odd.wireBefore))).toHaveLength(4)
 
     await room!.advance(8)
 
     // One heartbeat of bind gap later, and the peer that pressed nothing is
-    // written to 312.00 — two seconds up from the 6.5 s run's 310.00, which is
+    // written to 313.00 — two seconds up from the 6.5 s run's 311.00, which is
     // the `+2.00 s per dragging run` the header describes, and 4.95 s behind the
-    // 316.95 the `k = 8` row above leaves it at over the same fourteen seconds.
+    // 317.95 the `k = 8` row above leaves it at over the same fourteen seconds.
     // The switcher's writes are the same two.
     expect(odd.switcher.el.seekWrites).toHaveLength(2)
-    expect(odd.switcher.el.seekWrites[0]).toBeCloseTo(302, 2)
-    expect(odd.switcher.el.seekWrites[1]).toBeCloseTo(310, 2)
+    expect(odd.switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(odd.switcher.el.seekWrites[1]).toBeCloseTo(311, 2)
     expect(odd.innocent.el.seekWrites).toHaveLength(1)
-    expect(odd.innocent.el.seekWrites[0]).toBeCloseTo(312, 2)
-    expect(oddServer.roomState().position).toBeCloseTo(313, 1)
-    expect(odd.innocent.el.currentTime).toBeCloseTo(313.95, 2)
+    expect(odd.innocent.el.seekWrites[0]).toBeCloseTo(313, 2)
+    expect(oddServer.roomState().position).toBeCloseTo(314, 1)
+    expect(odd.innocent.el.currentTime).toBeCloseTo(314.95, 2)
     expect(oddServer.roomState().paused).toBe(false)
     expect(mirroring(oddServer.wireOf('hostuser').slice(odd.wireBefore))).toHaveLength(7)
 
     await room!.advance(6)
     expect(odd.innocent.el.seekWrites).toHaveLength(1)
-    expect(oddServer.roomState().position).toBeCloseTo(318.95, 1)
-    expect(odd.innocent.el.currentTime).toBeCloseTo(319.95, 2)
+    expect(oddServer.roomState().position).toBeCloseTo(319.95, 1)
+    expect(odd.innocent.el.currentTime).toBeCloseTo(320.95, 2)
     expect(odd.innocent.el.paused).toBe(false)
     expect(oddServer.roomState().paused).toBe(false)
 

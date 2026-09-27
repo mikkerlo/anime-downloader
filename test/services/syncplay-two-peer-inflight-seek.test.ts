@@ -30,12 +30,19 @@
 //    room walks on without it, wins `Room.getPosition()`'s `min()`, and ratchets
 //    the room backwards onto a position its element has not reached.
 //
-// Measured on the stock (frozen) harness the same fixture gives
-// `electionsJoiner 0`, `roomPos 605.95 setBy hostuser`, `currentTime 0` and
-// seven writes `[601, 602.05, 601.05, 602, 603, 604, 605]` — the frozen peer
-// never adopts, so it mirrors the room back and wins nothing. On the corrected
-// harness it takes one write and wins four elections. That is the whole
-// difference and it is the reason this file exists.
+// Measured with the in-flight reading reverted — the `pending.target` branch of
+// the `currentTime` getter taken out, so it walks where the pre-#368 one froze
+// — the same fixture gives `electionsJoiner 0`, `roomPos 606.95 setBy hostuser`,
+// eight writes `[600, 601, 601.05, 602, 603, 604, 605, 606]`, and a
+// `currentTime` of 7.95 — the joiner's un-honoured playhead, not its target:
+// the uncorrected peer never adopts, so it mirrors the room back and wins
+// nothing. On the corrected harness it takes one write and wins six elections.
+// That is the whole difference and it is the reason this file exists.
+//
+// The counterfactual is stated as that mutation rather than as "the stock
+// harness" on purpose. The pre-#368 harness is no longer in the tree, so its
+// figures cannot be re-measured; the getter revert can be, and the reverted
+// figures in the paragraph above were re-measured under it at this tip.
 //
 // The room is dragged back by seconds here rather than by the capture's
 // minutes, and the bound is the point rather than a weakness of the fixture:
@@ -90,11 +97,18 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     await room.advance(8)
 
     // The premise. One write, never landed: the element is still seeking and is
-    // parked on the target it was handed rather than on 0. On the stock frozen
-    // harness this read `0` with seven writes behind it.
+    // parked on the target it was handed rather than on 0. With the in-flight
+    // reading reverted this read the un-honoured playhead with eight writes
+    // behind it.
+    //
+    // The target is the room position the joiner was *first told*, and the
+    // reference hands that over in its `Hello` reply rather than at the first
+    // periodic second — so it is 600, the room's seed, and not the 601 the
+    // t=1000 election would have written. A fixture that omitted the join-time
+    // `State` measured 601 here.
     expect(joiner.el.seekWrites).toHaveLength(1)
-    expect(joiner.el.seekWrites[0]).toBeCloseTo(601, 2)
-    expect(joiner.el.currentTime).toBeCloseTo(601, 2)
+    expect(joiner.el.seekWrites[0]).toBeCloseTo(600, 2)
+    expect(joiner.el.currentTime).toBeCloseTo(600, 2)
     expect(joiner.el.seeking).toBe(true)
 
     // Readiness is what lags, not the position — which is exactly why the
@@ -109,24 +123,31 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     // assertion, counted rather than sampled.
     expect(joiner.status().playbackAdopted).toBe(true)
     const wire = room.server.wireOf('joinuser')
-    expect(wire).toHaveLength(7)
-    expect(asserting(wire)).toHaveLength(7)
+    // Eight, not seven: adopting a second earlier starts the 1 Hz assertion a
+    // second earlier, so there is one more of them inside the same 8 s window.
+    expect(wire).toHaveLength(8)
+    expect(asserting(wire)).toHaveLength(8)
     expect(mirroring(wire)).toHaveLength(0)
 
     // And every one of those assertions carries the target, not the element's
-    // real progress and not 0: seven frames all at 601 while the room walks from
-    // 601 to past 606.
-    expect(wire.every((f) => Math.abs(f.position - 601) < 0.5)).toBe(true)
+    // real progress and not 0: eight frames all at 600. The room they are
+    // announced into reads 601 for every one of them — the joiner has had it
+    // pinned there since its third second — where an undragged room would have
+    // reached 606.95.
+    expect(wire.every((f) => Math.abs(f.position - 600) < 0.5)).toBe(true)
+    expect(wire.every((f) => Math.abs(f.room - 601) < 0.5)).toBe(true)
 
-    // The claim: it wins the election with that position, four times, and drags
-    // the room back onto it. On the stock harness the joiner won none of them
-    // and the room ended at 605.95 under the host.
-    expect(room.server.electionsSetBy('joinuser')).toHaveLength(4)
+    // The claim: it wins the election with that position, six times, and drags
+    // the room back onto it. With the in-flight reading reverted the joiner won
+    // none of them and the room ended at 606.95 under the host.
+    expect(room.server.electionsSetBy('joinuser')).toHaveLength(6)
     expect(room.server.roomState().setBy).toBe('joinuser')
-    expect(room.server.roomState().position).toBeCloseTo(602, 2)
+    expect(room.server.roomState().position).toBeCloseTo(601, 2)
 
     // The host is dragged with it — it is the peer that had done nothing wrong.
-    expect(host.el.currentTime).toBeLessThan(606.95)
+    // 607.95 is where it ends when nothing drags it, measured on the same
+    // fixture at a latency the joiner never wins from.
+    expect(host.el.currentTime).toBeLessThan(607.95)
   })
 
   it('is bounded by the seek target rather than by 0, and the bound moves with the latency', async () => {
@@ -135,7 +156,12 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
     // lands — which is the shape of the bound: the damage is "how stale is the
     // target", not "the peer announces 0". A frozen element would have announced
     // 0 at every one of these and the bound would not exist.
-    const seen: { landMs: number; roomPos: number; elections: number }[] = []
+    const seen: {
+      landMs: number
+      roomPos: number
+      elections: number
+      setBy: string | null
+    }[] = []
     for (const landMs of [1200, 2000, 8000]) {
       room = await createTwoPeerRoom({ position: 600, paused: false })
       await room.seat({ username: 'hostuser', position: 600, paused: false, delayMs: DELAY_MS })
@@ -148,20 +174,50 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
       })
       await room.advance(8)
       // Never 0, at any latency: the announced floor is the target.
-      expect(room.server.wireOf('joinuser').every((f) => f.position >= 601 - 0.01)).toBe(true)
+      //
+      // Three lines rather than one, because the one-sided bound alone stopped
+      // discriminating once it was renumbered from 601 down to 600 — 601 clears
+      // a floor of 600, so a fixture that withholds the join-time `State` passes
+      // it too. The exact floor is what holds the value, and the third line ties
+      // it to the write, so it cannot drift away from the target it is supposed
+      // to be without one of the two saying so.
+      const wire = room.server.wireOf('joinuser')
+      const floor = Math.min(...wire.map((f) => f.position))
+      expect(wire.every((f) => f.position >= 600 - 0.01)).toBe(true)
       expect(joiner.el.seekWrites).toHaveLength(1)
+      expect(floor).toBeCloseTo(600, 2)
+      expect(floor).toBeCloseTo(joiner.el.seekWrites[0], 2)
       seen.push({
         landMs,
         roomPos: room.server.roomState().position,
-        elections: room.server.electionsSetBy('joinuser').length
+        elections: room.server.electionsSetBy('joinuser').length,
+        setBy: room.server.roomState().setBy
       })
       room.dispose()
     }
 
-    expect(seen.map((s) => s.elections)).toEqual([4, 4, 4])
+    // Not the flat `[4, 4, 4]` this read against a fixture that withheld the
+    // join-time `State`, and the difference is a regime and not a renumber. The
+    // takeover is still latency-independent — the joiner becomes the `min()` at
+    // t=3 s in all three runs — but the *release* is not, so the triple is
+    // asserted together with who owns the room at the end:
+    //
+    //  - 1200 ms: the host never corrects, so the joiner holds the room for six
+    //    consecutive elections and still owns it at the end.
+    //  - 2000 ms: the joiner's takeover is now early enough that the host's own
+    //    corrective seek fires, and it lands *below* the by-then-walking joiner
+    //    — a write of 602.0, putting the host at 603 against the joiner's 603.95
+    //    at t=7 s. That hands the `min()` back for the
+    //    last two seconds, so the joiner wins four and the host, not the joiner,
+    //    is who the room ends under. Withholding the join-time `State` hid this
+    //    band entirely: at 2000 ms the host issued no corrective seek at all.
+    //  - 8000 ms: the seek never lands, so the joiner is pinned below the
+    //    corrected host for the whole window and wins six.
+    expect(seen.map((s) => s.elections)).toEqual([6, 4, 6])
+    expect(seen.map((s) => s.setBy)).toEqual(['joinuser', 'hostuser', 'joinuser'])
     expect(seen[0].roomPos).toBeCloseTo(605.75, 2)
-    expect(seen[1].roomPos).toBeCloseTo(604.95, 2)
-    expect(seen[2].roomPos).toBeCloseTo(602, 2)
+    expect(seen[1].roomPos).toBeCloseTo(603.95, 2)
+    expect(seen[2].roomPos).toBeCloseTo(601, 2)
     // Monotone in the latency, which is what "bounded by the target" means.
     expect(seen[0].roomPos).toBeGreaterThan(seen[1].roomPos)
     expect(seen[1].roomPos).toBeGreaterThan(seen[2].roomPos)

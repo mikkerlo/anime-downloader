@@ -144,6 +144,14 @@ export class DownloadManager {
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
   private mergeCancelled = false
+  // A merge trigger that arrived while a cycle was running (#410). The cycle
+  // drains it with a follow-up pass instead of dropping it.
+  private mergeRequested = false
+  // Translations cancelled one-by-one during the current merge cycle. Separate
+  // from `mergeCancelled` on purpose: the global flag ends the whole cycle,
+  // this set only skips its own translations, so cancelling one episode's
+  // merge cannot drop another episode's requested rerun.
+  private cancelledMerges = new Set<number>()
   private queueFilePath: string
   private persistScheduled = false
   private isFileLocked: (absPath: string) => boolean = () => false
@@ -588,14 +596,32 @@ export class DownloadManager {
   }
 
   cancelMerge(translationId?: number): void {
+    if (translationId) {
+      // Per-translation cancel joins the one-cycle cancel set and never raises
+      // the global flag: raising it would break the running pass and drop a
+      // rerun another episode's completion had already requested. The set is
+      // only joined while a cycle is in flight — an entry added with nothing
+      // merging has no cycle exit to clear it, and would skip that group for
+      // every later request. The insertion sits ahead of the kill path so a
+      // group that is queued rather than active is skipped too, and the kill
+      // is now conditional instead of returning out of the whole method, so
+      // the pending-merge status reset below always runs.
+      if (this.merging) this.cancelledMerges.add(translationId)
+      if (this.activeFfmpegCmd && this.activeMergeTranslationId === translationId) {
+        this.activeFfmpegCmd.kill('SIGKILL')
+      }
+      // Also cancel pending merges by resetting their status
+      this.mergeStatuses.delete(translationId)
+      return
+    }
+    // Global cancel (the user's Cancel button) ends the whole cycle. The flag
+    // goes up whenever a cycle is running, not only when a command is active,
+    // so a Cancel pressed while duration is being probed or between two groups
+    // is not lost.
+    if (this.merging) this.mergeCancelled = true
     if (this.activeFfmpegCmd) {
-      if (translationId && this.activeMergeTranslationId !== translationId) return
       this.mergeCancelled = true
       this.activeFfmpegCmd.kill('SIGKILL')
-    }
-    // Also cancel pending merges by resetting their status
-    if (translationId) {
-      this.mergeStatuses.delete(translationId)
     }
   }
 
@@ -682,13 +708,33 @@ export class DownloadManager {
     ffprobePath: string,
     videoCodec = 'copy'
   ): Promise<void> {
-    if (this.merging) return
+    // A trigger that arrives mid-cycle used to be dropped outright, and the
+    // running pass could not pick the episode up either: it iterates a
+    // snapshot of the groups taken before that episode was completed (#410).
+    // Record the request and let the running cycle drain it.
+    if (this.merging) {
+      this.mergeRequested = true
+      return
+    }
     this.merging = true
 
     try {
-      await this._mergeAll(ffmpegPath, ffprobePath, videoCodec)
+      do {
+        // Cleared before each pass, so a request that arrives while the pass
+        // runs survives into the next one. Clearing it afterwards instead
+        // would lose exactly the requests this fix is about. Every pass calls
+        // getEpisodeGroups() again, so a follow-up pass sees the episode that
+        // completed mid-pass rather than the stale snapshot.
+        this.mergeRequested = false
+        await this._mergeAll(ffmpegPath, ffprobePath, videoCodec)
+        // _mergeAll only resets mergeCancelled on entry, so after it returns
+        // the flag still describes the pass that just ran. Ending the cycle on
+        // it is what stops a follow-up pass from un-cancelling a global Cancel
+        // and carrying on with the next group.
+      } while (this.mergeRequested && !this.mergeCancelled)
     } finally {
       this.merging = false
+      this.cancelledMerges.clear()
     }
   }
 
@@ -701,7 +747,13 @@ export class DownloadManager {
     const groups = this.getEpisodeGroups()
 
     for (const group of groups) {
+      // Only the global cancel breaks the pass; a single cancelled translation
+      // must not abandon the groups behind it.
       if (this.mergeCancelled) break
+      // Read from the live set, not from the snapshot: group.mergeStatus was
+      // frozen when the pass started, so a cancel that lands mid-pass is
+      // invisible there and this pass would merge the group just cancelled.
+      if (this.cancelledMerges.has(group.translationId)) continue
       if (!group.video || group.video.status !== 'completed') continue
       if (group.mergeStatus === 'completed' || group.mergeStatus === 'merging') continue
       // Deferred episodes still live as .part under a player lock — never
@@ -782,7 +834,12 @@ export class DownloadManager {
         } catch {
           /* ignore */
         }
-        if (this.mergeCancelled) {
+        // The cancel set counts as a cancel here as much as the global flag
+        // does. A per-translation cancel kills ffmpeg without raising the
+        // global flag, so without this check the rejection would be recorded
+        // as a 'failed' merge — and 'failed' is eligible again on the next
+        // pass, which would re-merge exactly what the user cancelled.
+        if (this.mergeCancelled || this.cancelledMerges.has(group.translationId)) {
           this.mergeStatuses.delete(group.translationId)
           console.log(`[merge] Cancelled: ${mkvFilename}`)
         } else {
@@ -881,8 +938,15 @@ export class DownloadManager {
     onProgress?: (current: number, total: number, file: string, percent: number) => void,
     extraDirs?: string[]
   ): Promise<{ merged: number; failed: string[] }> {
-    if (this.merging) return { merged: 0, failed: [] }
+    // Queuing a scan behind a running pass buys nothing (it walks the
+    // directories and drives its own progress reporting), but reporting
+    // "0 merged, no errors" made the manual button look like a silent no-op.
+    // Same IPC return shape, so nothing downstream changes.
+    if (this.merging) return { merged: 0, failed: ['A merge is already running'] }
     this.merging = true
+    // Only _mergeAll resets this on entry, so a global Cancel from an earlier
+    // cycle would otherwise still be up and make the drain below skip.
+    this.mergeCancelled = false
 
     const result = { merged: 0, failed: [] as string[] }
 
@@ -964,6 +1028,19 @@ export class DownloadManager {
       }
     } finally {
       this.merging = false
+      this.cancelledMerges.clear()
+    }
+
+    // An episode that completed while the scan was running only got as far as
+    // setting mergeRequested, so drain it with a normal pass. This must stay
+    // outside the finally: with `merging` still true, mergeCompleted's own
+    // busy check would swallow the request and the scan case would keep the
+    // bug while the direct case's test still passed. Skipped after a global
+    // Cancel — the scan loop never checks that flag itself (pre-existing, out
+    // of scope), but the drain must not restart merging the user cancelled,
+    // which a pass would do because _mergeAll clears the flag on entry.
+    if (this.mergeRequested && !this.mergeCancelled) {
+      await this.mergeCompleted(ffmpegPath, ffprobePath, videoCodec)
     }
 
     return result

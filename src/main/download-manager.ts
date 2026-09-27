@@ -944,6 +944,9 @@ export class DownloadManager {
     // Same IPC return shape, so nothing downstream changes.
     if (this.merging) return { merged: 0, failed: ['A merge is already running'] }
     this.merging = true
+    // Only _mergeAll resets this on entry, so a global Cancel from an earlier
+    // cycle would otherwise still be up and make the drain below skip.
+    this.mergeCancelled = false
 
     const result = { merged: 0, failed: [] as string[] }
 
@@ -1025,6 +1028,7 @@ export class DownloadManager {
       }
     } finally {
       this.merging = false
+      this.cancelledMerges.clear()
     }
 
     // An episode that completed while the scan was running only got as far as

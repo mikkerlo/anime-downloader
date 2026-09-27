@@ -369,5 +369,75 @@ describe('DownloadManager merge scheduling (#410)', () => {
       expect(calls.map((c) => c.videoPath)).toEqual([scanned])
       expect(dm.getMergeStatus(2)).toBe('pending')
     })
+
+    it('drains a completion from the scan even when an earlier cycle ended on a global Cancel (regression: the stale flag skipped the drain)', async () => {
+      // Only _mergeAll resets mergeCancelled, so a cycle that ends on a global
+      // Cancel leaves the flag up after it returns. A scan that does not reset
+      // it reads the stale flag as "this scan was cancelled" and skips the
+      // drain, leaving the episode sitting with mergeRequested up.
+      const a = episodeA()
+      const b = episodeB('downloading')
+      const aPath = putVideo('ep1.mp4')
+      const bPath = putVideo('ep2.mp4')
+      const scanned = putScannable()
+      seed(dm, [a, b])
+      const calls = stubFfmpeg(dm)
+
+      const cancelled = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      expect(calls.map((c) => c.videoPath)).toEqual([aPath])
+      dm.cancelMerge()
+      await cancelled
+      // The user clears the episode whose merge they just cancelled, so A is
+      // out of the drain's eligible set and the assertions below are about B.
+      dm.cancel(a.id)
+
+      const scan = dm.scanAndMerge(FFMPEG, FFPROBE)
+      await flush()
+      expect(calls.map((c) => c.videoPath)).toEqual([aPath, scanned])
+
+      // B finishes mid-scan: mergeCompleted can only record the request,
+      // because the scan holds `merging`.
+      b.status = 'completed'
+      await dm.mergeCompleted(FFMPEG, FFPROBE)
+      calls[1].resolve()
+      await flush()
+      // Asserted before settling: on the stale flag there is no third call and
+      // this pins the skipped drain rather than hanging on an unsettled stub.
+      expect(calls).toHaveLength(3)
+      calls[2].resolve()
+      await scan
+
+      expect(calls.map((c) => c.videoPath)).toEqual([aPath, scanned, bPath])
+      expect(dm.getMergeStatus(2)).toBe('completed')
+    })
+
+    it('hardening: a per-translation cancel raised during the scan does not outlive it (no live caller reaches this today)', async () => {
+      // cancelMerge(trId) joins cancelledMerges whenever a cycle is in flight,
+      // and a scan counts. cancelByEpisode only reaches it for a translation
+      // already 'merging' and the scan never sets that status, so this is a
+      // contract test for the direct call: the set must be empty by the drain.
+      const b = episodeB('downloading')
+      const bPath = putVideo('ep2.mp4')
+      const scanned = putScannable()
+      seed(dm, [b])
+      const calls = stubFfmpeg(dm)
+
+      const scan = dm.scanAndMerge(FFMPEG, FFPROBE)
+      await flush()
+      dm.cancelMerge(2)
+
+      b.status = 'completed'
+      await dm.mergeCompleted(FFMPEG, FFPROBE)
+      calls[0].resolve()
+      await flush()
+      // An entry that survived the scan would skip B's group for this drain.
+      expect(calls).toHaveLength(2)
+      calls[1].resolve()
+      await scan
+
+      expect(calls.map((c) => c.videoPath)).toEqual([scanned, bPath])
+      expect(dm.getMergeStatus(2)).toBe('completed')
+    })
   })
 })

@@ -30,6 +30,62 @@ const ROOM_START = 100
 const DELAY_MS = 50
 
 /**
+ * Where the join-time `State` places a joiner: the room's start plus **one
+ * one-way delay**, not the room's start.
+ *
+ * The room's *playback* never moves — it is paused at `ROOM_START` and no peer
+ * ever acts — so this is not the room drifting. It is one second during which
+ * the server's **elected** position sits a forward delay above the room's true
+ * one, and the joiner's `State` is answered inside it.
+ *
+ * The cause is the join-time `State` on **both** ends, because the server sends
+ * one on every `Hello`, the host's included. That is what the counterfactual
+ * measures rather than infers:
+ *
+ *  - Suppressed, the host puts *no* playstate on the wire at t=1000 at all. It
+ *    has been told nothing about the room, so `buildPlaystate` stops at
+ *    `src/main/syncplay.ts:2411` ("if (!room) return null"). Its first wire frame
+ *    is the t=2000 one, by which point it has adopted and sends `paused: true`,
+ *    which the server stores raw — so every election reads `ROOM_START` and the
+ *    old `[ROOM_START]` literal was right.
+ *  - Present, the host's own join-time `State` has already given it a
+ *    `lastRoomState` by t=1000, while the adopted-exit gate
+ *    `src/main/syncplay.ts:2403` ("if (this.canAssertSnapshot() &&
+ *    this.isAdopted()) {") is still false. Both of those follow from the frame
+ *    itself rather than from a separate reading: the mirror exit is only
+ *    reachable past the null one, and it is the only exit that omits `paused`.
+ *    So its t=1000 heartbeat takes the **mirror** exit —
+ *    position, and no `paused` key at all (`src/main/syncplay.ts:2446-2449`,
+ *    against the adopted exit at `src/main/syncplay.ts:2404-2408`, which does
+ *    send `paused`). The server reads a missing `paused` as "not paused" and
+ *    compensates it by a forward delay —
+ *    `test/helpers/syncplay-min-election-server.ts:757` ("w.position = position +
+ *    (ps.paused === true ? 0 : this.forwardDelayFor(w))") — so it stores this
+ *    value for the host, the t=2000 election elects it, and the joiner's `Hello`,
+ *    answered in that same second, carries it out.
+ *
+ * So the fixture did not previously model this at all: it suppressed the host's
+ * mirror heartbeat by never giving it a room to mirror. The compensation is the
+ * *server's* arithmetic, and production's `paused`-less frame is documented as
+ * accepting it — the comment block above that mirror exit calls it a "Known
+ * consequence: the server reads a missing paused as not-paused in
+ * _updatePositionByAge too, so it forward-delay-compensates the mirrored
+ * position even while the room is paused." What the join-time `State` changed is
+ * reachability, and on half B's own provenance that is the direction of *more*
+ * fidelity, not less: the frame it adds is one the reference sends and this
+ * fixture did not. (Quoted by phrase rather than anchored: that sentence lives on
+ * comment lines, which this repo's citation gate will not let an anchor land on.)
+ *
+ * Bounded at one delay, not N. The same block warns that a lone spectator's
+ * crept value "compounds at ~one forward delay per second", but here exactly one
+ * mirror frame is ever stored compensated — the host's t=1000 one is the only
+ * frame it ever sends without a `paused` key, and its t=2000 heartbeat onward is
+ * adopted and stored raw, which puts the room back on `ROOM_START` from the
+ * t=3000 election to the end of the run.
+ */
+const JOIN_TIME_ROOM_POSITION = ROOM_START + DELAY_MS / 1000
+
+/**
  * `SyncplayClient`'s `clientIgnoreCounter` — bumped once per *discrete* change
  * the client originates, and by nothing else. Read here to say "this peer
  * announced nothing of its own", which is what distinguishes following a room
@@ -119,10 +175,16 @@ describe('SyncplayClient — play/pause across two peers', () => {
 
   it('places and stops a peer that joins a room already standing still', async () => {
     // Nothing propagates here: no peer acts for the whole run. The room is
-    // paused at 100 before the joiner exists, so what reaches it is an ordinary
-    // periodic — `doSeek: false`, `paused: true` — and both halves of the apply
-    // rule have to fire off that one frame. The element is seated at 0 and
-    // *playing*, which is what a freshly bound `<video autoplay>` looks like.
+    // paused at `ROOM_START` before the joiner exists, so what reaches the
+    // joiner first is the server's join-time `State` — `doSeek: false`,
+    // `paused: true`, `setBy` the host — and both halves of the apply rule have
+    // to fire off that one frame. That it is the join-time frame and not a
+    // periodic is measured, not assumed: suppressing the send guarded by
+    // `test/helpers/syncplay-min-election-server.ts:612` ("if (joined) {") in the
+    // fixture's `Hello` arm moves the joiner's first frame from t=2050 to t=3050
+    // and its single seek write from `JOIN_TIME_ROOM_POSITION` to `ROOM_START`.
+    // The element is seated at 0 and *playing*, which is what a freshly bound
+    // `<video autoplay>` looks like.
     room = await createTwoPeerRoom({ position: ROOM_START, paused: true })
     const host = await room.seat({
       username: 'hostuser',
@@ -139,12 +201,19 @@ describe('SyncplayClient — play/pause across two peers', () => {
     })
     await room.advance(4)
 
-    // The seek half: 100 s of divergence against a 3 s tolerance, on a frame
-    // that never set `doSeek`. Exactly one write — a paused room's position does
-    // not advance, so every later periodic repeats the same number and the
-    // no-op early-out swallows it.
-    expect(joiner.el.seekWrites).toEqual([ROOM_START])
-    expect(joiner.el.currentTime).toBe(ROOM_START)
+    // The seek half: ~100 s of divergence against a 3 s tolerance, on a frame
+    // that never set `doSeek`. Still exactly one write, but no longer because
+    // the number never changes. The join-time `State` places the element at
+    // `JOIN_TIME_ROOM_POSITION`; the host's first adopted heartbeat then drops
+    // the room back to `ROOM_START`, so every later periodic carries a
+    // *different* position, 0.05 s away. The tolerance is what swallows those:
+    // `src/renderer/src/composables/use-syncplay-client.ts:1411` ("const
+    // wouldSeek = state.doSeek || diff > 3.0") leaves `needsSeek` un-armed at a
+    // 0.05 s gap, and with the element already paused
+    // `src/renderer/src/composables/use-syncplay-client.ts:1588` ("if (!needsSeek
+    // && !needsPlayPause) return") returns before the write.
+    expect(joiner.el.seekWrites).toEqual([JOIN_TIME_ROOM_POSITION])
+    expect(joiner.el.currentTime).toBe(JOIN_TIME_ROOM_POSITION)
 
     // The play/pause half, and the roster half of the badge: the joiner can name
     // the peer the server attributed the standing pause to, which is a fact no
@@ -155,7 +224,11 @@ describe('SyncplayClient — play/pause across two peers', () => {
 
     // And it arrived without announcing anything: a newcomer that answered the
     // room with a discrete state would assert `position: 0` into a `min()`
-    // election and drag every other watcher back to the start of the file.
+    // election and drag every other watcher back to the start of the file. The
+    // last two are also what keeps the `JOIN_TIME_ROOM_POSITION` above honest —
+    // the room and the incumbent both finish on `ROOM_START`, so the joiner's
+    // extra 0.05 s is the one frame it was handed on arrival and not a room that
+    // crept while nobody was looking.
     expect(discreteSends(joiner)).toBe(0)
     expect(host.el.currentTime).toBe(ROOM_START)
     expect(room.server.roomState().position).toBe(ROOM_START)

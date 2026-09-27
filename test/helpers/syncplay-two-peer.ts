@@ -439,11 +439,11 @@ export class HarnessVideo {
       // target on the following slice, discarding the ~0.05 s it has already
       // walked since the write landed, and reds three files by exactly that
       // much for reasons with no connection to the mid-seek reading:
-      // `syncplay-two-peer-seek-echo.test.ts:104` reads 400.1000000715256
+      // `syncplay-two-peer-seek-echo.test.ts:114` reads 400.1000000715256
       // against a close-to of 400.15, the same shape repeats at
-      // `syncplay-two-peer-seek-echo.test.ts:193` and
-      // `syncplay-two-peer-seek-echo.test.ts:194` (800.1 against 800.15), and
-      // `syncplay-two-peer-ignore-counters.test.ts:230` reads 700.0499999523163
+      // `syncplay-two-peer-seek-echo.test.ts:207` and
+      // `syncplay-two-peer-seek-echo.test.ts:208` (800.1 against 800.15), and
+      // `syncplay-two-peer-ignore-counters.test.ts:239` reads 700.0499999523163
       // against 700.1 — plus `syncplay-two-peer-rtt.test.ts` and one adoption
       // test off the same shift. The numbers are written down because keeping
       // this guard is what makes deleting the field free, and the next person

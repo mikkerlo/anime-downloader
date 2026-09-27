@@ -87,6 +87,14 @@ export interface EpisodeCompleteInfo {
   translationType: string
   author: string
   quality: number
+  /**
+   * Whether the completed group actually contained a video item (#412). False
+   * for a subtitle-only group, which `enqueue` can produce when an embed has a
+   * `subtitlesUrl` but no usable stream — the rest of this payload is then
+   * copied off the subtitle and describes no file on disk, so a consumer that
+   * persists episode metadata must skip it.
+   */
+  hasVideo: boolean
 }
 
 const USER_AGENT = 'smotret-anime-dl'
@@ -1177,7 +1185,14 @@ export class DownloadManager {
     )
     const allDone = items.length > 0 && items.every((i) => i.status === 'completed')
     if (allDone) {
-      const first = items[0]
+      // Prefer the video item rather than whichever row survived the filter
+      // first (#412). Both matter: `startDownload` corrects only the video
+      // item's `quality` to the freshly resolved stream height, so a stale
+      // embed makes the subtitle's copy wrong; and `hasVideo` tells the
+      // consumer when the fallback fired, instead of hiding a subtitle-only
+      // group behind a payload that looks like a video's.
+      const video = items.find((i) => i.kind === 'video')
+      const first = video ?? items[0]
       if (this.episodeCompleteCallback) {
         const info: EpisodeCompleteInfo = {
           animeName: first.animeName,
@@ -1187,7 +1202,8 @@ export class DownloadManager {
           translationId: first.translationId,
           translationType: first.translationType,
           author: first.author,
-          quality: first.quality
+          quality: first.quality,
+          hasVideo: !!video
         }
         setTimeout(() => this.episodeCompleteCallback?.(info), 100)
       }

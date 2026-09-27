@@ -23,6 +23,7 @@ import {
 import * as shikimori from './shikimori'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
+import { persistDownloadedEpisode } from './lib/downloaded-episodes'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
@@ -726,21 +727,27 @@ async function bootstrap(): Promise<void> {
     } = info
     fileScanner.invalidate(animeName)
 
-    // Persist episode metadata now that the video is on disk. Writing this at enqueue
-    // time caused stale ⬇ icons to survive cancelled / failed downloads.
-    if (animeId > 0 && episodeInt) {
-      const episodes = store.get('downloadedEpisodes') as Record<
-        string,
-        { translationType: string; author: string; quality: number; translationId: number }
-      >
-      delete episodes[`${animeId}:${episodeInt}`]
-      episodes[`${animeId}:${episodeInt}:${translationId}`] = {
+    // Repair path for episode metadata, not the primary writer any more (#412).
+    // The onVideoDownloaded hook below writes the entry as soon as the video
+    // item lands; this call exists for queues persisted before that hook did,
+    // where a `video: completed` + `subtitle: failed` group only reaches a write
+    // when the user finally retries the subtitle. It re-writes the same keyed
+    // entry from the same video item, so the two paths agree.
+    //
+    // Skipped when the group had no video item at all: `enqueue` pushes the
+    // subtitle outside the "usable stream" guard, so an embed with a
+    // `subtitlesUrl` and no playable stream reaches all-done with a payload
+    // copied off the subtitle. Writing that entry would put a ⬇ icon on an
+    // episode with nothing on disk.
+    if (info.hasVideo) {
+      persistDownloadedEpisode(store, {
+        animeId,
+        episodeInt,
+        translationId,
         translationType,
         author,
-        quality,
-        translationId
-      }
-      store.set('downloadedEpisodes', episodes)
+        quality
+      })
     }
 
     if (downloadManager.getMergeStatus(translationId) === 'deferred') {
@@ -793,6 +800,16 @@ async function bootstrap(): Promise<void> {
   })
 
   downloadManager.onVideoDownloaded((filePath, item) => {
+    // Episode metadata lands with the video item, not with the group (#412). A
+    // subtitle that failed its three attempts used to hold `allDone` false
+    // forever, so the video sat on disk showing ⬇ with no Play and no Delete.
+    //
+    // Two placement constraints, both load-bearing. It must stay ABOVE the
+    // .mp4 filter on the next line, which belongs to the mp4-stats consumer
+    // only. And it must stay INSIDE this callback rather than in a second
+    // `onVideoDownloaded(...)` call: the manager holds one callback slot, not a
+    // list, so registering again would silently unregister mp4 stats.
+    persistDownloadedEpisode(store, item)
     if (!filePath.toLowerCase().endsWith('.mp4')) return
     void mp4StatsService.recordCheck(filePath, {
       animeId: item.animeId,

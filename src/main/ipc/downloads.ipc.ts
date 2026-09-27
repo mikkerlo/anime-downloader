@@ -17,9 +17,9 @@ export function register({
 }: AppDeps): void {
   ipcMain.handle(CHANNELS.DOWNLOAD_ENQUEUE, async (_event, requests: DownloadRequest[]) => {
     await downloadManager.enqueue(requests)
-    // Metadata in `downloadedEpisodes` is written by the onEpisodeComplete callback
-    // once the video is actually on disk — premature writes here caused stale ⬇ icons
-    // to survive cancelled or never-finished downloads.
+    // Metadata in `downloadedEpisodes` is written by the onVideoDownloaded hook
+    // once the video item is actually on disk — premature writes here caused stale
+    // ⬇ icons to survive cancelled or never-finished downloads.
   })
 
   ipcMain.handle(CHANNELS.DOWNLOAD_PAUSE, (_event, id: string) => {
@@ -49,7 +49,13 @@ export function register({
   ipcMain.handle(CHANNELS.DOWNLOAD_CANCEL, (_event, id: string) => {
     const item = downloadManager.getItem(id)
     downloadManager.cancel(id)
-    if (item && item.animeId > 0 && item.episodeInt) {
+    // Only a video cancel may prune the episode's metadata (#412). The prune
+    // keeps the entry only when `episodeFileExists` finds a final .mkv/.mp4, so
+    // cancelling a failed subtitle while the player still holds the video's
+    // .part would delete the video's entry. Cancelling the video itself cascades
+    // to the subtitle and arrives here with kind 'video', so the guard costs
+    // nothing: there is no case where a subtitle cancel should prune.
+    if (item && item.kind === 'video' && item.animeId > 0 && item.episodeInt) {
       coldStorageService.pruneDownloadedEpisode(
         item.animeId,
         item.episodeInt,

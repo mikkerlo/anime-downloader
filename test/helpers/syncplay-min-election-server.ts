@@ -599,11 +599,11 @@ export class MinElectionServer {
         // that call starts (`server.py:841-843`) fires its first tick
         // immediately rather than one interval in — so a watcher gets a full
         // `State` about 0.1 s after connecting, well before the room's first
-        // periodic second. The *other* immediate tick, the one `setRoom` forces
-        // at `server.py:751`, is swallowed by `Watcher.sendState`'s `isLogged()`
-        // guard (`server.py:858-860`): `handleHello` adds the watcher before it
-        // sets `_logged` (`protocols.py:558-559`). So the reference emits exactly
-        // one such frame and the `Hello` reply — the login — is where it belongs.
+        // periodic second. The *other* immediate frame is no tick: it is the
+        // forced `doSeek` update `setRoom` asks for at `server.py:751`, and it
+        // dies in `Watcher.sendState`'s `isLogged()` guard (`server.py:858-860`)
+        // because `handleHello` adds the watcher before it sets `_logged`
+        // (`protocols.py:558-559`). One such frame; the `Hello` reply sends it.
         //
         // Delivered through `sendState`, so it pays the link delay like every
         // other `State`: `seat()`'s doc comment exempts the *handshake* from the

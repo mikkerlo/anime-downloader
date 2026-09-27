@@ -298,7 +298,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
 
     it('takes the group payload from the video item, not from whichever row is first', async () => {
       // The stale-embed divergence: `restart` re-resolves the embed and corrects
-      // only the VIDEO item's quality (`download-manager.ts:533`); the subtitle
+      // only the VIDEO item's quality (`download-manager.ts:541`); the subtitle
       // branch sets `url` alone, so the two genuinely disagree afterwards.
       // Queue order is then the only thing deciding which number gets persisted,
       // and the payload must not depend on it.

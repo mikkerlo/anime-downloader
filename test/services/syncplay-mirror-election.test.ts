@@ -50,7 +50,7 @@ import {
   ECHO_SEEK_EPSILON_S,
   PLAYBACK_ASSERT_STALE_MS
 } from '../../src/main/syncplay'
-import { MinElectionServer } from '../helpers/syncplay-min-election-server'
+import { MinElectionServer, DEFAULT_PLAYING_SET_BY } from '../helpers/syncplay-min-election-server'
 import type { MinElectionServerOptions } from '../helpers/syncplay-min-election-server'
 import type { SyncplayRemoteState, SyncplaySnapshot } from '../../src/main/syncplay'
 
@@ -292,7 +292,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // #394 — METADATA_MS is phase-critical, so it is a parameter with a predicted
   // value rather than a magic number that happened to land green. Five seconds
   // was an ordinary MKV prep (probe plus the remux spawn and its buffer-ahead);
-  // the set below is that span swept either way across the transition.
+  // the set below is that span swept either way across the tick it rounds to.
   //
   // THE CLOSED FORM. The element write can only land on a whole second, because
   // `metadataAt` is only ever tested inside a `snapshotOf` callback that `run()`
@@ -304,49 +304,72 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   //
   //     T = 1000 * Math.ceil((3000 + METADATA_MS) / 1000)
   //
-  // and the room lands one one-way delay low iff `T / 1000` is even — the park
-  // is always exactly one tick stale, so the joiner wins the election iff it won
-  // two seconds earlier, a period-2000 ms recursion. Five of the eight values
-  // are even-tick (4001, 4500, 5000, 6500, 7000) and three odd (4000, 5500,
-  // 6000); all eight are green, because the assertions predict the phase rather
-  // than demand one of its two branches. Bisected edges, 1000 ms apart and
-  // recurring: 4000 / 4001, 5000 / 5001.
+  // and T is the only thing about METADATA_MS the outcome depends on: the eight
+  // values collapse onto four ticks — 7000, 8000, 8000, 8000, 9000, 9000, 10000,
+  // 10000 — and every cell sharing a tick measures identically.
   //
-  // THE MEASURED RANGE IS [4000, 11000], but the form's validated range is only
-  // [4000, 10000] — the top tick is swept and out of regime. Nothing below 4000
-  // has been swept; "both ceilings" does not mean "everything under them".
+  // THE PLATEAU IS THE POINT, AND IT USED TO BE A PARITY SPLIT. On the harness
+  // this case was written against, the room landed one one-way delay low exactly
+  // when `T / 1000` was even, and the predictions were two-branched
+  // (`evenTick ? 2 - DELAY_MS / 1000 : 2`). Both branches were live in the set:
+  // measured on a tree with the helper's join-time `State` suppressed and its
+  // receipt stamp put back below the playstate guard, 4001 / 4500 / 5000 / 6500 /
+  // 7000 give q337 = 1.9500000476837158 and q340 = 2.950000047683716, while
+  // 4000 / 5500 / 6000 give 2.0000000476836703 and 3.0000000476836703 — the two
+  // old literals, one per branch. At this tip all eight cells give
+  // q337 = 2.0000000476836703 and q340 = 3.0000000476836703, with no split at any
+  // tick in the swept band, so the predictions are single-valued and what the
+  // eight cells now pin is that flatness. They still differ in how many mirror
+  // frames the joiner hears — (T - 4000) / 1000 over the case, so 3 through 6
+  // across the eight, all but the last of them before the write.
   //
-  // TWO CEILINGS, AND THEY FAIL DIFFERENTLY. The signature is how to tell them
-  // apart at a glance if someone widens the set:
+  // THE SWEPT BAND IS METADATA_MS [500, 13000], on a 500 ms grid plus 1001 and
+  // 4001, and it is green throughout [1001, 10000]. Both ends fail for stated
+  // reasons rather than being unexplored:
   //
+  //   * Floor, METADATA_MS at most 1000 (T = 4000) — the write lands on the very
+  //     first tick the driver runs, before any mirror frame is heard (measured:
+  //     zero frames with `setBy === null`), so the anti-vacuity assertion at the
+  //     bottom of the body reds while both predictions still hold — and hold
+  //     exactly, q337 = 2 and q340 = 3 with no float residue at all. Adoption is
+  //     real down there; it is just not the mirror's doing, which is what the
+  //     case is named for.
   //   * Regime ceiling, METADATA_MS at most 10000 (T at most 13000) — enforced
-  //     by the relation and by nothing else. Past it the room reflects the
-  //     just-adopted element directly instead of through the two-tick chain,
-  //     q340 snaps to exactly 1, and q340 - q337 goes to -0.95. Measured: 10000
-  //     passes, 10001 is the first failure, and it reds on
-  //     (test/services/syncplay-mirror-election.test.ts:444 ("regime: q340 = q337 + 1"))
+  //     by the relation and by nothing else. Past it q340 drops to
+  //     1.0499999999999545 while q337 stays put, so q340 - q337 goes to
+  //     -0.9500000476837158 and the relation the predictions live inside stops
+  //     holding at all. Measured: 10000 passes, 10001 is the first failure,
+  //     and it reds on
+  //     (test/services/syncplay-mirror-election.test.ts:468 ("regime: q340 = q337 + 1"))
   //     rather than on a prediction. The band it owns is exactly one tick wide:
   //     11000 still reds there, 11001 no longer does.
   //   * Window ceiling, METADATA_MS of 11001 and up — already enforced, and it
   //     is two mechanisms under one red. Through 12000 the element IS written
   //     (q337 = 2.0000000476836703); the write just lands on the driver's last
   //     tick with none left to converge. From 12001 the 15000 ms cap
-  //     (test/services/syncplay-mirror-election.test.ts:385 ("run(12, (c) => {"))
+  //     (test/services/syncplay-mirror-election.test.ts:408 ("run(12, (c) => {"))
   //     stops the write landing at all and q337 jumps to 615. Both red on
-  //     (test/services/syncplay-mirror-election.test.ts:400 ("expect(joiner.getStatus().playbackAdopted).toBe(true)")) with `expected false to be true`.
+  //     (test/services/syncplay-mirror-election.test.ts:423 ("expect(joiner.getStatus().playbackAdopted).toBe(true)")) with `expected false to be true`.
   //
-  // THE PRECISION WINDOW is two-sided, which is why PARITY_PRECISION is chosen
-  // rather than defaulted. Below: one ULP at the fixture epoch, 2**-22 =
+  // THE PRECISION WINDOW is two-sided, which is why PREDICTION_PRECISION is
+  // chosen rather than defaulted. Below: one ULP at the fixture epoch, 2**-22 =
   // 2.384e-7 — this is the binding floor, and it puts precision 7 (5e-8) and 8
   // (5e-9) *outside* the window, not merely close to its edge. Neither is a
   // tighter configuration available at a cost; both red the ULP guard before any
   // prediction runs, so a tighter-precision argument cannot be load-bearing. The
-  // float residue those quantities carry at DELAY_MS = 50 is 4.77e-8, a fifth of
-  // one ULP, so it is bounded by the floor above rather than setting it. Above:
-  // 0.05, `DELAY_MS / 1000`, the gap the tolerance must stay under to
-  // discriminate at all. PARITY_PRECISION = 4 (5e-5) sits three orders under the
-  // top and three over the floor, where the default 2 sits one order from the
-  // top. Both ends are asserted in the body, so neither decays into a comment.
+  // float residue these quantities carry at DELAY_MS = 50 is 4.77e-8, a fifth of
+  // one ULP, so it is bounded by the floor above rather than setting it — and it
+  // is measured as exactly 0 at T = 4000 and 5000, appearing from T = 6000 up,
+  // which every cell in this set is above. Above: 0.05, `DELAY_MS / 1000`. With
+  // the parity term gone that is no longer the gap between two predicted values,
+  // but it is still the shift the predictions have to stay sensitive to, and
+  // `toBeCloseTo` passes iff the difference is strictly under 10 ** -precision / 2
+  // (@vitest/expect), so a tolerance at or above one one-way delay would let this
+  // case's own stale literals back through: 1.95 against a predicted 2 reported a
+  // difference of 0.04999995231628418. PREDICTION_PRECISION = 4 (5e-5) sits three
+  // orders under the top and three over the floor, where the default 2 sits one
+  // order from the top. Both ends are asserted in the body, so neither decays
+  // into a comment.
   //
   // ORDERING IS GENERAL TO SPECIFIC, and anything added later goes BELOW the
   // assertions in the body rather than after them. Vitest reports only the first
@@ -404,83 +427,108 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // scenario: the joiner asserts its own converged element from here — at a
       // phase the write tick decides, which is what the block below predicts
       // rather than bounds (#394).
-      const PARITY_PRECISION = 4
-      const T = 1000 * Math.ceil((3000 + METADATA_MS) / 1000)
-      const evenTick = (T / 1000) % 2 === 0
+      const PREDICTION_PRECISION = 4
       const q337 = Math.abs(elementPosition() - trueRoomPosition())
       const q340 = Math.abs(server.roomState().position - trueRoomPosition())
 
       // Floor: the assertion discriminates only while toBeCloseTo's tolerance
-      // stays under the gap between the two predicted values. At
-      // PARITY_PRECISION = 4 the reachable trigger is the *precision*, not the
+      // stays under one one-way delay, which is the shift separating the live
+      // predictions from the stale ones this case used to carry. At
+      // PREDICTION_PRECISION = 4 the reachable trigger is the *precision*, not the
       // delay — no integer DELAY_MS >= 1 clears a 5e-5 tolerance from below — so
       // this reds on a named line if someone loosens the precision, instead of
       // quietly turning discriminating cases into vacuous ones. DELAY_MS = 0 does
       // trip it, and there this guard is also masking a structural break rather
-      // than only a precision one: at zero delay the q340 = q337 + 1 regime
-      // itself collapses (measured 1.0009999999999764). That is a reason to keep
-      // this above the parity lines, not to reorder further.
+      // than only a precision one: at zero delay the q340 = q337 + 1 regime itself
+      // collapses to 1.0009999999999764, re-measured at this tip, with this guard
+      // reporting `expected 0 to be greater than 0.000049999999999999996` first.
+      // That is a reason to keep this above the prediction lines, not to reorder
+      // further.
       expect(
         DELAY_MS / 1000,
-        'PARITY_PRECISION is too loose for DELAY_MS: the parity assertions no longer discriminate'
-      ).toBeGreaterThan(10 ** -PARITY_PRECISION / 2)
+        'PREDICTION_PRECISION is too loose for DELAY_MS: the predictions no longer discriminate'
+      ).toBeGreaterThan(10 ** -PREDICTION_PRECISION / 2)
 
       // Ceiling on the same axis: the tolerance must still clear one ULP at the
       // fake epoch, or the assertions are measuring float noise. Reds if the
       // precision is tightened past 6.
       expect(
-        10 ** -PARITY_PRECISION / 2,
-        'PARITY_PRECISION is tighter than one ULP at the fixture epoch'
+        10 ** -PREDICTION_PRECISION / 2,
+        'PREDICTION_PRECISION is tighter than one ULP at the fixture epoch'
       ).toBeGreaterThan(2 ** -22)
 
       // Order is load-bearing, general to specific: Vitest reports only the FIRST
       // failing assertion per test, so the assertion that *defines the regime*
-      // must run before the two that predict values inside it. Measured with the
-      // relation last, METADATA_MS = 10001 reds on `predicted q340: expected 1 to
-      // be close to 2.95` while q337 passes its even-tick prediction — the regime
-      // control never executes, and an out-of-regime value reads as an ordinary
-      // wrong prediction. Anything added later goes below these, not appended
-      // after them.
-      expect(q340 - q337, 'regime: q340 = q337 + 1').toBeCloseTo(1, PARITY_PRECISION)
+      // must run before the two that predict values inside it. Measured by moving
+      // this line below both predictions: METADATA_MS = 10001 then reds on
+      // `predicted q340: expected 1.0499999999999545 to be close to 3` while q337
+      // passes its prediction — the regime control never executes, and an
+      // out-of-regime value reads as an ordinary wrong prediction. Anything added
+      // later goes below these, not appended after them.
+      expect(q340 - q337, 'regime: q340 = q337 + 1').toBeCloseTo(1, PREDICTION_PRECISION)
 
-      // The even arm's `- DELAY_MS / 1000` term is contingent on a known
-      // infidelity in the fixture, named here because two independent changes
-      // destroy it and neither is a production regression. The helper answers
-      // `Hello` with only `Hello`
+      // The bare 2 replaces an `evenTick ? 2 - DELAY_MS / 1000 : 2`, whose even
+      // arm was contingent on a fixture infidelity that has since been repaired.
+      // The helper now answers `Hello` with `Hello` *and* the reference's
+      // join-time `State`
       // (test/helpers/syncplay-min-election-server.ts:592 ("if ('Hello' in msg) {")),
-      // where the reference server schedules a State just after the handshake.
-      // Add that join-time State — the same playstate the periodic broadcast
-      // builds — and all eight cells collapse to q337 = 2.0000000476836703 and
-      // q340 = 3.0000000476836703 with no even/odd split at all: the five
-      // even-tick cells red on this assertion, the three odd ones stay green
-      // because the bare 2/3 is exactly what the collapse lands on, and the
-      // q340 = q337 + 1 regime survives in all eight. Measured in both
-      // configurations, and again with the State deferred 100 ms to match the
-      // reference's schedule rather than sent at handshake time — identical.
-      // #384's proposed stamp move removes the same term by a different route,
-      // taking the even cells to 3 and 4 plus the residue, so it gains a room
-      // tick as well — but it does not red on this assertion: at 3 plus the
-      // residue the element bound above fails first, and the reader sees
-      // `expected 3.0000000476836703 to be less than 3` rather than this note,
-      // because `predicted q337` never executes. That route reds six cases in
-      // this file, not five: the five even-tick cells on the element bound
-      // above, plus one in a different case entirely — `delivers the room to
-      // the unadopted joiner at ~1 Hz while the room plays`, whose
-      // strict-monotonicity loop
-      // (test/services/syncplay-mirror-election.test.ts:246 ("expect(positions[i]).toBeGreaterThan(positions[i - 1])"))
-      // reads `expected 602.9999999523163 to be greater than 603`. The five
-      // even-tick cells red *here* only on the join-time State route; when they
-      // do, read the helper before looking for a convergence change in src/.
-      // The repair is the same on both routes: drop this term and predict the
-      // bare 2/3.
-      expect(q337, 'predicted q337').toBeCloseTo(
-        evenTick ? 2 - DELAY_MS / 1000 : 2,
-        PARITY_PRECISION
-      )
+      // delivered through `sendState` so that frame pays the link delay like
+      // every other `State`; the reference schedules its own just after the
+      // handshake. That one frame is the whole of this literal's motion, and what
+      // the delay term encoded was a sampling phase, measured as election
+      // sequences (`server.elections`, `setBy` in order). Without the join-time
+      // `State` the room is still trading the election at these ticks — hostuser
+      // x5, then joinuser and hostuser alternating from the sixth until the
+      // joiner's own write ends the alternation, which every cell reaches at a
+      // different point: each alternates through election T / 1000 and settles on
+      // the joiner one or two elections after it. The tail is therefore
+      // cell-dependent, and the full sequence is not what decides the value —
+      // 4001 (T = 8000) and 5500 (T = 9000) have *identical* full sequences and
+      // still differ in q337. Since the element is written once, from the freshest
+      // parked frame, the value it is written from is decided by whoever owned
+      // election number T / 1000. All eight cells map cleanly: T = 8000
+      // (4001 / 4500 / 5000) and T = 10000 (6500 / 7000) land on a joinuser
+      // election and give 1.95, T = 7000 (4000) and T = 9000 (5500 / 6000) land on
+      // a hostuser one and give 2 — which is the whole content of "even ticks read
+      // low", the alternation having period 2. With the join-time `State` the
+      // sequence is hostuser x4 and then joinuser for all eleven remaining
+      // elections, identically in every cell, so every write tick in [7000, 10000]
+      // falls inside a room the joiner has owned outright since the fifth
+      // election. There is no phase left to sample, and the predictions are
+      // single-valued.
+      //
+      // Measured as a 2x2 over #384's two halves — the join-time `State` and the
+      // receipt stamp moved above the playstate guard — by suppressing each in the
+      // helper and reverting (`git diff` on the helper clean afterwards):
+      //
+      //   * Neither: the old split, exactly the old literals. 4001 / 4500 / 5000 /
+      //     6500 / 7000 give q337 = 1.9500000476837158 and q340 = 2.950000047683716;
+      //     4000 / 5500 / 6000 give 2.0000000476836703 and 3.0000000476836703.
+      //   * Stamp move only: the same five cells go a whole room tick FURTHER, to
+      //     q337 = 3.0000000476836703 and q340 = 4.00000004768367, and they red on
+      //     the element bound above (`expected 3.0000000476836703 to be less than
+      //     3`) before `predicted q337` ever executes. That route also reds a sixth
+      //     case this tip leaves green — `delivers the room to the unadopted joiner
+      //     at ~1 Hz while the room plays`, whose strict-monotonicity loop
+      //     (test/services/syncplay-mirror-election.test.ts:246 ("expect(positions[i]).toBeGreaterThan(positions[i - 1])"))
+      //     reads `expected 602.9999999523163 to be greater than 603`.
+      //   * Join-time `State` only: this whole file is green, 41 passed — bit for
+      //     bit the tip's numbers.
+      //   * Both, which is this tip: all eight cells at 2.0000000476836703 and
+      //     3.0000000476836703.
+      //
+      // So the stamp move contributes nothing to this file once the join-time
+      // `State` is present; it is absorbed, not additive. The CI failure this
+      // literal answers is the five cells reading `predicted q337: expected
+      // 2.0000000476836703 to be close to 1.95`, and the repair is to drop the
+      // term and predict the bare 2/3 — which is the value BOTH surviving
+      // configurations land on, so it is not a number fitted to this tip alone.
+      expect(q337, 'predicted q337').toBeCloseTo(2, PREDICTION_PRECISION)
       // Replaces this case's old `toBeLessThan(ADOPT_TOLERANCE_S)` on the room,
-      // which cannot survive the odd branch: on 4000, 5500 and 6000 it is
-      // `expected 3.0000000476836703 to be less than 3`. On those ticks the case
-      // now *pins* a value 47.68 ns over the production tolerance rather than
+      // which no cell in the set can satisfy any more: all eight now measure
+      // q340 = 3.0000000476836703, so that bound would read `expected
+      // 3.0000000476836703 to be less than 3` everywhere. The case therefore
+      // *pins* a value 47.68 ns over the production tolerance rather than
       // asserting it stays under — the element bound above is what keeps that
       // honest, being the only bound left in the case that still reads
       // ADOPT_TOLERANCE_S.
@@ -490,10 +538,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // writing `ADOPT_TOLERANCE_S - DELAY_MS / 1000` would read as if the
       // prediction were derived from the production threshold, and changing that
       // threshold in src/ would produce reds whose stated cause was wrong.
-      expect(q340, 'predicted q340').toBeCloseTo(
-        evenTick ? 3 - DELAY_MS / 1000 : 3,
-        PARITY_PRECISION
-      )
+      expect(q340, 'predicted q340').toBeCloseTo(3, PREDICTION_PRECISION)
       // Anti-vacuity: adoption here is driven by the mirror frames rather than
       // incidental to them. The bounds above hold on a reference server whether or
       // not the mirror is heard (review of #279), so this is what keeps the case
@@ -636,11 +681,38 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // `roomOwnsPlayhead()` eat the saved position on every solo episode open,
     // and make `getRoomPosition()` answer from our own echo — the regression
     // pinned at `test/services/syncplay-room-position.test.ts:176`.
+    //
+    // One frame is nevertheless heard, and it is not of that class: the harness
+    // answers a client `Hello` with the reference's join-time `State`, and a room
+    // seeded `paused: false` carries `DEFAULT_PLAYING_SET_BY` on it — a departed
+    // watcher, so `isForeignSetBy()` is true, and because the room-voice flag is
+    // a conjunction with the negation of that
+    // (src/main/syncplay.ts:2088 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
+    // the room-voice predicate is never consulted for this frame at all — quoted as
+    // a marked quote so the gate re-checks it if that line moves, which is the
+    // point of the branch this commit sits on. It is emitted on the
+    // foreign arm, which is not the echo path this case guards. The case therefore
+    // pins that frame and then asserts the echo's absence directly, rather than
+    // resting on an empty array that the harness's own handshake now populates.
+    // Measured over the window: 8 elections fire and all 8 name us, exactly 1
+    // frame is emitted, and suppressing only the helper's `Hello`-time `State`
+    // takes the array back to empty — so that handshake frame is the whole of the
+    // difference. `getRoomPosition()` still answers `null` beside it, because the
+    // read's own alone test (src/main/syncplay.ts:717 ("if (alone) return null"))
+    // refuses a solo room whatever was applied.
     run(8, () => null)
 
     expect(solo.getStatus().playbackAdopted).toBe(false)
     expect(server.electionsSetBy('hostuser').length).toBeGreaterThanOrEqual(6)
-    expect(frames).toEqual([])
+    expect(frames).toEqual([
+      { paused: false, position: ROOM_START, setBy: DEFAULT_PLAYING_SET_BY, doSeek: false }
+    ])
+    // The invariant the case is named for, stated as itself. A mirror-sourced
+    // frame is emitted with its attribution stripped (#277), so `setBy: null` is
+    // the signature of an echo that got through — and this is the assertion that
+    // reds if one ever does, on any of the eight periodics rather than only on
+    // the array's length.
+    expect(frames.filter((f) => f.setBy === null)).toEqual([])
     expect(solo.getRoomPosition(OPEN)).toBeNull()
   })
 

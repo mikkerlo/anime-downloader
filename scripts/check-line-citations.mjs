@@ -21,11 +21,23 @@
 // that quote against the cited line is a substring test, not a judgement about
 // prose, so it hard-fails rather than warns. See `extractMarkedQuote()`.
 //
+// #407 adds the second decidable case, and it is the one every heuristic above
+// is blind to by construction: an anchor that still resolves, still lands on a
+// live code line, and names the WRONG line because the target grew above it.
+// Nothing in the head tree alone tells that apart from a correct anchor — a
+// wrong line holding code looks exactly like a right one — so the check is a
+// comparison against the PR's base. Same token, different content at the line it
+// names, and that content still present in the file at least as often as before:
+// then the line moved and the anchor did not follow. See `verifyNoDrift()`. It
+// hard-fails and carries no pin, because unlike a suspicious landing there is no
+// legitimate steady-state population of anchors pointing at the wrong line.
+//
 // Run: npm run check:line-citations
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { basename, extname } from 'node:path'
+import { baseRevision } from './check-version-not-lower.mjs'
 
 // --- pins ---------------------------------------------------------------------
 //
@@ -65,7 +77,22 @@ import { basename, extname } from 'node:path'
 // each at its neighbour's test, green and wrong. #345 kept them for the
 // inbound-anchor coverage on the record that `resolved` counts anchors that
 // resolve, not anchors that are checked.
-export const SUSPICIOUS_LANDING_PIN = 3
+//
+// #384 is the second case and it brings one. The premise correction in the
+// conformance-harness header cites the fixture's own `Deliberately **not**
+// modelled: the ignoringOnTheFly ignore window` entry in
+// `test/helpers/syncplay-min-election-server.ts`, because the claim it carries
+// is an *absence*. What makes a counter-less frame loud rather than inert is
+// that the model never grew an ignore window to discard it with, and an absence
+// has no code line to point at: the nearest code would name the receipt-time
+// stamp or the playstate guard below it, neither of which is the thing the
+// prose means. The sibling docstring in `conformance/helpers/wire-peer.ts`
+// argues the same correction and anchors the other half of it — that stamp — at
+// a live code line instead, so one comment landing covers the pair rather than
+// two. Deliberately written without an anchor of its own, for the reason the
+// #390 paragraph gives: citing the target here would land on the same comment
+// line again and double the count this pin is trying to state. A fifth reds.
+export const SUSPICIOUS_LANDING_PIN = 4
 
 // Anchors that name something in this repo and still cannot be checked:
 // basenames carried by more than one tracked file, plus pathless `:NNN`
@@ -287,9 +314,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:288 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:315 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:312 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:339 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -298,8 +325,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:311 and the `<!--` test at
-  // scripts/check-line-citations.mjs:317 have no measured false positive in
+  // scripts/check-line-citations.mjs:338 and the `<!--` test at
+  // scripts/check-line-citations.mjs:344 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and
@@ -371,6 +398,105 @@ function verifyQuote(lines, { start, end, quote, self, citedAt }) {
   return { elsewhere }
 }
 
+// --- drift (#407) -------------------------------------------------------------
+
+// How much of a base line a drift failure echoes. `docs/syncplay.md`'s bullets
+// are multi-thousand-character single lines, so an untruncated echo turns one
+// failure into a screenful and scrolls every other failure out of the terminal —
+// in a gate whose whole output is a list of numbers to copy.
+const DRIFT_ECHO = 96
+
+const truncate = (s) => (s.length <= DRIFT_ECHO ? s : s.slice(0, DRIFT_ECHO - 1) + '…')
+
+/**
+ * Lines of `lines` whose content equals `needle` after `normalizeQuote()`.
+ *
+ * WHOLE-LINE EQUALITY, NEVER `.includes` — the rule decided in #407's round 3,
+ * and the one thing in this check a later hand is most likely to "simplify" into
+ * the substring match `verifyQuote()` uses three functions up. The two answer
+ * differently and only one of them is usable here. `clearPendingUserPause()`
+ * occurs at ten lines of
+ * `src/renderer/src/composables/use-syncplay-client.ts`; a normalized substring
+ * match takes all ten — the declaration, a one-line `if` and three backticked
+ * comment-prose mentions included — where whole-line equality takes the five that
+ * are the bare call and nothing else. That is a tidiness argument. The structural
+ * one is fatal: a short line like `}` or `return` would match half its file under
+ * substring matching, and an empty base line would match all of it, so both the
+ * elsewhere-search and the occurrence count below would report on every anchor
+ * whose target line is short. `test/check-line-citations.test.ts` carries a
+ * fixture whose only purpose is to red if the comparison is swapped back.
+ */
+const matchingLines = (lines, needle) => {
+  const hits = []
+  for (let n = 1; n <= lines.length; n++) {
+    if (normalizeQuote(lines[n - 1] ?? '') === needle) hits.push(n)
+  }
+  return hits
+}
+
+/**
+ * Decide whether the anchor naming line `line` of the target has drifted off the
+ * content the base tree had there. Returns null for "no drift to report" —
+ * which, deliberately, covers three quite different situations — and
+ * `{ elsewhere, baseText }` when the content moved and these are the lines it
+ * moved to.
+ *
+ * The three passes, in the order they are tested:
+ *
+ * 1. **The content is unchanged.** Compared after `normalizeQuote()`, so a
+ *    whitespace-only reflow or a reindent of the anchored line is not a change
+ *    at all. That makes "a reflow passes" true here rather than a consequence of
+ *    the two narrowings below happening to miss it.
+ * 2. **The old content is nowhere else in head** — an in-place edit. The line was
+ *    reworded where it stands, the anchor still points at the thing it always
+ *    pointed at, and there is no other line to retarget it to. Failing this
+ *    would block the most ordinary edit there is with nothing the author could do
+ *    to satisfy the gate.
+ * 3. **The old content occurs LESS often in head than in base.** The narrowing
+ *    above is not enough on content that repeats: reword one of three identical
+ *    lines in place and the elsewhere-search still finds the other two, so the
+ *    gate would report "pick one of two" on an anchor that never moved. A genuine
+ *    relocation keeps the count at *k* — the line moved, it did not vanish —
+ *    while an in-place edit or a deletion of the anchored copy drops it to *k−1*.
+ *
+ * Its two residuals, from #407 and named rather than left to be discovered: a
+ * commit that both relocates the anchored copy and deletes another copy of the
+ * same content misses the drift (a non-regression, since nothing catches it
+ * today), and a commit that both edits the anchored copy in place and adds a new
+ * copy of its old content elsewhere blocks falsely. The second is the one that
+ * costs something, because drift is a hard failure and the author cannot make it
+ * pass; hitting it is the stated trigger to switch to mapping base lines through
+ * `git diff -U0` hunks, which is exact and has neither residual.
+ *
+ * Base content that normalizes to `''` is skipped outright: a blank landing is
+ * `suspiciousLanding()`'s job, and an empty needle would otherwise match every
+ * blank line in the file.
+ *
+ * @param {string[]} baseLines  the target file as the base tree has it
+ * @param {string[]} headLines  the target file as this tree has it
+ * @param {{ line: number, self: boolean, citedAt: number }} opts
+ * @returns {{ elsewhere: number[], baseText: string } | null}
+ */
+function verifyNoDrift(baseLines, headLines, { line, self, citedAt }) {
+  const baseText = baseLines[line - 1]
+  if (baseText === undefined) return null
+  const needle = normalizeQuote(baseText)
+  if (needle === '') return null
+
+  const headHits = matchingLines(headLines, needle)
+  if (headHits.includes(line)) return null
+
+  // The citing line is excluded from the REPORT for the same reason
+  // `verifyQuote()` excludes it: naming it would be telling the author their
+  // anchor should point at their own sentence. It stays in both COUNTS, where
+  // excluding it on one side only would bias the comparison by one.
+  const elsewhere = headHits.filter((n) => !(self && n === citedAt))
+  if (elsewhere.length === 0) return null
+  if (headHits.length < matchingLines(baseLines, needle).length) return null
+
+  return { elsewhere, baseText }
+}
+
 const underRoot = (p, roots) =>
   roots.some((r) => (r === '.' ? !p.includes('/') : p === r || p.startsWith(r + '/')))
 
@@ -378,12 +504,22 @@ const underRoot = (p, roots) =>
  * @param {object} opts
  * @param {string[]} opts.files        every tracked path, repo-relative
  * @param {(p: string) => string[]} opts.readLines
+ * @param {((p: string) => string[] | null) | null} [opts.readBaseLines]
+ *   the same file as the PR's base tree has it, or null for a path the base does
+ *   not carry. Omit it and the drift check does not run — which is how every
+ *   fixture that predates #407 keeps working, and how a tree with no base to
+ *   compare against degrades. `git` stays outside this function: the tests build
+ *   both trees in memory and never touch a repository.
+ * @param {string | null} [opts.baseLabel] the revision `readBaseLines` reads, for
+ *   the report line only. Nothing branches on it.
  * @param {string[]} [opts.scanRoots]
  * @param {string[]} [opts.excludedPaths]
  */
 export function analyze({
   files,
   readLines,
+  readBaseLines = null,
+  baseLabel = null,
   scanRoots = SCAN_ROOTS,
   excludedPaths = EXCLUDED_PATHS
 }) {
@@ -409,6 +545,19 @@ export function analyze({
     return cache.get(p)
   }
 
+  // Batched per file rather than per anchor: 292 resolved anchors on `main` at
+  // 04cb4a4 concentrate into far fewer files, and on the CLI path each miss is a
+  // `git show`.
+  const baseCache = new Map()
+  const baseLinesOf = (p) => {
+    if (!baseCache.has(p)) {
+      const lines = readBaseLines(p)
+      if (lines !== null && lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+      baseCache.set(p, lines)
+    }
+    return baseCache.get(p)
+  }
+
   const scanned = files.filter(
     (p) =>
       underRoot(p, scanRoots) &&
@@ -423,6 +572,8 @@ export function analyze({
   const resolved = []
   const marked = []
   const quoteFailures = []
+  const drift = []
+  let driftChecked = 0
   let unresolvableByExtension = 0
   let resolvedFullPath = 0
   let resolvedUniqueBasename = 0
@@ -500,6 +651,62 @@ export function analyze({
           })
           if (verdict) quoteFailures.push({ at, cited, target, quote, ...verdict })
         }
+
+        if (readBaseLines !== null) {
+          const baseCiting = baseLinesOf(from)
+          const baseTarget = baseLinesOf(target)
+          // "The anchor token is unchanged" means the base version of the citing
+          // file PARSES a token equal to this one ANYWHERE in the file — not one
+          // at the same line. Position-based matching breaks the moment the
+          // citing file itself gains a line above the citation, which is the very
+          // failure this check exists to catch. Equality is on the token the base
+          // line PARSES, not on a substring of that line: `a.ts:N` is a substring
+          // of `a.ts:NM`, of the range `a.ts:N-M`, and of `data.ts:N` — spelled
+          // with letters here because a literal example would be an anchor to a
+          // file that does not exist. A substring precondition therefore held a
+          // branch's brand-new anchor to a base claim it never made, and the base
+          // token stays in the base whatever the author does: the failure named a
+          // line the anchor already pointed at and the only way out was rewording
+          // the prose, which is the hard-fail-with-no-way-out class #407 spent
+          // three rounds removing. A citing or target file the base does not carry
+          // has nothing to compare and is exempt, as is an anchor whose number
+          // this commit changed: a hand retarget is exempt by construction, which
+          // is #407's stated limit and not an oversight.
+          if (
+            baseCiting !== null &&
+            baseTarget !== null &&
+            baseCiting.some((l) =>
+              [...l.matchAll(CITATION)].some(
+                ([, r, s, e]) => `${r}:${e ? `${Number(s)}-${Number(e)}` : Number(s)}` === cited
+              )
+            )
+          ) {
+            driftChecked++
+            // `path:N-M` claims both ends, so both are checked. That is NOT the
+            // rule `suspiciousLanding()` follows, and deliberately so: its
+            // docstring gives a reason peculiar to itself — a cited block's last
+            // line is a closing brace by construction, so a landing heuristic
+            // judging the interior would red the legitimate ranges. Content
+            // equality against the base has no such collision.
+            for (const n of end === null || end === start ? [start] : [start, end]) {
+              const verdict = verifyNoDrift(baseTarget, linesOf(target), {
+                line: n,
+                self: from === target,
+                citedAt: i + 1
+              })
+              if (verdict) {
+                drift.push({
+                  at,
+                  cited,
+                  target,
+                  line: n,
+                  end: end !== null && n === end,
+                  ...verdict
+                })
+              }
+            }
+          }
+        }
       }
 
       // Blank the full citations out first, so the line number inside a
@@ -521,6 +728,10 @@ export function analyze({
     suspicious,
     marked,
     quoteFailures,
+    drift,
+    driftChecked,
+    driftBase: readBaseLines === null ? null : baseLabel,
+    driftEnabled: readBaseLines !== null,
     ambiguous,
     pathless,
     uncheckable: ambiguous.length + pathless.length
@@ -551,6 +762,17 @@ export function report(r, pins = {}) {
   out.push(
     `  marked quotes: ${r.marked.length} verified against their target ` +
       `(${r.quoteFailures.length} failing) — floor ${markedPin}`
+  )
+  // Printed even at zero, and printed differently when the check did not run at
+  // all. "0 drifted" and "not compared" are the two outcomes a reader has to be
+  // able to tell apart: one is the gate working, the other is the gate absent,
+  // and a single line reading `drift: 0` would render them identical — which is
+  // the shape docs/testing.md warns about in *Structural tests*.
+  out.push(
+    r.driftEnabled
+      ? `  drift: ${r.driftChecked} anchor(s) compared against ` +
+          `${r.driftBase ?? 'the base tree'} (${r.drift.length} drifted)`
+      : '  drift: not compared (no base revision)'
   )
 
   let ok = true
@@ -604,6 +826,41 @@ export function report(r, pins = {}) {
       'line or inside that range. Repoint the anchor at the line named above, or, if',
       'the target really was rewritten, requote it. Dropping the `("…")` turns the',
       'anchor back into an unverified one rather than silencing a failure.'
+    )
+  }
+
+  // A HARD FAILURE WITH NO PIN, unlike suspicious landings at 3. A pin states a
+  // legitimate steady-state population, and there is none here: an anchor that
+  // names the wrong line is wrong, and the repair is a number this block has
+  // already worked out and printed.
+  if (r.drift.length > 0) {
+    ok = false
+    err.push('', `${r.drift.length} anchor(s) name a line whose content moved in this branch:`, '')
+    for (const d of r.drift) {
+      err.push(
+        `  ${d.at}: \`${d.cited}\` names ${d.target}:${d.line}${d.end ? ' (range end)' : ''}`,
+        `    the base had "${truncate(d.baseText.trim())}" there`
+      )
+      if (d.elsewhere.length === 1) {
+        err.push(`    drift — it is at ${d.target}:${d.elsewhere[0]}`)
+      } else {
+        err.push(
+          `    drift — it is at ${d.elsewhere.map((n) => `${d.target}:${n}`).join(', ')};` +
+            ' more than one match, so pick the one the prose means'
+        )
+      }
+    }
+    err.push(
+      '',
+      'The cited line still exists, so nothing above this could see it: the target',
+      'grew and the anchor stayed put. Copy the line number out of the message —',
+      'DO NOT COUNT IT BY HAND. Editing the number is what makes an anchor exempt',
+      'from this check, so a retarget that lands one line short goes through green,',
+      'and hand-counting is how that happens.',
+      '',
+      'If the line was reworded where it stands rather than moved, this does not',
+      'fire: it reports only when the old content is still in the file at least as',
+      'often as the base had it.'
     )
   }
 
@@ -673,6 +930,133 @@ export function report(r, pins = {}) {
 
 // --- CLI ----------------------------------------------------------------------
 
+/**
+ * Which of the three base-resolution paths this tree is on. Pure, so the one
+ * decision in the drift check that CI can silently get wrong is testable without
+ * a repository: a gate that skips is indistinguishable from a gate that passes,
+ * and CI is where it has to run.
+ *
+ * - `tip` — take the base ref as it stands. This is the CI path, and `ci` is
+ *   tested FIRST because that is the only thing that decides it: `actions/checkout`
+ *   leaves HEAD on `refs/pull/N/merge`, the head already merged into the base
+ *   tip, so comparing against that tip shows only the PR's own changes.
+ *
+ *   TESTED BEFORE `haveTracking`, AND THAT ORDER IS THE WHOLE CORRECTNESS OF THIS
+ *   FUNCTION IN CI. The obvious reading — "CI has no tracking ref, so routing on
+ *   `haveTracking` routes CI here anyway" — is false, and measurably so. By the
+ *   time this runs, `check:version-not-lower` has already run in the same
+ *   `quality` job and taken `baseRevision()`'s fetching branch, and
+ *   `git fetch --depth=1 origin <base>` DOES write `refs/remotes/origin/<base>`:
+ *   `actions/checkout` builds its clone with `git remote add`, which leaves
+ *   `remote.origin.fetch` at `+refs/heads/*:refs/remotes/origin/*`, and that
+ *   refspec makes the fetch update the tracking ref opportunistically. So in CI
+ *   the tracking ref is reliably PRESENT, and routing on it would send CI down
+ *   `merge-base` — where `git merge-base` then exits 1 and finds nothing, because
+ *   at depth 1 HEAD's parents are outside the shallow boundary. That is a hard
+ *   red on every PR, not a silent skip.
+ * - `merge-base` — a local clone with the remote-tracking ref. Take the BRANCH
+ *   POINT, not the tip: locally `origin/main` is usually ahead of the fork, so the
+ *   tip would read every shift that landed on `main` since as this branch's drift.
+ *   Getting this and `tip` the wrong way round yields a gate that reds
+ *   unconditionally in CI and one that blames the branch for all of `main`
+ *   locally.
+ * - `skip` — no tracking ref and no remote at all, outside CI. There is genuinely
+ *   no base to compare against, so the check cannot run; it says so loudly rather
+ *   than printing a zero.
+ * - `fail` — the same, in CI, where a missing base is a failure and not a skip. A
+ *   skip there would turn this gate off in the one place it must run.
+ *
+ * @param {{ haveTracking: boolean, haveOrigin: boolean, ci: boolean }} env
+ * @returns {{ path: 'merge-base' | 'tip' | 'skip' | 'fail', why?: string }}
+ */
+export function driftBasePlan({ haveTracking, haveOrigin, ci }) {
+  if (ci) {
+    if (haveTracking || haveOrigin) return { path: 'tip' }
+    return {
+      path: 'fail',
+      why: 'no remote-tracking base ref and no `origin` remote to fetch one from'
+    }
+  }
+  if (haveTracking) return { path: 'merge-base' }
+  if (haveOrigin) return { path: 'tip' }
+  return { path: 'skip', why: 'this clone has no `origin` remote' }
+}
+
+const gitOk = (args) => {
+  try {
+    execFileSync('git', args, { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The revision whose trees the drift check reads, or null when there is no base
+ * and we are not in CI. Exits on the paths `driftBasePlan()` calls failures —
+ * including `baseRevision()`'s own exit when its shallow fetch fails.
+ *
+ * @param {string} baseRef
+ * @returns {string | null}
+ */
+function driftBaseRevision(baseRef) {
+  const tracking = `refs/remotes/origin/${baseRef}`
+  const plan = driftBasePlan({
+    haveTracking: gitOk(['rev-parse', '--verify', '--quiet', tracking]),
+    haveOrigin: gitOk(['remote', 'get-url', 'origin']),
+    ci: !!process.env.CI
+  })
+
+  if (plan.path === 'fail') {
+    console.error(`\nCannot check citation drift against '${baseRef}': ${plan.why}.`)
+    process.exit(1)
+  }
+  if (plan.path === 'skip') {
+    console.error(
+      `\nNOT CHECKING CITATION DRIFT: ${plan.why}, so there is no '${baseRef}' to\n` +
+        'compare against. Every other check below still ran. In CI this is a failure.'
+    )
+    return null
+  }
+
+  // `baseRevision()` prefers the tracking ref and otherwise fetches one shallow
+  // ref to FETCH_HEAD, failing closed if that fetch fails. Reused rather than
+  // reimplemented so the two gates cannot disagree about where the base is.
+  const rev = baseRevision(baseRef)
+  // THE PLAN DECIDES, not the shape of what `baseRevision()` handed back. Keying
+  // this off `rev === 'FETCH_HEAD'` would put CI on the merge-base path, since
+  // there the tracking ref exists by then and `baseRevision()` returns it — see
+  // `driftBasePlan()`.
+  if (plan.path === 'tip') return rev
+  try {
+    return execFileSync('git', ['merge-base', 'HEAD', rev], { encoding: 'utf8' }).trim()
+  } catch {
+    console.error(`\nCould not find the merge base of HEAD and ${rev}.`)
+    process.exit(1)
+  }
+}
+
+/**
+ * @param {string} rev
+ * @returns {(p: string) => string[] | null}
+ */
+function baseReaderAt(rev) {
+  return (p) => {
+    try {
+      return execFileSync('git', ['show', `${rev}:${p}`], {
+        encoding: 'utf8',
+        maxBuffer: 256 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).split('\n')
+    } catch {
+      // Absent from the base tree: a file this branch adds, or one it renamed
+      // into place. Nothing to compare, and the resolver above already owns a
+      // rename that broke the anchor.
+      return null
+    }
+  }
+}
+
 function main() {
   const files = execFileSync('git', ['ls-files', '-z'], {
     encoding: 'utf8',
@@ -681,8 +1065,15 @@ function main() {
     .split('\0')
     .filter(Boolean)
 
+  const baseRev = driftBaseRevision(process.env.GITHUB_BASE_REF || 'main')
+
   const { ok, out, err } = report(
-    analyze({ files, readLines: (p) => readFileSync(p, 'utf8').split('\n') })
+    analyze({
+      files,
+      readLines: (p) => readFileSync(p, 'utf8').split('\n'),
+      readBaseLines: baseRev === null ? null : baseReaderAt(baseRev),
+      baseLabel: baseRev
+    })
   )
   console.log(out.join('\n'))
   if (err.length > 0) console.error(err.join('\n'))

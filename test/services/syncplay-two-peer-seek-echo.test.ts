@@ -75,6 +75,16 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
     const [host, joiner] = await seatBoth()
     await room.advance(4)
+    // Exactly one frame, and which one it is matters for the `host.frames` claim
+    // below: the reference's join-time `State` at t=50, whose `setBy` is the room's
+    // constructor seed rather than ours, so `src/main/syncplay.ts:2097` admits it.
+    // It is also what hands this peer a `lastRoomState` a second before the first
+    // periodic would, lifting `isAdopted()`'s `if (!room) return false` and moving
+    // the latch from t=2000 to t=1000 — which is what gets the t=1050 periodic
+    // dropped here rather than emitted with `setBy` nulled at
+    // `src/main/syncplay.ts:2187`. So the window below starts empty because of the
+    // drop guard *and* this line, which is why the claim there is scoped to the
+    // frames that follow it rather than to the path.
     host.frames.length = 0
     expect(host.el.seekWrites).toEqual([])
 
@@ -124,10 +134,14 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // `every()` on an empty array is `true`, so without the pin a harness change
     // that stopped handing the joiner frames at all — a widened drop guard, a
     // rewired observer — would leave the line below green while asserting
-    // nothing. Eleven is what this fixture delivers: the ten 1 Hz periodics of
-    // the run, at t=1050 through t=10050, plus the forced update at t=4150 that
-    // carried the drag.
-    expect(joiner.frames).toHaveLength(11)
+    // nothing. Twelve is what this fixture delivers: the ten 1 Hz periodics of
+    // the run, at t=1050 through t=10050, the forced update at t=4150 that
+    // carried the drag, and — ahead of both — the reference's join-time `State`
+    // at t=50. That one is admitted for the same reason the host's copy of it is
+    // (see the clear above): no election runs inside a fresh room's own election
+    // age, so it carries the `setBy` the room was constructed with and is nobody
+    // here's echo.
+    expect(joiner.frames).toHaveLength(12)
     expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
   })
 

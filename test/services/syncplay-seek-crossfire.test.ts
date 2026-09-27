@@ -253,8 +253,8 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // `use-syncplay-client.test.ts:5090 ("expect(v.currentTime).toBe(604)")`
     // pins the same half-open `[3.0, 4.0)` window and pins it more tightly, on
     // a fake element parked at 600 handed seven 1 Hz frames at 601…607: the
-    // first frame clearing the literal is 604 for any tolerance in `[3.0,
-    // 4.0)`, 605 at `4.0` and 606 under `2.0`. The two files are a pair, and
+    // surviving write is 604 for any tolerance in `[3.0, 4.0)`, 605 at `4.0`
+    // and 606 at `2.0` (it clears twice there). The two files are a pair, and
     // anyone trimming either should know it. Note that the surviving site lives
     // outside `test/services/`, so `npx vitest run test/services/` cannot see
     // the mutation control at all — run the whole suite.

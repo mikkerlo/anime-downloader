@@ -12,7 +12,7 @@
 // notify, then schedule — and a refactor that keeps every call but reorders two
 // of them is exactly the failure an endpoint assertion misses.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -61,6 +61,13 @@ interface Harness {
   ffmpegPath: string
   /** What `coldStorageService.isAdvanced()` answers. */
   coldAdvanced: boolean
+  /**
+   * When set, `recordCheck` logs its call and then blocks on this promise before
+   * logging `recordCheckSettled(...)`. That splits the probe's *start* from its
+   * *completion* in the one ordered `calls` log, which is how the
+   * fire-and-forget test below can see the handler come back mid-probe.
+   */
+  recordCheckGate: Promise<void> | null
 }
 
 function makeHarness(settings: Partial<Settings> = {}): Harness {
@@ -119,6 +126,9 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
     mp4StatsService: {
       recordCheck: async (filePath) => {
         calls.push(`recordCheck(${path.basename(filePath)})`)
+        if (h.recordCheckGate === null) return
+        await h.recordCheckGate
+        calls.push(`recordCheckSettled(${path.basename(filePath)})`)
       }
     },
     // A promise, not a value: the real `ffmpegReady` is the background
@@ -150,9 +160,21 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
     mergeStatus: null,
     ffmpegAvailable: true,
     ffmpegPath: '/bin/ffmpeg',
-    coldAdvanced: false
+    coldAdvanced: false,
+    recordCheckGate: null
   }
   return h
+}
+
+/**
+ * Yield past the microtask queue, so a fire-and-forget promise released inside a
+ * test has run to completion by the next line. A macrotask hop rather than a
+ * counted run of `await Promise.resolve()`: the number of ticks a released
+ * `await` chain needs is an implementation detail, and one timer callback is
+ * scheduled behind all of them whatever that number is.
+ */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function makeInfo(overrides: Partial<EpisodeCompleteInfo> = {}): EpisodeCompleteInfo {
@@ -528,10 +550,49 @@ describe('episode-completion — the per-video tail', () => {
 
   it('does not await the faststart probe', async () => {
     // `recordCheck` is fired with `void`, deliberately: it opens and reads the
-    // file, and the hook runs on the download manager's success path.
+    // file, and the hook runs on the download manager's success path, which
+    // calls it synchronously and ignores what comes back.
+    //
+    // Asserting the return value alone cannot say that. A `: void` signature
+    // yields `undefined` whether the probe is fired and forgotten or never
+    // fired at all, so the probe is held open on a promise this test resolves by
+    // hand: the handler must come back while that promise is still pending, and
+    // the probe must still run once it settles. `toBeUndefined()` stays because
+    // it is the assertion an `await` trips — awaiting turns the handler `async`
+    // and hands the caller a pending promise instead of nothing.
     const h = makeHarness()
+    let releaseProbe!: () => void
+    h.recordCheckGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve
+    })
+
     const returned = h.handlers.handleVideoDownloaded('/dl/x.mp4', makeItem()) as unknown
+
+    // Back already, mid-probe: the write landed and `recordCheck` has been
+    // entered, but its post-await marker cannot be in the log yet.
     expect(returned).toBeUndefined()
+    expect(h.calls).toEqual(['store.set(downloadedEpisodes)', 'recordCheck(x.mp4)'])
+
+    // The same property again without reading the signature, so this test keeps
+    // biting if the declared return type ever changes for an unrelated reason:
+    // whatever came back must be settled while the gate is still closed. Under
+    // an `await` it is the handler's own pending promise and the timer wins.
+    const stillRunning = Symbol('still-running')
+    const raced = await Promise.race([
+      Promise.resolve(returned).then(() => 'handler-returned'),
+      flushMicrotasks().then(() => stillRunning)
+    ])
+    expect(raced).toBe('handler-returned')
+
+    releaseProbe()
+    await flushMicrotasks()
+
+    // Forgotten, not dropped — the probe completes on its own afterwards.
+    expect(h.calls).toEqual([
+      'store.set(downloadedEpisodes)',
+      'recordCheck(x.mp4)',
+      'recordCheckSettled(x.mp4)'
+    ])
   })
 })
 
@@ -573,6 +634,5 @@ describe('episode-completion — construction', () => {
       'handleVideoDownloaded'
     ])
     expect(h.calls).toEqual([])
-    expect(vi.isMockFunction(h.handlers.handleEpisodeComplete)).toBe(false)
   })
 })

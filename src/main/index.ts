@@ -717,9 +717,12 @@ async function bootstrap(): Promise<void> {
   // One callback slot, not a list: a second `onVideoDownloaded(...)` anywhere
   // would silently unregister this one, taking both the metadata write and the
   // mp4-faststart probe with it. That is the one constraint here that is about
-  // the wiring rather than about the tail, so it keeps a source-text guard in
-  // `test/lib/episode-completion.test.ts`; the tail's own write-above-the-filter
-  // ordering is asserted behaviourally there instead.
+  // the wiring rather than about the tail, so it keeps a counted source-text
+  // guard of its own — `registers onVideoDownloaded exactly once`, in
+  // `test/services/download-manager-episode-metadata.test.ts`, which is where
+  // that consumer pair is exercised end to end. The tail's own
+  // write-above-the-filter ordering is a different claim and is asserted
+  // behaviourally, in `test/lib/episode-completion.test.ts`.
   downloadManager.onVideoDownloaded(episodeCompletion.handleVideoDownloaded)
 
   // Register IPC BEFORE creating the window: the renderer mounts as soon as

@@ -511,7 +511,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // for the whole divergence. Not a universal: a stream sparser than one per 3500 ms does
   // clear. Here it is the room's cadence, because what reaches us survives
   // `src/main/syncplay.ts:2097`/`:2098` — foreign-`setBy`, or room voice, which needs
-  // de-adoption *and* a keyed roster with a peer (`:2489-2493`), not de-adoption alone. And
+  // de-adoption *and* a keyed roster with a peer (`:2527-2531`), not de-adoption alone. And
   // what fires this toast is what de-adopted main: `wouldSeek` needs `diff > 3.0` (:1282) on
   // the two positions main tests against `ADOPT_TOLERANCE_S` at `src/main/syncplay.ts:1924`,
   // writing the flag at `:1930`. Cleared where a state applies in range, alongside
@@ -535,7 +535,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   //
   // Its own boolean, mirroring `refusedToastShown`: neither existing marker survives that stream
   // — which de-adoption alone need not produce, since with `List` unkeyable `rosterReceived`
-  // stays false and `isRoomVoice()` returns there (`src/main/syncplay.ts:2492`), so only a peer's
+  // stays false and `isRoomVoice()` returns there (`src/main/syncplay.ts:2530`), so only a peer's
   // foreign-`setBy` move arrives. `recordRemoteState()` nulls `syncplayPausedBy` on any
   // non-paused state, parked or not — already clobbered when the apply tests it — while
   // `intendedPaused` comes from the apply path and conflates "the room paused us" with "the user
@@ -824,9 +824,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // action is dropped until a remote apply seeks us back. Fixing it means a
   // snapshot source that survives background throttling while paused; see
   // the "Known consequence" note on `buildPlaystate()` in syncplay.ts for
-  // the forward-compensation mechanism (its "nobody is watching in that
-  // state" framing predates this issue — a live paused player reaches it
-  // too), and test/services/syncplay-room-presence.test.ts,
+  // the forward-compensation mechanism (#411 retracted its "nobody is
+  // watching in that state" framing, and this route is one of the two
+  // reasons), and test/services/syncplay-room-presence.test.ts,
   // "a paused hidden player goes stale and recovers".
   function pushSyncplaySnapshot(): void {
     if (syncplayStatus.value.state !== 'ready') return
@@ -1721,7 +1721,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // Unconditional, a hold included. The seek write above carries no `holding`
     // term — under a hold we still move the element to the room's position —
     // and main's adoption latch is a test on exactly that quantity:
-    // `isAdopted()` (src/main/syncplay.ts:2596) is
+    // `isAdopted()` (src/main/syncplay.ts:2634) is
     // `|snapshot.position - projectedRoomPosition(room)| <= ADOPT_TOLERANCE_S`.
     // So gating the push withheld the position announcement in precisely the
     // pre-adoption window the hold exists to shorten. That is the seek half's
@@ -1817,7 +1817,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // (src/main/syncplay.ts:2115) and nothing advances the parked copy, so it applies behind the
     // room by the park's duration. Uncompensated on purpose — the 3 s apply tolerance and main's
     // adoption gate bound the error, and the 1 Hz overwrite too — but only where adoption cleared
-    // at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2489-2493`) is keyed
+    // at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2527-2531`) is keyed
     // with a peer; an in-player switch leaves adoption set. docs/syncplay.md, "Apply Rule".
     recordRemoteState(state, { pausedBy: parkedPausedBy })
     applyRemoteStateToElement(state, v, true)
@@ -1828,7 +1828,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // reset with it — it must not latch for the session: main stops emitting `remote-state` once we
   // are alone, so it would eat the user's saved position on every later open. Resetting in a live
   // room costs at most a sub-second flash before the next 1 Hz state seeks us to the room — where
-  // adoption cleared at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2492`)
+  // adoption cleared at `src/main/syncplay.ts:789` and the roster (`src/main/syncplay.ts:2530`)
   // is keyed with a peer; an in-player switch leaves adoption set, so only a peer's move does.
   // `refusedToastShown` is cleared here too, by default and deliberately: every
   // caller of this function is a point where the file, the room or the socket

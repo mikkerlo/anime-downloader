@@ -2421,9 +2421,45 @@ export class SyncplayClient extends EventEmitter {
     // _updatePositionByAge too, so it forward-delay-compensates the mirrored
     // position even while the room is paused. Spectating *alone* in a paused
     // room our own crept value comes back as lastRoomState and compounds at
-    // ~one forward delay per second. Nobody is watching in that state and
-    // adopting a player resets it — documented rather than fixed, so it isn't
-    // rediscovered as "the room moved while I was away".
+    // ~one forward delay per second — one per turn round the election loop.
+    // `test/services/syncplay-mirror-drift.test.ts:344-346` pins that series to
+    // the millisecond for a room of *two* mirroring peers, so it bounds the rate
+    // a lone spectator creeps at rather than measuring it (and, built at zero
+    // phase, it closes the loop only every other second and so reports the
+    // ratchet at half rate).
+    //
+    // This paragraph used to end "nobody is watching in that state and adopting
+    // a player resets it". Both halves are narrower than they read, and #411 is
+    // the scoping. Nobody is watching only until somebody joins, and the creep's
+    // own precondition is what guarantees it: alone, we are the *only* candidate
+    // in Room.getPosition()'s min(), and a single-candidate min() returns the
+    // crept value rather than rejecting it. So the crept value *is* the room and
+    // the next peer to join is seeded with it. The claim also fails with no
+    // joiner at all — a *live* paused player fires no `timeupdate`, so a window
+    // hidden past PLAYBACK_STALE_MS crosses the staleness line and is demoted to
+    // this very mirror while someone is watching the whole time (#227, measured
+    // at `test/services/syncplay-room-presence.test.ts`, "a paused hidden player
+    // goes stale and recovers"; the renderer's own note on that gap has been
+    // saying the framing here was stale for longer than #411 has existed).
+    //
+    // "Adopting a player resets it" needs to say *whose*. An incumbent that has
+    // adopted at the true position reports raw — `paused: true`, which the
+    // server stores without the + fd term — so the room comes back to the truth
+    // on the first election after the join, and only the joiner keeps the offset
+    // it was handed, one forward delay of it:
+    // `test/services/syncplay-two-peer-playpause.test.ts`, "places and stops a
+    // peer that joins a room already standing still". In the case this paragraph
+    // is really about — spectating alone, with no player to adopt — nothing ever
+    // re-asserts the truth: our mirror is compensated *above* the newcomer and
+    // loses, while the newcomer adopts at the value it was handed and reports
+    // that raw, so the crept offset is promoted to the room and stays there.
+    // That the spectator never adopts is the gate above rather than luck — with
+    // no snapshot ever pushed `canAssertSnapshot()` is the false conjunct and
+    // short-circuits before `isAdopted()` can latch, per the note on the
+    // conjunction order. Measured at
+    // `test/services/syncplay-paused-spectator-handoff.test.ts`. Documented
+    // rather than fixed, so it isn't rediscovered as "the room moved while I was
+    // away".
     //
     // This used to add "invisible with peers present (we land ahead, never the
     // min())". That parenthesis was false, and #277 is what it cost: the mirror
@@ -2442,7 +2478,9 @@ export class SyncplayClient extends EventEmitter {
     // Landing genuinely *ahead* is the paused-room creep above and nothing
     // else, which is why a de-adopted hidden player (#227) cannot drag the
     // room: a crept mirror in a paused room is above it and loses every
-    // election.
+    // *contested* election. Uncontested is not a second mechanism — it is the
+    // join-time window above, where the crept mirror is the only candidate and
+    // min() hands its own value back as the room.
     return {
       position: this.projectedRoomPosition(room),
       doSeek: false

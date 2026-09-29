@@ -2439,8 +2439,8 @@ export class SyncplayClient extends EventEmitter {
     // hidden past PLAYBACK_STALE_MS crosses the staleness line and is demoted to
     // this very mirror while someone is watching the whole time (#227, measured
     // at `test/services/syncplay-room-presence.test.ts`, "a paused hidden player
-    // goes stale and recovers"; the renderer's own note on that gap has been
-    // saying the framing here was stale for longer than #411 has existed).
+    // goes stale and recovers"; the renderer's own note on that gap said as much
+    // before this issue, and now cites this retraction instead).
     //
     // "Adopting a player resets it" needs to say *whose*. An incumbent that has
     // adopted at the true position reports raw — `paused: true`, which the

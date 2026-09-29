@@ -115,6 +115,8 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
   let store: FakeStore
   let episodePayloads: EpisodeCompleteInfo[]
   let videoHookCalls: Array<{ filePath: string; itemId: string }>
+  let mirrorVideoHook: (filePath: string, item: DownloadItem) => void
+  let mirrorEpisodeHook: (info: EpisodeCompleteInfo) => void
 
   beforeEach(() => {
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-meta-ud-'))
@@ -125,15 +127,19 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     videoHookCalls = []
 
     // Mirror of src/main/index.ts: the video hook writes unconditionally, the
-    // group-complete hook is the repair path and is gated on `hasVideo`.
-    dm.onVideoDownloaded((filePath, item) => {
+    // group-complete hook is the repair path and is gated on `hasVideo`. Both
+    // are named so the equivalence block at the bottom can call these exact
+    // closures instead of re-copying their bodies.
+    mirrorVideoHook = (filePath, item) => {
       videoHookCalls.push({ filePath, itemId: item.id })
       persistDownloadedEpisode(store, item)
-    })
-    dm.onEpisodeComplete((info) => {
+    }
+    mirrorEpisodeHook = (info) => {
       episodePayloads.push(info)
       if (info.hasVideo) persistDownloadedEpisode(store, info)
-    })
+    }
+    dm.onVideoDownloaded(mirrorVideoHook)
+    dm.onEpisodeComplete(mirrorEpisodeHook)
 
     global.fetch = vi.fn(
       async () =>
@@ -443,7 +449,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       const real = makeStore()
       const video = makeItem({ status: 'completed' })
 
-      persistDownloadedEpisode(store, video)
+      mirrorVideoHook(path.join(downloadDir, video.filename), video)
       realHandlers(real).handleVideoDownloaded(path.join(downloadDir, video.filename), video)
 
       expect(real.entries).toEqual(store.entries)
@@ -460,7 +466,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
         filename: path.join('Anime', 'Anime - 01 [Author].mkv')
       })
 
-      persistDownloadedEpisode(store, video)
+      mirrorVideoHook(path.join(downloadDir, video.filename), video)
       realHandlers(real).handleVideoDownloaded(path.join(downloadDir, video.filename), video)
 
       expect(real.entries).toEqual(store.entries)
@@ -483,12 +489,15 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
 
       const a = makeStore()
       await realHandlers(a).handleEpisodeComplete(withVideo)
-      if (withVideo.hasVideo) persistDownloadedEpisode(store, withVideo)
+      mirrorEpisodeHook(withVideo)
       expect(a.entries).toEqual(store.entries)
       expect(a.entries).toEqual({ '100:1:1': ENTRY })
 
+      store = makeStore()
       const b = makeStore()
       await realHandlers(b).handleEpisodeComplete(subtitleOnly)
+      mirrorEpisodeHook(subtitleOnly)
+      expect(b.entries).toEqual(store.entries)
       expect(b.entries).toEqual({})
     })
   })

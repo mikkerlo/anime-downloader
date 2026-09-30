@@ -70,12 +70,34 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // What this pin does not cover, and what `resolved` does not attest: an anchor
 // landing on a live code line is checked for existence only. The four
 // same-file anchors in the `suspiciousLanding()` comment below all target
-// `if (…)` lines, which blank, bare brace and comment line can never see go
-// stale — they are attested as "the target line exists", not as drift-checked.
-// The bare-brace and comment-line predicates are also consecutive, so those
-// two anchors differ by one: a single line inserted above the ladder re-points
-// each at its neighbour's test, green and wrong. #345 kept them for the
-// inbound-anchor coverage on the record that `resolved` counts anchors that
+// `if (…)` lines, so while they are right nothing here has anything to say
+// about them — they are attested as "the target line exists", not as
+// drift-checked.
+//
+// WHAT THAT DOES NOT MEAN, and #395 is the correction: it does not mean they go
+// stale invisibly. This paragraph predicted that "a single line inserted above
+// the ladder re-points each at its neighbour's test, green and wrong", and #393
+// inserted exactly that line: the build went RED and wrong. The predicates
+// classify the anchor's NEW landing, not the `if (…)` line it used to name, and
+// the ladder is interleaved with comment lines and closes its `#` branch on a
+// bare `}` — so an insertion above it re-points one or two of the four onto
+// lines the comment-line and bare-brace tests do catch, depending both on where
+// the line goes and on what it is. All measured on this tree: a live-code line
+// above the blank predicate's comment block catches two, `suspicious` 4 -> 6;
+// directly above `if (text === '')` it catches one, the bare-brace anchor, at
+// 4 -> 5, because the first anchor then lands on the inserted line itself; make
+// that inserted line a comment and it is two again. #393 measured three of four
+// on its own tree. Either way `suspicious` rises, the count is compared with
+// `!==`, and the gate fails. Since #407 `verifyNoDrift()` names them
+// individually as well.
+//
+// The failure it produces is the thing worth knowing, and it is narrower than
+// either "green and wrong" or "caught": it names whichever siblings happened to
+// land on a comment or a brace and says NOTHING about the ones that landed on
+// live code, which are stale too and ride in underneath a failure about their
+// neighbours. A reviewer who repairs what the gate named has repaired half the
+// drift and has been told nothing about the rest. #345 kept these anchors for
+// the inbound-anchor coverage on the record that `resolved` counts anchors that
 // resolve, not anchors that are checked.
 //
 // #384 is the second case and it brings one. The premise correction in the
@@ -125,8 +147,49 @@ export const UNCHECKABLE_PIN = 116
 // `MARKED_OPEN` its zero false-positive rate is exactly what makes them quiet.
 // Growth must not cost a bump on every retrofit, so only the fall reds.
 //
-// 12 marked citations on this tree.
-export const MARKED_PIN = 12
+// 64 marked citations on this tree. #395 raised this from the 12 #372 set and
+// nothing has moved since: 52 anchors of slack, which is a floor that lets the
+// verified population lose 81% of its members with the gate green. Growth is
+// still free — that is the whole point of the direction — but a floor left
+// behind by every retrofit it was supposed to ratchet is decoration, and the
+// only edit that makes it bind is raising it to what the tree measures.
+export const MARKED_PIN = 64
+
+// A CEILING, compared with `>`, and the only pin here that is. Upstream
+// Syncplay anchors are the one population where GROWTH is the dangerous
+// direction, so it is `MARKED_PIN`'s mirror image and wants the mirrored
+// comparison. Neither half of that floor's rationale survives the reflection:
+// writing an upstream anchor is not opt-in, because a foreign extension is the
+// only way to cite upstream at all, and none of these is checked by anything —
+// `RESOLVABLE_EXT` counts a `.py` target as unresolvable by construction, so no
+// landing predicate below ever runs on it and no line number is ever compared
+// against anything.
+//
+// Counted as UNMARKED rather than folded into `marked` above. Zero of the 261
+// carry a quote today, so widening that population would make its own printed
+// sentence — "verified against their target" — false by 261 in a single step.
+// Hence a separate counter and a separate printed line, and deliberately no
+// `.py`-marked floor constant beside it: the ceiling states the same property
+// from the other side, and a second number would only be one more thing to keep
+// in step.
+//
+// What the ceiling buys that a floor could not: `analyze()` has no notion of
+// "added in this PR" — it compares one aggregate against one constant — so a
+// floor says only "the count must not fall" and a new unmarked upstream anchor
+// arrives green. One past this ceiling reds in the PR that writes it. The
+// anchors already here are grandfathered rather than retrofitted under duress,
+// and a retrofit lowers the count, so the number ratchets toward zero instead of
+// waiting for someone to remember to raise it. A fall is silent, as `MARKED_PIN`
+// spent 52 anchors demonstrating: lowering this to match is what converts a
+// retrofit into coverage, and skipping it costs nothing today and everything
+// later.
+//
+// 261 unmarked upstream-Python anchors on this tree, and re-measuring it has a
+// trap worth stating rather than rediscovering. A direct scan of tracked files
+// returns 268. The seven extra are citation-shaped fixture strings inside
+// `test/check-line-citations.test.ts`, which is in `EXCLUDED_PATHS`: the gate
+// does not scan it and a hand census does. Pin against what the gate counts.
+export const UNMARKED_PY_PIN = 261
 
 // --- configuration ------------------------------------------------------------
 
@@ -314,9 +377,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:315 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:378 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:339 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:402 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -325,20 +388,32 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:338 and the `<!--` test at
-  // scripts/check-line-citations.mjs:344 have no measured false positive in
+  // scripts/check-line-citations.mjs:401 and the `<!--` test at
+  // scripts/check-line-citations.mjs:419 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and
   // markup is not a line anyone cites deliberately. That `<!--` test is also
   // what makes this return's placement observable rather than equivalent to
   // deleting it, which the fixtures in test/check-line-citations.test.ts pin.
-  // The yml/yaml/sh `#` branch below cannot fire for a `.md` target at all.
+  // The hash-comment branch below cannot fire for a `.md` target at all.
   if (extname(targetPath) === '.md') return null
   if (/^[}\])]+[;,]?$/.test(text)) return `bare \`${text}\``
   if (/^(\/\/|\/\*|\*)/.test(text)) return 'comment line'
+  // `.py` joined the hash-comment languages in #395, and it is the one entry
+  // here that fires on NO anchor in this tree — `RESOLVABLE_EXT` cannot resolve
+  // a `.py` target, so this function is never reached for one. It is written now
+  // because the moment a pinned upstream copy is on disk, the ~260 upstream
+  // anchors resolve all at once and an anchor sitting on a Python comment would
+  // pass silently through the only predicate that had anything to say about it.
+  // A predicate and a fixture now, or a fresh hole of exactly this gate's own
+  // kind later. Covered by a fixture rather than by the tree: the test file
+  // injects a `resolvableExt` that contains `.py`.
   const ext = extname(targetPath)
-  if ((ext === '.yml' || ext === '.yaml' || ext === '.sh') && text.startsWith('#')) {
+  if (
+    (ext === '.yml' || ext === '.yaml' || ext === '.sh' || ext === '.py') &&
+    text.startsWith('#')
+  ) {
     return 'comment line'
   }
   if (text.startsWith('<!--')) return 'comment line'
@@ -514,6 +589,13 @@ const underRoot = (p, roots) =>
  *   the report line only. Nothing branches on it.
  * @param {string[]} [opts.scanRoots]
  * @param {string[]} [opts.excludedPaths]
+ * @param {Set<string>} [opts.resolvableExt]
+ *   injectable for one reason only: `.py` is not in `RESOLVABLE_EXT` and cannot
+ *   be, so every predicate that runs on an upstream target is unreachable from a
+ *   fixture without this seam — including the hash-comment branch #395 added for
+ *   exactly that population. A fixture that widens it is testing the predicate
+ *   ladder against the tree a pinned upstream copy would produce. The default is
+ *   `RESOLVABLE_EXT`, so the real gate's behaviour is untouched.
  */
 export function analyze({
   files,
@@ -521,7 +603,8 @@ export function analyze({
   readBaseLines = null,
   baseLabel = null,
   scanRoots = SCAN_ROOTS,
-  excludedPaths = EXCLUDED_PATHS
+  excludedPaths = EXCLUDED_PATHS,
+  resolvableExt = RESOLVABLE_EXT
 }) {
   const tracked = new Set(files)
   const byBasename = new Map()
@@ -578,6 +661,7 @@ export function analyze({
   const driftExemptNewFile = []
   let driftChecked = 0
   let unresolvableByExtension = 0
+  let unmarkedPy = 0
   let resolvedFullPath = 0
   let resolvedUniqueBasename = 0
 
@@ -591,7 +675,21 @@ export function analyze({
         const end = endStr ? Number(endStr) : null
         const cited = `${raw}:${endStr ? `${start}-${end}` : start}`
 
-        if (!RESOLVABLE_EXT.has(extname(raw))) {
+        // Extracted here rather than beside `marked.push` below, because the
+        // `.py` ceiling has to see anchors that never reach the resolver: an
+        // upstream anchor's whole problem is that it is unresolvable by
+        // construction, so a count taken after the `continue` below would be
+        // zero for the one population it exists to bound.
+        const quote = extractMarkedQuote(linesOf(from), i, line.slice(m.index + m[0].length))
+
+        // Keyed on the EXTENSION, not on whether the anchor resolved: the
+        // ceiling is a statement about upstream anchors, and one stays counted
+        // whether or not a tracked copy of its target happens to exist. That is
+        // also what keeps the fixtures honest — widening `resolvableExt` to reach
+        // the predicates must not change this number.
+        if (extname(raw) === '.py' && quote === null) unmarkedPy++
+
+        if (!resolvableExt.has(extname(raw))) {
           unresolvableByExtension++
           continue
         }
@@ -642,7 +740,6 @@ export function analyze({
           }
         }
 
-        const quote = extractMarkedQuote(linesOf(from), i, line.slice(m.index + m[0].length))
         if (quote !== null) {
           marked.push({ at, cited, target, quote })
           const verdict = verifyQuote(linesOf(target), {
@@ -750,6 +847,7 @@ export function analyze({
     resolvedFullPath,
     resolvedUniqueBasename,
     unresolvableByExtension,
+    unmarkedPy,
     failures,
     suspicious,
     marked,
@@ -772,6 +870,7 @@ export function report(r, pins = {}) {
   const landingPin = pins.suspiciousLanding ?? SUSPICIOUS_LANDING_PIN
   const uncheckablePin = pins.uncheckable ?? UNCHECKABLE_PIN
   const markedPin = pins.marked ?? MARKED_PIN
+  const unmarkedPyPin = pins.unmarkedPy ?? UNMARKED_PY_PIN
   const out = []
   const err = []
 
@@ -789,6 +888,16 @@ export function report(r, pins = {}) {
   out.push(
     `  marked quotes: ${r.marked.length} verified against their target ` +
       `(${r.quoteFailures.length} failing) — floor ${markedPin}`
+  )
+  // Its own line, never folded into the one above: this population is defined by
+  // what is NOT verified, so adding it to a count printed as "verified against
+  // their target" would falsify that sentence by the whole upstream corpus at
+  // once. "Ceiling" rather than "pin" in the text because the comparison is
+  // one-sided and a reader copying numbers out of this output has to be able to
+  // tell which way it binds.
+  out.push(
+    `  unmarked upstream .py anchors: ${r.unmarkedPy} — ceiling ${unmarkedPyPin}` +
+      ' (unverified by construction)'
   )
   // Printed even at zero, and printed differently when the check did not run at
   // all. "0 drifted" and "not compared" are the two outcomes a reader has to be
@@ -868,6 +977,27 @@ export function report(r, pins = {}) {
       'silently. Restore the marked form, or, if the anchor was genuinely de-marked on',
       'purpose, lower MARKED_PIN in scripts/check-line-citations.mjs and say why in the',
       'commit message.'
+    )
+  }
+
+  // The mirror of the block above, and the comparison is the only difference that
+  // matters: `>` rather than `<`, because here growth is the hazard and a fall is
+  // the retrofit. See `UNMARKED_PY_PIN` for why this population cannot be folded
+  // into `marked` and why it gets no floor of its own.
+  if (r.unmarkedPy > unmarkedPyPin) {
+    ok = false
+    err.push(
+      '',
+      `Unmarked upstream .py anchor count rose: ${r.unmarkedPy}, ceiling at ${unmarkedPyPin}.`,
+      'Nothing in this repo resolves a `.py` target, so an upstream anchor is checked by',
+      'nothing at all: it is counted as unresolvable by construction, no landing',
+      'predicate ever sees its target, and its line number is never compared with',
+      'anything. The marked form is what makes one checkable —',
+      '`server.py:NN ("the quoted line")` carries its own evidence, so a reader can',
+      'verify it without the upstream tree and the pinned tree can verify it',
+      'mechanically. Mark the anchor you just added; if it genuinely cannot carry a',
+      'quote, raise UNMARKED_PY_PIN in scripts/check-line-citations.mjs and say why in',
+      'the commit message.'
     )
   }
 

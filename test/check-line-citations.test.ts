@@ -18,6 +18,7 @@ type Result = {
   resolvedFullPath: number
   resolvedUniqueBasename: number
   unresolvableByExtension: number
+  unmarkedPy: number
   failures: { at: string; cited: string; why: string }[]
   suspicious: { at: string; cited: string; target: string; start: number; why: string }[]
   marked: { at: string; cited: string; target: string; quote: string }[]
@@ -69,6 +70,39 @@ const run = (files: Corpus, excludedPaths: string[] = []): Result =>
   }) as Result
 
 const base = (extra: Corpus = {}): Corpus => ({ 'src/target.ts': TARGET, ...extra })
+
+// The tree step 2 of #395 produces, in memory. `.py` is not in `RESOLVABLE_EXT`
+// and cannot be — that rule is what lets the upstream Syncplay anchors through
+// with no filename allowlist — so every predicate that would run on an upstream
+// target the moment a pinned copy is on disk is unreachable from a fixture
+// without widening the set here. Only the fixtures that exercise those
+// predicates use this; everything else runs the shipped extension list. The set
+// is spelled out rather than derived from `RESOLVABLE_EXT`, so that widening the
+// shipped list cannot quietly change what these two corpora mean — they cite the
+// two extensions named here and nothing else.
+const runResolvingPy = (files: Corpus): Result =>
+  analyze({
+    files: Object.keys(files),
+    readLines: (p: string) => files[p].split('\n'),
+    scanRoots: ['src', 'docs', 'test'],
+    excludedPaths: [],
+    resolvableExt: new Set(['.ts', '.py'])
+  }) as Result
+
+// Four lines of upstream-shaped Python: a `def`, a statement, a `#` comment and
+// another statement. Line 3 is the landing the hash predicate has to see and
+// line 4 the one it must leave alone.
+const UPSTREAM = [
+  'def forcePositionUpdate(self, watcher):',
+  '    room = watcher.getRoom()',
+  '    # the controller path, from the signature through the broadcast',
+  '    room.broadcast(watcher)',
+  ''
+].join('\n')
+
+// Every pin but the one under test neutralised, so a case about one counter
+// cannot be satisfied or broken by another moving.
+const pinsAtZero = { suspiciousLanding: 0, uncheckable: 0, marked: 0 }
 
 describe('check-line-citations', () => {
   it('resolves a full-path citation that lands on code', () => {
@@ -249,6 +283,93 @@ describe('check-line-citations', () => {
 
     expect(r.failures).toEqual([])
     expect(r.unresolvableByExtension).toBe(1)
+  })
+
+  it('reads a `#` line in a Python target as a comment landing', () => {
+    // #395's predicate. `.yml`, `.yaml` and `.sh` were the hash-comment
+    // languages; `.py` was not, so the moment a pinned upstream copy makes these
+    // anchors resolve, one landing on a Python comment would pass through the
+    // only predicate with anything to say about it. Written against the corpus a
+    // vendored copy would produce rather than against the tree, because on this
+    // tree the branch fires on nothing at all.
+    const corpus: Corpus = {
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the forced update (server.py:3)'
+    }
+
+    const r = runResolvingPy(corpus)
+
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'server.py:3',
+        target: 'upstream/server.py',
+        start: 3,
+        why: 'comment line'
+      }
+    ])
+
+    // The other half of the predicate, so a later widening to "every `.py` line"
+    // has to delete an assertion: a Python target on live code stays clean.
+    const onCode = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4)'
+    })
+    expect(onCode.suspicious).toEqual([])
+
+    // And the characterisation half. With the shipped extension list the anchor
+    // never reaches the ladder at all, so the same stale landing reports nothing:
+    // this case fails on the old predicate and passes on the new one only because
+    // the fixture supplies the tree the predicate is written for.
+    const asShipped = analyze({
+      files: Object.keys(corpus),
+      readLines: (p: string) => corpus[p].split('\n'),
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+    expect(asShipped.suspicious).toEqual([])
+    expect(asShipped.unresolvableByExtension).toBe(1)
+  })
+
+  it('counts an unmarked upstream `.py` anchor against the ceiling, a marked one not', () => {
+    // #395's counter, and the only pin here compared with `>`. The hazard runs
+    // the other way from `MARKED_PIN`: writing an upstream anchor is not opt-in,
+    // nothing resolves a `.py` target, so growth is what costs coverage and a
+    // fall is the retrofit. The gate has no notion of "added in this PR" — it
+    // compares one aggregate against one constant — so only a ceiling can red the
+    // PR that writes a new unmarked one.
+    const unmarked = run(base({ 'src/caller.ts': "// upstream's election (server.py:597-604)" }))
+
+    expect(unmarked.unmarkedPy).toBe(1)
+    expect(report(unmarked, { ...pinsAtZero, unmarkedPy: 0 }).ok).toBe(false)
+    expect(report(unmarked, { ...pinsAtZero, unmarkedPy: 1 }).ok).toBe(true)
+
+    // Marking it takes it out of the population without resolving anything: the
+    // `quality` half of the rule checks the FORM offline, because the target file
+    // is not on disk to check the content against.
+    const marked = run(
+      base({
+        'src/caller.ts': '// the setter echo (server.py:187 ("room.broadcast(watcher)"))'
+      })
+    )
+    expect(marked.unmarkedPy).toBe(0)
+    expect(report(marked, { ...pinsAtZero, unmarkedPy: 0 }).ok).toBe(true)
+
+    // One-sided, unlike `suspiciousLanding` and `uncheckable`: a fall is free, so
+    // the anchors already on the tree are grandfathered and each retrofit
+    // ratchets the number down rather than redding the PR that does it.
+    expect(report(marked, { ...pinsAtZero, unmarkedPy: 3 }).ok).toBe(true)
+
+    // Keyed on the extension, not on whether the anchor resolved. Widening
+    // `resolvableExt` is what the predicate fixture above does, and it must not
+    // move this number — otherwise the ceiling would measure the fixture rather
+    // than the population.
+    const resolving = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4)'
+    })
+    expect(resolving.unmarkedPy).toBe(1)
   })
 
   it('does not scan a file under an excluded path', () => {

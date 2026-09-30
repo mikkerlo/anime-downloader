@@ -474,8 +474,8 @@ either direction (all 16 brace matches sit inside fenced code blocks, and no
 markdown line starts with `<!--`); they stay exempt on the argument that a
 fenced `}` carries code semantics and that markup is not cited deliberately.
 
-Three pinned counts are what give that teeth, for the reasons in *Structural
-tests* above — two exact, one a floor:
+Four pinned counts are what give that teeth, for the reasons in *Structural
+tests* above — two exact, one a floor and one a ceiling:
 
 - **Suspicious landings, pinned at 0.** Every such landing on this tree was
   stale: #336 repaired all thirteen, and #344 repaired the two the narrowing
@@ -486,11 +486,28 @@ tests* above — two exact, one a floor:
   commit message. What the pin does **not** cover is an anchor landing on a live
   code line: that is checked for existence only. The four same-file anchors in
   the `suspiciousLanding()` comment are the clearest case — all four target
-  `if (…)` lines, invisible to blank, bare brace and comment line alike, and the
-  two naming the consecutive bare-brace and comment-line predicates differ by
-  one, so a single line inserted above the ladder re-points each at its
-  neighbour's test, green and wrong. `resolved` counts anchors that resolve, not
-  anchors that are checked.
+  `if (…)` lines, so while they are right no predicate here has anything to say
+  about them. **What that does not mean is that they go stale invisibly**, and
+  until #395 this paragraph said it did: it predicted that a single line inserted
+  above the ladder re-points each at its neighbour's test, "green and wrong".
+  #393 inserted exactly that line and the build went **red** and wrong. The
+  predicates classify the anchor's *new* landing, not the `if (…)` line it used
+  to name, and the ladder is interleaved with comment lines and closes its
+  hash-comment branch on a bare `}` — so an insertion above it re-points one or
+  two of the four onto lines the comment-line and bare-brace tests do catch,
+  depending both on where the line goes and on what it is. Measured: a live-code
+  line above the blank predicate's comment block catches two; directly above
+  `if (text === '')` it catches one, the bare-brace anchor, because the first
+  anchor then lands on the inserted line itself — and two again if that inserted
+  line is a comment. #393 measured three of four on its own tree. Either way the
+  landing count is exact, and the gate fails. Since #407 the drift check names
+  them individually as well.
+  The failure that produces is narrower than either prediction, and it is the
+  part worth knowing: it names whichever siblings happened to land on a comment
+  or a brace and says nothing about the ones that landed on live code, which are
+  stale too and ride in underneath a failure about their neighbours. A reviewer
+  who repairs what the gate named has repaired half the drift. `resolved` counts
+  anchors that resolve, not anchors that are checked.
 - **Uncheckable anchors.** Bare basenames more than one tracked file carries
   (`syncplay.ts` is both `src/main/syncplay.ts` and
   `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that
@@ -498,9 +515,34 @@ tests* above — two exact, one a floor:
   pin bounds how much the gate is blind to. Adding one reds the build; the fix
   is almost always to give the anchor a resolvable path rather than raise the
   number.
-- **Marked citations, floored at 12.** The only one-sided count here, because
-  the marked class can only shrink silently — see *The marked form* below.
-  Falling below the floor reds; rising above it is free.
+- **Marked citations, floored at 64.** One of the two one-sided counts here,
+  because the marked class can only shrink silently — see *The marked form*
+  below. Falling below the floor reds; rising above it is free. #395 raised the
+  floor from the 12 #372 set and nothing had moved since: 52 anchors of slack let
+  the verified population lose 81% of its members with the gate green, which is a
+  floor that bounds nothing.
+- **Unmarked upstream `.py` anchors, capped at 261.** The other one-sided count,
+  and the only one where *growth* is the hazard, so it is the floor's mirror image
+  and is compared the other way. Nothing in this repo resolves a Python target:
+  each of these is counted as unresolvable by construction, no landing predicate
+  ever runs on it, and its line number is never compared with anything. 261
+  anchors across 27 citing files, and **none of them carries a quote** — which is
+  why the count is of the *unmarked* ones rather than a widening of `marked`
+  above, whose printed line says "verified against their target" and would be
+  false by 261 in a single step. One more than the cap reds the PR that writes it,
+  which is the property a floor could not deliver: `analyze()` has no notion of
+  "added in this PR" and a floor only says the count must not fall, so a new
+  unmarked upstream anchor would arrive green. The 261 already here are
+  grandfathered rather than retrofitted under duress, and a retrofit lowers the
+  count, so the number ratchets toward zero. The hash-comment predicate learned
+  `.py` in the same change — 0 occurrences today, since no Python target resolves
+  for it to fire on, so it is covered by a fixture rather than by the tree and the
+  hole is closed before the population arrives. Re-measuring the cap has one
+  trap: a direct scan of tracked files returns **268**, because
+  `test/check-line-citations.test.ts` carries seven citation-shaped fixture
+  strings and sits in `EXCLUDED_PATHS`. Pin against what the gate counts, not
+  what a hand census does — the seven grew by six in this very change, and the
+  gate's 261 did not move.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full

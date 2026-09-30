@@ -311,6 +311,36 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [B].mp4'))).toBe(false)
   })
 
+  it('moveFileToColdByRelPath logs a failed move and resolves instead of rejecting', async () => {
+    // The merge tail does not guard this call: `handleMergeComplete` awaits it
+    // bare, and DownloadManager's merge pass drops the promise the handler
+    // returns. So a rejection here would skip the merge notification and the
+    // skip-analysis schedule, then land as an unhandled rejection. Same
+    // occupied-destination trick as the per-file case above.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x')
+    fs.mkdirSync(join(coldDir, 'Show', 'Show - 01 [A].mkv'), { recursive: true })
+    fs.writeFileSync(join(coldDir, 'Show', 'Show - 01 [A].mkv', 'occupied'), 'x')
+
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args)
+    })
+    try {
+      await expect(
+        svc.moveFileToColdByRelPath(join('Show', 'Show - 01 [A].mkv'))
+      ).resolves.toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+
+    // The failure was logged, naming the file, instead of escaping the mover.
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0][0])).toContain('Show - 01 [A].mkv')
+    // …and the unmovable source stayed in hot rather than vanishing.
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
+  })
+
   it('moveFileToColdByRelPath no-ops when cold is unconfigured or the file is gone', async () => {
     const { svc } = svcWithDirs()
     // Missing source: no throw, and no empty directory left in cold.

@@ -141,6 +141,7 @@ export interface ColdStorageService {
    * path — anime directory included, as `download-manager`'s `filename` fields
    * carry it. Bypasses the tag-less prefix scan `moveEpisodeToColdStorage` does,
    * which sweeps sibling translations of the same episode (#414, #416).
+   * A failed move is logged and resolves, like `moveEpisodeToColdStorage`'s.
    */
   moveFileToColdByRelPath(relPath: string): Promise<void>
   /** Move every finished file from the hot root into cold, with progress callback. */
@@ -577,13 +578,21 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
   async function moveFileToColdByRelPath(relPath: string): Promise<void> {
     const coldDir = getColdStorageDir()
     if (!coldDir) return
-    // Read the hot root the way every other cold-storage operation does, rather
-    // than trusting a path absolutised by the caller: DownloadManager fixes its
-    // downloadDir at construction, while getDownloadDir() re-reads storageMode
-    // / hotStorageDir / downloadDir from the store on every call.
+    // Resolve against the hot root the way every other cold-storage operation
+    // does (getDownloadDir() re-reads storageMode / hotStorageDir / downloadDir
+    // from the store), rather than trusting a path absolutised by the caller.
     const src = path.join(getDownloadDir(), relPath)
     if (!fs.existsSync(src)) return
-    await moveFileToCold(src, path.join(coldDir, relPath))
+    // Log and swallow, exactly as the per-file loop above does, so both movers
+    // share one failure policy (#414). handleMergeComplete does not guard this
+    // call, and DownloadManager's merge tail drops the promise it returns, so a
+    // throw here would skip the merge notification and the skip-analysis
+    // schedule and then surface as an unhandled rejection.
+    try {
+      await moveFileToCold(src, path.join(coldDir, relPath))
+    } catch (err) {
+      console.error(`[cold] Failed to move ${relPath} to cold storage:`, err)
+    }
   }
 
   async function moveAllFilesToColdStorage(

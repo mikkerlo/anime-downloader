@@ -5,7 +5,12 @@ import {
   resolveSeekTarget,
   resolveMkvSpawnTarget,
   sanitizeDuration,
-  waitingToastVisible
+  waitingToastVisible,
+  toPlayerTranslations,
+  walkEpisodeSteps,
+  resolveEpisodeTranslation,
+  type EpisodeStepOutcome,
+  type PlayerTranslationEntry
 } from '../../src/renderer/src/utils'
 
 // Regression coverage for #127: the slider must not write video.currentTime
@@ -278,5 +283,264 @@ describe('resolveMkvSpawnTarget', () => {
   it('keeps the room position when no duration is known to bound it', () => {
     expect(resolveMkvSpawnTarget(null, 99999).fromRoom).toBe(true)
     expect(resolveMkvSpawnTarget({ ...saved, duration: 0 }, 99999).fromRoom).toBe(true)
+  })
+})
+
+// #419. `PlayerView` has no mount harness (see the note above
+// `resolveMkvSpawnTarget`), so the two behaviours this issue is about live in
+// pure helpers and are asserted here: the walk that could not exit, and the
+// resolution chain that could not see an off-page episode.
+describe('toPlayerTranslations', () => {
+  const detail = {
+    translations: [
+      { id: 10, type: 'subRu', authorsSummary: 'A', height: 720, isActive: 1 },
+      { id: 11, type: 'voiceRu', authorsSummary: 'B', height: 480, isActive: 0 },
+      { id: 12, type: 'subRu', authorsSummary: 'C', height: 1080, isActive: 1 }
+    ] as Translation[]
+  }
+
+  it('maps the active translations and drops the inactive ones', () => {
+    expect(toPlayerTranslations(detail)).toEqual([
+      { id: 10, label: 'A', type: 'subRu', height: 720 },
+      { id: 12, label: 'C', type: 'subRu', height: 1080 }
+    ])
+  })
+
+  it('reads the declared height by default and the measured one when asked', () => {
+    // The producers' one legitimate disagreement, and the reason `getHeight` is
+    // a parameter: the detail view substitutes its probe cache here, the join
+    // path and the player have no cache to substitute. Same mapper, two
+    // rankings — which is why the asymmetry is written down in docs/player.md
+    // rather than left to be discovered at a `.sort((a, b) => b.height - a.height)`.
+    const probed = new Map([[10, 1440]])
+    expect(toPlayerTranslations(detail, (t) => probed.get(t.id) ?? t.height)).toEqual([
+      { id: 10, label: 'A', type: 'subRu', height: 1440 },
+      { id: 12, label: 'C', type: 'subRu', height: 1080 }
+    ])
+  })
+
+  it('returns an empty list for an episode whose detail was never loaded', () => {
+    // The off-page shape this whole issue is about, at its source.
+    expect(toPlayerTranslations(undefined)).toEqual([])
+  })
+})
+
+// The walk-exit test, and it is the one for the hang. `handleRemoteEpisodeChange`
+// stepped toward the room's episode while three reactive terms held, and a step
+// that released `navigating` without moving the index left all three true. Every
+// await on the way to that release resolved synchronously, so each iteration was
+// a microtask continuation and the queue drained to exhaustion — timers, input
+// and rAF all starved, with no exit but a translation pick and none at all after
+// the player closed.
+//
+// The three rows are a table because the outcome is a three-case union and the
+// asymmetry between the last two is the part a source scan cannot see: both
+// break, only one of them is allowed to have said anything to the user.
+describe('walkEpisodeSteps', () => {
+  // `cap` is what stands in for "forever" — a real infinite walk cannot be
+  // asserted on, so the harness gives `shouldStep` a bound and the assertion is
+  // on how many steps were actually taken. A helper that ignores the outcome
+  // runs to the cap; one that breaks takes exactly one step.
+  const CAP = 50
+
+  function harness(outcome: EpisodeStepOutcome): {
+    shouldStep: () => boolean
+    step: () => Promise<EpisodeStepOutcome>
+    taken: () => number
+    toasts: () => number
+    index: () => number
+  } {
+    const target = 3
+    const state = { index: 0, navigating: false }
+    let taken = 0
+    let toasts = 0
+    return {
+      // The real loop's three terms, minus the translation-epoch one that is
+      // orthogonal here: index not yet at the target, and nobody else owns
+      // `navigating`.
+      shouldStep: () => state.index !== target && !state.navigating && taken < CAP,
+      step: async () => {
+        taken++
+        state.navigating = true
+        await Promise.resolve()
+        if (outcome === 'moved') {
+          state.index++
+          state.navigating = false
+          return 'moved'
+        }
+        // Both non-moved outcomes release the flag WITHOUT advancing the index —
+        // verbatim what the silent `!resolvedTr` arm did, and why the loop's own
+        // terms cannot see the difference. The toast is the step's, not the
+        // walk's: `goToEpisode` owns the message so a stalled walk shows one, not
+        // two.
+        state.navigating = false
+        if (outcome === 'unreachable') toasts++
+        return outcome
+      },
+      taken: () => taken,
+      toasts: () => toasts,
+      index: () => state.index
+    }
+  }
+
+  it('keeps stepping while the steps move, and arrives', async () => {
+    const h = harness('moved')
+    expect(await walkEpisodeSteps(h.shouldStep, h.step)).toBe('arrived')
+    expect(h.taken()).toBe(3)
+    expect(h.index()).toBe(3)
+    expect(h.toasts()).toBe(0)
+  })
+
+  it('breaks on an unreachable step, and the user is told exactly once', async () => {
+    const h = harness('unreachable')
+    expect(await walkEpisodeSteps(h.shouldStep, h.step)).toBe('unreachable')
+    expect(h.taken()).toBe(1)
+    expect(h.toasts()).toBe(1)
+  })
+
+  it('breaks on a superseded step, and says nothing', async () => {
+    // The asymmetry. A superseded step did not fail — it was outranked by the
+    // user's own click or by the player closing — so a toast here would report
+    // the user's own action as an error.
+    const h = harness('superseded')
+    expect(await walkEpisodeSteps(h.shouldStep, h.step)).toBe('superseded')
+    expect(h.taken()).toBe(1)
+    expect(h.toasts()).toBe(0)
+  })
+})
+
+describe('resolveEpisodeTranslation', () => {
+  const onPage: PlayerTranslationEntry[] = [
+    { id: 100, label: 'Fansub', type: 'subRu', height: 1080 },
+    { id: 101, label: 'Fansub', type: 'subRu', height: 720 },
+    { id: 102, label: 'Studio', type: 'voiceRu', height: 1080 }
+  ]
+
+  function fetcher(result: PlayerTranslationEntry[]): {
+    fill: () => Promise<PlayerTranslationEntry[]>
+    calls: () => number
+  } {
+    let calls = 0
+    return {
+      fill: async () => {
+        calls++
+        return result
+      },
+      calls: () => calls
+    }
+  }
+
+  // THE red→green case. An off-page episode arrives with `translations: []` and
+  // a populated `downloadedTrIds` — the one shape arm (a) cannot use, because it
+  // looks the downloaded ids up inside the translation list — so all four arms
+  // read the empty array, nothing resolved, and the click did nothing at all.
+  // The user could see the app knew about the download elsewhere and still not
+  // reach it from the player.
+  it('fills an off-page target on demand and resolves its downloaded translation', async () => {
+    const f = fetcher(onPage)
+    const res = await resolveEpisodeTranslation(
+      { translations: [], downloadedTrIds: [101] },
+      { translationId: 100, type: 'subRu' },
+      f.fill
+    )
+    expect(res.outcome).toBe('resolved')
+    expect(f.calls()).toBe(1)
+    if (res.outcome !== 'resolved') return
+    expect(res.translation.id).toBe(101)
+    expect(res.forceLocal).toBe(true)
+    // The filled list is handed back, because `activeTranslations` has to be
+    // written from it too — the prop is a frozen snapshot and must not be mutated.
+    expect(res.translations).toEqual(onPage)
+  })
+
+  it('does not fetch for an episode the page already carries', async () => {
+    const f = fetcher(onPage)
+    const res = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [] },
+      { translationId: 100, type: 'subRu' },
+      f.fill
+    )
+    expect(f.calls()).toBe(0)
+    expect(res.outcome).toBe('resolved')
+  })
+
+  it('reports a failed fetch as unreachable rather than throwing', async () => {
+    // Network or API error has to leave by the same path as "no translations":
+    // the walk must stop on either, and the user must be told on either.
+    const res = await resolveEpisodeTranslation(
+      { translations: [], downloadedTrIds: [101] },
+      { translationId: 100, type: 'subRu' },
+      async () => {
+        throw new Error('offline')
+      }
+    )
+    expect(res.outcome).toBe('unreachable')
+  })
+
+  it('reports an empty fetch as unreachable', async () => {
+    const res = await resolveEpisodeTranslation(
+      { translations: [], downloadedTrIds: [101] },
+      { translationId: 100, type: 'subRu' },
+      async () => []
+    )
+    expect(res.outcome).toBe('unreachable')
+  })
+
+  // The chain itself is transplanted unchanged, so these pin its order rather
+  // than propose one. Arm (a)'s last term is deliberately unfiltered — see the
+  // author/type note in docs/player.md.
+  it('prefers the same downloaded id, then the same type by quality, then any downloaded', async () => {
+    const f = fetcher([])
+    const sameId = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [100, 101] },
+      { translationId: 100, type: 'subRu' },
+      f.fill
+    )
+    expect(sameId.outcome === 'resolved' && sameId.translation.id).toBe(100)
+
+    const sameType = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [101, 102] },
+      { translationId: 100, type: 'subRu' },
+      f.fill
+    )
+    expect(sameType.outcome === 'resolved' && sameType.translation.id).toBe(101)
+
+    // Nothing downloaded of the current type: the fallback crosses type on
+    // purpose, and `forceLocal` still holds because the pick is a local file.
+    const anyDownloaded = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [102] },
+      { translationId: 100, type: 'subRu' },
+      f.fill
+    )
+    expect(anyDownloaded.outcome === 'resolved' && anyDownloaded.translation.id).toBe(102)
+    expect(anyDownloaded.outcome === 'resolved' && anyDownloaded.forceLocal).toBe(true)
+  })
+
+  it('falls through the three streaming arms in order when nothing is downloaded', async () => {
+    const f = fetcher([])
+    // (b) same id
+    const sameId = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [] },
+      { translationId: 102, type: 'subRu' },
+      f.fill
+    )
+    expect(sameId.outcome === 'resolved' && sameId.translation.id).toBe(102)
+    expect(sameId.outcome === 'resolved' && sameId.forceLocal).toBe(false)
+
+    // (c) best quality of the same type
+    const sameType = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [] },
+      { translationId: 999, type: 'subRu' },
+      f.fill
+    )
+    expect(sameType.outcome === 'resolved' && sameType.translation.id).toBe(100)
+
+    // (d) first available
+    const first = await resolveEpisodeTranslation(
+      { translations: onPage, downloadedTrIds: [] },
+      { translationId: 999, type: 'signsRu' },
+      f.fill
+    )
+    expect(first.outcome === 'resolved' && first.translation.id).toBe(100)
   })
 })

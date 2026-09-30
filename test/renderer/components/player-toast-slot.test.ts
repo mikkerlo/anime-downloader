@@ -57,3 +57,49 @@ describe('PlayerView growing-.part toast slot', () => {
     )
   })
 })
+
+describe('PlayerView episode-navigation notice (#419)', () => {
+  // A dead-ended prev/next now says so. It must NOT say so through
+  // `remuxError`, which renders `.remux-overlay` across the video: the failed
+  // step leaves the CURRENT episode playing, so covering it would be a worse
+  // outcome than the failure being reported. This pins the surface, in the
+  // template, for the same reason as the scans above — there is no mount
+  // harness for this SFC.
+  it('reports a failed step in its own toast slot, not over the video', () => {
+    expect(SOURCE).toContain('<div v-if="navToast" class="nav-toast">')
+    // Its own row, because a room-driven walk can raise it while the syncplay
+    // toast still names the move that triggered the walk.
+    expect(SOURCE).toContain('.nav-toast { top: 180px;')
+  })
+
+  it('keeps the one wording for both silent arms and for the throw', () => {
+    // Three arms reach it — no usable translation (fetch included), a null
+    // `playerGetStreamUrl`, and the `catch` — and all three take the same
+    // constant. Hand-written strings at three sites is how one of them ends up
+    // saying nothing about the expired token that #354 found is the same null.
+    expect(SOURCE).toContain('const NAV_FAILED_MESSAGE =')
+    expect([...SOURCE.matchAll(/showNavToast\(NAV_FAILED_MESSAGE\)/g)]).toHaveLength(3)
+    expect(SOURCE).not.toMatch(/showNavToast\('/)
+  })
+
+  // Non-regression for the boundary, which is the one `unreachable` that must
+  // stay silent: #419 made `goToEpisode` toast on a step that cannot resolve,
+  // and the cheapest way to get that wrong is to toast at the caller instead,
+  // which would fire every time a user holds `next` at the last episode. The
+  // gates that make that unreachable from the UI are these two.
+  it('still hides both nav buttons for a single-episode anime', () => {
+    const navs = [...SOURCE.matchAll(/<EpisodeNavButton v-if="([^"]+)" direction="(\w+)"/g)]
+    expect(navs).toHaveLength(2)
+    for (const m of navs) expect(m[1]).toBe('props.allEpisodes.length > 1')
+    expect(navs.map((m) => m[2])).toEqual(['prev', 'next'])
+  })
+
+  it('still disables each nav button at its own end of the list and while navigating', () => {
+    expect(SOURCE).toContain(
+      '<EpisodeNavButton v-if="props.allEpisodes.length > 1" direction="prev" :disabled="!canPrev || navigating"'
+    )
+    expect(SOURCE).toContain(
+      '<EpisodeNavButton v-if="props.allEpisodes.length > 1" direction="next" :disabled="!canNext || navigating"'
+    )
+  })
+})

@@ -23,7 +23,7 @@ import {
 import * as shikimori from './shikimori'
 import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
-import { persistDownloadedEpisode } from './lib/downloaded-episodes'
+import { createEpisodeCompletionHandlers } from './lib/episode-completion'
 import { installShikimoriReferer } from './lib/shikimori-images'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
@@ -675,122 +675,37 @@ async function bootstrap(): Promise<void> {
   downloadManager.loadQueue()
   downloadManager.setFileLockCheck(playerLockService.isLocked)
 
+  const showBackgroundNotification = (title: string, body: string): void => {
+    if (BrowserWindow.getFocusedWindow() !== null) return
+    new Notification({ title, body }).show()
+  }
+
+  // The four completion tails live in `lib/episode-completion.ts` (#409) so they
+  // can be driven from a test; what stays here is the wiring, plus `notify` —
+  // the one seam that needs `BrowserWindow` / `Notification`.
+  const episodeCompletion = createEpisodeCompletionHandlers({
+    store,
+    downloadManager,
+    fileScanner,
+    coldStorageService,
+    skipAnalysisService,
+    mp4StatsService,
+    ffmpegReady,
+    getFfmpegPath,
+    getFfprobePath,
+    notify: showBackgroundNotification
+  })
   // Watch-while-downloading (#63): when the player releases a file, finish any
   // episode whose .part → final rename (and merge) was deferred under the lock.
-  const finalizeDeferredEpisodes = async (): Promise<void> => {
-    const readyTrIds = downloadManager.finalizeDeferred()
-    if (readyTrIds.length === 0) return
-    const groups = downloadManager.getEpisodeGroups()
-    const ffmpegInfo = await ffmpegReady
-    const autoMerge = store.get('autoMerge') as boolean
-    const ffmpegPath = getFfmpegPath()
-    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
-      const codec = (store.get('videoCodec') as string) || 'copy'
-      // The merge-complete hook below handles cold-move / notify / skip analysis.
-      await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
-    } else {
-      // Deliberately no 'each'-mode "Download complete" notification here:
-      // the user was literally watching this episode and just closed it.
-      for (const trId of readyTrIds) {
-        const group = groups.find((g) => g.translationId === trId)
-        if (!group) continue
-        fileScanner.invalidate(group.animeName)
-        if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
-          await coldStorageService.moveEpisodeToColdStorage(group.animeName, group.episodeLabel)
-        }
-        if (group.animeId > 0)
-          skipAnalysisService.scheduleAutoSkipAnalysis(group.animeId, group.animeName)
-      }
-    }
-  }
+  const finalizeDeferredEpisodes = episodeCompletion.finalizeDeferredEpisodes
   playerLockService.onRelease(() => {
     void finalizeDeferredEpisodes().catch((err) =>
       console.error('[download] Deferred finalize failed:', err)
     )
   })
 
-  const showBackgroundNotification = (title: string, body: string): void => {
-    if (BrowserWindow.getFocusedWindow() !== null) return
-    new Notification({ title, body }).show()
-  }
-
-  downloadManager.onEpisodeComplete(async (info) => {
-    const {
-      animeName,
-      episodeLabel,
-      animeId,
-      episodeInt,
-      translationId,
-      translationType,
-      author,
-      quality
-    } = info
-    fileScanner.invalidate(animeName)
-
-    // Repair path for episode metadata, not the primary writer any more (#412).
-    // The onVideoDownloaded hook below writes the entry as soon as the video
-    // item lands; this call exists for queues persisted before that hook did,
-    // where a `video: completed` + `subtitle: failed` group only reaches a write
-    // when the user finally retries the subtitle. It re-writes the same keyed
-    // entry from the same video item, so the two paths agree.
-    //
-    // Skipped when the group had no video item at all: `enqueue` pushes the
-    // subtitle outside the "usable stream" guard, so an embed with a
-    // `subtitlesUrl` and no playable stream reaches all-done with a payload
-    // copied off the subtitle. Writing that entry would put a ⬇ icon on an
-    // episode with nothing on disk.
-    if (info.hasVideo) {
-      persistDownloadedEpisode(store, {
-        animeId,
-        episodeInt,
-        translationId,
-        translationType,
-        author,
-        quality
-      })
-    }
-
-    if (downloadManager.getMergeStatus(translationId) === 'deferred') {
-      // The player is watching this episode from its .part (#63) — the file
-      // can't be renamed or merged yet. finalizeDeferredEpisodes() runs the
-      // rest of this tail once the player releases the file.
-      return
-    }
-
-    const ffmpegInfo = await ffmpegReady
-    const autoMerge = store.get('autoMerge') as boolean
-    const ffmpegPath = getFfmpegPath()
-    if (autoMerge && ffmpegInfo.available && ffmpegPath) {
-      const codec = (store.get('videoCodec') as string) || 'copy'
-      await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
-    } else {
-      // Auto-move to cold if merge is disabled
-      if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
-        await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
-      }
-      const mode = store.get('notificationMode') as string
-      if (mode === 'each') {
-        showBackgroundNotification('Download complete', `${animeName} \u2014 ${episodeLabel}`)
-      }
-      // With autoMerge off, the .mp4 is the final artifact \u2014 trigger here.
-      // With autoMerge on, the merge-complete hook below triggers against the
-      // .mkv instead, so we don't double-fingerprint.
-      if (animeId > 0) skipAnalysisService.scheduleAutoSkipAnalysis(animeId, animeName)
-    }
-  })
-
-  downloadManager.onMergeComplete(async ({ animeName, animeId, episodeLabel }) => {
-    fileScanner.invalidate(animeName)
-    // Auto-move to cold after merge
-    if (coldStorageService.isAdvanced() && (store.get('autoMoveToCold') as boolean)) {
-      await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
-    }
-    const mode = store.get('notificationMode') as string
-    if (mode === 'each') {
-      showBackgroundNotification('Merge complete', `${animeName} \u2014 ${episodeLabel}`)
-    }
-    if (animeId > 0) skipAnalysisService.scheduleAutoSkipAnalysis(animeId, animeName)
-  })
+  downloadManager.onEpisodeComplete(episodeCompletion.handleEpisodeComplete)
+  downloadManager.onMergeComplete(episodeCompletion.handleMergeComplete)
 
   downloadManager.onQueueComplete(() => {
     const mode = store.get('notificationMode') as string
@@ -799,25 +714,16 @@ async function bootstrap(): Promise<void> {
     }
   })
 
-  downloadManager.onVideoDownloaded((filePath, item) => {
-    // Episode metadata lands with the video item, not with the group (#412). A
-    // subtitle that failed its three attempts used to hold `allDone` false
-    // forever, so the video sat on disk showing ⬇ with no Play and no Delete.
-    //
-    // Two placement constraints, both load-bearing. It must stay ABOVE the
-    // .mp4 filter on the next line, which belongs to the mp4-stats consumer
-    // only. And it must stay INSIDE this callback rather than in a second
-    // `onVideoDownloaded(...)` call: the manager holds one callback slot, not a
-    // list, so registering again would silently unregister mp4 stats.
-    persistDownloadedEpisode(store, item)
-    if (!filePath.toLowerCase().endsWith('.mp4')) return
-    void mp4StatsService.recordCheck(filePath, {
-      animeId: item.animeId,
-      animeName: item.animeName,
-      episodeInt: item.episodeInt,
-      episodeLabel: item.episodeLabel
-    })
-  })
+  // One callback slot, not a list: a second `onVideoDownloaded(...)` anywhere
+  // would silently unregister this one, taking both the metadata write and the
+  // mp4-faststart probe with it. That is the one constraint here that is about
+  // the wiring rather than about the tail, so it keeps a counted source-text
+  // guard of its own — `registers onVideoDownloaded exactly once`, in
+  // `test/services/download-manager-episode-metadata.test.ts`, which is where
+  // that consumer pair is exercised end to end. The tail's own
+  // write-above-the-filter ordering is a different claim and is asserted
+  // behaviourally, in `test/lib/episode-completion.test.ts`.
+  downloadManager.onVideoDownloaded(episodeCompletion.handleVideoDownloaded)
 
   // Register IPC BEFORE creating the window: the renderer mounts as soon as
   // the window loads, and it used to race a multi-second awaited ensureFfmpeg

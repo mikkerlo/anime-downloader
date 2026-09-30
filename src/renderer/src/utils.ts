@@ -199,3 +199,156 @@ export function sanitizeDuration(d: number): number {
 function isKnownDuration(d: number | undefined): d is number {
   return typeof d === 'number' && Number.isFinite(d) && d > 0
 }
+
+// --- episode navigation (#419) -------------------------------------------------
+
+// The shared `EpisodeDetail` → player-translation mapper. Both producers of
+// `PlayerEpisode.translations` carried their own copy — `buildAllEpisodes` in
+// `use-episode-downloads.ts` and a private `toPlayerTranslations` in
+// `use-open-episode.ts` — and the player's on-demand page-window fetch below
+// would have been a third. It lives here rather than in either composable
+// because a pure mapper is the wrong reason for one composable to import
+// another.
+//
+// `getHeight` is the one place the two producers legitimately disagree, so it is
+// a parameter rather than a hidden constant. The detail view has a probe cache
+// (`getRealHeight` in `use-episode-list.ts`) that replaces the declared height
+// with a measured one; the join path and the player have no such cache and read
+// the declared `t.height`. The default is the declared height, so a caller that
+// wants the measured one has to ask.
+export type PlayerTranslationEntry = { id: number; label: string; type: string; height: number }
+
+export function toPlayerTranslations(
+  detail: { translations: Translation[] } | undefined,
+  getHeight: (tr: Translation) => number = (tr) => tr.height
+): PlayerTranslationEntry[] {
+  if (!detail) return []
+  return detail.translations
+    .filter((t) => t.isActive === 1)
+    .map((t) => ({ id: t.id, label: t.authorsSummary, type: t.type, height: getHeight(t) }))
+}
+
+// What one `goToEpisode` call did, as seen by whoever asked for it.
+//
+// `moved` means the `activeEpisodeIndex` write happened, and it is the ONLY
+// outcome a multi-step walk may continue past. `unreachable` means the step
+// failed on its own terms and the user has been told. `superseded` means the
+// step was outranked — the component unmounted, or a newer run took ownership of
+// `navigating` — which is not a failure and must stay silent.
+export type EpisodeStepOutcome = 'moved' | 'unreachable' | 'superseded'
+
+// The pure form of `PlayerView`'s `stepTowards` walk (#419). Extracted because
+// the bug it fixes is invisible to a source scan and unreachable from a mount:
+// `handleRemoteEpisodeChange` looped on three reactive terms only, and a step
+// that released `navigating` without moving the index left all three true, so
+// the walk re-entered forever. Every await on the way to that release resolved
+// synchronously, so the microtask queue drained to exhaustion and the renderer
+// froze with timers, input and rAF all starved.
+//
+// The outcome is the fourth term and the only one that can see the difference.
+// The caller keeps its own three so a pick or an unmount still stops the walk
+// through the route it already had.
+//
+// It deliberately does NOT toast. `goToEpisode` owns the message, because the
+// buttons, the keyboard and auto-advance all need it at the site anyway, and a
+// second one here would show two toasts for one stalled walk.
+export async function walkEpisodeSteps(
+  shouldStep: () => boolean,
+  step: () => Promise<EpisodeStepOutcome>
+): Promise<EpisodeStepOutcome | 'arrived'> {
+  while (shouldStep()) {
+    const outcome = await step()
+    if (outcome !== 'moved') return outcome
+  }
+  return 'arrived'
+}
+
+export type EpisodeResolutionTarget = {
+  translations: PlayerTranslationEntry[]
+  downloadedTrIds: number[]
+}
+
+export type EpisodeResolution =
+  | {
+      outcome: 'resolved'
+      translation: PlayerTranslationEntry
+      translations: PlayerTranslationEntry[]
+      forceLocal: boolean
+    }
+  | { outcome: 'unreachable' }
+
+// `goToEpisode`'s resolution chain (a)-(d), plus the on-demand fill that makes
+// it work off the current page (#419).
+//
+// The chain itself is unchanged and is documented at docs/player.md's
+// `## Episode Navigation` section: (a) any downloaded translation on the target
+// — same id first, then same type by quality, then any downloaded — (b) the
+// same translation id as a stream, (c) the best of the same type, (d) the first
+// available. What changed is the list it runs over. `allEpisodes` names every
+// filtered episode but sources `translations` from a map holding only the
+// current 30-episode page, so every off-page entry arrived with
+// `translations: []` while `downloadedTrIds` stayed populated from the
+// anime-wide metadata — the one shape arm (a) cannot use, because it looks the
+// downloaded ids up INSIDE the translation list. All four arms then read the
+// empty array and nothing resolved.
+//
+// `fillTranslations` is injected rather than called directly so this stays pure
+// and testable: `PlayerView` passes a cache-first page-window fetch. A rejection
+// is `unreachable`, not a throw, because a network failure and "no translations"
+// are the same outcome to the user and must leave by the same path — the walk
+// in `walkEpisodeSteps` has to stop on either.
+export async function resolveEpisodeTranslation(
+  target: EpisodeResolutionTarget,
+  current: { translationId: number | null; type: string },
+  fillTranslations: () => Promise<PlayerTranslationEntry[]>
+): Promise<EpisodeResolution> {
+  let translations = target.translations
+  if (translations.length === 0) {
+    try {
+      translations = await fillTranslations()
+    } catch {
+      return { outcome: 'unreachable' }
+    }
+  }
+  const { downloadedTrIds } = target
+  let resolvedTr: PlayerTranslationEntry | null = null
+  let forceLocal = false
+
+  // (a) Prefer any downloaded translation on the target episode
+  if (downloadedTrIds.length > 0) {
+    const sameIdDownloaded = translations.find(
+      (t) => t.id === current.translationId && downloadedTrIds.includes(t.id)
+    )
+    if (sameIdDownloaded) {
+      resolvedTr = sameIdDownloaded
+    } else {
+      const downloadedTrs = translations.filter((t) => downloadedTrIds.includes(t.id))
+      const sameTypeDownloaded = downloadedTrs
+        .filter((t) => t.type === current.type)
+        .sort((a, b) => b.height - a.height)
+      resolvedTr = sameTypeDownloaded[0] || downloadedTrs[0] || null
+    }
+    if (resolvedTr) forceLocal = true
+  }
+
+  // (b) Same translationId if available in the target episode (stream)
+  if (!resolvedTr) {
+    resolvedTr = translations.find((t) => t.id === current.translationId) || null
+  }
+
+  // (c) Best quality of the same type (stream)
+  if (!resolvedTr) {
+    const sameType = translations
+      .filter((t) => t.type === current.type)
+      .sort((a, b) => b.height - a.height)
+    resolvedTr = sameType[0] || null
+  }
+
+  // (d) First available translation (stream)
+  if (!resolvedTr) {
+    resolvedTr = translations[0] || null
+  }
+
+  if (!resolvedTr) return { outcome: 'unreachable' }
+  return { outcome: 'resolved', translation: resolvedTr, translations, forceLocal }
+}

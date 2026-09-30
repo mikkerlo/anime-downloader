@@ -578,9 +578,12 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
 
     // Filter the listing rather than iterating `wanted` and moving each name: a
     // missing candidate is the normal case (no `.mp4` survives a merge, legacy
-    // twins usually do not exist), and `moveFileToCold`'s `copyFile` fallback
-    // rejects ENOENT for a name that is not on disk. Filtering also keeps the
-    // `.part` shadow guard below reading the directory it already listed.
+    // twins usually do not exist). Iterating would not abandon the pass — the
+    // per-file `catch` below is #414's — but `moveFileToCold`'s `copyFile`
+    // fallback rejects ENOENT for a name that is not on disk, so every absent
+    // candidate would log `[cold] Failed to move … ENOENT` and normal operation
+    // would read as an error. Filtering also keeps the `.part` shadow guard
+    // below reading the directory it already listed.
     try {
       const files = fs.readdirSync(hotAnimeDir)
       for (const file of files) {

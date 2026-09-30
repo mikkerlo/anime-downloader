@@ -365,6 +365,23 @@ scans read comment-stripped source; negative (`not.toContain`) scans read raw,
 where stripping could only loosen them. See #302 and #321, and the per-site
 notes in that test file.
 
+The third way out is to stop scanning: a text guard on `src/main/index.ts` exists
+only because that file boots Electron at module scope and no test can import it,
+so extracting the code it guards converts the guard into an ordinary assertion.
+#409 did that for the four download-completion tails, now
+`src/main/lib/episode-completion.ts` and covered by
+`test/lib/episode-completion.test.ts`. Two of the three constraints the old
+`wiring placement` block in `test/services/download-manager-episode-metadata.test.ts`
+pinned as text were strictly weaker than what replaced them: "the metadata write
+sits above the `.mp4` early return" became "a `.mkv` path still persists and is
+not probed", and "the repair write is gated on `info.hasVideo`" became a pair of
+calls whose store contents are compared. The third one, that the manager's single
+`onVideoDownloaded` slot is claimed exactly once, is about the wiring rather than
+about any tail, so it stays a counted text scan — there is nothing to import that
+would answer it. That is the general shape: extraction removes the text guards
+that were standing in for behaviour, and leaves the ones that are genuinely
+about where a call site is.
+
 ## Typechecking the test tree
 
 `npm run typecheck` is three projects, not two: `tsconfig.node.json` (main +

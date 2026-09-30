@@ -138,6 +138,16 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(svc.episodeFileExists('Show', '99', '')).toBe(false)
   })
 
+  it('episodeFileExists finds an empty-author tag, which is what download-manager writes', () => {
+    const { svc } = svcWithDirs()
+    // download-manager appends ` [${authorTag}]` unconditionally, so an empty author
+    // lands on disk as `Show - NN [].ext`. Both extensions are candidates.
+    writeFile(hotDir, 'Show', 'Show - 03 [].mkv')
+    expect(svc.episodeFileExists('Show', '3', '')).toBe(true)
+    writeFile(hotDir, 'Show', 'Show - 04 [].mp4')
+    expect(svc.episodeFileExists('Show', '4', '')).toBe(true)
+  })
+
   it('episodeHasInProgressDownload detects a .part file', () => {
     const { svc } = svcWithDirs()
     expect(svc.episodeHasInProgressDownload('Show', '1')).toBe(false)
@@ -166,6 +176,23 @@ describe('ColdStorageService write-side disk ops', () => {
     fs.mkdirSync(hotDir, { recursive: true })
     svc.pruneDownloadedEpisode(7, '1', 42, 'Show', 'A')
     expect(Object.keys(store.get<Record<string, unknown>>('downloadedEpisodes')!)).toEqual([])
+  })
+
+  it('pruneDownloadedEpisode keeps an empty-author entry whose tagged file is on disk', () => {
+    const { svc, store } = svcWithDirs({
+      downloadedEpisodes: {
+        '7:3:42': { translationType: 'sub', author: '', quality: 720, translationId: 42 },
+        '7:3': { translationType: 'sub', author: '', quality: 720, translationId: 42 }
+      }
+    })
+
+    // The video is on disk under the empty tag download-manager writes → prune must no-op
+    writeFile(hotDir, 'Show', 'Show - 03 [].mkv')
+    svc.pruneDownloadedEpisode(7, '3', 42, 'Show', '')
+    expect(Object.keys(store.get<Record<string, unknown>>('downloadedEpisodes')!).sort()).toEqual([
+      '7:3',
+      '7:3:42'
+    ])
   })
 
   it('deleteEpisodeFiles untargeted: removes every base-matching file across hot+cold', () => {

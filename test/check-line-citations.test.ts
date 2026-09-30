@@ -38,6 +38,7 @@ type Result = {
     baseText: string
   }[]
   driftChecked: number
+  driftExemptNewFile: { at: string; cited: string; target: string }[]
   driftBase: string | null
   driftEnabled: boolean
   ambiguous: { at: string; cited: string; candidates: string[] }[]
@@ -1170,6 +1171,232 @@ describe('check-line-citations', () => {
     expect(added.drift).toEqual([])
     expect(added.driftChecked).toBe(0)
     expect(added.driftEnabled).toBe(true)
+  })
+
+  // --- the base-free exemption, made visible (#420) ----------------------------
+  //
+  // #415 closed citation drift for anchors the base carries. It cannot close it
+  // for an anchor in a file the branch ADDS: `baseCiting` is null, the first term
+  // of the precondition fails, and the anchor is never compared and never counted
+  // in `driftChecked`. #417 shipped exactly that shape — a new test file whose
+  // comment cited `src/main/download-manager.ts` at the line then holding
+  // `item.quality = best.height`, and bringing `main` in inserted eight lines
+  // above it — and a manual sweep of the merge's nine files caught it because
+  // nothing in this gate could. `suspiciousLanding()` missed it too: the stale
+  // number landed on a `try {`, which is not blank, not a closer, not a comment
+  // marker. Nothing about the landing was suspicious; it simply named the wrong
+  // statement.
+  //
+  // So the bucket is ADVISORY and carries no pin, unlike every other class here.
+  // It is base-relative, where `SUSPICIOUS_LANDING_PIN` and `UNCHECKABLE_PIN`
+  // count properties of the head tree alone: on `main` the base tree and the head
+  // tree are the same object, so it measures 0 by construction, and an exact pin
+  // at 0 would red every PR that adds a cited test file with "edit the pin" as the
+  // only repair. That is the hard-fail-with-no-escape shape #407 spent three
+  // rounds removing. The three cases below therefore assert `ok` is untouched and
+  // never assert a count against a pin.
+  //
+  // Every assertion here is an exact list or a length, never a predicate:
+  // `bucket.every(...)` is true of the empty bucket, so it passes precisely when
+  // collection silently stopped happening. That is a property of the bug under
+  // repair rather than a style preference — the whole issue is a check that was
+  // green because it never ran, and a vacuous assertion here would be the same
+  // defect one level up.
+
+  // The base line the #417 anchor was written against, and the line the merge
+  // pushed it down to.
+  const MOVED = '  item.quality = best.height'
+  const movedBase = { 'src/svc.ts': ['const best = pick()', MOVED, ''].join('\n') }
+  const movedHead = ['const best = pick()', 'const inserted = 0', MOVED, ''].join('\n')
+
+  it('collects an anchor whose citing file is new on the branch, which drift cannot compare', () => {
+    // THE #417 SHAPE, at fixture scale. The citing file is absent from the base;
+    // the target is present in BOTH corpora, and its base line 2 content sits at
+    // head line 3.
+    const head: Corpus = {
+      'src/svc.ts': movedHead,
+      'test/new.test.ts': '// the quality write (src/svc.ts:2)'
+    }
+
+    // Both shapes asserted rather than left to the arithmetic — a fixture whose
+    // own line numbers are wrong would prove the opposite of what it claims.
+    expect(movedBase['src/svc.ts'].split('\n')[1]).toBe(MOVED)
+    expect(head['src/svc.ts'].split('\n')[2]).toBe(MOVED)
+
+    // The pre-#407 reader-less path, per this section's convention: green, as it
+    // is on every fixture here.
+    const old = analyze({
+      files: Object.keys(head),
+      readLines: (p: string) => head[p].split('\n'),
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+    expect(old.driftEnabled).toBe(false)
+    expect(report(old, noPins).ok).toBe(true)
+
+    const r = runDrift(movedBase, head)
+
+    // The old behaviour of the drift path itself, which is the half that makes
+    // the diff self-documenting: it compared nothing and said nothing, and the
+    // landing heuristic had nothing to say either.
+    expect(r.drift).toEqual([])
+    expect(r.driftChecked).toBe(0)
+    expect(r.suspicious).toEqual([])
+
+    // The new behaviour: the anchor is collected, and named.
+    expect(r.driftExemptNewFile).toEqual([
+      { at: 'test/new.test.ts:1', cited: 'src/svc.ts:2', target: 'src/svc.ts' }
+    ])
+  })
+
+  it('collects every anchor in a citing file the branch renamed into place', () => {
+    // The loudest case the advisory has, and chosen rather than incidental: `null`
+    // covers a file renamed into place as well as one added, so a `git mv` of a
+    // heavily-cited test file puts ALL of its anchors in the bucket on a PR that
+    // wrote no citations at all. Nothing is wrong when that happens, which is
+    // exactly why it needs a fixture and a line in the docs.
+    //
+    // The target keeps its path in both corpora, and that is load-bearing rather
+    // than incidental setup: rename the target too and every anchor here drops to
+    // the uncollected `baseTarget === null` arm, the bucket comes back empty, and
+    // a predicate assertion would pass on it. The exact list below fails loudly
+    // instead.
+    const svc = ['const a = 1', '  const total = a + b', 'const c = 3', ''].join('\n')
+    const citing = ['// the sum (src/svc.ts:2)', '// the tail (src/svc.ts:3)'].join('\n')
+    const r = runDrift(
+      { 'src/svc.ts': svc, 'test/old-name.test.ts': citing },
+      { 'src/svc.ts': svc, 'test/new-name.test.ts': citing }
+    )
+
+    // Two anchors planted, two collected — asserted as a list and as a length,
+    // because the length is what goes to 0 if the target is ever renamed too.
+    expect(r.driftExemptNewFile).toEqual([
+      { at: 'test/new-name.test.ts:1', cited: 'src/svc.ts:2', target: 'src/svc.ts' },
+      { at: 'test/new-name.test.ts:2', cited: 'src/svc.ts:3', target: 'src/svc.ts' }
+    ])
+    expect(r.driftExemptNewFile).toHaveLength(2)
+    expect(r.driftChecked).toBe(0)
+  })
+
+  it('leaves an anchor whose TARGET the branch also adds or renames out of the bucket', () => {
+    // Both files new on the branch. There is no base content for the target
+    // either, so there is nothing the advisory could tell the author to compare
+    // against, and collecting it would turn the bucket into noise. A renamed
+    // target reaches this arm too, and is right to: a rename that broke the
+    // anchor is already the resolver's business.
+    //
+    // `toEqual([])`, not `expect(bucket.some(...)).toBe(false)`. A negative
+    // assertion cannot be made non-vacuous by itself — it passes just as happily
+    // when collection is broken outright — so it earns its teeth from the two
+    // positive cases above and from the mutation control: drop `baseTarget !==
+    // null` from the new arm and THIS is the case that reds, while every positive
+    // case stays green. That asymmetry is why it lives in this suite rather than
+    // in a file of its own.
+    const r = runDrift(
+      {},
+      {
+        'src/svc.ts': ['const a = 1', '  const total = a + b', ''].join('\n'),
+        'test/new.test.ts': '// the sum (src/svc.ts:2)'
+      }
+    )
+
+    // The anchor RESOLVES in the head, which is what gives the mutation control
+    // something to pull into the bucket. Resolution happens before the drift
+    // block, so an anchor that does not resolve reaches no arm at all: the case
+    // passes, the mutation run passes, and nothing is proven.
+    expect(r.resolved.map((x) => x.cited)).toEqual(['src/svc.ts:2'])
+    expect(r.driftExemptNewFile).toEqual([])
+    expect(r.driftChecked).toBe(0)
+  })
+
+  it('does not fail the gate on a non-empty exempt bucket', () => {
+    // There is genuinely no way to tell a stale anchor from a correct brand-new
+    // one without history, so this must not become a hard failure. The advisory
+    // goes to `out`, never to `err`: `err` is non-empty only when something
+    // failed, and CI log readers skim stderr as "what broke".
+    //
+    // Every target in this fixture is present in both corpora, deliberately. A
+    // positive fixture that casually cited a second head-only file would hold a
+    // latent `baseTarget === null` anchor, the mutation control would pull it in,
+    // and the case would red for fixture contamination while reading as "the
+    // wrong mutation was applied".
+    const svc = ['const a = 1', '  const total = a + b', ''].join('\n')
+    const r = runDrift(
+      { 'src/svc.ts': svc },
+      { 'src/svc.ts': svc, 'test/new.test.ts': '// the sum (src/svc.ts:2)' }
+    )
+
+    expect(r.driftExemptNewFile).toHaveLength(1)
+    const { ok, err } = report(r, noPins)
+    expect(ok).toBe(true)
+    expect(err).toEqual([])
+  })
+
+  it('lists each exempt anchor in scan order rather than printing a count', () => {
+    // A bare "2 drift-exempt" gives the author nothing to act on, so the advisory
+    // names the lines, in the `at: cites \`cited\`` shape the resolve failures
+    // use. The order is SCAN order, matching how those failures are emitted; the
+    // fixture's keys are deliberately not alphabetical, so a sort would fail here
+    // rather than pass by coincidence.
+    const svc = ['const a = 1', '  const total = a + b', ''].join('\n')
+    const r = runDrift(
+      { 'src/svc.ts': svc },
+      {
+        'src/svc.ts': svc,
+        'test/zebra.test.ts': '// the sum (src/svc.ts:2)',
+        'test/alpha.test.ts': '// the sum again (src/svc.ts:2)'
+      }
+    )
+
+    expect(r.driftExemptNewFile.map((e) => e.at)).toEqual([
+      'test/zebra.test.ts:1',
+      'test/alpha.test.ts:1'
+    ])
+
+    const { out } = report(r, noPins)
+    expect(out.filter((l: string) => l.includes('cites `src/svc.ts:2`'))).toEqual([
+      '    test/zebra.test.ts:1: cites `src/svc.ts:2`',
+      '    test/alpha.test.ts:1: cites `src/svc.ts:2`'
+    ])
+    // And it names the remedy, not just the anchors.
+    expect(out.join('\n')).toContain('("quoted text")')
+    // On its own line, after the drift line, never folded into it: `driftChecked`
+    // keeps the meaning the `scanned`-against-`compared` cross-checks in PR
+    // descriptions rely on.
+    const driftLine = out.findIndex((l: string) => l.includes('anchor(s) compared against'))
+    const bucketLine = out.findIndex((l: string) => l.includes('drift-exempt'))
+    expect(driftLine).toBeGreaterThan(-1)
+    expect(bucketLine).toBe(driftLine + 1)
+    expect(out[driftLine]).toContain('0 anchor(s) compared against base')
+  })
+
+  it('still verifies a marked quote on an exempt anchor, and names the corrected line', () => {
+    // THE REMEDY THE ADVISORY RECOMMENDS, asserted rather than asserted about.
+    // Quote verification runs OUTSIDE the base guard, so the exemption cannot
+    // suppress it: on the #417 shape a marked anchor fails and names the line the
+    // content moved to. It reports the correction; it does not apply it. Without
+    // this case the advisory would be recommending something unverified.
+    const head = {
+      'src/svc.ts': movedHead,
+      'test/new.test.ts': '// the write (src/svc.ts:2 ("item.quality = best.height"))'
+    }
+
+    const r = runDrift(movedBase, head)
+
+    expect(r.marked).toHaveLength(1)
+    expect(r.quoteFailures).toHaveLength(1)
+    expect(r.quoteFailures[0].elsewhere).toEqual([3])
+
+    // Exempt all the same: the two mechanisms are independent, and the anchor is
+    // still listed so the author can see which one the quote rescued.
+    expect(r.driftChecked).toBe(0)
+    expect(r.driftExemptNewFile).toEqual([
+      { at: 'test/new.test.ts:1', cited: 'src/svc.ts:2', target: 'src/svc.ts' }
+    ])
+
+    const { ok, err } = report(r, noPins)
+    expect(ok).toBe(false)
+    expect(err.join('\n')).toContain('drift — it is at src/svc.ts:3')
   })
 
   it('truncates a multi-thousand-character base line in the failure message', () => {

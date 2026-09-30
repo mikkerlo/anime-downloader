@@ -606,7 +606,7 @@ check, because resolution is precisely the part that already passes:
   population with a legitimate steady state. This one has none, and a pin would
   do nothing but record how many wrong numbers the tree is currently carrying.
 
-**What it does not catch**, all three by construction rather than by oversight:
+**What it does not catch**, all four by construction rather than by oversight:
 
 - **A hand retarget that lands short.** Editing the number changes the token, the
   token is the precondition, and so the gate has nothing to compare and says
@@ -622,6 +622,74 @@ check, because resolution is precisely the part that already passes:
   meaning moved — the function around it renamed, the condition it sits under
   inverted — is not a string comparison away from being caught, and nothing in
   #407 changes that.
+- **An anchor in a file the base does not carry.** The unchanged-token
+  precondition needs base content for the *citing* file, and a file this branch
+  adds has none, so the anchor reaches no comparison at all. Since #420 that is no
+  longer silent: those anchors are listed on their own advisory line, below.
+
+**The exemption for a new citing file is not a clearance, so the gate now names
+it.** An anchor in a file the branch adds was measured against the branch's own
+earlier state, which a base-vs-head comparison cannot see, so it may already have
+gone stale before the base was merged in. That is not a theoretical concern. #417
+added `test/services/download-manager-episode-metadata.test.ts`, whose comment
+cited `src/main/download-manager.ts` at line 533, the write of
+`item.quality = best.height`. Bringing `main` in put #410's eight added lines
+above it and the write moved to line 541. Drift skipped it because the base did
+not carry the citing file, and the landing heuristic missed it too: post-merge,
+line 533 is a `try {`, which is not blank, not a closer and not a comment marker.
+Nothing about the landing was suspicious; it simply named the wrong statement. A
+manual sweep of the merge's nine files caught it, and nothing in the gate would
+have.
+
+Since #420 those anchors print on their own advisory line, immediately after the
+`drift:` line and never folded into it — the scanned-against-compared cross-checks
+in PR descriptions read `driftChecked` as it stands, and a third number absorbed
+into it would change what it means. Each anchor is listed in the `at: cites …`
+shape the resolve failures use, in scan order, followed by the remedy. Reading it:
+
+- **It covers new files only**, so `0` here does **not** mean this branch's new
+  anchors were checked. An anchor a branch adds to a file the base *does* carry
+  fails the **third** term of the precondition instead — the base parsed no such
+  token — and is not in this bucket. That arm cannot tell a brand-new anchor from
+  a deliberate hand retarget, which is #407's stated limit, so collecting it would
+  fill the bucket with retargets. Separating the two populations is worth its own
+  issue and is deliberately not attempted here.
+- **A renamed citing file lands in the bucket wholesale.** Absent-from-the-base
+  covers a file this branch renamed into place as well as one it added, so a
+  `git mv` of a heavily-cited test file puts every one of its anchors here on a PR
+  that wrote no citations at all. Nothing is wrong when that happens — the base
+  cannot vouch for them under the new path — but it is the one way the advisory
+  gets loud on a PR that never touched a citation, so it is documented rather than
+  left to be discovered. An unexplained wall of advisory lines is how an advisory
+  becomes ignorable.
+- **An anchor whose *target* the branch adds or renames is not collected.** There
+  is no base content for the target either, so there is nothing an author could be
+  told to compare against, and a rename that broke the anchor is already the
+  resolver's business.
+- **The remedy is the marked form**, and it reaches through the exemption because
+  quote verification runs outside the base guard. On the shape above, a marked
+  anchor would have **failed** at line 533 and **named line 541** as the drift
+  target. It reports the correction rather than applying it, which is the same
+  bargain the rest of this gate offers.
+- **The bucket is deliberately unpinned, and a pin should not be added later.**
+  `SUSPICIOUS_LANDING_PIN` and `UNCHECKABLE_PIN` count properties of the head
+  tree, so a value measured on `main` stays valid on every branch. This count is
+  base-relative, for the same diff-scoping reason as the bullet above, and on
+  `main` the base tree and the head tree are the same object — so it measures zero
+  by construction rather than by luck, while being non-zero on precisely the PRs
+  it exists to notice. An exact pin at zero therefore reds every PR that adds a
+  cited test file, with "edit the pin" as the only repair; a `MARKED_PIN`-shaped
+  floor at zero is unfalsifiable, and a ceiling at zero is the exact pin again.
+  Advisory is the design here, not a fallback.
+- **A merge is the common case, not the only one.** The within-branch variant —
+  commit 1 adds the anchor, commit 3 shifts the target, no merge involved — lands
+  in the same bucket, and it is also the case this route cannot catch even in
+  principle. The complete fix compares against the state the author measured,
+  found by walking the citing file's own history, and CI blocks it: neither
+  `actions/checkout` step in `.github/workflows/check.yml` sets `fetch-depth`, so
+  the clone is depth 1 and there is no history to walk. **The bucket therefore
+  does not mean "checked."** It means this is where a stale new-file anchor would
+  be hiding.
 
 `test/check-line-citations.test.ts` drives both trees as synthetic corpora
 through injected readers, so nothing in the suite shells out to git, and the

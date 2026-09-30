@@ -2244,6 +2244,7 @@ async function fetchEpisodeWindowTranslations(
     };
     const cached = await window.api.getEpisodesBatchCached(wanted, props.animeId);
     store(cached.data);
+    if (unmounted) return [];
     const missing = wanted.filter((id) => !fetchedTranslations.has(id));
     if (missing.length > 0) {
       // Let this reject: the caller maps a failed fetch to `unreachable`, which
@@ -2537,6 +2538,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutco
     // guarded clear #302's classifier expects at a post-resume site.
     if (navigationEpoch !== myNav) return 'superseded';
     if (navigationEpoch === myNav) navigating.value = false;
+    if (unmounted) return committed ? 'moved' : 'superseded';
     // A throw below the index write is a #354-shaped failure of the SOURCE, with
     // the UI already switched — so `moved`, and the walk keeps going. Above it,
     // nothing changed and the step genuinely did not happen. Both get the toast:

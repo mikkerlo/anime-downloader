@@ -1653,6 +1653,110 @@ describe('#311 — the ladder checkpoints the stream fall-back in BOTH continuat
   )
 })
 
+describe('#419 review — the ladder reaches the toast arms and the on-demand fetch', () => {
+  const GO_TO = stripComments(slice('async function goToEpisode', 'function cancelAutoAdvance'))
+  const TOAST = 'showNavToast(NAV_FAILED_MESSAGE);'
+
+  // The reviewer's finding, as an inventory rather than as one spot check: the
+  // `catch` was the only one of the three arms that could raise a toast on a
+  // DEAD component. The `!result` arm had `if (unmounted) return 'moved';`
+  // above it and the resolution arm is covered by the post-resolution pair, so
+  // a rejection from `playerGetStreamUrl` / `playerFindLocalFile` landing after
+  // close fell straight through — and an unmount does NOT bump
+  // `navigationEpoch`, so the ownership compare one line above cannot stand in
+  // for the check. The consequence is the one timer that escapes teardown:
+  // `showNavToast` arms `navToastTimer` after `onBeforeUnmount` has already
+  // cleared it.
+  //
+  // Scanned per arm, from the toast BACKWARDS, because that is the direction the
+  // claim runs — "nothing that toasts is reachable on a dead component" — and it
+  // is what makes a fourth arm added later red by default instead of silently
+  // unguarded.
+  it('checks unmounted above every navigation toast, on all three arms', () => {
+    const sites = [...GO_TO.matchAll(/showNavToast\(NAV_FAILED_MESSAGE\);/g)].map((m) => m.index!)
+    // Pinned, not merely looped over: `for (const site of [])` passes
+    // vacuously, so a toast moved behind a helper would turn this green on the
+    // exact arms it exists to protect. Three arms — no resolution, a null
+    // `playerGetStreamUrl`, and the `catch` — and `player-toast-slot.test.ts`
+    // pins that the whole FILE has the same three, so none of them can escape
+    // this slice either.
+    expect(sites, 'navigation toast arms in goToEpisode').toHaveLength(3)
+    // The `catch` is not reached by falling off the end of the `try`: it is
+    // entered from a throw at ANY await inside it, so every bail lexically
+    // above it is off the path and a plain backwards `lastIndexOf` is satisfied
+    // by one of them. Without this floor this scan passes on the pre-review
+    // source, finding the `playerGetStreamUrl` arm's `if (unmounted) return
+    // 'moved';` fifty lines up and reporting the `catch` as guarded.
+    const catchAt = GO_TO.indexOf('} catch {')
+    expect(catchAt, 'missing the goToEpisode catch').toBeGreaterThan(-1)
+    for (const site of sites) {
+      const floor = site > catchAt ? catchAt : -1
+      const bail = GO_TO.lastIndexOf(BAIL, site)
+      expect(
+        bail,
+        `no \`${BAIL}\` above the toast at ${site}${floor > -1 ? ' inside the catch' : ''}`
+      ).toBeGreaterThan(floor)
+      // No await in between, which is what makes the check current rather than
+      // merely present somewhere upstream: a suspension point after the bail
+      // reopens the window the bail exists to close.
+      expect(
+        GO_TO.slice(bail, site),
+        `a suspension point separates the toast at ${site} from its \`${BAIL}\``
+      ).not.toContain('await ')
+    }
+  })
+
+  // The outcome half. `moved` is not a detail here: the walk in
+  // `walkEpisodeSteps` breaks on anything but `moved`, and below the identity
+  // write the index HAS reached the target — a `superseded` there would stop
+  // the walk at an index it has already left. Above the write nothing moved, so
+  // an unmounted run reports `superseded` and stays silent, where a live one
+  // still says `unreachable` and toasts.
+  it('reports the catch arm by whether the identity write happened, above the toast', () => {
+    const cat = GO_TO.indexOf('} catch {')
+    expect(cat, 'missing the goToEpisode catch').toBeGreaterThan(-1)
+    const arm = GO_TO.slice(cat)
+    const bail = arm.indexOf("if (unmounted) return committed ? 'moved' : 'superseded';")
+    expect(bail, 'missing the committed-aware unmount bail in the catch').toBeGreaterThan(-1)
+    // Below the guarded clear and above the toast. Below, because #302 wants
+    // `navigating` released by whichever run still owns it even on a dead
+    // component — bailing above the clear would leave the flag set. Above,
+    // because that is the whole point.
+    expect(bail).toBeGreaterThan(
+      arm.indexOf('if (navigationEpoch === myNav) navigating.value = false;')
+    )
+    expect(bail).toBeLessThan(arm.indexOf(TOAST))
+    // And `committed` means what the outcome claims it does: set immediately
+    // above the index write, so "committed" and "the index reached the target"
+    // cannot come apart.
+    expect(GO_TO).toContain('committed = true;\n    activeEpisodeIndex.value = targetIndex;')
+  })
+
+  // #280's ladder is sliced per flow, and this network call is the one that sits
+  // OUTSIDE every slice it would be caught by: `fetchEpisodeWindowTranslations`
+  // is its own function, reached from `resolveEpisodeTranslation`'s callback.
+  // Read-only and cheap, so a stray batch for a dead player is not a bug — but
+  // it is a full page of network for nothing, and the empty list it returns
+  // instead is mapped to `unreachable` by the caller, where
+  // `goToEpisode`'s own `if (unmounted) return 'superseded';` takes it first
+  // and nothing toasts.
+  it('abandons the on-demand page fetch on unmount, before the network batch', () => {
+    const body = stripComments(
+      slice('async function fetchEpisodeWindowTranslations', 'async function goToEpisode')
+    )
+    const cached = body.indexOf('await window.api.getEpisodesBatchCached(')
+    const bail = body.indexOf('if (unmounted) return [];')
+    const network = body.indexOf('await window.api.getEpisodesBatch(')
+    expect(cached, 'missing the cache-first read').toBeGreaterThan(-1)
+    expect(bail, 'missing the unmount bail in fetchEpisodeWindowTranslations').toBeGreaterThan(-1)
+    expect(network, 'missing the network batch').toBeGreaterThan(-1)
+    // Between the two, in that order: after the await it guards, and before the
+    // call it is there to skip.
+    expect(bail).toBeGreaterThan(cached)
+    expect(bail).toBeLessThan(network)
+  })
+})
+
 describe('#280 (3) — the diagnostic element listeners are removed at teardown', () => {
   const TYPES = ['waiting', 'stalled', 'error', 'timeupdate', 'seeking', 'seeked']
 

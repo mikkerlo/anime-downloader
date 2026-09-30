@@ -1193,8 +1193,8 @@ describe('check-line-citations', () => {
   // tree are the same object, so it measures 0 by construction, and an exact pin
   // at 0 would red every PR that adds a cited test file with "edit the pin" as the
   // only repair. That is the hard-fail-with-no-escape shape #407 spent three
-  // rounds removing. The three cases below therefore assert `ok` is untouched and
-  // never assert a count against a pin.
+  // rounds removing. The cases below therefore never assert a count against a
+  // pin, and the one that checks `ok` asserts the bucket alone leaves it untouched.
   //
   // Every assertion here is an exact list or a length, never a predicate:
   // `bucket.every(...)` is true of the empty bucket, so it passes precisely when
@@ -1387,12 +1387,17 @@ describe('check-line-citations', () => {
     expect(r.quoteFailures).toHaveLength(1)
     expect(r.quoteFailures[0].elsewhere).toEqual([3])
 
-    // Exempt all the same: the two mechanisms are independent, and the anchor is
-    // still listed so the author can see which one the quote rescued.
+    // Still exempt from the base comparison — the two mechanisms are independent
+    // — but NOT listed in the advisory: the advisory's whole content is "mark
+    // it", and this anchor is marked. Listing it would name an anchor that has
+    // been checked and tell its author to do what they already did.
+    //
+    // `toEqual([])` rather than a predicate. `bucket.every(...)` is true of the
+    // empty bucket, so it would pass here whether the exclusion works or not; it
+    // earns its teeth instead from the unmarked positives above, which are the
+    // cases that red if the new `quote === null` clause ever over-reaches.
     expect(r.driftChecked).toBe(0)
-    expect(r.driftExemptNewFile).toEqual([
-      { at: 'test/new.test.ts:1', cited: 'src/svc.ts:2', target: 'src/svc.ts' }
-    ])
+    expect(r.driftExemptNewFile).toEqual([])
 
     const { ok, err } = report(r, noPins)
     expect(ok).toBe(false)

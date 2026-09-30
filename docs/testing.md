@@ -670,7 +670,10 @@ shape the resolve failures use, in scan order, followed by the remedy. Reading i
   quote verification runs outside the base guard. On the shape above, a marked
   anchor would have **failed** at line 533 and **named line 541** as the drift
   target. It reports the correction rather than applying it, which is the same
-  bargain the rest of this gate offers.
+  bargain the rest of this gate offers. **A marked anchor is therefore not
+  collected here at all**: it has already been checked against its target, so
+  listing it would advise its author to do what they did. Marking one shortens
+  the advisory by exactly that line.
 - **The bucket is deliberately unpinned, and a pin should not be added later.**
   `SUSPICIOUS_LANDING_PIN` and `UNCHECKABLE_PIN` count properties of the head
   tree, so a value measured on `main` stays valid on every branch. This count is

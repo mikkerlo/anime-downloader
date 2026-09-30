@@ -708,7 +708,7 @@ export function analyze({
                 })
               }
             }
-          } else if (baseCiting === null && baseTarget !== null) {
+          } else if (baseCiting === null && baseTarget !== null && quote === null) {
             // #420: the exemption above is not one class but two, and only one of
             // them is benign. A citing file the base does not carry — one this
             // branch ADDS, or one it renamed into place — was measured against the
@@ -724,6 +724,12 @@ export function analyze({
             // branch adds or renames has no base content either, so there is
             // nothing an author could be told to compare against, and a rename
             // that broke the anchor is already the resolver's business.
+            //
+            // A MARKED anchor stays uncollected too, hence `quote === null`. The
+            // advisory's whole content is "mark it", and quote verification ran
+            // above, outside the base guard: a marked anchor has already been
+            // checked against its target, so listing it would be telling the
+            // author to do the thing they did.
             driftExemptNewFile.push({ at, cited, target })
           }
         }
@@ -818,6 +824,9 @@ export function report(r, pins = {}) {
   // author nothing to act on, and the marked form is named as the remedy because
   // quote verification runs outside the base guard above and so survives the
   // exemption: it reports the correction, naming the line the content moved to.
+  // Taking the remedy also takes the anchor off this list — collection skips a
+  // marked one — so the advisory only ever names anchors nothing has checked,
+  // and acting on it shortens it.
   if (r.driftExemptNewFile.length > 0) {
     out.push(
       `  drift-exempt, citing file not in the base: ${r.driftExemptNewFile.length}` +

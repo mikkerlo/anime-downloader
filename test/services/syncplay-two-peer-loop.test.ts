@@ -484,7 +484,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2373` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2374` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -770,7 +770,7 @@ describe('two-peer syncplay harness', () => {
 // — a different function, called un-awaited on purpose at
 // `src/renderer/src/components/views/PlayerView.vue:1824`,
 // `src/renderer/src/components/views/PlayerView.vue:1827` and
-// `src/renderer/src/components/views/PlayerView.vue:2565`.
+// `src/renderer/src/components/views/PlayerView.vue:2567`.
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 
 const SIBLING_PREFIX = 'syncplay-two-peer-'

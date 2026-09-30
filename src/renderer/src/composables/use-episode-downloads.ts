@@ -12,7 +12,7 @@
 // composable callable from Vitest without a Vue component context.
 
 import { ref, computed, nextTick, type Ref, type ComputedRef } from 'vue'
-import { sanitizeFilename } from '../utils'
+import { sanitizeFilename, toPlayerTranslations } from '../utils'
 import type { EpisodeRow } from './use-episode-list'
 import type { useDownloadsStore } from '../stores/downloads'
 import type { usePlayerStore } from '../stores/player'
@@ -27,6 +27,9 @@ type FileEntry = {
 type TranslationListEntry = { id: number; label: string; type: string; height: number }
 
 type AllEpisodesEntry = {
+  // Mirrors `PlayerEpisode.id` (#419) — the player fetches by upstream episode
+  // id, and every entry past the current page arrives with no translations.
+  id: number
   episodeInt: string
   episodeFull: string
   translations: TranslationListEntry[]
@@ -200,22 +203,26 @@ export function useEpisodeDownloads(deps: {
     }))
   }
 
+  // The full filtered episode list, with translations for whatever the detail
+  // view happens to have loaded.
+  //
+  // The two-source mismatch is deliberate and documented rather than fixed here
+  // (#419): `deps.episodes` is filled only from `pagedEpisodes`, so it holds one
+  // PAGE_SIZE window, while `downloadedTrIds` comes from the anime-wide
+  // `episodeMeta`. Off-page entries therefore ship `translations: []` with
+  // `downloadedTrIds` populated. Pre-fetching every page here is the wrong
+  // answer for a 1000-episode show; the player fills the gap on demand from
+  // `id`, which is why that field exists.
   function buildAllEpisodes(): AllEpisodesEntry[] {
     return deps.filteredEpisodes.value.map((ep) => {
       const detail = deps.episodes.value.get(ep.id)
-      const translations = detail
-        ? detail.translations
-            .filter((t) => t.isActive === 1)
-            .map((t) => ({
-              id: t.id,
-              label: t.authorsSummary,
-              type: t.type,
-              height: deps.getRealHeight(t)
-            }))
-        : []
+      // The measured height, not the declared one — this is the one producer
+      // with a probe cache to substitute. See `toPlayerTranslations`.
+      const translations = toPlayerTranslations(detail, deps.getRealHeight)
       const metas = deps.episodeMeta.value[ep.episodeInt] || []
       const downloadedTrIds = metas.map((m) => m.translationId)
       return {
+        id: ep.id,
         episodeInt: ep.episodeInt,
         episodeFull: ep.episodeFull,
         translations,

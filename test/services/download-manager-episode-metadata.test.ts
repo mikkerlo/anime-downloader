@@ -10,11 +10,13 @@
 //
 // The two consumers are wired here the way `src/main/index.ts` wires them: the
 // video hook calls `persistDownloadedEpisode` unconditionally, and the
-// group-complete hook calls it only when `info.hasVideo`. `index.ts` itself is
-// not importable under Vitest (module-scope Electron boot) and is excluded from
-// coverage, so `wiring placement` below pins that mirror against its source
-// instead — the two placement constraints there are the ones whose failure mode
-// is silent.
+// group-complete hook calls it only when `info.hasVideo`. Since #409 those two
+// tails live in `src/main/lib/episode-completion.ts`, so the mirror is checked
+// against the real handlers rather than against `index.ts` as source text — see
+// the equivalence block at the bottom. `index.ts` itself is still not importable
+// under Vitest (module-scope Electron boot) and is still excluded from coverage,
+// so the one constraint that is purely about the wiring — that the manager's
+// single `onVideoDownloaded` slot is claimed exactly once — remains a text guard.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
@@ -31,6 +33,10 @@ import {
   type DownloadedEpisodesMap,
   type DownloadedEpisodesStore
 } from '../../src/main/lib/downloaded-episodes'
+import {
+  createEpisodeCompletionHandlers,
+  type EpisodeCompletionStore
+} from '../../src/main/lib/episode-completion'
 
 const VIDEO_BODY = 'video-bytes'
 
@@ -109,6 +115,8 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
   let store: FakeStore
   let episodePayloads: EpisodeCompleteInfo[]
   let videoHookCalls: Array<{ filePath: string; itemId: string }>
+  let mirrorVideoHook: (filePath: string, item: DownloadItem) => void
+  let mirrorEpisodeHook: (info: EpisodeCompleteInfo) => void
 
   beforeEach(() => {
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-meta-ud-'))
@@ -119,15 +127,19 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     videoHookCalls = []
 
     // Mirror of src/main/index.ts: the video hook writes unconditionally, the
-    // group-complete hook is the repair path and is gated on `hasVideo`.
-    dm.onVideoDownloaded((filePath, item) => {
+    // group-complete hook is the repair path and is gated on `hasVideo`. Both
+    // are named so the equivalence block at the bottom can call these exact
+    // closures instead of re-copying their bodies.
+    mirrorVideoHook = (filePath, item) => {
       videoHookCalls.push({ filePath, itemId: item.id })
       persistDownloadedEpisode(store, item)
-    })
-    dm.onEpisodeComplete((info) => {
+    }
+    mirrorEpisodeHook = (info) => {
       episodePayloads.push(info)
       if (info.hasVideo) persistDownloadedEpisode(store, info)
-    })
+    }
+    dm.onVideoDownloaded(mirrorVideoHook)
+    dm.onEpisodeComplete(mirrorEpisodeHook)
 
     global.fetch = vi.fn(
       async () =>
@@ -395,27 +407,98 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
         .filter((l) => l.includes('onVideoDownloaded('))
       expect(registrations).toHaveLength(1)
     })
+  })
 
-    it('persists the metadata above the .mp4 early return', () => {
-      const lines = source().split('\n')
-      const hookLine = lines.findIndex((l) => l.includes('onVideoDownloaded('))
-      const writeLine = lines.findIndex(
-        (l, i) => i > hookLine && l.includes('persistDownloadedEpisode(store, item)')
-      )
-      const mp4ReturnLine = lines.findIndex(
-        (l, i) => i > hookLine && l.includes("endsWith('.mp4')) return")
-      )
+  describe('the mirror above, checked against the real handlers (#409)', () => {
+    // The other two constraints the old source-text block pinned — the write
+    // sitting above the .mp4 filter, and the group-complete write being gated on
+    // `info.hasVideo` — are behavioural now that the tails are importable. They
+    // are asserted directly in `test/lib/episode-completion.test.ts`; here they
+    // are re-asserted as an *equivalence*, so this file's hand-rolled
+    // `beforeEach` mirror cannot drift away from production without saying so.
+    // (That the hooks are still wired to these handlers at all, rather than to a
+    // pasted-back inline closure, is guarded in that same file.)
+    //
+    // The deps are inert on purpose: no `autoMerge`, no `autoMoveToCold`, no
+    // `notificationMode`, so the group-complete tail reduces to invalidate,
+    // write, merge-status, schedule — and the store is the only thing compared.
+    const realHandlers = (target: FakeStore): ReturnType<typeof createEpisodeCompletionHandlers> =>
+      createEpisodeCompletionHandlers({
+        store: {
+          get: ((key: string) =>
+            key === 'downloadedEpisodes'
+              ? target.get('downloadedEpisodes')
+              : undefined) as EpisodeCompletionStore['get'],
+          set: target.set as EpisodeCompletionStore['set']
+        },
+        downloadManager: dm,
+        fileScanner: { invalidate: () => {} },
+        coldStorageService: {
+          isAdvanced: () => false,
+          moveEpisodeToColdStorage: async () => {}
+        },
+        skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
+        mp4StatsService: { recordCheck: async () => {} },
+        ffmpegReady: Promise.resolve({ available: false }),
+        getFfmpegPath: () => '',
+        getFfprobePath: () => '',
+        notify: () => {}
+      })
 
-      expect(hookLine).toBeGreaterThan(-1)
-      expect(mp4ReturnLine).toBeGreaterThan(-1)
-      // The .mp4 filter belongs to the mp4-stats consumer only; below it the
-      // write would silently skip every .mkv download.
-      expect(writeLine).toBeGreaterThan(hookLine)
-      expect(writeLine).toBeLessThan(mp4ReturnLine)
+    it('writes what this file writes for a .mp4 video item', () => {
+      const real = makeStore()
+      const video = makeItem({ status: 'completed' })
+
+      mirrorVideoHook(path.join(downloadDir, video.filename), video)
+      realHandlers(real).handleVideoDownloaded(path.join(downloadDir, video.filename), video)
+
+      expect(real.entries).toEqual(store.entries)
+      expect(real.entries).toEqual({ '100:1:1': ENTRY })
     })
 
-    it('gates the group-complete repair write on info.hasVideo', () => {
-      expect(source()).toContain('if (info.hasVideo) {')
+    it('writes what this file writes for a .mkv video item', () => {
+      // The ordering case. With the write below the .mp4 filter, production
+      // would record nothing here while this file's mirror still recorded the
+      // entry — the two sides would disagree and this assertion would fail.
+      const real = makeStore()
+      const video = makeItem({
+        status: 'completed',
+        filename: path.join('Anime', 'Anime - 01 [Author].mkv')
+      })
+
+      mirrorVideoHook(path.join(downloadDir, video.filename), video)
+      realHandlers(real).handleVideoDownloaded(path.join(downloadDir, video.filename), video)
+
+      expect(real.entries).toEqual(store.entries)
+      expect(real.entries).toEqual({ '100:1:1': ENTRY })
+    })
+
+    it('agrees on both sides of the group-complete hasVideo gate', async () => {
+      const withVideo: EpisodeCompleteInfo = {
+        animeName: 'Anime',
+        episodeLabel: 'ep1',
+        animeId: 100,
+        episodeInt: '1',
+        translationId: 1,
+        translationType: 'subRu',
+        author: 'Author',
+        quality: 720,
+        hasVideo: true
+      }
+      const subtitleOnly: EpisodeCompleteInfo = { ...withVideo, hasVideo: false }
+
+      const a = makeStore()
+      await realHandlers(a).handleEpisodeComplete(withVideo)
+      mirrorEpisodeHook(withVideo)
+      expect(a.entries).toEqual(store.entries)
+      expect(a.entries).toEqual({ '100:1:1': ENTRY })
+
+      store = makeStore()
+      const b = makeStore()
+      await realHandlers(b).handleEpisodeComplete(subtitleOnly)
+      mirrorEpisodeHook(subtitleOnly)
+      expect(b.entries).toEqual(store.entries)
+      expect(b.entries).toEqual({})
     })
   })
 })

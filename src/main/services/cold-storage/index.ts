@@ -131,8 +131,18 @@ export interface ColdStorageService {
   ): void
   /** True iff a `.mkv` or `.mp4` for `(animeName, episodeInt, author)` exists in any storage root. */
   episodeFileExists(animeName: string, episodeInt: string, author: string): boolean
-  /** Move every file matching one episode's base prefix from hot to cold. */
+  /**
+   * Move every file matching one episode's base prefix from hot to cold.
+   * A per-file failure is logged and the rest still move (#414).
+   */
   moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void>
+  /**
+   * Move exactly one file from hot to cold, named by its **download-dir-relative**
+   * path — anime directory included, as `download-manager`'s `filename` fields
+   * carry it. Bypasses the tag-less prefix scan `moveEpisodeToColdStorage` does,
+   * which sweeps sibling translations of the same episode (#414, #416).
+   */
+  moveFileToColdByRelPath(relPath: string): Promise<void>
   /** Move every finished file from the hot root into cold, with progress callback. */
   moveAllFilesToColdStorage(
     onProgress?: (current: number, total: number, file: string) => void
@@ -548,11 +558,32 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         // Never move .part files or files with in-progress downloads
         if (file.endsWith('.mp4') && fs.existsSync(path.join(hotAnimeDir, file + '.part'))) continue
         const src = path.join(hotAnimeDir, file)
-        await moveFileToCold(src, path.join(coldAnimeDir, file))
+        // Per file, not per episode (#414). The bare outer catch used to
+        // swallow the first failure and abandon every file behind it, so one
+        // unmovable source left the merged .mkv sitting in hot with
+        // autoMoveToCold on and nothing logged. Matches
+        // moveAllFilesToColdStorage, which already collects per-file failures.
+        try {
+          await moveFileToCold(src, path.join(coldAnimeDir, file))
+        } catch (err) {
+          console.error(`[cold] Failed to move ${file} to cold storage:`, err)
+        }
       }
     } catch {
       /* dir listing failed */
     }
+  }
+
+  async function moveFileToColdByRelPath(relPath: string): Promise<void> {
+    const coldDir = getColdStorageDir()
+    if (!coldDir) return
+    // Read the hot root the way every other cold-storage operation does, rather
+    // than trusting a path absolutised by the caller: DownloadManager fixes its
+    // downloadDir at construction, while getDownloadDir() re-reads storageMode
+    // / hotStorageDir / downloadDir from the store on every call.
+    const src = path.join(getDownloadDir(), relPath)
+    if (!fs.existsSync(src)) return
+    await moveFileToCold(src, path.join(coldDir, relPath))
   }
 
   async function moveAllFilesToColdStorage(
@@ -743,6 +774,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     pruneDownloadedEpisode,
     episodeFileExists,
     moveEpisodeToColdStorage,
+    moveFileToColdByRelPath,
     moveAllFilesToColdStorage,
     findCleanupCandidates,
     runWatchedCleanup

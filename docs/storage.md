@@ -21,13 +21,14 @@ In advanced storage mode, files are managed across two directories:
 
 ### File movement
 
-- `moveEpisodeToColdStorage()`: Moves a single episode's files (.mkv, .mp4, .ass) from hot → cold. Skips files with .part (in-progress). Uses `fs.rename` with `fs.copyFile` + `fs.unlink` fallback for cross-filesystem moves.
+- `moveEpisodeToColdStorage()`: Moves a single episode's files (.mkv, .mp4, .ass) from hot → cold, matching on the tag-less `<anime> - NN` prefix. Skips files with .part (in-progress). Uses `fs.rename` with `fs.copyFile` + `fs.unlink` fallback for cross-filesystem moves. A per-file failure is logged (`console.error`, naming the file) and the remaining files still move; only a failure to list the directory ends the pass (#414 — it used to abort on the first failure, silently, leaving everything behind it in hot). The prefix match has no author tag, so it still sweeps sibling translations of the same episode (#416).
+- `moveFileToColdByRelPath()`: Moves exactly one file hot → cold, named by its **download-dir-relative** path — anime directory included, matching the `filename` fields the download manager builds. Bypasses the prefix scan entirely, and resolves against the service's own `getDownloadDir()` / `getColdStorageDir()`. This is what the merge tail uses (#414), so a merge cannot sweep a sibling translation's unmerged sources.
 - `moveAllFilesToColdStorage()`: Scans hot dir for all finished files and moves them to cold. Reports progress via `storage:move-to-cold-progress` IPC.
 
 ### Auto-move triggers
 
-- If merge disabled: after `onEpisodeComplete` callback
-- If merge enabled: after `onMergeComplete` callback
+- If merge disabled: after `onEpisodeComplete` callback (via `moveEpisodeToColdStorage()`)
+- If merge enabled: after `onMergeComplete` callback, which fires after the merge sources are unlinked and moves only the merged `.mkv` (via `moveFileToColdByRelPath()`)
 - Manual: "Move all to cold storage" button in Settings > Storage
 
 ### File scanning

@@ -79,6 +79,7 @@ export interface EpisodeCompletionDeps {
   coldStorageService: {
     isAdvanced: () => boolean
     moveEpisodeToColdStorage: (animeName: string, episodeLabel: string) => Promise<void>
+    moveFileToColdByRelPath: (relPath: string) => Promise<void>
   }
   skipAnalysisService: {
     scheduleAutoSkipAnalysis: (animeId: number, animeName: string) => void
@@ -121,6 +122,7 @@ export interface EpisodeCompletionHandlers {
     animeId: number
     episodeInt: string
     episodeLabel: string
+    mkvFilename: string
   }) => Promise<void>
   /** `downloadManager.onVideoDownloaded` — metadata write + mp4-faststart probe. */
   handleVideoDownloaded: (filePath: string, item: DownloadItem) => void
@@ -237,17 +239,24 @@ export function createEpisodeCompletionHandlers(
   async function handleMergeComplete({
     animeName,
     animeId,
-    episodeLabel
+    episodeLabel,
+    mkvFilename
   }: {
     animeName: string
     animeId: number
     episodeInt: string
     episodeLabel: string
+    mkvFilename: string
   }): Promise<void> {
     fileScanner.invalidate(animeName)
-    // Auto-move to cold after merge
+    // Auto-move to cold after merge — exactly the .mkv this merge produced, by
+    // its download-dir-relative path (#414). The prefix-matching
+    // moveEpisodeToColdStorage carries no author tag, so from here it would
+    // sweep a sibling translation's still-unmerged .mp4/.ass into cold. The
+    // merge pass unlinks its own sources before firing this callback, so
+    // nothing else in that directory belongs to this merge anyway.
     if (coldStorageService.isAdvanced() && store.get('autoMoveToCold')) {
-      await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
+      await coldStorageService.moveFileToColdByRelPath(mkvFilename)
     }
     const mode = store.get('notificationMode')
     if (mode === 'each') {

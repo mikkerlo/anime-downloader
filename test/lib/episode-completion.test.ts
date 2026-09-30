@@ -117,6 +117,9 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
       },
       moveEpisodeToColdStorage: async (animeName, episodeLabel) => {
         calls.push(`moveToCold(${animeName},${episodeLabel})`)
+      },
+      moveFileToColdByRelPath: async (relPath) => {
+        calls.push(`moveFileToCold(${relPath})`)
       }
     },
     skipAnalysisService: {
@@ -394,36 +397,48 @@ describe('episode-completion — the group-complete tail', () => {
 })
 
 describe('episode-completion — the merge-complete tail', () => {
+  const mergeInfo = (
+    overrides: Partial<Parameters<EpisodeCompletionHandlers['handleMergeComplete']>[0]> = {}
+  ): Parameters<EpisodeCompletionHandlers['handleMergeComplete']>[0] => ({
+    animeName: 'Anime',
+    animeId: 100,
+    episodeInt: '1',
+    episodeLabel: 'ep1',
+    mkvFilename: path.join('Anime', 'Anime - 01 [Author].mkv'),
+    ...overrides
+  })
+
   it('invalidates, moves to cold, notifies and schedules, in that order', async () => {
     const h = makeHarness({ autoMoveToCold: true, notificationMode: 'each' })
     h.coldAdvanced = true
 
-    await h.handlers.handleMergeComplete({
-      animeName: 'Anime',
-      animeId: 100,
-      episodeInt: '1',
-      episodeLabel: 'ep1'
-    })
+    await h.handlers.handleMergeComplete(mergeInfo())
 
+    // The move is the payload's exact .mkv, by download-dir-relative path —
+    // not `moveToCold(Anime,ep1)`, whose tag-less prefix match would sweep a
+    // sibling translation's unmerged sources into cold (#414).
     expect(h.calls).toEqual([
       'invalidate(Anime)',
       'isAdvanced',
-      'moveToCold(Anime,ep1)',
+      `moveFileToCold(${path.join('Anime', 'Anime - 01 [Author].mkv')})`,
       'notify(Merge complete|Anime — ep1)',
       'scheduleSkip(100,Anime)'
     ])
+    expect(h.calls.some((c) => c.startsWith('moveToCold('))).toBe(false)
   })
 
   it('writes no metadata — the merge tail is not a metadata writer', async () => {
     const h = makeHarness()
-    await h.handlers.handleMergeComplete({
-      animeName: 'Anime',
-      animeId: 100,
-      episodeInt: '1',
-      episodeLabel: 'ep1'
-    })
+    await h.handlers.handleMergeComplete(mergeInfo())
     expect(h.store.entries).toEqual({})
     expect(h.calls).toEqual(['invalidate(Anime)', 'isAdvanced', 'scheduleSkip(100,Anime)'])
+  })
+
+  it('moves nothing when autoMoveToCold is off, even in advanced mode', async () => {
+    const h = makeHarness({ autoMoveToCold: false })
+    h.coldAdvanced = true
+    await h.handlers.handleMergeComplete(mergeInfo())
+    expect(h.calls.some((c) => c.startsWith('moveFileToCold('))).toBe(false)
   })
 })
 

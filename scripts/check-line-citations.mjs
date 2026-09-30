@@ -573,6 +573,9 @@ export function analyze({
   const marked = []
   const quoteFailures = []
   const drift = []
+  // Advisory only, and deliberately not a pin — see the `out.push` in `report()`
+  // that prints it for why no value would work.
+  const driftExemptNewFile = []
   let driftChecked = 0
   let unresolvableByExtension = 0
   let resolvedFullPath = 0
@@ -705,6 +708,29 @@ export function analyze({
                 })
               }
             }
+          } else if (baseCiting === null && baseTarget !== null && quote === null) {
+            // #420: the exemption above is not one class but two, and only one of
+            // them is benign. A citing file the base does not carry — one this
+            // branch ADDS, or one it renamed into place — was measured against the
+            // branch's own earlier state, which a base-vs-head comparison cannot
+            // see: the anchor may already have been stale when the merge that
+            // brought the base in landed. #417 shipped exactly that and a manual
+            // sweep caught it, because the landing was a `try {` and no heuristic
+            // here had anything to say about it. Collected so the report can NAME
+            // those anchors; it stays exempt, because without history there is no
+            // telling a stale anchor from a correct brand-new one.
+            //
+            // `baseTarget === null` stays uncollected on purpose. A target the
+            // branch adds or renames has no base content either, so there is
+            // nothing an author could be told to compare against, and a rename
+            // that broke the anchor is already the resolver's business.
+            //
+            // A MARKED anchor stays uncollected too, hence `quote === null`. The
+            // advisory's whole content is "mark it", and quote verification ran
+            // above, outside the base guard: a marked anchor has already been
+            // checked against its target, so listing it would be telling the
+            // author to do the thing they did.
+            driftExemptNewFile.push({ at, cited, target })
           }
         }
       }
@@ -730,6 +756,7 @@ export function analyze({
     quoteFailures,
     drift,
     driftChecked,
+    driftExemptNewFile,
     driftBase: readBaseLines === null ? null : baseLabel,
     driftEnabled: readBaseLines !== null,
     ambiguous,
@@ -774,6 +801,46 @@ export function report(r, pins = {}) {
           `${r.driftBase ?? 'the base tree'} (${r.drift.length} drifted)`
       : '  drift: not compared (no base revision)'
   )
+  // #420's bucket, on its own line and never folded into the drift line above:
+  // `driftChecked` keeps the meaning the scanned-against-compared cross-checks in
+  // PR descriptions rely on, and a third number in that arithmetic has to be
+  // introduced explicitly rather than absorbed. Advisory in both directions — it
+  // goes to `out` rather than `err`, because `err` is non-empty only when
+  // something failed and CI log readers skim stderr as "what broke", and it never
+  // touches `ok`.
+  //
+  // THERE IS NO PIN AND THERE CANNOT BE ONE. Every other count here is a property
+  // of the head tree, so a value measured on `main` stays valid on every branch.
+  // This one is base-relative: on `main` the base tree and the head tree are the
+  // same object, so it measures zero by construction rather than by luck, and is
+  // non-zero on precisely the PRs it exists to notice. An exact pin at zero
+  // therefore reds every PR that adds a cited test file with "edit the pin" as the
+  // only repair, which is the hard-fail-with-no-way-out class #407 spent three
+  // rounds removing; a `MARKED_PIN`-shaped floor does not rescue it either,
+  // because a floor at zero is unfalsifiable and a ceiling at zero is the exact
+  // pin again.
+  //
+  // The anchors are listed rather than counted because a bare number gives the
+  // author nothing to act on, and the marked form is named as the remedy because
+  // quote verification runs outside the base guard above and so survives the
+  // exemption: it reports the correction, naming the line the content moved to.
+  // Taking the remedy also takes the anchor off this list — collection skips a
+  // marked one — so the advisory only ever names anchors nothing has checked,
+  // and acting on it shortens it.
+  if (r.driftExemptNewFile.length > 0) {
+    out.push(
+      `  drift-exempt, citing file not in the base: ${r.driftExemptNewFile.length}` +
+        ' (advisory, no pin)'
+    )
+    for (const e of r.driftExemptNewFile) out.push(`    ${e.at}: cites \`${e.cited}\``)
+    out.push(
+      '    A file the base does not carry — added on this branch, or renamed into',
+      '    place — has no base anchor token, so the comparison above skipped these',
+      '    rather than clearing them. To have one checked, mark it: a citation',
+      '    written `path:NN ("quoted text")` is verified against the cited line with',
+      '    no base revision at all.'
+    )
+  }
 
   let ok = true
 

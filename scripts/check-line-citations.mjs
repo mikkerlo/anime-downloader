@@ -87,9 +87,9 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // directly above `if (text === '')` it catches one, the bare-brace anchor, at
 // 4 -> 5, because the first anchor then lands on the inserted line itself; make
 // that inserted line a comment and it is two again. #393 measured three of four
-// on its own tree. Either way `suspicious`
-// rises, the count is compared with `!==`, and the gate fails. Since #407
-// `verifyNoDrift()` names them individually as well.
+// on its own tree. Either way `suspicious` rises, the count is compared with
+// `!==`, and the gate fails. Since #407 `verifyNoDrift()` names them
+// individually as well.
 //
 // The failure it produces is the thing worth knowing, and it is narrower than
 // either "green and wrong" or "caught": it names whichever siblings happened to

@@ -210,15 +210,31 @@ export function createEpisodeCompletionHandlers(
     // `subtitlesUrl` and no playable stream reaches all-done with a payload
     // copied off the subtitle. Writing that entry would put a ⬇ icon on an
     // episode with nothing on disk.
+    //
+    // Guarded locally, unlike the primary write in `handleVideoDownloaded`
+    // (#428). An `EpisodeCompleteInfo` carries no download item, so there is no
+    // `item.error` for the manager to mark — and an unguarded throw here would
+    // skip the whole rest of this tail: the auto-merge, the cold move, the
+    // notification and the skip analysis. The metadata loss at this point is
+    // already the unrecoverable window; the merge must not be lost with it.
     if (info.hasVideo) {
-      persistDownloadedEpisode(store, {
-        animeId,
-        episodeInt,
-        translationId,
-        translationType,
-        author,
-        quality
-      })
+      try {
+        const written = persistDownloadedEpisode(store, {
+          animeId,
+          episodeInt,
+          translationId,
+          translationType,
+          author,
+          quality
+        })
+        if (!written) {
+          console.warn(
+            `[episode-complete] repair metadata write skipped, item cannot be keyed: animeId=${animeId} episodeInt=${episodeInt}`
+          )
+        }
+      } catch (err) {
+        console.error('[episode-complete] repair metadata write failed:', err)
+      }
     }
 
     if (downloadManager.getMergeStatus(translationId) === 'deferred') {
@@ -290,7 +306,22 @@ export function createEpisodeCompletionHandlers(
     // unrecorded. Since #409 that is a behavioural assertion in
     // `test/lib/episode-completion.test.ts` rather than a source-text one — a
     // non-.mp4 path must still persist, and must not probe.
-    persistDownloadedEpisode(store, item)
+    //
+    // The write's two failure modes are different things, and #428 gives them
+    // different dispositions. A throw out of `store.get`/`store.set` — ENOSPC,
+    // EACCES on a locked userData dir, a serialization error — is a real
+    // failure and is deliberately NOT caught here: it propagates to the
+    // manager's `dispatchHook`, which marks `item.error` so the queue row stops
+    // claiming a clean completion. A `false` return is not a failure: it means
+    // only `animeId <= 0 || !episodeInt`, an item that could never have been
+    // keyed and that the rest of main skips quietly, so it gets a warn and
+    // nothing else. Marking it would put a permanent red line on every
+    // legitimately unkeyable download.
+    if (!persistDownloadedEpisode(store, item)) {
+      console.warn(
+        `[video-downloaded] metadata write skipped, item cannot be keyed: animeId=${item.animeId} episodeInt=${item.episodeInt} (${item.filename})`
+      )
+    }
     if (!filePath.toLowerCase().endsWith('.mp4')) return
     void mp4StatsService.recordCheck(filePath, {
       animeId: item.animeId,

@@ -104,6 +104,37 @@ function makeStore(): FakeStore {
   }
 }
 
+/**
+ * A store whose write fails the way electron-store's really does (#428). `set`
+ * is a synchronous whole-file atomic JSON write, so it propagates ENOSPC,
+ * EACCES on a locked userData dir, EROFS and serialization errors straight out
+ * of `persistDownloadedEpisode`, which has no try/catch of its own.
+ *
+ * No fixture in the suite injected a failure here before this issue — the nine
+ * cases in `test/lib/downloaded-episodes.test.ts` all use a store that only
+ * clones and counts — so the hook's catch had never been executed by a test.
+ */
+function makeFailingStore(
+  err: Error = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+): FakeStore & {
+  readonly attempts: number
+} {
+  let attempts = 0
+  return {
+    get: () => ({}),
+    set: () => {
+      attempts++
+      throw err
+    },
+    get entries() {
+      return {}
+    },
+    get attempts() {
+      return attempts
+    }
+  }
+}
+
 /** `setTimeout(…, 100)` defers the group-complete callback — outwait it. */
 const settleEpisodeComplete = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 200))
@@ -158,6 +189,39 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
   })
 
   const ENTRY = { translationType: 'subRu', author: 'Author', quality: 720, translationId: 1 }
+
+  /**
+   * The real `src/main/lib/episode-completion.ts` tails over an injected store,
+   * with every other dep inert — no `autoMerge`, no `autoMoveToCold`, no
+   * `notificationMode`, so the group-complete tail reduces to invalidate,
+   * write, merge-status, schedule and the store is the only thing observed.
+   * Shared by the #409 equivalence block and the #428 failure block.
+   */
+  const realHandlers = (
+    target: DownloadedEpisodesStore
+  ): ReturnType<typeof createEpisodeCompletionHandlers> =>
+    createEpisodeCompletionHandlers({
+      store: {
+        get: ((key: string) =>
+          key === 'downloadedEpisodes'
+            ? target.get('downloadedEpisodes')
+            : undefined) as EpisodeCompletionStore['get'],
+        set: target.set as EpisodeCompletionStore['set']
+      },
+      downloadManager: dm,
+      fileScanner: { invalidate: () => {} },
+      coldStorageService: {
+        isAdvanced: () => false,
+        moveEpisodeToColdStorage: async () => {},
+        moveFileToColdByRelPath: async () => {}
+      },
+      skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
+      mp4StatsService: { recordCheck: async () => {} },
+      ffmpegReady: Promise.resolve({ available: false }),
+      getFfmpegPath: () => '',
+      getFfprobePath: () => '',
+      notify: () => {}
+    })
 
   describe('path 3 — the user never retries the failed subtitle', () => {
     it('writes the entry when the video lands, with the sibling subtitle already failed', async () => {
@@ -310,7 +374,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
 
     it('takes the group payload from the video item, not from whichever row is first', async () => {
       // The stale-embed divergence: `restart` re-resolves the embed and corrects
-      // only the VIDEO item's quality (`download-manager.ts:552`); the subtitle
+      // only the VIDEO item's quality (`download-manager.ts:612`); the subtitle
       // branch sets `url` alone, so the two genuinely disagree afterwards.
       // Queue order is then the only thing deciding which number gets persisted,
       // and the payload must not depend on it.
@@ -422,29 +486,8 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     // The deps are inert on purpose: no `autoMerge`, no `autoMoveToCold`, no
     // `notificationMode`, so the group-complete tail reduces to invalidate,
     // write, merge-status, schedule — and the store is the only thing compared.
-    const realHandlers = (target: FakeStore): ReturnType<typeof createEpisodeCompletionHandlers> =>
-      createEpisodeCompletionHandlers({
-        store: {
-          get: ((key: string) =>
-            key === 'downloadedEpisodes'
-              ? target.get('downloadedEpisodes')
-              : undefined) as EpisodeCompletionStore['get'],
-          set: target.set as EpisodeCompletionStore['set']
-        },
-        downloadManager: dm,
-        fileScanner: { invalidate: () => {} },
-        coldStorageService: {
-          isAdvanced: () => false,
-          moveEpisodeToColdStorage: async () => {},
-          moveFileToColdByRelPath: async () => {}
-        },
-        skipAnalysisService: { scheduleAutoSkipAnalysis: () => {} },
-        mp4StatsService: { recordCheck: async () => {} },
-        ffmpegReady: Promise.resolve({ available: false }),
-        getFfmpegPath: () => '',
-        getFfprobePath: () => '',
-        notify: () => {}
-      })
+    // (`realHandlers` itself lives in the outer describe: the #428 block below
+    // drives the same production handler with a store whose `set` throws.)
 
     it('writes what this file writes for a .mp4 video item', () => {
       const real = makeStore()
@@ -500,6 +543,152 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       mirrorEpisodeHook(subtitleOnly)
       expect(b.entries).toEqual(store.entries)
       expect(b.entries).toEqual({})
+    })
+  })
+
+  // A lost `downloadedEpisodes` entry is permanent: nothing in the tree can
+  // reconstruct one. `episode-file-scan.ts` never touches the store and no
+  // filename carries a translation id, so `fileStatus` self-heals on a rescan
+  // and `episodeMeta` structurally cannot — which is a video on disk with no
+  // Play and no Delete, the #412 symptom exactly. Until #428 the hook's catch
+  // was one `console.warn`, with the row already 'completed' and already
+  // persisted above the dispatch, so the queue reported a clean download.
+  describe('a failed metadata write is visible on the row (#428)', () => {
+    /** Replaces the mirror hook with the real production tail over `target`. */
+    const wireReal = (target: DownloadedEpisodesStore): void => {
+      const handlers = realHandlers(target)
+      dm.onVideoDownloaded((filePath, item) => {
+        videoHookCalls.push({ filePath, itemId: item.id })
+        handlers.handleVideoDownloaded(filePath, item)
+      })
+    }
+
+    /**
+     * Counts `startDownload` entries and calls through. `dispatchHook` runs
+     * inside `startDownload`'s try, whose catch re-queues with exponential
+     * backoff — so an escape from the helper would re-download a video that is
+     * already on disk, and the call count is how that shows up.
+     */
+    const countStarts = (): number[] => {
+      const internals = dm as unknown as Internals
+      const original = internals.startDownload.bind(dm)
+      const retries: number[] = []
+      internals.startDownload = (item, retryCount = 0) => {
+        retries.push(retryCount)
+        return original(item, retryCount)
+      }
+      return retries
+    }
+
+    /** Outwaits the first retry's `2^0 * 1000` ms backoff. */
+    const settleFirstBackoff = (): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, 1300))
+
+    it('marks the item instead of reporting a clean completion', async () => {
+      const failing = makeFailingStore()
+      wireReal(failing)
+      const video = makeItem({})
+      seed(dm, [video])
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      // The file really did land, so 'completed' is right — what was wrong was
+      // reporting it with nothing to say that the metadata went missing.
+      expect(video.status).toBe('completed')
+      expect(fs.existsSync(path.join(downloadDir, video.filename))).toBe(true)
+      expect(failing.attempts).toBe(1)
+      expect(video.error).toMatch(/ENOSPC/)
+    })
+
+    it('does not re-download the completed video (the helper never throws)', async () => {
+      wireReal(makeFailingStore())
+      const video = makeItem({})
+      seed(dm, [video])
+      const retries = countStarts()
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleFirstBackoff()
+
+      // One entry, at retryCount 0. A throw escaping `dispatchHook` would flip
+      // the row to 'queued' and schedule `startDownload(item, 1)`.
+      expect(retries).toEqual([0])
+      expect(video.status).toBe('completed')
+      expect(video.error).toMatch(/ENOSPC/)
+    })
+
+    it('leaves the loss visible in the narrow window the repair path cannot reach', async () => {
+      // Permanent loss needs both halves: the write fails AND the group never
+      // reaches `allDone`, so `onEpisodeComplete` — the repair writer — never
+      // fires. A failed sibling subtitle is exactly that, and is the case #412
+      // existed to fix.
+      const failing = makeFailingStore()
+      wireReal(failing)
+      const video = makeItem({})
+      const subtitle = makeSubtitle({ status: 'failed', error: 'HTTP 404 Not Found' })
+      seed(dm, [video, subtitle])
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(episodePayloads).toEqual([])
+      expect(failing.entries).toEqual({})
+      expect(video.status).toBe('completed')
+      expect(video.error).toMatch(/Post-download step failed: ENOSPC/)
+    })
+
+    it('leaves no error on an unkeyable item — a false return is not a failure', async () => {
+      // `persistDownloadedEpisode` returns false only for `animeId <= 0 ||
+      // !episodeInt`. The rest of main treats those as expected and skips them
+      // quietly, so marking the row would put a permanent red line on every
+      // manual-scan download for a write that could never have been read back.
+      const working = makeStore()
+      wireReal(working)
+      const video = makeItem({ animeId: 0 })
+      seed(dm, [video])
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(videoHookCalls).toHaveLength(1)
+      expect(working.entries).toEqual({})
+      expect(video.status).toBe('completed')
+      expect(video.error).toBeUndefined()
+    })
+
+    it('keeps the entry that the repair path manages to write afterwards', async () => {
+      // The complement of the case above: when the group DOES reach `allDone`,
+      // the group-complete repair write runs outside the video hook's failure
+      // and lands the entry. Nothing clears the `item.error` the manager set —
+      // accepted deliberately (it was true when it was set), and stated in
+      // `docs/data-flow.md` rather than given a manager API to undo it.
+      const real = makeStore()
+      let firstWrite = true
+      const flaky: DownloadedEpisodesStore = {
+        get: () => real.get('downloadedEpisodes'),
+        set: (key, value) => {
+          if (firstWrite) {
+            firstWrite = false
+            throw new Error('ENOSPC: no space left on device')
+          }
+          real.set(key, value)
+        }
+      }
+      const handlers = realHandlers(flaky)
+      dm.onVideoDownloaded((filePath, item) => {
+        videoHookCalls.push({ filePath, itemId: item.id })
+        handlers.handleVideoDownloaded(filePath, item)
+      })
+      dm.onEpisodeComplete(handlers.handleEpisodeComplete)
+
+      const video = makeItem({})
+      seed(dm, [video])
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(real.entries).toEqual({ '100:1:1': ENTRY })
+      expect(video.error).toMatch(/ENOSPC/)
     })
   })
 })

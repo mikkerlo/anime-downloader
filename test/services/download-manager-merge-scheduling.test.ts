@@ -64,6 +64,8 @@ function seed(
 
 interface MergeCall {
   videoPath: string
+  /** Where the pass told ffmpeg to write the `.mkv` — the file the catch unlinks. */
+  outputPath: string
   resolve: () => void
   reject: (err: Error) => void
 }
@@ -86,6 +88,7 @@ function stubFfmpeg(dm: DownloadManager): MergeCall[] {
       }
       const call: MergeCall = {
         videoPath: opts.videoPath,
+        outputPath: opts.outputPath,
         resolve: () => settle(resolve),
         reject: (err) => settle(() => reject(err))
       }
@@ -437,6 +440,215 @@ describe('DownloadManager merge scheduling (#410)', () => {
       await scan
 
       expect(calls.map((c) => c.videoPath)).toEqual([scanned, bPath])
+      expect(dm.getMergeStatus(2)).toBe('completed')
+    })
+  })
+
+  // The merge-complete dispatch used to sit inside the ffmpeg try, whose catch
+  // `unlinkSync`es the output and records the merge as 'failed'. That made the
+  // disposition of a consumer failure depend on one keyword on the far side of
+  // a slot typed `=> void`: a rejection from an `async` consumer floated away
+  // as an unhandled rejection, while a *synchronous* throw destroyed a
+  // successfully merged file and blamed ffmpeg for it. #428 moved the dispatch
+  // out of the try and behind a `merged` flag, and routed it through
+  // `dispatchHook` so both throw shapes land in the same handler.
+  //
+  // The two blocks below are the two halves of that. This one is the gate — the
+  // dispatch must fire on the success path and on nothing else; the next is the
+  // consumer's own failure, which must not come back as a merge failure.
+  describe('merge-complete dispatch gate (#428)', () => {
+    /** Collects the `mkvFilename` of every merge the hook is told about. */
+    const watchHook = (): string[] => {
+      const seen: string[] = []
+      dm.onMergeComplete((info) => {
+        seen.push(info.mkvFilename)
+      })
+      return seen
+    }
+
+    it('fires exactly once for a successful merge (positive control for the gate)', async () => {
+      // Without this, every assertion below is satisfied by a gate that is
+      // simply always false.
+      const seen = watchHook()
+      const a = episodeA()
+      putVideo('ep1.mp4')
+      seed(dm, [a])
+      const calls = stubFfmpeg(dm)
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      calls[0].resolve()
+      await cycle
+
+      expect(seen).toEqual(['ep1.mkv'])
+      expect(dm.getMergeStatus(1)).toBe('completed')
+    })
+
+    it('does not fire when ffmpeg rejects, and still records the merge as failed', async () => {
+      // The reason the dispatch is gated on a flag rather than left as a
+      // fall-through after the catch: out here, "the try finished" no longer
+      // means "the merge succeeded".
+      const seen = watchHook()
+      const a = episodeA()
+      putVideo('ep1.mp4')
+      seed(dm, [a])
+      const calls = stubFfmpeg(dm)
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      calls[0].reject(new Error('nvenc unavailable'))
+      await cycle
+
+      expect(seen).toEqual([])
+      expect(dm.getMergeStatus(1)).toBe('failed')
+    })
+
+    it('does not fire for a per-translation cancel, and still fires for the rest of the pass', async () => {
+      // The cancel lands in the catch's `mergeCancelled || cancelledMerges`
+      // branch, which deletes the status rather than recording 'failed' — so
+      // the gate has to hold for that branch too, while B still completes.
+      const seen = watchHook()
+      const a = episodeA()
+      const aSub = makeItem({
+        id: 'sub-1',
+        translationId: 1,
+        kind: 'subtitle',
+        filename: 'ep1.ass',
+        episodeLabel: 'ep1',
+        status: 'downloading'
+      })
+      const b = episodeB()
+      putVideo('ep1.mp4')
+      putVideo('ep2.mp4')
+      seed(dm, [a, aSub, b])
+      const calls = stubFfmpeg(dm)
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      dm.cancelByEpisode('Anime', 'ep1')
+      await flush()
+      expect(calls).toHaveLength(2)
+      calls[1].resolve()
+      await cycle
+
+      expect(seen).toEqual(['ep2.mkv'])
+      expect(dm.getMergeStatus(1)).toBeNull()
+      expect(dm.getMergeStatus(2)).toBe('completed')
+    })
+
+    it('does not fire for a global cancel', async () => {
+      const seen = watchHook()
+      const a = episodeA()
+      putVideo('ep1.mp4')
+      seed(dm, [a])
+      // `cancelMerge()` kills the active command, which rejects the stub — so
+      // the cycle settles without the test resolving anything by hand.
+      stubFfmpeg(dm)
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      dm.cancelMerge()
+      await cycle
+
+      expect(seen).toEqual([])
+      expect(dm.getMergeStatus(1)).toBeNull()
+    })
+  })
+
+  describe('merge-complete consumer failures (#428)', () => {
+    /**
+     * Collects process-level unhandled rejections for the duration of one test.
+     * Vitest fails a run on an unhandled rejection anyway, but asserting it
+     * here says which dispatch is responsible instead of failing the file.
+     */
+    function captureUnhandled(): { seen: unknown[]; stop: () => void } {
+      const seen: unknown[] = []
+      const onUnhandled = (reason: unknown): void => {
+        seen.push(reason)
+      }
+      process.on('unhandledRejection', onUnhandled)
+      return { seen, stop: () => process.off('unhandledRejection', onUnhandled) }
+    }
+
+    /** Runs one group to a successful merge with `consumer` in the hook slot. */
+    async function mergeWith(
+      consumer: (info: { mkvFilename: string }) => void | Promise<void>
+    ): Promise<{ outputPath: string }> {
+      const a = episodeA()
+      putVideo('ep1.mp4')
+      seed(dm, [a])
+      const calls = stubFfmpeg(dm)
+      dm.onMergeComplete(consumer)
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      // What ffmpeg would have left behind. The point of these two cases is
+      // that this file is still here afterwards.
+      fs.writeFileSync(calls[0].outputPath, 'merged-bytes')
+      calls[0].resolve()
+      await cycle
+      // Let a rejected consumer promise settle into dispatchHook's `.catch`.
+      await flush()
+      return { outputPath: calls[0].outputPath }
+    }
+
+    it('keeps the merged .mkv and the completed status when the consumer throws synchronously', async () => {
+      const watch = captureUnhandled()
+      try {
+        const { outputPath } = await mergeWith(() => {
+          throw new Error('cold move exploded')
+        })
+
+        // Before #428 this is the destructive case: the throw fell into the
+        // ffmpeg catch, which unlinked the .mkv and recorded 'failed'.
+        expect(fs.existsSync(outputPath)).toBe(true)
+        expect(dm.getMergeStatus(1)).toBe('completed')
+        expect(watch.seen).toEqual([])
+      } finally {
+        watch.stop()
+      }
+    })
+
+    it('keeps the merged .mkv and the completed status when the consumer rejects', async () => {
+      const watch = captureUnhandled()
+      try {
+        const { outputPath } = await mergeWith(async () => {
+          throw new Error('cold move rejected')
+        })
+
+        expect(fs.existsSync(outputPath)).toBe(true)
+        expect(dm.getMergeStatus(1)).toBe('completed')
+        // The half that was never destructive but was never observed either:
+        // an un-awaited rejection used to escape the manager entirely.
+        expect(watch.seen).toEqual([])
+      } finally {
+        watch.stop()
+      }
+    })
+
+    it('still merges the next group after a consumer failure', async () => {
+      // The failure is the consumer's, not the pass's — a cycle that aborted on
+      // it would strand every queued merge behind one broken handler.
+      const a = episodeA()
+      const b = episodeB()
+      const aPath = putVideo('ep1.mp4')
+      const bPath = putVideo('ep2.mp4')
+      seed(dm, [a, b])
+      const calls = stubFfmpeg(dm)
+      dm.onMergeComplete(() => {
+        throw new Error('cold move exploded')
+      })
+
+      const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+      await flush()
+      calls[0].resolve()
+      await flush()
+      expect(calls).toHaveLength(2)
+      calls[1].resolve()
+      await cycle
+
+      expect(calls.map((c) => c.videoPath)).toEqual([aPath, bPath])
+      expect(dm.getMergeStatus(1)).toBe('completed')
       expect(dm.getMergeStatus(2)).toBe('completed')
     })
   })

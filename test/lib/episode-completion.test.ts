@@ -74,6 +74,16 @@ interface Harness {
    * fire-and-forget test below can see the handler come back mid-probe.
    */
   recordCheckGate: Promise<void> | null
+  /**
+   * When set, `store.set('downloadedEpisodes', …)` throws it — the shape of a
+   * real electron-store write failure (#428). `set` is a synchronous whole-file
+   * atomic JSON write, so ENOSPC, EACCES on a locked userData dir and EROFS all
+   * come out of it, and `persistDownloadedEpisode` has no try/catch of its own.
+   * The two tails then deliberately differ: the per-video one lets it
+   * propagate, so the manager can mark `item.error`; the group-complete repair
+   * one absorbs it, because it has no item and the rest of the tail must run.
+   */
+  storeSetError: Error | null
 }
 
 function makeHarness(settings: Partial<Settings> = {}): Harness {
@@ -87,6 +97,7 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
     }) as EpisodeCompletionStore['get'],
     set: ((key: 'downloadedEpisodes', value: DownloadedEpisodesMap) => {
       calls.push(`store.set(${key})`)
+      if (h.storeSetError) throw h.storeSetError
       held = structuredClone(value)
     }) as EpisodeCompletionStore['set'],
     get entries() {
@@ -174,7 +185,8 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
     ffmpegAvailable: true,
     ffmpegPath: '/bin/ffmpeg',
     coldAdvanced: false,
-    recordCheckGate: null
+    recordCheckGate: null,
+    storeSetError: null
   }
   return h
 }
@@ -265,6 +277,43 @@ describe('episode-completion — the group-complete tail', () => {
       expect(gated.indexOf('store.set(downloadedEpisodes)')).toBeGreaterThan(0)
       expect(h.calls.indexOf('invalidate(Anime)')).toBe(0)
       expect(h.calls).not.toContain('store.set(downloadedEpisodes)')
+    })
+  })
+
+  // The repair write is the one metadata write with no download item behind it
+  // — an `EpisodeCompleteInfo` carries no queue row — so there is no
+  // `item.error` for `DownloadManager.dispatchHook` to mark, and the manager
+  // would absorb the throw into a log either way. What it cannot do is put back
+  // the rest of this tail, which an unguarded throw skips entirely. Hence a
+  // local try/catch here and a propagating write in the per-video tail (#428).
+  describe('the repair write is guarded locally', () => {
+    it('still merges when the repair write throws', async () => {
+      h.settings.autoMerge = true
+      h.storeSetError = Object.assign(new Error('ENOSPC: no space left on device'), {
+        code: 'ENOSPC'
+      })
+
+      await expect(h.handlers.handleEpisodeComplete(makeInfo())).resolves.toBeUndefined()
+
+      expect(h.calls).toContain('store.set(downloadedEpisodes)')
+      // The whole point: the metadata is already lost, and losing the merge
+      // with it would leave an unmerged .mp4/.ass pair as well.
+      expect(h.calls).toContain('mergeCompleted(/bin/ffmpeg,/bin/ffprobe,copy)')
+    })
+
+    it('still moves to cold, notifies and schedules when the repair write throws', async () => {
+      // The other branch of the merge condition — everything downstream of the
+      // write in the no-merge path is equally skipped by an unguarded throw.
+      h.coldAdvanced = true
+      h.settings.autoMoveToCold = true
+      h.settings.notificationMode = 'each'
+      h.storeSetError = new Error('EROFS: read-only file system')
+
+      await expect(h.handlers.handleEpisodeComplete(makeInfo())).resolves.toBeUndefined()
+
+      expect(h.calls).toContain('moveToCold(Anime,1,Author)')
+      expect(h.calls).toContain('notify(Download complete|Anime — ep1)')
+      expect(h.calls).toContain('scheduleSkip(100,Anime)')
     })
   })
 
@@ -650,6 +699,38 @@ describe('episode-completion — the per-video tail', () => {
       'recordCheck(x.mp4)',
       'recordCheckSettled(x.mp4)'
     ])
+  })
+
+  // The per-video tail is the one hook whose failure has a queue row to land
+  // on, so the disposition is split (#428): a real store failure propagates to
+  // `DownloadManager.dispatchHook`, which marks `item.error`; a `false` return
+  // does not, because it only means the item could never have been keyed.
+  describe('a failed write vs. an unkeyable item (#428)', () => {
+    it('lets a store failure propagate, so the manager can mark the row', () => {
+      const h = makeHarness()
+      h.storeSetError = Object.assign(new Error('ENOSPC: no space left on device'), {
+        code: 'ENOSPC'
+      })
+
+      expect(() => h.handlers.handleVideoDownloaded('/dl/x.mp4', makeItem())).toThrow(/ENOSPC/)
+
+      // And nothing after the write runs — the probe is skipped, which is the
+      // accepted cost of keeping the write above the .mp4 filter.
+      expect(h.calls).toEqual(['store.set(downloadedEpisodes)'])
+    })
+
+    it('returns normally for an unkeyable item and still probes', () => {
+      // Same assertion as the `animeId: 0` case above, restated as the negative
+      // of the one before it: a `false` return must not be turned into a throw
+      // on the way out, or every manual-scan download would get a permanent red
+      // line for a write that could never have been read back.
+      const h = makeHarness()
+
+      expect(() =>
+        h.handlers.handleVideoDownloaded('/dl/x.mp4', makeItem({ animeId: 0 }))
+      ).not.toThrow()
+      expect(h.calls).toEqual(['recordCheck(x.mp4)'])
+    })
   })
 })
 

@@ -187,7 +187,9 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
    per-video write existed; both writers take their fields from the video item,
    so the two agree. It skips a group with no video item at all
    (`hasVideo === false`), which 3c produces from an embed that has a
-   `subtitlesUrl` and no usable stream.
+   `subtitlesUrl` and no usable stream. When the write FAILS, the video item is
+   marked with `item.error` so the row stops claiming a clean download — see
+   "DownloadManager Hook Boundary" below for the whole policy.
 6. processQueue(): run up to 2 concurrent downloads
    - Queued subtitles start before queued videos (#63): the .ass must be on
      disk before watch-while-downloading playback begins
@@ -239,6 +241,11 @@ mergeCompleted(ffmpegPath, videoCodec):
        relocate a source the merge was about to unlink and then fail on one it
        had already unlinked. The payload carries the merged .mkv's
        download-dir-relative path so the handler moves exactly that file.
+       Dispatched OUTSIDE the ffmpeg try and gated on a local `merged` flag
+       (#428): the try's catch unlinks the output and records 'failed', so a
+       consumer bug inside it could delete a successfully merged file and blame
+       ffmpeg. The flag, not a fall-through, because the catch also handles a
+       cancelled merge and neither it nor a failure may fire a completion hook.
     8. Sequential merging (one at a time) enforced via lock
     9. Merge can be cancelled (kills ffmpeg process, cleans up partial output)
 
@@ -254,6 +261,69 @@ fixMetadata(ffmpegPath, ffprobePath):
   Uses temp file + atomic rename to avoid corruption
   Available from Settings > Debug tab
 ```
+
+## DownloadManager Hook Boundary
+
+`DownloadManager` dispatches to four consumer callbacks — `onVideoDownloaded`,
+`onEpisodeComplete`, `onMergeComplete`, `onQueueComplete`. All four are
+registered once in `src/main/index.ts` and all four are implemented by
+`src/main/lib/episode-completion.ts`. One slot each, not a list: a second
+registration silently replaces the first.
+
+**One error policy for all four (#428).** Every dispatch goes through the
+manager's private `dispatchHook`, which:
+
+- calls the consumer inside a `try`, and — if the consumer handed back a
+  thenable — attaches a `.catch` to it, so a synchronous throw and a rejected
+  promise get the same disposition. The four slots are typed
+  `=> void | Promise<void>` so that the contract says this rather than leaving
+  it to the far side of the slot. Before this, the disposition depended on
+  whether the consumer happened to be declared `async`: a sync throw out of
+  `onMergeComplete` fell into the ffmpeg `catch`, which `unlink`s the freshly
+  merged `.mkv` and records the merge as `failed`, while the two timer
+  dispatches turned a throw into an unhandled rejection or an uncaught
+  exception raised from a `setTimeout` in the main process. The merge dispatch
+  now also sits outside that try (see Merge Pipeline step 7), so the
+  destructive path is structurally gone rather than merely absorbed.
+- **awaits nothing.** The merge consumer awaits a cold-storage move; awaiting it
+  here would hold `this.merging`, and every queued merge behind it, for a
+  multi-GB cross-drive copy that the between-groups cancel check cannot
+  interrupt. So no dispatch site's timing changes.
+- logs the failure, and — for `onVideoDownloaded`, the only hook that carries a
+  queue item — sets `item.error` on the video item. Nothing new is needed on the
+  renderer side: `DownloadsView.vue` renders the video item's `error` whatever
+  its status, so a `completed` row with an error shows the line. `dispatchHook`
+  itself must never throw: its `onVideoDownloaded` call site sits inside
+  `startDownload`'s `try`, whose `catch` re-queues with exponential backoff, so
+  an escape would re-download a video that is already on disk.
+
+**Why the video hook is the one that gets a row marked.** A lost
+`downloadedEpisodes` entry is permanent. `lib/episode-file-scan.ts` never touches
+the store and no filename carries a translation id, so `fileStatus` self-heals on
+a rescan and `episodeMeta` structurally cannot — the result is a video on disk
+with no Play and no Delete. Since `item.status` is already `completed` and
+already persisted above the dispatch, an unmarked failure means the queue row
+reports a clean download for an episode whose metadata is gone.
+
+**A `false` return from `persistDownloadedEpisode` is not a failure.** It means
+only `animeId <= 0 || !episodeInt` — an item that could never have been keyed and
+so could never have been read back, which the rest of main skips quietly. That
+gets a `console.warn` naming the item and nothing else; marking it would put a
+permanent red line on every legitimately unkeyable (manual-scan) download. Only a
+throw out of `store.get` / `store.set` marks the row.
+
+**The repair write is guarded locally instead.** `onEpisodeComplete` re-writes
+the same entry as a repair path, but an `EpisodeCompleteInfo` carries no queue
+item, so there is no `item.error` to set — and an unguarded throw there would
+skip the whole rest of that tail: the auto-merge, the cold move, the notification
+and the skip analysis. So that one write has its own `try`/`catch` in the
+handler, and the tail continues.
+
+**`item.error` is never cleared.** If the primary per-video write fails and the
+later repair write succeeds, the entry exists while the row still shows the
+error. That is accepted deliberately: the error was true when it was set, and
+adding a manager API to retract it buys less than it costs. "Clear completed"
+removes completed rows anyway, so the line does not outlive the queue.
 
 ## File Management
 

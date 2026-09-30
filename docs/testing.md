@@ -493,10 +493,15 @@ tests* above — two exact, one a floor and one a ceiling:
   #393 inserted exactly that line and the build went **red** and wrong. The
   predicates classify the anchor's *new* landing, not the `if (…)` line it used
   to name, and the ladder is interleaved with comment lines and closes its
-  hash-comment branch on a bare `}` — so an insertion above it re-points two of
-  the four onto lines the comment-line and bare-brace tests do catch (measured on
-  this tree; #393 measured three of four on its own), the landing count is exact,
-  and the gate fails. Since #407 the drift check names them individually as well.
+  hash-comment branch on a bare `}` — so an insertion above it re-points one or
+  two of the four onto lines the comment-line and bare-brace tests do catch,
+  depending both on where the line goes and on what it is. Measured: a live-code
+  line above the blank predicate's comment block catches two; directly above
+  `if (text === '')` it catches one, the bare-brace anchor, because the first
+  anchor then lands on the inserted line itself — and two again if that inserted
+  line is a comment. #393 measured three of four on its own tree. Either way the
+  landing count is exact, and the gate fails. Since #407 the drift check names
+  them individually as well.
   The failure that produces is narrower than either prediction, and it is the
   part worth knowing: it names whichever siblings happened to land on a comment
   or a brace and says nothing about the ones that landed on live code, which are

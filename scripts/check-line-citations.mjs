@@ -80,11 +80,16 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // inserted exactly that line: the build went RED and wrong. The predicates
 // classify the anchor's NEW landing, not the `if (…)` line it used to name, and
 // the ladder is interleaved with comment lines and closes its `#` branch on a
-// bare `}` — so an insertion above it re-points two of the four onto lines the
-// comment-line and bare-brace tests do catch (measured on this tree; #393
-// measured three of four on its own), `suspicious` rises, the count is compared
-// with `!==`, and the gate fails. Since #407 `verifyNoDrift()` names them
-// individually as well.
+// bare `}` — so an insertion above it re-points one or two of the four onto
+// lines the comment-line and bare-brace tests do catch, depending both on where
+// the line goes and on what it is. All measured on this tree: a live-code line
+// above the blank predicate's comment block catches two, `suspicious` 4 -> 6;
+// directly above `if (text === '')` it catches one, the bare-brace anchor, at
+// 4 -> 5, because the first anchor then lands on the inserted line itself; make
+// that inserted line a comment and it is two again. #393 measured three of four
+// on its own tree. Either way `suspicious`
+// rises, the count is compared with `!==`, and the gate fails. Since #407
+// `verifyNoDrift()` names them individually as well.
 //
 // The failure it produces is the thing worth knowing, and it is narrower than
 // either "green and wrong" or "caught": it names whichever siblings happened to
@@ -372,9 +377,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:373 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:378 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:397 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:402 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -383,8 +388,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:396 and the `<!--` test at
-  // scripts/check-line-citations.mjs:414 have no measured false positive in
+  // scripts/check-line-citations.mjs:401 and the `<!--` test at
+  // scripts/check-line-citations.mjs:419 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and

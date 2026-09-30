@@ -132,15 +132,19 @@ export interface ColdStorageService {
   /** True iff a `.mkv` or `.mp4` for `(animeName, episodeInt, author)` exists in any storage root. */
   episodeFileExists(animeName: string, episodeInt: string, author: string): boolean
   /**
-   * Move every file matching one episode's base prefix from hot to cold.
+   * Move one episode's files — `.mkv`, `.mp4`, `.ass` — from hot to cold, by
+   * their **exact** names: `<anime> - NN [author].ext` as `enqueue` writes them,
+   * plus the legacy untagged `<anime> - NN.ext` twin. Takes `episodeInt` (the
+   * field the on-disk `NN` derives from), not `episodeLabel`, and scopes the
+   * match to one author so a sibling translation is left alone (#416).
    * A per-file failure is logged and the rest still move (#414).
    */
-  moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void>
+  moveEpisodeToColdStorage(animeName: string, episodeInt: string, author: string): Promise<void>
   /**
    * Move exactly one file from hot to cold, named by its **download-dir-relative**
    * path — anime directory included, as `download-manager`'s `filename` fields
-   * carry it. Bypasses the tag-less prefix scan `moveEpisodeToColdStorage` does,
-   * which sweeps sibling translations of the same episode (#414, #416).
+   * carry it. Narrower than `moveEpisodeToColdStorage`, which is scoped to an
+   * episode+author rather than to a single file (#414, #416).
    * A failed move is logged and resolves, like `moveEpisodeToColdStorage`'s.
    */
   moveFileToColdByRelPath(relPath: string): Promise<void>
@@ -535,7 +539,11 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     }
   }
 
-  async function moveEpisodeToColdStorage(animeName: string, episodeLabel: string): Promise<void> {
+  async function moveEpisodeToColdStorage(
+    animeName: string,
+    episodeInt: string,
+    author: string
+  ): Promise<void> {
     const coldDir = getColdStorageDir()
     if (!coldDir) return
     const hotDir = getDownloadDir()
@@ -546,16 +554,37 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
 
     if (!fs.existsSync(hotAnimeDir)) return
 
-    // episodeLabel is like "01", we need to find matching files
-    const padded = episodeLabel.padStart(2, '0')
+    // The exact names `enqueue` writes (`download-manager.ts`: `padStart(2,'0')`
+    // then `sanitizeFilename(anime - NN)` + ` [sanitizeFilename(author)]`), plus
+    // the legacy untagged twin that predates the tag and that nothing else will
+    // ever collect. Built the way `deleteEpisodeFiles` builds it — the tag is
+    // appended unconditionally, so an empty author matches the `[]` form that
+    // `enqueue` really writes, not the bare base.
+    //
+    // This used to be a `startsWith(base)` prefix test, which was wrong three
+    // ways (#416): the argument was `episodeLabel` (`"1 серия"` on real API
+    // data, where the file is named from `episodeInt`, so nothing matched at
+    // all); the prefix stopped before ` [author]`, so moving one translation
+    // swept its siblings — which can still be mid-download; and it was
+    // unbounded, so episode 10 also matched `- 100` and `- 10.5`.
+    const padded = episodeInt.padStart(2, '0')
     const base = sanitizeFilename(`${animeName} - ${padded}`)
+    const taggedBase = `${base} [${sanitizeFilename(author)}]`
+    const wanted = new Set<string>()
+    for (const ext of ['.mkv', '.mp4', '.ass']) {
+      wanted.add(`${taggedBase}${ext}`)
+      wanted.add(`${base}${ext}`)
+    }
 
-    // Move all files matching this episode base (including [Author] tagged variants)
+    // Filter the listing rather than iterating `wanted` and moving each name: a
+    // missing candidate is the normal case (no `.mp4` survives a merge, legacy
+    // twins usually do not exist), and `moveFileToCold`'s `copyFile` fallback
+    // rejects ENOENT for a name that is not on disk. Filtering also keeps the
+    // `.part` shadow guard below reading the directory it already listed.
     try {
       const files = fs.readdirSync(hotAnimeDir)
       for (const file of files) {
-        if (!file.startsWith(base)) continue
-        if (!['.mkv', '.mp4', '.ass'].some((ext) => file.endsWith(ext))) continue
+        if (!wanted.has(file)) continue
         // Never move .part files or files with in-progress downloads
         if (file.endsWith('.mp4') && fs.existsSync(path.join(hotAnimeDir, file + '.part'))) continue
         const src = path.join(hotAnimeDir, file)

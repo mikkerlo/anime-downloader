@@ -57,15 +57,17 @@ export interface EpisodeCompletionStore {
 
 /**
  * The `DownloadManager` methods the tails call. Narrowed to four, and
- * `getEpisodeGroups` narrowed further to the four `EpisodeGroup` fields
- * `finalizeDeferredEpisodes` actually reads — a fake then costs four fields
- * instead of fourteen.
+ * `getEpisodeGroups` narrowed further to the five `EpisodeGroup` fields
+ * `finalizeDeferredEpisodes` actually reads — a fake then costs five fields
+ * instead of fourteen. `episodeLabel` is deliberately absent: the cold-move
+ * takes `episodeInt` + `author`, which is what the filenames are built from
+ * (#416), and this pass sends no notification that would need the label.
  */
 export interface EpisodeCompletionDownloadManager {
   finalizeDeferred: () => number[]
   getEpisodeGroups: () => Pick<
     EpisodeGroup,
-    'translationId' | 'animeName' | 'animeId' | 'episodeLabel'
+    'translationId' | 'animeName' | 'animeId' | 'episodeInt' | 'author'
   >[]
   getMergeStatus: (translationId: number) => MergeStatus | null
   mergeCompleted: (ffmpegPath: string, ffprobePath: string, videoCodec?: string) => Promise<void>
@@ -78,7 +80,11 @@ export interface EpisodeCompletionDeps {
   fileScanner: { invalidate: (animeName: string) => void }
   coldStorageService: {
     isAdvanced: () => boolean
-    moveEpisodeToColdStorage: (animeName: string, episodeLabel: string) => Promise<void>
+    moveEpisodeToColdStorage: (
+      animeName: string,
+      episodeInt: string,
+      author: string
+    ) => Promise<void>
     moveFileToColdByRelPath: (relPath: string) => Promise<void>
   }
   skipAnalysisService: {
@@ -163,7 +169,15 @@ export function createEpisodeCompletionHandlers(
         if (!group) continue
         fileScanner.invalidate(group.animeName)
         if (coldStorageService.isAdvanced() && store.get('autoMoveToCold')) {
-          await coldStorageService.moveEpisodeToColdStorage(group.animeName, group.episodeLabel)
+          // `episodeInt` + `author`, not `episodeLabel`: the on-disk name is
+          // built from `episodeInt`, and the match is author-scoped so a
+          // sibling translation — possibly still mid-download — stays put
+          // (#416).
+          await coldStorageService.moveEpisodeToColdStorage(
+            group.animeName,
+            group.episodeInt,
+            group.author
+          )
         }
         if (group.animeId > 0)
           skipAnalysisService.scheduleAutoSkipAnalysis(group.animeId, group.animeName)
@@ -221,9 +235,10 @@ export function createEpisodeCompletionHandlers(
       const codec = store.get('videoCodec') || 'copy'
       await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
     } else {
-      // Auto-move to cold if merge is disabled
+      // Auto-move to cold if merge is disabled. `episodeInt` + `author`, not
+      // `episodeLabel` — see the finalize pass above (#416).
       if (coldStorageService.isAdvanced() && store.get('autoMoveToCold')) {
-        await coldStorageService.moveEpisodeToColdStorage(animeName, episodeLabel)
+        await coldStorageService.moveEpisodeToColdStorage(animeName, episodeInt, author)
       }
       const mode = store.get('notificationMode')
       if (mode === 'each') {
@@ -250,11 +265,11 @@ export function createEpisodeCompletionHandlers(
   }): Promise<void> {
     fileScanner.invalidate(animeName)
     // Auto-move to cold after merge — exactly the .mkv this merge produced, by
-    // its download-dir-relative path (#414). The prefix-matching
-    // moveEpisodeToColdStorage carries no author tag, so from here it would
-    // sweep a sibling translation's still-unmerged .mp4/.ass into cold. The
-    // merge pass unlinks its own sources before firing this callback, so
-    // nothing else in that directory belongs to this merge anyway.
+    // its download-dir-relative path (#414). Not moveEpisodeToColdStorage: that
+    // one is scoped to an episode+author (#416), which is right for its own two
+    // callers but still wider than one file. The merge pass unlinks its own
+    // sources before firing this callback, so nothing else in that directory
+    // belongs to this merge anyway.
     if (coldStorageService.isAdvanced() && store.get('autoMoveToCold')) {
       await coldStorageService.moveFileToColdByRelPath(mkvFilename)
     }

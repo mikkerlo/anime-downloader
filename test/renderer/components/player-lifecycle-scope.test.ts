@@ -863,12 +863,42 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // vacuous the way a per-iteration re-sample would.
     const sample = 'const walkTranslation = translationEpoch;'
     expect(handler).toContain(sample)
-    expect(handler.indexOf(sample)).toBeLessThan(handler.indexOf('const stepTowards ='))
-    const walk = stripComments(slice('const stepTowards =', 'stepTowards()'))
+    expect(handler.indexOf(sample)).toBeLessThan(handler.indexOf('walkEpisodeSteps('))
+    const walk = stripComments(slice('void walkEpisodeSteps(', '\n}'))
     expect(walk).toContain('activeEpisodeIndex.value !== idx')
     expect(walk).toContain('!navigating.value')
     expect(walk).toContain('translationEpoch === walkTranslation')
     expect(walk).not.toContain('switchingTranslation')
+  })
+
+  it('stops the walk on a step that declined to move, not only on observed state', () => {
+    // #419. The three terms above are all state the walk reads from OUTSIDE the
+    // step, and none of them can see a step that refused to advance: a boundary
+    // no-op, an episode with no usable translation, or a failed on-demand fetch
+    // all leave `activeEpisodeIndex` where it was and release `navigating` on the
+    // way out. The old `while` loop re-read both as permission and called again
+    // with every term unchanged — a tight retry of the same failing step. Worse,
+    // the boundary check is `goToEpisode`'s first statement, so that retry could
+    // resolve without ever awaiting a real task: a microtask spin that starved
+    // timers, input and rAF for as long as the room stayed on that episode.
+    //
+    // Fails against the pre-#419 source, where the loop is a bare `while` and
+    // `goToEpisode` returns `Promise<void>` with no outcome to break on.
+    const handler = stripComments(
+      slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
+    )
+    expect(handler).toContain('void walkEpisodeSteps(')
+    expect(handler).toContain('() => goToEpisode(dir)')
+    // The loop itself is gone from the component — the break-on-outcome rule
+    // lives in `walkEpisodeSteps` (see `test/renderer/utils.test.ts`), where it
+    // is reachable by a real unit test instead of only by a source scan.
+    expect(handler).not.toContain('while (')
+    // And the outcome type is what makes the break possible at all: a
+    // `Promise<void>` signature here would type-error, but a scan is what keeps
+    // the claim visible next to the walk it protects.
+    expect(SRC).toContain(
+      "async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutcome> {"
+    )
   })
 })
 
@@ -945,20 +975,21 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
   }
 
   /**
-   * Walks OUTWARD from `at` to an enclosing `{`, never inward from a known
-   * opener and never by searching for one. `if (!resolvedTr) {` occurs FOUR
-   * times inside `goToEpisode` — the first three are the resolution-chain
-   * fallbacks (b)/(c)/(d) and none of them contains a clear — so a matcher that
-   * searches for that string finds the wrong block.
+   * Walks OUTWARD from `at` to the enclosing FUNCTION body's `{`, never inward
+   * from a known opener and never by searching for one. Searching is what makes
+   * a needle-based matcher wrong here: guard shapes repeat inside these two
+   * functions — `if (navigationEpoch !== myNav) return` alone occurs six times
+   * in `goToEpisode` — so `indexOf` on any of them finds a block that is not the
+   * one containing the clear under test.
    */
-  function enclosing(src: string, at: number, functionsOnly: boolean): number {
+  function enclosing(src: string, at: number): number {
     let depth = 0
     for (let i = at; i >= 0; i--) {
       const ch = src[i]
       if (ch === '}') depth++
       else if (ch === '{') {
         if (depth > 0) depth--
-        else if (!functionsOnly || isFunctionBody(src, i)) return i
+        else if (isFunctionBody(src, i)) return i
       }
     }
     return -1
@@ -972,13 +1003,27 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
     return [start, end]
   }
 
+  /**
+   * `early` is the whole statement, including the `;`, because branch (b) asserts
+   * that a `nextTick` callback OPENS with it and those callbacks still return
+   * void.
+   *
+   * `compare` is the same test with the returned value cut off, and it exists
+   * because #419 gave `goToEpisode` an outcome: its ownership bails now read
+   * `return 'superseded';` above the episode-identity write and `return 'moved';`
+   * below it, so no single statement literal reaches every #317 block any more.
+   * Still one literal PER FLOW rather than a shared `'Epoch !== my'`-style
+   * pattern — a matcher loose enough to cover both flows would also accept a
+   * mismatched pair (`translationEpoch !== myNav`), which is the failure the old
+   * per-flow literal was chosen to catch.
+   */
   function callers(): {
     name: string
     flag: string
     guard: string
     early: string
+    compare: string
     clears: number
-    bare: number
     bounds: [number, number]
   }[] {
     return [
@@ -987,8 +1032,8 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
         flag: 'switchingTranslation',
         guard: 'if (translationEpoch === mySwitch) switchingTranslation.value = false;',
         early: 'if (translationEpoch !== mySwitch) return;',
+        compare: 'if (translationEpoch !== mySwitch) return',
         clears: 5,
-        bare: 0,
         bounds: boundsOf('async function selectTranslation(', '\nasync function goToEpisode(')
       },
       {
@@ -996,8 +1041,8 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
         flag: 'navigating',
         guard: 'if (navigationEpoch === myNav) navigating.value = false;',
         early: 'if (navigationEpoch !== myNav) return;',
+        compare: 'if (navigationEpoch !== myNav) return',
         clears: 6,
-        bare: 1,
         bounds: boundsOf('async function goToEpisode(', '\nfunction cancelAutoAdvance(')
       }
     ]
@@ -1034,7 +1079,7 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
     expect(SRC).toContain("'anime-video://' + encodeURIComponent(")
   })
 
-  it('classifies every flag clear as guarded, or as the one allowed bare site', () => {
+  it('classifies every flag clear as guarded, by its callback or by its own line', () => {
     for (const c of callers()) {
       const [start, end] = c.bounds
       const body = SRC.slice(start, end)
@@ -1048,43 +1093,8 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
       // one deleted, and a deleted clear strands the flag.
       expect(sites, `${c.name} clear count`).toHaveLength(c.clears)
 
-      let bare = 0
       for (const at of sites) {
-        // (c) is consulted FIRST — ordered, then positional. The allowed bare
-        // site sits at a straight-line position, so a positional-first
-        // classifier routes it to (a) and demands a compare the body
-        // deliberately does not have.
-        const block = enclosing(SRC, at, false)
-        expect(block, `${c.name}: clear outside any block at ${at}`).toBeGreaterThan(-1)
-        if (c.flag === 'navigating' && SRC.slice(0, block).trimEnd().endsWith('if (!resolvedTr)')) {
-          // (c) selects on SHAPE ALONE — an `if (!resolvedTr)` block sitting at
-          // a straight-line position — so on its own it pins where the allowed
-          // bare clear is, never WHY it is allowed to be bare. That reason is a
-          // claim about the source ABOVE it: nothing between
-          // `const myNav = ++navigationEpoch` and the clear suspends, so the
-          // ownership compare the other six carry would be dead code here.
-          // Without the pin below, an `await` dropped anywhere into the
-          // resolution chain reintroduces #302 at precisely the one site this
-          // change deliberately leaves bare, and the whole scan stays green —
-          // cardinality and confinement included — because the clear neither
-          // moved nor changed shape. Scoped to `start`, not an unscoped
-          // `indexOf`: the premise is about THIS function's epoch set site.
-          const set = SRC.indexOf('const myNav = ++navigationEpoch', start)
-          expect(set, `${c.name}: no epoch set site above the bare clear at ${at}`).toBeGreaterThan(
-            -1
-          )
-          expect(set, `${c.name}: the bare clear at ${at} sits above its epoch set`).toBeLessThan(
-            at
-          )
-          expect(
-            SRC.slice(set, at),
-            `${c.name}: the bare clear at ${at} is now reached across a suspension`
-          ).not.toContain('await ')
-          bare++
-          continue
-        }
-
-        const fn = enclosing(SRC, at, true)
+        const fn = enclosing(SRC, at)
         expect(fn, `${c.name}: clear outside any function body at ${at}`).toBeGreaterThan(-1)
         if (isNextTickBody(SRC, fn)) {
           // (b) — accepted only when the CALLBACK's first statement is the
@@ -1105,29 +1115,63 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
           expect(line, `${c.name}: unguarded straight-line clear at ${at}`).toBe(c.guard)
         }
       }
-      // Cardinality on branch (c), not just its shape: without it a ninth clear
-      // dropped in as `if (!resolvedTr) { … }` at any straight-line position
-      // classifies as the exception and lands green.
-      expect(bare, `${c.name}: allowed bare clears`).toBe(c.bare)
-
-      // Mutating this: a ninth bare clear must be added BELOW that function's
-      // first `nextTick(`, with the count literal above bumped alongside it.
-      // The bump matters because cardinality fires on ANY clear added inside
+      // Mutating this: a clear added anywhere at a straight-line position must
+      // carry `c.guard` verbatim, with the count literal above bumped alongside
+      // it. The bump matters because cardinality fires on ANY clear added inside
       // the slice, so without it the mutant goes red for a reason that has
       // nothing to do with classification and the (a)/(b) selector stays
-      // unpinned by the very mutation written to pin it. The placement matters
-      // because a clear dropped ABOVE the first `nextTick(` classifies as (a)
-      // and goes red even under a broken "is there a `nextTick(` textually
-      // above me" selector — which would otherwise route all four straight-line
-      // clears to (b) and let them be satisfied by an enclosing callback's
-      // early return.
+      // unpinned by the very mutation written to pin it. Placement matters the
+      // other way round now: a clear dropped ABOVE the first `nextTick(`
+      // classifies as (a) and goes red even under a broken "is there a
+      // `nextTick(` textually above me" selector — which would otherwise route
+      // every straight-line clear to (b) and let them be satisfied by an
+      // enclosing callback's early return.
       //
-      // Also, and this is not a hole: with the bump in place, the same ninth
-      // clear placed at an IN-CALLBACK position lands green. Branch (b) keys on
-      // the callback, not on the clear, so once a callback opens with its early
+      // Also, and this is not a hole: with the bump in place, the same clear
+      // placed at an IN-CALLBACK position lands green. Branch (b) keys on the
+      // callback, not on the clear, so once a callback opens with its early
       // return every clear inside it is guarded — which is semantically right.
       // (Claim about the ADD only: deleting a clear at an in-callback position
       // drops the slice count and goes red on cardinality.)
+    }
+  })
+
+  it('leaves no bare clear in either flow, the exception having lost its premise', () => {
+    // There used to be a third branch above: `goToEpisode`'s `if (!resolvedTr)`
+    // arm cleared `navigating` bare, and that was sound because nothing between
+    // `const myNav = ++navigationEpoch` and the clear suspended — the whole
+    // (a)-(d) resolution chain was synchronous, so no second run could be
+    // admitted in between and the ownership compare would have been dead code.
+    //
+    // #419 moved that chain into `resolveEpisodeTranslation` and made it
+    // awaitable, because an off-page target arrives with `translations: []` and
+    // has to be fetched before anything can be ranked. The premise is therefore
+    // gone, the exception with it, and this asserts BOTH halves — the count is
+    // zero, and the reason the count is zero is a suspension where there was
+    // none. Without the second half a later refactor could make the chain
+    // synchronous again and re-bare the clear while this scan stayed green on
+    // the classifier alone.
+    for (const c of callers()) {
+      const [start, end] = c.bounds
+      const body = SRC.slice(start, end)
+      const set = SRC.indexOf(
+        c.flag === 'navigating'
+          ? 'const myNav = ++navigationEpoch'
+          : 'const mySwitch = ++translationEpoch',
+        start
+      )
+      expect(set, `${c.name}: no epoch set site`).toBeGreaterThan(-1)
+      const first = body.indexOf(`${c.flag}.value = false`)
+      expect(first, `${c.name}: no clear at all`).toBeGreaterThan(-1)
+      const line = SRC.slice(
+        SRC.lastIndexOf('\n', start + first) + 1,
+        SRC.indexOf('\n', start + first)
+      ).trim()
+      expect(line, `${c.name}: the first clear is bare`).not.toBe(`${c.flag}.value = false;`)
+      expect(
+        SRC.slice(set, start + first),
+        `${c.name}: the first clear is no longer reached across a suspension`
+      ).toContain('await ')
     }
   })
 
@@ -1293,11 +1337,17 @@ describe('#302 — every caller-side flag clear is guarded by ownership', () => 
    * `CONTINUATIONS` is `it.each`-ed over both functions, and a literal loose
    * enough to match both would also pass a MISMATCHED pair
    * (`translationEpoch !== myNav`).
+   *
+   * `compare`, not `early`: #419 made `goToEpisode`'s bails return an outcome, so
+   * the statement they end with differs by position (`'superseded'` above the
+   * episode-identity write, `'moved'` below it) while the ownership TEST — the
+   * only thing this scan is asking about — is unchanged. Cutting the literal at
+   * `return` keeps it per-flow and keeps it a test of the compare.
    */
   function earlyFor(name: string): string {
     const c = callers().find((x) => x.name === name)
     expect(c, `no #302 caller entry for ${name}`).toBeTruthy()
-    return c!.early
+    return c!.compare
   }
 
   it.each(CONTINUATIONS)(

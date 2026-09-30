@@ -413,6 +413,58 @@ describe('useEpisodeDownloads — buildTranslationList / buildAllEpisodes', () =
     expect(out).toHaveLength(1)
     expect(out[0].translations).toEqual([{ id: 10, label: 'A', type: 'subRu', height: 720 }])
     expect(out[0].downloadedTrIds).toEqual([10])
+    // #419: the upstream episode id rides along so the player can fetch an entry
+    // it was handed no translations for. `episodeInt` is not a usable key —
+    // `getEpisodesBatch` takes ids — and the two differ here on purpose in the
+    // pin below.
+    expect(out[0].id).toBe(1)
+  })
+
+  it('leaves off-page entries translation-less while still marking them downloaded', () => {
+    // The two-source mismatch #419 works around, pinned rather than fixed here:
+    // `translations` comes from `deps.episodes`, which the detail view only ever
+    // fills for the PAGE_SIZE page it is showing, while `downloadedTrIds` comes
+    // from the anime-wide `episodeMeta`. So an anime longer than one page hands
+    // the player entries that claim a downloaded translation and list none.
+    //
+    // This is a pin, not a regression test: it is green before #419 and stays
+    // green after, because the fill is the PLAYER's job — `goToEpisode` fetches
+    // the target's page on demand. If a later change makes this composable
+    // fetch every page instead, this goes red and the on-demand path in
+    // `PlayerView` becomes dead code that should go with it.
+    const onPage = mkEpisode(1, '1')
+    const offPage = mkEpisode(31, '31')
+    const detail = {
+      ...onPage,
+      translations: [
+        { id: 10, type: 'subRu', authorsSummary: 'A', height: 720, isActive: 1 } as Translation
+      ],
+      duration: 1440,
+      mediaInfo: null,
+      translationCount: 1
+    } as unknown as EpisodeDetail
+    // Only the first page's detail is in the map — exactly what the detail view
+    // holds while showing page 1 of a 31-episode anime.
+    const episodes = ref(new Map<number, EpisodeDetail>([[1, detail]]))
+    const deps = makeDeps({
+      filteredEpisodes: computed(() => [onPage, offPage]),
+      episodes
+    })
+    const dl = useEpisodeDownloads(deps)
+    deps.episodeMeta.value = {
+      '1': [{ translationId: 10, author: 'A' } as unknown as EpisodeMeta],
+      '31': [{ translationId: 77, author: 'A' } as unknown as EpisodeMeta]
+    }
+    const out = dl.buildAllEpisodes()
+    expect(out).toHaveLength(2)
+    expect(out[1].episodeInt).toBe('31')
+    expect(out[1].translations).toEqual([])
+    // The half that makes the dead end silent rather than obvious: the entry
+    // looks playable to the resolution chain's arm (a) — a downloaded id is
+    // present — and then nothing in `translations` matches it.
+    expect(out[1].downloadedTrIds).toEqual([77])
+    // And the id the player fetches by, which is NOT the episode number.
+    expect(out[1].id).toBe(31)
   })
 })
 

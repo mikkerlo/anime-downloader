@@ -234,6 +234,31 @@ describe('useOpenEpisode', () => {
     expect(usePlayerStore().playerState).toBeNull()
   })
 
+  it('carries an episode id on every entry, including the ones outside the window', async () => {
+    // #419. A Watch Together join only fetches the target's PAGE_SIZE window,
+    // so on a 70-episode anime joined at episode 35 the other 40 entries arrive
+    // with `translations: []` — and before this they arrived with no id either,
+    // which made them permanently unfillable: `getEpisodesBatch` keys by id and
+    // `episodeInt` is not one. Stepping prev/next off the window then dead-ended
+    // with no message.
+    //
+    // Fails against the pre-#419 composable, where the mapped entry has no `id`.
+    api.getAnime.mockResolvedValue({ data: makeAnime(70), source: 'api' })
+    const { openEpisode } = useOpenEpisode()
+    const result = await openEpisode({ animeId: 42, episodeInt: '35' })
+    expect(result).toEqual({ ok: true })
+    const all = usePlayerStore().playerState!.allEpisodes
+    expect(all).toHaveLength(70)
+    // Every entry, not just the window's — ids come from the episode list, which
+    // is anime-wide, so there is no reason for any of them to be missing.
+    expect(all.map((e) => e.id)).toEqual(Array.from({ length: 70 }, (_, i) => 100 + i))
+    // The window is filled; the first entry outside it below is not.
+    expect(all[34].translations.length).toBeGreaterThan(0)
+    expect(all[29].translations).toEqual([])
+    // And that unfilled entry still names the id the player fetches it by.
+    expect(all[29].id).toBe(129)
+  })
+
   it('marks downloaded translations from episode metadata', async () => {
     api.downloadedEpisodesGet.mockResolvedValue({
       '1': [{ translationId: 600, author: 'author-600' }]

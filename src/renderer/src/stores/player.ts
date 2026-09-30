@@ -17,6 +17,12 @@ export type PlayerTranslation = {
 }
 
 export type PlayerEpisode = {
+  // The upstream episode id, carried so the player can fetch an episode it was
+  // handed no translations for (#419). `translations` is sourced from a map that
+  // only ever holds the detail view's current 30-episode page, so every off-page
+  // entry arrives empty; `getEpisodesBatch` keys by id, and `episodeInt` is not
+  // one.
+  id: number
   episodeInt: string
   episodeFull: string
   translations: PlayerTranslation[]

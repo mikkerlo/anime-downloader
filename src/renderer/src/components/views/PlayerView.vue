@@ -23,9 +23,15 @@ import {
   resolveSeekTarget,
   resolveMkvSpawnTarget,
   sanitizeDuration,
-  waitingToastVisible
+  waitingToastVisible,
+  toPlayerTranslations,
+  walkEpisodeSteps,
+  resolveEpisodeTranslation,
+  type EpisodeStepOutcome,
+  type PlayerTranslationEntry
 } from '../../utils';
 import { useGrowingFile } from '../../composables/use-growing-file';
+import { PAGE_SIZE } from '../../composables/use-episode-list';
 
 const props = defineProps<{
   filePath: string;
@@ -38,6 +44,9 @@ const props = defineProps<{
   translations: { id: number; label: string; type: string; height: number }[];
   downloadedTrIds: number[];
   allEpisodes: {
+    // Upstream episode id (#419) — the key `getEpisodesBatch` takes, and the
+    // only way to fill an off-page entry's empty `translations` on demand.
+    id: number;
     episodeInt: string;
     episodeFull: string;
     translations: { id: number; label: string; type: string; height: number }[];
@@ -394,6 +403,30 @@ function showPrefetchToast(text: string, ms = 2500): void {
   }, ms);
 }
 
+// Episode-navigation failure notice (#419). Its own slot rather than
+// `remuxError`, which paints `.remux-overlay` over the video: a prev/next that
+// cannot resolve leaves the CURRENT episode playing, so covering it would be a
+// worse outcome than the failure it reports. Same reason it is not
+// `errorMessage`-style either — nothing here stops playback.
+const navToast = ref('');
+let navToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showNavToast(text: string, ms = 4000): void {
+  navToast.value = text;
+  if (navToastTimer) clearTimeout(navToastTimer);
+  navToastTimer = setTimeout(() => {
+    navToast.value = '';
+  }, ms);
+}
+
+// One message for every way a step can fail to reach its target, because the
+// user cannot act differently on any of them, and #354's finding applies
+// verbatim: `playerGetStreamUrl` collapses "no stream for this translation" and
+// "the API refused the request" to the same null, so the wording has to cover
+// an expired token as well as a genuinely absent stream.
+const NAV_FAILED_MESSAGE =
+  'Could not open that episode. It may have no available translation, or your API token may have expired — check Settings → Connectors.';
+
 function pausePrefetchForSeek(): void {
   const target = prefetchInFlight.value;
   if (!target) return;
@@ -513,16 +546,24 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // to it, and suppressing the whole walk on one left the user toasted about a
   // room move the player then never followed.
   const walkTranslation = translationEpoch;
-  const stepTowards = async (): Promise<void> => {
-    while (
-      activeEpisodeIndex.value !== idx &&
-      !navigating.value &&
-      translationEpoch === walkTranslation
-    ) {
-      await goToEpisode(dir);
-    }
-  };
-  stepTowards();
+  // The fourth stop condition is the step's own outcome (#419), which is why
+  // this is `walkEpisodeSteps` and not a bare `while` any more. The three terms
+  // above are all state the walk observes from outside; none of them can see a
+  // step that declined to move — the boundary no-op, an episode with no usable
+  // translation, a failed on-demand fetch — because such a step leaves
+  // `activeEpisodeIndex` where it was and releases `navigating` on the way out.
+  // The loop then re-read both as permission and called again, with every term
+  // unchanged: a tight retry of the same failing step, and because the step
+  // could return without ever suspending on a real task (the boundary check is
+  // the first statement), the `await` resolved in a microtask and the loop
+  // starved timers, input and rAF for as long as the room stayed on that
+  // episode. `walkEpisodeSteps` breaks on anything but `moved`; the toast is
+  // `goToEpisode`'s, at the arm that knows which failure it was.
+  void walkEpisodeSteps(
+    () =>
+      activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
+    () => goToEpisode(dir)
+  );
 }
 
 // Disposers for the non-syncplay broadcast subs (syncplay owns its own).
@@ -2169,18 +2210,74 @@ async function selectTranslation(tr: {
   }
 }
 
-async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
+// On-demand translation lists for episodes the payload was handed none for
+// (#419). Both producers build `allEpisodes` from a detail map that only ever
+// holds ONE PAGE_SIZE page — `use-episode-downloads` the page the detail view is
+// showing, `use-open-episode` the page around the join target — while
+// `downloadedTrIds` is anime-wide. So every off-page entry arrives with
+// `translations: []`, and before this the resolution chain below simply found
+// nothing in it and bailed: prev/next dead-ended at the page edge on any anime
+// longer than 30 episodes, with no message. Keyed by episode id, which is what
+// `getEpisodesBatch` takes and what `episodeInt` is not.
+const fetchedTranslations = new Map<number, PlayerTranslationEntry[]>();
+
+// Fetch the whole PAGE_SIZE page the target sits in, not just the target. One
+// round trip then covers every further step until the walk leaves the page,
+// which matters most for the room-driven walk in `handleRemoteEpisodeChange`:
+// per-episode fetches would make a jump across a page boundary a burst of
+// single-id requests. The page granularity is deliberately the detail view's,
+// so a step lands on exactly the set a visit to that page would have cached.
+async function fetchEpisodeWindowTranslations(
+  targetIndex: number
+): Promise<PlayerTranslationEntry[]> {
+  const pageStart = Math.floor(targetIndex / PAGE_SIZE) * PAGE_SIZE;
+  const page = props.allEpisodes.slice(pageStart, pageStart + PAGE_SIZE);
+  const wanted = page.filter((ep) => !fetchedTranslations.has(ep.id)).map((ep) => ep.id);
+  if (wanted.length > 0) {
+    // Cache first, network for the gaps — the same two-step
+    // `use-open-episode` does. `getEpisodesBatchCached` only returns what a
+    // prior detail-view visit stored, so on a cold cache it returns nothing
+    // and the network call does all the work; on a warm one it saves the
+    // round trip entirely.
+    const store = (details: EpisodeDetail[]): void => {
+      for (const d of details) fetchedTranslations.set(d.id, toPlayerTranslations(d));
+    };
+    const cached = await window.api.getEpisodesBatchCached(wanted, props.animeId);
+    store(cached.data);
+    const missing = wanted.filter((id) => !fetchedTranslations.has(id));
+    if (missing.length > 0) {
+      // Let this reject: the caller maps a failed fetch to `unreachable`, which
+      // is the whole point of the issue's "network or API error must take the
+      // same path" rule. Swallowing it here would resurrect the silent
+      // dead end for the one case the user is most likely to hit.
+      const fetched = await window.api.getEpisodesBatch(missing, props.animeId);
+      store(fetched.data);
+    }
+  }
+  return fetchedTranslations.get(props.allEpisodes[targetIndex].id) || [];
+}
+
+async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutcome> {
   const targetIndex =
     direction === 'prev' ? activeEpisodeIndex.value - 1 : activeEpisodeIndex.value + 1;
-  if (targetIndex < 0 || targetIndex >= props.allEpisodes.length) return;
-  if (navigating.value) return;
+  // Off the end of the list (#419). `unreachable`, not a third kind of "no" —
+  // the walk's stop condition is "anything but `moved`", and this is the one
+  // `unreachable` the caller must NOT toast about, so the toast lives at the
+  // arms below rather than being hoisted into the caller. The buttons are
+  // hidden at a single-episode anime and disabled at either end, so only the
+  // keyboard shortcut and the room walk can reach here, and neither wants to
+  // be told there is no episode before the first.
+  if (targetIndex < 0 || targetIndex >= props.allEpisodes.length) return 'unreachable';
+  // Not this run's turn: another `goToEpisode` (or a `selectTranslation` that
+  // unwound) owns `navigating`. `superseded`, so the walk stops silently.
+  if (navigating.value) return 'superseded';
 
   // Persist current episode progress before leaving
   await saveProgress(true);
   // A close landing in that write resumes here on a dead instance, and the
   // blanket `playerCleanupRemux()` below would kill a successor player's
   // session (#280) — `remuxedPath` is not cleared at unmount.
-  if (unmounted) return;
+  if (unmounted) return 'superseded';
   const prevEpisodeInt = currentEpisodeInt.value;
 
   cancelAutoAdvance();
@@ -2193,64 +2290,60 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
   const currentTr = activeTranslations.value.find((t) => t.id === activeTranslationId.value);
   const currentType = currentTr?.type || '';
 
-  // Resolution priority chain
-  let resolvedTr: { id: number; label: string; type: string; height: number } | null = null;
-  let forceLocal = false;
-
-  // (a) Prefer any downloaded translation on the target episode
-  if (targetEp.downloadedTrIds.length > 0) {
-    // Prefer same translationId if it's downloaded
-    const sameIdDownloaded = targetEp.translations.find(
-      (t) => t.id === activeTranslationId.value && targetEp.downloadedTrIds.includes(t.id)
-    );
-    if (sameIdDownloaded) {
-      resolvedTr = sameIdDownloaded;
-    } else {
-      // Pick the best quality downloaded translation of the same type, or any downloaded
-      const downloadedTrs = targetEp.translations.filter((t) =>
-        targetEp.downloadedTrIds.includes(t.id)
-      );
-      const sameTypeDownloaded = downloadedTrs
-        .filter((t) => t.type === currentType)
-        .sort((a, b) => b.height - a.height);
-      resolvedTr = sameTypeDownloaded[0] || downloadedTrs[0] || null;
-    }
-    if (resolvedTr) forceLocal = true;
+  // The (a)-(d) resolution chain lives in `resolveEpisodeTranslation` (#419) so
+  // that it can suspend: an off-page target arrives with `translations: []` and
+  // the chain has to fetch the list before it can rank anything. Deliberately
+  // below `const myNav = ++navigationEpoch` and above the `try`, which is what
+  // makes `navigating` cover the wait — both nav buttons read
+  // `:disabled="!canPrev || navigating"`, so a slow fetch cannot be
+  // double-submitted, and a second call taken during it is turned away by the
+  // `navigating` guard at the top with `superseded`.
+  //
+  // Overlay before payload: a list this component fetched is fresher than the
+  // snapshot assembled when the player opened, and identical whenever both are
+  // non-empty.
+  const resolution = await resolveEpisodeTranslation(
+    {
+      translations: fetchedTranslations.get(targetEp.id) || targetEp.translations,
+      downloadedTrIds: targetEp.downloadedTrIds
+    },
+    { translationId: activeTranslationId.value, type: currentType },
+    () => fetchEpisodeWindowTranslations(targetIndex)
+  );
+  // An await now DOES intervene between the epoch bump and the clear below,
+  // which is why this function no longer has a bare clear (#419, amending
+  // #302). The fetch is a network round trip, so a second `goToEpisode` can be
+  // admitted across it the moment the first one's own arms release
+  // `navigating` — the resolution arm below is reached from a resume point like
+  // every other clear in this function, and carries the same ownership compare.
+  // The premise that made the bare form provably safe is simply gone; nothing
+  // about the other six changed.
+  if (unmounted) return 'superseded';
+  if (navigationEpoch !== myNav) return 'superseded';
+  if (resolution.outcome === 'unreachable') {
+    // The dead end this issue closes, now reported. Nothing was written, so the
+    // current episode keeps playing and a toast is the right surface — see
+    // `showNavToast`. Both halves land here: an episode with no usable
+    // translation at all, and a fetch that failed (network down, API refused),
+    // because the user cannot act differently on the two.
+    if (navigationEpoch === myNav) navigating.value = false;
+    showNavToast(NAV_FAILED_MESSAGE);
+    return 'unreachable';
   }
+  const resolvedTr = resolution.translation;
+  const forceLocal = resolution.forceLocal;
+  // The list the resolution actually ranked — for an off-page target that is
+  // the freshly fetched one, and writing `targetEp.translations` to
+  // `activeTranslations` below would leave the translation menu empty while a
+  // translation from outside it plays.
+  const targetTranslations = resolution.translations;
 
-  // (b) Same translationId if available in target episode (stream)
-  if (!resolvedTr) {
-    resolvedTr = targetEp.translations.find((t) => t.id === activeTranslationId.value) || null;
-  }
-
-  // (c) Best quality of same type (stream)
-  if (!resolvedTr) {
-    const sameType = targetEp.translations
-      .filter((t) => t.type === currentType)
-      .sort((a, b) => b.height - a.height);
-    resolvedTr = sameType[0] || null;
-  }
-
-  // (d) First available translation (stream)
-  if (!resolvedTr) {
-    resolvedTr = targetEp.translations[0] || null;
-  }
-
-  // The one clear in this function that stays bare, deliberately (#302). Every
-  // other one is reached across a suspension point, so a newer `goToEpisode`
-  // may own `navigating` by the time it runs and each carries the ownership
-  // compare. Nothing between `const myNav = ++navigationEpoch` above and here
-  // suspends — the whole resolution chain (a)-(d) is synchronous — so no second
-  // run can be admitted in between and `navigationEpoch === myNav` holds by
-  // construction: the guarded single-line form used at the other six would be
-  // dead code here, not hardening. This is the ONE site where "no await
-  // intervenes" is the whole argument; it is not a licence to reason that way
-  // about the others, whose premise is a run that was ALREADY in flight rather
-  // than one admitted after the resume point.
-  if (!resolvedTr) {
-    navigating.value = false;
-    return;
-  }
+  // Whether `activeEpisodeIndex` has moved. Decides the outcome the `catch`
+  // reports: a throw before the write left nothing changed and the caller
+  // should hear `unreachable`, while a throw after it has already committed the
+  // UI to the new episode, so the walk must treat the step as taken or it
+  // spins re-attempting an episode it is already on.
+  let committed = false;
 
   try {
     // Clean up previous remux / MSE stream
@@ -2273,12 +2366,13 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     // pending mark-watched, which nothing reports as a failure because
     // `maybeMarkPendingPrevWatched()` is gated on the `episodeOpenedAt` this
     // same block just reset.
-    if (navigationEpoch !== myNav) return;
+    if (navigationEpoch !== myNav) return 'superseded';
 
     // Update episode state
+    committed = true;
     activeEpisodeIndex.value = targetIndex;
     activeEpisodeLabel.value = targetEp.episodeInt;
-    activeTranslations.value = targetEp.translations;
+    activeTranslations.value = targetTranslations;
     activeDownloadedTrIds.value = targetEp.downloadedTrIds;
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
@@ -2294,10 +2388,16 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       );
       // Guards the second blanket `playerCleanupRemux()` in this function
       // (#280), the one inside the `.mkv` branch below.
-      if (unmounted) return;
+      //
+      // `moved`, like every return below the index write (#419): the outcome
+      // answers "did `activeEpisodeIndex` reach the target", and it did, one
+      // statement above the `try`'s first await. A `superseded` here would tell
+      // the walk to stop at an index it has already left, and an `unreachable`
+      // would toast about an episode the UI is showing.
+      if (unmounted) return 'moved';
       // The ownership half (#317), separate from the `unmounted` term above:
       // the source writes below belong to whichever run owns `myNav` now.
-      if (navigationEpoch !== myNav) return;
+      if (navigationEpoch !== myNav) return 'moved';
       if (localResult) {
         activeFilePath.value = localResult.filePath;
         activeStreamUrl.value = '';
@@ -2324,7 +2424,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           // survives in main with no renderer handle on it until the next
           // blanket `playerCleanupRemux` — the unmount one, or the next `.mkv`
           // open's — sweeps it.
-          if (navigationEpoch !== myNav) return;
+          if (navigationEpoch !== myNav) return 'moved';
           const prep = await prepareMkvForPlayback(localResult.filePath);
           // As in `selectTranslation` (#317): the callee's `shouldBail` ladder
           // covers the callee, not this continuation, and a superseder that
@@ -2340,7 +2440,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           // with the loser's prepare guaranteed to run all the way through.
           // Past the arm it also covers `destroySubtitles()` below, which
           // would tear down the winner's live subtitle worker.
-          if (navigationEpoch !== myNav) return;
+          if (navigationEpoch !== myNav) return 'moved';
           if (!prep.ok) {
             reportPrepareError(prep);
             // As in `selectTranslation` (#291). Skipping this unconditionally
@@ -2353,7 +2453,11 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
             // compare above this arm with no await between them — kept for
             // #302's flag-clear classifier, not as live protection.
             if (navigationEpoch === myNav) navigating.value = false;
-            return;
+            // `moved`, not `unreachable`: the remux failed, but the episode
+            // switch itself happened and `reportPrepareError` already put the
+            // reason on screen, so a nav toast would be a second notice for one
+            // failure.
+            return 'moved';
           }
         }
 
@@ -2371,7 +2475,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
           }
           navigating.value = false;
         });
-        return;
+        return 'moved';
       }
     }
 
@@ -2382,17 +2486,24 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
     // function — `prepareMkvForPlayback` above is wider — but the widest
     // unchecked one: that await comes back through `shouldBail`, this one
     // returns a stream URL whether or not the component is still alive.
-    if (unmounted) return;
+    if (unmounted) return 'moved';
     // The ownership half (#317), above `if (!result)` for the same reason as
     // `selectTranslation`'s: the only failure it swallows is a superseded run's,
     // about a source nobody is going to play. And as there, the arm's own
     // `navigationEpoch === myNav` is provably true under this compare with no
     // await between them — kept for #302's flag-clear classifier, not as live
     // protection.
-    if (navigationEpoch !== myNav) return;
+    if (navigationEpoch !== myNav) return 'moved';
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;
-      return;
+      // The other arm this issue makes audible (#419). Until now this returned
+      // with the episode label and translation list already pointed at the new
+      // episode and no source behind them — a blank player and no message. It is
+      // still `moved`, because it is, so the walk carries on; the toast is what
+      // changes. #354's finding is exactly this call: the null covers "no stream
+      // for this translation" and "the API refused", hence the shared wording.
+      showNavToast(NAV_FAILED_MESSAGE);
+      return 'moved';
     }
 
     activeFilePath.value = '';
@@ -2418,8 +2529,20 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<void> {
       }
       navigating.value = false;
     });
+    return 'moved';
   } catch {
+    // Same ladder as the arms above, in the order the rest of this function
+    // uses: the inverse compare first, so a superseded run neither clears a flag
+    // it no longer owns nor toasts about a step nobody is waiting on, then the
+    // guarded clear #302's classifier expects at a post-resume site.
+    if (navigationEpoch !== myNav) return 'superseded';
     if (navigationEpoch === myNav) navigating.value = false;
+    // A throw below the index write is a #354-shaped failure of the SOURCE, with
+    // the UI already switched — so `moved`, and the walk keeps going. Above it,
+    // nothing changed and the step genuinely did not happen. Both get the toast:
+    // either way the user asked for an episode and did not get one playing.
+    showNavToast(NAV_FAILED_MESSAGE);
+    return committed ? 'moved' : 'unreachable';
   }
 }
 
@@ -2671,6 +2794,7 @@ onBeforeUnmount(() => {
     prefetchPausedForSeek = false;
   }
   if (prefetchToastTimer) clearTimeout(prefetchToastTimer);
+  if (navToastTimer) clearTimeout(navToastTimer);
   if (resumeToastTimer) clearTimeout(resumeToastTimer);
   if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
   // The document keydown listener is removed by usePlayerKeyboard's
@@ -2867,6 +2991,12 @@ const bufferedProgress = computed(() => {
     <!-- Syncplay toast -->
     <transition name="fade">
       <div v-if="syncplayToast" class="syncplay-toast">{{ syncplayToast }}</div>
+    </transition>
+
+    <!-- Episode navigation failed (#419): its own row, because a room-driven
+         walk can raise this while the syncplay toast still names the move -->
+    <transition name="fade">
+      <div v-if="navToast" class="nav-toast">{{ navToast }}</div>
     </transition>
 
     <!-- Syncplay: persistent "paused by X" badge while paused -->
@@ -3221,6 +3351,7 @@ const bufferedProgress = computed(() => {
 .resume-toast,
 .stream-skip-toast,
 .prefetch-toast,
+.nav-toast,
 .syncplay-toast {
   position: absolute;
   left: 50%;
@@ -3247,6 +3378,13 @@ const bufferedProgress = computed(() => {
 
 .syncplay-toast {
   top: 140px;
+  max-width: 60vw;
+  text-align: center;
+}
+
+/* Below the 140px row: a room-driven walk that dead-ends shows both at once. */
+.nav-toast {
+  top: 180px;
   max-width: 60vw;
   text-align: center;
 }

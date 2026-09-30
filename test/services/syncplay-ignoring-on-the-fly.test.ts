@@ -250,8 +250,10 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
   //    either call site; this is the one that fails if sendAck() is moved to the
   //    end of handleState(), because the self-`setBy` guard returns first. And
   //    self-`setBy` is the *dominant* path for a counter-bearing frame: the
-  //    server broadcasts its forced update back to the setter too, so a
-  //    scrubbing user's own connection is precisely the deaf one.
+  //    server broadcasts its forced update back to the setter too
+  //    (`server.py:187` hands it to `broadcastRoom()`, which has no sender
+  //    filter, `server.py:441-445`), so a scrubbing user's own connection is
+  //    precisely the deaf one.
   it('still acks a forced State the server reflects back with our own setBy', () => {
     handshake()
     clearWrites()

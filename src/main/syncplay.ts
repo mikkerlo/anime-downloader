@@ -1363,7 +1363,7 @@ export class SyncplayClient extends EventEmitter {
         // take the cheap guard. Note it exempts, it does not skip: our own
         // file push is broadcast back to us without sender exclusion, and
         // absorbRemoteFile is what keeps our roster row's file current between
-        // `List` replies.
+        // `List` replies (`server.py:175-178`, `server.py:447-450`).
         if (username !== this.config?.username && offRoom) {
           // Rule 2: a peer switching out reaches us as one entry naming their
           // **destination**, with no `left` event — `sendRoomSwitchMessage`

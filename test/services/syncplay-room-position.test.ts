@@ -277,9 +277,10 @@ describe('SyncplayClient.getRoomPosition (#262)', () => {
     })
 
     // Shape 2 — *we* pause the room. Our pause is broadcast back to us `setBy`
-    // us and dropped, so the stored `paused: false` never flips and the
-    // projection keeps walking a room that is standing still. Unbounded this
-    // answered 900 after five minutes of a room parked at 600.
+    // us and dropped (`server.py:187` hands it to `broadcastRoom()`, which has
+    // no sender filter, `server.py:441-445`), so the stored `paused: false`
+    // never flips and the projection keeps walking a room that is standing still.
+    // Unbounded this answered 900 after five minutes of a room parked at 600.
     //
     // Adoption is **pinned**, not incidental (#277 review). The user who paused
     // the room is adopted by construction — they have a player and it has

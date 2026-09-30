@@ -148,9 +148,9 @@ export class DownloadManager {
          * The merged `.mkv`, as a path relative to the download dir — it
          * already carries the anime directory, because it derives from
          * `group.video.filename` (itself `path.join(animeDirName, …)`). Lets a
-         * handler move exactly the file this merge produced instead of
-         * prefix-matching the episode, which has no author tag and would sweep
-         * a sibling translation's unmerged sources (#414).
+         * handler move exactly the file this merge produced instead of matching
+         * the whole episode, which is wider than one file even now that it is
+         * author-scoped, and back then swept sibling translations (#414, #416).
          */
         mkvFilename: string
       }) => void)

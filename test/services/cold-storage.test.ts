@@ -251,7 +251,7 @@ describe('ColdStorageService write-side disk ops', () => {
     writeFile(hotDir, 'Show', 'Show - 01.mp4', 'z') // shadowed by .part
     writeFile(hotDir, 'Show', 'Show - 01.mp4.part', 'p')
 
-    await svcMoveEpisode(svc, 'Show', '1')
+    await svcMoveEpisode(svc, 'Show', '1', 'A')
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01.mkv'))).toBe(true)
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].ass'))).toBe(true)
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01.mp4'))).toBe(false)
@@ -276,7 +276,7 @@ describe('ColdStorageService write-side disk ops', () => {
       errors.push(args)
     })
     try {
-      await svcMoveEpisode(svc, 'Show', '1')
+      await svcMoveEpisode(svc, 'Show', '1', 'A')
     } finally {
       spy.mockRestore()
     }
@@ -289,6 +289,114 @@ describe('ColdStorageService write-side disk ops', () => {
     // …and the failure was logged, naming the file, instead of being swallowed.
     expect(errors).toHaveLength(1)
     expect(String(errors[0][0])).toContain('Show - 01 [A].ass')
+  })
+
+  // #416. Every case below carries a *positive control* — an assertion that the
+  // requested translation's own file reached cold — because the failure these
+  // tests guard against and the failure "the matcher matched nothing at all"
+  // both leave the sibling in hot. Without the control, a mover that moves
+  // nothing passes every "stays in hot" assertion here.
+  it('moveEpisodeToColdStorage leaves a sibling translation of the same episode in hot', async () => {
+    // Red before the fix: the prefix was `Show - 01`, which stops before the
+    // ` [author]` tag, so moving X swept Y's files too — and Y can still be
+    // mid-download.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [X].mkv', 'x-video')
+    writeFile(hotDir, 'Show', 'Show - 01 [X].ass', 'x-subs')
+    writeFile(hotDir, 'Show', 'Show - 01 [Y].mkv', 'y-video')
+    writeFile(hotDir, 'Show', 'Show - 01 [Y].ass', 'y-subs')
+
+    await svcMoveEpisode(svc, 'Show', '1', 'X')
+
+    // Positive control: the mover did fire and did move X's pair.
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [X].mkv'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [X].ass'))).toBe(true)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [X].mkv'))).toBe(false)
+    // …and Y stayed put, by exact path on both sides.
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [Y].mkv'))).toBe(true)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [Y].ass'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [Y].mkv'))).toBe(false)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [Y].ass'))).toBe(false)
+  })
+
+  it('moveEpisodeToColdStorage moving episode 10 does not sweep episode 100', async () => {
+    // Red before the fix: `padStart(2, '0')` pads to two digits and no further,
+    // so `Show - 10` is an unbounded prefix of `Show - 100`.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 10 [A].mkv', 'ten')
+    writeFile(hotDir, 'Show', 'Show - 100 [A].mkv', 'hundred')
+
+    await svcMoveEpisode(svc, 'Show', '10', 'A')
+
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 10 [A].mkv'))).toBe(true) // control
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 100 [A].mkv'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 100 [A].mkv'))).toBe(false)
+  })
+
+  it('moveEpisodeToColdStorage moving episode 10 does not sweep episode 10.5', async () => {
+    // Red before the fix, same unbounded prefix. Fractional episodes are real
+    // and preserved verbatim — `lib/filename.ts` is pinned on `- 5.5`.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 10 [A].mkv', 'ten')
+    writeFile(hotDir, 'Show', 'Show - 10.5 [A].mkv', 'ten-point-five')
+
+    await svcMoveEpisode(svc, 'Show', '10', 'A')
+
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 10 [A].mkv'))).toBe(true) // control
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 10.5 [A].mkv'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 10.5 [A].mkv'))).toBe(false)
+  })
+
+  it('moveEpisodeToColdStorage still pads a single-digit episodeInt to the on-disk form', async () => {
+    // Non-regression: `'5'.padStart(2, '0')` is `'05'` on both sides, and a
+    // caller that already passes `'05'` lands on the same name.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 05 [A].mkv', 'five')
+    await svcMoveEpisode(svc, 'Show', '5', 'A')
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 05 [A].mkv'))).toBe(true)
+
+    writeFile(hotDir, 'Show', 'Show - 06 [A].mkv', 'six')
+    await svcMoveEpisode(svc, 'Show', '06', 'A')
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 06 [A].mkv'))).toBe(true)
+  })
+
+  it('moveEpisodeToColdStorage matches the empty-author `[]` form enqueue writes', async () => {
+    // Non-regression, and the case that rules out routing this through
+    // `parseEpisodeFromFilename`: `enqueue` appends the tag unconditionally, so
+    // an empty `author` produces `Show - 01 [].mkv`, which the parser's
+    // `\[[^\]]+\]` rejects. The tag is appended unconditionally here too, the
+    // way `deleteEpisodeFiles` does it — not made conditional the way
+    // `episodeFileExists` does, which looks for the bare base instead.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [].mkv', 'untagged-author')
+    await svcMoveEpisode(svc, 'Show', '1', '')
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [].mkv'))).toBe(true)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [].mkv'))).toBe(false)
+  })
+
+  it('moveEpisodeToColdStorage moves every present candidate when the .mp4 is absent', async () => {
+    // Non-regression that catches the iterate-the-candidate-names shape: with no
+    // `.mp4` on disk (the normal state after a merge), `moveFileToCold`'s
+    // `copyFile` fallback would reject ENOENT for that name and, depending on
+    // where the `try` sits, leave the `.ass` behind.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'video')
+    writeFile(hotDir, 'Show', 'Show - 01 [A].ass', 'subs')
+
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args)
+    })
+    try {
+      await svcMoveEpisode(svc, 'Show', '1', 'A')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].ass'))).toBe(true)
+    // A missing candidate is the normal case, not a failure worth logging.
+    expect(errors).toEqual([])
   })
 
   it('moveFileToColdByRelPath moves exactly the named file, sweeping no sibling translation', async () => {
@@ -442,11 +550,15 @@ describe('ColdStorageService write-side disk ops', () => {
   })
 })
 
-// Helper so the awaited move test reads cleanly.
+// Helper so the awaited move tests read cleanly. The parameter names are the
+// production ones on purpose (#416): the old helper called its second parameter
+// `episodeInt` while every caller in `src/` passed `episodeLabel`, which is how
+// the field mismatch stayed invisible here for as long as it did.
 async function svcMoveEpisode(
   svc: ReturnType<typeof createColdStorageService>,
   animeName: string,
-  episodeInt: string
+  episodeInt: string,
+  author: string
 ): Promise<void> {
-  await svc.moveEpisodeToColdStorage(animeName, episodeInt)
+  await svc.moveEpisodeToColdStorage(animeName, episodeInt, author)
 }

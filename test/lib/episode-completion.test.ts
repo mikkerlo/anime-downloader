@@ -39,7 +39,13 @@ interface FakeStore extends EpisodeCompletionStore {
   readonly entries: DownloadedEpisodesMap
 }
 
-type Group = { translationId: number; animeName: string; animeId: number; episodeLabel: string }
+type Group = {
+  translationId: number
+  animeName: string
+  animeId: number
+  episodeInt: string
+  author: string
+}
 
 /**
  * Everything a test can steer, in one mutable bag. Every field is read through
@@ -115,8 +121,12 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
         calls.push('isAdvanced')
         return h.coldAdvanced
       },
-      moveEpisodeToColdStorage: async (animeName, episodeLabel) => {
-        calls.push(`moveToCold(${animeName},${episodeLabel})`)
+      // Logs all three arguments, deliberately: the bug #416 fixes was the
+      // *second* one (`episodeLabel`, e.g. `"1 серия"`, where the filename is
+      // built from `episodeInt`) and the *absence* of the third. A log that
+      // printed only the anime name would have stayed green through both.
+      moveEpisodeToColdStorage: async (animeName, episodeInt, author) => {
+        calls.push(`moveToCold(${animeName},${episodeInt},${author})`)
       },
       moveFileToColdByRelPath: async (relPath) => {
         calls.push(`moveFileToCold(${relPath})`)
@@ -340,7 +350,29 @@ describe('episode-completion — the group-complete tail', () => {
 
       await h.handlers.handleEpisodeComplete(makeInfo())
 
-      expect(h.calls).toContain('moveToCold(Anime,ep1)')
+      expect(h.calls).toContain('moveToCold(Anime,1,Author)')
+    })
+
+    it('hands the mover episodeInt and author, never the episodeLabel (#416)', async () => {
+      // Red before the fix, and red for the right reason: the old tail passed
+      // `(animeName, episodeLabel)`, so the log read
+      // `moveToCold(Anime,1 серия)`. `episodeFull` is passed through verbatim
+      // from the API — this repo's own `/translations` fixture has
+      // `"episodeFull": "1 серия", "episodeInt": "1"` — and the file on disk is
+      // named from `episodeInt`, so with the label the service built the base
+      // `Anime - 1 серия`, matched nothing, and moved nothing at all. The
+      // `toContain('moveToCold(')` below is the positive control that separates
+      // "wrong arguments" from "the branch never ran".
+      h.coldAdvanced = true
+      h.settings.autoMoveToCold = true
+
+      await h.handlers.handleEpisodeComplete(
+        makeInfo({ episodeLabel: '1 серия', episodeInt: '1', author: 'AniDub' })
+      )
+
+      expect(h.calls.some((c) => c.startsWith('moveToCold('))).toBe(true)
+      expect(h.calls).toContain('moveToCold(Anime,1,AniDub)')
+      expect(h.calls.some((c) => c.includes('серия'))).toBe(false)
     })
 
     it('does not move with autoMoveToCold on but storage in simple mode', async () => {
@@ -375,7 +407,7 @@ describe('episode-completion — the group-complete tail', () => {
         'store.set(downloadedEpisodes)',
         'getMergeStatus(7)',
         'isAdvanced',
-        'moveToCold(Anime,ep1)',
+        'moveToCold(Anime,1,Author)',
         'notify(Download complete|Anime — ep1)',
         'scheduleSkip(100,Anime)'
       ])
@@ -455,8 +487,8 @@ describe('episode-completion — the deferred-finalize pass', () => {
     const h = makeHarness({ autoMerge: true })
     h.readyTrIds = [7, 8]
     h.groups = [
-      { translationId: 7, animeName: 'Anime', animeId: 100, episodeLabel: 'ep1' },
-      { translationId: 8, animeName: 'Anime', animeId: 100, episodeLabel: 'ep2' }
+      { translationId: 7, animeName: 'Anime', animeId: 100, episodeInt: '1', author: 'Author' },
+      { translationId: 8, animeName: 'Anime', animeId: 100, episodeInt: '2', author: 'Author' }
     ]
 
     await h.handlers.finalizeDeferredEpisodes()
@@ -474,7 +506,9 @@ describe('episode-completion — the deferred-finalize pass', () => {
     // module the rest of this file leaves unmeasured.
     const h = makeHarness({ autoMerge: true, videoCodec: '' })
     h.readyTrIds = [7]
-    h.groups = [{ translationId: 7, animeName: 'Anime', animeId: 100, episodeLabel: 'ep1' }]
+    h.groups = [
+      { translationId: 7, animeName: 'Anime', animeId: 100, episodeInt: '1', author: 'Author' }
+    ]
 
     await h.handlers.finalizeDeferredEpisodes()
 
@@ -488,9 +522,15 @@ describe('episode-completion — the deferred-finalize pass', () => {
     const h = makeHarness({ autoMoveToCold: true, notificationMode: 'each' })
     h.coldAdvanced = true
     h.readyTrIds = [7, 8]
+    // Episode identifiers deliberately unlike the labels an earlier version of
+    // this fixture used (#416): `episodeInt` is the field the on-disk `NN` is
+    // built from, and `author` is what scopes the move to one translation. The
+    // old tail read `group.episodeLabel` and passed no author at all, so this
+    // list is red before the fix — `moveToCold(Anime,undefined)`, because the
+    // narrowed `getEpisodeGroups` no longer reports a label.
     h.groups = [
-      { translationId: 7, animeName: 'Anime', animeId: 100, episodeLabel: 'ep1' },
-      { translationId: 8, animeName: 'Other', animeId: 0, episodeLabel: 'ep2' }
+      { translationId: 7, animeName: 'Anime', animeId: 100, episodeInt: '1', author: 'AniDub' },
+      { translationId: 8, animeName: 'Other', animeId: 0, episodeInt: '12', author: 'AniLibria' }
     ]
 
     await h.handlers.finalizeDeferredEpisodes()
@@ -500,11 +540,11 @@ describe('episode-completion — the deferred-finalize pass', () => {
       'getEpisodeGroups',
       'invalidate(Anime)',
       'isAdvanced',
-      'moveToCold(Anime,ep1)',
+      'moveToCold(Anime,1,AniDub)',
       'scheduleSkip(100,Anime)',
       'invalidate(Other)',
       'isAdvanced',
-      'moveToCold(Other,ep2)'
+      'moveToCold(Other,12,AniLibria)'
     ])
     expect(h.calls.some((c) => c.startsWith('notify'))).toBe(false)
   })
@@ -512,7 +552,9 @@ describe('episode-completion — the deferred-finalize pass', () => {
   it('skips a ready id whose group has already left the queue', async () => {
     const h = makeHarness()
     h.readyTrIds = [7, 99]
-    h.groups = [{ translationId: 7, animeName: 'Anime', animeId: 100, episodeLabel: 'ep1' }]
+    h.groups = [
+      { translationId: 7, animeName: 'Anime', animeId: 100, episodeInt: '1', author: 'Author' }
+    ]
 
     await h.handlers.finalizeDeferredEpisodes()
 

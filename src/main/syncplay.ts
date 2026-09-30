@@ -2478,9 +2478,9 @@ export class SyncplayClient extends EventEmitter {
     // Landing genuinely *ahead* is the paused-room creep above and nothing
     // else, which is why a de-adopted hidden player (#227) cannot drag the
     // room: a crept mirror in a paused room is above it and loses every
-    // *contested* election. Uncontested is not a second mechanism — it is the
-    // join-time window above, where the crept mirror is the only candidate and
-    // min() hands its own value back as the room.
+    // election it is above in. Where it is the only candidate — the join-time
+    // window above — min() hands its own value back as the room, and the join
+    // second itself is a tie at that value, which (as above) can still elect us.
     return {
       position: this.projectedRoomPosition(room),
       doSeek: false

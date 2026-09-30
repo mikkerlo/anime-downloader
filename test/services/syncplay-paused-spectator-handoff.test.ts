@@ -192,6 +192,13 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // handoff the room is the joiner's *raw* report of the value it was handed,
     // while the spectator's mirror is stored one forward delay above it and
     // loses every one. Five elections of it, and the room does not move.
+    // The join second itself is contested and still the spectator's: both
+    // candidates report the handed value, and the tie names the crept mirror.
+    expect(room.server.elections[ALONE_SECONDS].positions).toEqual({
+      ghostuser: HANDOFF_POSITION,
+      joinuser: HANDOFF_POSITION
+    })
+    expect(room.server.elections[ALONE_SECONDS].setBy).toBe('ghostuser')
     const settled = room.server.elections.slice(ALONE_SECONDS + 1)
     expect(settled).toHaveLength(5)
     expect(settled.every((e) => e.setBy === 'joinuser')).toBe(true)

@@ -369,7 +369,7 @@ export class Peer {
   /**
    * A `State` carrying `ping` and the retained counter and **no `playstate`
    * key at all** — the production sender's frame, copied rather than invented:
-   * `sendAck()`'s literal is `src/main/syncplay.ts:2737-2745`, and that object
+   * `sendAck()`'s literal is `src/main/syncplay.ts:2775-2783`, and that object
    * holds the ping, the counter, and nothing else. The absence of a playstate
    * is the thing under test, so an emitter that added one would be testing a
    * different frame.
@@ -392,7 +392,7 @@ export class Peer {
    * later.
    *
    * Does **not** clear `lastServerCounter`, where production `sendAck()` zeroes
-   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2746`), so a second
+   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2784`), so a second
    * `pingOnly` step would re-echo a counter the first one already spent. Benign
    * today rather than harmless in general: with no forced update in between the
    * server's flag is already 0, `protocols.py:775-777` simply does not match,

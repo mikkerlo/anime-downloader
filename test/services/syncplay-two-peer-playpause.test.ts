@@ -55,7 +55,7 @@ const DELAY_MS = 50
  *    itself rather than from a separate reading: the mirror exit is only
  *    reachable past the null one, and it is the only exit that omits `paused`.
  *    So its t=1000 heartbeat takes the **mirror** exit —
- *    position, and no `paused` key at all (`src/main/syncplay.ts:2446-2449`,
+ *    position, and no `paused` key at all (`src/main/syncplay.ts:2484-2487`,
  *    against the adopted exit at `src/main/syncplay.ts:2404-2408`, which does
  *    send `paused`). The server reads a missing `paused` as "not paused" and
  *    compensates it by a forward delay —
@@ -82,6 +82,16 @@ const DELAY_MS = 50
  * frame it ever sends without a `paused` key, and its t=2000 heartbeat onward is
  * adopted and stored raw, which puts the room back on `ROOM_START` from the
  * t=3000 election to the end of the run.
+ *
+ * And the boundedness is the *incumbent's* doing, not the mechanism's, which is
+ * the qualifier #411 added to that comment: what stops the compensation here is
+ * a peer that has adopted a real player and therefore reports raw. Take that
+ * peer away and nothing re-asserts the truth — the crept value is handed to the
+ * joiner and kept, which is why this constant is named for the *handoff* rather
+ * than for a room that moved. That case is
+ * `syncplay-paused-spectator-handoff.test.ts`, and the pair of fixtures is the
+ * scope of the comment's correction: the same seam, once with an incumbent and
+ * once without.
  */
 const JOIN_TIME_ROOM_POSITION = ROOM_START + DELAY_MS / 1000
 
@@ -232,6 +242,32 @@ describe('SyncplayClient — play/pause across two peers', () => {
     expect(discreteSends(joiner)).toBe(0)
     expect(host.el.currentTime).toBe(ROOM_START)
     expect(room.server.roomState().position).toBe(ROOM_START)
+
+    // Which election puts it back, by ordinal rather than by "later" (#411).
+    // The middle row is the one the comment's scoping turns on: for one second
+    // the host is the *only* candidate, so `min()` returns its compensated
+    // mirror frame and `JOIN_TIME_ROOM_POSITION` is not a value above the room,
+    // it is the room — which is what the joiner's `Hello` is answered with. The
+    // row after it is the recovery, and it is the third election, not an
+    // eventual one: the host's first adopted heartbeat is stored raw, the
+    // joiner's own report is the offset it was handed, and `min()` takes the
+    // host's.
+    const elections = room.server.elections
+    expect(elections).toHaveLength(6)
+    expect(elections[1].positions).toEqual({ hostuser: JOIN_TIME_ROOM_POSITION })
+    expect(elections[2].positions).toEqual({
+      hostuser: ROOM_START,
+      joinuser: JOIN_TIME_ROOM_POSITION
+    })
+    expect(elections[2].at - elections[0].at).toBe(2000)
+    // And it holds for the rest of the run rather than oscillating: three more
+    // elections, all naming the incumbent at the truth. Counted before it is
+    // quantified over, per docs/testing.md:332 ("Pin the count, never just loop
+    // over the set").
+    const afterRecovery = elections.slice(2)
+    expect(afterRecovery).toHaveLength(4)
+    expect(afterRecovery.every((e) => e.setBy === 'hostuser')).toBe(true)
+    expect(afterRecovery.every((e) => e.positions.hostuser === ROOM_START)).toBe(true)
   })
 
   it('never hands the pauser its own pause back', async () => {

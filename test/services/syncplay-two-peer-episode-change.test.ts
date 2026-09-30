@@ -77,10 +77,10 @@
 // Two mechanisms, not one, which is why 3 s and 6.5 s are separate cases rather
 // than two rows of a table. At 3 s the seat de-adopts on the file change
 // (`src/main/syncplay.ts:789`) and then **re-latches before the next push, on
-// the previous episode's snapshot**: `src/main/syncplay.ts:2596` subtracts the
+// the previous episode's snapshot**: `src/main/syncplay.ts:2634` subtracts the
 // projected room from `this.snapshot.position`, and while a reloading element
 // announces nothing both terms are still the old episode's number, so the drift
-// is 0 and `src/main/syncplay.ts:2597` adopts a seat whose element reads ~0. The
+// is 0 and `src/main/syncplay.ts:2635` adopts a seat whose element reads ~0. The
 // latched seat then asserts the inbound write's 303 — #360 itself — and wins
 // `min()`. At 6.5 s a second path runs: the gap outlives `PLAYBACK_STALE_MS`
 // (`src/main/syncplay.ts:66`), so by the first post-bind push
@@ -411,7 +411,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // PINS CURRENT BEHAVIOUR, BELIEVED WRONG. A peer that pressed nothing has
     // its playhead written backwards and loses ~5 s of playback. The analysis —
     // the de-adopt at `src/main/syncplay.ts:789`, the stale re-latch at
-    // `src/main/syncplay.ts:2597`, and why #360's own inbound write is upstream
+    // `src/main/syncplay.ts:2635`, and why #360's own inbound write is upstream
     // of both the room drag and this one — is in #360. This is not a guard: when
     // #360 is fixed, this case inverts.
     const { switcher, innocent, wireBefore } = await seatPair(3000)

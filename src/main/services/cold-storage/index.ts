@@ -498,7 +498,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     const padded = episodeInt.padStart(2, '0')
     const base = sanitizeFilename(`${animeName} - ${padded}`)
     const authorTag = sanitizeFilename(author || '')
-    const taggedBase = authorTag ? `${base} [${authorTag}]` : base
+    const taggedBase = `${base} [${authorTag}]`
     for (const dir of dirsForScan()) {
       const animeDir = path.join(dir, animeDirName)
       for (const candidate of [

@@ -10,8 +10,12 @@
 // future deep links and the remote-episode-change mismatch case.
 
 import { PAGE_SIZE, filterEpisodes } from './use-episode-list'
-import { usePlayerStore, type PlayerTranslation } from '../stores/player'
-import { getAnimeName } from '../utils'
+import { usePlayerStore } from '../stores/player'
+// `toPlayerTranslations` used to live here as a private function. It moved to
+// `utils.ts` in #419 because the player needs the same mapper for its on-demand
+// page-window fetch, and a pure mapper is the wrong reason for one composable to
+// import another.
+import { getAnimeName, toPlayerTranslations } from '../utils'
 
 export type OpenEpisodeTarget = {
   animeId: number
@@ -20,13 +24,6 @@ export type OpenEpisodeTarget = {
 }
 
 export type OpenEpisodeResult = { ok: true } | { ok: false; error: string }
-
-function toPlayerTranslations(detail: EpisodeDetail | undefined): PlayerTranslation[] {
-  if (!detail) return []
-  return detail.translations
-    .filter((t) => t.isActive === 1)
-    .map((t) => ({ id: t.id, label: t.authorsSummary, type: t.type, height: t.height }))
-}
 
 export function useOpenEpisode(): {
   openEpisode: (target: OpenEpisodeTarget) => Promise<OpenEpisodeResult>
@@ -89,7 +86,13 @@ export function useOpenEpisode(): {
       }
     }
 
+    // Same two-source mismatch as `buildAllEpisodes` (#419), and for the same
+    // reason: the list is every filtered episode, but `details` only covers the
+    // target's PAGE_SIZE window while `downloadedTrIds` is anime-wide. A joiner
+    // therefore gets off-page entries with `translations: []` and populated
+    // downloaded ids, and the player fills those on demand from `id`.
     const allEpisodes = eps.map((ep) => ({
+      id: ep.id,
       episodeInt: ep.episodeInt,
       episodeFull: ep.episodeFull,
       translations: toPlayerTranslations(details.get(ep.id)),

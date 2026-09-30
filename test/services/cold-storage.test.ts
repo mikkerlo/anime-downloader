@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import { join } from 'path'
@@ -256,6 +256,103 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].ass'))).toBe(true)
     expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01.mp4'))).toBe(false)
     expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01.mp4'))).toBe(true) // still in hot
+  })
+
+  it('moveEpisodeToColdStorage logs a per-file failure and still moves the rest', async () => {
+    // Regression for #414: the loop's only `catch` was the outer one around
+    // `readdirSync`, so the first file that failed to move abandoned every file
+    // behind it — silently, since the catch was bare. With autoMoveToCold on
+    // that left the merged .mkv in hot and printed nothing at all.
+    const { svc } = svcWithDirs()
+    // Sorts first, and cannot be moved: its cold destination is a non-empty
+    // directory, so `renameSync` fails and the `copyFile` fallback fails too.
+    writeFile(hotDir, 'Show', 'Show - 01 [A].ass', 'y')
+    fs.mkdirSync(join(coldDir, 'Show', 'Show - 01 [A].ass'), { recursive: true })
+    fs.writeFileSync(join(coldDir, 'Show', 'Show - 01 [A].ass', 'occupied'), 'x')
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x')
+
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args)
+    })
+    try {
+      await svcMoveEpisode(svc, 'Show', '1')
+    } finally {
+      spy.mockRestore()
+    }
+
+    // The file behind the failure still reached cold.
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].mkv'))).toBe(false)
+    // The unmovable one stayed in hot rather than vanishing.
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].ass'))).toBe(true)
+    // …and the failure was logged, naming the file, instead of being swallowed.
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0][0])).toContain('Show - 01 [A].ass')
+  })
+
+  it('moveFileToColdByRelPath moves exactly the named file, sweeping no sibling translation', async () => {
+    // #414's exact-file entry: the path is relative to the *download dir* and
+    // already carries the anime directory, so it must not be joined onto a
+    // per-anime hot dir (that would name <hot>/Show/Show/… and match nothing).
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x')
+    writeFile(hotDir, 'Show', 'Show - 01 [B].mp4', 'sibling-video')
+    writeFile(hotDir, 'Show', 'Show - 01 [B].ass', 'sibling-subs')
+
+    await svc.moveFileToColdByRelPath(join('Show', 'Show - 01 [A].mkv'))
+
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show', 'Show - 01 [A].mkv'))).toBe(false)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].mkv'))).toBe(false)
+    // The sibling translation's unmerged sources are untouched.
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [B].mp4'))).toBe(true)
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [B].ass'))).toBe(true)
+    expect(fs.existsSync(join(coldDir, 'Show', 'Show - 01 [B].mp4'))).toBe(false)
+  })
+
+  it('moveFileToColdByRelPath logs a failed move and resolves instead of rejecting', async () => {
+    // The merge tail does not guard this call: `handleMergeComplete` awaits it
+    // bare, and DownloadManager's merge pass drops the promise the handler
+    // returns. So a rejection here would skip the merge notification and the
+    // skip-analysis schedule, then land as an unhandled rejection. Same
+    // occupied-destination trick as the per-file case above.
+    const { svc } = svcWithDirs()
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x')
+    fs.mkdirSync(join(coldDir, 'Show', 'Show - 01 [A].mkv'), { recursive: true })
+    fs.writeFileSync(join(coldDir, 'Show', 'Show - 01 [A].mkv', 'occupied'), 'x')
+
+    const errors: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args)
+    })
+    try {
+      await expect(
+        svc.moveFileToColdByRelPath(join('Show', 'Show - 01 [A].mkv'))
+      ).resolves.toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+
+    // The failure was logged, naming the file, instead of escaping the mover.
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0][0])).toContain('Show - 01 [A].mkv')
+    // …and the unmovable source stayed in hot rather than vanishing.
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
+  })
+
+  it('moveFileToColdByRelPath no-ops when cold is unconfigured or the file is gone', async () => {
+    const { svc } = svcWithDirs()
+    // Missing source: no throw, and no empty directory left in cold.
+    await svc.moveFileToColdByRelPath(join('Show', 'Show - 99 [A].mkv'))
+    expect(fs.existsSync(join(coldDir, 'Show'))).toBe(false)
+
+    const { svc: simple } = buildSvc({
+      initial: { storageMode: 'advanced', hotStorageDir: hotDir, coldStorageDir: '' }
+    })
+    writeFile(hotDir, 'Show', 'Show - 01 [A].mkv', 'x')
+    await simple.moveFileToColdByRelPath(join('Show', 'Show - 01 [A].mkv'))
+    expect(fs.existsSync(join(hotDir, 'Show', 'Show - 01 [A].mkv'))).toBe(true)
   })
 
   it('moveAllFilesToColdStorage skips .part files + their mp4 shadow + non-media files', async () => {

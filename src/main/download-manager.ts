@@ -144,6 +144,15 @@ export class DownloadManager {
         animeId: number
         episodeInt: string
         episodeLabel: string
+        /**
+         * The merged `.mkv`, as a path relative to the download dir — it
+         * already carries the anime directory, because it derives from
+         * `group.video.filename` (itself `path.join(animeDirName, …)`). Lets a
+         * handler move exactly the file this merge produced instead of
+         * prefix-matching the episode, which has no author tag and would sweep
+         * a sibling translation's unmerged sources (#414).
+         */
+        mkvFilename: string
       }) => void)
     | null = null
   private queueCompleteCallback: (() => void) | null = null
@@ -253,6 +262,8 @@ export class DownloadManager {
       animeId: number
       episodeInt: string
       episodeLabel: string
+      /** Download-dir-relative path of the merged `.mkv` — see the field (#414). */
+      mkvFilename: string
     }) => void
   ): void {
     this.mergeCompleteCallback = callback
@@ -814,14 +825,6 @@ export class DownloadManager {
         this.mergeStatuses.set(group.translationId, { status: 'completed' })
         this.schedulePersist()
         console.log(`[merge] Completed: ${mkvFilename}`)
-        if (this.mergeCompleteCallback) {
-          this.mergeCompleteCallback({
-            animeName: group.animeName,
-            animeId: group.animeId,
-            episodeInt: group.episodeInt,
-            episodeLabel: group.episodeLabel
-          })
-        }
         // Delete source files after successful merge
         try {
           fs.unlinkSync(videoPath)
@@ -834,6 +837,22 @@ export class DownloadManager {
           } catch {
             /* ignore */
           }
+        }
+        // Below the unlinks on purpose (#414): the handler's cold move
+        // snapshots the hot directory, so firing above them let the move
+        // relocate a source the merge was about to delete and then die on one
+        // it had already deleted. Still fire-and-forget — awaiting it would
+        // hold `this.merging` and the whole merge queue behind a multi-GB
+        // cross-drive copy that the between-groups `mergeCancelled` check
+        // cannot interrupt.
+        if (this.mergeCompleteCallback) {
+          this.mergeCompleteCallback({
+            animeName: group.animeName,
+            animeId: group.animeId,
+            episodeInt: group.episodeInt,
+            episodeLabel: group.episodeLabel,
+            mkvFilename
+          })
         }
       } catch (err) {
         // Clean up partial output file

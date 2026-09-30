@@ -233,8 +233,14 @@ mergeCompleted(ffmpegPath, videoCodec):
     4. Subtitle track title set to translator name (authorsSummary)
     5. Progress calculated from timemark/duration (works for all codecs including GPU)
     6. Delete source .mp4 and .ass after successful merge
-    7. Sequential merging (one at a time) enforced via lock
-    8. Merge can be cancelled (kills ffmpeg process, cleans up partial output)
+    7. Fire mergeCompleteCallback -> onMergeComplete, AFTER the delete and not
+       awaited. Ordering is load-bearing (#414): the handler's cold move
+       snapshots the hot directory, so firing above the delete let the move
+       relocate a source the merge was about to unlink and then fail on one it
+       had already unlinked. The payload carries the merged .mkv's
+       download-dir-relative path so the handler moves exactly that file.
+    8. Sequential merging (one at a time) enforced via lock
+    9. Merge can be cancelled (kills ffmpeg process, cleans up partial output)
 
 scanAndMerge(ffmpegPath, videoCodec):
   Scans all download folders for .mp4 without matching .mkv

@@ -1,3 +1,4 @@
+import * as path from 'path'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
@@ -21,20 +22,88 @@ export function resyncDownloadDir({ downloadManager, coldStorageService }: AppDe
   downloadManager.setDownloadDir(coldStorageService.getDownloadDir())
 }
 
+/**
+ * The raw root state every root-writing channel replies with.
+ *
+ * Module scope for the reason `resyncDownloadDir` is: `download:pick-dir` lives
+ * in `downloads.ipc.ts` and now has to build the same reply (#447).
+ */
+export function storageRootsState({ store, coldStorageService }: AppDeps): StorageRootsState {
+  return {
+    downloadDir: (store.get('downloadDir') as string) || '',
+    hotStorageDir: (store.get('hotStorageDir') as string) || '',
+    coldStorageDir: (store.get('coldStorageDir') as string) || '',
+    autoMoveToCold: !!store.get('autoMoveToCold'),
+    missingRoot: coldStorageService.missingConfiguredRoot()
+  }
+}
+
+/**
+ * The reason a root move gives the renderer when it is refused. Prose, not a
+ * code: the Storage tab shows it verbatim.
+ *
+ * It names one exit per blocking state, because no single control clears them
+ * all (#447): **Clear done** (`clearCompleted()`) drops `failed`/`cancelled`
+ * items and `completed` ones whose merge is absent, `completed` or `failed`,
+ * but deliberately *keeps* `pending`/`deferred`/`merging` merges and never
+ * touches `queued`/`downloading`/`paused`. Sending someone holding a paused
+ * download to **Clear done** would be a dead end, so owed merges get pointed
+ * at **Merge finished** and unfinished items at finish-or-cancel instead.
+ *
+ * `action` is the move the user asked for, as a gerund phrase — "switching
+ * storage mode", "changing the download folder". Three channels share the
+ * prose and no two of them are the same control, so the mode-specific wording
+ * #443 shipped could not just be reused verbatim.
+ */
+export function rootBoundWorkReason(action: string): string {
+  return (
+    'Downloads are still in progress or waiting to merge — they would otherwise look for ' +
+    'their files under the new folder and not find them. Finish or cancel anything ' +
+    'downloading or paused, use "Merge finished" for episodes still waiting to merge, and ' +
+    `"Clear done" for finished or failed ones, then try ${action} again.`
+  )
+}
+
+/**
+ * Should a picker refuse to write `key = dir`, and why (#447)?
+ *
+ * Called **after** the dialog returns and immediately before the write, which
+ * is the only position that actually guarantees anything. A check taken before
+ * `showOpenDialog` is a check against a queue the user can then leave stale for
+ * as long as the native dialog stays open, and the auto-downloader enqueues on
+ * a timer — so a `queued` item can appear between the check and the `store.set`
+ * and the hazard is reachable with the guard apparently in place. There is no
+ * pre-dialog check as well: it could only ever be advisory, and a second
+ * message that sometimes disagrees with the authoritative one is worse than
+ * one that is always right.
+ *
+ * The refusal runs only when the effective root would **actually move**. A
+ * re-pick that resolves to the root the manager is already on changes nothing
+ * for it, and refusing that would break the recovery #440 asks for by name:
+ * the missing-root notice tells the user to "re-pick the folder to resume", and
+ * an away drive is exactly the situation that leaves `paused`/`failed` items
+ * bound to it, so an unconditional refusal would close the only door out.
+ * Hence `path.resolve` on both sides rather than a string compare on `dir` —
+ * what matters is where `getDownloadDir()` lands, not which key was written.
+ */
+export function rootMoveRefusal(
+  deps: AppDeps,
+  key: StorageRootKey,
+  dir: string,
+  action: string
+): string | null {
+  const { downloadManager, coldStorageService } = deps
+  const before = path.resolve(coldStorageService.getDownloadDir())
+  const after = path.resolve(coldStorageService.downloadDirWith(key, dir))
+  if (before === after) return null
+  return downloadManager.hasRootBoundWork() ? rootBoundWorkReason(action) : null
+}
+
 export function register(deps: AppDeps): void {
   const { store, downloadManager, coldStorageService, clearFileCache, broadcast } = deps
   const ROOT_KEYS: readonly StorageRootKey[] = ['downloadDir', 'hotStorageDir', 'coldStorageDir']
   const resync = (): void => resyncDownloadDir(deps)
-
-  function rootsState(): StorageRootsState {
-    return {
-      downloadDir: (store.get('downloadDir') as string) || '',
-      hotStorageDir: (store.get('hotStorageDir') as string) || '',
-      coldStorageDir: (store.get('coldStorageDir') as string) || '',
-      autoMoveToCold: !!store.get('autoMoveToCold'),
-      missingRoot: coldStorageService.missingConfiguredRoot()
-    }
-  }
+  const rootsState = (): StorageRootsState => storageRootsState(deps)
 
   ipcMain.handle(CHANNELS.STORAGE_GET_MISSING_ROOT, () => rootsState())
 
@@ -68,24 +137,6 @@ export function register(deps: AppDeps): void {
   })
 
   /**
-   * The reason `storage:set-mode` gives the renderer when it refuses. Prose,
-   * not a code: the Storage tab shows it verbatim.
-   *
-   * It names one exit per blocking state, because no single control clears them
-   * all (#447): **Clear done** (`clearCompleted()`) drops `failed`/`cancelled`
-   * items and `completed` ones whose merge is absent, `completed` or `failed`,
-   * but deliberately *keeps* `pending`/`deferred`/`merging` merges and never
-   * touches `queued`/`downloading`/`paused`. Sending someone holding a paused
-   * download to **Clear done** would be a dead end, so owed merges get pointed
-   * at **Merge finished** and unfinished items at finish-or-cancel instead.
-   */
-  const ROOT_BOUND_REASON =
-    'Downloads are still in progress or waiting to merge — they would otherwise look for ' +
-    'their files under the new folder and not find them. Finish or cancel anything ' +
-    'downloading or paused, use "Merge finished" for episodes still waiting to merge, and ' +
-    '"Clear done" for finished or failed ones, then switch storage mode.'
-
-  /**
    * Write `storageMode` and re-sync the download manager with it (#443).
    *
    * A channel of its own rather than `SET_SETTING('storageMode', …)`, for the
@@ -110,27 +161,51 @@ export function register(deps: AppDeps): void {
       return { mode: current, refusedReason: null, roots: rootsState() }
     }
     if (mode !== current && downloadManager.hasRootBoundWork()) {
-      return { mode: current, refusedReason: ROOT_BOUND_REASON, roots: rootsState() }
+      return {
+        mode: current,
+        refusedReason: rootBoundWorkReason('switching storage mode'),
+        roots: rootsState()
+      }
     }
     store.set('storageMode', mode)
     resync()
     return { mode, refusedReason: null, roots: rootsState() }
   })
 
-  ipcMain.handle(CHANNELS.STORAGE_PICK_HOT_DIR, async () => {
+  /**
+   * Pick the hot-storage root (advanced mode's live download root).
+   *
+   * Refused by the same predicate as `storage:set-mode`, and for the same
+   * hazard reached through a different control (#447): `hotStorageDir` is an
+   * input to `getDownloadDir()`, so picking a new one moves the effective root
+   * out from under every path the manager re-derives later. The check runs
+   * after the dialog returns and before the write — see `rootMoveRefusal`,
+   * which also explains why a re-pick that resolves to the same root is not
+   * refused.
+   */
+  ipcMain.handle(CHANNELS.STORAGE_PICK_HOT_DIR, async (): Promise<StoragePickDirResult> => {
     const win = BrowserWindow.getFocusedWindow()
-    if (!win) return null
+    if (!win) return { dir: null, refusedReason: null, roots: rootsState() }
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory'],
       title: 'Select hot storage directory (active downloads)'
     })
-    if (result.canceled || result.filePaths.length === 0) return null
+    if (result.canceled || result.filePaths.length === 0) {
+      return { dir: null, refusedReason: null, roots: rootsState() }
+    }
     const dir = result.filePaths[0]
+    const refusedReason = rootMoveRefusal(
+      deps,
+      'hotStorageDir',
+      dir,
+      'changing the hot storage folder'
+    )
+    if (refusedReason) return { dir: null, refusedReason, roots: rootsState() }
     store.set('hotStorageDir', dir)
     // Not `setDownloadDir(dir)`: in simple mode `getDownloadDir()` ignores
     // `hotStorageDir` entirely, and the manager has to follow the resolver.
     resync()
-    return dir
+    return { dir, refusedReason: null, roots: rootsState() }
   })
 
   ipcMain.handle(CHANNELS.STORAGE_PICK_COLD_DIR, async () => {

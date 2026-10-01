@@ -90,6 +90,21 @@ export interface ColdStorageServiceDeps {
 export interface ColdStorageService {
   /** Active hot-storage root (advanced mode hot dir, then `downloadDir`, then fallback). */
   getDownloadDir(): string
+  /**
+   * What `getDownloadDir()` **would** answer if `key` held `value` (#447).
+   *
+   * The two root-moving pickers need to know whether the path the user picked
+   * actually moves the effective root before they decide to refuse, and they
+   * have to know it *without* writing the store — a refusal writes nothing at
+   * all. Asking the resolver a hypothetical keeps the fall-through rule in one
+   * place; a picker that worked it out itself ("simple mode means `downloadDir`
+   * is the root") would be a second copy of `getDownloadDir()`, which is what
+   * #443 removed.
+   *
+   * `coldStorageDir` is accepted and answered truthfully — it is not an input
+   * to the resolution, so it always answers the current root unchanged.
+   */
+  downloadDirWith(key: StorageRootKey, value: string): string
   /** Configured cold-storage root, or `''` if not set. */
   getColdStorageDir(): string
   /** `storageMode === 'advanced'`. */
@@ -212,15 +227,31 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
 
   let cleanupRunning = false
 
-  function getDownloadDir(): string {
+  /**
+   * The hot → `downloadDir` → fallback chain, over values rather than over the
+   * store. Both entry points below go through it so the rule is stated once
+   * (#447): `getDownloadDir()` reads the live keys, `downloadDirWith()` swaps
+   * one of them for a value that has not been written.
+   */
+  function resolveDownloadDir(hotDir: string, dir: string): string {
     const mode = store.get('storageMode') as string
-    if (mode === 'advanced') {
-      const hotDir = store.get('hotStorageDir') as string
-      if (hotDir) return hotDir
-    }
-    const dir = store.get('downloadDir') as string
+    if (mode === 'advanced' && hotDir) return hotDir
     if (dir) return dir
     return join(downloadsFallbackDir, 'anime-dl')
+  }
+
+  function getDownloadDir(): string {
+    return resolveDownloadDir(
+      store.get('hotStorageDir') as string,
+      store.get('downloadDir') as string
+    )
+  }
+
+  function downloadDirWith(key: StorageRootKey, value: string): string {
+    return resolveDownloadDir(
+      key === 'hotStorageDir' ? value : (store.get('hotStorageDir') as string),
+      key === 'downloadDir' ? value : (store.get('downloadDir') as string)
+    )
   }
 
   function getColdStorageDir(): string {
@@ -862,6 +893,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
 
   return {
     getDownloadDir,
+    downloadDirWith,
     getColdStorageDir,
     isAdvanced,
     dirsForScan,

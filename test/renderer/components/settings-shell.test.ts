@@ -502,3 +502,202 @@ describe('StorageTab — switching storage mode (#443)', () => {
     expect(wrapper.text()).toContain('Default (Downloads/anime-dl)')
   })
 })
+
+// The Storage tab's half of #447. Both root-moving pickers now answer with
+// `StoragePickDirResult` rather than a path, because main refuses the pick while
+// the download manager still has work bound to the current root — and the tab
+// read a bare `null` as "cancelled", so a refusal sent that way would have
+// discarded the pick silently.
+describe('StorageTab — refused folder picks (#447)', () => {
+  const EMPTY_ROOTS: StorageRootsState = {
+    downloadDir: '',
+    hotStorageDir: '',
+    coldStorageDir: '',
+    autoMoveToCold: false,
+    missingRoot: null
+  }
+
+  const REFUSAL = 'Downloads are still in progress or waiting to merge — finish or cancel them.'
+
+  const pickResult = (over: Partial<StoragePickDirResult> = {}): StoragePickDirResult => ({
+    dir: null,
+    refusedReason: null,
+    roots: EMPTY_ROOTS,
+    ...over
+  })
+
+  const api = {
+    getSetting: vi.fn(async (_key: string): Promise<unknown> => null),
+    setSetting: vi.fn(async () => undefined),
+    storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
+    downloadPickDir: vi.fn(async () => pickResult()),
+    storagePickHotDir: vi.fn(async () => pickResult()),
+    storageSetMode: vi.fn(async () => ({
+      mode: 'advanced' as StorageMode,
+      refusedReason: null as string | null,
+      roots: EMPTY_ROOTS
+    })),
+    cleanupGetSnoozed: vi.fn(async () => ({}))
+  }
+
+  const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
+    get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})
+  })
+
+  async function mountTab(
+    roots: Partial<StorageRootsState> = {},
+    storageMode: StorageMode = 'simple'
+  ) {
+    api.storageGetMissingRoot.mockResolvedValue({ ...EMPTY_ROOTS, ...roots })
+    api.getSetting.mockImplementation(async (key: string) =>
+      key === 'storageMode' ? storageMode : null
+    )
+    const wrapper = mount(StorageTab)
+    await flushPromises()
+    return wrapper
+  }
+
+  const browse = async (wrapper: VueWrapper, row: string): Promise<void> => {
+    const target = wrapper
+      .findAll('.set-row')
+      .find((r) => r.text().includes(row))!
+      .findAll('button')
+      .find((b) => b.text() === 'Browse')!
+    await target.trigger('click')
+    await flushPromises()
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(window as unknown as { api: unknown }).api = apiProxy
+    api.storageGetMissingRoot.mockResolvedValue(EMPTY_ROOTS)
+    api.cleanupGetSnoozed.mockResolvedValue({})
+    api.downloadPickDir.mockResolvedValue(pickResult())
+    api.storagePickHotDir.mockResolvedValue(pickResult())
+  })
+
+  // The behaviour-difference case for the nit in the review: `pickDir` called
+  // `autoSave('downloadDir', dir)` after main had already written the key, so a
+  // refusal would have echoed the root main just declined straight back through
+  // `set-setting`.
+  it('never writes downloadDir through set-setting, refused or not', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.downloadPickDir.mockResolvedValue(
+      pickResult({ refusedReason: REFUSAL, roots: { ...EMPTY_ROOTS, downloadDir: '/dl' } })
+    )
+
+    await browse(wrapper, 'Download folder')
+
+    expect(api.setSetting).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('/dl')
+    expect(wrapper.text()).not.toContain('/elsewhere')
+  })
+
+  it('does not write it on an accepted pick either — main already did', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.downloadPickDir.mockResolvedValue(
+      pickResult({ dir: '/new', roots: { ...EMPTY_ROOTS, downloadDir: '/new' } })
+    )
+
+    await browse(wrapper, 'Download folder')
+
+    expect(api.setSetting).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('/new')
+  })
+
+  it.each([
+    ['Download folder', 'simple' as StorageMode, () => api.downloadPickDir],
+    ['Hot storage', 'advanced' as StorageMode, () => api.storagePickHotDir]
+  ])('shows the reason when main refuses a %s pick', async (row, storageMode, picker) => {
+    const wrapper = await mountTab({ downloadDir: '/dl', hotStorageDir: '/hot' }, storageMode)
+    picker().mockResolvedValue(pickResult({ refusedReason: REFUSAL }))
+
+    await browse(wrapper, row)
+
+    expect(wrapper.text()).toContain(REFUSAL)
+  })
+
+  // Where it renders, not just that it renders. `modeRefusedReason` sits in the
+  // "Storage mode" group under the segmented control; a picker refusal there
+  // would explain a Browse click next to a control the user never touched.
+  it('renders the refusal in the Locations group, not under the mode toggle', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.downloadPickDir.mockResolvedValue(pickResult({ refusedReason: REFUSAL }))
+
+    await browse(wrapper, 'Download folder')
+
+    const groups = wrapper.findAll('.set-group')
+    const holder = groups.find((g) => g.text().includes(REFUSAL))!
+    expect(holder.text()).toContain('Locations')
+    expect(holder.text()).not.toContain('Storage mode')
+  })
+
+  it('clears the refusal on the next pick that goes through', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.downloadPickDir.mockResolvedValue(pickResult({ refusedReason: REFUSAL }))
+    await browse(wrapper, 'Download folder')
+    expect(wrapper.text()).toContain(REFUSAL)
+
+    api.downloadPickDir.mockResolvedValue(
+      pickResult({ dir: '/new', roots: { ...EMPTY_ROOTS, downloadDir: '/new' } })
+    )
+    await browse(wrapper, 'Download folder')
+
+    expect(wrapper.text()).not.toContain(REFUSAL)
+  })
+
+  // An accepted mode switch proves the predicate was false, so a standing
+  // picker refusal is stale.
+  it('clears the refusal on the next accepted mode switch', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl', hotStorageDir: '/hot' })
+    api.downloadPickDir.mockResolvedValue(pickResult({ refusedReason: REFUSAL }))
+    await browse(wrapper, 'Download folder')
+    expect(wrapper.text()).toContain(REFUSAL)
+
+    api.storageSetMode.mockResolvedValue({
+      mode: 'advanced',
+      refusedReason: null,
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot' }
+    })
+    await wrapper
+      .findAll('.set-seg button')
+      .find((b) => b.text() === 'Advanced')!
+      .trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain(REFUSAL)
+  })
+
+  // Cancelling says nothing about whether the work the refusal named is
+  // finished, so the notice stays up.
+  it('keeps the refusal on screen when the next dialog is cancelled', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.downloadPickDir.mockResolvedValue(pickResult({ refusedReason: REFUSAL }))
+    await browse(wrapper, 'Download folder')
+
+    api.downloadPickDir.mockResolvedValue(pickResult())
+    await browse(wrapper, 'Download folder')
+
+    expect(wrapper.text()).toContain(REFUSAL)
+  })
+
+  // The pickers carry root state now, so the tab adopts it from the reply
+  // instead of re-reading it — one round trip, and nothing that can disagree
+  // with what main just wrote.
+  it('adopts the roots from the pick reply, with no re-read', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.storageGetMissingRoot.mockClear()
+    api.downloadPickDir.mockResolvedValue(
+      pickResult({
+        dir: '/new',
+        roots: { ...EMPTY_ROOTS, downloadDir: '/new', missingRoot: '/gone' }
+      })
+    )
+
+    await browse(wrapper, 'Download folder')
+
+    expect(wrapper.text()).toContain('/new')
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+    expect(api.storageGetMissingRoot).not.toHaveBeenCalled()
+  })
+})

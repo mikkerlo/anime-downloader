@@ -5,7 +5,7 @@ import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { VIDEO_EXTS } from '@shared/episode-files'
 import { sanitizeFilename, type DownloadRequest } from '../download-manager'
-import { resyncDownloadDir } from './storage.ipc'
+import { resyncDownloadDir, rootMoveRefusal, storageRootsState } from './storage.ipc'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
@@ -357,20 +357,36 @@ export function register(deps: AppDeps): void {
     return result
   })
 
-  ipcMain.handle(CHANNELS.DOWNLOAD_PICK_DIR, async () => {
+  /**
+   * Pick the simple-mode download root.
+   *
+   * The mirror of `storage:pick-hot-dir`, and deliberately written the same way
+   * even though it lives in another router (#447): both move the root
+   * `getDownloadDir()` answers with, so both are refused by
+   * `hasRootBoundWork()` and both reply with `StoragePickDirResult`. #446's
+   * experience was that a one-sided fix leaves one router's tests green, so the
+   * guard is in both and tested in both.
+   */
+  ipcMain.handle(CHANNELS.DOWNLOAD_PICK_DIR, async (): Promise<StoragePickDirResult> => {
     const win = BrowserWindow.getFocusedWindow()
-    if (!win) return null
+    if (!win) return { dir: null, refusedReason: null, roots: storageRootsState(deps) }
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory'],
       title: 'Select download directory'
     })
-    if (result.canceled || result.filePaths.length === 0) return null
+    if (result.canceled || result.filePaths.length === 0) {
+      return { dir: null, refusedReason: null, roots: storageRootsState(deps) }
+    }
     const dir = result.filePaths[0]
+    const refusedReason = rootMoveRefusal(deps, 'downloadDir', dir, 'changing the download folder')
+    if (refusedReason) {
+      return { dir: null, refusedReason, roots: storageRootsState(deps) }
+    }
     store.set('downloadDir', dir)
     // Not `setDownloadDir(dir)`: in advanced mode `getDownloadDir()` answers
     // `hotStorageDir` and this key is only its fallback, so the manager has to
     // follow the resolver rather than the picked path (#443).
     resyncDownloadDir(deps)
-    return dir
+    return { dir, refusedReason: null, roots: storageRootsState(deps) }
   })
 }

@@ -39,6 +39,7 @@ describe('storage IPC — clear-root (#440)', () => {
   let fallbackDir: string
   let store: InMemoryStorage
   let setDownloadDir: Mock
+  let hasRootBoundWork: Mock
   let coldStorageService: ReturnType<typeof createColdStorageService>
   let invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
 
@@ -69,7 +70,7 @@ describe('storage IPC — clear-root (#440)', () => {
 
     register({
       store,
-      downloadManager: { setDownloadDir },
+      downloadManager: { setDownloadDir, hasRootBoundWork },
       coldStorageService,
       clearFileCache: () => {},
       broadcast: () => {}
@@ -96,6 +97,7 @@ describe('storage IPC — clear-root (#440)', () => {
     fallbackDir = join(tmpRoot, 'downloads')
     for (const dir of [hotDir, coldDir, fallbackDir]) fs.mkdirSync(dir, { recursive: true })
     setDownloadDir = vi.fn()
+    hasRootBoundWork = vi.fn(() => false)
     wire()
   })
 
@@ -267,6 +269,48 @@ describe('storage IPC — clear-root (#440)', () => {
       await clear('downloadDir')
 
       expect(coldStorageService.dirsForScan()).toEqual([join(fallbackDir, 'anime-dl')])
+    })
+  })
+
+  // A pin against a future tidying pass, not a behaviour this PR adds (#447).
+  //
+  // #446 gave `storage:set-mode` a `hasRootBoundWork()` refusal and #447 gave
+  // the two folder pickers the same one. All three write a root key and all
+  // three call `resyncDownloadDir()`, so `storage:clear-root` looks like the
+  // fourth member of a set that is missing its guard — and it must stay
+  // unguarded. Clearing is the exit from the `missingConfiguredRoot()` trap,
+  // and an away drive is exactly what leaves `paused`/`failed` items bound to
+  // the root being cleared: the predicate is at its most likely to hold in the
+  // one situation the hatch exists for. Guarding here would re-trap the user
+  // with no way out at all.
+  describe('stays unguarded while the manager has root-bound work', () => {
+    it.each(['downloadDir', 'hotStorageDir', 'coldStorageDir'] as const)(
+      'clearing %s still writes and still re-syncs',
+      async (key) => {
+        wire({
+          storageMode: 'advanced',
+          downloadDir: coldDir,
+          hotStorageDir: awayDir,
+          coldStorageDir: awayDir
+        })
+        hasRootBoundWork.mockReturnValue(true)
+
+        const state = await clear(key)
+
+        expect(store.get(key)).toBe('')
+        expect(state[key]).toBe('')
+        expect(setDownloadDir).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('reports no refusal of any kind — the reply shape has nowhere to put one', async () => {
+      wire({ storageMode: 'simple', downloadDir: awayDir })
+      hasRootBoundWork.mockReturnValue(true)
+
+      const state = await clear('downloadDir')
+
+      expect(state).not.toHaveProperty('refusedReason')
+      expect(setDownloadDir).toHaveBeenCalledWith(join(fallbackDir, 'anime-dl'))
     })
   })
 })

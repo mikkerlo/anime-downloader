@@ -148,7 +148,8 @@ const api = {
   downloadMerge: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_MERGE),
   ffmpegCheck: () => ipcRenderer.invoke(CHANNELS.FFMPEG_CHECK),
   ffmpegDelete: () => ipcRenderer.invoke(CHANNELS.FFMPEG_DELETE),
-  downloadPickDir: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_PICK_DIR),
+  downloadPickDir: () =>
+    ipcRenderer.invoke(CHANNELS.DOWNLOAD_PICK_DIR) as Promise<StoragePickDirResult>,
   // File management
   fileCheckEpisodes: (animeName: string, episodeInts: string[]) =>
     ipcRenderer.invoke(CHANNELS.FILE_CHECK_EPISODES, animeName, episodeInts),
@@ -184,7 +185,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.STORAGE_CLEAR_ROOT, key) as Promise<StorageRootsState>,
   storageSetMode: (mode: StorageMode) =>
     ipcRenderer.invoke(CHANNELS.STORAGE_SET_MODE, mode) as Promise<StorageSetModeResult>,
-  storagePickHotDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_HOT_DIR),
+  storagePickHotDir: () =>
+    ipcRenderer.invoke(CHANNELS.STORAGE_PICK_HOT_DIR) as Promise<StoragePickDirResult>,
   storagePickColdDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_COLD_DIR),
   storageMoveToCold: () => ipcRenderer.invoke(CHANNELS.STORAGE_MOVE_TO_COLD),
   onStorageMoveToColdProgress: subscribe<{ current: number; total: number; file: string }>(

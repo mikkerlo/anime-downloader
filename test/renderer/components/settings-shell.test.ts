@@ -325,6 +325,25 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     expect(api.storageClearRoot).toHaveBeenCalledWith('hotStorageDir')
   })
 
+  // #454: the lookup is a loop over `ROOT_KEYS` rather than a hand-written `if`
+  // chain, and this is the case that pins the order it must keep. Two keys hold
+  // the same absent path — which happens for real, since `downloadDir` is the
+  // advanced-mode fallback a user may well have pointed at their hot folder —
+  // so the notice has to name the key `missingConfiguredRoot()` picked, i.e.
+  // the earlier one in `ROOT_KEYS`. Reversing the loop makes this clear
+  // `hotStorageDir` instead, and nothing else in the suite would notice.
+  it('resolves an ambiguous missing root to the first key in ROOT_KEYS order', async () => {
+    const wrapper = await mountTab(
+      { downloadDir: '/gone', hotStorageDir: '/gone', missingRoot: '/gone' },
+      'advanced'
+    )
+
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+    await clickThroughConfirm(wrapper, 'Clear Download folder')
+
+    expect(api.storageClearRoot).toHaveBeenCalledWith('downloadDir')
+  })
+
   it('drops the notice on the state the clear handler returns, with no re-read', async () => {
     const wrapper = await mountTab({
       downloadDir: '/dl',

@@ -16,9 +16,11 @@
 // working in the renderer and staying invisible is how the
 // `autoSave('downloadDir')` echo survived until #449 — so the error names the
 // channel that owns the key, which is what the assertions here read. And the
-// denylist is spread from `ROOT_KEYS` rather than re-typed, with the equality
-// assertion at the bottom standing in for the runtime set-comparison the review
-// turned down.
+// denylist is spread from `ROOT_KEYS` rather than re-typed, standing in for the
+// runtime set-comparison the review turned down; the `storageMode` exclusion
+// that makes the spread safe is pinned at the bottom. The equality assertion
+// locking `ROOT_KEYS` to the ambient `StorageRootKey` union lives in
+// `test/shared/storage-roots.test.ts`, next to the list itself (#454).
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import * as fs from 'fs'
@@ -28,7 +30,7 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { register } from '../../src/main/ipc/settings.ipc'
-import { ROOT_KEYS } from '../../src/main/ipc/storage.ipc'
+import { ROOT_KEYS } from '../../src/shared/storage-roots'
 import { createColdStorageService } from '../../src/main/services/cold-storage'
 import type { AppDeps } from '../../src/main/ipc/index'
 
@@ -252,21 +254,16 @@ describe('settings IPC — set-setting root-key denylist (#450)', () => {
     })
   })
 
-  it('locks the ambient `StorageRootKey` union to the runtime ROOT_KEYS list', () => {
-    // The review's replacement for a runtime set-comparison. `StorageRootKey`
-    // is ambient in a `.d.ts`, so there is no value to derive the denylist
-    // from and nothing can import it either — this is the compile-time
-    // stand-in, the same pattern `VIDEO_EXTS` / `EpisodeFileType` use in
-    // `test/lib/episode-files.test.ts`. Adding a fourth member to the union
-    // without adding it to `ROOT_KEYS` (or the reverse) fails
-    // `npm run typecheck`, not just this assertion — and since the denylist is
-    // `[...ROOT_KEYS, 'storageMode']`, a root key cannot reach the pickers'
-    // guard and miss `set-setting`.
-    type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-    const rootKeysMatchUnion: Eq<(typeof ROOT_KEYS)[number], StorageRootKey> = true
-    expect(rootKeysMatchUnion).toBe(true)
-    // `storageMode` sits outside that union by design — it is a mode, not a
-    // path — so it is the one member of the denylist added by hand.
+  it('keeps `storageMode` out of ROOT_KEYS, so the denylist adds it by hand', () => {
+    // The denylist is `[...ROOT_KEYS, 'storageMode']`, so a root key cannot
+    // reach the pickers' guard and miss `set-setting`. `storageMode` sits
+    // outside `StorageRootKey` by design — it is a mode, not a path — which is
+    // why it is the one member added by hand, and this is the fact that makes
+    // the spread safe rather than a coincidence.
+    //
+    // The equality assertion locking `ROOT_KEYS` to the ambient
+    // `StorageRootKey` union moved to `test/shared/storage-roots.test.ts` with
+    // the list itself (#454).
     expect(ROOT_KEYS).not.toContain('storageMode')
   })
 })

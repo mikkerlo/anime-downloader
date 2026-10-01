@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
+import { ROOT_KEYS } from '@shared/storage-roots'
 import type { AppDeps } from './index'
 
 /**
@@ -22,23 +23,6 @@ import type { AppDeps } from './index'
 export function resyncDownloadDir({ downloadManager, coldStorageService }: AppDeps): void {
   downloadManager.setDownloadDir(coldStorageService.getDownloadDir())
 }
-
-/**
- * The `electron-store` keys that name a storage root — the runtime counterpart
- * of the ambient `StorageRootKey` union, which a `.d.ts` cannot derive from.
- *
- * Module scope for the reason `resyncDownloadDir` is, and now for a second one.
- * It validates `storage:clear-root`'s argument below, and since #450
- * `settings.ipc.ts` builds `set-setting`'s denylist as `[...ROOT_KEYS,
- * 'storageMode']` rather than re-typing the three keys a third time — the
- * drift that lets a fourth root key slip past one list and not the other.
- *
- * `as const` rather than `readonly StorageRootKey[]`: the annotation would
- * erase the literals and make the equality assertion in
- * `test/ipc/settings.ipc.test.ts` vacuous, since `ROOT_KEYS[number]` would be
- * `StorageRootKey` by declaration instead of by contents.
- */
-export const ROOT_KEYS = ['downloadDir', 'hotStorageDir', 'coldStorageDir'] as const
 
 /**
  * The raw root state every root-writing channel replies with.

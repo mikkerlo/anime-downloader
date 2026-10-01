@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, onActivated, type Ref } from 'vue';
+import { ROOT_KEYS } from '@shared/storage-roots';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import { formatBytes } from '../../utils';
 import SettingsGroup from './SettingsGroup.vue';
@@ -72,17 +73,26 @@ const ROOT_LABELS: Record<StorageRootKey, string> = {
   coldStorageDir: 'Cold storage'
 };
 
-// Iteration order matches `missingConfiguredRoot()`, so the key this resolves to
-// is the one that produced `missingRoot`. It is needed because that key's own
-// row may belong to the other storage mode and not be on screen at all — the
-// case the notice exists for.
+// The ref holding each root's raw stored path, so the lookup below can be a loop
+// over `ROOT_KEYS` instead of a hand-written `if` chain (#454). A `Record` rather
+// than a loose object for the reason `ROOT_LABELS` is one: a fourth root key
+// leaves it incomplete and `npm run typecheck` is what asks for its ref. The
+// chain it replaced reddened nowhere — with a fourth key it just returned `null`,
+// and the missing-root notice rendered with no key to clear.
+const ROOT_REFS: Record<StorageRootKey, Ref<string>> = {
+  downloadDir,
+  hotStorageDir,
+  coldStorageDir
+};
+
+// Iteration order is `ROOT_KEYS`, which is `missingConfiguredRoot()`'s own order,
+// so the key this resolves to is the one that produced `missingRoot`. It is
+// needed because that key's own row may belong to the other storage mode and not
+// be on screen at all — the case the notice exists for.
 const missingRootKey = computed<StorageRootKey | null>(() => {
   const target = missingRoot.value;
   if (!target) return null;
-  if (downloadDir.value === target) return 'downloadDir';
-  if (hotStorageDir.value === target) return 'hotStorageDir';
-  if (coldStorageDir.value === target) return 'coldStorageDir';
-  return null;
+  return ROOT_KEYS.find((key) => ROOT_REFS[key].value === target) ?? null;
 });
 
 const movingToCold = ref(false);

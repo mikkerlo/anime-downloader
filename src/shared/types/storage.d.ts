@@ -37,13 +37,14 @@ interface EpisodeFileEntry {
  * them names a directory that is not on disk, both metadata-deleting paths
  * refuse to run, and a root the user deleted for good never comes back.
  *
- * The runtime counterpart is `ROOT_KEYS` in `src/main/ipc/storage.ipc.ts`,
- * which validates `storage:clear-root`'s argument and which `set-setting`'s
- * denylist spreads (#450). The two are locked together by a compile-time
- * equality assertion in `test/ipc/settings.ipc.test.ts` — a `.d.ts` cannot
- * import, so the mirror cannot be derived here, exactly as for `VIDEO_EXTS`
- * above. A fourth root key therefore cannot reach the pickers' guard and miss
- * the denylist.
+ * The runtime counterpart is `ROOT_KEYS` in `src/shared/storage-roots.ts`,
+ * which validates `storage:clear-root`'s argument, which `set-setting`'s
+ * denylist spreads (#450), and which `missingConfiguredRoot()` and the Storage
+ * tab's missing-root lookup both walk (#454). The two are locked together by a
+ * compile-time equality assertion in `test/shared/storage-roots.test.ts` — a
+ * `.d.ts` cannot import, so the mirror cannot be derived here, exactly as for
+ * `VIDEO_EXTS` above. A fourth root key therefore cannot reach any one of those
+ * four sites and miss the others.
  */
 type StorageRootKey = 'downloadDir' | 'hotStorageDir' | 'coldStorageDir'
 

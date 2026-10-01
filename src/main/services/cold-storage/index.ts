@@ -3,6 +3,7 @@ import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import { join } from 'path'
 import { EPISODE_ARTIFACT_EXTS } from '@shared/episode-files'
+import { ROOT_KEYS } from '@shared/storage-roots'
 import type { StorageService } from '../../store/types'
 import type { AnimeSearchResult } from '../../smotret-api'
 
@@ -312,12 +313,13 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
   }
 
   function missingConfiguredRoot(): string | null {
-    // Built from the raw stored keys rather than from `allConfiguredRoots()` on
-    // purpose: the fallback must stay out of this check (see the interface doc),
-    // so the two lists have to be able to shrink independently.
-    const storedRoots = (['downloadDir', 'hotStorageDir', 'coldStorageDir'] as const)
-      .map((key) => (store.get(key) as string) || '')
-      .filter(Boolean)
+    // Keys from `ROOT_KEYS`, values raw — deliberately not `allConfiguredRoots()`,
+    // which adds the fallback. The fallback must stay out of this check (see the
+    // interface doc), so the two lists still have to be able to shrink
+    // independently; sourcing the *key list* from the shared array does not
+    // change that, it only stops this copy from being the one place a fourth
+    // root key could be forgotten (#454).
+    const storedRoots = ROOT_KEYS.map((key) => (store.get(key) as string) || '').filter(Boolean)
     for (const root of storedRoots) {
       if (!fs.existsSync(root)) return root
     }

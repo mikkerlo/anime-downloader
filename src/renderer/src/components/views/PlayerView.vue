@@ -3587,6 +3587,13 @@ const bufferedProgress = computed(() => {
 /* Seek bar */
 .seek-container {
   position: relative;
+  /* Confines `.seek-knob` (2) and `.seek-band` (1) to this row (#445). Without
+     a stacking context here, neither this rule nor `.seek-track` makes one
+     (both positioned, both `z-index: auto`), so those two values were compared
+     at `.controls-bar`'s level — where a positive z-index paints later than
+     `auto` whatever the tree order, and so over the open `.preset-menu`
+     dropdowns, which carry none by design (#220). */
+  isolation: isolate;
   height: 16px;
   display: flex;
   align-items: center;
@@ -3647,8 +3654,10 @@ const bufferedProgress = computed(() => {
   border-radius: 2px;
   pointer-events: none;
   /* Sits above buffered/progress fills so the band tint is visible regardless
-     of playback position. Below the seek-input thumb (which is invisible but
-     interactive) so clicks still seek normally. */
+     of playback position. It paints *above* `.seek-input` too, which declares
+     no z-index — clicks still seek because the band is `pointer-events: none`,
+     not because of any stacking order. Confined to the row by
+     `.seek-container`'s isolation (#445). */
   z-index: 1;
   opacity: 0.55;
   transition: opacity 0.15s;

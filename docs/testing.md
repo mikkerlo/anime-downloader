@@ -553,7 +553,7 @@ tests* above — two exact, one a floor and one a ceiling:
   is a property of the fixture file rather than of the tree, and it grows with
   every fixture added, which is exactly how it was last carried forward wrong:
   #457 added one to each side of a stale 268-and-seven while in fact adding
-  several fixture strings, and #395 step 2 added eighteen more. Pin against what
+  several fixture strings, and #395 step 2 added more of its own. Pin against what
   the gate counts, not what a hand census does. The cap last rose
   by one, for a qualifier on `RoomManager.broadcast` in
   `test/services/syncplay-two-peer-adoption.test.ts` naming the default-config

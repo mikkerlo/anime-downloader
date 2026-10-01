@@ -41,6 +41,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Syncplay 1.7.6 from the pinned commit
+        id: install
         # The commit, not the tag: the PyPI 1.7.6 artefact is not the 1.7.6
         # source tree, and the suite's whole claim is about a known `server.py`.
         # `conformance/helpers/real-server.ts` holds the same SHA so a run can
@@ -85,16 +86,26 @@ jobs:
         # a wrong anchor: a `failure()`-gated step would skip on exactly the
         # nightly where someone is already reading the upstream source.
         #
+        # CONDITIONED ON THE INSTALL STEP ALL THE SAME. Without a pinned tree on
+        # disk the script examines no anchor at all: it dies on `ModuleNotFound`,
+        # `tee` writes the traceback into `upstream-citations.md`, and the filing
+        # step below posts a pip failure under the title "upstream citation
+        # anchors are wrong at the pin" — borrowing a title that would then not
+        # mean what it says, which is the whole point of splitting the two. The
+        # accepted consequence: an install failure now files NOTHING and is just
+        # a red run. If that should ever file, it needs a THIRD title, not either
+        # of the two here.
+        #
         # `shell: bash` for `pipefail`, as the step above. Without it `tee`'s 0
         # is the step's status, the outcome below reads `success`, and no issue
         # is ever filed — the same swallow `test/conformance-workflow.test.ts`
         # pins for every piped step in this file.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         shell: bash
         env:
           SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: npm run check:upstream-citations 2>&1 | tee upstream-citations.md
+        run: npm run --silent check:upstream-citations 2>&1 | tee upstream-citations.md
 
       - name: Upload the transcripts
         if: always()

@@ -241,6 +241,14 @@ describe('syncplay-conformance workflow', () => {
     expect(divergence).not.toContain('steps.citations.outcome')
     expect(citations).not.toContain('steps.conformance.outcome')
 
+    // AND THE CHECK STEP ITSELF IS GATED ON THE INSTALL. `!cancelled()` alone also
+    // runs it after `pip install` failed, where the script dies on `ModuleNotFound`,
+    // `tee` writes the traceback into `upstream-citations.md` and the step above
+    // files a pip failure titled "upstream citation anchors are wrong at the pin" —
+    // no anchor ever examined. This pins the second half so an edit back to bare
+    // `!cancelled()` cannot restore that silently.
+    expect(byOutcome('install')).toContain("steps.install.outcome == 'success'")
+
     // Both are still schedule-only: a manual dispatch is somebody watching the
     // run, and an issue filed at them is noise.
     for (const expr of [divergence, citations]) {

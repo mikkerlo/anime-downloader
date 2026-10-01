@@ -112,8 +112,10 @@ const EXT_ALT = ['mkv', 'mp4', 'ass', 'srt'].join('|')
  * detector cannot rot into one that matches nothing and passes.
  */
 const DETECTORS: Record<string, RegExp> = {
-  // `(mkv|mp4)`, `(mp4|mkv)`, `(mkv|mp4|ass)` — the six regex sites.
-  alternation: new RegExp(`\\((?:${EXT_ALT})(?:\\|(?:${EXT_ALT}))+\\)`),
+  // `(mkv|mp4)`, `(mp4|mkv)`, `(mkv|mp4|ass)` — the six regex sites. The `?:`
+  // is optional because only the scanner regexes need the capture, so a
+  // non-capturing `(?:mkv|mp4)` is the likeliest way someone re-inlines one.
+  alternation: new RegExp(`\\((?:\\?:)?(?:${EXT_ALT})(?:\\|(?:${EXT_ALT}))+\\)`),
   // `['.mkv', '.mp4']`, `['.mkv', '.mp4', '.ass']`.
   arrayLiteral: new RegExp(`\\[\\s*'\\.(?:${EXT_ALT})'(?:\\s*,\\s*'\\.(?:${EXT_ALT})')+\\s*\\]`),
   // `f.endsWith('.mkv') || f.endsWith('.mp4')`, across line breaks.
@@ -170,7 +172,8 @@ describe('episode-file set duplication guard', () => {
         "fp.replace(/\\.(mp4|mkv)$/i, '.ass')",
         'file.match(/^(.+?) \\[(.+?)\\]\\.(mkv|mp4)$/)',
         'file.match(/^(.+)\\.(mkv|mp4)$/)',
-        '/\\s-\\s(\\d{1,4})\\.(mkv|mp4|ass)$/i'
+        '/\\s-\\s(\\d{1,4})\\.(mkv|mp4|ass)$/i',
+        '/\\.(?:mkv|mp4)$/i'
       ],
       arrayLiteral: [
         "for (const ext of ['.mkv', '.mp4']) {",

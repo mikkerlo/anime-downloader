@@ -21,7 +21,7 @@ In advanced storage mode, files are managed across two directories:
 
 ### Extension sets
 
-Two named sets in `src/shared/episode-files.ts` (#429), imported as `@shared/episode-files` from main, preload and the renderer — the same three-layer pattern as `src/shared/shikimori.ts`:
+Two named sets in `src/shared/episode-files.ts` (#429), imported as `@shared/episode-files` from main; it lives in `src/shared/` (the same placement as `src/shared/shikimori.ts`) so preload or the renderer can import it when they need to — today they use only the ambient `EpisodeFileEntry` type:
 
 - `VIDEO_EXTS` = `['.mkv', '.mp4']` — the containers a playable episode file can be in. Used by `downloads:*`'s "is there a video here" check and by the player's file resolver.
 - `EPISODE_ARTIFACT_EXTS` = `VIDEO_EXTS` + `['.ass']` — everything the downloader writes for one episode, so it is the set the delete and hot→cold move paths iterate.

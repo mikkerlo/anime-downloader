@@ -96,6 +96,37 @@ export interface ColdStorageService {
   isAdvanced(): boolean
   /** Hot + cold roots, in scan order. */
   dirsForScan(): string[]
+  /**
+   * Every root the app has ever written into, **independent of `storageMode`**:
+   * `downloadDir` (or the fallback when it is empty), `hotStorageDir` and
+   * `coldStorageDir`, empties dropped and de-duplicated (#421).
+   *
+   * Deliberately NOT routed through `getDownloadDir()`, which returns
+   * `hotStorageDir` in advanced mode and would therefore drop `downloadDir` —
+   * exactly the root that holds everything downloaded before the user switched
+   * to advanced mode. Deliberately NOT `dirsForScan()` either: that one is
+   * mode-scoped on purpose because `CLEANUP_EXECUTE` feeds it to a recursive
+   * `fs.rmSync`, so widening it would turn a stale `coldStorageDir` into file
+   * loss. This list is only ever read, never deleted from.
+   */
+  allConfiguredRoots(): string[]
+  /**
+   * The first configured, **non-empty stored** root that is not on disk, or
+   * `null` when they are all reachable (#421).
+   *
+   * Guards the two metadata-deleting callers of `episodeFileExists`: a root that
+   * is away (unmounted drive, re-pointed setting) makes the predicate answer a
+   * false `false` for every file inside it, so deleting on that answer is bulk,
+   * irreversible loss.
+   *
+   * The `downloadsFallbackDir` fallback is exempt, and that exemption is
+   * load-bearing: `downloadDir` defaults to `''`, and a profile that went
+   * straight to advanced mode has never created `<downloads>/anime-dl`, so
+   * including it would report a missing root on every call and disable the GC
+   * permanently. Omitting it is safe by construction — if the path does not
+   * exist, no file can be inside it.
+   */
+  missingConfiguredRoot(): string | null
   /** Walk hot/cold roots, total bytes per anime/episode, classify by bucket. */
   scanUsage(): Promise<StorageUsage>
 
@@ -117,6 +148,7 @@ export interface ColdStorageService {
    * Drop `downloadedEpisodes[animeId:episodeInt:translationId]` (and the legacy
    * unkeyed twin pointing at the same translation) when no file for that
    * translation exists on disk. Called after cancel / cancel-by-episode.
+   * No-op while any configured root is missing (#421).
    */
   pruneDownloadedEpisode(
     animeId: number,
@@ -125,7 +157,13 @@ export interface ColdStorageService {
     animeName: string,
     author: string
   ): void
-  /** True iff a `.mkv` or `.mp4` for `(animeName, episodeInt, author)` exists in any storage root. */
+  /**
+   * True iff a `.mkv` or `.mp4` for `(animeName, episodeInt, author)` exists in
+   * any **configured** root — `allConfiguredRoots()`, not the mode-scoped
+   * `dirsForScan()`, so a `storageMode` flip cannot hide a file that is on disk
+   * (#421). Both callers use the answer to decide whether to delete metadata,
+   * so both want the wide one.
+   */
   episodeFileExists(animeName: string, episodeInt: string, author: string): boolean
   /**
    * Move one episode's files — `.mkv`, `.mp4`, `.ass` — from hot to cold, by
@@ -200,6 +238,27 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
       if (cold) dirs.push(cold)
     }
     return dirs
+  }
+
+  function allConfiguredRoots(): string[] {
+    const downloadDir =
+      (store.get('downloadDir') as string) || join(downloadsFallbackDir, 'anime-dl')
+    const hotDir = (store.get('hotStorageDir') as string) || ''
+    const coldDir = getColdStorageDir()
+    return [...new Set([downloadDir, hotDir, coldDir].filter(Boolean))]
+  }
+
+  function missingConfiguredRoot(): string | null {
+    // Built from the raw stored keys rather than from `allConfiguredRoots()` on
+    // purpose: the fallback must stay out of this check (see the interface doc),
+    // so the two lists have to be able to shrink independently.
+    const storedRoots = (['downloadDir', 'hotStorageDir', 'coldStorageDir'] as const)
+      .map((key) => (store.get(key) as string) || '')
+      .filter(Boolean)
+    for (const root of storedRoots) {
+      if (!fs.existsSync(root)) return root
+    }
+    return null
   }
 
   async function scanUsage(): Promise<StorageUsage> {
@@ -482,6 +541,13 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     animeName: string,
     author: string
   ): void {
+    const missingRoot = missingConfiguredRoot()
+    if (missingRoot) {
+      console.warn(
+        `[storage] skipping downloadedEpisodes prune — configured root is missing: ${missingRoot}`
+      )
+      return
+    }
     if (episodeFileExists(animeName, episodeInt, author)) return
     const episodes = store.get('downloadedEpisodes') as Record<
       string,
@@ -507,7 +573,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     const base = sanitizeFilename(`${animeName} - ${padded}`)
     const authorTag = sanitizeFilename(author || '')
     const taggedBase = `${base} [${authorTag}]`
-    for (const dir of dirsForScan()) {
+    for (const dir of allConfiguredRoots()) {
       const animeDir = path.join(dir, animeDirName)
       for (const candidate of [
         `${taggedBase}.mkv`,
@@ -799,6 +865,8 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     getColdStorageDir,
     isAdvanced,
     dirsForScan,
+    allConfiguredRoots,
+    missingConfiguredRoot,
     scanUsage,
     deleteEpisodeFiles,
     episodeHasInProgressDownload,

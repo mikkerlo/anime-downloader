@@ -86,6 +86,47 @@ describe('ColdStorageService path helpers', () => {
       }).svc.dirsForScan()
     ).toEqual(['/hot'])
   })
+
+  // `dirsForScan()` above moves with `storageMode`; `allConfiguredRoots()` must
+  // not, or the GC in `downloaded-episodes-get` deletes metadata for files it
+  // merely cannot see after a settings toggle (#421).
+  it('allConfiguredRoots spans every stored root regardless of storageMode', () => {
+    const initial = {
+      hotStorageDir: '/hot',
+      downloadDir: '/custom/dl',
+      coldStorageDir: '/cold'
+    }
+    expect(
+      buildSvc({ initial: { ...initial, storageMode: 'simple' } }).svc.allConfiguredRoots()
+    ).toEqual(['/custom/dl', '/hot', '/cold'])
+    expect(
+      buildSvc({ initial: { ...initial, storageMode: 'advanced' } }).svc.allConfiguredRoots()
+    ).toEqual(['/custom/dl', '/hot', '/cold'])
+  })
+
+  it('allConfiguredRoots keeps downloadDir in advanced mode, unlike getDownloadDir', () => {
+    // The withdrawn formula routed the union through `getDownloadDir()`, which
+    // returns `hotStorageDir` here — dropping the root that holds everything
+    // downloaded before the user switched to advanced mode.
+    const { svc } = buildSvc({
+      initial: { storageMode: 'advanced', hotStorageDir: '/hot', downloadDir: '/custom/dl' }
+    })
+    expect(svc.getDownloadDir()).toBe('/hot')
+    expect(svc.allConfiguredRoots()).toContain('/custom/dl')
+  })
+
+  it('allConfiguredRoots substitutes the fallback for an empty downloadDir and de-duplicates', () => {
+    expect(
+      buildSvc({
+        initial: { storageMode: 'advanced', downloadDir: '', hotStorageDir: '/hot' }
+      }).svc.allConfiguredRoots()
+    ).toEqual([join('/users/me/Downloads', 'anime-dl'), '/hot'])
+    expect(
+      buildSvc({
+        initial: { storageMode: 'advanced', downloadDir: '/hot', hotStorageDir: '/hot' }
+      }).svc.allConfiguredRoots()
+    ).toEqual(['/hot'])
+  })
 })
 
 describe('ColdStorageService write-side disk ops', () => {
@@ -146,6 +187,50 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(svc.episodeFileExists('Show', '3', '')).toBe(true)
     writeFile(hotDir, 'Show', 'Show - 04 [].mp4')
     expect(svc.episodeFileExists('Show', '4', '')).toBe(true)
+  })
+
+  // #421: the predicate that both metadata-deleting callers trust. Its answer
+  // must not depend on `storageMode`, because nothing migrates files when the
+  // mode flips and nothing rewrites the store after the GC has run.
+  it('episodeFileExists finds a cold-resident file in simple mode too', () => {
+    writeFile(coldDir, 'Show', 'Show - 01 [Crunchy].mkv')
+    expect(svcWithDirs().svc.episodeFileExists('Show', '1', 'Crunchy')).toBe(true)
+    expect(
+      svcWithDirs({ storageMode: 'simple', downloadDir: hotDir }).svc.episodeFileExists(
+        'Show',
+        '1',
+        'Crunchy'
+      )
+    ).toBe(true)
+  })
+
+  it('episodeFileExists finds a downloadDir-resident file in advanced mode too', () => {
+    // Setup 4: the file landed in `downloadDir` during simple mode, and
+    // `getDownloadDir()` now points at the hot dir instead.
+    const otherHot = join(tmpRoot, 'hot2')
+    fs.mkdirSync(otherHot, { recursive: true })
+    writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv')
+    const { svc } = svcWithDirs({ hotStorageDir: otherHot, downloadDir: hotDir })
+    expect(svc.getDownloadDir()).toBe(otherHot)
+    expect(svc.episodeFileExists('Show', '1', 'Crunchy')).toBe(true)
+  })
+
+  it('missingConfiguredRoot names an absent stored root and exempts the fallback', () => {
+    // `downloadDir` is '' here and `/users/me/Downloads` does not exist, so a
+    // check that included the fallback would report a missing root forever.
+    expect(svcWithDirs().svc.missingConfiguredRoot()).toBeNull()
+    const away = join(tmpRoot, 'away')
+    expect(svcWithDirs({ coldStorageDir: away }).svc.missingConfiguredRoot()).toBe(away)
+  })
+
+  it('pruneDownloadedEpisode is a no-op while a configured root is away', () => {
+    const away = join(tmpRoot, 'away')
+    const entries = {
+      '1:1:7': { translationType: 'subRu', author: 'Crunchy', quality: 720, translationId: 7 }
+    }
+    const { svc, store } = svcWithDirs({ coldStorageDir: away, downloadedEpisodes: entries })
+    svc.pruneDownloadedEpisode(1, '1', 7, 'Show', 'Crunchy')
+    expect(store.get('downloadedEpisodes')).toEqual(entries)
   })
 
   it('episodeHasInProgressDownload detects a .part file', () => {

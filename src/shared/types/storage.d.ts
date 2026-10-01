@@ -31,6 +31,34 @@ interface EpisodeFileEntry {
   author?: string
 }
 
+/**
+ * The three `electron-store` keys that can name a storage root. Clearing one is
+ * the escape hatch from the `missingConfiguredRoot()` guard (#440): while any of
+ * them names a directory that is not on disk, both metadata-deleting paths
+ * refuse to run, and a root the user deleted for good never comes back.
+ */
+type StorageRootKey = 'downloadDir' | 'hotStorageDir' | 'coldStorageDir'
+
+/**
+ * Raw root state, as `CHANNELS.STORAGE_GET_MISSING_ROOT` and
+ * `CHANNELS.STORAGE_CLEAR_ROOT` both report it.
+ *
+ * The three paths are the **stored** values, `''` when unset — deliberately not
+ * what `CHANNELS.GET_SETTING` returns, which resolves `downloadDir` through
+ * `getDownloadDir()` and so hands back the fallback path (or the hot dir, in
+ * advanced mode) for a key that was never set. The renderer needs the unresolved
+ * form to decide which rows have something to clear, and to know which key holds
+ * `missingRoot` when that key's own row is not visible in the current mode.
+ */
+interface StorageRootsState {
+  downloadDir: string
+  hotStorageDir: string
+  coldStorageDir: string
+  autoMoveToCold: boolean
+  /** First stored root that is absent from disk, or `null` — `missingConfiguredRoot()`. */
+  missingRoot: string | null
+}
+
 interface StorageEpisodeUsage {
   episodeInt: string
   files: {

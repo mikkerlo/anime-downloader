@@ -178,6 +178,10 @@ const api = {
   ) => Unsubscribe,
 
   // Storage
+  storageGetMissingRoot: () =>
+    ipcRenderer.invoke(CHANNELS.STORAGE_GET_MISSING_ROOT) as Promise<StorageRootsState>,
+  storageClearRoot: (key: StorageRootKey) =>
+    ipcRenderer.invoke(CHANNELS.STORAGE_CLEAR_ROOT, key) as Promise<StorageRootsState>,
   storagePickHotDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_HOT_DIR),
   storagePickColdDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_COLD_DIR),
   storageMoveToCold: () => ipcRenderer.invoke(CHANNELS.STORAGE_MOVE_TO_COLD),

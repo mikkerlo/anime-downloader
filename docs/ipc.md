@@ -143,6 +143,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `auto-dl:get-enabled` / `auto-dl:set-enabled` | invoke | Read/write the global master toggle |
 | `auto-dl:tick-result` | send | Broadcast after each tick: `{ ranAt, reason, enqueued, skipped, errors, details }` |
 | `auto-dl:enqueued` | send | Broadcast each time the tick enqueues an episode: `{ animeId, episodeInt, animeName }` |
+| `storage:get-missing-root` | invoke | Returns `StorageRootsState`: the three **raw stored** root paths (`''` when unset — unlike `get-setting`, which resolves `downloadDir` through `getDownloadDir()`), `autoMoveToCold`, and `missingRoot` — the first configured root absent from disk, which disables the `downloadedEpisodes` GC (#421). Read-only |
+| `storage:clear-root` | invoke | Clear one of `downloadDir` / `hotStorageDir` / `coldStorageDir` (#440) — the escape hatch for a root that is gone for good. Writes `''` **and** re-syncs `DownloadManager`'s cached download directory via `setDownloadDir(getDownloadDir())`, which is why this is not a `set-setting` call: without it the next download still writes to the cleared root and `mkdirSync` recreates it. Clearing `coldStorageDir` also forces `autoMoveToCold` off. Returns the fresh `StorageRootsState` |
 | `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |

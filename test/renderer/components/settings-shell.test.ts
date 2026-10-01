@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SettingsShell from '../../../src/renderer/src/components/settings/SettingsShell.vue'
+import StorageTab from '../../../src/renderer/src/components/settings/StorageTab.vue'
 import { useLibraryStore } from '../../../src/renderer/src/stores/library'
 
 // Each tab is stubbed with an identifiable marker so we can assert the panel
@@ -123,5 +124,216 @@ describe('SettingsShell', () => {
     expect(badges[0].text()).toBe('in development')
     const wt = wrapper.findAll('.settings-tab')[6]
     expect(wt.find('.st-badge').exists()).toBe(true)
+  })
+})
+
+// The Storage tab's half of #440. The shell stubs this tab out above, so the
+// group below mounts it for real — it is the closest harness, and the tab is
+// where every control added for the issue lives.
+//
+// Two contracts are asserted rather than one. The visible one is that a stale
+// root is reachable from whichever mode the user is in. The invisible one is
+// that Clear goes through `storageClearRoot` and NOT `autoSave`/`setSetting`:
+// the latter only writes the store, leaving the download manager's cached
+// directory on the root that was just cleared.
+describe('StorageTab — clearing a stale storage root (#440)', () => {
+  const EMPTY_ROOTS: StorageRootsState = {
+    downloadDir: '',
+    hotStorageDir: '',
+    coldStorageDir: '',
+    autoMoveToCold: false,
+    missingRoot: null
+  }
+
+  const api = {
+    getSetting: vi.fn(
+      async (key: string): Promise<unknown> => (key === 'storageMode' ? 'simple' : null)
+    ),
+    setSetting: vi.fn(async () => undefined),
+    storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
+    storageClearRoot: vi.fn(async () => EMPTY_ROOTS),
+    cleanupGetSnoozed: vi.fn(async () => ({}))
+  }
+
+  const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
+    get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})
+  })
+
+  async function mountTab(
+    roots: Partial<StorageRootsState> = {},
+    storageMode: 'simple' | 'advanced' = 'simple'
+  ) {
+    const state = { ...EMPTY_ROOTS, ...roots }
+    api.storageGetMissingRoot.mockResolvedValue(state)
+    api.getSetting.mockImplementation(async (key: string) =>
+      key === 'storageMode' ? storageMode : null
+    )
+    const wrapper = mount(StorageTab)
+    await flushPromises()
+    return wrapper
+  }
+
+  const buttonWithText = (wrapper: VueWrapper, text: string) =>
+    wrapper.findAll('button').find((b) => b.text() === text)
+
+  /** Open the confirm dialog from a button, then accept it. */
+  async function clickThroughConfirm(wrapper: VueWrapper, trigger: string): Promise<void> {
+    await buttonWithText(wrapper, trigger)!.trigger('click')
+    await buttonWithText(wrapper, 'Clear folder')!.trigger('click')
+    await flushPromises()
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(window as unknown as { api: unknown }).api = apiProxy
+    api.storageGetMissingRoot.mockResolvedValue(EMPTY_ROOTS)
+    api.storageClearRoot.mockResolvedValue(EMPTY_ROOTS)
+    api.cleanupGetSnoozed.mockResolvedValue({})
+  })
+
+  it('offers no Clear on a root that is already unset', async () => {
+    const wrapper = await mountTab()
+    expect(buttonWithText(wrapper, 'Clear')).toBeUndefined()
+  })
+
+  it('clears downloadDir through storageClearRoot, never through setSetting', async () => {
+    const wrapper = await mountTab({ downloadDir: '/old/dl' })
+
+    await clickThroughConfirm(wrapper, 'Clear')
+
+    expect(api.storageClearRoot).toHaveBeenCalledTimes(1)
+    expect(api.storageClearRoot).toHaveBeenCalledWith('downloadDir')
+    // The plan the review rejected: `autoSave('downloadDir', '')` lands here.
+    expect(api.setSetting).not.toHaveBeenCalled()
+  })
+
+  it('does not clear anything until the confirm is accepted', async () => {
+    const wrapper = await mountTab({ downloadDir: '/old/dl' })
+
+    await buttonWithText(wrapper, 'Clear')!.trigger('click')
+    expect(api.storageClearRoot).not.toHaveBeenCalled()
+
+    await buttonWithText(wrapper, 'Cancel')!.trigger('click')
+    await flushPromises()
+    expect(api.storageClearRoot).not.toHaveBeenCalled()
+  })
+
+  it('warns that the files stay put AND that the downloads vanish from the app', async () => {
+    const wrapper = await mountTab({ downloadDir: '/old/dl' })
+    await buttonWithText(wrapper, 'Clear')!.trigger('click')
+
+    const copy = wrapper.find('.cleanup-modal').text()
+    // Both halves, because clearing is not metadata-neutral: an unmounted root
+    // still holds files whose entries the next GC pass collects.
+    expect(copy).toMatch(/No files are moved or deleted/)
+    expect(copy).toMatch(/disappear from the app until you re-pick this folder/)
+  })
+
+  it('says the cold clear also turns auto-move off, and only for that root', async () => {
+    const advanced = await mountTab({ hotStorageDir: '/hot', coldStorageDir: '/cold' }, 'advanced')
+    const clears = advanced.findAll('button').filter((b) => b.text() === 'Clear')
+    expect(clears).toHaveLength(2)
+
+    await clears[1].trigger('click')
+    expect(advanced.find('.cleanup-modal').text()).toContain('Auto-move to cold storage')
+
+    await buttonWithText(advanced, 'Cancel')!.trigger('click')
+    await clears[0].trigger('click')
+    expect(advanced.find('.cleanup-modal').text()).not.toContain('Auto-move to cold storage')
+  })
+
+  // The cold clear's `autoMoveToCold: false` arrives as part of the handler's
+  // returned state, so adopting it must stay silent. A `watch(autoMoveToCold)`
+  // that saves on every change turns that adoption into a second, redundant
+  // `set-setting('autoMoveToCold', false)` — which contradicts the IPC test's
+  // "same handler, not a follow-up renderer write", and makes `onActivated`'s
+  // refresh echo back whatever main changed. Only a user toggle may write.
+  it('adopts the handler-written auto-move off without echoing a renderer write', async () => {
+    const wrapper = await mountTab(
+      { hotStorageDir: '/hot', coldStorageDir: '/cold', autoMoveToCold: true },
+      'advanced'
+    )
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('true')
+    api.storageClearRoot.mockResolvedValue({
+      ...EMPTY_ROOTS,
+      hotStorageDir: '/hot',
+      autoMoveToCold: false
+    })
+
+    const clears = wrapper.findAll('button').filter((b) => b.text() === 'Clear')
+    await clears[1].trigger('click')
+    await buttonWithText(wrapper, 'Clear folder')!.trigger('click')
+    await flushPromises()
+
+    expect(api.storageClearRoot).toHaveBeenCalledWith('coldStorageDir')
+    // The switch did follow main down — this is adoption, not a no-op.
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('false')
+    expect(api.setSetting).not.toHaveBeenCalled()
+  })
+
+  // The other half of the same contract: dropping the watcher must not drop
+  // persistence for the toggle a user actually flips.
+  it('still persists a user toggle of the auto-move switch', async () => {
+    const wrapper = await mountTab({ hotStorageDir: '/hot', coldStorageDir: '/cold' }, 'advanced')
+
+    await wrapper.find('.switch').trigger('click')
+
+    expect(api.setSetting).toHaveBeenCalledTimes(1)
+    expect(api.setSetting).toHaveBeenCalledWith('autoMoveToCold', true)
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('true')
+
+    await wrapper.find('.switch').trigger('click')
+
+    expect(api.setSetting).toHaveBeenLastCalledWith('autoMoveToCold', false)
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('false')
+  })
+
+  // The case the issue is actually about: the stale root belongs to advanced
+  // mode and the user is in simple mode, so its own row is not rendered at all.
+  it('surfaces a stale cold root from simple mode, where its own row is hidden', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/dl',
+      coldStorageDir: '/gone',
+      missingRoot: '/gone'
+    })
+
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+    // Proof the row is genuinely absent — the notice is the only way in.
+    expect(wrapper.text()).not.toContain('Cold storage (finished files)')
+
+    await clickThroughConfirm(wrapper, 'Clear Cold storage')
+
+    expect(api.storageClearRoot).toHaveBeenCalledWith('coldStorageDir')
+  })
+
+  it('surfaces a stale hot root from advanced mode too — the notice is mode-independent', async () => {
+    const wrapper = await mountTab(
+      { hotStorageDir: '/gone', coldStorageDir: '/cold', missingRoot: '/gone' },
+      'advanced'
+    )
+
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+    await clickThroughConfirm(wrapper, 'Clear Hot storage')
+
+    expect(api.storageClearRoot).toHaveBeenCalledWith('hotStorageDir')
+  })
+
+  it('drops the notice on the state the clear handler returns, with no re-read', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/dl',
+      coldStorageDir: '/gone',
+      missingRoot: '/gone'
+    })
+    api.storageGetMissingRoot.mockClear()
+
+    await clickThroughConfirm(wrapper, 'Clear Cold storage')
+
+    expect(wrapper.text()).not.toContain('Storage folder not found')
+    expect(api.storageGetMissingRoot).not.toHaveBeenCalled()
+  })
+
+  it('shows no notice while every configured root is on disk', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    expect(wrapper.text()).not.toContain('Storage folder not found')
   })
 })

@@ -165,9 +165,9 @@ export const MARKED_PIN = 64
 // landing predicate below ever runs on it and no line number is ever compared
 // against anything.
 //
-// Counted as UNMARKED rather than folded into `marked` above. Zero of the 261
+// Counted as UNMARKED rather than folded into `marked` above. Zero of the 262
 // carry a quote today, so widening that population would make its own printed
-// sentence — "verified against their target" — false by 261 in a single step.
+// sentence — "verified against their target" — false by 262 in a single step.
 // Hence a separate counter and a separate printed line, and deliberately no
 // `.py`-marked floor constant beside it: the ceiling states the same property
 // from the other side, and a second number would only be one more thing to keep
@@ -184,12 +184,12 @@ export const MARKED_PIN = 64
 // retrofit into coverage, and skipping it costs nothing today and everything
 // later.
 //
-// 261 unmarked upstream-Python anchors on this tree, and re-measuring it has a
+// 262 unmarked upstream-Python anchors on this tree, and re-measuring it has a
 // trap worth stating rather than rediscovering. A direct scan of tracked files
-// returns 268. The seven extra are citation-shaped fixture strings inside
+// returns 269. The seven extra are citation-shaped fixture strings inside
 // `test/check-line-citations.test.ts`, which is in `EXCLUDED_PATHS`: the gate
 // does not scan it and a hand census does. Pin against what the gate counts.
-export const UNMARKED_PY_PIN = 261
+export const UNMARKED_PY_PIN = 262
 
 // --- configuration ------------------------------------------------------------
 
@@ -662,6 +662,10 @@ export function analyze({
   let driftChecked = 0
   let unresolvableByExtension = 0
   let unmarkedPy = 0
+  // The other half of the same population, kept beside it rather than derived
+  // later: a marked `.py` anchor leaves the ceiling without entering `marked`,
+  // so nothing downstream of the extension gate below can reconstruct it.
+  let markedPy = 0
   let resolvedFullPath = 0
   let resolvedUniqueBasename = 0
 
@@ -687,7 +691,16 @@ export function analyze({
         // whether or not a tracked copy of its target happens to exist. That is
         // also what keeps the fixtures honest — widening `resolvableExt` to reach
         // the predicates must not change this number.
-        if (extname(raw) === '.py' && quote === null) unmarkedPy++
+        //
+        // Both halves are counted from this one place, keyed on the extension
+        // alone, so the split between them is the only thing the quote decides.
+        // Counting `markedPy` beside `marked.push` below instead would put it
+        // past the `continue` that every `.py` anchor takes, and it would read 0
+        // forever.
+        if (extname(raw) === '.py') {
+          if (quote === null) unmarkedPy++
+          else markedPy++
+        }
 
         if (!resolvableExt.has(extname(raw))) {
           unresolvableByExtension++
@@ -848,6 +861,7 @@ export function analyze({
     resolvedUniqueBasename,
     unresolvableByExtension,
     unmarkedPy,
+    markedPy,
     failures,
     suspicious,
     marked,
@@ -898,6 +912,26 @@ export function report(r, pins = {}) {
   out.push(
     `  unmarked upstream .py anchors: ${r.unmarkedPy} — ceiling ${unmarkedPyPin}` +
       ' (unverified by construction)'
+  )
+  // #395's hatch, and the reason it needs a line of its own rather than a share
+  // of either neighbour. The marked quote is extracted ABOVE the extension gate
+  // in `analyze()`, so a MARKED `.py` anchor leaves the ceiling line above —
+  // which is defined as the unmarked population — and then takes the gate's
+  // `continue` before `marked.push` and `verifyQuote()`, so it cannot join the
+  // `marked quotes` line either: that text promises "verified against their
+  // target" and this class is verified by nothing. Folded into either one it
+  // would make that line's own sentence false, which is the same objection
+  // `UNMARKED_PY_PIN` makes to folding the ceiling into `marked`.
+  //
+  // Printed even at zero, which is the count today, and deliberately carrying NO
+  // pin: the ceiling already bounds the upstream corpus from the other side, and
+  // a constant here would bind the direction nobody wants bound — marking an
+  // upstream anchor is the remedy the ceiling's own failure text recommends, so
+  // a floor would penalise the retrofit and a ceiling would penalise the cure.
+  // Visibility is the whole ask: the class is empty now, and a figure that reads
+  // 0 is how it stops growing unobserved.
+  out.push(
+    `  marked .py anchors: ${r.markedPy} — outside the ceiling,` + ' compared with nothing (no pin)'
   )
   // Printed even at zero, and printed differently when the check did not run at
   // all. "0 drifted" and "not compared" are the two outcomes a reader has to be
@@ -994,8 +1028,8 @@ export function report(r, pins = {}) {
       'predicate ever sees its target, and its line number is never compared with',
       'anything. The marked form is what makes one checkable —',
       '`server.py:NN ("the quoted line")` carries its own evidence, so a reader can',
-      'verify it without the upstream tree and the pinned tree can verify it',
-      'mechanically. Mark the anchor you just added; if it genuinely cannot carry a',
+      'verify it without the upstream tree. Nothing verifies it mechanically yet —',
+      'that waits on #395 step 2. Mark the anchor you just added; if it cannot carry a',
       'quote, raise UNMARKED_PY_PIN in scripts/check-line-citations.mjs and say why in',
       'the commit message.'
     )

@@ -529,28 +529,50 @@ tests* above — two exact, one a floor and one a ceiling:
   floor from the 12 #372 set and nothing had moved since: 52 anchors of slack let
   the verified population lose 81% of its members with the gate green, which is a
   floor that bounds nothing.
-- **Unmarked upstream `.py` anchors, capped at 261.** The other one-sided count,
+- **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:
   each of these is counted as unresolvable by construction, no landing predicate
-  ever runs on it, and its line number is never compared with anything. 261
+  ever runs on it, and its line number is never compared with anything. 262
   anchors across 27 citing files, and **none of them carries a quote** — which is
   why the count is of the *unmarked* ones rather than a widening of `marked`
   above, whose printed line says "verified against their target" and would be
-  false by 261 in a single step. One more than the cap reds the PR that writes it,
+  false by 262 in a single step. One more than the cap reds the PR that writes it,
   which is the property a floor could not deliver: `analyze()` has no notion of
   "added in this PR" and a floor only says the count must not fall, so a new
-  unmarked upstream anchor would arrive green. The 261 already here are
+  unmarked upstream anchor would arrive green. The 262 already here are
   grandfathered rather than retrofitted under duress, and a retrofit lowers the
   count, so the number ratchets toward zero. The hash-comment predicate learned
   `.py` in the same change — 0 occurrences today, since no Python target resolves
   for it to fire on, so it is covered by a fixture rather than by the tree and the
   hole is closed before the population arrives. Re-measuring the cap has one
-  trap: a direct scan of tracked files returns **268**, because
-  `test/check-line-citations.test.ts` carries seven citation-shaped fixture
-  strings and sits in `EXCLUDED_PATHS`. Pin against what the gate counts, not
-  what a hand census does — the seven grew by six in this very change, and the
-  gate's 261 did not move.
+  trap worth knowing: a direct scan returns **269** against the gate's 262, and
+  the gap is seven citation-shaped fixture strings inside
+  `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. Pin
+  against what the gate counts, not what a hand census does. The cap last rose
+  by one, for a qualifier on `RoomManager.broadcast` in
+  `test/services/syncplay-two-peer-adoption.test.ts` naming the default-config
+  branch that constructs the room manager — spelled out there and deliberately
+  not repeated here, because an upstream anchor written into this paragraph is
+  counted by the very cap the paragraph describes. The reason for a rise goes in
+  the commit message, as the failure text requires.
+- **Marked upstream `.py` anchors — printed, with no pin.** The cap above bounds
+  the *unmarked* half, and a marked `.py` anchor is in neither printed count
+  that sounds like it: the quote is extracted before the extension gate, so
+  marking one takes it out of the cap, and the gate's `continue` for a foreign
+  extension then fires before the quote is ever compared with anything. So it
+  leaves the `marked quotes` line alone too — that line says "verified against
+  their target", and this class is verified by nothing in this repo. **A marked
+  upstream anchor carries its evidence for a human reader, not for the gate**:
+  the quote lets a reviewer check the citation without the upstream tree, and
+  mechanical verification of it waits on #395's step 2, which is where CI gets
+  the upstream tree to compare against. The count is **0** today, so the figure
+  exists to keep it visible rather than to clear a backlog — folded into either
+  neighbour it would falsify that line's own sentence, and left unprinted the
+  class could grow with every figure on the gate's output unmoved. It takes no
+  pin in either direction: marking an upstream anchor is the remedy the cap's
+  failure text recommends, so a floor would penalise the retrofit and a ceiling
+  would penalise the cure.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -593,6 +615,9 @@ backticks dropped, whitespace collapsed) before comparing, so a quote may
 include or omit the target's `**`. This is the one part of the gate that judges
 meaning, and it can, because the comparison is a substring test against a string
 the comment already contains rather than a judgement about prose.
+That assertion needs the target on disk, so it does **not** hold for an upstream
+`.py` anchor: the form is checked and the content is not, and those anchors are
+counted on their own printed line rather than inside `marked quotes`.
 
 - **It hard-fails, and the count has a floor rather than a pin.** A quote found
   elsewhere in the file is reported as **drift**, with the corrected line named,

@@ -19,6 +19,7 @@ type Result = {
   resolvedUniqueBasename: number
   unresolvableByExtension: number
   unmarkedPy: number
+  markedPy: number
   failures: { at: string; cited: string; why: string }[]
   suspicious: { at: string; cited: string; target: string; start: number; why: string }[]
   marked: { at: string; cited: string; target: string; quote: string }[]
@@ -342,6 +343,7 @@ describe('check-line-citations', () => {
     const unmarked = run(base({ 'src/caller.ts': "// upstream's election (server.py:597-604)" }))
 
     expect(unmarked.unmarkedPy).toBe(1)
+    expect(unmarked.markedPy).toBe(0)
     expect(report(unmarked, { ...pinsAtZero, unmarkedPy: 0 }).ok).toBe(false)
     expect(report(unmarked, { ...pinsAtZero, unmarkedPy: 1 }).ok).toBe(true)
 
@@ -354,7 +356,48 @@ describe('check-line-citations', () => {
       })
     )
     expect(marked.unmarkedPy).toBe(0)
+
+    // #395's hatch, pinned from both sides. Marking the anchor moves it out of
+    // the ceiling and into `markedPy`, and NOT into `marked[]`: the quote is
+    // extracted above the extension gate, so the gate's `continue` fires before
+    // `marked.push` and `verifyQuote()` ever see it. That asymmetry is the whole
+    // hole — the anchor reads as checkable and is compared with nothing — and
+    // asserting the absence is what stops a later refactor from moving the
+    // `continue` and making the printed counter redundant unobserved.
+    expect(marked.markedPy).toBe(1)
+    expect(marked.marked).toEqual([])
+    // Both halves of "compared with nothing": absent from the verified
+    // population AND never handed to `verifyQuote()`, so an empty failure list
+    // here is the absence of a comparison rather than a comparison that passed.
+    expect(marked.quoteFailures).toEqual([])
+
+    // And the counter is a figure, not a verdict: it carries no pin of its own,
+    // so a non-zero `markedPy` must leave `ok` alone with the ceiling at zero.
     expect(report(marked, { ...pinsAtZero, unmarkedPy: 0 }).ok).toBe(true)
+
+    // The printed line is the deliverable, so its position and text are pinned,
+    // not just the number behind it. Immediately after the ceiling line and
+    // never folded into it: the ceiling names the unmarked population and this
+    // names the half that escaped it. Matched with `startsWith` on the two-space
+    // indent, because `includes('marked .py anchors')` finds the ceiling line's
+    // own `unmarked upstream .py anchors:` first and would pass on the wrong row.
+    const printed = report(marked, { ...pinsAtZero, unmarkedPy: 0 }).out
+    const ceiling = printed.findIndex((l: string) =>
+      l.startsWith('  unmarked upstream .py anchors:')
+    )
+    const hatch = printed.findIndex((l: string) => l.startsWith('  marked .py anchors:'))
+    expect(ceiling).toBeGreaterThan(-1)
+    expect(hatch).toBe(ceiling + 1)
+    expect(printed[hatch]).toContain('marked .py anchors: 1')
+    expect(printed[hatch]).toContain('(no pin)')
+
+    // Printed even at zero, which is the count on the real tree. A figure that
+    // appears only once the class is non-empty cannot be what keeps the class
+    // from growing unobserved — the same objection *Structural tests* makes to a
+    // drift line that prints nothing when the check did not run.
+    expect(report(unmarked, { ...pinsAtZero, unmarkedPy: 1 }).out.join('\n')).toContain(
+      '  marked .py anchors: 0'
+    )
 
     // One-sided, unlike `suspiciousLanding` and `uncheckable`: a fall is free, so
     // the anchors already on the tree are grandfathered and each retrofit
@@ -370,6 +413,20 @@ describe('check-line-citations', () => {
       'src/caller.ts': '// the broadcast (server.py:4)'
     })
     expect(resolving.unmarkedPy).toBe(1)
+
+    // The same claim for the marked half, which is now the other number the
+    // extension keying has to hold still. It also shows what the hatch costs:
+    // with the target on disk the anchor stays in `markedPy` AND reaches
+    // `marked[]`, so `verifyQuote()` runs and passes. Off the tree only the
+    // first of those happens — which is exactly why `markedPy` is printed as
+    // compared with nothing rather than counted as verified.
+    const resolvingMarked = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4 ("room.broadcast(watcher)"))'
+    })
+    expect(resolvingMarked.markedPy).toBe(1)
+    expect(resolvingMarked.marked).toHaveLength(1)
+    expect(resolvingMarked.quoteFailures).toEqual([])
   })
 
   it('does not scan a file under an excluded path', () => {

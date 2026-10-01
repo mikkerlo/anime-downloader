@@ -142,7 +142,14 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     hotStorageDir: '',
     coldStorageDir: '',
     autoMoveToCold: false,
-    missingRoot: null
+    missingRoot: null,
+    // #451 widened the state. Nothing is configured here, so the resolver lands
+    // on the downloads fallback and reports `downloadDir` as the key a root move
+    // would write.
+    effectiveRoot: '',
+    effectiveRootKey: 'downloadDir',
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const api = {
@@ -349,7 +356,14 @@ describe('StorageTab — switching storage mode (#443)', () => {
     hotStorageDir: '',
     coldStorageDir: '',
     autoMoveToCold: false,
-    missingRoot: null
+    missingRoot: null,
+    // #451 widened the state. Nothing is configured here, so the resolver lands
+    // on the downloads fallback and reports `downloadDir` as the key a root move
+    // would write.
+    effectiveRoot: '',
+    effectiveRootKey: 'downloadDir',
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const api = {
@@ -514,7 +528,14 @@ describe('StorageTab — refused folder picks (#447)', () => {
     hotStorageDir: '',
     coldStorageDir: '',
     autoMoveToCold: false,
-    missingRoot: null
+    missingRoot: null,
+    // #451 widened the state. Nothing is configured here, so the resolver lands
+    // on the downloads fallback and reports `downloadDir` as the key a root move
+    // would write.
+    effectiveRoot: '',
+    effectiveRootKey: 'downloadDir',
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const REFUSAL = 'Downloads are still in progress or waiting to merge — finish or cancel them.'
@@ -699,5 +720,261 @@ describe('StorageTab — refused folder picks (#447)', () => {
     expect(wrapper.text()).toContain('/new')
     expect(wrapper.text()).toContain('Storage folder not found: /gone')
     expect(api.storageGetMissingRoot).not.toHaveBeenCalled()
+  })
+})
+
+// The Storage tab's half of #451. #440's notice tells the user to "re-pick the
+// folder to resume", which #449 honours only for a drive that returns at the
+// same path — a relocated one is a genuine root move and the pickers refuse it.
+// The tab now offers the validated move instead, and the condition it is offered
+// under is the whole point: `missingRoot` is the *first* missing stored root, so
+// in advanced mode with a stale `downloadDir` it names `downloadDir` while the
+// root actually holding the stranded work is the hot one. Main therefore reports
+// the resolution itself and the tab gates on one boolean, re-deriving nothing.
+//
+// That boolean is `rebindOffered`, not `effectiveRootMissing` (#455 review): the
+// bare missing-root fact is also true on a fresh install, where `downloadDir` is
+// unset and nothing has created `<Downloads>/anime-dl` yet, so gating on it
+// offered the action to users with an empty queue.
+describe('StorageTab — pointing a relocated root at its new folder (#451)', () => {
+  const EMPTY_ROOTS: StorageRootsState = {
+    downloadDir: '',
+    hotStorageDir: '',
+    coldStorageDir: '',
+    autoMoveToCold: false,
+    missingRoot: null,
+    effectiveRoot: '',
+    effectiveRootKey: 'downloadDir',
+    effectiveRootMissing: false,
+    rebindOffered: false
+  }
+
+  const OFFER = 'My downloads moved to another folder'
+  const REFUSAL = 'Nothing was changed: the unfinished downloads were not found under /new.'
+
+  const rebindResult = (over: Partial<StorageRebindRootResult> = {}): StorageRebindRootResult => ({
+    dir: null,
+    refusedReason: null,
+    roots: EMPTY_ROOTS,
+    matched: [],
+    unmatched: [],
+    ...over
+  })
+
+  const api = {
+    getSetting: vi.fn(async (_key: string): Promise<unknown> => null),
+    setSetting: vi.fn(async () => undefined),
+    storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
+    storageRebindRoot: vi.fn(async () => rebindResult()),
+    cleanupGetSnoozed: vi.fn(async () => ({}))
+  }
+
+  const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
+    get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})
+  })
+
+  async function mountTab(
+    roots: Partial<StorageRootsState> = {},
+    storageMode: StorageMode = 'simple'
+  ) {
+    api.storageGetMissingRoot.mockResolvedValue({ ...EMPTY_ROOTS, ...roots })
+    api.getSetting.mockImplementation(async (key: string) =>
+      key === 'storageMode' ? storageMode : null
+    )
+    const wrapper = mount(StorageTab)
+    await flushPromises()
+    return wrapper
+  }
+
+  const clickOffer = async (wrapper: VueWrapper): Promise<void> => {
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text().includes(OFFER))!
+      .trigger('click')
+    await flushPromises()
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(window as unknown as { api: unknown }).api = apiProxy
+    api.storageGetMissingRoot.mockResolvedValue(EMPTY_ROOTS)
+    api.cleanupGetSnoozed.mockResolvedValue({})
+    api.storageRebindRoot.mockResolvedValue(rebindResult())
+  })
+
+  it('offers the action while the effective root is away', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      missingRoot: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+
+    expect(wrapper.text()).toContain(OFFER)
+  })
+
+  // The fresh-install regression (#455 review). `downloadDir` is unset, so the
+  // resolver lands on `<Downloads>/anime-dl`, which nothing has created yet —
+  // `effectiveRootMissing` is therefore true for a user who has downloaded
+  // nothing. Main answers `rebindOffered: false` because there is no root-bound
+  // work, and the row must follow that rather than the bare fact.
+  it('does not offer it on a fresh install, where the root is merely uncreated', async () => {
+    const wrapper = await mountTab({
+      effectiveRoot: '/home/u/Downloads/anime-dl',
+      effectiveRootMissing: true,
+      rebindOffered: false
+    })
+
+    expect(wrapper.text()).not.toContain(OFFER)
+  })
+
+  // The case the review's own correction is about, and the one a `missingRoot`
+  // comparison gets wrong: the stale root is `downloadDir`, the live work is
+  // under the hot root, and nothing is stranded — so the notice stays and the
+  // action does not appear.
+  it('does not offer it when the missing root is not the effective one', async () => {
+    const wrapper = await mountTab(
+      {
+        downloadDir: '/gone',
+        hotStorageDir: '/hot',
+        missingRoot: '/gone',
+        effectiveRoot: '/hot',
+        effectiveRootKey: 'hotStorageDir',
+        effectiveRootMissing: false,
+        rebindOffered: false
+      },
+      'advanced'
+    )
+
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+    expect(wrapper.text()).not.toContain(OFFER)
+  })
+
+  it('names the effective root key, which in advanced mode is hot storage', async () => {
+    const wrapper = await mountTab(
+      {
+        hotStorageDir: '/gone',
+        missingRoot: '/gone',
+        effectiveRoot: '/gone',
+        effectiveRootKey: 'hotStorageDir',
+        effectiveRootMissing: true,
+        rebindOffered: true
+      },
+      'advanced'
+    )
+
+    const row = wrapper
+      .findAll('.set-row')
+      .find((r) => r.text().includes(OFFER))!
+      .text()
+    expect(row).toContain('Hot storage')
+  })
+
+  // The same contract as #447's pickers: main validates and writes the key in
+  // the handler that re-syncs the manager, so a `set-setting` echo would either
+  // duplicate that write or perform the one main just refused.
+  it('goes through storageRebindRoot and never through set-setting', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+    api.storageRebindRoot.mockResolvedValue(
+      rebindResult({
+        dir: '/new',
+        roots: { ...EMPTY_ROOTS, downloadDir: '/new', effectiveRoot: '/new' },
+        matched: [{ filename: 'Anime/Anime - 01 [X].mp4', reason: null }]
+      })
+    )
+
+    await clickOffer(wrapper)
+
+    expect(api.storageRebindRoot).toHaveBeenCalledTimes(1)
+    expect(api.setSetting).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('/new')
+    expect(wrapper.text()).toContain('found all 1 unfinished file(s)')
+  })
+
+  // The handler moves the root and nothing else, so a `paused` item is still
+  // paused afterwards (#455 review). The outcome row therefore points at the
+  // Downloads page instead of claiming the items resumed, which sent people
+  // looking for downloads that were not running.
+  it('tells the user to resume the matched files rather than saying they resumed', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+    api.storageRebindRoot.mockResolvedValue(
+      rebindResult({
+        dir: '/new',
+        roots: { ...EMPTY_ROOTS, effectiveRoot: '/new' },
+        matched: [
+          { filename: 'Anime/Anime - 01 [X].mp4', reason: null },
+          { filename: 'Anime/Anime - 02 [X].mp4', reason: null }
+        ]
+      })
+    )
+
+    await clickOffer(wrapper)
+
+    expect(wrapper.text()).toContain('found all 2 unfinished file(s) there')
+    expect(wrapper.text()).toContain('Resume them from the Downloads page')
+    expect(wrapper.text()).not.toContain('resumed against them')
+  })
+
+  // An accepted move clears `rebindOffered` and takes the offer off screen with
+  // it, so the confirmation has to live in its own row or it would never be
+  // seen.
+  it('still shows the outcome once the offer itself is gone', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+    api.storageRebindRoot.mockResolvedValue(
+      rebindResult({ dir: '/new', roots: { ...EMPTY_ROOTS, effectiveRoot: '/new' } })
+    )
+
+    await clickOffer(wrapper)
+
+    expect(wrapper.text()).not.toContain(OFFER)
+    expect(wrapper.text()).toContain('Now using /new')
+  })
+
+  it('shows a refusal verbatim and adopts the unchanged roots', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      missingRoot: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+    api.storageRebindRoot.mockResolvedValue(
+      rebindResult({
+        refusedReason: REFUSAL,
+        roots: {
+          ...EMPTY_ROOTS,
+          downloadDir: '/gone',
+          missingRoot: '/gone',
+          effectiveRoot: '/gone',
+          effectiveRootMissing: true,
+          rebindOffered: true
+        },
+        unmatched: [{ filename: 'Anime/Anime - 02 [X].mp4', reason: 'its .part file is not there' }]
+      })
+    )
+
+    await clickOffer(wrapper)
+
+    expect(wrapper.text()).toContain(REFUSAL)
+    // The offer is still there, because nothing was written and the root is
+    // still away.
+    expect(wrapper.text()).toContain(OFFER)
+    expect(api.setSetting).not.toHaveBeenCalled()
   })
 })

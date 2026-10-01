@@ -195,7 +195,13 @@ describe('storage IPC — set-mode (#443)', () => {
           hotStorageDir: hotDir,
           coldStorageDir: '',
           autoMoveToCold: false,
-          missingRoot: null
+          missingRoot: null,
+          // #451 widened the state: the switch moved the effective root to the
+          // hot one, and the reply says so by key as well as by path.
+          effectiveRoot: hotDir,
+          effectiveRootKey: 'hotStorageDir',
+          effectiveRootMissing: false,
+          rebindOffered: false
         }
       })
     })
@@ -439,7 +445,13 @@ describe('storage IPC — set-mode (#443)', () => {
         hotStorageDir: hotDir,
         coldStorageDir: coldDir,
         autoMoveToCold: false,
-        missingRoot: null
+        missingRoot: null,
+        // Simple mode, so the hot pick did not move the effective root at all —
+        // which is #447's exemption, now visible in the reply (#451).
+        effectiveRoot: dlDir,
+        effectiveRootKey: 'downloadDir',
+        effectiveRootMissing: false,
+        rebindOffered: false
       })
     })
 

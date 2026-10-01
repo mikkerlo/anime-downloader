@@ -91,6 +91,20 @@ export interface ColdStorageService {
   /** Active hot-storage root (advanced mode hot dir, then `downloadDir`, then fallback). */
   getDownloadDir(): string
   /**
+   * Which stored key `getDownloadDir()` resolves **through** right now (#451):
+   * `hotStorageDir` in advanced mode with one set, `downloadDir` otherwise.
+   *
+   * The key a root move has to write, and the one `storage:rebind-root` reports
+   * so the renderer never re-derives the rule. Derived from the same predicate
+   * `resolveDownloadDir` branches on rather than restating it, for the reason
+   * `downloadDirWith` exists: a second copy of "simple mode means `downloadDir`
+   * is the root" is what #443 removed.
+   *
+   * The fallback has no key of its own, so an empty `downloadDir` still answers
+   * `downloadDir` — writing it is exactly what replaces the fallback.
+   */
+  effectiveRootKey(): StorageRootKey
+  /**
    * What `getDownloadDir()` **would** answer if `key` held `value` (#447).
    *
    * The two root-moving pickers need to know whether the path the user picked
@@ -228,16 +242,34 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
   let cleanupRunning = false
 
   /**
+   * Which of the two root keys wins, over a value rather than over the store.
+   *
+   * Split out of `resolveDownloadDir` (#451) rather than restated beside it:
+   * `effectiveRootKey()` has to name the key a root move must write, and the
+   * mode+hot-set condition is the whole of that answer. Two copies of it could
+   * disagree — the resolver resolving through `hotStorageDir` while a handler
+   * writes `downloadDir` — which is the class of defect #443 and #447 both
+   * closed by routing every caller through one rule.
+   */
+  function resolveRootKey(hotDir: string): StorageRootKey {
+    const mode = store.get('storageMode') as string
+    return mode === 'advanced' && hotDir ? 'hotStorageDir' : 'downloadDir'
+  }
+
+  /**
    * The hot → `downloadDir` → fallback chain, over values rather than over the
    * store. Both entry points below go through it so the rule is stated once
    * (#447): `getDownloadDir()` reads the live keys, `downloadDirWith()` swaps
    * one of them for a value that has not been written.
    */
   function resolveDownloadDir(hotDir: string, dir: string): string {
-    const mode = store.get('storageMode') as string
-    if (mode === 'advanced' && hotDir) return hotDir
+    if (resolveRootKey(hotDir) === 'hotStorageDir') return hotDir
     if (dir) return dir
     return join(downloadsFallbackDir, 'anime-dl')
+  }
+
+  function effectiveRootKey(): StorageRootKey {
+    return resolveRootKey(store.get('hotStorageDir') as string)
   }
 
   function getDownloadDir(): string {
@@ -893,6 +925,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
 
   return {
     getDownloadDir,
+    effectiveRootKey,
     downloadDirWith,
     getColdStorageDir,
     isAdvanced,

@@ -120,6 +120,8 @@ interface Api {
   storageClearRoot: (key: StorageRootKey) => Promise<StorageRootsState>
   storageSetMode: (mode: StorageMode) => Promise<StorageSetModeResult>
   storagePickHotDir: () => Promise<StoragePickDirResult>
+  /** Validated root move for a drive that came back at a different path (#451). */
+  storageRebindRoot: () => Promise<StorageRebindRootResult>
   /** Still `string | null`: a cold root is a move target, never the manager's. */
   storagePickColdDir: () => Promise<string | null>
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>

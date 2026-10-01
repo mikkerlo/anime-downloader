@@ -101,6 +101,33 @@ const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
 
+/**
+ * How far `item.bytesReceived` is allowed to run **ahead** of the `.part` on
+ * disk before `verifyRootBoundFilesUnder()` calls a shorter file someone else's
+ * (#455 review).
+ *
+ * It bounds exactly one quantity: the bytes `trackProgress` had already counted
+ * but that had not reached `fileStream` when the transfer was aborted.
+ * `trackProgress` is the *first* stage of `pipeline(readable, trackProgress,
+ * throttle, fileStream)`, so it increments the counter before `throttle` and the
+ * write stream ever see the chunk — a few stream buffers (64 KiB each at most by
+ * default) plus the one chunk `throttle` is holding in its `setTimeout`. So the
+ * real ceiling is well under a mebibyte and this is roughly fourfold headroom.
+ *
+ * The gap is not self-correcting, which is why it has to be tolerated rather
+ * than reconciled: `destroy()` calls `persistQueue()` *before* it aborts, so a
+ * quit mid-download writes the inflated counter to `queue.json`, and by the next
+ * start the drive is gone and nothing can stat the `.part` to fix it. That is
+ * precisely the relocated-drive situation this check runs in.
+ *
+ * Too tight a bound over-blocks a move the user could have had, which is the
+ * safe failure — they keep the clear refusal they have today. Too loose adopts a
+ * foreign `.part`, which corrupts a download silently, so err small. The
+ * opposite drift — a `.part` **longer** than the counter, which a hard kill
+ * between the 5 s periodic persists can leave behind — is still refused.
+ */
+export const PART_IN_FLIGHT_SLACK = 4 * 1024 * 1024
+
 export function sanitizeFilename(name: string): string {
   return name
     .replace(/[<>:"/\\|?*]/g, '_')
@@ -802,6 +829,147 @@ export class DownloadManager {
       if (owed.includes(ms.status)) return true
     }
     return false
+  }
+
+  /**
+   * Could `root` serve every piece of root-bound work this manager holds (#451)?
+   *
+   * The companion to `hasRootBoundWork()` above, for the one case blocking
+   * cannot recover: the drive came back at a **different** path. `#440`'s notice
+   * promises "re-pick the folder to resume" and #449 honours that only for a
+   * re-pick of the root already in force, so a relocated drive is a genuine root
+   * move and is refused. This answers the question that makes such a move safe
+   * to allow after all, and it **mutates nothing** — the `store.set` plus
+   * `resyncDownloadDir()` half lives in `storage:rebind-root`, which is the only
+   * position where the answer is still true when the write happens, for the
+   * reason `rootMoveRefusal()` gives.
+   *
+   * Still shape (1), not the per-item root #443 declined: the items have no root
+   * of their own to rewrite, every path comes from `this.downloadDir`, so what
+   * a "re-bind" means here is moving that one root after proving the files are
+   * where it will look for them. Re-binding to a root that does **not** hold
+   * them would turn a clear refusal into silent data loss on the next merge or
+   * cancel, which is worse than the over-blocking it replaces.
+   *
+   * A name match alone is not that proof, so each state is checked for the file
+   * the code that resumes it actually opens:
+   *
+   * - `queued`/`paused`/`failed` carrying bytes: `<root>/<filename>.part` exists
+   *   **and** its size is `bytesReceived`, or short of it by at most
+   *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
+   *   `startDownload` stats the `.part` and resumes with
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1420-1425`), so a same-named `.part` left
+   *   by some *other* download is appended to from its own length and nothing
+   *   anywhere reports an error — the "adopts someone else's files" hazard.
+   *   Equality would be the wrong test, though, because the counter legitimately
+   *   runs ahead of the file: `trackProgress` is the first `pipeline` stage and
+   *   counts a chunk before `throttle` and `fileStream` see it, `destroy()`
+   *   calls `persistQueue()` *before* it aborts, so a quit mid-download persists
+   *   the inflated number — and by the next start the drive is gone, so nothing
+   *   can stat the `.part` to correct it, which is this check's own situation. A
+   *   `.part` **longer** than the counter is still refused: a hard kill between
+   *   the periodic persists can produce that, and it is not a gap any in-flight
+   *   buffer explains.
+   * - `completed` still owed a merge: the finished artifact exists. `_mergeAll`
+   *   reads the video and, when the group has one, the subtitle, and skips a
+   *   video it cannot find with a silent `continue`. Both items are in the queue
+   *   as `completed`, so iterating items covers the pair without special-casing.
+   * - a `deferred` merge: either the `.part` or the final file, because the
+   *   rename is exactly what `finalizeDeferred` has not done yet and it copes
+   *   with both shapes.
+   * - `queued` at zero bytes: nothing has been written, so there is nothing a
+   *   root move can strand. Excluded from both lists rather than refused —
+   *   otherwise "queue filled, drive unplugged before the first byte" would be
+   *   unrecoverable for no gain.
+   * - `cancelled`, and `completed` whose merge completed: inert, the same two
+   *   exclusions `hasRootBoundWork()` makes.
+   *
+   * `busy` is separate because a `downloading` item or a `merging` merge cannot
+   * be settled by looking at files at all: both hold their paths in locals taken
+   * under the old root, and `mkdirSync(…, { recursive: true })`
+   * (`src/main/download-manager.ts:1416`)
+   * recreates a dead mount path rather than failing, so a live write may be
+   * landing somewhere that is neither the old drive nor the new one. The caller
+   * refuses on it.
+   *
+   * Nothing here needs a separate "at least one real match" rule: `matched` and
+   * `unmatched` partition everything checkable, and the caller refuses on any
+   * `unmatched` entry, so an empty folder cannot validate trivially while the
+   * queue holds real partial work — it comes back with every one of those files
+   * in `unmatched`.
+   */
+  verifyRootBoundFilesUnder(root: string): RootRebindCheck {
+    const matched: RootBoundFileReport[] = []
+    const unmatched: RootBoundFileReport[] = []
+    const busy: string[] = []
+
+    for (const [translationId, ms] of this.mergeStatuses) {
+      if (ms.status !== 'merging') continue
+      const group = this.queue.find((i) => i.translationId === translationId && i.kind === 'video')
+      busy.push(`merging ${group?.filename ?? `translation ${translationId}`}`)
+    }
+
+    for (const item of this.queue) {
+      if (item.status === 'cancelled') continue
+      if (item.status === 'downloading') {
+        busy.push(`downloading ${item.filename}`)
+        continue
+      }
+
+      const finalPath = path.join(root, item.filename)
+      const partPath = finalPath + '.part'
+      const merge = this.mergeStatuses.get(item.translationId)?.status
+
+      if (item.status === 'completed') {
+        if (merge === 'completed' || merge === 'merging') continue
+        if (merge === 'deferred') {
+          if (fs.existsSync(finalPath) || fs.existsSync(partPath)) {
+            matched.push({ filename: item.filename, reason: null })
+          } else {
+            unmatched.push({
+              filename: item.filename,
+              reason: 'waiting to be finalized, but neither the file nor its .part is there'
+            })
+          }
+          continue
+        }
+        if (fs.existsSync(finalPath)) {
+          matched.push({ filename: item.filename, reason: null })
+        } else {
+          unmatched.push({
+            filename: item.filename,
+            reason: 'waiting to be merged, but the finished file is not there'
+          })
+        }
+        continue
+      }
+
+      // 'queued' | 'paused' | 'failed'. `resumeAll()` turns `paused` into
+      // `queued` and keeps `bytesReceived`, so the status alone does not say
+      // whether a transfer has started — only the byte count does.
+      if (item.bytesReceived <= 0) continue
+      let size: number | null = null
+      try {
+        size = fs.statSync(partPath).size
+      } catch {
+        /* no .part under this root */
+      }
+      if (size === null) {
+        unmatched.push({
+          filename: item.filename,
+          reason: `partly downloaded, but its .part file is not there`
+        })
+      } else if (size > item.bytesReceived || item.bytesReceived - size > PART_IN_FLIGHT_SLACK) {
+        unmatched.push({
+          filename: item.filename,
+          reason: `its .part file is ${size} bytes, but ${item.bytesReceived} were downloaded — this looks like a different file`
+        })
+      } else {
+        matched.push({ filename: item.filename, reason: null })
+      }
+    }
+
+    return { matched, unmatched, busy }
   }
 
   /**

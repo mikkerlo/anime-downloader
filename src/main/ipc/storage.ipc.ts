@@ -1,3 +1,4 @@
+import * as fs from 'fs'
 import * as path from 'path'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
@@ -44,14 +45,38 @@ export const ROOT_KEYS = ['downloadDir', 'hotStorageDir', 'coldStorageDir'] as c
  *
  * Module scope for the reason `resyncDownloadDir` is: `download:pick-dir` lives
  * in `downloads.ipc.ts` and now has to build the same reply (#447).
+ *
+ * The three `effectiveRoot*` fields answer a question `missingRoot` cannot, and
+ * they are computed here so the renderer re-derives nothing (#451).
+ * `missingConfiguredRoot()` reports the **first** missing *stored* root, which
+ * in advanced mode with a stale `downloadDir` is `downloadDir` even when the
+ * absent root is the hot one in force — so "is the root that actually holds my
+ * unfinished work gone?" is `!existsSync(getDownloadDir())` and nothing else.
+ *
+ * `rebindOffered` is that fact **and** `hasRootBoundWork()`, which is the gate
+ * the issue specified and `effectiveRootMissing` is not (#455 review): an unset
+ * `downloadDir` resolves to `<Downloads>/anime-dl`, which nothing creates until
+ * the first download's `mkdirSync`, so the bare missing-root fact is true on
+ * every fresh install. It is computed here for the reason the other three are —
+ * the renderer gates on one boolean and re-derives no part of the rule.
  */
-export function storageRootsState({ store, coldStorageService }: AppDeps): StorageRootsState {
+export function storageRootsState({
+  store,
+  coldStorageService,
+  downloadManager
+}: AppDeps): StorageRootsState {
+  const effectiveRoot = coldStorageService.getDownloadDir()
+  const effectiveRootMissing = !fs.existsSync(effectiveRoot)
   return {
     downloadDir: (store.get('downloadDir') as string) || '',
     hotStorageDir: (store.get('hotStorageDir') as string) || '',
     coldStorageDir: (store.get('coldStorageDir') as string) || '',
     autoMoveToCold: !!store.get('autoMoveToCold'),
-    missingRoot: coldStorageService.missingConfiguredRoot()
+    missingRoot: coldStorageService.missingConfiguredRoot(),
+    effectiveRoot,
+    effectiveRootKey: coldStorageService.effectiveRootKey(),
+    effectiveRootMissing,
+    rebindOffered: effectiveRootMissing && downloadManager.hasRootBoundWork()
   }
 }
 
@@ -114,6 +139,46 @@ export function rootMoveRefusal(
   const after = path.resolve(coldStorageService.downloadDirWith(key, dir))
   if (before === after) return null
   return downloadManager.hasRootBoundWork() ? rootBoundWorkReason(action) : null
+}
+
+/**
+ * Why `storage:rebind-root` refused while something was still running (#451).
+ *
+ * A separate refusal from `rootBoundWorkReason` because the exits are different
+ * ones: that prose tells the user to *clear* their queue, which is the opposite
+ * of what this action is for. Here the work is wanted and only the timing is
+ * wrong, so the advice is to let it settle.
+ */
+export function rootRebindBusyReason(busy: string[]): string {
+  return (
+    'Something is still writing to the old folder, so pointing the app somewhere else now ' +
+    `could leave files behind in a third place: ${busy.join(', ')}. Pause your downloads, let ` +
+    'any merge finish, then try again.'
+  )
+}
+
+/**
+ * Why `storage:rebind-root` refused the folder the user picked (#451).
+ *
+ * Lists what was looked for and not found, because the only way forward is for
+ * the user to decide per item: pick a different folder, or cancel the items
+ * whose files are genuinely gone and retry. The move is all-or-nothing — one
+ * root serves the whole queue, so re-binding "just the matched ones" is not
+ * representable — and that is what this has to explain without saying
+ * "all-or-nothing".
+ */
+export function rootRebindMismatchReason(dir: string, unmatched: RootBoundFileReport[]): string {
+  const listed = unmatched
+    .slice(0, 5)
+    .map((u) => `${u.filename} — ${u.reason}`)
+    .join('; ')
+  const rest = unmatched.length > 5 ? ` …and ${unmatched.length - 5} more` : ''
+  return (
+    `Nothing was changed: the unfinished downloads were not found under ${dir}, and the app ` +
+    'has one folder for all of them, so it cannot move only some. ' +
+    `${listed}${rest}. Pick the folder that holds these files, or cancel the ones that are ` +
+    'gone for good and try again.'
+  )
 }
 
 export function register(deps: AppDeps): void {
@@ -222,6 +287,89 @@ export function register(deps: AppDeps): void {
     // `hotStorageDir` entirely, and the manager has to follow the resolver.
     resync()
     return { dir, refusedReason: null, roots: rootsState() }
+  })
+
+  /**
+   * Re-point the effective download root at the folder a relocated drive came
+   * back as, after proving the unfinished work is actually there (#451).
+   *
+   * The one case blocking cannot recover. #440's notice promises "re-pick the
+   * folder to resume" and #449 honours it only for a drive that returns at the
+   * **same** path: `rootMoveRefusal()` exempts a re-pick that resolves to the
+   * root already in force and refuses every other move while
+   * `hasRootBoundWork()` holds — which is precisely what an away drive leaves
+   * behind. `/media/user/DISK1` returning as `/media/user/DISK1_` resolves
+   * differently, so the pickers refuse it and the only exits are to cancel the
+   * stranded work or to clear the root. Neither is "resume".
+   *
+   * This is a path *through* that guard, not a relaxation of it. The pickers are
+   * unchanged and still refuse an unvalidated move; what this channel adds is
+   * the validation that makes one safe —
+   * `downloadManager.verifyRootBoundFilesUnder()`, which checks the file each
+   * state's resume path actually opens (a `.part` by name **and** size, within
+   * `PART_IN_FLIGHT_SLACK` of `bytesReceived` and never longer than it, a
+   * finished artifact for a merge still owed, either shape for a `deferred`
+   * one). Still shape (1) and not the per-item root #443 declined: there is no
+   * per-item binding to rewrite, so a "re-bind" is this `store.set` plus
+   * `resyncDownloadDir()`, `queue.json` does not change, and the root comes back
+   * through the store on the next start.
+   *
+   * The key written is the one `getDownloadDir()` resolves **through**, from the
+   * resolver rather than from the mode: `hotStorageDir` in advanced mode with
+   * one set, `downloadDir` otherwise. The cold picker stays unguarded and is
+   * untouched here — `coldStorageDir` is not an input to the resolution, so a
+   * relocated cold drive is already recoverable by re-picking it.
+   *
+   * Two refusals, both writing nothing. Live work (`downloading`/`merging`)
+   * first, because no file check can settle it: those hold their paths in
+   * locals under the old root, and `mkdirSync(…, { recursive: true })` recreates
+   * a dead mount path rather than failing, so a write may be landing somewhere
+   * that is neither root. Then any unmatched file, which refuses the **whole**
+   * move: one root serves the entire queue, so "re-bind only the matched ones"
+   * cannot be represented, and re-binding to a folder that does not hold the
+   * files would convert today's clear refusal into silent loss on the next merge
+   * or cancel. Both checks run after the dialog returns and immediately before
+   * the write, for the reason `rootMoveRefusal` gives at length.
+   */
+  ipcMain.handle(CHANNELS.STORAGE_REBIND_ROOT, async (): Promise<StorageRebindRootResult> => {
+    const unwritten = (refusedReason: string | null, check?: RootRebindCheck) => ({
+      dir: null,
+      refusedReason,
+      roots: rootsState(),
+      matched: check?.matched ?? [],
+      unmatched: check?.unmatched ?? []
+    })
+
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return unwritten(null)
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory'],
+      title: 'Select the folder your unfinished downloads are now in'
+    })
+    if (result.canceled || result.filePaths.length === 0) return unwritten(null)
+
+    const dir = result.filePaths[0]
+    const key = coldStorageService.effectiveRootKey()
+    // Through the resolver rather than straight to `dir`: what has to hold the
+    // files is wherever `getDownloadDir()` would land once `key` holds `dir`,
+    // which is the same hypothetical the pickers' guard asks.
+    const check = downloadManager.verifyRootBoundFilesUnder(
+      coldStorageService.downloadDirWith(key, dir)
+    )
+    if (check.busy.length > 0) return unwritten(rootRebindBusyReason(check.busy), check)
+    if (check.unmatched.length > 0) {
+      return unwritten(rootRebindMismatchReason(dir, check.unmatched), check)
+    }
+
+    store.set(key, dir)
+    resync()
+    return {
+      dir,
+      refusedReason: null,
+      roots: rootsState(),
+      matched: check.matched,
+      unmatched: []
+    }
   })
 
   ipcMain.handle(CHANNELS.STORAGE_PICK_COLD_DIR, async () => {

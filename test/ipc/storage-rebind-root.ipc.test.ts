@@ -319,8 +319,12 @@ describe('storage IPC — rebind-root (#451)', () => {
     // `.part` is appended to with `Range: bytes=<size>-` and nothing anywhere
     // reports an error. Re-binding here converts a clear refusal into a corrupt
     // file, which is worse than today's over-blocking.
+    //
+    // The `.part` is *longer* than the counter: short by a little is now our own
+    // file mid-abort (`PART_IN_FLIGHT_SLACK`, #455 review), and only a size the
+    // in-flight window cannot explain is still evidence of a foreign file.
     it('refuses a .part whose size differs from bytesReceived', async () => {
-      put(newDir, VIDEO + '.part', 999)
+      put(newDir, VIDEO + '.part', 2048)
       seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
       pickerReturns(newDir)
 
@@ -415,12 +419,14 @@ describe('storage IPC — rebind-root (#451)', () => {
   describe('the action is offered for the effective root, and only for it', () => {
     it('offers it in simple mode when downloadDir is away', async () => {
       wire({ storageMode: 'simple', downloadDir: awayDir })
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
 
       const state = await rootsState()
 
       expect(state.effectiveRootMissing).toBe(true)
       expect(state.effectiveRootKey).toBe('downloadDir')
       expect(state.effectiveRoot).toBe(awayDir)
+      expect(state.rebindOffered).toBe(true)
     })
 
     // The case the review's own correction is about. `missingConfiguredRoot()`
@@ -430,6 +436,7 @@ describe('storage IPC — rebind-root (#451)', () => {
     it('offers it for hotStorageDir in advanced mode even when downloadDir is stale too', async () => {
       wire({ storageMode: 'advanced', downloadDir: awayDir, hotStorageDir: newDir })
       fs.rmSync(newDir, { recursive: true, force: true })
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
 
       const state = await rootsState()
 
@@ -437,6 +444,7 @@ describe('storage IPC — rebind-root (#451)', () => {
       expect(state.effectiveRootKey).toBe('hotStorageDir')
       expect(state.effectiveRoot).toBe(newDir)
       expect(state.effectiveRootMissing).toBe(true)
+      expect(state.rebindOffered).toBe(true)
     })
 
     // The mirror image, and the "two roots" risk the issue lists: a stale
@@ -444,12 +452,14 @@ describe('storage IPC — rebind-root (#451)', () => {
     // and the action does not appear.
     it('does not offer it in advanced mode when only the inactive downloadDir is away', async () => {
       wire({ storageMode: 'advanced', downloadDir: awayDir, hotStorageDir: hotDir })
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
 
       const state = await rootsState()
 
       expect(state.missingRoot).toBe(awayDir)
       expect(state.effectiveRootKey).toBe('hotStorageDir')
       expect(state.effectiveRootMissing).toBe(false)
+      expect(state.rebindOffered).toBe(false)
     })
 
     // Advanced mode with no hot dir picked falls through to `downloadDir`, so
@@ -471,6 +481,84 @@ describe('storage IPC — rebind-root (#451)', () => {
 
       expect(state.effectiveRootMissing).toBe(false)
       expect(state.effectiveRootKey).toBe('downloadDir')
+      expect(state.rebindOffered).toBe(false)
+    })
+  })
+
+  // `effectiveRootMissing` is the plain fact and is **not** the offer's gate
+  // (#455 review). The issue scoped the offer to "a root is missing *and* there
+  // is root-bound work", which is what `rebindOffered` reports; gating the row
+  // on the bare fact put the action in front of every fresh install, because an
+  // unset `downloadDir` resolves to `<Downloads>/anime-dl` and nothing creates
+  // that folder until the first download's `mkdirSync`.
+  describe('the offer needs root-bound work as well as a missing root', () => {
+    it('is not offered on a fresh install: downloadDir unset, the fallback absent, queue empty', async () => {
+      wire({ storageMode: 'simple', downloadDir: '' })
+      fs.rmSync(fallbackDir, { recursive: true, force: true })
+
+      const state = await rootsState()
+
+      // The fallback is what an unset `downloadDir` resolves to, and it is not
+      // on disk — so the bare fact holds and would have shown the row.
+      expect(state.downloadDir).toBe('')
+      expect(state.effectiveRoot).toBe(join(fallbackDir, 'anime-dl'))
+      expect(state.effectiveRootMissing).toBe(true)
+      expect(state.rebindOffered).toBe(false)
+    })
+
+    it('is not offered for an away root with nothing bound to it', async () => {
+      wire({ storageMode: 'simple', downloadDir: awayDir })
+
+      const state = await rootsState()
+
+      expect(state.effectiveRootMissing).toBe(true)
+      expect(state.rebindOffered).toBe(false)
+    })
+
+    // The whole population `hasRootBoundWork()` covers, so the offer cannot
+    // depend on which flavour of stranded work the user happens to hold.
+    it.each([
+      [
+        'a paused download',
+        (): DownloadItem[] => [makeItem({ status: 'paused', bytesReceived: 9 })]
+      ],
+      [
+        'a failed download',
+        (): DownloadItem[] => [makeItem({ status: 'failed', bytesReceived: 9 })]
+      ],
+      ['a queued download', (): DownloadItem[] => [makeItem({ status: 'queued' })]],
+      ['an unmerged finished episode', (): DownloadItem[] => [makeItem({ status: 'completed' })]]
+    ])('is offered for an away root holding %s', async (_label, items) => {
+      wire({ storageMode: 'simple', downloadDir: awayDir })
+      seed(items())
+
+      expect((await rootsState()).rebindOffered).toBe(true)
+    })
+
+    it('is not offered once the work is inert, even with the root still away', async () => {
+      wire({ storageMode: 'simple', downloadDir: awayDir })
+      seed([makeItem({ status: 'cancelled', bytesReceived: 1024 })])
+
+      const state = await rootsState()
+
+      expect(state.effectiveRootMissing).toBe(true)
+      expect(state.rebindOffered).toBe(false)
+    })
+
+    // An accepted move is what takes the row off screen, and it does so through
+    // the root half rather than the work half: the queue is untouched.
+    it('stops being offered after a move that went through', async () => {
+      put(newDir, VIDEO + '.part', 1024)
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
+      pickerReturns(newDir)
+
+      expect((await rootsState()).rebindOffered).toBe(true)
+
+      const result = await rebind()
+
+      expect(result.refusedReason).toBeNull()
+      expect(result.roots.rebindOffered).toBe(false)
+      expect((await rootsState()).rebindOffered).toBe(false)
     })
   })
 

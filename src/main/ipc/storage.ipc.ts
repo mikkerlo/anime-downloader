@@ -52,9 +52,21 @@ export const ROOT_KEYS = ['downloadDir', 'hotStorageDir', 'coldStorageDir'] as c
  * in advanced mode with a stale `downloadDir` is `downloadDir` even when the
  * absent root is the hot one in force — so "is the root that actually holds my
  * unfinished work gone?" is `!existsSync(getDownloadDir())` and nothing else.
+ *
+ * `rebindOffered` is that fact **and** `hasRootBoundWork()`, which is the gate
+ * the issue specified and `effectiveRootMissing` is not (#455 review): an unset
+ * `downloadDir` resolves to `<Downloads>/anime-dl`, which nothing creates until
+ * the first download's `mkdirSync`, so the bare missing-root fact is true on
+ * every fresh install. It is computed here for the reason the other three are —
+ * the renderer gates on one boolean and re-derives no part of the rule.
  */
-export function storageRootsState({ store, coldStorageService }: AppDeps): StorageRootsState {
+export function storageRootsState({
+  store,
+  coldStorageService,
+  downloadManager
+}: AppDeps): StorageRootsState {
   const effectiveRoot = coldStorageService.getDownloadDir()
+  const effectiveRootMissing = !fs.existsSync(effectiveRoot)
   return {
     downloadDir: (store.get('downloadDir') as string) || '',
     hotStorageDir: (store.get('hotStorageDir') as string) || '',
@@ -63,7 +75,8 @@ export function storageRootsState({ store, coldStorageService }: AppDeps): Stora
     missingRoot: coldStorageService.missingConfiguredRoot(),
     effectiveRoot,
     effectiveRootKey: coldStorageService.effectiveRootKey(),
-    effectiveRootMissing: !fs.existsSync(effectiveRoot)
+    effectiveRootMissing,
+    rebindOffered: effectiveRootMissing && downloadManager.hasRootBoundWork()
   }
 }
 
@@ -293,7 +306,8 @@ export function register(deps: AppDeps): void {
    * unchanged and still refuse an unvalidated move; what this channel adds is
    * the validation that makes one safe —
    * `downloadManager.verifyRootBoundFilesUnder()`, which checks the file each
-   * state's resume path actually opens (a `.part` by name **and** size, a
+   * state's resume path actually opens (a `.part` by name **and** size, within
+   * `PART_IN_FLIGHT_SLACK` of `bytesReceived` and never longer than it, a
    * finished artifact for a merge still owed, either shape for a `deferred`
    * one). Still shape (1) and not the per-item root #443 declined: there is no
    * per-item binding to rewrite, so a "re-bind" is this `store.set` plus

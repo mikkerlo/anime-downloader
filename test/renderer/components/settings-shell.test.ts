@@ -148,7 +148,8 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     // would write.
     effectiveRoot: '',
     effectiveRootKey: 'downloadDir',
-    effectiveRootMissing: false
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const api = {
@@ -361,7 +362,8 @@ describe('StorageTab — switching storage mode (#443)', () => {
     // would write.
     effectiveRoot: '',
     effectiveRootKey: 'downloadDir',
-    effectiveRootMissing: false
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const api = {
@@ -532,7 +534,8 @@ describe('StorageTab — refused folder picks (#447)', () => {
     // would write.
     effectiveRoot: '',
     effectiveRootKey: 'downloadDir',
-    effectiveRootMissing: false
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const REFUSAL = 'Downloads are still in progress or waiting to merge — finish or cancel them.'
@@ -727,7 +730,12 @@ describe('StorageTab — refused folder picks (#447)', () => {
 // under is the whole point: `missingRoot` is the *first* missing stored root, so
 // in advanced mode with a stale `downloadDir` it names `downloadDir` while the
 // root actually holding the stranded work is the hot one. Main therefore reports
-// `effectiveRootMissing` and the tab gates on that, re-deriving nothing.
+// the resolution itself and the tab gates on one boolean, re-deriving nothing.
+//
+// That boolean is `rebindOffered`, not `effectiveRootMissing` (#455 review): the
+// bare missing-root fact is also true on a fresh install, where `downloadDir` is
+// unset and nothing has created `<Downloads>/anime-dl` yet, so gating on it
+// offered the action to users with an empty queue.
 describe('StorageTab — pointing a relocated root at its new folder (#451)', () => {
   const EMPTY_ROOTS: StorageRootsState = {
     downloadDir: '',
@@ -737,7 +745,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
     missingRoot: null,
     effectiveRoot: '',
     effectiveRootKey: 'downloadDir',
-    effectiveRootMissing: false
+    effectiveRootMissing: false,
+    rebindOffered: false
   }
 
   const OFFER = 'My downloads moved to another folder'
@@ -798,10 +807,26 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
       downloadDir: '/gone',
       missingRoot: '/gone',
       effectiveRoot: '/gone',
-      effectiveRootMissing: true
+      effectiveRootMissing: true,
+      rebindOffered: true
     })
 
     expect(wrapper.text()).toContain(OFFER)
+  })
+
+  // The fresh-install regression (#455 review). `downloadDir` is unset, so the
+  // resolver lands on `<Downloads>/anime-dl`, which nothing has created yet —
+  // `effectiveRootMissing` is therefore true for a user who has downloaded
+  // nothing. Main answers `rebindOffered: false` because there is no root-bound
+  // work, and the row must follow that rather than the bare fact.
+  it('does not offer it on a fresh install, where the root is merely uncreated', async () => {
+    const wrapper = await mountTab({
+      effectiveRoot: '/home/u/Downloads/anime-dl',
+      effectiveRootMissing: true,
+      rebindOffered: false
+    })
+
+    expect(wrapper.text()).not.toContain(OFFER)
   })
 
   // The case the review's own correction is about, and the one a `missingRoot`
@@ -816,7 +841,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
         missingRoot: '/gone',
         effectiveRoot: '/hot',
         effectiveRootKey: 'hotStorageDir',
-        effectiveRootMissing: false
+        effectiveRootMissing: false,
+        rebindOffered: false
       },
       'advanced'
     )
@@ -832,7 +858,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
         missingRoot: '/gone',
         effectiveRoot: '/gone',
         effectiveRootKey: 'hotStorageDir',
-        effectiveRootMissing: true
+        effectiveRootMissing: true,
+        rebindOffered: true
       },
       'advanced'
     )
@@ -851,7 +878,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
     const wrapper = await mountTab({
       downloadDir: '/gone',
       effectiveRoot: '/gone',
-      effectiveRootMissing: true
+      effectiveRootMissing: true,
+      rebindOffered: true
     })
     api.storageRebindRoot.mockResolvedValue(
       rebindResult({
@@ -866,17 +894,47 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
     expect(api.storageRebindRoot).toHaveBeenCalledTimes(1)
     expect(api.setSetting).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('/new')
-    expect(wrapper.text()).toContain('found 1 unfinished file(s)')
+    expect(wrapper.text()).toContain('found all 1 unfinished file(s)')
   })
 
-  // An accepted move clears `effectiveRootMissing` and takes the offer off
-  // screen with it, so the confirmation has to live in its own row or it would
-  // never be seen.
+  // The handler moves the root and nothing else, so a `paused` item is still
+  // paused afterwards (#455 review). The outcome row therefore points at the
+  // Downloads page instead of claiming the items resumed, which sent people
+  // looking for downloads that were not running.
+  it('tells the user to resume the matched files rather than saying they resumed', async () => {
+    const wrapper = await mountTab({
+      downloadDir: '/gone',
+      effectiveRoot: '/gone',
+      effectiveRootMissing: true,
+      rebindOffered: true
+    })
+    api.storageRebindRoot.mockResolvedValue(
+      rebindResult({
+        dir: '/new',
+        roots: { ...EMPTY_ROOTS, effectiveRoot: '/new' },
+        matched: [
+          { filename: 'Anime/Anime - 01 [X].mp4', reason: null },
+          { filename: 'Anime/Anime - 02 [X].mp4', reason: null }
+        ]
+      })
+    )
+
+    await clickOffer(wrapper)
+
+    expect(wrapper.text()).toContain('found all 2 unfinished file(s) there')
+    expect(wrapper.text()).toContain('Resume them from the Downloads page')
+    expect(wrapper.text()).not.toContain('resumed against them')
+  })
+
+  // An accepted move clears `rebindOffered` and takes the offer off screen with
+  // it, so the confirmation has to live in its own row or it would never be
+  // seen.
   it('still shows the outcome once the offer itself is gone', async () => {
     const wrapper = await mountTab({
       downloadDir: '/gone',
       effectiveRoot: '/gone',
-      effectiveRootMissing: true
+      effectiveRootMissing: true,
+      rebindOffered: true
     })
     api.storageRebindRoot.mockResolvedValue(
       rebindResult({ dir: '/new', roots: { ...EMPTY_ROOTS, effectiveRoot: '/new' } })
@@ -893,7 +951,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
       downloadDir: '/gone',
       missingRoot: '/gone',
       effectiveRoot: '/gone',
-      effectiveRootMissing: true
+      effectiveRootMissing: true,
+      rebindOffered: true
     })
     api.storageRebindRoot.mockResolvedValue(
       rebindResult({
@@ -903,7 +962,8 @@ describe('StorageTab — pointing a relocated root at its new folder (#451)', ()
           downloadDir: '/gone',
           missingRoot: '/gone',
           effectiveRoot: '/gone',
-          effectiveRootMissing: true
+          effectiveRootMissing: true,
+          rebindOffered: true
         },
         unmatched: [{ filename: 'Anime/Anime - 02 [X].mp4', reason: 'its .part file is not there' }]
       })

@@ -22,22 +22,27 @@
 // is that table:
 //
 //   - `queued`/`paused`/`failed` with `bytesReceived > 0` → `<root>/<name>.part`
-//     exists **and** its size equals `bytesReceived`. The important one: on
-//     resume `startDownload` stats the `.part` and sends
-//     `Range: bytes=<size>-` (`src/main/download-manager.ts:1383-1388`), so a
-//     same-named `.part` belonging to some other download is appended to with
-//     no error anywhere.
+//     exists **and** its size is `bytesReceived`, or short of it by at most
+//     `PART_IN_FLIGHT_SLACK`. The important one: on resume `startDownload` stats
+//     the `.part` and sends `Range: bytes=<size>-`
+//     (`src/main/download-manager.ts:1420-1425`), so a same-named `.part`
+//     belonging to some other download is appended to with no error anywhere.
+//     The slack is not laxity: `trackProgress` counts a chunk before `throttle`
+//     and the write stream see it and `destroy()` persists before aborting, so a
+//     quit mid-download leaves the counter ahead of the file with no later
+//     chance to reconcile it (#455 review). A `.part` *longer* than the counter
+//     still refuses.
 //   - `completed` still owed a merge → the finished artifact exists. `_mergeAll`
-//     reads the video at `src/main/download-manager.ts:1030` and the subtitle at
-//     `src/main/download-manager.ts:1044`, and skips a missing video with a
+//     reads the video at `src/main/download-manager.ts:1067` and the subtitle at
+//     `src/main/download-manager.ts:1081`, and skips a missing video with a
 //     silent `continue`.
 //   - a `deferred` merge → either the `.part` or the final file, because
-//     `finalizeDeferred` handles both (`src/main/download-manager.ts:957-961`).
+//     `finalizeDeferred` handles both (`src/main/download-manager.ts:994-998`).
 //   - `queued` with `bytesReceived === 0` → nothing on disk to check, excluded.
 //   - `downloading` items and `merging` merges → `busy`, which the caller
 //     refuses on: those hold paths in locals under the old root, and
 //     `mkdirSync(…, { recursive: true })`
-//     (`src/main/download-manager.ts:1379`) can recreate a dead mount path, so
+//     (`src/main/download-manager.ts:1416`) can recreate a dead mount path, so
 //     a live write may be landing somewhere that is neither root.
 //
 // The method mutates nothing — the `store.set` + `resyncDownloadDir()` half
@@ -51,6 +56,7 @@ import * as path from 'path'
 import { join } from 'path'
 import {
   DownloadManager,
+  PART_IN_FLIGHT_SLACK,
   type DownloadItem,
   type MergeStatus
 } from '../../src/main/download-manager'
@@ -142,17 +148,70 @@ describe('DownloadManager — verifyRootBoundFilesUnder (#451)', () => {
     })
 
     // THE case. The file is there, the name is right, and re-binding to it
-    // would corrupt the download on the next resume.
-    it('refuses a .part whose size differs from bytesReceived, and says both sizes', () => {
-      put(newRoot, VIDEO + '.part', 999)
+    // would corrupt the download on the next resume. A `.part` *longer* than
+    // the counter is the direction no in-flight buffer can explain — the
+    // counter only ever runs ahead of the file, never behind it — so this is
+    // the one that stays an unconditional refusal (#455 review).
+    it('refuses a .part longer than bytesReceived, and says both sizes', () => {
+      put(newRoot, VIDEO + '.part', 2048)
       seed([makeItem({ status: 'paused', bytesReceived: 1024 })])
 
       const result = check()
 
       expect(result.matched).toEqual([])
       expect(names(result.unmatched)).toEqual([VIDEO])
-      expect(result.unmatched[0].reason).toContain('999')
+      expect(result.unmatched[0].reason).toContain('2048')
       expect(result.unmatched[0].reason).toContain('1024')
+    })
+
+    // The counter is incremented by `trackProgress`, the first `pipeline` stage,
+    // so it already counts bytes that `throttle` and the write stream have not
+    // received; and `destroy()` runs `persistQueue()` before it aborts, so a
+    // quit mid-download persists that inflated number. By the next start the
+    // drive is gone and nothing can stat the `.part` to correct it — which is
+    // exactly the state this check runs in — so a `.part` short by at most what
+    // the pipeline could have held is our own file, and demanding equality would
+    // refuse the move for the case the issue calls the common one.
+    it('matches a .part short of bytesReceived by less than the in-flight slack', () => {
+      put(newRoot, VIDEO + '.part', 1024)
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 + 64 * 1024 })])
+
+      const result = check()
+
+      expect(names(result.matched)).toEqual([VIDEO])
+      expect(result.unmatched).toEqual([])
+    })
+
+    // The bound itself, pinned at the edge rather than at a round number, so a
+    // change to `PART_IN_FLIGHT_SLACK` cannot quietly turn one of these into the
+    // other.
+    it('matches a .part short by exactly the slack and refuses one byte past it', () => {
+      put(newRoot, VIDEO + '.part', 1024)
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 + PART_IN_FLIGHT_SLACK })])
+
+      expect(names(check().matched)).toEqual([VIDEO])
+
+      seed([makeItem({ status: 'paused', bytesReceived: 1024 + PART_IN_FLIGHT_SLACK + 1 })])
+
+      const result = check()
+
+      expect(result.matched).toEqual([])
+      expect(names(result.unmatched)).toEqual([VIDEO])
+      expect(result.unmatched[0].reason).toContain('different file')
+    })
+
+    // Far short is the foreign-`.part` case the slack must not swallow: a
+    // same-named stub from an unrelated download resumes from its own length and
+    // writes a file that is corrupt in the middle with nothing reporting it.
+    it('refuses a .part short of bytesReceived by more than the slack', () => {
+      put(newRoot, VIDEO + '.part', 10)
+      seed([makeItem({ status: 'paused', bytesReceived: PART_IN_FLIGHT_SLACK + 4096 })])
+
+      const result = check()
+
+      expect(result.matched).toEqual([])
+      expect(names(result.unmatched)).toEqual([VIDEO])
+      expect(result.unmatched[0].reason).toContain('10')
     })
 
     it('refuses a partial transfer with no .part under the candidate root', () => {
@@ -186,8 +245,12 @@ describe('DownloadManager — verifyRootBoundFilesUnder (#451)', () => {
 
     // `resumeAll()` flips `paused` → `queued` and keeps `bytesReceived`, so a
     // `queued` item is not automatically a fresh one — only a zero-byte one is.
+    // The `.part` is *longer* than the counter rather than a few bytes shorter,
+    // which the slack would now accept — the point here is only that a `queued`
+    // item carrying bytes is file-checked at all, so it needs a mismatch the
+    // slack cannot excuse.
     it('checks a queued item that carries bytes, which resumeAll produces', () => {
-      put(newRoot, VIDEO + '.part', 3)
+      put(newRoot, VIDEO + '.part', 9)
       seed([makeItem({ status: 'queued', bytesReceived: 7 })])
 
       expect(names(check().unmatched)).toEqual([VIDEO])

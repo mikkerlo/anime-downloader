@@ -81,11 +81,29 @@ interface StorageRootsState {
    */
   effectiveRootKey: StorageRootKey
   /**
-   * Is `effectiveRoot` absent from disk? The precondition for offering
-   * `storage:rebind-root` (#451) — unlike `missingRoot !== null`, which is true
-   * for a stale root belonging to the *other* mode, where nothing is stranded.
+   * Is `effectiveRoot` absent from disk? The plain fact, and only half of the
+   * precondition for offering `storage:rebind-root` (#451) — unlike
+   * `missingRoot !== null`, which is true for a stale root belonging to the
+   * *other* mode, where nothing is stranded. Gate the offer on `rebindOffered`
+   * below, not on this.
    */
   effectiveRootMissing: boolean
+  /**
+   * Should the Storage tab offer `storage:rebind-root` at all — the issue's own
+   * condition, "a root is missing **and** there is root-bound work"
+   * (`effectiveRootMissing && downloadManager.hasRootBoundWork()`).
+   *
+   * `effectiveRootMissing` alone is true on every **fresh install** (#455
+   * review): with `downloadDir` unset `getDownloadDir()` answers
+   * `<Downloads>/anime-dl`, and nothing creates that folder until the first
+   * download's `mkdirSync`. Gating on it alone showed a brand-new user "My
+   * downloads moved to another folder…" before they had downloaded anything.
+   *
+   * With no root-bound work the action also has nothing to add: `rootMoveRefusal`
+   * refuses a picker only while `hasRootBoundWork()` holds, so Browse already
+   * does everything this would, without the file check it has no files to run on.
+   */
+  rebindOffered: boolean
 }
 
 /**

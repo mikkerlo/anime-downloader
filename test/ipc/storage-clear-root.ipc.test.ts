@@ -223,7 +223,8 @@ describe('storage IPC — clear-root (#440)', () => {
         // action is not offered, even though `missingRoot` is non-null.
         effectiveRoot: hotDir,
         effectiveRootKey: 'downloadDir',
-        effectiveRootMissing: false
+        effectiveRootMissing: false,
+        rebindOffered: false
       })
     })
 

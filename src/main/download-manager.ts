@@ -101,6 +101,33 @@ const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
 const PROGRESS_INTERVAL_MS = 500
 
+/**
+ * How far `item.bytesReceived` is allowed to run **ahead** of the `.part` on
+ * disk before `verifyRootBoundFilesUnder()` calls a shorter file someone else's
+ * (#455 review).
+ *
+ * It bounds exactly one quantity: the bytes `trackProgress` had already counted
+ * but that had not reached `fileStream` when the transfer was aborted.
+ * `trackProgress` is the *first* stage of `pipeline(readable, trackProgress,
+ * throttle, fileStream)`, so it increments the counter before `throttle` and the
+ * write stream ever see the chunk — a few stream buffers (64 KiB each at most by
+ * default) plus the one chunk `throttle` is holding in its `setTimeout`. So the
+ * real ceiling is well under a mebibyte and this is roughly fourfold headroom.
+ *
+ * The gap is not self-correcting, which is why it has to be tolerated rather
+ * than reconciled: `destroy()` calls `persistQueue()` *before* it aborts, so a
+ * quit mid-download writes the inflated counter to `queue.json`, and by the next
+ * start the drive is gone and nothing can stat the `.part` to fix it. That is
+ * precisely the relocated-drive situation this check runs in.
+ *
+ * Too tight a bound over-blocks a move the user could have had, which is the
+ * safe failure — they keep the clear refusal they have today. Too loose adopts a
+ * foreign `.part`, which corrupts a download silently, so err small. The
+ * opposite drift — a `.part` **longer** than the counter, which a hard kill
+ * between the 5 s periodic persists can leave behind — is still refused.
+ */
+export const PART_IN_FLIGHT_SLACK = 4 * 1024 * 1024
+
 export function sanitizeFilename(name: string): string {
   return name
     .replace(/[<>:"/\\|?*]/g, '_')
@@ -828,11 +855,21 @@ export class DownloadManager {
    * the code that resumes it actually opens:
    *
    * - `queued`/`paused`/`failed` carrying bytes: `<root>/<filename>.part` exists
-   *   **and** its size equals `bytesReceived`. The size half is the one that
-   *   matters. `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1383-1388`), so a same-named `.part` left
+   *   **and** its size is `bytesReceived`, or short of it by at most
+   *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
+   *   `startDownload` stats the `.part` and resumes with
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1420-1425`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
+   *   Equality would be the wrong test, though, because the counter legitimately
+   *   runs ahead of the file: `trackProgress` is the first `pipeline` stage and
+   *   counts a chunk before `throttle` and `fileStream` see it, `destroy()`
+   *   calls `persistQueue()` *before* it aborts, so a quit mid-download persists
+   *   the inflated number — and by the next start the drive is gone, so nothing
+   *   can stat the `.part` to correct it, which is this check's own situation. A
+   *   `.part` **longer** than the counter is still refused: a hard kill between
+   *   the periodic persists can produce that, and it is not a gap any in-flight
+   *   buffer explains.
    * - `completed` still owed a merge: the finished artifact exists. `_mergeAll`
    *   reads the video and, when the group has one, the subtitle, and skips a
    *   video it cannot find with a silent `continue`. Both items are in the queue
@@ -850,7 +887,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1379`)
+   * (`src/main/download-manager.ts:1416`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -922,7 +959,7 @@ export class DownloadManager {
           filename: item.filename,
           reason: `partly downloaded, but its .part file is not there`
         })
-      } else if (size !== item.bytesReceived) {
+      } else if (size > item.bytesReceived || item.bytesReceived - size > PART_IN_FLIGHT_SLACK) {
         unmatched.push({
           filename: item.filename,
           reason: `its .part file is ${size} bytes, but ${item.bytesReceived} were downloaded — this looks like a different file`

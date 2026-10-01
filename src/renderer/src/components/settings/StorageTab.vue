@@ -52,6 +52,14 @@ const effectiveRoot = ref('');
 const effectiveRootKey = ref<StorageRootKey>('downloadDir');
 const effectiveRootMissing = ref(false);
 
+// Whether to offer the re-bind at all: the missing-root fact **and**
+// `hasRootBoundWork()`, both decided in main (#455 review).
+// `effectiveRootMissing` alone is true on a fresh install, where `downloadDir`
+// is unset, `getDownloadDir()` answers `<Downloads>/anime-dl` and nothing has
+// created that folder yet — so gating on it put "My downloads moved to another
+// folder…" in front of users who had never downloaded anything.
+const rebindOffered = ref(false);
+
 // The outcome of the last re-bind: main's refusal prose, or the files it matched
 // when the move went through.
 const rebindRefusedReason = ref<string | null>(null);
@@ -122,6 +130,7 @@ function applyRootsState(state: StorageRootsState): void {
   effectiveRoot.value = state.effectiveRoot;
   effectiveRootKey.value = state.effectiveRootKey;
   effectiveRootMissing.value = state.effectiveRootMissing;
+  rebindOffered.value = state.rebindOffered;
 }
 
 async function refreshRootsState(): Promise<void> {
@@ -213,9 +222,15 @@ async function pickHotDir(): Promise<void> {
 /**
  * Point the unfinished downloads at the folder the drive came back as (#451).
  *
- * Offered only while `effectiveRootMissing` holds, which is the root that
- * actually strands work — a stale root belonging to the other mode has nothing
- * under it to resume, and `storage:clear-root` is already its exit.
+ * Offered only while `rebindOffered` holds: the *effective* root is away, which
+ * is the one that actually strands work — a stale root belonging to the other
+ * mode has nothing under it to resume, and `storage:clear-root` is already its
+ * exit — **and** the manager still has root-bound work, without which there is
+ * nothing to validate and Browse is not refused anyway.
+ *
+ * It moves the root and only the root: items that were `paused` or `failed`
+ * before the move are still `paused` or `failed` after it, so the outcome row
+ * tells the user to resume them rather than saying they resumed.
  *
  * No `autoSave` and no optimistic write, for the reason `applyPick` gives: main
  * validates the folder and writes the key itself, so a `set-setting` echo would
@@ -650,18 +665,25 @@ watch(autoCleanupDays, (val) => {
 
       <!--
         #451: the drive came back somewhere else. Its own row rather than part of
-        the notice above, and keyed on `effectiveRootMissing` rather than on
+        the notice above, and keyed on `rebindOffered` rather than on
         `missingRoot`, because the two disagree in exactly the case this exists
         for: in advanced mode with a stale `downloadDir`, `missingRoot` names
         `downloadDir` while the root holding the stranded work is the hot one.
         The row also stands alone when `downloadDir` is unset and the fallback
         folder is the one missing, which `missingConfiguredRoot()` exempts.
 
+        Not on the bare `effectiveRootMissing` either (#455 review): that is true
+        on a fresh install, where `downloadDir` is unset and nothing has created
+        `<Downloads>/anime-dl` yet, so it showed this to users with an empty
+        queue. `rebindOffered` adds `hasRootBoundWork()`, which is the condition
+        the issue specified — and without root-bound work the pickers are not
+        refused, so Browse already does everything this action would.
+
         Re-picking the *same* path already works through Browse (#449 exempts a
         pick that resolves to the root in force), so this is worded for the other
         case — the files are somewhere else now.
       -->
-      <SettingsRow v-if="effectiveRootMissing" stack>
+      <SettingsRow v-if="rebindOffered" stack>
         <div class="usage-meta-row missing-root-help">
           If the same folder is back, use Browse above to re-pick it. If your downloads are now in a
           <em>different</em> folder — a drive that came back under another name or letter — point
@@ -677,8 +699,13 @@ watch(autoCleanupDays, (val) => {
 
       <!--
         The outcome, in a row of its own: a move that went through clears
-        `effectiveRootMissing` and takes the offer above off screen with it, so
-        the confirmation cannot live inside it.
+        `rebindOffered` and takes the offer above off screen with it, so the
+        confirmation cannot live inside it.
+
+        It says "resume them from the Downloads page" rather than claiming they
+        resumed (#455 review): the handler moves the root and nothing else, so
+        `paused` and `failed` items are still paused and failed afterwards, and
+        the old wording sent people looking for downloads that were not running.
       -->
       <SettingsRow v-if="rebindRefusedReason || rebindMatched" stack>
         <div v-if="rebindRefusedReason" class="inline-result bad">{{ rebindRefusedReason }}</div>
@@ -687,7 +714,7 @@ watch(autoCleanupDays, (val) => {
           {{
             rebindMatched.length === 0
               ? 'nothing was waiting on disk, so your queue can carry on there.'
-              : `found ${rebindMatched.length} unfinished file(s) and resumed against them.`
+              : `found all ${rebindMatched.length} unfinished file(s) there. Resume them from the Downloads page.`
           }}
         </div>
       </SettingsRow>

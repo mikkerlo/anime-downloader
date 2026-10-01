@@ -326,9 +326,11 @@ onUnmounted(() => {
 watch(storageMode, (val) => {
   if (loaded.value) autoSave('storageMode', val);
 });
-watch(autoMoveToCold, (val) => {
-  if (loaded.value) autoSave('autoMoveToCold', val);
-});
+// No `watch(autoMoveToCold)`: the switch saves from its own handler instead.
+// A watcher also fires when `applyRootsState()` adopts the value main just
+// wrote — the cold clear turns auto-move off in the same handler — which would
+// echo a redundant `set-setting` back, and make `onActivated`'s refresh write
+// whatever main changed.
 watch(autoCleanupDays, (val) => {
   if (loaded.value) autoSave('autoCleanupWatchedDays', Number(val) || 0);
 });
@@ -418,7 +420,11 @@ watch(autoCleanupDays, (val) => {
           label="Auto-move to cold storage"
           desc="Automatically move finished files to cold storage after download (or merge, if enabled)."
         >
-          <SettingsSwitch v-model="autoMoveToCold" :disabled="!coldStorageDir" />
+          <SettingsSwitch
+            v-model="autoMoveToCold"
+            :disabled="!coldStorageDir"
+            @update:model-value="(v) => autoSave('autoMoveToCold', v)"
+          />
         </SettingsRow>
         <SettingsRow
           label="Move all to cold storage"

@@ -242,6 +242,52 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     expect(advanced.find('.cleanup-modal').text()).not.toContain('Auto-move to cold storage')
   })
 
+  // The cold clear's `autoMoveToCold: false` arrives as part of the handler's
+  // returned state, so adopting it must stay silent. A `watch(autoMoveToCold)`
+  // that saves on every change turns that adoption into a second, redundant
+  // `set-setting('autoMoveToCold', false)` — which contradicts the IPC test's
+  // "same handler, not a follow-up renderer write", and makes `onActivated`'s
+  // refresh echo back whatever main changed. Only a user toggle may write.
+  it('adopts the handler-written auto-move off without echoing a renderer write', async () => {
+    const wrapper = await mountTab(
+      { hotStorageDir: '/hot', coldStorageDir: '/cold', autoMoveToCold: true },
+      'advanced'
+    )
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('true')
+    api.storageClearRoot.mockResolvedValue({
+      ...EMPTY_ROOTS,
+      hotStorageDir: '/hot',
+      autoMoveToCold: false
+    })
+
+    const clears = wrapper.findAll('button').filter((b) => b.text() === 'Clear')
+    await clears[1].trigger('click')
+    await buttonWithText(wrapper, 'Clear folder')!.trigger('click')
+    await flushPromises()
+
+    expect(api.storageClearRoot).toHaveBeenCalledWith('coldStorageDir')
+    // The switch did follow main down — this is adoption, not a no-op.
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('false')
+    expect(api.setSetting).not.toHaveBeenCalled()
+  })
+
+  // The other half of the same contract: dropping the watcher must not drop
+  // persistence for the toggle a user actually flips.
+  it('still persists a user toggle of the auto-move switch', async () => {
+    const wrapper = await mountTab({ hotStorageDir: '/hot', coldStorageDir: '/cold' }, 'advanced')
+
+    await wrapper.find('.switch').trigger('click')
+
+    expect(api.setSetting).toHaveBeenCalledTimes(1)
+    expect(api.setSetting).toHaveBeenCalledWith('autoMoveToCold', true)
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('true')
+
+    await wrapper.find('.switch').trigger('click')
+
+    expect(api.setSetting).toHaveBeenLastCalledWith('autoMoveToCold', false)
+    expect(wrapper.find('.switch').attributes('aria-pressed')).toBe('false')
+  })
+
   // The case the issue is actually about: the stale root belongs to advanced
   // mode and the user is in simple mode, so its own row is not rendered at all.
   it('surfaces a stale cold root from simple mode, where its own row is hidden', async () => {

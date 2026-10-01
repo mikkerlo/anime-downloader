@@ -584,6 +584,22 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     const settleFirstBackoff = (): Promise<void> =>
       new Promise((resolve) => setTimeout(resolve, 1300))
 
+    /**
+     * Collects process-level unhandled rejections for the duration of one test,
+     * the same way the merge-complete cases in
+     * `download-manager-merge-scheduling.test.ts` do. Vitest fails a run on an
+     * escaped rejection anyway; the listener is what says which dispatch let it
+     * out instead of just failing the file.
+     */
+    function captureUnhandled(): { seen: unknown[]; stop: () => void } {
+      const seen: unknown[] = []
+      const onUnhandled = (reason: unknown): void => {
+        seen.push(reason)
+      }
+      process.on('unhandledRejection', onUnhandled)
+      return { seen, stop: () => process.off('unhandledRejection', onUnhandled) }
+    }
+
     it('marks the item instead of reporting a clean completion', async () => {
       const failing = makeFailingStore()
       wireReal(failing)
@@ -599,6 +615,43 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
       expect(fs.existsSync(path.join(downloadDir, video.filename))).toBe(true)
       expect(failing.attempts).toBe(1)
       expect(video.error).toMatch(/ENOSPC/)
+    })
+
+    it('marks the item when an async consumer rejects, not only when one throws', async () => {
+      // The thenable half of `dispatchHook`, at the only dispatch site that
+      // passes an item. Today's consumer is synchronous, so the sync case
+      // above is the one that runs in production — but #428 widened the slot to
+      // `=> void | Promise<void>`, which makes an `async` consumer legal here,
+      // and the merge consumer next door already awaits a cold move. Dropping
+      // the `.catch` attachment for a bare `void result` leaves the row
+      // 'completed' with no error at all and floats the reason out of the
+      // process, which is the same silent clean-success report #428 removed.
+      const watch = captureUnhandled()
+      try {
+        const failing = makeFailingStore()
+        const handlers = realHandlers(failing)
+        dm.onVideoDownloaded(async (filePath, item) => {
+          videoHookCalls.push({ filePath, itemId: item.id })
+          // The await is the point: the throw lands after the dispatch has
+          // already returned, so only the attached `.catch` can see it.
+          await Promise.resolve()
+          handlers.handleVideoDownloaded(filePath, item)
+        })
+        const video = makeItem({})
+        seed(dm, [video])
+
+        await (dm as unknown as Internals).startDownload(video)
+        await settleEpisodeComplete()
+
+        expect(videoHookCalls).toHaveLength(1)
+        expect(failing.attempts).toBe(1)
+        expect(video.status).toBe('completed')
+        expect(fs.existsSync(path.join(downloadDir, video.filename))).toBe(true)
+        expect(video.error).toMatch(/Post-download step failed: ENOSPC/)
+        expect(watch.seen).toEqual([])
+      } finally {
+        watch.stop()
+      }
     })
 
     it('does not re-download the completed video (the helper never throws)', async () => {

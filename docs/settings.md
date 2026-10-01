@@ -4,7 +4,7 @@
 |-----|------|---------|-------------|
 | `token` | string | `''` | smotret-anime.ru API token |
 | `translationType` | string | `'subRu'` | Default translation filter |
-| `downloadDir` | string | `''` | Custom download path (falls back to Downloads/anime-dl) |
+| `downloadDir` | string | `''` | Custom download path (falls back to Downloads/anime-dl). `''` means unset on every read path, which is also what `storage:clear-root` writes to retire a root that is gone (#440) — note `get-setting` *resolves* this key through `getDownloadDir()` and so never answers `''`; read `storage:get-missing-root` for the raw value |
 | `library` | object | `{}` | Map of starred anime by ID |
 | `autoMerge` | boolean | `false` | Auto-merge when episode downloads complete |
 | `videoCodec` | string | `'copy'` | FFmpeg video codec for merge |
@@ -22,9 +22,9 @@
 | `shikimoriFriends` | array | `[]` | Cached Friends-page cards for FriendsView (#179): per-friend presence + titles/mean/mutual + current watch. Cache-first, background-refreshed via `shikimori:get-friends`/`shikimori:friends-refreshed`; cleared on logout |
 | `shikimoriRecommendations` | array | `[]` | Cached "For You" feed for RecommendationsView (#193): locally-ranked `RecommendationEntry[]` (malId, smotret animeId, title, poster, community score, reason). Cache-first, background-refreshed via `shikimori:get-recommendations`/`shikimori:recommendations-refreshed`; **invalidated (cleared) on any rate change** so it rebuilds from fresh taste; cleared on logout |
 | `storageMode` | string | `'simple'` | Storage mode: `simple` (single dir) or `advanced` (hot/cold split) |
-| `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode) |
-| `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode) |
-| `autoMoveToCold` | boolean | `false` | Auto-move finished files to cold storage |
+| `hotStorageDir` | string | `''` | Hot storage path for active downloads (advanced mode). Cleared back to `''` by `storage:clear-root` (#440) |
+| `coldStorageDir` | string | `''` | Cold storage path for finished files (advanced mode). Cleared back to `''` by `storage:clear-root` (#440) |
+| `autoMoveToCold` | boolean | `false` | Auto-move finished files to cold storage. Also forced to `false` by `storage:clear-root('coldStorageDir')`, so a disabled switch cannot re-arm itself when a new cold dir is picked (#440) |
 | `malIdMap` | object | `{}` | Persistent cache of MAL ID → smotret-anime entry for Shikimori list resolution |
 | `playerMode` | string | `'system'` | Default player: `system` (OS default) or `builtin` (in-app HTML5 player) |
 | `anime4kPreset` | string | `'off'` | Anime4K shader preset: `off`, `mode-a` (1080p), `mode-b` (720p), `mode-c` (480p) |

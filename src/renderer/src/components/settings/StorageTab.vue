@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, onActivated } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import { formatBytes } from '../../utils';
 import SettingsGroup from './SettingsGroup.vue';
@@ -15,6 +15,32 @@ const storageMode = ref<'simple' | 'advanced'>('simple');
 const hotStorageDir = ref('');
 const coldStorageDir = ref('');
 const autoMoveToCold = ref(false);
+
+// #440: the first stored root that is not on disk. While it is non-null both
+// metadata-deleting paths in main refuse to run, so finished-but-deleted
+// episodes keep showing as downloaded with nothing in the UI to explain it.
+const missingRoot = ref<string | null>(null);
+const clearTarget = ref<StorageRootKey | null>(null);
+
+const ROOT_LABELS: Record<StorageRootKey, string> = {
+  downloadDir: 'Download folder',
+  hotStorageDir: 'Hot storage',
+  coldStorageDir: 'Cold storage'
+};
+
+// Iteration order matches `missingConfiguredRoot()`, so the key this resolves to
+// is the one that produced `missingRoot`. It is needed because that key's own
+// row may belong to the other storage mode and not be on screen at all — the
+// case the notice exists for.
+const missingRootKey = computed<StorageRootKey | null>(() => {
+  const target = missingRoot.value;
+  if (!target) return null;
+  if (downloadDir.value === target) return 'downloadDir';
+  if (hotStorageDir.value === target) return 'hotStorageDir';
+  if (coldStorageDir.value === target) return 'coldStorageDir';
+  return null;
+});
+
 const movingToCold = ref(false);
 const moveProgress = ref<{ current: number; total: number; file: string } | null>(null);
 const moveResult = ref<{ moved: number; failed: string[] } | null>(null);
@@ -45,11 +71,44 @@ function onMoveProgress(data: { current: number; total: number; file: string }):
   moveProgress.value = data;
 }
 
+/**
+ * Adopt the raw stored root values main just reported. These are deliberately
+ * not read back through `getSetting('downloadDir')`, which resolves the key
+ * through `getDownloadDir()` and so answers with the fallback path — or the hot
+ * dir, in advanced mode — for a `downloadDir` that was never set.
+ */
+function applyRootsState(state: StorageRootsState): void {
+  downloadDir.value = state.downloadDir;
+  hotStorageDir.value = state.hotStorageDir;
+  coldStorageDir.value = state.coldStorageDir;
+  autoMoveToCold.value = state.autoMoveToCold;
+  missingRoot.value = state.missingRoot;
+}
+
+async function refreshRootsState(): Promise<void> {
+  applyRootsState(await window.api.storageGetMissingRoot());
+}
+
+function askClearRoot(key: StorageRootKey | null): void {
+  if (key) clearTarget.value = key;
+}
+
+async function confirmClearRoot(): Promise<void> {
+  const key = clearTarget.value;
+  clearTarget.value = null;
+  if (!key) return;
+  // Not `autoSave(key, '')`: `set-setting` only writes the store, leaving the
+  // download manager's cached directory pointed at the root being cleared.
+  applyRootsState(await window.api.storageClearRoot(key));
+  showSaved();
+}
+
 async function pickDir(): Promise<void> {
   const dir = await window.api.downloadPickDir();
   if (dir) {
     downloadDir.value = dir;
     autoSave('downloadDir', dir);
+    await refreshRootsState();
   }
 }
 
@@ -58,6 +117,7 @@ async function pickHotDir(): Promise<void> {
   if (dir) {
     hotStorageDir.value = dir;
     showSaved();
+    await refreshRootsState();
   }
 }
 
@@ -66,6 +126,7 @@ async function pickColdDir(): Promise<void> {
   if (dir) {
     coldStorageDir.value = dir;
     showSaved();
+    await refreshRootsState();
   }
 }
 
@@ -234,12 +295,9 @@ onMounted(async () => {
   unsubCleanupPending = window.api.onStorageCleanupPending(onCleanupPending);
   unsubCleanupFinished = window.api.onStorageCleanupFinished(onCleanupFinished);
 
-  downloadDir.value = ((await window.api.getSetting('downloadDir')) as string) || '';
+  await refreshRootsState();
   storageMode.value =
     ((await window.api.getSetting('storageMode')) as 'simple' | 'advanced') || 'simple';
-  hotStorageDir.value = ((await window.api.getSetting('hotStorageDir')) as string) || '';
-  coldStorageDir.value = ((await window.api.getSetting('coldStorageDir')) as string) || '';
-  autoMoveToCold.value = ((await window.api.getSetting('autoMoveToCold')) as boolean) || false;
   autoCleanupDays.value = ((await window.api.getSetting('autoCleanupWatchedDays')) as number) || 0;
   autoCleanupLastRun.value = (await window.api.getSetting('autoCleanupLastRun')) as {
     ranAt: number;
@@ -254,6 +312,8 @@ onMounted(async () => {
 
 onActivated(() => {
   void reloadSnoozedCleanups();
+  // A drive can be plugged back in, or pulled, while another tab is on screen.
+  void refreshRootsState();
 });
 
 onUnmounted(() => {
@@ -301,6 +361,13 @@ watch(autoCleanupDays, (val) => {
         <div class="path-field">
           <span class="path-input">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
           <button class="btn btn-sm btn-ghost" @click="pickDir">Browse</button>
+          <button
+            v-if="downloadDir"
+            class="btn btn-sm btn-ghost"
+            @click="askClearRoot('downloadDir')"
+          >
+            Clear
+          </button>
         </div>
       </SettingsRow>
 
@@ -312,6 +379,13 @@ watch(autoCleanupDays, (val) => {
           <div class="path-field">
             <span class="path-input">{{ hotStorageDir || 'Default (Downloads/anime-dl)' }}</span>
             <button class="btn btn-sm btn-ghost" @click="pickHotDir">Browse</button>
+            <button
+              v-if="hotStorageDir"
+              class="btn btn-sm btn-ghost"
+              @click="askClearRoot('hotStorageDir')"
+            >
+              Clear
+            </button>
           </div>
         </SettingsRow>
         <SettingsRow
@@ -323,6 +397,13 @@ watch(autoCleanupDays, (val) => {
               coldStorageDir || 'Not set'
             }}</span>
             <button class="btn btn-sm btn-ghost" @click="pickColdDir">Browse</button>
+            <button
+              v-if="coldStorageDir"
+              class="btn btn-sm btn-ghost"
+              @click="askClearRoot('coldStorageDir')"
+            >
+              Clear
+            </button>
           </div>
         </SettingsRow>
         <SettingsRow v-if="!coldStorageDir || coldStorageDir === hotStorageDir" stack>
@@ -383,6 +464,27 @@ watch(autoCleanupDays, (val) => {
           </div>
         </SettingsRow>
       </template>
+
+      <!--
+        Outside the mode split on purpose (#440). The stale root is often the one
+        belonging to the *other* mode — a cold dir picked during an advanced-mode
+        experiment, left behind after switching back to simple — so its own row
+        is not on screen, and that is exactly the case this notice exists for.
+        Hence its own Clear button rather than a pointer at a row.
+      -->
+      <SettingsRow v-if="missingRoot" stack>
+        <div class="inline-result bad">Storage folder not found: {{ missingRoot }}</div>
+        <div class="usage-meta-row missing-root-help">
+          Records of downloaded episodes are being kept instead of collected while this folder is
+          away, so episodes you have deleted can keep showing as downloaded. Reconnect the drive or
+          re-pick the folder to resume — or clear it if the folder is gone for good.
+        </div>
+        <div v-if="missingRootKey" class="snooze-actions">
+          <button class="btn btn-sm" @click="askClearRoot(missingRootKey)">
+            Clear {{ ROOT_LABELS[missingRootKey] }}
+          </button>
+        </div>
+      </SettingsRow>
     </SettingsGroup>
 
     <SettingsGroup
@@ -559,6 +661,26 @@ watch(autoCleanupDays, (val) => {
       </SettingsRow>
     </SettingsGroup>
 
+    <div v-if="clearTarget" class="cleanup-modal-backdrop" @click.self="clearTarget = null">
+      <div class="cleanup-modal">
+        <div class="cleanup-modal-title">Clear {{ ROOT_LABELS[clearTarget] }}?</div>
+        <p class="cleanup-modal-hint">
+          No files are moved or deleted — this only stops the app looking in this folder.
+        </p>
+        <p class="cleanup-modal-hint">
+          Downloads stored there will disappear from the app until you re-pick this folder, and
+          their records may be collected in the meantime.
+        </p>
+        <p v-if="clearTarget === 'coldStorageDir'" class="cleanup-modal-hint">
+          Auto-move to cold storage will be turned off.
+        </p>
+        <div class="cleanup-modal-actions">
+          <button class="btn btn-sm btn-ghost" @click="clearTarget = null">Cancel</button>
+          <button class="btn btn-sm btn-primary" @click="confirmClearRoot">Clear folder</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="cleanupPending" class="cleanup-modal-backdrop" @click.self="dismissCleanupPending">
       <div class="cleanup-modal">
         <div class="cleanup-modal-title">Auto-cleanup ready</div>
@@ -608,6 +730,10 @@ watch(autoCleanupDays, (val) => {
 
 .snooze-actions {
   margin-top: 12px;
+}
+
+.missing-root-help {
+  margin-top: 6px;
 }
 
 .usage-summary {

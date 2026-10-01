@@ -116,6 +116,8 @@ interface Api {
   ffmpegDelete: () => Promise<void>
   downloadPickDir: () => Promise<string | null>
   // Storage
+  storageGetMissingRoot: () => Promise<StorageRootsState>
+  storageClearRoot: (key: StorageRootKey) => Promise<StorageRootsState>
   storagePickHotDir: () => Promise<string | null>
   storagePickColdDir: () => Promise<string | null>
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>

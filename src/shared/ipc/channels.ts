@@ -129,6 +129,8 @@ export const CHANNELS = {
   SKIP_DETECTOR_QUEUE_STATUS: 'skip-detector:queue-status',
 
   // Storage
+  STORAGE_CLEAR_ROOT: 'storage:clear-root',
+  STORAGE_GET_MISSING_ROOT: 'storage:get-missing-root',
   STORAGE_GET_USAGE: 'storage:get-usage',
   STORAGE_MOVE_TO_COLD: 'storage:move-to-cold',
   STORAGE_PICK_COLD_DIR: 'storage:pick-cold-dir',

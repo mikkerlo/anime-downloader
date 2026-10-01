@@ -187,6 +187,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.STORAGE_SET_MODE, mode) as Promise<StorageSetModeResult>,
   storagePickHotDir: () =>
     ipcRenderer.invoke(CHANNELS.STORAGE_PICK_HOT_DIR) as Promise<StoragePickDirResult>,
+  storageRebindRoot: () =>
+    ipcRenderer.invoke(CHANNELS.STORAGE_REBIND_ROOT) as Promise<StorageRebindRootResult>,
   storagePickColdDir: () => ipcRenderer.invoke(CHANNELS.STORAGE_PICK_COLD_DIR),
   storageMoveToCold: () => ipcRenderer.invoke(CHANNELS.STORAGE_MOVE_TO_COLD),
   onStorageMoveToColdProgress: subscribe<{ current: number; total: number; file: string }>(

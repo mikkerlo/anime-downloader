@@ -65,6 +65,91 @@ interface StorageRootsState {
   autoMoveToCold: boolean
   /** First stored root that is absent from disk, or `null` — `missingConfiguredRoot()`. */
   missingRoot: string | null
+  /** What `getDownloadDir()` resolves to right now, fallback included. */
+  effectiveRoot: string
+  /**
+   * The key `getDownloadDir()` resolves **through**: `hotStorageDir` in advanced
+   * mode with one set, `downloadDir` otherwise (the fallback has no key, so an
+   * unset `downloadDir` still answers `downloadDir` — the key a move writes).
+   *
+   * Reported by main rather than re-derived in the renderer (#451), because
+   * `missingRoot` cannot stand in for it: that is a *path*, and
+   * `missingConfiguredRoot()` answers with the **first** missing stored root. In
+   * advanced mode with a stale `downloadDir` and an absent `hotStorageDir` it
+   * answers `downloadDir`, so matching the effective key against it would have
+   * hidden the re-bind action from the one case it exists for.
+   */
+  effectiveRootKey: StorageRootKey
+  /**
+   * Is `effectiveRoot` absent from disk? The precondition for offering
+   * `storage:rebind-root` (#451) — unlike `missingRoot !== null`, which is true
+   * for a stale root belonging to the *other* mode, where nothing is stranded.
+   */
+  effectiveRootMissing: boolean
+}
+
+/**
+ * One root-bound file as `verifyRootBoundFilesUnder()` reports it (#451), and an
+ * element of both lists in `StorageRebindRootResult`.
+ *
+ * Ambient like the rest of this file so `src/main/download-manager.ts` and the
+ * Storage tab share one declaration; the per-state rules that decide which list
+ * an entry lands in live on the method.
+ */
+interface RootBoundFileReport {
+  /** Root-relative path, exactly as `DownloadItem.filename` holds it. */
+  filename: string
+  /** Prose the Storage tab shows verbatim for an unmatched file; `null` for a match. */
+  reason: string | null
+}
+
+/**
+ * What `DownloadManager.verifyRootBoundFilesUnder(root)` answers (#451).
+ *
+ * Three lists rather than a boolean, because the caller refuses for two
+ * different reasons and reports what it found in both cases. `matched` +
+ * `unmatched` is every root-bound file the check could decide; an item with
+ * nothing on disk yet (a `queued` item at zero bytes) is in neither, which is
+ * why a queue of those validates against any folder.
+ */
+interface RootRebindCheck {
+  /** Files found under the candidate root exactly as their item expects them. */
+  matched: RootBoundFileReport[]
+  /** Files absent from the candidate root, or present at the wrong size. */
+  unmatched: RootBoundFileReport[]
+  /**
+   * Live work — a `downloading` item or a `merging` merge — described for the
+   * refusal message. No file check can settle these: they hold their paths in
+   * locals taken under the old root, so a write may be landing somewhere that is
+   * neither root while the check runs.
+   */
+  busy: string[]
+}
+
+/**
+ * Reply of `CHANNELS.STORAGE_REBIND_ROOT` (#451) — the validated root move a
+ * drive that came back at a *different* path needs.
+ *
+ * Deliberately `StoragePickDirResult` plus the two lists: this is a folder
+ * picker that writes a root key, so `dir` is the picked path and `null` for
+ * **both** a cancel and a refusal, `refusedReason` tells those apart and is
+ * shown verbatim, and `roots` carries the same state every other root channel
+ * reports.
+ *
+ * `matched` and `unmatched` are the outcome of the file check, and the move is
+ * **all-or-nothing**: a single `unmatched` entry refuses the whole thing and
+ * writes nothing, because with one root for the entire queue "re-bind only the
+ * matched ones" is not representable (it is the per-item root #443 declined).
+ * They are still both populated on a refusal, so the user can see which items to
+ * cancel before retrying — including when the refusal was for live work, where
+ * they describe a queue that is still moving.
+ */
+interface StorageRebindRootResult {
+  dir: string | null
+  refusedReason: string | null
+  roots: StorageRootsState
+  matched: RootBoundFileReport[]
+  unmatched: RootBoundFileReport[]
 }
 
 /** The `storageMode` setting: one root, or a hot/cold split. */

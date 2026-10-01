@@ -217,7 +217,13 @@ describe('storage IPC — clear-root (#440)', () => {
         hotStorageDir: '',
         coldStorageDir: awayDir,
         autoMoveToCold: false,
-        missingRoot: awayDir
+        missingRoot: awayDir,
+        // #451. The away root here is the cold one, which is not an input to
+        // `getDownloadDir()` — so the effective root is present and the re-bind
+        // action is not offered, even though `missingRoot` is non-null.
+        effectiveRoot: hotDir,
+        effectiveRootKey: 'downloadDir',
+        effectiveRootMissing: false
       })
     })
 

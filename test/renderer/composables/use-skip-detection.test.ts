@@ -2,12 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ref, computed } from 'vue'
 import { useSkipDetection } from '../../../src/renderer/src/composables/use-skip-detection'
 
-type FileEntry = {
-  type: 'mkv' | 'mp4'
-  filePath: string
-  translationId?: number
-  author?: string
-}
+// `EpisodeFileEntry` is the ambient global from `src/shared/types/storage.d.ts`
+// (#429) — this file used to carry its own byte-identical copy.
+type FileEntry = EpisodeFileEntry
 
 type Api = {
   skipDetectorGetDetections: (animeId: number) => Promise<ShowSkipDetections | null>

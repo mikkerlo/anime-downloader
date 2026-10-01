@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import { type ChildProcess } from 'child_process'
 import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
+import { VIDEO_EXTS, VIDEO_EXT_RE, VIDEO_EXT_OR_PART_RE } from '@shared/episode-files'
 import { sanitizeFilename } from '../download-manager'
 import { probeMp4Faststart } from '../mp4-faststart'
 import type { MseSession } from '../streaming'
@@ -174,7 +175,7 @@ export function register({
   ipcMain.handle(CHANNELS.PLAYER_GET_LOCAL_SUBTITLES, async (_event, filePath: string) => {
     // .part-aware (#63): a growing `x.mp4.part` session maps to the same
     // sibling `x.ass` as its final file would.
-    const assPath = filePath.replace(/\.(mp4|mkv)(\.part)?$/i, '.ass')
+    const assPath = filePath.replace(VIDEO_EXT_OR_PART_RE, '.ass')
     // Unrecognized extension — never read the video file itself back as ASS.
     if (assPath === filePath) return null
     try {
@@ -280,11 +281,11 @@ export function register({
       for (const dir of dirsToCheck) {
         const animeDir = path.join(dir, animeDirName)
         // Try tagged filename first
-        for (const ext of ['.mkv', '.mp4']) {
+        for (const ext of VIDEO_EXTS) {
           const fp = path.join(animeDir, `${taggedBase}${ext}`)
           if (fs.existsSync(fp)) {
             const subtitleContent = await (async () => {
-              const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+              const assPath = fp.replace(VIDEO_EXT_RE, '.ass')
               try {
                 return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
               } catch {
@@ -296,11 +297,11 @@ export function register({
           }
         }
         // Try legacy filename
-        for (const ext of ['.mkv', '.mp4']) {
+        for (const ext of VIDEO_EXTS) {
           const fp = path.join(animeDir, `${base}${ext}`)
           if (fs.existsSync(fp)) {
             const subtitleContent = await (async () => {
-              const assPath = fp.replace(/\.(mp4|mkv)$/i, '.ass')
+              const assPath = fp.replace(VIDEO_EXT_RE, '.ass')
               try {
                 return fs.existsSync(assPath) ? fs.readFileSync(assPath, 'utf-8') : null
               } catch {

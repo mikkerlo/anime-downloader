@@ -6,12 +6,9 @@ import { usePlayerStore } from '../../../src/renderer/src/stores/player'
 import { useEpisodeDownloads } from '../../../src/renderer/src/composables/use-episode-downloads'
 import type { EpisodeRow } from '../../../src/renderer/src/composables/use-episode-list'
 
-type FileEntry = {
-  type: 'mkv' | 'mp4'
-  filePath: string
-  translationId?: number
-  author?: string
-}
+// `EpisodeFileEntry` is the ambient global from `src/shared/types/storage.d.ts`
+// (#429) — this file used to carry its own byte-identical copy.
+type FileEntry = EpisodeFileEntry
 
 type Api = {
   watchProgressGetAll: (animeId: number) => Promise<Record<string, WatchProgressEntry>>

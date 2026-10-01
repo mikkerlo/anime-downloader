@@ -18,16 +18,22 @@
 import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
+import { VIDEO_EXT_ALTERNATION } from '@shared/episode-files'
 
 /**
  * Map of episode base-name (sanitized `${anime} - NN`) → matched files on disk.
  * Produced by the episode-file scanner and (after `filterScanResult`) returned
  * verbatim by `CHANNELS.FILE_CHECK_EPISODES`.
  */
-export type FileCheckResult = Record<
-  string,
-  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
->
+export type FileCheckResult = Record<string, EpisodeFileEntry[]>
+
+// The two filename shapes this scanner recognizes, derived from `VIDEO_EXTS`
+// (#429) and case-sensitive as they have always been. Exported so the pin test
+// can see that they are still derived rather than re-inlined; built once at
+// module scope because `accumulateEpisodeFiles` runs them over every entry of
+// every anime directory.
+export const EPISODE_FILE_TAGGED_RE = new RegExp(`^(.+?) \\[(.+?)\\]\\.(${VIDEO_EXT_ALTERNATION})$`)
+export const EPISODE_FILE_LEGACY_RE = new RegExp(`^(.+)\\.(${VIDEO_EXT_ALTERNATION})$`)
 
 /**
  * Fold one anime directory's filenames into the running scan result. Matches
@@ -40,11 +46,11 @@ export function accumulateEpisodeFiles(
   files: string[]
 ): void {
   for (const file of files) {
-    const match = file.match(/^(.+?) \[(.+?)\]\.(mkv|mp4)$/)
+    const match = file.match(EPISODE_FILE_TAGGED_RE)
     if (match) {
       const base = match[1]
       const author = match[2]
-      const ext = match[3] as 'mkv' | 'mp4'
+      const ext = match[3] as EpisodeFileType
       if (!result[base]) result[base] = []
       const existing = result[base].find((e) => e.author === author)
       if (existing) {
@@ -56,10 +62,10 @@ export function accumulateEpisodeFiles(
       continue
     }
 
-    const legacyMatch = file.match(/^(.+)\.(mkv|mp4)$/)
+    const legacyMatch = file.match(EPISODE_FILE_LEGACY_RE)
     if (legacyMatch) {
       const base = legacyMatch[1]
-      const ext = legacyMatch[2] as 'mkv' | 'mp4'
+      const ext = legacyMatch[2] as EpisodeFileType
       if (!result[base]) result[base] = []
       const hasAuthorVersion = result[base].some((e) => e.author)
       if (!hasAuthorVersion || !result[base].some((e) => !e.author)) {

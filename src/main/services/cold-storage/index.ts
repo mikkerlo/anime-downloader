@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import { join } from 'path'
+import { EPISODE_ARTIFACT_EXTS } from '@shared/episode-files'
 import type { StorageService } from '../../store/types'
 import type { AnimeSearchResult } from '../../smotret-api'
 
@@ -63,19 +64,14 @@ export interface CleanupResult {
   items: CleanupCandidate[]
 }
 
-export type ColdStorageScanFileCheckResult = Record<
-  string,
-  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
->
+export type ColdStorageScanFileCheckResult = Record<string, EpisodeFileEntry[]>
 
 export interface ColdStorageServiceDeps {
   store: StorageService
   /** Fallback root when `downloadDir` is empty — `app.getPath('downloads')`. */
   downloadsFallbackDir: string
   sanitizeFilename: (s: string) => string
-  parseEpisodeFromFilename: (
-    file: string
-  ) => { episodeInt: string; ext: 'mkv' | 'mp4' | 'ass' } | null
+  parseEpisodeFromFilename: (file: string) => { episodeInt: string; ext: EpisodeArtifactExt } | null
   /** Used by runWatchedCleanup to surface fresh file-episode maps to the renderer. */
   scanEpisodeFiles: (animeName: string) => ColdStorageScanFileCheckResult
   /** Invalidate index.ts's session-level scan cache for one anime (after a delete). */
@@ -401,7 +397,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         const taggedBase = `${base} [${authorTag}]`
         for (const dir of dirsToCheck) {
           const animeDir = path.join(dir, animeDirName)
-          for (const ext of ['.mkv', '.mp4', '.ass']) {
+          for (const ext of EPISODE_ARTIFACT_EXTS) {
             const taggedPath = path.join(animeDir, `${taggedBase}${ext}`)
             const tSize = trySize(taggedPath)
             try {
@@ -430,10 +426,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         try {
           const files = fs.readdirSync(animeDir)
           for (const file of files) {
-            if (
-              file.startsWith(base) &&
-              (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))
-            ) {
+            if (file.startsWith(base) && EPISODE_ARTIFACT_EXTS.some((ext) => file.endsWith(ext))) {
               const fp = path.join(animeDir, file)
               const sz = trySize(fp)
               try {
@@ -571,7 +564,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     const base = sanitizeFilename(`${animeName} - ${padded}`)
     const taggedBase = `${base} [${sanitizeFilename(author)}]`
     const wanted = new Set<string>()
-    for (const ext of ['.mkv', '.mp4', '.ass']) {
+    for (const ext of EPISODE_ARTIFACT_EXTS) {
       wanted.add(`${taggedBase}${ext}`)
       wanted.add(`${base}${ext}`)
     }
@@ -650,7 +643,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         // Skip mp4 if a .part exists (download in progress)
         if (file.endsWith('.mp4') && files.includes(file + '.part')) continue
         // Only move media/subtitle files
-        if (!['.mkv', '.mp4', '.ass'].some((ext) => file.endsWith(ext))) continue
+        if (!EPISODE_ARTIFACT_EXTS.some((ext) => file.endsWith(ext))) continue
 
         filesToMove.push({
           src: path.join(dirPath, file),
@@ -706,10 +699,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
         try {
           const files = fs.readdirSync(animeDir)
           for (const file of files) {
-            if (
-              file.startsWith(base) &&
-              (file.endsWith('.mkv') || file.endsWith('.mp4') || file.endsWith('.ass'))
-            ) {
+            if (file.startsWith(base) && EPISODE_ARTIFACT_EXTS.some((ext) => file.endsWith(ext))) {
               hasFile = true
               try {
                 bytes += fs.statSync(path.join(animeDir, file)).size

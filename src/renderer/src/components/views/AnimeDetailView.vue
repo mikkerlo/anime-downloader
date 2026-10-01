@@ -67,12 +67,7 @@ const isDownloaded = ref(false);
 const cleanupModalOpen = ref(false);
 
 const episodeMeta = ref<Record<string, EpisodeMeta[]>>({});
-const fileStatus = ref<
-  Record<
-    string,
-    { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-  >
->({});
+const fileStatus = ref<Record<string, EpisodeFileEntry[]>>({});
 const downloadGroups = ref<Map<string, EpisodeGroup>>(new Map());
 const watchProgress = ref<Record<string, WatchProgressEntry>>({});
 

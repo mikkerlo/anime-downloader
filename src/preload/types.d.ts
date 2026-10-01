@@ -135,12 +135,7 @@ interface Api {
   fileCheckEpisodes: (
     animeName: string,
     episodeInts: string[]
-  ) => Promise<
-    Record<
-      string,
-      { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-    >
-  >
+  ) => Promise<Record<string, EpisodeFileEntry[]>>
   fileOpen: (filePath: string) => Promise<string>
   fileShowInFolder: (filePath: string) => Promise<void>
   fileDeleteEpisode: (
@@ -150,13 +145,7 @@ interface Api {
     translationId?: number
   ) => Promise<void>
   onFileEpisodesChanged: (
-    callback: (
-      animeName: string,
-      data: Record<
-        string,
-        { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-      >
-    ) => void
+    callback: (animeName: string, data: Record<string, EpisodeFileEntry[]>) => void
   ) => Unsubscribe
 
   onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => Unsubscribe

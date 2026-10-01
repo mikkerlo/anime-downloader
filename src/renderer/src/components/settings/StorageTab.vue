@@ -22,6 +22,13 @@ const autoMoveToCold = ref(false);
 const modeRefusedReason = ref<string | null>(null);
 const modeSwitching = ref(false);
 
+// #447: the same refusal reached through a folder picker, which the two
+// root-moving pickers now return instead of writing the root. Kept apart from
+// `modeRefusedReason` because the two render in different groups — a picker
+// refusal under the mode toggle would point at a control the user did not
+// touch.
+const pickRefusedReason = ref<string | null>(null);
+
 const DEFAULT_DIR_LABEL = 'Default (Downloads/anime-dl)';
 
 // `getDownloadDir()` falls through hot → downloadDir → fallback, and the row has
@@ -135,7 +142,14 @@ async function setStorageMode(mode: StorageMode): Promise<void> {
     storageMode.value = result.mode;
     modeRefusedReason.value = result.refusedReason;
     applyRootsState(result.roots);
-    if (!result.refusedReason) showSaved();
+    if (!result.refusedReason) {
+      // An accepted switch proves `hasRootBoundWork()` was false, so any
+      // standing picker refusal is stale (#447). The converse does not hold —
+      // a pick can be accepted because it resolved to the root already in use
+      // — so a successful pick does not clear the mode refusal.
+      pickRefusedReason.value = null;
+      showSaved();
+    }
   } catch (err) {
     modeRefusedReason.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -143,22 +157,39 @@ async function setStorageMode(mode: StorageMode): Promise<void> {
   }
 }
 
+/**
+ * Adopt a root-moving picker's reply (#447).
+ *
+ * Both pickers answer with `StoragePickDirResult` rather than a bare path,
+ * because main refuses the pick while the download manager still holds work
+ * bound to the current root, and a `null` path on its own cannot say whether
+ * the user cancelled the dialog or main declined to write.
+ *
+ * No `autoSave` here, which is the other half of the same point: main writes
+ * the key itself, in the handler that also re-syncs the manager, so a
+ * `set-setting` echo would re-write a value already stored — and after a
+ * refusal it would write the very root main just declined. Root state comes
+ * from `result.roots` for the same reason the clear and the mode switch take it
+ * from their replies: it is already in hand and cannot disagree with what main
+ * just did.
+ *
+ * A cancelled dialog leaves a standing refusal on screen. Only a pick that
+ * went through clears it, because nothing about cancelling says the work it
+ * named is finished.
+ */
+function applyPick(result: StoragePickDirResult): void {
+  if (result.refusedReason) pickRefusedReason.value = result.refusedReason;
+  else if (result.dir) pickRefusedReason.value = null;
+  applyRootsState(result.roots);
+  if (result.dir) showSaved();
+}
+
 async function pickDir(): Promise<void> {
-  const dir = await window.api.downloadPickDir();
-  if (dir) {
-    downloadDir.value = dir;
-    autoSave('downloadDir', dir);
-    await refreshRootsState();
-  }
+  applyPick(await window.api.downloadPickDir());
 }
 
 async function pickHotDir(): Promise<void> {
-  const dir = await window.api.storagePickHotDir();
-  if (dir) {
-    hotStorageDir.value = dir;
-    showSaved();
-    await refreshRootsState();
-  }
+  applyPick(await window.api.storagePickHotDir());
 }
 
 async function pickColdDir(): Promise<void> {
@@ -530,6 +561,19 @@ watch(autoCleanupDays, (val) => {
           </div>
         </SettingsRow>
       </template>
+
+      <!--
+        #447: main refused the last folder pick, so the Browse button above did
+        nothing. This row is in the Locations group rather than under the mode
+        toggle, where the #443 refusal renders: both refusals come from the same
+        predicate, but putting a picker's under the segmented control would
+        explain a Browse click next to a control the user never touched. Outside
+        the mode split, because either picker can land here and only one of them
+        is on screen at a time.
+      -->
+      <SettingsRow v-if="pickRefusedReason" stack>
+        <div class="inline-result bad">{{ pickRefusedReason }}</div>
+      </SettingsRow>
 
       <!--
         Outside the mode split on purpose (#440). The stale root is often the one

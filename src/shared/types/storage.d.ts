@@ -85,6 +85,33 @@ interface StorageSetModeResult {
   roots: StorageRootsState
 }
 
+/**
+ * Reply of the two **root-moving** folder pickers, `CHANNELS.DOWNLOAD_PICK_DIR`
+ * and `CHANNELS.STORAGE_PICK_HOT_DIR` (#447).
+ *
+ * Deliberately the shape of `StorageSetModeResult` with `dir` where `mode` is,
+ * because the two pickers move the effective download root exactly the way
+ * `storage:set-mode` does and are refused by the same predicate. A bare
+ * `string | null` could not carry that: `null` already means "the user
+ * cancelled the dialog", and the renderer treats it as a no-op, so a refusal
+ * sent that way would discard the pick with nothing on screen to say why.
+ *
+ * `dir` is the picked path, and `null` for **both** a cancel and a refusal —
+ * nothing was written in either case, so there is no new value to adopt.
+ * `refusedReason` is what tells the two apart, and the Storage tab shows it
+ * verbatim. `roots` carries the same `StorageRootsState` the clear, the getter
+ * and the mode switch report.
+ *
+ * `storage:pick-cold-dir` keeps its `string | null`: `coldStorageDir` is a move
+ * *target* and is not an input to `getDownloadDir()`, so picking one never
+ * re-points the manager and there is nothing for the predicate to refuse.
+ */
+interface StoragePickDirResult {
+  dir: string | null
+  refusedReason: string | null
+  roots: StorageRootsState
+}
+
 interface StorageEpisodeUsage {
   episodeInt: string
   files: {

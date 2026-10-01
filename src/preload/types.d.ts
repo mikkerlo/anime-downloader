@@ -114,12 +114,13 @@ interface Api {
     encoders: string[]
   }>
   ffmpegDelete: () => Promise<void>
-  downloadPickDir: () => Promise<string | null>
+  downloadPickDir: () => Promise<StoragePickDirResult>
   // Storage
   storageGetMissingRoot: () => Promise<StorageRootsState>
   storageClearRoot: (key: StorageRootKey) => Promise<StorageRootsState>
   storageSetMode: (mode: StorageMode) => Promise<StorageSetModeResult>
-  storagePickHotDir: () => Promise<string | null>
+  storagePickHotDir: () => Promise<StoragePickDirResult>
+  /** Still `string | null`: a cold root is a move target, never the manager's. */
   storagePickColdDir: () => Promise<string | null>
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>
   onStorageMoveToColdProgress: (

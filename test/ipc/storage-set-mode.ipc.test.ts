@@ -150,6 +150,14 @@ describe('storage IPC — set-mode (#443)', () => {
     ;(dialog.showOpenDialog as Mock).mockResolvedValue({ canceled: false, filePaths: [dir] })
   }
 
+  // The two root-moving pickers (#447). Both widened from `string | null` to
+  // the `StoragePickDirResult` shape, and they live in different routers.
+  const pickHotDir = (): Promise<StoragePickDirResult> =>
+    invoke(CHANNELS.STORAGE_PICK_HOT_DIR) as Promise<StoragePickDirResult>
+
+  const pickDownloadDir = (): Promise<StoragePickDirResult> =>
+    invoke(CHANNELS.DOWNLOAD_PICK_DIR) as Promise<StoragePickDirResult>
+
   beforeEach(() => {
     vi.clearAllMocks()
     tmpRoot = fs.mkdtempSync(join(os.tmpdir(), 'storage-set-mode-'))
@@ -381,9 +389,10 @@ describe('storage IPC — set-mode (#443)', () => {
       wire({ storageMode: 'simple', downloadDir: dlDir, hotStorageDir: '' })
       pickerReturns(hotDir)
 
-      const picked = await invoke(CHANNELS.STORAGE_PICK_HOT_DIR)
+      const picked = await pickHotDir()
 
-      expect(picked).toBe(hotDir)
+      expect(picked.dir).toBe(hotDir)
+      expect(picked.refusedReason).toBeNull()
       expect(store.get('hotStorageDir')).toBe(hotDir)
       expect(setDownloadDir).toHaveBeenCalledWith(dlDir)
       expect(setDownloadDir).not.toHaveBeenCalledWith(hotDir)
@@ -402,13 +411,244 @@ describe('storage IPC — set-mode (#443)', () => {
       wire({ storageMode: 'advanced', downloadDir: '', hotStorageDir: hotDir })
       pickerReturns(dlDir)
 
-      const picked = await invoke(CHANNELS.DOWNLOAD_PICK_DIR)
+      const picked = await pickDownloadDir()
 
-      expect(picked).toBe(dlDir)
+      expect(picked.dir).toBe(dlDir)
+      expect(picked.refusedReason).toBeNull()
       expect(store.get('downloadDir')).toBe(dlDir)
       expect(setDownloadDir).toHaveBeenCalledWith(hotDir)
       expect(setDownloadDir).not.toHaveBeenCalledWith(dlDir)
     })
+
+    // The widened reply (#447). `string | null` could not carry a refusal: the
+    // renderer already reads `null` as "the user cancelled" and does nothing,
+    // so a refusal sent that way would discard the pick with nothing on screen.
+    it('carries the root state alongside the picked path, as the mode switch does', async () => {
+      wire({
+        storageMode: 'simple',
+        downloadDir: dlDir,
+        hotStorageDir: '',
+        coldStorageDir: coldDir
+      })
+      pickerReturns(hotDir)
+
+      const picked = await pickHotDir()
+
+      expect(picked.roots).toEqual({
+        downloadDir: dlDir,
+        hotStorageDir: hotDir,
+        coldStorageDir: coldDir,
+        autoMoveToCold: false,
+        missingRoot: null
+      })
+    })
+
+    it.each([
+      ['hot', () => CHANNELS.STORAGE_PICK_HOT_DIR],
+      ['download', () => CHANNELS.DOWNLOAD_PICK_DIR]
+    ])('reports a cancelled %s-dir dialog as dir null with no refusal', async (_label, channel) => {
+      wire({ storageMode: 'simple', downloadDir: dlDir })
+      ;(BrowserWindow.getFocusedWindow as Mock).mockReturnValue({})
+      ;(dialog.showOpenDialog as Mock).mockResolvedValue({ canceled: true, filePaths: [] })
+
+      const picked = (await invoke(channel())) as StoragePickDirResult
+
+      expect(picked.dir).toBeNull()
+      expect(picked.refusedReason).toBeNull()
+      expect(setStoreValue).not.toHaveBeenCalled()
+    })
+  })
+
+  // #447. The pickers move the effective root exactly the way `set-mode` does,
+  // and until this landed neither consulted the predicate that guards it: pause
+  // a download, press Browse, pick another folder, and the manager re-pointed.
+  //
+  // Both halves are asserted per picker rather than once over a loop, because
+  // #446's experience — and the reason the review asked for the mirror — is that
+  // the two live in different routers and a one-sided fix leaves one router's
+  // tests green. Reverting either guard must red only that picker's cases.
+  describe('the pickers refuse a root move while the manager has root-bound work', () => {
+    it('download:pick-dir writes neither the store nor the manager', async () => {
+      wire({ storageMode: 'simple', downloadDir: dlDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(join(tmpRoot, 'elsewhere'))
+
+      const picked = await pickDownloadDir()
+
+      expect(picked.refusedReason).toBeTruthy()
+      // Not the picked path either: nothing was written, so there is no new
+      // value for the renderer to adopt.
+      expect(picked.dir).toBeNull()
+      expect(store.get('downloadDir')).toBe(dlDir)
+      expect(setStoreValue).not.toHaveBeenCalled()
+      expect(setDownloadDir).not.toHaveBeenCalled()
+    })
+
+    it('storage:pick-hot-dir writes neither the store nor the manager', async () => {
+      wire({ storageMode: 'advanced', downloadDir: dlDir, hotStorageDir: hotDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(join(tmpRoot, 'elsewhere'))
+
+      const picked = await pickHotDir()
+
+      expect(picked.refusedReason).toBeTruthy()
+      expect(picked.dir).toBeNull()
+      expect(store.get('hotStorageDir')).toBe(hotDir)
+      expect(setStoreValue).not.toHaveBeenCalled()
+      expect(setDownloadDir).not.toHaveBeenCalled()
+    })
+
+    it('still reports the raw roots when it refuses, so the tab can re-adopt them', async () => {
+      wire({ storageMode: 'simple', downloadDir: dlDir, hotStorageDir: hotDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(join(tmpRoot, 'elsewhere'))
+
+      const picked = await pickDownloadDir()
+
+      expect(picked.roots.downloadDir).toBe(dlDir)
+      expect(picked.roots.hotStorageDir).toBe(hotDir)
+    })
+
+    // The prose is shared with `set-mode` and parameterised by the action, so
+    // the three exits are the same three and the closing clause is not.
+    it('names the three exits, and the action the user actually took', async () => {
+      wire({ storageMode: 'simple', downloadDir: dlDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(join(tmpRoot, 'elsewhere'))
+
+      const reason = (await pickDownloadDir()).refusedReason!
+      const modeReason = (await setMode('advanced')).refusedReason!
+
+      for (const exit of ['Finish or cancel', 'Merge finished', 'Clear done']) {
+        expect(reason).toContain(exit)
+        expect(modeReason).toContain(exit)
+      }
+      expect(reason).toContain('changing the download folder')
+      expect(modeReason).toContain('switching storage mode')
+      expect(reason).not.toContain('switching storage mode')
+    })
+
+    // A key that is not an input to the live resolution cannot move the root,
+    // so there is nothing to refuse — and refusing would make the hot picker
+    // unusable in simple mode, where it is not even on screen.
+    it('allows a hot-dir pick in simple mode, where it does not move the root', async () => {
+      wire({ storageMode: 'simple', downloadDir: dlDir, hotStorageDir: '' })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(hotDir)
+
+      const picked = await pickHotDir()
+
+      expect(picked.refusedReason).toBeNull()
+      expect(picked.dir).toBe(hotDir)
+      expect(store.get('hotStorageDir')).toBe(hotDir)
+      expect(setDownloadDir).toHaveBeenCalledWith(dlDir)
+    })
+
+    it('allows a download-dir pick in advanced mode behind a set hot dir', async () => {
+      wire({ storageMode: 'advanced', downloadDir: '', hotStorageDir: hotDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(dlDir)
+
+      const picked = await pickDownloadDir()
+
+      expect(picked.refusedReason).toBeNull()
+      expect(store.get('downloadDir')).toBe(dlDir)
+      expect(setDownloadDir).toHaveBeenCalledWith(hotDir)
+    })
+
+    // The spec gap the review named. #440's missing-root notice tells the user
+    // to "re-pick the folder to resume", and an away drive is exactly what
+    // leaves `paused`/`failed` items bound to it — so refusing every pick while
+    // the predicate holds would close the only door #440 opened. The guard
+    // therefore compares where `getDownloadDir()` lands, not which key moved.
+    it('allows a re-pick of the root already in force, and is a no-op for the manager', async () => {
+      wire({ storageMode: 'simple', downloadDir: dlDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(dlDir)
+
+      const picked = await pickDownloadDir()
+
+      expect(picked.refusedReason).toBeNull()
+      expect(picked.dir).toBe(dlDir)
+      expect(setDownloadDir).toHaveBeenCalledTimes(1)
+      expect(setDownloadDir).toHaveBeenCalledWith(dlDir)
+    })
+
+    it('allows a re-pick that differs only in trailing separators', async () => {
+      wire({ storageMode: 'advanced', downloadDir: dlDir, hotStorageDir: hotDir })
+      hasRootBoundWork.mockReturnValue(true)
+      pickerReturns(hotDir + path.sep)
+
+      const picked = await pickHotDir()
+
+      expect(picked.refusedReason).toBeNull()
+      expect(setDownloadDir).toHaveBeenCalledWith(hotDir + path.sep)
+    })
+  })
+
+  // THE test for where the check sits, and the one a pre-dialog-only guard
+  // fails while passing everything above it.
+  //
+  // `showOpenDialog` stays pending for as long as the user leaves the native
+  // dialog open, and the auto-downloader enqueues on a timer — so a check taken
+  // before the dialog is a check against a queue that can change underneath it.
+  // The only position that guarantees anything is after the dialog returns and
+  // immediately before the write. Here the queue is empty when the dialog opens
+  // and holds a real `queued` item by the time it resolves.
+  describe('the guard is consulted after the dialog, not before it', () => {
+    let userDataDir: string
+    let dm: DownloadManager
+
+    beforeEach(() => {
+      userDataDir = fs.mkdtempSync(join(os.tmpdir(), 'storage-pick-race-'))
+      dm = new DownloadManager(dlDir, {} as never, userDataDir)
+    })
+
+    afterEach(() => {
+      dm.destroy()
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+    })
+
+    /** Open the dialog and hand back the resolver for it. */
+    function deferredPicker(dir: string): () => void {
+      let release: () => void = () => {}
+      const pending = new Promise<{ canceled: boolean; filePaths: string[] }>((resolve) => {
+        release = () => resolve({ canceled: false, filePaths: [dir] })
+      })
+      ;(BrowserWindow.getFocusedWindow as Mock).mockReturnValue({})
+      ;(dialog.showOpenDialog as Mock).mockReturnValue(pending)
+      return release
+    }
+
+    it.each([
+      ['download:pick-dir', 'simple' as StorageMode, () => CHANNELS.DOWNLOAD_PICK_DIR],
+      ['storage:pick-hot-dir', 'advanced' as StorageMode, () => CHANNELS.STORAGE_PICK_HOT_DIR]
+    ])(
+      '%s refuses work that arrived while the dialog was open',
+      async (_label, storageMode, channel) => {
+        wire({ storageMode, downloadDir: dlDir, hotStorageDir: hotDir, downloadManager: dm })
+        const moved = vi.spyOn(dm, 'setDownloadDir')
+        // The real predicate, against the real queue — not the stub, whose
+        // return value would be fixed before the dialog even opened.
+        expect(dm.hasRootBoundWork()).toBe(false)
+        const release = deferredPicker(join(tmpRoot, 'elsewhere'))
+
+        const inFlight = invoke(channel()) as Promise<StoragePickDirResult>
+        seed(dm, [makeItem({ status: 'queued' })])
+        release()
+        const picked = await inFlight
+
+        expect(picked.refusedReason).toBeTruthy()
+        expect(picked.dir).toBeNull()
+        expect(setStoreValue).not.toHaveBeenCalled()
+        expect(moved).not.toHaveBeenCalled()
+        // And the manager's cached root is still the one the item's `.part` is
+        // under, which is the thing all of this is protecting.
+        expect(
+          dm.getActiveDownloadByPath(join(dlDir, path.join('Anime', 'file.mp4')))
+        ).not.toBeNull()
+      }
+    )
   })
 
   // End to end, with the real manager wired to the real handler: what the user

@@ -987,6 +987,105 @@ describe('check-line-citations', () => {
     expect(report(r, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
   })
 
+  it('reds a marked anchor when a line is inserted above its target, where a plain one does not', () => {
+    // WHY #408'S RETROFIT SHIPPED AS ITS OWN PR. A plain `path:NN` is checked for
+    // existence only, so an insertion anywhere above it re-points it at a
+    // neighbouring line and the gate still prints OK — measured on #384, where a
+    // small insertion inside the model's `sendState` went green while silently
+    // wrong, and that is where item 4's `PROTOCOL_TIMEOUT` goes next. This is a
+    // contrast rather than a second copy of the rot case below: that one
+    // hand-writes a mismatch, this one produces it the way an edit does, and the
+    // plain half is the assertion that says the gate alone would not have noticed.
+    const body = (extra: string[]): string =>
+      [
+        '  private updateWatcher(w: Watcher, ps: Playstate | undefined): void {',
+        ...extra,
+        '    w.lastUpdatedOn = Date.now()',
+        '    if (!ps) return',
+        '    w.position = ps.position',
+        '  }',
+        ''
+      ].join('\n')
+
+    const before = body([])
+    const after = body(['    if (this.protocolTimedOut(w)) return'])
+    expect(before.split('\n')[1]).toBe('    w.lastUpdatedOn = Date.now()')
+    expect(after.split('\n')[1]).toBe('    if (this.protocolTimedOut(w)) return')
+    expect(after.split('\n')[2]).toBe('    w.lastUpdatedOn = Date.now()')
+
+    const plain = '// stamped at receipt (src/server.ts:2), above the playstate guard'
+    const cite = '// stamped at receipt (src/server.ts:2 ("w.lastUpdatedOn = Date.now()"))'
+
+    // THE SILENT HALF. The plain anchor resolves, lands on code, and says nothing
+    // about the code no longer being the line its own sentence describes.
+    const plainAfter = run({ 'src/server.ts': after, 'src/caller.ts': plain })
+    expect(plainAfter.resolved).toHaveLength(1)
+    expect(plainAfter.marked).toEqual([])
+    expect(plainAfter.quoteFailures).toEqual([])
+    expect(plainAfter.suspicious).toEqual([])
+    expect(report(plainAfter, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
+
+    // THE HALF THE RETROFIT BUYS. Same corpus, same shift, marked anchor: a drift
+    // failure naming the line the stamp moved to, and no pin value makes it pass.
+    const markedAfter = run({ 'src/server.ts': after, 'src/caller.ts': cite })
+    expect(markedAfter.quoteFailures).toHaveLength(1)
+    expect(markedAfter.quoteFailures[0]).toMatchObject({
+      at: 'src/caller.ts:1',
+      cited: 'src/server.ts:2',
+      target: 'src/server.ts',
+      elsewhere: [3]
+    })
+    expect(report(markedAfter, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(false)
+
+    // And it is the shift that reds, not the marking: the same anchor over the
+    // unshifted target is green, so the retrofit lands no pre-existing red.
+    const markedBefore = run({ 'src/server.ts': before, 'src/caller.ts': cite })
+    expect(markedBefore.marked).toHaveLength(1)
+    expect(markedBefore.quoteFailures).toEqual([])
+    expect(report(markedBefore, { suspiciousLanding: 0, uncheckable: 0, marked: 0 }).ok).toBe(true)
+  })
+
+  it('reds a shifted range only once the quote leaves its window', () => {
+    // Why the retrofit's one range anchor quotes its LAST line. A range absorbs any
+    // shift smaller than its own width, so a quote taken from the near edge is still
+    // inside the stale window and reds nothing — correctly, since the span still
+    // covers the declaration it names. The far edge is the half that leaves.
+    const iface = (extra: string[]): string =>
+      [
+        'export interface WireFrame {',
+        ...extra,
+        '  at: number',
+        '  username: string',
+        '  position: number',
+        '  paused?: boolean',
+        ''
+      ].join('\n')
+
+    const shifted = iface(['  seq: number'])
+
+    const near = run({
+      'src/wire.ts': shifted,
+      'src/caller.ts': '// the frame shape (src/wire.ts:1-5 ("at: number"))'
+    })
+    expect(near.marked).toHaveLength(1)
+    expect(near.quoteFailures).toEqual([])
+
+    const far = run({
+      'src/wire.ts': shifted,
+      'src/caller.ts': '// the frame shape (src/wire.ts:1-5 ("paused?: boolean"))'
+    })
+    expect(far.quoteFailures).toHaveLength(1)
+    expect(far.quoteFailures[0]).toMatchObject({ cited: 'src/wire.ts:1-5', elsewhere: [6] })
+
+    // The same far-edge anchor over the unshifted interface, where `paused?:
+    // boolean` is the fifth line and the window's last: green.
+    const unshifted = run({
+      'src/wire.ts': iface([]),
+      'src/caller.ts': '// the frame shape (src/wire.ts:1-5 ("paused?: boolean"))'
+    })
+    expect(unshifted.quoteFailures).toEqual([])
+  })
+
   it('reds when a marked anchor rots and goes green once it is repointed', () => {
     const rotted = run({
       'docs/prose.md': PROSE,

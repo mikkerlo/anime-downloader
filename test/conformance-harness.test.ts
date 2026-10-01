@@ -16,7 +16,7 @@
 // divergence; the pin reddened on its own, as designed, and the same PR swapped
 // it for `assertConforms`. The pin failed in *both* directions, and so does the
 // agreement check that replaced it, for a reason item 4 itself changed: the
-// model has no ignore window (`test/helpers/syncplay-min-election-server.ts:70`)
+// model has no ignore window (`test/helpers/syncplay-min-election-server.ts:70` ("Deliberately **not** modelled"))
 // and now stamps every frame above its playstate guard, so a `sendPingOnly` that
 // dropped its counter leaves the reference inert and the model re-electing — a
 // divergence `assertConforms` reports, measured at 4.094s against the pinned

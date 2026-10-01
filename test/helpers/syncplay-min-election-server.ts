@@ -86,9 +86,9 @@
 //
 // Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
 // **paused** arm — the `this.roomPaused ? w.position` half of
-// `test/helpers/syncplay-min-election-server.ts:456-461` — is already checked
-// against the real Syncplay 1.7.6 server in both the steady state and the flip
-// into it, so no new scenario is owed for it.
+// `test/helpers/syncplay-min-election-server.ts:456-461` ("return this.roomPaused
+// ? w.position") — is already checked against the real Syncplay 1.7.6 server in
+// both the steady state and the flip into it, so no new scenario is owed for it.
 //  - **Steady.** `conformance/syncplay-election.conformance.ts:27`
 //    (`conf-elect-lowest`) is a paused room holding two watchers at different
 //    positions — alpha `position: 700` at
@@ -115,17 +115,17 @@
 //    again at 720, and the room re-seats") is the one taken *after* the flip,
 //    and `assertConforms` puts it beside 1.7.6 like any other — at the paused
 //    tolerance, because that scenario never sets `playing`.
-//  - The clause a reader would otherwise go hunting for, stated rather than left
-//    as a hole: `forcePositionUpdate`'s own write, the
+//  - The clause a reader would otherwise go hunting for, stated rather than left as a
+//    hole: `forcePositionUpdate`'s own write, the
 //    `test/helpers/syncplay-min-election-server.ts:527` ("this.roomPosition =
-//    this.watcherPosition(w)") line, reads through that same paused arm
-//    whenever the change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:744-766` refreshes that
-//    watcher's `lastUpdatedOn`, flips `roomPaused`, and only then calls it, in
-//    that order. Safe for a stated reason rather than by luck: the refresh is what
-//    the *playing* arm would have projected from, and the paused arm ignores the
-//    stamp regardless, so either way that write reads the setter's own position
-//    at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
+//    this.watcherPosition(w)") line, reads through that same paused arm whenever the
+//    change that forced it is a pause, because
+//    `test/helpers/syncplay-min-election-server.ts:744-766` ("if (ps.doSeek === true ||
+//    pausedChanged)") refreshes that watcher's `lastUpdatedOn`, flips `roomPaused`, and
+//    only then calls it, in that order. Safe for a stated reason rather than by luck:
+//    the refresh is what the *playing* arm would have projected from, and the paused
+//    arm ignores the stamp regardless, so either way that write reads the setter's own
+//    position at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
 //    (const other of this.watchers.values())") then re-seats every watcher.
 //  - Option (B) — a scenario built to catch an election *flip* decided inside
 //    the paused arm — is structurally excluded rather than deferred, so nobody

@@ -346,16 +346,32 @@ Actions per episode:
 
 Metadata invariants:
   `downloaded-episodes-get` cross-checks each `downloadedEpisodes` entry against
-  disk (tagged `[Author]` .mkv/.mp4, plus legacy untagged, in hot + cold dirs).
-  Entries with no matching file and no active download are filtered out and
-  garbage-collected from the store. Combined with the write being keyed on the
-  video item landing, this makes the ⬇ icon a reliable signal that the file is
-  actually present — and, since #412, one that appears for every video that is
-  present rather than only for groups whose subtitle also succeeded.
+  disk (tagged `[Author]` .mkv/.mp4, plus legacy untagged, in every configured
+  root — `allConfiguredRoots()`, so `downloadDir`/fallback + `hotStorageDir` +
+  `coldStorageDir` regardless of `storageMode`, not the mode-scoped
+  `dirsForScan()`). Entries with no matching file and no active download are
+  filtered out and garbage-collected from the store. Combined with the write
+  being keyed on the video item landing, this makes the ⬇ icon a reliable signal
+  that the file is actually present — and, since #412, one that appears for every
+  video that is present rather than only for groups whose subtitle also
+  succeeded.
+  The GC persists its verdict, so the search scope is part of the invariant: when
+  it moved with `storageMode` (before #421), one settings toggle deleted every
+  entry for the anime being viewed, permanently — nothing rewrites the store when
+  the setting comes back. Two guards keep it honest. The scope is now
+  mode-independent, and the whole collection pass is skipped for the call when
+  `missingConfiguredRoot()` names a configured, non-empty **stored** root that is
+  not on disk (unmounted drive, re-pointed or deleted setting). The
+  `downloadsFallbackDir` fallback is exempt from that check: `downloadDir`
+  defaults to `''`, so including it would report a missing root forever on a
+  straight-to-advanced profile and disable the GC for good. Skipping costs
+  phantom ⬇ rows until the root returns, which is recoverable; the wipe was not.
   `download-cancel` prunes the entry only for a cancelled VIDEO item: the prune
   keeps an entry alive on `episodeFileExists`, which probes .mkv/.mp4 and never
   .part, so pruning on a subtitle cancel would delete the entry of a video still
-  deferred under the player lock.
+  deferred under the player lock. `pruneDownloadedEpisode` shares both guards
+  above — same predicate, same decision to delete metadata, one entry at a time
+  instead of in bulk.
 
 File scan cache (session-level, in-memory):
   fileCheckCache: Map<animeName, fullScanResult>

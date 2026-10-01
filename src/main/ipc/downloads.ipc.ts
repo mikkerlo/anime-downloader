@@ -157,6 +157,19 @@ export function register({
         .map((g) => g.translationId)
     )
 
+    // A configured root that is away (unmounted drive, re-pointed or deleted
+    // setting) makes `episodeFileExists` answer a false `false` for every file
+    // inside it, and this GC persists its verdict — so one page open would wipe
+    // all of this anime's metadata irreversibly. Skip collecting for the whole
+    // call instead; the trade is phantom ⬇ rows, which are recoverable (#421).
+    // Computed once: it is the same answer for every key and a syscall each time.
+    const missingRoot = coldStorageService.missingConfiguredRoot()
+    if (missingRoot) {
+      console.warn(
+        `[storage] skipping downloadedEpisodes GC — configured root is missing: ${missingRoot}`
+      )
+    }
+
     let mutated = false
     for (const [key, val] of Object.entries(episodes)) {
       if (!key.startsWith(prefix)) continue
@@ -166,6 +179,7 @@ export function register({
 
       // GC stale metadata whose file is not on disk and which isn't an active download.
       if (
+        !missingRoot &&
         animeName &&
         !activeTrIds.has(val.translationId) &&
         !coldStorageService.episodeFileExists(animeName, episodeInt, val.author)

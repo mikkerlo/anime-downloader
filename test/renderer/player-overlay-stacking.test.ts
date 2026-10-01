@@ -215,6 +215,15 @@ function controlsBarElements(source: string): BarElement[] {
       if (stack.length === 0) return found
       continue
     }
+    // The walk resolves static classes only, so a `:class` binding anywhere in
+    // the bar would carry classes it cannot evaluate and the checks below would
+    // skip them without saying so. Asserted here rather than over a slice of
+    // the template: the walk already reads every tag's attributes and knows
+    // exactly where the bar ends, where a slice has to guess at the boundary.
+    expect(
+      attrs,
+      `\`<${tag}>\` inside \`.controls-bar\` binds its class; the walk reads static \`class="…"\` only`
+    ).not.toMatch(/(?:^|\s)(?::|v-bind:)class=/)
     const classes = (/(?:^|\s)class="([^"]*)"/.exec(attrs)?.[1] ?? '').split(/\s+/).filter(Boolean)
     // The bar itself is not a subject: its own `13` resolves against
     // `.player-overlay` and is #220's, pinned above. Nor is it an ancestor that
@@ -260,12 +269,24 @@ describe('positive z-index inside the controls bar (#445)', () => {
   })
 
   it('resolves every class in the bar statically', () => {
-    // The walk reads static `class="…"` only. A `:class` binding inside the bar
-    // would carry classes it cannot evaluate, so the check above would skip
-    // them without saying so — red here instead of going quietly blind.
-    const template = PLAYER_VIEW.slice(0, PLAYER_VIEW.indexOf('</template>'))
-    const bar = template.slice(template.lastIndexOf('<', template.indexOf('class="controls-bar"')))
-    expect(bar.slice(0, bar.indexOf('</transition>'))).not.toMatch(/:class=|v-bind:class=/)
+    // A named pointer at the invariant the walk now carries, and a regression
+    // test for the hole it closed. This check used to live out here, over
+    // `bar.slice(0, bar.indexOf('</transition>'))` — a slice that ends at the
+    // *first* nested `</transition>`, which is well short of the bar. The
+    // fixture below is that hole: on the pre-fix walk it parses clean, so the
+    // binding went unseen by both this test and the scan above.
+    const nested = (binding: string) => `
+      <template>
+        <div v-show="x" class="controls-bar">
+          <div class="seek-container">
+            <transition name="x"><span /></transition>
+            <div ${binding}class="seek-knob" />
+          </div>
+        </div>
+      </template>`
+    expect(() => controlsBarElements(nested(':class="{ a: true }" '))).toThrow(/binds its class/)
+    // And it is the binding that reds it, not the shape of the fixture.
+    expect(controlsBarElements(nested('')).flatMap(({ classes }) => classes)).toContain('seek-knob')
   })
 
   it('keeps `.seek-container` the stacking context that confines them', () => {

@@ -10,10 +10,7 @@ import {
   type EpisodeSkipDetection
 } from '../../skip-detector'
 
-export type SkipAnalysisFileCheckResult = Record<
-  string,
-  { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
->
+export type SkipAnalysisFileCheckResult = Record<string, EpisodeFileEntry[]>
 
 const AUTO_SKIP_DEBOUNCE_MS = 5000
 

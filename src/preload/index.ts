@@ -166,10 +166,7 @@ const api = {
   // unlike every other channel which sends a single payload. Inlined rather than
   // shoehorning the helper to support multi-arg events.
   onFileEpisodesChanged: ((callback) => {
-    type Episodes = Record<
-      string,
-      { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-    >
+    type Episodes = Record<string, EpisodeFileEntry[]>
     const wrapped = (_event: IpcRendererEvent, animeName: string, data: Episodes): void =>
       callback(animeName, data)
     ipcRenderer.on(EVENT_CHANNELS.FILE_EPISODES_CHANGED, wrapped)
@@ -177,13 +174,7 @@ const api = {
       ipcRenderer.removeListener(EVENT_CHANNELS.FILE_EPISODES_CHANGED, wrapped)
     }
   }) as (
-    callback: (
-      animeName: string,
-      data: Record<
-        string,
-        { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-      >
-    ) => void
+    callback: (animeName: string, data: Record<string, EpisodeFileEntry[]>) => void
   ) => Unsubscribe,
 
   // Storage

@@ -3,6 +3,7 @@ import * as path from 'path'
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
+import { VIDEO_EXTS } from '@shared/episode-files'
 import { sanitizeFilename, type DownloadRequest } from '../download-manager'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
@@ -107,7 +108,9 @@ export function register({
         let hasFiles = false
         try {
           const files = fs.readdirSync(animeDir)
-          hasFiles = files.some((f) => f.endsWith('.mkv') || f.endsWith('.mp4'))
+          // Case-sensitive, as before: `VIDEO_EXTS` shares the list, not the
+          // matching (#429).
+          hasFiles = files.some((f) => VIDEO_EXTS.some((ext) => f.endsWith(ext)))
         } catch {
           /* dir doesn't exist */
         }

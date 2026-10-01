@@ -53,12 +53,7 @@ export function useEpisodeList(deps: {
   translationType: Ref<string>
   selectedAuthor: Ref<string>
   episodeMeta: Ref<Record<string, EpisodeMeta[]>>
-  fileStatus: Ref<
-    Record<
-      string,
-      { type: 'mkv' | 'mp4'; filePath: string; translationId?: number; author?: string }[]
-    >
-  >
+  fileStatus: Ref<Record<string, EpisodeFileEntry[]>>
   downloadGroups: Ref<Map<string, EpisodeGroup>>
   watchProgress: Ref<Record<string, WatchProgressEntry>>
   libraryStore: ReturnType<typeof useLibraryStore>

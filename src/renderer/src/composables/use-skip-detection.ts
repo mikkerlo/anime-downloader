@@ -13,13 +13,6 @@
 
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 
-type FileEntry = {
-  type: 'mkv' | 'mp4'
-  filePath: string
-  translationId?: number
-  author?: string
-}
-
 export interface SkipEpisodeInput {
   episodeInt: string
   episodeLabel: string
@@ -29,7 +22,7 @@ export interface SkipEpisodeInput {
 export function useSkipDetection(deps: {
   getAnimeId: () => number
   filteredEpisodes: ComputedRef<EpisodeSummary[]> | Ref<EpisodeSummary[]>
-  fileStatus: Ref<Record<string, FileEntry[]>>
+  fileStatus: Ref<Record<string, EpisodeFileEntry[]>>
 }): {
   skipPanelCollapsed: Ref<boolean>
   skipDetections: Ref<ShowSkipDetections | null>

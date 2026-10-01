@@ -17,13 +17,6 @@ import type { EpisodeRow } from './use-episode-list'
 import type { useDownloadsStore } from '../stores/downloads'
 import type { usePlayerStore } from '../stores/player'
 
-type FileEntry = {
-  type: 'mkv' | 'mp4'
-  filePath: string
-  translationId?: number
-  author?: string
-}
-
 type TranslationListEntry = { id: number; label: string; type: string; height: number }
 
 type AllEpisodesEntry = {
@@ -42,7 +35,7 @@ export function useEpisodeDownloads(deps: {
   getAnimeName: () => string
   // Component-owned data refs (write access)
   episodeMeta: Ref<Record<string, EpisodeMeta[]>>
-  fileStatus: Ref<Record<string, FileEntry[]>>
+  fileStatus: Ref<Record<string, EpisodeFileEntry[]>>
   downloadGroups: Ref<Map<string, EpisodeGroup>>
   watchProgress: Ref<Record<string, WatchProgressEntry>>
   // From useEpisodeList
@@ -74,7 +67,10 @@ export function useEpisodeDownloads(deps: {
   hasActiveDownloads: ComputedRef<boolean>
   episodeProgressPercent: (episodeInt: string) => number
   isEpisodeWatched: (episodeInt: string) => boolean
-  getFileForTranslation: (episodeInt: string, translationId: number | undefined) => FileEntry | null
+  getFileForTranslation: (
+    episodeInt: string,
+    translationId: number | undefined
+  ) => EpisodeFileEntry | null
   hasAnyFile: (episodeInt: string) => boolean
   selectedTrHasFile: (row: EpisodeRow) => boolean
   buildTranslationList: (row: EpisodeRow | undefined) => TranslationListEntry[]
@@ -234,7 +230,7 @@ export function useEpisodeDownloads(deps: {
   function getFileForTranslation(
     episodeInt: string,
     translationId: number | undefined
-  ): FileEntry | null {
+  ): EpisodeFileEntry | null {
     const files = deps.fileStatus.value[episodeInt]
     if (!files || files.length === 0) return null
     // Find file matching the translation's author via metadata

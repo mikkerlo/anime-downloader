@@ -48,11 +48,11 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // Citations landing on a blank line, a bare brace or a comment line — and
 // since #344 that enumeration is not uniform: blank applies to every tracked
 // extension, the other three to code only, because `.md` is exempt from those
-// three and subject to blank. Zero is not an aspiration: every such landing on
+// three and subject to blank. Zero was not an aspiration: every such landing on
 // this tree was stale, and the repair half of #336 fixed all thirteen while
 // #344 repaired the two markdown anchors its narrowing exposed, so the
 // heuristic's measured false-positive rate here is zero. The first genuinely
-// deliberate comment landing raises this by one, with its reason.
+// deliberate comment landing raises it by what it adds, with its reason.
 //
 // #390 is that first case and it brings three at once, all of them anchors in
 // the `blankCommentsAndStrings` docstring in the two-peer loop test. That
@@ -64,8 +64,8 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // code would name a line the prose does not mean, which is the failure this
 // heuristic exists to catch. Deliberately written without anchors of their own:
 // citing the three targets here would land on the same comment lines again and
-// double the count this pin is trying to state. They are the only comment
-// landings on this tree, so a fourth still reds.
+// double the count this pin is trying to state. They were the only comment
+// landings on this tree when #390 landed; #384 below added the fourth.
 //
 // What this pin does not cover, and what `resolved` does not attest: an anchor
 // landing on a live code line is checked for existence only. The four

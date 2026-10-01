@@ -66,16 +66,20 @@ import { basename, extname } from 'node:path'
 
 // Ragged lines this tree still carries. The convention is UNCHECKABLE_PIN in
 // scripts/check-line-citations.mjs, NOT SUSPICIOUS_LANDING_PIN, and the two
-// carry opposite instructions to whoever next reds this.
+// differ in which direction they are allowed to move.
 //
-// A landing pin of 0 can say "what you just added is a defect, repair it",
-// because its measured false-positive rate is zero and every member it ever had
-// was repaired. This one cannot be 0: the lines it counts are real, unrepaired,
-// and not repairable from here — rewrapping them reflows docs/testing.md and
-// renumbers the very citation anchors the sibling gate pins, which is what the
-// issue's Risks section says not to do. So it bounds a known blindness instead.
-// A ragged line ARRIVING reds the build and the fix is to rewrap the line just
-// written; a deliberate repair LOWERS the pin, with its reason.
+// They do NOT differ in what they tell a new member: both red on arrival and
+// both then say "repair what you just added" — a ragged line ARRIVING means
+// rewrap the line just written, exactly as an uncheckable anchor arriving means
+// spell its path out rather than raise the number. The difference is in the
+// members already under them. Every landing under SUSPICIOUS_LANDING_PIN is a
+// deliberate exception carrying its own written argument, so that pin only ever
+// rises, one member at a time, and each rise is paid for by making that
+// argument. Every line this one counts is a real defect left unrepaired,
+// because rewrapping it reflows docs/testing.md and renumbers the very citation
+// anchors the sibling gate pins — which is what the issue's Risks section says
+// not to do. So it bounds a known blindness, and it moves one way only: DOWN,
+// when one of those lines is genuinely repaired.
 //
 // NEVER RE-PIN TO CLEAR A RED. A number moved to match whatever the tree
 // happens to say measures nothing, and this one is the only thing between the

@@ -770,8 +770,17 @@ export class DownloadManager {
    * looking: anything not yet finished (`queued`, `downloading`, `paused`,
    * `failed` — the last two because they survive a restart through
    * `queue.json`), and any merge still owed work (`pending`, `deferred`,
-   * `merging`). `completed` and `cancelled` items are inert, and a `completed`
-   * or `failed` merge is too.
+   * `merging`).
+   *
+   * A `completed` item is *not* inert on its own: it stays root-bound until its
+   * merge has actually **completed**. `getEpisodeGroups()` defaults a missing
+   * `mergeStatuses` entry to `'pending'`, and `_mergeAll` skips only
+   * `'completed'`, `'merging'` and `'deferred'` — so a finished video with no
+   * merge entry (autoMerge off, or nothing has triggered a pass yet) and one
+   * whose merge is `'failed'` are both still picked up, and both rebuild
+   * `path.join(this.downloadDir, group.video.filename)`. Under a moved root that
+   * `existsSync` misses and `continue`s silently, which is the first hazard this
+   * guard exists to stop. Only `cancelled` items are inert unconditionally.
    *
    * One predicate rather than a per-item root (#443's decision): pinning the
    * root on each `DownloadItem` would change the persisted queue format, which
@@ -780,6 +789,14 @@ export class DownloadManager {
   hasRootBoundWork(): boolean {
     const pending: DownloadStatus[] = ['queued', 'downloading', 'paused', 'failed']
     if (this.queue.some((i) => pending.includes(i.status))) return true
+    // A finished item is still owed a merge pass until its merge succeeds: no
+    // entry (autoMerge off) and a `failed` merge are both picked up by
+    // `_mergeAll`, which rebuilds the path from `this.downloadDir`.
+    const unmerged = this.queue.some(
+      (i) =>
+        i.status === 'completed' && this.mergeStatuses.get(i.translationId)?.status !== 'completed'
+    )
+    if (unmerged) return true
     const owed: MergeStatus[] = ['pending', 'deferred', 'merging']
     for (const ms of this.mergeStatuses.values()) {
       if (owed.includes(ms.status)) return true

@@ -302,12 +302,33 @@ describe('storage IPC — set-mode (#443)', () => {
       }
     )
 
-    it('is false for items that are finished or gone', () => {
-      seed(dm, [
-        makeItem({ id: 'a', status: 'completed' }),
-        makeItem({ id: 'b', status: 'cancelled' })
-      ])
+    // A finished item only goes inert once its merge has *completed* — being
+    // `completed` is not enough on its own (see the two cases below it).
+    it('is false for items that are finished and merged, or gone', () => {
+      seed(
+        dm,
+        [makeItem({ id: 'a', status: 'completed' }), makeItem({ id: 'b', status: 'cancelled' })],
+        [[1, 'completed']]
+      )
       expect(dm.hasRootBoundWork()).toBe(false)
+    })
+
+    // The hole the review found, and the state every finished episode sits in
+    // with autoMerge off: no `mergeStatuses` entry at all. `getEpisodeGroups()`
+    // defaults that to 'pending' and `_mergeAll` processes it, rebuilding the
+    // video path from `this.downloadDir` — so the merge pass is still owed and
+    // the item is still root-bound. The pre-fix predicate read this as inert.
+    it('is true for a completed item with no merge entry — the merge pass is still owed', () => {
+      seed(dm, [makeItem({ status: 'completed' })])
+      expect(dm.hasRootBoundWork()).toBe(true)
+    })
+
+    // The other half of it. `_mergeAll` skips only 'completed', 'merging' and
+    // 'deferred', so a 'failed' merge is retried on the very next pass and
+    // re-derives the same path; 'failed' is not a settled state.
+    it('is true for a completed item whose merge failed — _mergeAll retries it', () => {
+      seed(dm, [makeItem({ status: 'completed' })], [[1, 'failed']])
+      expect(dm.hasRootBoundWork()).toBe(true)
     })
 
     it.each(['pending', 'deferred', 'merging'] as const)(
@@ -319,14 +340,15 @@ describe('storage IPC — set-mode (#443)', () => {
     )
 
     it('is false for a merge that is already settled', () => {
-      seed(
-        dm,
-        [makeItem({ status: 'completed' })],
-        [
-          [1, 'completed'],
-          [2, 'failed']
-        ]
-      )
+      seed(dm, [makeItem({ status: 'completed' })], [[1, 'completed']])
+      expect(dm.hasRootBoundWork()).toBe(false)
+    })
+
+    // The boundary the widened rule keeps: `_mergeAll` iterates
+    // `getEpisodeGroups()`, which is built from the queue, so a stray entry
+    // with no item behind it has no path to re-derive.
+    it('is false for a failed merge entry with no item left in the queue', () => {
+      seed(dm, [], [[2, 'failed']])
       expect(dm.hasRootBoundWork()).toBe(false)
     })
 
@@ -423,10 +445,15 @@ describe('storage IPC — set-mode (#443)', () => {
     // cached root, so with the mode flipped it must delete the copy under hot
     // and leave the one under the root the app no longer uses. On `main` the
     // field never moves and this is exactly inverted.
+    //
+    // Note what this one cannot show, and why the test after it exists: the
+    // seed puts a copy under *both* roots and marks the merge `completed`, so
+    // the switch is legitimately allowed and the guard is never consulted. A
+    // real disk has the file under one root only.
     it('deletes the file under the new root on cancel, and leaves the old root alone', async () => {
       const inDl = putFile(dlDir)
       const inHot = putFile(hotDir)
-      seed(dm, [makeItem({ status: 'completed', filename: relPath })])
+      seed(dm, [makeItem({ status: 'completed', filename: relPath })], [[1, 'completed']])
 
       const result = await setMode('advanced')
       expect(result.refusedReason).toBeNull()
@@ -434,6 +461,45 @@ describe('storage IPC — set-mode (#443)', () => {
 
       expect(fs.existsSync(inHot)).toBe(false)
       expect(fs.existsSync(inDl)).toBe(true)
+    })
+
+    // The review's repro, in the shape the test above is blind to. The file
+    // exists only under `dl/` — the real user's disk — and the item is
+    // `completed` with no merge entry at all, which is where every episode
+    // sits with autoMerge off. The switch has to be refused.
+    //
+    // Against the pre-fix predicate `hasRootBoundWork()` is false here: the
+    // switch goes through, `mergeCompleted()` then leaves the status `null`
+    // because its `existsSync` misses under `hot/` and `continue`s, and
+    // `cancel` unlinks at `hot/` and leaves the real file behind.
+    it('refuses the switch for a completed item that was never merged, with the file only under the old root', async () => {
+      const inDl = putFile(dlDir)
+      seed(dm, [makeItem({ status: 'completed', filename: relPath })])
+
+      const result = await setMode('advanced')
+
+      expect(result.refusedReason).toBeTruthy()
+      expect(result.mode).toBe('simple')
+      expect(store.get('storageMode')).toBe('simple')
+      // The manager stayed on the root the file is actually under, so the
+      // merge pass still finds it and `cancel` still reaches it.
+      expect(dm.getActiveDownloadByPath(inDl)).not.toBeNull()
+      expect(dm.getActiveDownloadByPath(join(hotDir, relPath))).toBeNull()
+      dm.cancel('video-1')
+      expect(fs.existsSync(inDl)).toBe(false)
+    })
+
+    // Same hazard reached through a merge that already ran and failed:
+    // `_mergeAll` retries it, so it is still owed a path under the live root.
+    it('refuses the switch for a failed merge, with the file only under the old root', async () => {
+      const inDl = putFile(dlDir)
+      seed(dm, [makeItem({ status: 'completed', filename: relPath })], [[1, 'failed']])
+
+      const result = await setMode('advanced')
+
+      expect(result.refusedReason).toBeTruthy()
+      expect(store.get('storageMode')).toBe('simple')
+      expect(dm.getActiveDownloadByPath(inDl)).not.toBeNull()
     })
 
     it('hands the player a .part path under the new root', async () => {
@@ -446,15 +512,21 @@ describe('storage IPC — set-mode (#443)', () => {
       expect(refused.refusedReason).toBeTruthy()
       expect(dm.getPartialVideoPath(1)?.partPath).toBe(join(dlDir, relPath) + '.part')
 
-      // With the item finished the switch goes through, and the path follows.
-      seed(dm, [makeItem({ status: 'completed', totalBytes: 10, filename: relPath })])
+      // With the item finished *and merged* the switch goes through, and the
+      // path follows. Finished alone is not enough — the merge pass would
+      // still be owed a path under the old root.
+      seed(
+        dm,
+        [makeItem({ status: 'completed', totalBytes: 10, filename: relPath })],
+        [[1, 'completed']]
+      )
       await setMode('advanced')
 
       expect(dm.getPartialVideoPath(1)?.partPath).toBe(join(hotDir, relPath) + '.part')
     })
 
     it('resolves a protocol-handler lookup against the new root', async () => {
-      seed(dm, [makeItem({ status: 'completed', filename: relPath })])
+      seed(dm, [makeItem({ status: 'completed', filename: relPath })], [[1, 'completed']])
 
       await setMode('advanced')
 

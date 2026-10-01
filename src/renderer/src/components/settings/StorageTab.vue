@@ -136,6 +136,8 @@ async function setStorageMode(mode: StorageMode): Promise<void> {
     modeRefusedReason.value = result.refusedReason;
     applyRootsState(result.roots);
     if (!result.refusedReason) showSaved();
+  } catch (err) {
+    modeRefusedReason.value = err instanceof Error ? err.message : String(err);
   } finally {
     modeSwitching.value = false;
   }

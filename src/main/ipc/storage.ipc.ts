@@ -70,11 +70,20 @@ export function register(deps: AppDeps): void {
   /**
    * The reason `storage:set-mode` gives the renderer when it refuses. Prose,
    * not a code: the Storage tab shows it verbatim.
+   *
+   * It names one exit per blocking state, because no single control clears them
+   * all (#447): **Clear done** (`clearCompleted()`) drops `failed`/`cancelled`
+   * items and `completed` ones whose merge is absent, `completed` or `failed`,
+   * but deliberately *keeps* `pending`/`deferred`/`merging` merges and never
+   * touches `queued`/`downloading`/`paused`. Sending someone holding a paused
+   * download to **Clear done** would be a dead end, so owed merges get pointed
+   * at **Merge finished** and unfinished items at finish-or-cancel instead.
    */
   const ROOT_BOUND_REASON =
-    'Downloads are still in progress or waiting to merge. ' +
-    'Finish or cancel them before switching storage mode — they would otherwise ' +
-    'look for their files under the new folder and not find them.'
+    'Downloads are still in progress or waiting to merge — they would otherwise look for ' +
+    'their files under the new folder and not find them. Finish or cancel anything ' +
+    'downloading or paused, use "Merge finished" for episodes still waiting to merge, and ' +
+    '"Clear done" for finished or failed ones, then switch storage mode.'
 
   /**
    * Write `storageMode` and re-sync the download manager with it (#443).

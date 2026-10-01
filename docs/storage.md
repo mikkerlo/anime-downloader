@@ -58,7 +58,7 @@ In advanced mode, `file:check-episodes`, `file:delete-episode`, and `downloaded-
 
 Two caveats on the skip, both accepted rather than designed around:
 
-- It is all-or-nothing per call, so genuinely stale entries survive too and phantom ⬇ rows can accumulate until the root returns. An absent drive comes back on its own; a `downloadDir` the user **deleted** after switching to advanced mode does not, and that profile keeps the GC off until the setting is cleared. Hence the log line naming the root.
+- It is all-or-nothing per call, so genuinely stale entries survive too and phantom ⬇ rows can accumulate until the root returns. An absent drive comes back on its own; a root the user **deleted** does not — a `downloadDir` removed after switching to advanced mode, or a `hotStorageDir`/`coldStorageDir` left behind after switching back to simple. There is no "clear" control for any of the three, and each picker is only shown in one mode, so the recovery is: switch to the mode that shows the stale root's picker, re-point it at a directory that exists, switch back. Hence the log line naming the root. #440 tracks a real escape hatch.
 - On Linux, a `coldStorageDir` that *is* an fstab/SMB mountpoint still exists as an empty directory after unmount, so `fs.existsSync` passes and the skip does not fire. Point `coldStorageDir` at a subdirectory **below** the mountpoint to get the guard. Windows (the drive letter disappears) and udisks auto-mounts under `/media/<user>/` do not have this problem.
 
 ## File Layout on Disk

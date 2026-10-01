@@ -75,7 +75,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `download:merge` | invoke | Trigger ffmpeg merge for completed downloads |
 | `download:scan-merge` | invoke | Scan folders and merge all unmerged files |
 | `download:fix-metadata` | invoke | Re-mux MKVs to fix subtitle metadata |
-| `download:pick-dir` | invoke | Open folder picker dialog |
+| `download:pick-dir` | invoke | Open folder picker dialog. Writes `downloadDir` and then re-syncs `DownloadManager` through `getDownloadDir()` — **not** with the picked path, which advanced mode treats only as the fallback behind `hotStorageDir` (#443) |
 | `download:progress` | send | Real-time download progress broadcast (500ms) |
 | `scan-merge:progress` | send | Scan-merge per-file progress |
 | `fix-metadata:progress` | send | Fix-metadata per-file progress |
@@ -145,7 +145,8 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `auto-dl:enqueued` | send | Broadcast each time the tick enqueues an episode: `{ animeId, episodeInt, animeName }` |
 | `storage:get-missing-root` | invoke | Returns `StorageRootsState`: the three **raw stored** root paths (`''` when unset — unlike `get-setting`, which resolves `downloadDir` through `getDownloadDir()`), `autoMoveToCold`, and `missingRoot` — the first configured root absent from disk, which disables the `downloadedEpisodes` GC (#421). Read-only |
 | `storage:clear-root` | invoke | Clear one of `downloadDir` / `hotStorageDir` / `coldStorageDir` (#440) — the escape hatch for a root that is gone for good. Writes `''` **and** re-syncs `DownloadManager`'s cached download directory via `setDownloadDir(getDownloadDir())`, which is why this is not a `set-setting` call: without it the next download still writes to the cleared root and `mkdirSync` recreates it. Clearing `coldStorageDir` also forces `autoMoveToCold` off. Returns the fresh `StorageRootsState` |
-| `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory |
+| `storage:set-mode` | invoke | Write `storageMode` (`'simple'` / `'advanced'`) and re-sync `DownloadManager` with it (#443). Not a `set-setting` call for the same reason `storage:clear-root` is not: the mode is an input to `getDownloadDir()`, so a bare store write moves the **effective** root and leaves the manager's cached one behind until the next restart. **Refuses** the switch while `downloadManager.hasRootBoundWork()` holds — any item `queued`/`downloading`/`paused`/`failed`, any merge `pending`/`deferred`/`merging`, or any `completed` item whose merge has not itself completed (a missing entry and a `failed` one are both still owed a `_mergeAll` pass) — writing neither the store nor the manager. Returns `StorageSetModeResult`: the mode now in force (the previous one when refused), a `refusedReason` the renderer shows verbatim, and the same `StorageRootsState` the clear reports |
+| `storage:pick-hot-dir` | invoke | Open folder picker for hot storage directory. Writes `hotStorageDir` and then re-syncs the manager through `getDownloadDir()` — **not** with the picked path, which is only the effective root in advanced mode (#443) |
 | `storage:pick-cold-dir` | invoke | Open folder picker for cold storage directory |
 | `storage:move-to-cold` | invoke | Move all finished files from hot to cold storage |
 | `storage:move-to-cold-progress` | send | Progress broadcast for move operation |

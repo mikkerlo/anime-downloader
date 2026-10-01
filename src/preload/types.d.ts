@@ -118,6 +118,7 @@ interface Api {
   // Storage
   storageGetMissingRoot: () => Promise<StorageRootsState>
   storageClearRoot: (key: StorageRootKey) => Promise<StorageRootsState>
+  storageSetMode: (mode: StorageMode) => Promise<StorageSetModeResult>
   storagePickHotDir: () => Promise<string | null>
   storagePickColdDir: () => Promise<string | null>
   storageMoveToCold: () => Promise<{ moved: number; failed: string[] }>

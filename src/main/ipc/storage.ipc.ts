@@ -2,14 +2,29 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
 
-export function register({
-  store,
-  downloadManager,
-  coldStorageService,
-  clearFileCache,
-  broadcast
-}: AppDeps): void {
+/**
+ * Re-point `DownloadManager` at the root `getDownloadDir()` now resolves to.
+ *
+ * The single place the mode→root resolution is allowed to happen (#443). The
+ * manager keeps its download directory in a cached field, so every writer of a
+ * root-affecting key has to follow it here: `storage:set-mode`,
+ * `storage:clear-root`, and both folder pickers (`storage:pick-hot-dir` and
+ * `download:pick-dir`, which lives in `downloads.ipc.ts` and imports this).
+ *
+ * The pickers used to push their raw picked directory straight into the manager.
+ * That agreed with `getDownloadDir()` only because the Storage tab hides each
+ * picker outside its own mode — picking a hot dir with `storageMode` still
+ * `simple` would have moved the manager somewhere the scanner never looks.
+ * Routing them through the resolver instead makes the agreement structural.
+ */
+export function resyncDownloadDir({ downloadManager, coldStorageService }: AppDeps): void {
+  downloadManager.setDownloadDir(coldStorageService.getDownloadDir())
+}
+
+export function register(deps: AppDeps): void {
+  const { store, downloadManager, coldStorageService, clearFileCache, broadcast } = deps
   const ROOT_KEYS: readonly StorageRootKey[] = ['downloadDir', 'hotStorageDir', 'coldStorageDir']
+  const resync = (): void => resyncDownloadDir(deps)
 
   function rootsState(): StorageRootsState {
     return {
@@ -48,8 +63,58 @@ export function register({
     // new cold dir is picked. The mover already no-ops on an empty cold dir, so
     // this is about a coherent stored state, not about safety.
     if (key === 'coldStorageDir') store.set('autoMoveToCold', false)
-    downloadManager.setDownloadDir(coldStorageService.getDownloadDir())
+    resync()
     return rootsState()
+  })
+
+  /**
+   * The reason `storage:set-mode` gives the renderer when it refuses. Prose,
+   * not a code: the Storage tab shows it verbatim.
+   *
+   * It names one exit per blocking state, because no single control clears them
+   * all (#447): **Clear done** (`clearCompleted()`) drops `failed`/`cancelled`
+   * items and `completed` ones whose merge is absent, `completed` or `failed`,
+   * but deliberately *keeps* `pending`/`deferred`/`merging` merges and never
+   * touches `queued`/`downloading`/`paused`. Sending someone holding a paused
+   * download to **Clear done** would be a dead end, so owed merges get pointed
+   * at **Merge finished** and unfinished items at finish-or-cancel instead.
+   */
+  const ROOT_BOUND_REASON =
+    'Downloads are still in progress or waiting to merge — they would otherwise look for ' +
+    'their files under the new folder and not find them. Finish or cancel anything ' +
+    'downloading or paused, use "Merge finished" for episodes still waiting to merge, and ' +
+    '"Clear done" for finished or failed ones, then switch storage mode.'
+
+  /**
+   * Write `storageMode` and re-sync the download manager with it (#443).
+   *
+   * A channel of its own rather than `SET_SETTING('storageMode', …)`, for the
+   * reason `storage:clear-root` is one: the mode is an input to
+   * `getDownloadDir()`, so writing it moves the *effective* root while the
+   * manager's cached field stays where it was. Until the next restart — which
+   * re-reads the root at construction — the manager keeps resolving paths under
+   * the root the user just stopped using, and `mkdirSync(…, { recursive: true })`
+   * recreates it rather than failing, so new files land where the UI in the new
+   * mode never scans.
+   *
+   * The switch is **refused**, not applied-and-patched, while
+   * `hasRootBoundWork()` holds. Blocking rather than pinning a root per item is
+   * #443's decision: the alternative changes `DownloadItem` and the persisted
+   * queue format. Refusing writes nothing — not the store, not the manager —
+   * and reports the mode still in force, so the renderer has something
+   * unambiguous to adopt.
+   */
+  ipcMain.handle(CHANNELS.STORAGE_SET_MODE, (_event, mode: StorageMode): StorageSetModeResult => {
+    const current = ((store.get('storageMode') as StorageMode) || 'simple') as StorageMode
+    if (mode !== 'simple' && mode !== 'advanced') {
+      return { mode: current, refusedReason: null, roots: rootsState() }
+    }
+    if (mode !== current && downloadManager.hasRootBoundWork()) {
+      return { mode: current, refusedReason: ROOT_BOUND_REASON, roots: rootsState() }
+    }
+    store.set('storageMode', mode)
+    resync()
+    return { mode, refusedReason: null, roots: rootsState() }
   })
 
   ipcMain.handle(CHANNELS.STORAGE_PICK_HOT_DIR, async () => {
@@ -62,7 +127,9 @@ export function register({
     if (result.canceled || result.filePaths.length === 0) return null
     const dir = result.filePaths[0]
     store.set('hotStorageDir', dir)
-    downloadManager.setDownloadDir(dir)
+    // Not `setDownloadDir(dir)`: in simple mode `getDownloadDir()` ignores
+    // `hotStorageDir` entirely, and the manager has to follow the resolver.
+    resync()
     return dir
   })
 

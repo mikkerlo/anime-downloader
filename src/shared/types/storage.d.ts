@@ -59,6 +59,32 @@ interface StorageRootsState {
   missingRoot: string | null
 }
 
+/** The `storageMode` setting: one root, or a hot/cold split. */
+type StorageMode = 'simple' | 'advanced'
+
+/**
+ * Reply of `CHANNELS.STORAGE_SET_MODE` (#443).
+ *
+ * The mode is not written through `set-setting`, because the effective download
+ * root is a function of it: `getDownloadDir()` answers `hotStorageDir` in
+ * advanced mode and `downloadDir` in simple mode, while `DownloadManager` holds
+ * its root in a cached field. A bare store write moves the former and not the
+ * latter, and the manager keeps re-deriving paths under the root the user just
+ * left until the app restarts.
+ *
+ * `mode` is the mode **now in force**, which is the previous one whenever
+ * `refusedReason` is set — the switch is refused while the manager still has
+ * work whose paths it will re-derive later, so the renderer adopts this value
+ * rather than letting its own `ref` flip optimistically. `roots` carries the
+ * same `StorageRootsState` the clear and the getter report, so the Storage tab
+ * re-adopts root state here exactly as it already does after a clear.
+ */
+interface StorageSetModeResult {
+  mode: StorageMode
+  refusedReason: string | null
+  roots: StorageRootsState
+}
+
 interface StorageEpisodeUsage {
   episodeInt: string
   files: {

@@ -337,3 +337,168 @@ describe('StorageTab — clearing a stale storage root (#440)', () => {
     expect(wrapper.text()).not.toContain('Storage folder not found')
   })
 })
+
+// The Storage tab's half of #443. The mode toggle used to persist through
+// `watch(storageMode) → autoSave('storageMode', …)`, a plain `set-setting` that
+// no main-side code reacted to — so the download manager kept writing to the
+// root the user had just left. It now goes through `storage:set-mode`, which can
+// also refuse, and refusing is why the `ref` may not flip on the click.
+describe('StorageTab — switching storage mode (#443)', () => {
+  const EMPTY_ROOTS: StorageRootsState = {
+    downloadDir: '',
+    hotStorageDir: '',
+    coldStorageDir: '',
+    autoMoveToCold: false,
+    missingRoot: null
+  }
+
+  const api = {
+    getSetting: vi.fn(async (_key: string): Promise<unknown> => null),
+    setSetting: vi.fn(async () => undefined),
+    storageGetMissingRoot: vi.fn(async () => EMPTY_ROOTS),
+    storageSetMode: vi.fn(async () => ({
+      mode: 'advanced' as StorageMode,
+      refusedReason: null as string | null,
+      roots: EMPTY_ROOTS
+    })),
+    cleanupGetSnoozed: vi.fn(async () => ({}))
+  }
+
+  const apiProxy = new Proxy(api as unknown as Record<string, unknown>, {
+    get: (target, prop) => (prop in target ? target[prop as string] : () => () => {})
+  })
+
+  async function mountTab(
+    roots: Partial<StorageRootsState> = {},
+    storageMode: StorageMode = 'simple'
+  ) {
+    api.storageGetMissingRoot.mockResolvedValue({ ...EMPTY_ROOTS, ...roots })
+    api.getSetting.mockImplementation(async (key: string) =>
+      key === 'storageMode' ? storageMode : null
+    )
+    const wrapper = mount(StorageTab)
+    await flushPromises()
+    return wrapper
+  }
+
+  const modeButton = (wrapper: VueWrapper, label: 'Simple' | 'Advanced') =>
+    wrapper.findAll('.set-seg button').find((b) => b.text() === label)!
+
+  const activeMode = (wrapper: VueWrapper) =>
+    wrapper
+      .findAll('.set-seg button')
+      .find((b) => b.classes('on'))!
+      .text()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(window as unknown as { api: unknown }).api = apiProxy
+    api.storageGetMissingRoot.mockResolvedValue(EMPTY_ROOTS)
+    api.cleanupGetSnoozed.mockResolvedValue({})
+  })
+
+  // The behaviour-difference case: `setSetting('storageMode', 'advanced')` is
+  // what lands here on `main`.
+  it('switches through storageSetMode, never through setSetting', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl', hotStorageDir: '/hot' })
+    api.storageSetMode.mockResolvedValue({
+      mode: 'advanced',
+      refusedReason: null,
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot' }
+    })
+
+    await modeButton(wrapper, 'Advanced').trigger('click')
+    await flushPromises()
+
+    expect(api.storageSetMode).toHaveBeenCalledTimes(1)
+    expect(api.storageSetMode).toHaveBeenCalledWith('advanced')
+    expect(api.setSetting).not.toHaveBeenCalled()
+    expect(activeMode(wrapper)).toBe('Advanced')
+  })
+
+  it('does not call the handler for the mode already in force', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+
+    await modeButton(wrapper, 'Simple').trigger('click')
+    await flushPromises()
+
+    expect(api.storageSetMode).not.toHaveBeenCalled()
+  })
+
+  // Refusing is the half an optimistic `ref` would hide: the segmented control
+  // has to stay on the mode main kept, not the one that was clicked.
+  it('keeps the old mode and shows the reason when main refuses', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl', hotStorageDir: '/hot' })
+    api.storageSetMode.mockResolvedValue({
+      mode: 'simple',
+      refusedReason: 'Downloads are still in progress or waiting to merge.',
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot' }
+    })
+
+    await modeButton(wrapper, 'Advanced').trigger('click')
+    await flushPromises()
+
+    expect(activeMode(wrapper)).toBe('Simple')
+    expect(wrapper.text()).toContain('Downloads are still in progress or waiting to merge.')
+    // The advanced-mode rows must not be on screen either — the refusal is not
+    // a half-applied switch.
+    expect(wrapper.text()).not.toContain('Hot storage (active downloads)')
+    expect(api.setSetting).not.toHaveBeenCalled()
+  })
+
+  it('clears the refusal once a later switch is accepted', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl', hotStorageDir: '/hot' })
+    api.storageSetMode.mockResolvedValue({
+      mode: 'simple',
+      refusedReason: 'Downloads are still in progress or waiting to merge.',
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot' }
+    })
+    await modeButton(wrapper, 'Advanced').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Downloads are still in progress')
+
+    api.storageSetMode.mockResolvedValue({
+      mode: 'advanced',
+      refusedReason: null,
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot' }
+    })
+    await modeButton(wrapper, 'Advanced').trigger('click')
+    await flushPromises()
+
+    expect(activeMode(wrapper)).toBe('Advanced')
+    expect(wrapper.text()).not.toContain('Downloads are still in progress')
+  })
+
+  it('adopts the root state the handler returns, as the clear already does', async () => {
+    const wrapper = await mountTab({ downloadDir: '/dl' })
+    api.storageSetMode.mockResolvedValue({
+      mode: 'advanced',
+      refusedReason: null,
+      roots: { ...EMPTY_ROOTS, downloadDir: '/dl', hotStorageDir: '/hot', missingRoot: '/gone' }
+    })
+
+    await modeButton(wrapper, 'Advanced').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('/hot')
+    expect(wrapper.text()).toContain('Storage folder not found: /gone')
+  })
+
+  // The pre-existing display bug the review asked to fold in. `getDownloadDir()`
+  // falls through hot → downloadDir → fallback, so a user who switches to
+  // advanced without picking a hot dir is still downloading into `downloadDir` —
+  // and the row used to tell them "Default (Downloads/anime-dl)".
+  it('shows the downloadDir fall-through in the hot row, not "Default"', async () => {
+    const wrapper = await mountTab({ downloadDir: '/a', hotStorageDir: '' }, 'advanced')
+
+    const hotRow = wrapper.text()
+    expect(hotRow).toContain('/a')
+    expect(hotRow).not.toContain('Default (Downloads/anime-dl)')
+  })
+
+  it('still says "Default" in the hot row when no root is set at all', async () => {
+    const wrapper = await mountTab({ downloadDir: '', hotStorageDir: '' }, 'advanced')
+
+    expect(wrapper.text()).toContain('Default (Downloads/anime-dl)')
+  })
+})

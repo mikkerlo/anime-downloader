@@ -748,6 +748,63 @@ export class DownloadManager {
   }
 
   /**
+   * Does the manager still hold work whose on-disk paths it will re-derive from
+   * its cached download directory *later* (#443)? `storage:set-mode` refuses a
+   * storage-mode switch while this is true.
+   *
+   * A download that is running at the moment of a switch is not the hazard, and
+   * the issue was wrong to say so: `startDownload` resolves `filePath` and
+   * `partPath` into locals once and hands those same strings to
+   * `finishDownloadedFile`, so an in-flight item finishes cleanly under the root
+   * it started on. What breaks is every path rebuilt from the field after the
+   * move — `_mergeAll` looks for a finished video under the new root and its
+   * `existsSync` miss `continue`s silently, so the episode never merges;
+   * `finalizeDeferred` renames a `.part` that is not there; a `paused` or
+   * `failed` item that resumes stats its `.part` under the new root, finds
+   * nothing, and re-downloads from byte 0 while orphaning the old one; `cancel`
+   * and `restart` unlink at the new root and miss the real files; and
+   * `getActiveDownloadByPath`/`getPartialVideoPath` hand the player a path that
+   * does not exist, breaking watch-while-downloading.
+   *
+   * So the states that matter are the ones that outlive the switch and then go
+   * looking: anything not yet finished (`queued`, `downloading`, `paused`,
+   * `failed` — the last two because they survive a restart through
+   * `queue.json`), and any merge still owed work (`pending`, `deferred`,
+   * `merging`).
+   *
+   * A `completed` item is *not* inert on its own: it stays root-bound until its
+   * merge has actually **completed**. `getEpisodeGroups()` defaults a missing
+   * `mergeStatuses` entry to `'pending'`, and `_mergeAll` skips only
+   * `'completed'`, `'merging'` and `'deferred'` — so a finished video with no
+   * merge entry (autoMerge off, or nothing has triggered a pass yet) and one
+   * whose merge is `'failed'` are both still picked up, and both rebuild
+   * `path.join(this.downloadDir, group.video.filename)`. Under a moved root that
+   * `existsSync` misses and `continue`s silently, which is the first hazard this
+   * guard exists to stop. Only `cancelled` items are inert unconditionally.
+   *
+   * One predicate rather than a per-item root (#443's decision): pinning the
+   * root on each `DownloadItem` would change the persisted queue format, which
+   * is a bigger change than the defect warrants.
+   */
+  hasRootBoundWork(): boolean {
+    const pending: DownloadStatus[] = ['queued', 'downloading', 'paused', 'failed']
+    if (this.queue.some((i) => pending.includes(i.status))) return true
+    // A finished item is still owed a merge pass until its merge succeeds: no
+    // entry (autoMerge off) and a `failed` merge are both picked up by
+    // `_mergeAll`, which rebuilds the path from `this.downloadDir`.
+    const unmerged = this.queue.some(
+      (i) =>
+        i.status === 'completed' && this.mergeStatuses.get(i.translationId)?.status !== 'completed'
+    )
+    if (unmerged) return true
+    const owed: MergeStatus[] = ['pending', 'deferred', 'merging']
+    for (const ms of this.mergeStatuses.values()) {
+      if (owed.includes(ms.status)) return true
+    }
+    return false
+  }
+
+  /**
    * Finish episodes whose finalize (.part → final rename, then merge) was
    * deferred because the player held the file (#63). Renames what is no
    * longer locked and flips its status to 'pending'; returns the

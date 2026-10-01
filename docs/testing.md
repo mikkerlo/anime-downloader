@@ -811,13 +811,20 @@ through, on the argument that it moves no threshold (the deficit is still 20) an
 that it moves the count in the unflattering direction.
 
 The count is **pinned exactly**, following `UNCHECKABLE_PIN` rather than
-`SUSPICIOUS_LANDING_PIN`, and the choice is about the instruction the pin carries
-to whoever next reds it. A landing pin of 0 says _what you just added is a
-defect, repair it_. This pin is non-zero because the lines under it are real,
-unrepaired, and not repairable here: rewrapping them reflows `docs/testing.md`
-and renumbers the very anchors the gate above pins. So it says _bound the
-blindness_ instead — a new ragged line reds the build and the fix is to rewrap
-the line you just wrote, while lowering the pin is what a deliberate repair does.
+`SUSPICIOUS_LANDING_PIN`, and the choice is about the instruction the pin
+carries to whoever next reds it. It is not the instruction a _new_ member gets —
+there both pins say the same thing, _repair what you just added_: a new ragged
+line reds the build and the fix is to rewrap the line you just wrote, exactly as
+the fix for a new uncheckable anchor is to spell its path out rather than raise
+the number. What differs is what the members already under the pin are, and so
+which way the number is allowed to move. Every landing under
+`SUSPICIOUS_LANDING_PIN` is a deliberate exception that carries its own written
+argument, so that pin only ever rises, by what a change adds, and each rise is
+paid for by making that argument. Every line under this one is a real defect
+left unrepaired, and most of them sit in `docs/testing.md`, where rewrapping
+one reflows the file and renumbers the very anchors the gate above pins — so
+this pin _bounds a known blindness_, and it moves one way only: down, when one
+of those lines is genuinely repaired.
 **Never re-pin to clear a red.** A number moved to match whatever the tree
 happens to say measures nothing at all.
 

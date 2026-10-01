@@ -819,11 +819,12 @@ the fix for a new uncheckable anchor is to spell its path out rather than raise
 the number. What differs is what the members already under the pin are, and so
 which way the number is allowed to move. Every landing under
 `SUSPICIOUS_LANDING_PIN` is a deliberate exception that carries its own written
-argument, so that pin only ever rises, one member at a time, and each rise is
+argument, so that pin only ever rises, by what a change adds, and each rise is
 paid for by making that argument. Every line under this one is a real defect
-left unrepaired, because rewrapping it reflows `docs/testing.md` and renumbers
-the very anchors the gate above pins — so this pin _bounds a known blindness_,
-and it moves one way only: down, when one of those lines is genuinely repaired.
+left unrepaired, and most of them sit in `docs/testing.md`, where rewrapping
+one reflows the file and renumbers the very anchors the gate above pins — so
+this pin _bounds a known blindness_, and it moves one way only: down, when one
+of those lines is genuinely repaired.
 **Never re-pin to clear a red.** A number moved to match whatever the tree
 happens to say measures nothing at all.
 

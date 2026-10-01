@@ -74,12 +74,12 @@ import { basename, extname } from 'node:path'
 // spell its path out rather than raise the number. The difference is in the
 // members already under them. Every landing under SUSPICIOUS_LANDING_PIN is a
 // deliberate exception carrying its own written argument, so that pin only ever
-// rises, one member at a time, and each rise is paid for by making that
-// argument. Every line this one counts is a real defect left unrepaired,
-// because rewrapping it reflows docs/testing.md and renumbers the very citation
-// anchors the sibling gate pins — which is what the issue's Risks section says
-// not to do. So it bounds a known blindness, and it moves one way only: DOWN,
-// when one of those lines is genuinely repaired.
+// rises, by what a change adds, and each rise is paid for by making that
+// argument. Every line this one counts is a real defect left unrepaired, and
+// most of them sit in docs/testing.md, where rewrapping one reflows the file
+// and renumbers the very citation anchors the sibling gate pins — which is what
+// the issue's Risks section says not to do. So it bounds a known blindness, and
+// it moves one way only: DOWN, when one of those lines is genuinely repaired.
 //
 // NEVER RE-PIN TO CLEAR A RED. A number moved to match whatever the tree
 // happens to say measures nothing, and this one is the only thing between the

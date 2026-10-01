@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
-import { ROOT_KEYS } from './storage.ipc'
+import { ROOT_KEYS } from '@shared/storage-roots'
 import type { AppDeps } from './index'
 
 /**

@@ -223,6 +223,26 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(svcWithDirs({ coldStorageDir: away }).svc.missingConfiguredRoot()).toBe(away)
   })
 
+  it('missingConfiguredRoot returns the first missing root in ROOT_KEYS order', () => {
+    // Two roots away at once, which the case above never exercises — and the
+    // only shape that can see a reorder of `ROOT_KEYS` (#454). `hotStorageDir`
+    // precedes `coldStorageDir` in that array, so the hot one is the answer;
+    // swap the array and this test is what reds. The order is load-bearing
+    // beyond this function: `StorageTab.vue` maps the returned path back to a
+    // key by walking the same list, so the notice's Clear button would start
+    // naming a different root.
+    const hotAway = join(tmpRoot, 'hot-away')
+    const coldAway = join(tmpRoot, 'cold-away')
+    const { svc } = svcWithDirs({ hotStorageDir: hotAway, coldStorageDir: coldAway })
+    expect(svc.missingConfiguredRoot()).toBe(hotAway)
+
+    // The mirror: with only the cold one away the answer moves, so the test
+    // above is reading the order rather than just the first truthy key.
+    expect(
+      svcWithDirs({ hotStorageDir: hotDir, coldStorageDir: coldAway }).svc.missingConfiguredRoot()
+    ).toBe(coldAway)
+  })
+
   it('pruneDownloadedEpisode is a no-op while a configured root is away', () => {
     const away = join(tmpRoot, 'away')
     const entries = {

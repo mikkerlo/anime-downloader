@@ -1026,10 +1026,10 @@ export function report(r, pins = {}) {
     )
   }
 
-  // A HARD FAILURE WITH NO PIN, unlike suspicious landings at 3. A pin states a
-  // legitimate steady-state population, and there is none here: an anchor that
-  // names the wrong line is wrong, and the repair is a number this block has
-  // already worked out and printed.
+  // A HARD FAILURE WITH NO PIN, unlike suspicious landings, which carry one.
+  // A pin states a legitimate steady-state population, and there is none here:
+  // an anchor that names the wrong line is wrong, and the repair is a number
+  // this block has already worked out and printed.
   if (r.drift.length > 0) {
     ok = false
     err.push('', `${r.drift.length} anchor(s) name a line whose content moved in this branch:`, '')

@@ -477,13 +477,21 @@ fenced `}` carries code semantics and that markup is not cited deliberately.
 Four pinned counts are what give that teeth, for the reasons in *Structural
 tests* above — two exact, one a floor and one a ceiling:
 
-- **Suspicious landings, pinned at 0.** Every such landing on this tree was
+- **Suspicious landings, pinned exactly.** Every such landing on this tree was
   stale: #336 repaired all thirteen, and #344 repaired the two the narrowing
   above exposed — both anchors from
   `test/services/syncplay-mirror-election.test.ts` into `docs/syncplay.md`, one
-  81 lines behind its subject and one 119. So the measured false-positive rate
-  is zero. A deliberate landing raises the pin by one, with its reason in the
-  commit message. What the pin does **not** cover is an anchor landing on a live
+  81 lines behind its subject and one 119. So the heuristic's measured
+  false-positive rate on that population is zero, and the pin began there. What
+  it holds now is the deliberate landings that followed: #390's three, all
+  anchors in the `blankCommentsAndStrings` docstring in the two-peer loop test,
+  whose subject *is* which `goToEpisode(` matches are comments rather than call
+  sites, so its worked examples can only be comment lines; plus #384's one, the
+  premise correction in the conformance-harness header, which cites an
+  *absence* and so has no code line to point at. The comment block above
+  `SUSPICIOUS_LANDING_PIN` enumerates each of them. A further deliberate landing
+  raises the pin by the landings it adds, with its reason in the commit
+  message. What the pin does **not** cover is an anchor landing on a live
   code line: that is checked for existence only. The four same-file anchors in
   the `suspiciousLanding()` comment are the clearest case — all four target
   `if (…)` lines, so while they are right no predicate here has anything to say

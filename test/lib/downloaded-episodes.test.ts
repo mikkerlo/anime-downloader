@@ -139,4 +139,56 @@ describe('persistDownloadedEpisode', () => {
 
     expect(Object.keys(store.entries)).toEqual(['100:3'])
   })
+
+  // The helper has no try/catch of its own, and the #428 hook policy depends on
+  // that: a real store failure has to reach `DownloadManager.dispatchHook` for
+  // the queue row to be marked. Pinned here so a well-meaning `try { … } catch`
+  // added inside the helper — which would silently restore the swallow this
+  // issue removed, and make the caller's throw path dead code — fails a test.
+  //
+  // Both throwing points are electron-store reads/writes: `set` is a
+  // synchronous whole-file atomic JSON write, so ENOSPC, EACCES on a locked
+  // userData dir, EROFS and serialization errors all come out of it.
+  describe('a real store failure propagates, it is not swallowed (#428)', () => {
+    it('propagates a throw from set', () => {
+      const store: DownloadedEpisodesStore = {
+        get: () => ({}),
+        set: () => {
+          throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+        }
+      }
+
+      expect(() => persistDownloadedEpisode(store, source())).toThrow(/ENOSPC/)
+    })
+
+    it('propagates a throw from get', () => {
+      const store: DownloadedEpisodesStore = {
+        get: () => {
+          throw new Error('EACCES: permission denied')
+        },
+        set: () => {
+          throw new Error('set should never be reached')
+        }
+      }
+
+      expect(() => persistDownloadedEpisode(store, source())).toThrow(/EACCES/)
+    })
+
+    it('never reaches the store at all for an unkeyable item, so it cannot fail', () => {
+      // The distinction the policy rests on: `false` means "could never have
+      // been keyed", and that verdict is reached before any store call, so it
+      // is not a disguised failure and must not mark the row.
+      const store: DownloadedEpisodesStore = {
+        get: () => {
+          throw new Error('should not be read')
+        },
+        set: () => {
+          throw new Error('should not be written')
+        }
+      }
+
+      expect(persistDownloadedEpisode(store, source({ animeId: 0 }))).toBe(false)
+      expect(persistDownloadedEpisode(store, source({ episodeInt: '' }))).toBe(false)
+    })
+  })
 })

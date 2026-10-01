@@ -137,7 +137,16 @@ export class DownloadManager {
   private api: SmotretApi
   private getSpeedLimit: () => number
   private getConcurrentLimit: () => number
-  private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void) | null = null
+  // The four consumer slots all return `void | Promise<void>` on purpose
+  // (#428). They used to be typed `=> void`, which did not stop a consumer from
+  // being declared `async` — and then the disposition of a thrown error
+  // depended on that keyword: a sync throw hit whatever try happened to
+  // surround the dispatch site, while a rejection from an un-awaited call
+  // escaped as an unhandled rejection. `dispatchHook` now handles both shapes
+  // identically, and the widened type says so instead of leaving it to the far
+  // side of the slot.
+  private episodeCompleteCallback: ((info: EpisodeCompleteInfo) => void | Promise<void>) | null =
+    null
   private mergeCompleteCallback:
     | ((info: {
         animeName: string
@@ -153,10 +162,12 @@ export class DownloadManager {
          * author-scoped, and back then swept sibling translations (#414, #416).
          */
         mkvFilename: string
-      }) => void)
+      }) => void | Promise<void>)
     | null = null
-  private queueCompleteCallback: (() => void) | null = null
-  private videoDownloadedCallback: ((filePath: string, item: DownloadItem) => void) | null = null
+  private queueCompleteCallback: (() => void | Promise<void>) | null = null
+  private videoDownloadedCallback:
+    | ((filePath: string, item: DownloadItem) => void | Promise<void>)
+    | null = null
   private merging = false
   private activeFfmpegCmd: ReturnType<typeof Ffmpeg> | null = null
   private activeMergeTranslationId: number | null = null
@@ -252,7 +263,7 @@ export class DownloadManager {
     }
   }
 
-  onEpisodeComplete(callback: (info: EpisodeCompleteInfo) => void): void {
+  onEpisodeComplete(callback: (info: EpisodeCompleteInfo) => void | Promise<void>): void {
     this.episodeCompleteCallback = callback
   }
 
@@ -264,17 +275,66 @@ export class DownloadManager {
       episodeLabel: string
       /** Download-dir-relative path of the merged `.mkv` — see the field (#414). */
       mkvFilename: string
-    }) => void
+    }) => void | Promise<void>
   ): void {
     this.mergeCompleteCallback = callback
   }
 
-  onQueueComplete(callback: () => void): void {
+  onQueueComplete(callback: () => void | Promise<void>): void {
     this.queueCompleteCallback = callback
   }
 
-  onVideoDownloaded(callback: (filePath: string, item: DownloadItem) => void): void {
+  onVideoDownloaded(
+    callback: (filePath: string, item: DownloadItem) => void | Promise<void>
+  ): void {
     this.videoDownloadedCallback = callback
+  }
+
+  /**
+   * The one error policy for all four consumer hooks (#428).
+   *
+   * Before this the boundary had four different dispositions and which one a
+   * failure got depended on whether the consumer happened to be declared
+   * `async`: `videoDownloaded` swallowed a sync throw into a `console.warn`
+   * while its own status said 'completed'; a sync throw out of the
+   * merge-complete consumer would have fallen into the ffmpeg catch, which
+   * `unlinkSync`es the freshly merged `.mkv` and records the merge as failed;
+   * and the two timer dispatches turned a throw into an unhandled rejection or
+   * an uncaught exception raised from a `setTimeout` in the main process.
+   *
+   * So: call the consumer inside a `try`, and if it handed back a thenable,
+   * route its rejection into the same handler. Nothing is awaited — the merge
+   * consumer awaits a cold-storage move, and awaiting it here would hold
+   * `this.merging`, and the whole merge queue behind it, for a multi-GB
+   * cross-drive copy.
+   *
+   * `item`, when given, is marked with `error` so the queue row stops claiming
+   * a clean completion. Only `videoDownloaded` has an item to mark; the other
+   * three hooks carry no queue row (see `docs/data-flow.md`).
+   *
+   * This method must never throw. Its `videoDownloaded` call site sits inside
+   * `startDownload`'s try, whose catch re-queues with exponential backoff — an
+   * escape from here would re-download a video that is already on disk.
+   */
+  private dispatchHook(name: string, fn: () => void | Promise<void>, item?: DownloadItem): void {
+    const handle = (err: unknown): void => {
+      console.warn(`[download] ${name} callback failed:`, err)
+      if (!item) return
+      try {
+        item.error = `Post-download step failed: ${err instanceof Error ? err.message : String(err)}`
+        this.schedulePersist()
+      } catch (inner) {
+        console.warn(`[download] could not record the ${name} failure on the item:`, inner)
+      }
+    }
+    try {
+      const result = fn()
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        void (result as Promise<void>).catch(handle)
+      }
+    } catch (err) {
+      handle(err)
+    }
   }
 
   setDownloadDir(dir: string): void {
@@ -809,6 +869,11 @@ export class DownloadManager {
           }
         : undefined
 
+      // Gates the merge-complete dispatch below the try (#428). A plain
+      // fall-through after the catch would fire the hook for a failed or
+      // cancelled merge as well, so the success path has to say so explicitly.
+      let merged = false
+
       try {
         await this.runFfmpeg({
           ffmpegPath,
@@ -838,22 +903,9 @@ export class DownloadManager {
             /* ignore */
           }
         }
-        // Below the unlinks on purpose (#414): the handler's cold move
-        // snapshots the hot directory, so firing above them let the move
-        // relocate a source the merge was about to delete and then die on one
-        // it had already deleted. Still fire-and-forget — awaiting it would
-        // hold `this.merging` and the whole merge queue behind a multi-GB
-        // cross-drive copy that the between-groups `mergeCancelled` check
-        // cannot interrupt.
-        if (this.mergeCompleteCallback) {
-          this.mergeCompleteCallback({
-            animeName: group.animeName,
-            animeId: group.animeId,
-            episodeInt: group.episodeInt,
-            episodeLabel: group.episodeLabel,
-            mkvFilename
-          })
-        }
+        // The last statement of the success path, so the dispatch below the try
+        // still lands after the unlinks (#414/#431).
+        merged = true
       } catch (err) {
         // Clean up partial output file
         try {
@@ -875,6 +927,46 @@ export class DownloadManager {
           this.schedulePersist()
           console.error(`[merge] Failed: ${mkvFilename} - ${msg}`)
         }
+      }
+
+      // Three things are load-bearing about where this sits.
+      //
+      // BELOW THE UNLINKS (#414, #431): the handler's cold move snapshots the
+      // hot directory, so firing above them let the move relocate a source the
+      // merge was about to delete and then die on one it had already deleted.
+      // `merged` is set as the success path's last statement, after both
+      // unlinks, so moving the dispatch out of the try did not move it above
+      // them.
+      //
+      // OUTSIDE THE TRY (#428): the catch `unlinkSync`es `mkvPath` and records
+      // the merge as 'failed'. A consumer that threw synchronously — which the
+      // widened slot type allows, and which the extracted handler in
+      // `lib/episode-completion.ts` is one `async` keyword away from — would
+      // otherwise delete a successfully merged file and blame ffmpeg for it.
+      // `dispatchHook` already absorbs both throw shapes, which makes that
+      // unreachable; out here it is structurally impossible instead of merely
+      // currently-false, so a later edit that hoists the payload out of the
+      // arrow or adds a statement before the call cannot re-arm it. A consumer
+      // bug must never be reportable as a merge failure.
+      //
+      // GATED ON `merged`, not a fall-through: the catch handles a failed merge
+      // and a cancelled one (global flag or `cancelledMerges`), and neither may
+      // fire a completion hook.
+      //
+      // Still fire-and-forget — awaiting it would hold `this.merging`, and the
+      // whole merge queue behind it, for a multi-GB cross-drive copy that the
+      // between-groups `mergeCancelled` check cannot interrupt.
+      if (merged && this.mergeCompleteCallback) {
+        const callback = this.mergeCompleteCallback
+        this.dispatchHook('mergeComplete', () =>
+          callback({
+            animeName: group.animeName,
+            animeId: group.animeId,
+            episodeInt: group.episodeInt,
+            episodeLabel: group.episodeLabel,
+            mkvFilename
+          })
+        )
       }
     }
     this.activeMergeTranslationId = null
@@ -1223,11 +1315,14 @@ export class DownloadManager {
       this.schedulePersist()
 
       if (item.kind === 'video' && this.videoDownloadedCallback) {
-        try {
-          this.videoDownloadedCallback(filePath, item)
-        } catch (e) {
-          console.warn('[download] videoDownloaded callback failed:', e)
-        }
+        // `item` is passed so a failed metadata write marks the row (#428).
+        // Status and persist above already said 'completed', so without the
+        // mark the queue reports a clean download for a video whose
+        // `downloadedEpisodes` entry is missing — and nothing in the tree can
+        // reconstruct that entry, because the file scanner is pure filesystem
+        // and no filename carries a translation id.
+        const callback = this.videoDownloadedCallback
+        this.dispatchHook('videoDownloaded', () => callback(filePath, item), item)
       }
 
       this.checkEpisodeComplete(item.translationId)
@@ -1301,7 +1396,10 @@ export class DownloadManager {
           quality: first.quality,
           hasVideo: !!video
         }
-        setTimeout(() => this.episodeCompleteCallback?.(info), 100)
+        setTimeout(
+          () => this.dispatchHook('episodeComplete', () => this.episodeCompleteCallback?.(info)),
+          100
+        )
       }
       this.checkQueueComplete()
     }
@@ -1311,7 +1409,14 @@ export class DownloadManager {
     if (!this.queueCompleteCallback) return
     const hasRemaining = this.queue.some((i) => i.status === 'queued' || i.status === 'downloading')
     if (!hasRemaining) {
-      setTimeout(() => this.queueCompleteCallback?.(), 200)
+      // Both timer dispatches go through `dispatchHook` (#428): a throw out of
+      // a `setTimeout` callback has no surrounding try at all, so it used to
+      // reach the main process as an uncaught exception. Neither hook carries a
+      // queue item, so the disposition here is the log alone.
+      setTimeout(
+        () => this.dispatchHook('queueComplete', () => this.queueCompleteCallback?.()),
+        200
+      )
     }
   }
 

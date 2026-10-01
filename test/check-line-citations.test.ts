@@ -9,6 +9,12 @@ import { describe, it, expect } from 'vitest'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import { analyze, report, driftBasePlan } from '../scripts/check-line-citations.mjs'
+// The nightly half of the same gate (#395 step 2). Importing it is safe rather
+// than lucky: its `main()` sits behind an `endsWith('check-upstream-citations.mjs')`
+// argv guard, exactly as this file's other import does, so loading the module
+// under vitest provisions nothing and runs nothing.
+// @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
+import * as upstream from '../scripts/check-upstream-citations.mjs'
 
 type Corpus = Record<string, string>
 
@@ -104,6 +110,130 @@ const UPSTREAM = [
 // Every pin but the one under test neutralised, so a case about one counter
 // cannot be satisfied or broken by another moving.
 const pinsAtZero = { suspiciousLanding: 0, uncheckable: 0, marked: 0 }
+
+// --- #395 step 2: the nightly upstream check -----------------------------------
+
+const { assertPinnedTree, defClassBoundary, findings, issueBody, pinnedCommitFromWorkflow } =
+  upstream
+
+// Ten lines modelled on the real tree's class header: an import, a blank, the
+// `class` line, a two-line `def __init__` signature, a body line, a blank, a
+// decorator and the decorated `def` it belongs to, and that method's body. Every
+// shape `defClassBoundary()` has to decide about is in here, including the two it
+// must NOT fire on — a signature continuation line and a decorator.
+const UPSTREAM_CLASS = [
+  'from syncplay import constants',
+  '',
+  'class SyncFactory(Factory):',
+  "    def __init__(self, port='', password='', motdFilePath=None,",
+  '                 disableReady=False, disableChat=False, salt=None):',
+  '        self.isolateRooms = isolateRooms',
+  '',
+  '    @requireLogged',
+  '    def handleChat(self, chatMessage):',
+  '        self._factory.sendChat(self._watcher, chatMessage)'
+]
+
+/**
+ * A synthetic upstream file of `length` lines with `patch`'s one-based lines
+ * substituted in. The filler is live code — never blank, never a comment — so a
+ * fixture built this way can only trip the predicate under test and not the
+ * landing heuristics that share the ladder.
+ *
+ * Padded to the real line numbers on purpose, for the characterisation cases
+ * below: an assertion written against `:847-849` is checkable against the pinned
+ * tree by eye, where the same claim shifted onto a ten-line fixture is not.
+ */
+const pyFile = (length: number, patch: Record<number, string>): string[] => {
+  const lines = Array.from({ length }, (_, i) => `    pad${i + 1} = ${i + 1}`)
+  for (const [n, text] of Object.entries(patch)) lines[Number(n) - 1] = text
+  return lines
+}
+
+// `server.py` at the pin, in the three neighbourhoods step 0 repaired, at their
+// real line numbers.
+const SERVER_PY = pyFile(919, {
+  777: '    def setPosition(self, position):',
+  778: '        self._position = position',
+  779: '',
+  780: '    def getPosition(self):',
+  781: '        if self._position is None:',
+  782: '            return None',
+  783: '        if self._room.isPlaying():',
+  784: '            timePassedSinceSet = time.time() - self._lastUpdatedOn',
+  785: '        else:',
+  786: '            timePassedSinceSet = 0',
+  787: '        return self._position + timePassedSinceSet',
+  788: '',
+  841: '    def _scheduleSendState(self):',
+  842: '        self._sendStateTimer = task.LoopingCall(self._askForStateUpdate)',
+  843: '        self._sendStateTimer.start(constants.SERVER_STATE_INTERVAL)',
+  844: '',
+  845: '    def _askForStateUpdate(self, doSeek=False, forcedUpdate=False):',
+  846: '        self._server.sendState(self, doSeek, forcedUpdate)',
+  847: '',
+  848: '    def _resetStateTimer(self):',
+  849: '        if self._sendStateTimer:',
+  850: '            if self._sendStateTimer.running:',
+  851: '                self._sendStateTimer.stop()',
+  852: '            self._sendStateTimer.start(constants.SERVER_STATE_INTERVAL)'
+})
+
+// `client.py` at the pin, around `updateGlobalState` and the four definitions
+// that follow it.
+const CLIENT_PY = pyFile(2384, {
+  454: '    def updateGlobalState(self, position, paused, doSeek, setBy, messageAge):',
+  455: '        if self.__getUserlistOnLogon:',
+  464: '            self.askPlayer()',
+  465: '        self._executePlaystateHooks(position, paused, doSeek, setBy, messageAge)',
+  466: '',
+  467: '    def getUserOffset(self):',
+  468: '        return self._userOffset',
+  469: '',
+  470: '    def setUserOffset(self, time):',
+  474: '',
+  475: '    def onDisconnect(self):',
+  479: '',
+  480: '    def removeUser(self, username):',
+  484: '',
+  485: '    def getPlayerPosition(self):'
+})
+
+// `_allowTLSconnections()` at its real span: the `def` on the START line, and the
+// intra-function blank between the three `open()` calls and the `getmtime()`
+// below them. The contrast case's whole subject — one predicate must fire here
+// and the other must not.
+const TLS_PY = pyFile(919, {
+  251: '    def _allowTLSconnections(self, path):',
+  252: '        try:',
+  253: "            privKey = open(path+'/privkey.pem', 'rb').read()",
+  254: "            certif = open(path+'/cert.pem', 'rb').read()",
+  255: "            chain = open(path+'/chain.pem', 'rb').read()",
+  256: '',
+  257: "            self.lastEditCertTime = os.path.getmtime(path+'/cert.pem')"
+})
+
+// A small `syncplay/`-rooted corpus for `findings()`, which scopes on that
+// prefix: a crossing, a landing, an unresolved anchor and a rotted quote, one
+// each, so one `issueBody()` covers every section it can print.
+//
+// The two definitions at `:2` and `:4` are deliberately NOT separated by a blank
+// line, and the blank sits at `:6` instead. One anchor per class is the point of
+// the corpus, and the two predicates overlap freely on a real file — a range
+// spanning a blank line and a `def` is both a landing and a crossing — so a
+// corpus laid out the natural way reports four findings in three classes and the
+// counts stop saying which predicate fired.
+const FINDINGS_SERVER = [
+  'class SyncFactory(Factory):',
+  '    def __init__(self, port=None):',
+  '        self.port = port',
+  '    def handleChat(self, message):',
+  '        self.sendChat(message)',
+  '',
+  '    def sendChat(self, message):',
+  '        self._factory.sendChat(message)',
+  ''
+].join('\n')
 
 describe('check-line-citations', () => {
   it('resolves a full-path citation that lands on code', () => {
@@ -1663,5 +1793,347 @@ describe('check-line-citations', () => {
     expect(driftBasePlan({ haveTracking: true, haveOrigin: true, ci: true })).toEqual({
       path: 'tip'
     })
+  })
+})
+
+describe('check-upstream-citations', () => {
+  // `findings()` scopes on the `syncplay/` prefix the nightly script registers
+  // the installed package under, so these corpora use it rather than the
+  // `upstream/` of the fixtures above. Same analyzer, same injected `.py`
+  // extension, one reader shared with `findings()` so the two cannot disagree
+  // about what a file contains.
+  const runFindings = (files: Corpus) => {
+    const readLines = (p: string) => files[p].split('\n')
+    const result = analyze({
+      files: Object.keys(files),
+      readLines,
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: [],
+      resolvableExt: new Set(['.ts', '.md', '.py'])
+    })
+    return { result: result as Result, f: findings({ result, readLines }) }
+  }
+
+  it('flags a range that crosses a `def` and exempts the start line', () => {
+    // THE EXEMPTION IS THE PREDICATE. Measured over the 165 ranged upstream
+    // anchors at the pin, including the start line flags 97 of them and exempting
+    // it flags 0 — the difference between a gate that ships green and a gate that
+    // reds on every anchor that cites a function from its signature, which is the
+    // correct way to cite a function.
+    expect(defClassBoundary(UPSTREAM_CLASS, 3, 6)).toBe(4)
+
+    // An empty interval, a single-line anchor, a range whose own start is the
+    // `def`, and a range that is the two halves of one signature.
+    expect(defClassBoundary(UPSTREAM_CLASS, 3, 3)).toBeNull()
+    expect(defClassBoundary(UPSTREAM_CLASS, 3, null)).toBeNull()
+    expect(defClassBoundary(UPSTREAM_CLASS, 4, 5)).toBeNull()
+    expect(defClassBoundary(UPSTREAM_CLASS, 9, 10)).toBeNull()
+
+    // A range that opens on a decorator and runs past the `def` it decorates IS a
+    // crossing: the exemption is the START line, not "anything to do with a
+    // definition". The brief's own case list has this one as null, which cannot be
+    // right alongside `:6-9` below without the start exemption swallowing the end
+    // line too.
+    expect(defClassBoundary(UPSTREAM_CLASS, 8, 10)).toBe(9)
+  })
+
+  it('matches a decorated or `async` def at any indentation and nothing adjacent', () => {
+    // The end line is in scope, so a range that stops exactly on the next
+    // definition is caught — `:6-9` closes on `def handleChat`.
+    expect(defClassBoundary(UPSTREAM_CLASS, 6, 9)).toBe(9)
+
+    // Indentation is irrelevant (upstream's methods are all indented one level)
+    // and `async def` counts. The negatives are the word-boundary cases a looser
+    // `^def|^class` would take: a longer identifier, an assignment, a decorator
+    // that merely starts with the word, and a commented-out definition.
+    const probe = (line: string): number | null => defClassBoundary(['    pad = 1', line], 1, 2)
+    expect(probe('    async def restartTimer(self):')).toBe(2)
+    expect(probe('async def main():')).toBe(2)
+    expect(probe('class RoomManager:')).toBe(2)
+    expect(probe('        def nested():')).toBe(2)
+    expect(probe('classmethod')).toBeNull()
+    expect(probe('class_name = 1')).toBeNull()
+    expect(probe('    @classmethod')).toBeNull()
+    expect(probe('def_name = 1')).toBeNull()
+    expect(probe('    # def forcePositionUpdate(self):')).toBeNull()
+  })
+
+  it('leaves the one blank-line landing alone, which the blank predicate still takes', () => {
+    // THE MANDATED CONTRAST CASE, and both halves live in one `it` on purpose: a
+    // later hand that merges the two predicates into "anything odd inside a cited
+    // range" has to DELETE an assertion here rather than watch a count move.
+    //
+    // `server.py:251-257` is `_allowTLSconnections()` whole. The `def` is on the
+    // START line, so the boundary predicate is silent — correctly, the citation
+    // means the function. The blank at `:256` is an intra-function gap, which
+    // `interiorBlankLine()` does report, which is why that anchor is named in
+    // `UPSTREAM_LANDING_ALLOW` rather than repaired.
+    expect(defClassBoundary(TLS_PY, 251, 257)).toBeNull()
+
+    const r = runResolvingPy({
+      'upstream/server.py': TLS_PY.join('\n') + '\n',
+      'src/caller.ts': '// the TLS reload path (server.py:251-257)'
+    })
+    expect(r.failures).toEqual([])
+    expect(r.suspicious).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'server.py:251-257',
+        target: 'upstream/server.py',
+        start: 256,
+        why: 'blank line'
+      }
+    ])
+  })
+
+  it('does not flag a range that ends on a decorator above a `def`', () => {
+    // THE NAMED RESIDUAL, asserted as a decision rather than left as an accident.
+    // `protocols.py` carries one anchor of this shape. Adding a `/^@/` arm costs 0
+    // extra flags over the 165 at the pin, so this is a free choice; it stays out
+    // because a decorated boundary is not the boundary the issue asks about and
+    // because `@` opens a line continuation as well as a decorator. If the miss
+    // ever costs something, that measurement is where to start.
+    expect(defClassBoundary(UPSTREAM_CLASS, 6, 8)).toBeNull()
+  })
+
+  it('names the citer, the anchor, the predicate and the pin on every finding', () => {
+    // What a nightly issue has to carry, asserted field by field. It is read by
+    // someone with no context loaded and possibly without a checkout, so a report
+    // missing any of the four is a reason to go and re-derive the whole thing by
+    // hand — which is the work the check exists to remove.
+    const { f } = runFindings({
+      'syncplay/server.py': FINDINGS_SERVER,
+      'src/caller.ts': [
+        '// the init body (server.py:3-4)',
+        '// the chat relay (server.py:5-6)',
+        '// long gone (server.py:999)',
+        '// the setter (server.py:3 ("self.port = nope"))'
+      ].join('\n')
+    })
+
+    expect(f.counts).toMatchObject({
+      crossings: 1,
+      landings: 1,
+      unresolved: 1,
+      quoteRot: 1,
+      exempt: 0
+    })
+
+    const body = issueBody(f, {
+      commitId: '993232ab095bb810593459bc705b3e6fc64ad161',
+      runUrl: 'https://example.invalid/run/1',
+      lineCounts: { 'syncplay/server.py': 8 }
+    })
+
+    // The citer, as `file:line`, for each of the four classes.
+    expect(body).toContain('`src/caller.ts:1` cites `server.py:3-4`')
+    expect(body).toContain('`src/caller.ts:2` cites `server.py:5-6`')
+    expect(body).toContain('`src/caller.ts:3` cites `server.py:999`')
+    expect(body).toContain('`src/caller.ts:4` cites `server.py:3`')
+
+    // The predicate, by name, so the rule can be read rather than inferred.
+    expect(body).toContain('`defClassBoundary()`')
+    expect(body).toContain('`interiorBlankLine()`')
+    expect(body).toContain('`analyze()` resolver')
+    expect(body).toContain('`verifyQuote()`')
+
+    // The pin, on every row and not only in the header: a figure copied out of a
+    // six-week-old nightly must not read as a figure about today's upstream.
+    const rows = (body as string)
+      .split('\n')
+      .filter((l: string) => l.startsWith('- `src/caller.ts:'))
+    expect(rows).toHaveLength(4)
+    for (const row of rows) {
+      expect(row).toContain('measured against `993232ab095bb810593459bc705b3e6fc64ad161`')
+    }
+
+    // And the two things that make the report checkable without the tree.
+    expect(body).toContain('`syncplay/server.py` — 8 lines')
+    expect(body).toContain('npm run check:upstream-citations')
+    expect(body).toContain('conformance/README.md')
+  })
+
+  it('keys the landing allow-list on the citer AND the anchor, not on a count', () => {
+    // WHY A LIST AND NOT A NUMBER. There is exactly one legitimate upstream
+    // landing at the pin, so "expect 1" would pass — and would go on passing if a
+    // different anchor slid onto a different blank line, because the count is
+    // unchanged. Both halves of the key are load-bearing: the same citer repointed
+    // is a different claim, and the same anchor written somewhere else is a
+    // different reader.
+    const corpus: Corpus = {
+      'syncplay/server.py': FINDINGS_SERVER,
+      'src/caller.ts': '// the chat relay (server.py:5-6)'
+    }
+    const readLines = (p: string) => corpus[p].split('\n')
+    const result = analyze({
+      files: Object.keys(corpus),
+      readLines,
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: [],
+      resolvableExt: new Set(['.ts', '.py'])
+    })
+
+    const exact = [{ at: 'src/caller.ts:1', cited: 'server.py:5-6' }]
+    expect(findings({ result, readLines, allow: exact }).counts).toMatchObject({
+      landings: 0,
+      exempt: 1
+    })
+
+    // Same anchor, different citer — and the other way round. Each reds on its own.
+    const otherCiter = [{ at: 'src/elsewhere.ts:9', cited: 'server.py:5-6' }]
+    const otherAnchor = [{ at: 'src/caller.ts:1', cited: 'server.py:5-7' }]
+    for (const allow of [otherCiter, otherAnchor, []]) {
+      expect(findings({ result, readLines, allow }).counts).toMatchObject({
+        landings: 1,
+        exempt: 0
+      })
+    }
+  })
+
+  it('verifies a marked upstream quote once the target is on disk', () => {
+    // THE BEHAVIOUR DIFFERENCE, in the direction the nightly adds. A marked `.py`
+    // anchor is checked by nothing in `quality`: the quote is extracted above the
+    // extension gate in `analyze()`, so the anchor leaves the unmarked ceiling and
+    // then takes the foreign-extension `continue` before `verifyQuote()` ever sees
+    // it. With the target on disk the comparison actually happens.
+    const correct = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4 ("room.broadcast(watcher)"))'
+    })
+    expect(correct.marked).toHaveLength(1)
+    expect(correct.quoteFailures).toEqual([])
+
+    const stale = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4 ("room.broadcastRoom(watcher)"))'
+    })
+    expect(stale.quoteFailures).toHaveLength(1)
+    expect(stale.quoteFailures[0]).toMatchObject({
+      at: 'src/caller.ts:1',
+      cited: 'server.py:4',
+      quote: 'room.broadcastRoom(watcher)',
+      elsewhere: []
+    })
+
+    // The characterisation half, and the reason this is a behaviour difference
+    // rather than a restatement: with the shipped extension list the SAME stale
+    // marked anchor reports nothing at all. It is counted in `markedPy`, left out
+    // of `marked`, and never compared — which is precisely the hole the nightly
+    // closes.
+    const asShipped: Corpus = {
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the broadcast (server.py:4 ("room.broadcastRoom(watcher)"))'
+    }
+    const shipped = analyze({
+      files: Object.keys(asShipped),
+      readLines: (p: string) => asShipped[p].split('\n'),
+      scanRoots: ['src', 'docs', 'test'],
+      excludedPaths: []
+    }) as Result
+    expect(shipped.markedPy).toBe(1)
+    expect(shipped.marked).toEqual([])
+    expect(shipped.quoteFailures).toEqual([])
+  })
+
+  it('fails a path-qualified upstream anchor the registered tree does not carry', () => {
+    // The nightly registers the installed package under `syncplay/`, so an anchor
+    // spelled with a different prefix must FAIL rather than fall back to the
+    // basename and resolve against a file nobody named. Silent resolution here
+    // would be the gate attesting an anchor to a path it does not have.
+    const r = runResolvingPy({
+      'upstream/server.py': UPSTREAM,
+      'src/caller.ts': '// the signature (syncplay/server.py:3)'
+    })
+
+    expect(r.failures).toEqual([
+      {
+        at: 'src/caller.ts:1',
+        cited: 'syncplay/server.py:3',
+        why: 'no such file in this repo'
+      }
+    ])
+    expect(r.resolved).toEqual([])
+  })
+
+  it('refuses to measure anchors against a tree that is not the pinned one', () => {
+    // BOTH SHAS IN THE MESSAGE. The two ways this fires — a moved pin served a
+    // cached install, and a correct install with a wrong workflow edit — look
+    // identical from outside, so a message naming only the expected sha says which
+    // number to trust and not which number to change.
+    const pinned = '993232ab095bb810593459bc705b3e6fc64ad161'
+    const other = 'c9345d490b1d9533692508bc0c76638d8105dfba'
+
+    expect(() => assertPinnedTree({ commitId: pinned, expected: pinned })).not.toThrow()
+
+    let message = ''
+    try {
+      assertPinnedTree({ commitId: other, expected: pinned })
+    } catch (e) {
+      message = (e as Error).message
+    }
+    expect(message).toContain(other)
+    expect(message).toContain(pinned)
+
+    // A wheel or sdist install records no `vcs_info`, so there is nothing to
+    // compare — which is a failure, not a licence to assume the pin.
+    expect(() => assertPinnedTree({ commitId: null, expected: pinned })).toThrow(/direct_url/)
+  })
+
+  it('throws rather than defaulting when the workflow carries no pin', () => {
+    // A DEFAULT HERE WOULD BE THE WORST FAILURE THIS SCRIPT HAS: it would attest
+    // every anchor against a commit nobody installed, print a clean report and
+    // exit 0 — a gate that skips being indistinguishable from a gate that passes.
+    const yaml = [
+      'jobs:',
+      '  conformance:',
+      '    steps:',
+      '      - run: |',
+      '          "$RUNNER_TEMP/sp176/bin/pip" install --no-deps \\',
+      "            'git+https://github.com/Syncplay/syncplay@993232ab095bb810593459bc705b3e6fc64ad161'"
+    ].join('\n')
+    expect(pinnedCommitFromWorkflow(yaml)).toBe('993232ab095bb810593459bc705b3e6fc64ad161')
+
+    expect(() => pinnedCommitFromWorkflow('jobs:\n  conformance:\n    steps: []\n')).toThrow(
+      /No pinned Syncplay commit/
+    )
+    // A tag rather than a commit is the near miss, and it is the one #367 ruled
+    // out: a tag can be moved, so it is not a tree.
+    expect(() =>
+      pinnedCommitFromWorkflow("  'git+https://github.com/Syncplay/syncplay@v1.7.6'\n")
+    ).toThrow(/No pinned Syncplay commit/)
+  })
+
+  it('reproduces step 0’s three repaired anchors, and names what it cannot decide', () => {
+    // CHARACTERISATION, at the real line numbers so each claim is checkable
+    // against the pinned tree by eye. These are the three anchors #395 step 0
+    // repaired by hand; the predicate flags the broken form of each and clears the
+    // repair.
+    expect(defClassBoundary(SERVER_PY, 847, 849)).toBe(848)
+    expect(SERVER_PY[847]).toContain('def _resetStateTimer')
+    expect(defClassBoundary(SERVER_PY, 841, 843)).toBeNull()
+
+    expect(defClassBoundary(SERVER_PY, 779, 787)).toBe(780)
+    expect(SERVER_PY[779]).toContain('def getPosition')
+    expect(defClassBoundary(SERVER_PY, 780, 787)).toBeNull()
+
+    expect(defClassBoundary(CLIENT_PY, 454, 484)).toBe(467)
+    expect(CLIENT_PY[466]).toContain('def getUserOffset')
+    expect(defClassBoundary(CLIENT_PY, 454, 465)).toBeNull()
+
+    // FIRST HIT ONLY, so one citation is one finding however many definitions it
+    // spans. That range crosses four, and the report names the first.
+    const crossed: number[] = []
+    for (let n = 455; n <= 484; n++) {
+      if (/^(?:async\s+)?def\b|^class\b/.test(CLIENT_PY[n - 1].trim())) crossed.push(n)
+    }
+    expect(crossed).toEqual([467, 470, 475, 480])
+
+    // THE HONEST LIMIT, asserted rather than left to be discovered on a repair.
+    // The predicate names a bad anchor; it cannot choose between two candidate
+    // repairs. `server.py:848-852` is the WRONG repair of `:847-849` — it keeps
+    // the timer-reset body and drops the `_askForStateUpdate` line the prose was
+    // about — and it is just as clean here, because its `def` is on the start line
+    // and the start line is exempt.
+    expect(defClassBoundary(SERVER_PY, 848, 852)).toBeNull()
   })
 })

@@ -75,12 +75,35 @@ jobs:
           SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
         run: npm run test:conformance 2>&1 | tee conformance.log
 
+      - name: Verify upstream citation anchors against the pinned tree
+        id: citations
+        # AFTER the suite, and `!cancelled()` rather than `success()`, and both
+        # halves are deliberate. After, so a wrong line number inside a comment
+        # can never pre-empt the four minutes of wire comparison this workflow
+        # exists for — the suite's verdict is the news and this is the footnote.
+        # `!cancelled()` rather than `success()`, so a diverged suite cannot hide
+        # a wrong anchor: a `failure()`-gated step would skip on exactly the
+        # nightly where someone is already reading the upstream source.
+        #
+        # `shell: bash` for `pipefail`, as the step above. Without it `tee`'s 0
+        # is the step's status, the outcome below reads `success`, and no issue
+        # is ever filed — the same swallow `test/conformance-workflow.test.ts`
+        # pins for every piped step in this file.
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: npm run check:upstream-citations 2>&1 | tee upstream-citations.md
+
       - name: Upload the transcripts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: conformance-log
-          path: conformance.log
+          path: |
+            conformance.log
+            upstream-citations.md
           retention-days: 30
 
       - name: File a divergence issue
@@ -89,14 +112,37 @@ jobs:
         # duplicated, carrying the run URL that holds the transcripts. A
         # divergence is a claim about the reference and the frames are the
         # evidence, so the issue points at them rather than restating them.
-        if: failure() && github.event_name == 'schedule'
+        #
+        # GATED ON THE CONFORMANCE STEP'S OWN OUTCOME, not on bare `failure()`.
+        # `failure()` means "some earlier step in this job failed", which was
+        # unambiguous while the suite was the only thing that could fail and is
+        # not any more: with the citation check in the job, a wrong anchor would
+        # file an issue titled "model diverged from 1.7.6" and send a reader to
+        # the transcripts to look for a divergence that is not there — the exact
+        # mis-signal #395 is about. The status function stays, because an `if:`
+        # with none is implicitly `success() && …` and would never run at all.
+        if: ${{ failure() && steps.conformance.outcome == 'failure' && github.event_name == 'schedule' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'Syncplay conformance: model diverged from 1.7.6'
         run: |
           set -euo pipefail
+          # KEYED ON THE TITLE, not on the label alone. `syncplay-conformance` is
+          # the only label this repo has for either failure, and creating a
+          # second one from a workflow fails on a label that does not exist — so
+          # both filing steps share this label, and a lookup keyed on the label
+          # alone would comment a citation failure onto the divergence issue (or
+          # the reverse, whichever opened first).
+          #
+          # `map(select(…))` rather than the array-comprehension spelling that
+          # reads more naturally, and the reason is this file's own test:
+          # `hasPipeline()` in `test/conformance-workflow.test.ts` cannot tell a
+          # jq pipe from a shell one, so a jq filter containing one would enrol
+          # both filing steps in the piped-step census and make the count that
+          # guards the `tee` pipelines measure two steps with no pipeline in them.
           existing=$(gh issue list --state open --label syncplay-conformance \
-            --json number --jq '.[0].number // empty')
+            --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
           body="The nightly Syncplay conformance run diverged from the real 1.7.6 server.
 
           Run (transcripts attached as \`conformance-log\`): $RUN_URL
@@ -108,6 +154,39 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
-            gh issue create --title 'Syncplay conformance: model diverged from 1.7.6' \
+            gh issue create --title "$TITLE" \
+              --label syncplay-conformance --assignee mikkerlo --body "$body"
+          fi
+
+      - name: File an upstream-citation issue
+        # The same route for the other half of the job, and a separate issue
+        # rather than a comment on the divergence one: the two failures have
+        # different readers and different repairs. A divergence is a claim about
+        # the model, repaired in `test/helpers/`; a wrong anchor is a claim about
+        # a comment, repaired by changing a number.
+        #
+        # `!cancelled()` plus this step's own outcome. A status function is
+        # mandatory: an `if:` carrying none is implicitly `success() && …`, so a
+        # bare `steps.citations.outcome == 'failure'` would be SKIPPED on every
+        # run where anything earlier failed — which, since the citation step runs
+        # last, is most of the runs this step exists for.
+        if: ${{ !cancelled() && steps.citations.outcome == 'failure' && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: 'Syncplay conformance: upstream citation anchors are wrong at the pin'
+        run: |
+          set -euo pipefail
+          # Title-keyed, and pipe-free, for the two reasons spelled out in the
+          # step above.
+          existing=$(gh issue list --state open --label syncplay-conformance \
+            --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
+          # The script's own stdout IS the body: it names every finding with its
+          # citer, its anchor, the predicate that flagged it and the commit it was
+          # measured against, which is more than a summary of it could carry.
+          body=$(cat upstream-citations.md)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" \
               --label syncplay-conformance --assignee mikkerlo --body "$body"
           fi

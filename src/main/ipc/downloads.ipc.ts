@@ -5,17 +5,19 @@ import Ffmpeg from 'fluent-ffmpeg'
 import { CHANNELS, EVENT_CHANNELS } from '@shared/ipc/channels'
 import { VIDEO_EXTS } from '@shared/episode-files'
 import { sanitizeFilename, type DownloadRequest } from '../download-manager'
+import { resyncDownloadDir } from './storage.ipc'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
 
-export function register({
-  store,
-  downloadManager,
-  coldStorageService,
-  animeCacheService,
-  getFfmpegPath,
-  getFfprobePath
-}: AppDeps): void {
+export function register(deps: AppDeps): void {
+  const {
+    store,
+    downloadManager,
+    coldStorageService,
+    animeCacheService,
+    getFfmpegPath,
+    getFfprobePath
+  } = deps
   ipcMain.handle(CHANNELS.DOWNLOAD_ENQUEUE, async (_event, requests: DownloadRequest[]) => {
     await downloadManager.enqueue(requests)
     // Metadata in `downloadedEpisodes` is written by the onVideoDownloaded hook
@@ -365,7 +367,10 @@ export function register({
     if (result.canceled || result.filePaths.length === 0) return null
     const dir = result.filePaths[0]
     store.set('downloadDir', dir)
-    downloadManager.setDownloadDir(dir)
+    // Not `setDownloadDir(dir)`: in advanced mode `getDownloadDir()` answers
+    // `hotStorageDir` and this key is only its fallback, so the manager has to
+    // follow the resolver rather than the picked path (#443).
+    resyncDownloadDir(deps)
     return dir
   })
 }

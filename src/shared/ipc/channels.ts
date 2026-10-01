@@ -136,6 +136,7 @@ export const CHANNELS = {
   STORAGE_PICK_COLD_DIR: 'storage:pick-cold-dir',
   STORAGE_PICK_HOT_DIR: 'storage:pick-hot-dir',
   STORAGE_RUN_CLEANUP: 'storage:run-cleanup',
+  STORAGE_SET_MODE: 'storage:set-mode',
 
   // Syncplay
   SYNCPLAY_CONNECT: 'syncplay:connect',

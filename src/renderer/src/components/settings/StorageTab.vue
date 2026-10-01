@@ -11,10 +11,24 @@ const { autoSave, showSaved } = useSettingsAutosave();
 const loaded = ref(false);
 
 const downloadDir = ref('');
-const storageMode = ref<'simple' | 'advanced'>('simple');
+const storageMode = ref<StorageMode>('simple');
 const hotStorageDir = ref('');
 const coldStorageDir = ref('');
 const autoMoveToCold = ref(false);
+
+// #443: why main refused the last mode switch, shown verbatim. Non-null only
+// while the download manager still holds work whose paths it would re-derive
+// under the new root.
+const modeRefusedReason = ref<string | null>(null);
+const modeSwitching = ref(false);
+
+const DEFAULT_DIR_LABEL = 'Default (Downloads/anime-dl)';
+
+// `getDownloadDir()` falls through hot → downloadDir → fallback, and the row has
+// to say the same thing (#443). Showing `hotStorageDir || 'Default …'` told a
+// user who switched to advanced without picking a hot dir that downloads go to
+// the default folder while they were still going to `downloadDir`.
+const hotDirLabel = computed(() => hotStorageDir.value || downloadDir.value || DEFAULT_DIR_LABEL);
 
 // #440: the first stored root that is not on disk. While it is non-null both
 // metadata-deleting paths in main refuse to run, so finished-but-deleted
@@ -101,6 +115,30 @@ async function confirmClearRoot(): Promise<void> {
   // download manager's cached directory pointed at the root being cleared.
   applyRootsState(await window.api.storageClearRoot(key));
   showSaved();
+}
+
+/**
+ * Switch storage mode through main (#443), never through `autoSave`.
+ *
+ * `set-setting` is a plain store write, and the mode is an input to
+ * `getDownloadDir()` — so a bare write moves the effective root while the
+ * download manager's cached one stays behind. The handler also refuses the
+ * switch while downloads or merges are still owed work, which is why
+ * `storageMode` is assigned from the reply instead of from the click: an
+ * optimistic flip would show a mode that main did not accept.
+ */
+async function setStorageMode(mode: StorageMode): Promise<void> {
+  if (modeSwitching.value || mode === storageMode.value) return;
+  modeSwitching.value = true;
+  try {
+    const result = await window.api.storageSetMode(mode);
+    storageMode.value = result.mode;
+    modeRefusedReason.value = result.refusedReason;
+    applyRootsState(result.roots);
+    if (!result.refusedReason) showSaved();
+  } finally {
+    modeSwitching.value = false;
+  }
 }
 
 async function pickDir(): Promise<void> {
@@ -296,8 +334,9 @@ onMounted(async () => {
   unsubCleanupFinished = window.api.onStorageCleanupFinished(onCleanupFinished);
 
   await refreshRootsState();
-  storageMode.value =
-    ((await window.api.getSetting('storageMode')) as 'simple' | 'advanced') || 'simple';
+  // Reading the mode is still a plain `get-setting`; only writing it moved to
+  // its own channel (#443).
+  storageMode.value = ((await window.api.getSetting('storageMode')) as StorageMode) || 'simple';
   autoCleanupDays.value = ((await window.api.getSetting('autoCleanupWatchedDays')) as number) || 0;
   autoCleanupLastRun.value = (await window.api.getSetting('autoCleanupLastRun')) as {
     ranAt: number;
@@ -323,9 +362,11 @@ onUnmounted(() => {
   unsubCleanupFinished?.();
 });
 
-watch(storageMode, (val) => {
-  if (loaded.value) autoSave('storageMode', val);
-});
+// No `watch(storageMode)` either (#443): the mode is written by
+// `storage:set-mode`, which also re-syncs the download manager's cached root
+// and can refuse the switch outright. A watcher would persist the ref the user
+// clicked, including a value main rejected, and would fire again when the
+// handler's reply is adopted.
 // No `watch(autoMoveToCold)`: the switch saves from its own handler instead.
 // A watcher also fires when `applyRootsState()` adopts the value main just
 // wrote — the cold clear turns auto-move off in the same handler — which would
@@ -344,13 +385,30 @@ watch(autoCleanupDays, (val) => {
         desc="Simple mode uses a single directory. Advanced mode separates active downloads (hot) from finished files (cold)."
       >
         <div class="set-seg">
-          <button :class="{ on: storageMode === 'simple' }" @click="storageMode = 'simple'">
+          <button
+            :class="{ on: storageMode === 'simple' }"
+            :disabled="modeSwitching"
+            @click="setStorageMode('simple')"
+          >
             Simple
           </button>
-          <button :class="{ on: storageMode === 'advanced' }" @click="storageMode = 'advanced'">
+          <button
+            :class="{ on: storageMode === 'advanced' }"
+            :disabled="modeSwitching"
+            @click="setStorageMode('advanced')"
+          >
             Advanced
           </button>
         </div>
+      </SettingsRow>
+      <!--
+        #443: main refuses a switch while the download manager still has work
+        whose paths it would re-derive under the new root. The segmented control
+        above stays on the mode actually in force, so this row is the only thing
+        that tells the user their click did not take.
+      -->
+      <SettingsRow v-if="modeRefusedReason" stack>
+        <div class="inline-result bad">{{ modeRefusedReason }}</div>
       </SettingsRow>
     </SettingsGroup>
 
@@ -361,7 +419,7 @@ watch(autoCleanupDays, (val) => {
         desc="Where downloaded anime files are saved."
       >
         <div class="path-field">
-          <span class="path-input">{{ downloadDir || 'Default (Downloads/anime-dl)' }}</span>
+          <span class="path-input">{{ downloadDir || DEFAULT_DIR_LABEL }}</span>
           <button class="btn btn-sm btn-ghost" @click="pickDir">Browse</button>
           <button
             v-if="downloadDir"
@@ -379,7 +437,7 @@ watch(autoCleanupDays, (val) => {
           desc="Where new downloads and in-progress files are saved."
         >
           <div class="path-field">
-            <span class="path-input">{{ hotStorageDir || 'Default (Downloads/anime-dl)' }}</span>
+            <span class="path-input">{{ hotDirLabel }}</span>
             <button class="btn btn-sm btn-ghost" @click="pickHotDir">Browse</button>
             <button
               v-if="hotStorageDir"

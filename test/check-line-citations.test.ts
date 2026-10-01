@@ -427,6 +427,13 @@ describe('check-line-citations', () => {
     expect(resolvingMarked.markedPy).toBe(1)
     expect(resolvingMarked.marked).toHaveLength(1)
     expect(resolvingMarked.quoteFailures).toEqual([])
+
+    // And the other edge of the partition: a marked anchor to a non-`.py` target
+    // is the verified population, never `markedPy`. Without this, counting every
+    // quoted anchor here would read 64 on the real tree with the gate green.
+    const markedTs = run(base({ 'src/caller.ts': '// the init (src/target.ts:3 ("const a = 1"))' }))
+    expect(markedTs.marked).toHaveLength(1)
+    expect(markedTs.markedPy).toBe(0)
   })
 
   it('does not scan a file under an excluded path', () => {

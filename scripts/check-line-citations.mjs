@@ -186,9 +186,9 @@ export const MARKED_PIN = 64
 //
 // 262 unmarked upstream-Python anchors on this tree, and re-measuring it has a
 // trap worth stating rather than rediscovering. A direct scan of tracked files
-// returns 269. The seven extra are citation-shaped fixture strings inside
-// `test/check-line-citations.test.ts`, which is in `EXCLUDED_PATHS`: the gate
-// does not scan it and a hand census does. Pin against what the gate counts.
+// returns 292 — 286 unmarked and 6 marked — not the 262 pinned here. The 30 extra
+// are fixture strings in `test/check-line-citations.test.ts`, and that number
+// moves with every fixture added: pin against what the gate counts.
 export const UNMARKED_PY_PIN = 262
 
 // --- configuration ------------------------------------------------------------
@@ -1028,10 +1028,10 @@ export function report(r, pins = {}) {
       'predicate ever sees its target, and its line number is never compared with',
       'anything. The marked form is what makes one checkable —',
       '`server.py:NN ("the quoted line")` carries its own evidence, so a reader can',
-      'verify it without the upstream tree. Nothing verifies it mechanically yet —',
-      'that waits on #395 step 2. Mark the anchor you just added; if it cannot carry a',
-      'quote, raise UNMARKED_PY_PIN in scripts/check-line-citations.mjs and say why in',
-      'the commit message.'
+      'verify it without the upstream tree, and since #395 step 2 the nightly upstream',
+      'check verifies it mechanically against the pinned tree. Mark the anchor you just',
+      'added; if it cannot carry a quote, raise UNMARKED_PY_PIN in',
+      'scripts/check-line-citations.mjs and say why in the commit message.'
     )
   }
 

@@ -546,10 +546,15 @@ tests* above — two exact, one a floor and one a ceiling:
   `.py` in the same change — 0 occurrences today, since no Python target resolves
   for it to fire on, so it is covered by a fixture rather than by the tree and the
   hole is closed before the population arrives. Re-measuring the cap has one
-  trap worth knowing: a direct scan returns **269** against the gate's 262, and
-  the gap is seven citation-shaped fixture strings inside
-  `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. Pin
-  against what the gate counts, not what a hand census does. The cap last rose
+  trap worth knowing, and it is not a number to carry forward by hand: a direct
+  scan returns **292** — 286 unmarked and 6 marked — against the gate's 262, so
+  the gap is 30 citation-shaped fixture strings inside
+  `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. That gap
+  is a property of the fixture file rather than of the tree, and it grows with
+  every fixture added, which is exactly how it was last carried forward wrong:
+  #457 added one to each side of a stale 268-and-seven while in fact adding
+  several fixture strings, and #395 step 2 added more of its own. Pin against what
+  the gate counts, not what a hand census does. The cap last rose
   by one, for a qualifier on `RoomManager.broadcast` in
   `test/services/syncplay-two-peer-adoption.test.ts` naming the default-config
   branch that constructs the room manager — spelled out there and deliberately
@@ -562,17 +567,21 @@ tests* above — two exact, one a floor and one a ceiling:
   marking one takes it out of the cap, and the gate's `continue` for a foreign
   extension then fires before the quote is ever compared with anything. So it
   leaves the `marked quotes` line alone too — that line says "verified against
-  their target", and this class is verified by nothing in this repo. **A marked
-  upstream anchor carries its evidence for a human reader, not for the gate**:
-  the quote lets a reviewer check the citation without the upstream tree, and
-  mechanical verification of it waits on #395's step 2, which is where CI gets
-  the upstream tree to compare against. The count is **0** today, so the figure
-  exists to keep it visible rather than to clear a backlog — folded into either
-  neighbour it would falsify that line's own sentence, and left unprinted the
-  class could grow with every figure on the gate's output unmoved. It takes no
-  pin in either direction: marking an upstream anchor is the remedy the cap's
-  failure text recommends, so a floor would penalise the retrofit and a ceiling
-  would penalise the cure.
+  their target", and this class is verified by nothing in the `quality` run. **A
+  marked upstream anchor carries its evidence for a human reader, and since #395
+  step 2 for a machine as well**: the quote lets a reviewer check the citation
+  with no upstream tree at hand, and the nightly check in
+  `scripts/check-upstream-citations.mjs` compares it against the installed
+  upstream line, because there the target is on disk and the foreign-extension
+  `continue` has been lifted by an injected extension set. Mechanical
+  verification therefore holds for this class in the nightly run and not in
+  `quality`, which is the split *The nightly upstream check* below describes. The
+  count is **0** today, so the figure exists to keep it visible rather than to
+  clear a backlog — folded into either neighbour it would falsify that line's own
+  sentence, and left unprinted the class could grow with every figure on the
+  gate's output unmoved. It takes no pin in either direction: marking an upstream
+  anchor is the remedy the cap's failure text recommends, so a floor would
+  penalise the retrofit and a ceiling would penalise the cure.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -804,6 +813,54 @@ update opportunistic. Routing on the ref would therefore send CI down
 `merge-base`, where `git merge-base` exits 1 having found nothing — at depth 1
 HEAD's parents are outside the shallow boundary. A row in the table pins that
 case on its own, because it is the combination CI actually presents.
+
+### The nightly upstream check
+
+The cap above bounds the upstream-Python anchors; it cannot check one, because
+nothing in this repo resolves a Python target. `npm run check:upstream-citations`
+(`scripts/check-upstream-citations.mjs`) does check them, and it runs in
+`.github/workflows/syncplay-conformance.yml` rather than in `quality` — the
+nightly job that already provisions a pinned Syncplay tree. Vendoring a copy
+would put thousands of lines of upstream source in the repo and a second thing
+to keep in step with the pin; fetching one during `quality` would put the
+network on every pull request's critical path, to settle a number inside a
+comment. The nightly reads the tree pip already installed, so the anchors are
+attested against the same artefact the conformance suite is believed against,
+rather than against a second copy that could differ.
+
+Four classes are reported, each finding carrying its citer, its anchor, the
+predicate that flagged it and the commit it was measured against:
+
+- **anchors that do not resolve** — a path the installed tree does not carry, or
+  a line past the end of the file;
+- **ranges that cross a `def`/`class` boundary** — the predicate this check adds.
+  The **start line is exempt** and that exemption is the whole design: measured
+  over the 165 ranged upstream anchors at the pin, counting the start line flags
+  **97** of them, every one of which cites a function from its own signature,
+  which is the correct way to cite a function. Exempting it flags **0**, so the
+  predicate ships against a clean tree and its first flag is news. The end line
+  stays in scope, and only the first boundary in a range is reported;
+- **suspicious landings on an upstream line** — the existing ladder, which never
+  fires in `quality` because a Python target cannot resolve there. Exactly one
+  such landing exists at the pin: `docs/syncplay.md` cites `_allowTLSconnections()`
+  whole, and the blank line the heuristic objects to is the intra-function gap
+  between its `open()` calls and the `getmtime()` below them. It is allow-listed
+  by **citer and anchor together**, not by count — pinned as "one landing is
+  expected", a different anchor sliding onto a different blank line would hold
+  the count at one and pass;
+- **marked anchors whose quote has rotted** — the content half of the marked form,
+  which `quality` can only check the spelling of.
+
+All of those figures are pinned to the commit `993232ab…`, read from the
+workflow's own install line and confirmed against the installed distribution's
+`direct_url.json` before a single anchor is examined: a mismatch aborts with both
+shas rather than reporting line numbers measured against the wrong tree. A
+marked upstream anchor is therefore verified mechanically as soon as the
+population is non-empty — it is **0** today — which is what the printed
+marked-Python figure in `quality` exists to keep visible. A failure files its own
+issue, separate from the divergence one and deduped on the title, because a wrong
+line number in a comment and a model that has drifted from the reference have
+different readers and different repairs.
 
 ## Prose-shape gate
 

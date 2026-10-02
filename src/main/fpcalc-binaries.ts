@@ -7,6 +7,7 @@ import * as os from 'os'
 import { spawn } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
+import { extractZip } from './lib/unzip'
 
 const FPCALC_VERSION = '1.5.1'
 const RELEASE_BASE = `https://github.com/acoustid/chromaprint/releases/download/v${FPCALC_VERSION}`
@@ -152,8 +153,12 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
     if (platInfo.archiveFormat === 'tar.gz') {
       await runTar(['-xzf', tmpArchive], dest)
     } else {
-      // tar on Windows 10+ extracts .zip via -xf
-      await runTar(['-xf', tmpArchive], dest)
+      // Zip goes through the in-process reader (#469), not the system `tar`.
+      // The Windows archive worked only because `tar.exe` is bsdtar; this path
+      // no longer depends on which tar flavour happens to be installed. The
+      // archive nests its binary one level deep, which `extractZip` recreates
+      // and `findBinaryRecursively` below then walks.
+      await extractZip(tmpArchive, dest)
     }
 
     const extracted = await findBinaryRecursively(dest, platInfo.binaryName)

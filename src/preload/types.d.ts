@@ -157,7 +157,7 @@ interface Api {
   onDownloadProgress: (callback: (data: EpisodeGroup[]) => void) => Unsubscribe
   onScanMergeProgress: (callback: (data: ScanMergeProgress) => void) => Unsubscribe
   onFfmpegDownloadProgress: (
-    callback: (data: { status: string; progress?: number }) => void
+    callback: (data: { status: string; progress?: number; message?: string }) => void
   ) => Unsubscribe
   onFpcalcDownloadProgress: (
     callback: (data: { status: string; progress?: number }) => void

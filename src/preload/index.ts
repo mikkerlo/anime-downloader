@@ -211,7 +211,7 @@ const api = {
 
   onDownloadProgress: subscribe<unknown>(EVENT_CHANNELS.DOWNLOAD_PROGRESS),
   onScanMergeProgress: subscribe<unknown>(EVENT_CHANNELS.SCAN_MERGE_PROGRESS),
-  onFfmpegDownloadProgress: subscribe<{ status: string; progress?: number }>(
+  onFfmpegDownloadProgress: subscribe<{ status: string; progress?: number; message?: string }>(
     EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS
   ),
   onFpcalcDownloadProgress: subscribe<{ status: string; progress?: number }>(

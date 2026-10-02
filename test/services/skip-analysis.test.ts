@@ -244,4 +244,53 @@ describe('SkipAnalysisService', () => {
       expect(seen.signal?.aborted).toBe(false)
     })
   })
+
+  // #470. The shared `beforeEach` builds the service with `getFpcalcPath: () => ''`,
+  // which is exactly the missing-binary condition both skip paths guard on, so
+  // these need no nested service.
+  describe('missing fpcalc binary', () => {
+    // The literal is duplicated here deliberately: the production copy lives in
+    // one `const` so the two call sites cannot drift, and this is the assertion
+    // that would notice if someone inlined a different string at one of them.
+    const EXPECTED =
+      'fpcalc binary not available — it may still be downloading, or the install failed (see the app log)'
+
+    async function messageFrom(p: Promise<unknown>): Promise<string> {
+      try {
+        await p
+      } catch (err) {
+        return (err as Error).message
+      }
+      throw new Error('expected rejection, got resolution')
+    }
+
+    it('rejects runSkipAnalysis with the shared message, ahead of the episode-count check', async () => {
+      // `[]` would also fail "need at least 2 episodes"; the fpcalc guard runs
+      // first, so this pins the order as well as the text.
+      expect(await messageFrom(svc.runSkipAnalysis(42, []))).toBe(EXPECTED)
+    })
+
+    it('rejects runStreamSkipDetection with the shared message, ahead of the ffmpeg check', async () => {
+      // `getFfmpegPath` is also '' here, so this only passes while the fpcalc
+      // guard precedes the 'ffmpeg not available' one.
+      expect(
+        await messageFrom(
+          svc.runStreamSkipDetection(1, 42, '1', 'https://cdn/x.mp4', mkDetections({}, 'local'))
+        )
+      ).toBe(EXPECTED)
+    })
+
+    it('uses one identical message at both call sites and no longer advises a restart', async () => {
+      const fromAnalysis = await messageFrom(svc.runSkipAnalysis(42, []))
+      const fromStream = await messageFrom(
+        svc.runStreamSkipDetection(1, 42, '1', 'https://cdn/x.mp4', mkDetections({}, 'local'))
+      )
+
+      // The drift property the hoist exists to guarantee.
+      expect(fromAnalysis).toBe(fromStream)
+      // The behaviour change: a relaunch cannot help when the platform ships no
+      // fpcalc asset, nor when the bootstrap download is merely still in flight.
+      expect(fromAnalysis).not.toContain('restart')
+    })
+  })
 })

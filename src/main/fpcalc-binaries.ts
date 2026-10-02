@@ -22,15 +22,16 @@ export function getFpcalcDir(): string {
   return path.join(app.getPath('userData'), 'fpcalc')
 }
 
-interface PlatformInfo {
+export interface FpcalcPlatformInfo {
   archiveName: string
   archiveFormat: 'tar.gz' | 'zip'
   binaryName: string
 }
 
-function detectPlatform(): PlatformInfo | null {
-  const plat = process.platform
-  const arch = process.arch
+export function detectFpcalcPlatform(
+  plat: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): FpcalcPlatformInfo | null {
   if (plat === 'linux' && arch === 'x64') {
     return {
       archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-linux-x86_64.tar.gz`,
@@ -47,17 +48,21 @@ function detectPlatform(): PlatformInfo | null {
     }
   }
   if (plat === 'win32') {
-    if (arch === 'ia32') {
+    // v1.5.1 ships exactly one Windows asset, x86_64. The `windows-i686` archive
+    // this branch used to request for `ia32` 404s — v1.5.0 was the last release to
+    // publish one — so 32-bit Windows falls through to `null` and takes the honest
+    // unsupported-platform path instead of a doomed download. Do not "fix" it by
+    // handing ia32 the x64 asset: a 64-bit PE cannot run under WOW64, and once it
+    // is on disk the existence short-circuit below never re-attempts anything.
+    // arm64 does take the x64 asset, relying on Windows 11's x64 emulation in the
+    // same spirit as the Rosetta note above; a native arm64 asset needs a version
+    // bump, which changes every existing user's fingerprints.
+    if (arch === 'x64' || arch === 'arm64') {
       return {
-        archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-i686.zip`,
+        archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-x86_64.zip`,
         archiveFormat: 'zip',
         binaryName: 'fpcalc.exe'
       }
-    }
-    return {
-      archiveName: `chromaprint-fpcalc-${FPCALC_VERSION}-windows-x86_64.zip`,
-      archiveFormat: 'zip',
-      binaryName: 'fpcalc.exe'
     }
   }
   return null
@@ -124,7 +129,7 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
     return binary
   }
 
-  const platInfo = detectPlatform()
+  const platInfo = detectFpcalcPlatform()
   if (!platInfo) {
     throw new Error(`fpcalc: unsupported platform ${process.platform}/${process.arch}`)
   }

@@ -21,6 +21,16 @@ const AUTO_SKIP_DEBOUNCE_MS = 5000
 // to stop ffmpeg/fpcalc children outliving a renderer that has given up.
 const STREAM_DETECT_DEADLINE_MS = 120_000
 
+// #470. Both skip paths reject with this when `getFpcalcPath()` is empty, so it
+// lives in one place rather than being inlined twice — two copies had already
+// been edited as a pair once and would drift on the next pass. Deliberately
+// generic: an empty path means *any* of "the bootstrap download is still in
+// flight" (`src/main/index.ts:747` is fire-and-forget), "the download failed",
+// or "this platform has no fpcalc asset at all" (32-bit Windows). The old text
+// advised a restart, which is wrong for the first and third of those.
+const FPCALC_UNAVAILABLE_MESSAGE =
+  'fpcalc binary not available — it may still be downloading, or the install failed (see the app log)'
+
 export interface SkipAnalysisServiceDeps {
   store: StorageService
   scanEpisodeFiles: (animeName: string) => SkipAnalysisFileCheckResult
@@ -311,10 +321,7 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
       )
     }
     const fpcalcPath = getFpcalcPath()
-    if (!fpcalcPath)
-      return Promise.reject(
-        new Error('fpcalc binary not available — restart the app to retry the download')
-      )
+    if (!fpcalcPath) return Promise.reject(new Error(FPCALC_UNAVAILABLE_MESSAGE))
     if (!Array.isArray(episodes) || episodes.length < 2) {
       return Promise.reject(new Error('Need at least 2 downloaded episodes to analyze'))
     }
@@ -376,10 +383,7 @@ export function createSkipAnalysisService(deps: SkipAnalysisServiceDeps): SkipAn
     detections: ShowSkipDetections
   ): Promise<EpisodeSkipDetection | null> {
     const fpcalcPath = getFpcalcPath()
-    if (!fpcalcPath)
-      return Promise.reject(
-        new Error('fpcalc binary not available — restart the app to retry the download')
-      )
+    if (!fpcalcPath) return Promise.reject(new Error(FPCALC_UNAVAILABLE_MESSAGE))
     const ffmpegPath = getFfmpegPath()
     if (!ffmpegPath) return Promise.reject(new Error('ffmpeg not available'))
 

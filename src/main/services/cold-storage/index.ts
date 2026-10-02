@@ -188,6 +188,30 @@ export interface ColdStorageService {
     author: string
   ): void
   /**
+   * Whole-store counterpart to `pruneDownloadedEpisode`: walk every
+   * `downloadedEpisodes` entry once and drop the ones with no file on disk.
+   * This is the *only* place that collection happens now —
+   * `downloaded-episodes-get` filters its return value and never writes (#423),
+   * so a page open can no longer delete persisted state. Hosted by a delayed
+   * startup sweep in `bootstrap`, which is a moment that is allowed to write.
+   *
+   * `activeTranslationIds` is passed in rather than injected: this service is
+   * constructed before `DownloadManager` exists, and the set has to be read at
+   * sweep time anyway. It is not optional — `loadQueue` restores interrupted
+   * items as `paused` and `getEpisodeGroups` skips only `cancelled`, so a video
+   * that finished but was still parked as `.part` under the player lock at quit
+   * has metadata and no final file at launch. Without the exemption every such
+   * launch would delete it.
+   *
+   * Entries whose `animeId` has no `downloadedAnime` record are skipped, same as
+   * the getter's filter has always done. No-op while any configured root is
+   * missing (#421), same guard as `pruneDownloadedEpisode`.
+   */
+  reconcileDownloadedEpisodes(activeTranslationIds: ReadonlySet<number>): {
+    kept: number
+    dropped: number
+  }
+  /**
    * True iff a `.mkv` or `.mp4` for `(animeName, episodeInt, author)` exists in
    * any **configured** root — `allConfiguredRoots()`, not the mode-scoped
    * `dirsForScan()`, so a `storageMode` flip cannot hide a file that is on disk
@@ -632,6 +656,63 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     if (changed) store.set('downloadedEpisodes', episodes)
   }
 
+  function reconcileDownloadedEpisodes(activeTranslationIds: ReadonlySet<number>): {
+    kept: number
+    dropped: number
+  } {
+    // Same guard as the prune above, for the same reason: an away root makes
+    // `episodeFileExists` answer a false `false` for everything inside it, and
+    // this pass persists its verdict over the whole library (#421).
+    const missingRoot = missingConfiguredRoot()
+    if (missingRoot) {
+      console.warn(
+        `[storage] skipping downloadedEpisodes reconcile — configured root is missing: ${missingRoot}`
+      )
+      return { kept: 0, dropped: 0 }
+    }
+
+    const episodes = store.get('downloadedEpisodes') as Record<
+      string,
+      { translationType: string; author: string; quality: number; translationId: number }
+    >
+    const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
+    let kept = 0
+    let dropped = 0
+
+    for (const [key, entry] of Object.entries(episodes)) {
+      const sep = key.indexOf(':')
+      if (sep < 0) continue
+      const animeId = key.slice(0, sep)
+      // NOT `key.slice(sep + 1)`: `downloadedEpisodes` keys are
+      // `animeId:episodeInt:translationId`, unlike `watchProgress`'s
+      // `animeId:episodeInt`, so the rest of the key is not the episode. Parsed
+      // the way the getter does, falling back to the whole remainder so legacy
+      // two-part keys still resolve.
+      const rest = key.slice(sep + 1)
+      const colonIdx = rest.indexOf(':')
+      const episodeInt = colonIdx >= 0 ? rest.slice(0, colonIdx) : rest
+
+      const anime = downloaded[animeId]
+      if (!anime) continue
+      const animeName = anime.titles?.romaji || anime.titles?.ru || anime.title
+      if (!animeName) continue
+
+      if (activeTranslationIds.has(entry.translationId)) {
+        kept++
+        continue
+      }
+      if (!episodeFileExists(animeName, episodeInt, entry.author)) {
+        delete episodes[key]
+        dropped++
+        continue
+      }
+      kept++
+    }
+
+    if (dropped > 0) store.set('downloadedEpisodes', episodes)
+    return { kept, dropped }
+  }
+
   function episodeFileExists(animeName: string, episodeInt: string, author: string): boolean {
     const animeDirName = sanitizeFilename(animeName)
     const padded = episodeInt.padStart(2, '0')
@@ -938,6 +1019,7 @@ export function createColdStorageService(deps: ColdStorageServiceDeps): ColdStor
     deleteEpisodeFiles,
     episodeHasInProgressDownload,
     pruneDownloadedEpisode,
+    reconcileDownloadedEpisodes,
     episodeFileExists,
     moveEpisodeToColdStorage,
     moveFileToColdByRelPath,

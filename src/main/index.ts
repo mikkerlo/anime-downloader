@@ -799,6 +799,28 @@ async function bootstrap(): Promise<void> {
     }
   }, 30_000)
 
+  // Reconcile `downloadedEpisodes` against disk. This is the only collector now
+  // that `downloaded-episodes-get` is a pure read (#423) — startup is a moment
+  // that is allowed to write, unlike a page open. The active set is built here
+  // rather than at `loadQueue()` time so it reflects the queue at sweep time:
+  // `loadQueue` restores interrupted items as `paused`, and those still produce
+  // a group, which is what keeps a `.part`-under-lock download's metadata alive.
+  setTimeout(() => {
+    try {
+      const activeTrIds = new Set(downloadManager.getEpisodeGroups().map((g) => g.translationId))
+      const r = coldStorageService.reconcileDownloadedEpisodes(activeTrIds)
+      if (r.dropped > 0) {
+        console.log(
+          `[storage] downloadedEpisodes reconcile: kept ${r.kept}, dropped ${r.dropped} stale entries`
+        )
+      }
+    } catch (e) {
+      console.warn(
+        `[storage] downloadedEpisodes reconcile failed: ${e instanceof Error ? e.message : e}`
+      )
+    }
+  }, 30_000)
+
   registerSyncplayBroadcasts(syncplay, broadcastToAll)
 
   if (shikimoriSyncService.getQueueLength() > 0) {

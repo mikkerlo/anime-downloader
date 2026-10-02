@@ -406,22 +406,61 @@ Metadata invariants:
   root — `allConfiguredRoots()`, so `downloadDir`/fallback + `hotStorageDir` +
   `coldStorageDir` regardless of `storageMode`, not the mode-scoped
   `dirsForScan()`). Entries with no matching file and no active download are
-  filtered out and garbage-collected from the store. Combined with the write
-  being keyed on the video item landing, this makes the ⬇ icon a reliable signal
-  that the file is actually present — and, since #412, one that appears for every
-  video that is present rather than only for groups whose subtitle also
-  succeeded.
-  The GC persists its verdict, so the search scope is part of the invariant: when
-  it moved with `storageMode` (before #421), one settings toggle deleted every
-  entry for the anime being viewed, permanently — nothing rewrites the store when
-  the setting comes back. Two guards keep it honest. The scope is now
-  mode-independent, and the whole collection pass is skipped for the call when
-  `missingConfiguredRoot()` names a configured, non-empty **stored** root that is
-  not on disk (unmounted drive, re-pointed or deleted setting). The
+  filtered out of the **return value**. Combined with the write being keyed on
+  the video item landing, this makes the ⬇ icon a reliable signal that the file
+  is actually present — and, since #412, one that appears for every video that
+  is present rather than only for groups whose subtitle also succeeded.
+  The getter does **not** write. It used to garbage-collect the store on the same
+  pass, which made a `*_GET` destructive on whatever settings happened to be
+  current — and it has three renderer callers (detail-view load, `PlayerView`,
+  `use-open-episode`), so the sweep ran on opening a page, an episode or the
+  player. #423 split the two halves: the filter above stayed, and collection
+  moved to `coldStorageService.reconcileDownloadedEpisodes(activeTranslationIds)`,
+  a whole-store pass hosted by a delayed `setTimeout` in `bootstrap` beside the
+  other startup sweeps — a moment that is allowed to write. It logs
+  `[storage] downloadedEpisodes reconcile: kept N, dropped M stale entries` only
+  when it dropped something. The trade: a genuinely stale entry survives in the
+  store until the next launch. It is invisible in the UI, but **not** cost-free,
+  and the reason is a second reader that never passes through the getter's
+  filter: `auto-downloader.ts` reads raw `downloadedEpisodes` keys in
+  `isAlreadyDownloaded` (`src/main/auto-downloader.ts:211`, acted on at
+  `src/main/auto-downloader.ts:338`) and in `mostRecentDownloadedTranslation`
+  (`src/main/auto-downloader.ts:198`). So for the rest of the
+  session a stale entry also stops auto-download from re-fetching that episode,
+  and can steer its preferred-translation pick. That was equally true before
+  this split — until whenever the user happened to open the page — so it is not
+  a regression, and a once-per-launch collection is more predictable than one
+  that depends on which pages got opened. Do not read this as "store size only"
+  when touching auto-dl dedup. The store is also no longer self-healing on read.
+  Only the reconcile persists a verdict, so the search scope is part of *its*
+  invariant: when the scope moved with `storageMode` (before #421), one settings
+  toggle deleted every entry for the anime being viewed, permanently — nothing
+  rewrites the store when the setting comes back. Two guards keep it honest. The
+  scope is mode-independent (`allConfiguredRoots()`), and the whole pass is
+  skipped when `missingConfiguredRoot()` names a configured, non-empty **stored**
+  root that is not on disk (unmounted drive, re-pointed or deleted setting). The
   `downloadsFallbackDir` fallback is exempt from that check: `downloadDir`
   defaults to `''`, so including it would report a missing root forever on a
-  straight-to-advanced profile and disable the GC for good. Skipping costs
-  phantom ⬇ rows until the root returns, which is recoverable; the wipe was not.
+  straight-to-advanced profile and disable collection for good. Skipping costs
+  stale rows until the root returns, which is recoverable; the wipe was not.
+  The getter deliberately has **no** root-readability branch — that guard existed
+  to protect a `delete`, and the getter no longer has one. With a root away its
+  cold-resident rows are simply missing from the return value until the drive is
+  back (a Play button for an unmounted file would fail anyway), and the store
+  still holds them because neither half writes in that state.
+  Two behaviours are shared by the filter and the reconcile. An entry whose
+  `animeId` has no `downloadedAnime` record is skipped by both (collecting
+  orphans is a separate decision with its own blast radius). And a translation
+  with a live group is exempt from both: that is what shows an in-progress
+  episode's chip and lock state before any final file exists, and on the startup
+  path it is what keeps a video that completed but was still parked as `.part`
+  under the player lock at quit. `loadQueue` restores such items as `paused` and
+  `getEpisodeGroups` skips only `cancelled`, so the group is still there; without
+  the exemption every launch would delete that metadata. The reconcile's set is
+  library-wide where the getter's is anime-filtered, which is sound rather than a
+  widening: `getEpisodeGroups` keys its map on `translationId` alone, so one id
+  already identifies one group. Both match on the entry **value**'s
+  `translationId`, never on the key, because legacy two-part keys still exist.
   `download-cancel` prunes the entry only for a cancelled VIDEO item: the prune
   keeps an entry alive on `episodeFileExists`, which probes .mkv/.mp4 and never
   .part, so pruning on a subtitle cancel would delete the entry of a video still

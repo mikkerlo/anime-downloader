@@ -86,7 +86,7 @@
 //
 // Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
 // **paused** arm — the `this.roomPaused ? w.position` half of
-// `test/helpers/syncplay-min-election-server.ts:456-461` ("return this.roomPaused
+// `test/helpers/syncplay-min-election-server.ts:460` ("return this.roomPaused
 // ? w.position") — is already checked against the real Syncplay 1.7.6 server in
 // both the steady state and the flip into it, so no new scenario is owed for it.
 //  - **Steady.** `conformance/syncplay-election.conformance.ts:27`

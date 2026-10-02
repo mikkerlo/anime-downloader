@@ -1046,10 +1046,14 @@ describe('check-line-citations', () => {
   })
 
   it('reds a shifted range only once the quote leaves its window', () => {
-    // Why the retrofit's one range anchor quotes its LAST line. A range absorbs any
-    // shift smaller than its own width, so a quote taken from the near edge is still
-    // inside the stale window and reds nothing — correctly, since the span still
-    // covers the declaration it names. The far edge is the half that leaves.
+    // Why both of the retrofit's range anchors quote their LAST line. A range absorbs
+    // any shift smaller than its own width, so a quote taken from the near edge is
+    // still inside the stale window and reds nothing — correctly, since the span still
+    // covers the declaration it names. The far edge is the half that leaves. The
+    // fixture is shaped on `:314-319`, the interface one; `:744-766` leans on the same
+    // rule. A third anchor used to be a range and is a single line now, because the
+    // far edge of `:456-461` is a bare `}` and no quote there can red at all — when
+    // the prose already names one line, that is the anchor, not a window around it.
     const iface = (extra: string[]): string =>
       [
         'export interface WireFrame {',

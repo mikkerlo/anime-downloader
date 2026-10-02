@@ -369,7 +369,7 @@ export class Peer {
   /**
    * A `State` carrying `ping` and the retained counter and **no `playstate`
    * key at all** — the production sender's frame, copied rather than invented:
-   * `sendAck()`'s literal is `src/main/syncplay.ts:2775-2783`, and that object
+   * `sendAck()`'s literal is `src/main/syncplay.ts:2782-2790`, and that object
    * holds the ping, the counter, and nothing else. The absence of a playstate
    * is the thing under test, so an emitter that added one would be testing a
    * different frame.
@@ -380,7 +380,7 @@ export class Peer {
    * election where it was; the model has no ignore window to discard it with —
    * that window is on the fixture's deliberately-unmodelled list — and since
    * #384's item 4 it stamps at receipt, above the playstate guard
-   * (`test/helpers/syncplay-min-election-server.ts:744` ("w.lastUpdatedOn = Date.now()")), so it takes the frame
+   * (`test/helpers/syncplay-min-election-server.ts:932` ("w.lastUpdatedOn = Date.now()")), so it takes the frame
    * and elects the sender. `assertConforms` therefore reports a loud divergence
    * rather than two inert backends reading as agreement: with `ignoringOnTheFly`
    * dropped from the write below, `conf-forced-ping-stamps` reds with 5
@@ -392,7 +392,7 @@ export class Peer {
    * later.
    *
    * Does **not** clear `lastServerCounter`, where production `sendAck()` zeroes
-   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2784`), so a second
+   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2791`), so a second
    * `pingOnly` step would re-echo a counter the first one already spent. Benign
    * today rather than harmless in general: with no forced update in between the
    * server's flag is already 0, `protocols.py:775-777` simply does not match,

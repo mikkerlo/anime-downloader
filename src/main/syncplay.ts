@@ -2324,7 +2324,14 @@ export class SyncplayClient extends EventEmitter {
   // (`server.py:870-873`), which erases elapsed projection time turn after turn
   // while we are still file-bearing, so the room stays pinned near the dead
   // player's position — the exact symptom #307 exists to end. Sending no
-  // `State` at all trips the protocol timeout instead.
+  // `State` at all trips the protocol timeout instead — and since #384's item 4
+  // that is a modelled mechanism rather than only a reading of `server.py`:
+  // `test/helpers/syncplay-min-election-server.ts` drops a watcher that goes
+  // `PROTOCOL_TIMEOUT` without a `State`, off by default, and
+  // `conformance/syncplay-protocol-timeout.conformance.ts` read the reset rule
+  // off the pinned 1.7.6 server to get there. The rule is what makes the two
+  // options above genuinely different: a ping-only frame resets the clock, so it
+  // keeps the seat and pins the position, where silence loses the seat outright.
   //
   // There is no null-file broadcast to peers: `sendFileUpdate`
   // (`server.py:175-178`) refuses to broadcast a falsey file, so app peers

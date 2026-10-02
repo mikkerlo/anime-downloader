@@ -55,6 +55,17 @@ export interface Scenario {
    * peer here. See `ackForcedUpdates` on `Peer` for what turning it off costs.
    */
   manualAckPeers?: string[]
+  /**
+   * `PROTOCOL_TIMEOUT` as a modelled disconnect, in milliseconds, or `null`/absent
+   * for a model that never drops anyone. Only the **model** backend reads this:
+   * the real server has the behaviour unconditionally and at its own constant, so
+   * a scenario that sets this to anything but `PROTOCOL_TIMEOUT_MS` is asking the
+   * two backends a different question and is sweeping rather than comparing.
+   *
+   * Absent by default, which keeps every scenario written before #384's item 4
+   * running against the model it was written against.
+   */
+  protocolTimeout?: number | null
 }
 
 export interface RunResult {
@@ -152,6 +163,29 @@ export const peerOptions = (scenario: Scenario, name: string): { ackForcedUpdate
   ackForcedUpdates: !(scenario.manualAckPeers ?? []).includes(name)
 })
 
+/**
+ * The model-side options a scenario asks for, resolved. Exported and pinned from
+ * the PR gate for exactly `peerOptions`'s reason, and the failure here is the
+ * quieter of the two: a resolver that dropped `protocolTimeout` on the floor
+ * leaves `conf-timeout-idle-drop` comparing a dropping server against a model
+ * that never drops — which is the **red** that scenario was first run in, so it
+ * at least fails loudly. A resolver that turned the option on for *every*
+ * scenario is the inert direction, and `conformance/` runs nightly only.
+ *
+ * `room`, `position` and `paused` are not scenario-settable and are stated here
+ * rather than at the construction site: a fresh reference room is `position: 0`
+ * and `Room.STATE_PAUSED` (`server.py:543-547`), and the room name is the
+ * scenario name because the suite gives every scenario its own room.
+ */
+export const modelOptions = (
+  scenario: Scenario
+): { room: string; position: number; paused: boolean; protocolTimeoutMs: number | null } => ({
+  room: scenario.name,
+  position: 0,
+  paused: true,
+  protocolTimeoutMs: scenario.protocolTimeout ?? null
+})
+
 /** Runs the scenario against the live `syncplay-server` on `port`. */
 export async function runAgainstReal(scenario: Scenario, port: number): Promise<RunResult> {
   return await drive(
@@ -163,11 +197,11 @@ export async function runAgainstReal(scenario: Scenario, port: number): Promise<
 
 /** Runs the same scenario against `MinElectionServer`, over in-memory sockets. */
 export async function runAgainstModel(scenario: Scenario): Promise<RunResult> {
-  // A fresh reference room is at `position: 0` and `Room.STATE_PAUSED`
-  // (`server.py:543-547`), and `SERVER_STATE_INTERVAL` is 1 s — the model's own
-  // defaults for the last two, but the room starts `paused: false` there, so it
-  // is passed explicitly rather than inherited.
-  const server = new MinElectionServer({ room: scenario.name, position: 0, paused: true })
+  // Through `modelOptions()` rather than built here, so the PR gate can assert the
+  // resolution without a server: `SERVER_STATE_INTERVAL` is 1 s and that is the
+  // model's own default, but the room starts `paused: false` there, so the pause
+  // flag is passed explicitly rather than inherited.
+  const server = new MinElectionServer(modelOptions(scenario))
   try {
     return await drive(
       scenario,

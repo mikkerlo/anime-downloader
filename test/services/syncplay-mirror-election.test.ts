@@ -471,7 +471,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // arm was contingent on a fixture infidelity that has since been repaired.
       // The helper now answers `Hello` with `Hello` *and* the reference's
       // join-time `State`
-      // (test/helpers/syncplay-min-election-server.ts:592 ("if ('Hello' in msg) {")),
+      // (test/helpers/syncplay-min-election-server.ts:780 ("if ('Hello' in msg) {")),
       // delivered through `sendState` so that frame pays the link delay like
       // every other `State`; the reference schedules its own just after the
       // handshake. That one frame is the whole of this literal's motion, and what
@@ -1277,8 +1277,8 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     // (`server.py:636`, then `server.py:637`), so the next election returns
     // this same position. Nor can the drop move the room: un-adopted,
     // `buildPlaystate()` never asserts our own snapshot
-    // (`src/main/syncplay.ts:2403`) — it mirrors the room's own last state, or
-    // sends no playstate at all (`src/main/syncplay.ts:2410-2411`).
+    // (`src/main/syncplay.ts:2410`) — it mirrors the room's own last state, or
+    // sends no playstate at all (`src/main/syncplay.ts:2417-2418`).
     tls().emit(
       'data',
       Buffer.from(

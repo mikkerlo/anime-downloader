@@ -13,7 +13,7 @@
 // split into unambiguous failures plus a heuristic that only warns — and two
 // pinned counts, which are what give the warn teeth and what stop the gate
 // from passing by seeing nothing. A printed-only number is the shape check
-// docs/testing.md:342 ("it is never the assertion that catches set rot")
+// docs/testing.md:382 ("it is never the assertion that catches set rot")
 // warns about: nobody diffs it.
 //
 // The one case where meaning *is* decidable is #366's marked form: a citation
@@ -41,7 +41,7 @@ import { baseRevision } from './check-version-not-lower.mjs'
 
 // --- pins ---------------------------------------------------------------------
 //
-// Exact-match assertions, per docs/testing.md:332 ("Pin the count, never just
+// Exact-match assertions, per docs/testing.md:372 ("Pin the count, never just
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 

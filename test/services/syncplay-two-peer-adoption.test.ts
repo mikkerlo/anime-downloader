@@ -463,7 +463,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // every post-switch frame this peer sends carries a `paused` key — zero
     // spectator-mirror frames — so it asserts continuously straight through the
     // switch. The seat is de-adopted for less than one push and re-latches at
-    // `src/main/syncplay.ts:2635` on a drift of 0 taken from the previous
+    // `src/main/syncplay.ts:2642` on a drift of 0 taken from the previous
     // episode's snapshot, before the new element has pushed anything.
     // `syncplay-two-peer-episode-change.test.ts` sweeps the gap and #360 has the
     // chain.

@@ -44,22 +44,22 @@ const DELAY_MS = 50
  *
  *  - Suppressed, the host puts *no* playstate on the wire at t=1000 at all. It
  *    has been told nothing about the room, so `buildPlaystate` stops at
- *    `src/main/syncplay.ts:2411` ("if (!room) return null"). Its first wire frame
+ *    `src/main/syncplay.ts:2418` ("if (!room) return null"). Its first wire frame
  *    is the t=2000 one, by which point it has adopted and sends `paused: true`,
  *    which the server stores raw — so every election reads `ROOM_START` and the
  *    old `[ROOM_START]` literal was right.
  *  - Present, the host's own join-time `State` has already given it a
  *    `lastRoomState` by t=1000, while the adopted-exit gate
- *    `src/main/syncplay.ts:2403` ("if (this.canAssertSnapshot() &&
+ *    `src/main/syncplay.ts:2410` ("if (this.canAssertSnapshot() &&
  *    this.isAdopted()) {") is still false. Both of those follow from the frame
  *    itself rather than from a separate reading: the mirror exit is only
  *    reachable past the null one, and it is the only exit that omits `paused`.
  *    So its t=1000 heartbeat takes the **mirror** exit —
- *    position, and no `paused` key at all (`src/main/syncplay.ts:2484-2487`,
- *    against the adopted exit at `src/main/syncplay.ts:2404-2408`, which does
+ *    position, and no `paused` key at all (`src/main/syncplay.ts:2491-2494`,
+ *    against the adopted exit at `src/main/syncplay.ts:2411-2415`, which does
  *    send `paused`). The server reads a missing `paused` as "not paused" and
  *    compensates it by a forward delay —
- *    `test/helpers/syncplay-min-election-server.ts:757` ("w.position = position +
+ *    `test/helpers/syncplay-min-election-server.ts:945` ("w.position = position +
  *    (ps.paused === true ? 0 : this.forwardDelayFor(w))") — so it stores this
  *    value for the host, the t=2000 election elects it, and the joiner's `Hello`,
  *    answered in that same second, carries it out.
@@ -190,7 +190,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // `paused: true`, `setBy` the host — and both halves of the apply rule have
     // to fire off that one frame. That it is the join-time frame and not a
     // periodic is measured, not assumed: suppressing the send guarded by
-    // `test/helpers/syncplay-min-election-server.ts:612` ("if (joined) {") in the
+    // `test/helpers/syncplay-min-election-server.ts:800` ("if (joined) {") in the
     // fixture's `Hello` arm moves the joiner's first frame from t=2050 to t=3050
     // and its single seek write from `JOIN_TIME_ROOM_POSITION` to `ROOM_START`.
     // The element is seated at 0 and *playing*, which is what a freshly bound
@@ -262,7 +262,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     expect(elections[2].at - elections[0].at).toBe(2000)
     // And it holds for the rest of the run rather than oscillating: three more
     // elections, all naming the incumbent at the truth. Counted before it is
-    // quantified over, per docs/testing.md:332 ("Pin the count, never just loop
+    // quantified over, per docs/testing.md:372 ("Pin the count, never just loop
     // over the set").
     const afterRecovery = elections.slice(2)
     expect(afterRecovery).toHaveLength(4)

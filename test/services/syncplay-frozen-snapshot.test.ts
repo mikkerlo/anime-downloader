@@ -345,7 +345,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // they pin `canAssertSnapshot()` following the pushed value in both
   // directions, and the paused arm (`if (this.snapshot.paused) return true`)
   // carries no staleness compare of its own. Its clock is `hasLivePlayback()`,
-  // src/main/syncplay.ts:2341 ("Date.now() - this.lastSnapshotAt <=
+  // src/main/syncplay.ts:2348 ("Date.now() - this.lastSnapshotAt <=
   // PLAYBACK_STALE_MS"), so what bounds a paused assert is the 5 s de-adoption
   // horizon and not the 2 s assert one — which is #383's correction to the line
   // that used to stand here
@@ -453,9 +453,9 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // terms that it stays under PLAYBACK_STALE_MS throughout so
   // `hasLivePlayback()` is not what it tests. This one crosses that line.
   //
-  // What it pins: `src/main/syncplay.ts:2367` returns false once
+  // What it pins: `src/main/syncplay.ts:2374` returns false once
   // `hasLivePlayback()` goes false, so the paused arm at
-  // `src/main/syncplay.ts:2368` is never reached, and `buildPlaystate()` falls
+  // `src/main/syncplay.ts:2375` is never reached, and `buildPlaystate()` falls
   // through to the keyless spectator mirror. The paused exemption is therefore
   // bounded — by the de-adoption horizon rather than by nothing.
   //

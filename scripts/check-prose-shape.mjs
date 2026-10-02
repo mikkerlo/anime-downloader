@@ -91,7 +91,7 @@ import { basename, extname } from 'node:path'
 // estimated in review before #379 landed.
 //
 // Lowered from 9 by #368, which is the "deliberate repair" case above rather
-// than a re-pin to clear a red. The line that left was docs/testing.md:177,
+// than a re-pin to clear a red. The line that left was docs/testing.md:198,
 // "`HAVE_NOTHING`, and an episode change),", in the adoption file's entry in
 // the two-peer scenario list. #368 moved that file's door from "a seek that
 // never lands" to "an element that is not ready" — a real claim change, not a

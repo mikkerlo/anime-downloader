@@ -11,7 +11,7 @@
 //     to its own
 //     socket one round trip later;
 //  3. a drag the room did **not** take is re-asserted, and `seekIntent` is the
-//     record of that. `src/main/syncplay.ts:2822` retires the intent the moment
+//     record of that. `src/main/syncplay.ts:2829` retires the intent the moment
 //     the room agrees, so a fixture can pin the exact instant it is spent.
 //
 // (2) and (3) are the ones with teeth, and they are two sides of one predicate:
@@ -130,7 +130,7 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     expect(seekFrames(host)).toBe(1)
     expect(seekFrames(joiner)).toBe(0)
     // The set is counted before it is quantified over, per
-    // docs/testing.md:332 ("Pin the count, never just loop over the set"):
+    // docs/testing.md:372 ("Pin the count, never just loop over the set"):
     // `every()` on an empty array is `true`, so without the pin a harness change
     // that stopped handing the joiner frames at all — a widened drop guard, a
     // rewired observer — would leave the line below green while asserting

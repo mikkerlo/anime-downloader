@@ -1552,7 +1552,7 @@ export class DownloadManager {
           // Three causes, none of them asserted: a captive portal on hotel or
           // airport WiFi is an ordinary producer of `text/html` on a video URL,
           // and naming only an expired link would make the row confidently
-          // wrong there. Kept short — the row renders it unclamped on one line.
+          // wrong there. Kept short — the row renders it unclamped, so it wraps.
           throw new NonRetryableDownloadError(
             `Server sent ${mimeTypeOf(contentType)} instead of video — expired link, ` +
               `signed-out session, or a network portal. Restart re-resolves it.`

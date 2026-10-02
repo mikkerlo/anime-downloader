@@ -25,7 +25,7 @@
 //     exists **and** its size is `bytesReceived`, or short of it by at most
 //     `PART_IN_FLIGHT_SLACK`. The important one: on resume `startDownload` stats
 //     the `.part` and sends `Range: bytes=<size>-`
-//     (`src/main/download-manager.ts:1420-1425`), so a same-named `.part`
+//     (`src/main/download-manager.ts:1482-1487`), so a same-named `.part`
 //     belonging to some other download is appended to with no error anywhere.
 //     The slack is not laxity: `trackProgress` counts a chunk before `throttle`
 //     and the write stream see it and `destroy()` persists before aborting, so a
@@ -33,16 +33,16 @@
 //     chance to reconcile it (#455 review). A `.part` *longer* than the counter
 //     still refuses.
 //   - `completed` still owed a merge → the finished artifact exists. `_mergeAll`
-//     reads the video at `src/main/download-manager.ts:1067` and the subtitle at
-//     `src/main/download-manager.ts:1081`, and skips a missing video with a
+//     reads the video at `src/main/download-manager.ts:1129` and the subtitle at
+//     `src/main/download-manager.ts:1143`, and skips a missing video with a
 //     silent `continue`.
 //   - a `deferred` merge → either the `.part` or the final file, because
-//     `finalizeDeferred` handles both (`src/main/download-manager.ts:994-998`).
+//     `finalizeDeferred` handles both (`src/main/download-manager.ts:1056-1060`).
 //   - `queued` with `bytesReceived === 0` → nothing on disk to check, excluded.
 //   - `downloading` items and `merging` merges → `busy`, which the caller
 //     refuses on: those hold paths in locals under the old root, and
 //     `mkdirSync(…, { recursive: true })`
-//     (`src/main/download-manager.ts:1416`) can recreate a dead mount path, so
+//     (`src/main/download-manager.ts:1478`) can recreate a dead mount path, so
 //     a live write may be landing somewhere that is neither root.
 //
 // The method mutates nothing — the `store.set` + `resyncDownloadDir()` half

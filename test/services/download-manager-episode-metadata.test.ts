@@ -18,12 +18,13 @@
 // so the one constraint that is purely about the wiring — that the manager's
 // single `onVideoDownloaded` slot is claimed exactly once — remains a text guard.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
   DownloadManager,
+  isNonVideoContentType,
   type DownloadItem,
   type EpisodeCompleteInfo,
   type MergeStatus
@@ -334,6 +335,347 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
     })
   })
 
+  // The same store, driven through the other new way an entry can be wrong
+  // (#444). A 200 whose body is a web page — an unauthenticated request
+  // answered with an error/interstitial page — used to be streamed to the
+  // episode's final filename and recorded 'completed', so the video hook wrote
+  // a `downloadedEpisodes` entry for a 169 KB HTML document. `episodeFileExists`
+  // is satisfied by it, so #421/#439's GC correctly refuses to collect it and
+  // the bogus ⬇ is durable: the only recovery was deleting the file by hand.
+  //
+  // These cases live next to the #412 ones because the headline claim is about
+  // this file's subject — the entry — and not only about the status. The
+  // rejection rule is a denylist of document types rather than an allowlist of
+  // video ones, so the false-positive guards below are half the block: a
+  // stream served as `application/octet-stream`, one with no `Content-Type` at
+  // all, a resumed 206 and a subtitle's `text/*` body all still complete.
+  //
+  // Both status paths are refused and both are asserted. The 206 arm needs its
+  // own case rather than riding on the 200 ones: narrowing the gate to
+  // `response.status === 200` is invisible to every other case here, and the
+  // scenario it reopens — Resume against an expired link answered `206` with an
+  // interstitial — appends the page to a `.part` that was previously good.
+  describe('a response that is not video is refused before it reaches disk (#444)', () => {
+    /** The observed body: an interstitial page served 200 for a video URL. */
+    const HTML_BODY = '<!doctype html><html><body>Sign in to continue</body></html>'
+
+    /**
+     * Stubs one response, and means it when a case says "no `Content-Type`".
+     *
+     * `new Response('<string body>')` does not leave the header absent —
+     * undici supplies `text/plain;charset=UTF-8` for a string body, measured:
+     * `new Response('video-bytes', { headers: { 'content-length': '11' } })
+     * .headers.get('content-type')` is `"text/plain;charset=UTF-8"`. Nor does
+     * passing a `Headers` object with the key deleted, because the default is
+     * applied at construction from the body source. So a case meaning to
+     * exercise the genuinely-headerless path has to strip it afterwards, which
+     * is what the `delete` below does — otherwise those cases silently retest
+     * the `text/plain` abstention, which is covered on its own elsewhere.
+     *
+     * (That default is also why this file's `beforeEach` mock has been serving
+     * every other case here as `text/plain` all along, and why they stay green:
+     * `text/plain` is deliberately NOT in the denylist. nginx's `default_type`
+     * is `text/plain`, so the abstention is load-bearing, not merely prudent.)
+     */
+    const respondWith = (body: string, headers: Record<string, string>, status = 200): void => {
+      global.fetch = vi.fn(async () => {
+        const response = new Response(body, { status, headers })
+        if (!('content-type' in headers)) response.headers.delete('content-type')
+        return response
+      }) as unknown as typeof fetch
+    }
+
+    /** Outwaits the first retry's `2^0 * 1000` ms backoff. */
+    const settleFirstBackoff = (): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, 1300))
+
+    const finalPath = (item: DownloadItem): string => path.join(downloadDir, item.filename)
+
+    it('lands failed with a reason and writes no downloadedEpisodes entry', async () => {
+      // THE regression case. Without the content-type check this ends
+      // 'completed' with `{ '100:1:1': ENTRY }` in the store and the HTML body
+      // sitting at the episode's final filename.
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(HTML_BODY, { 'content-type': 'text/html; charset=utf-8' })
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(video.status).toBe('failed')
+      expect(video.error).toMatch(/text\/html/)
+      expect(store.entries).toEqual({})
+      expect(videoHookCalls).toEqual([])
+      // Nothing was streamed, so neither name exists — in particular the body
+      // is not parked as a resumable `.part` for the next attempt to append to.
+      expect(fs.existsSync(finalPath(video))).toBe(false)
+      expect(fs.existsSync(finalPath(video) + '.part')).toBe(false)
+    })
+
+    it('refuses on the first response instead of burning the retry ladder', async () => {
+      // A wrong content type is deterministic: three more fetches of the same
+      // URL cost ~7 s and cannot change the answer. This is the assertion that
+      // pins the non-retryable arm of the catch.
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(HTML_BODY, { 'content-type': 'text/html' })
+
+      await (dm as unknown as Internals).startDownload(video)
+      // The count is the distinctive half: without the non-retryable arm this
+      // reads 2 one backoff later, on its way to RETRY_LIMIT + 1 fetches of a
+      // URL whose answer cannot change.
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(video.status).toBe('failed')
+
+      await settleFirstBackoff()
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(video.status).toBe('failed')
+      expect(store.entries).toEqual({})
+    })
+
+    it('does not let a completed sibling subtitle carry the group to complete', async () => {
+      // The group gate is the second writer, and the name is only honest if
+      // the gate is actually run. Asserting `episodePayloads` after the
+      // rejection alone does not do that: the refusal never calls
+      // `checkEpisodeComplete`, so an empty payload list there is the trivial
+      // consequence of nothing having been dispatched, and the case would red
+      // under exactly the same mutant as the headline and no other. (Adding a
+      // `checkEpisodeComplete` call to the failure path is harmless for the
+      // same reason, which is why that mutant survives this file — the
+      // property is `allDone`, not the call site.)
+      //
+      // So drive the gate directly afterwards, with the group in the state a
+      // user would be looking at: a completed `.ass` beside a refused video.
+      // `allDone` is `every(i => i.status === 'completed')`, so the refused
+      // video is what holds it false — and a rule that ignored failed videos
+      // would write the repair entry for an episode with no playable file.
+      const video = makeItem({})
+      const subtitle = makeSubtitle({ status: 'completed' })
+      seed(dm, [video, subtitle])
+      respondWith(HTML_BODY, { 'content-type': 'text/html' })
+
+      await (dm as unknown as Internals).startDownload(video)
+      ;(dm as unknown as Internals).checkEpisodeComplete(1)
+      await settleEpisodeComplete()
+
+      expect(video.status).toBe('failed')
+      expect(subtitle.status).toBe('completed')
+      expect(episodePayloads).toEqual([])
+      expect(store.entries).toEqual({})
+    })
+
+    it('parses the header rather than matching it, so parameters and casing still reject', async () => {
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(HTML_BODY, { 'content-type': 'Text/HTML; charset=UTF-8' })
+
+      await (dm as unknown as Internals).startDownload(video)
+
+      expect(video.status).toBe('failed')
+      expect(store.entries).toEqual({})
+    })
+
+    it('refuses a JSON error envelope too', async () => {
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith('{"error":"unauthorized"}', { 'content-type': 'application/json' })
+
+      await (dm as unknown as Internals).startDownload(video)
+
+      expect(video.status).toBe('failed')
+      expect(store.entries).toEqual({})
+    })
+
+    it('refuses a 206 Range reply that is a document, leaving the .part byte-identical', async () => {
+      // The resume arm, and the one case the rest of this block cannot reach:
+      // every other rejection here is a 200, so narrowing the gate to
+      // `item.kind === 'video' && response.status === 200` left the full suite
+      // green. The live scenario is ordinary — a half-downloaded episode's
+      // `.part` is on disk, the stream link expires, the user hits Resume, and
+      // the edge cache answers `206 Partial Content` with an HTML
+      // interstitial. Under that narrowing the item takes the 206 bookkeeping,
+      // APPENDS the page to the `.part` (`fileFlags` is 'a' on this path, not
+      // 'w'), completes, renames and writes the entry — #444 restored on the
+      // resume path, on top of bytes that were previously good.
+      const existing = 'abc'
+      const video = makeItem({})
+      seed(dm, [video])
+      fs.mkdirSync(path.dirname(finalPath(video)), { recursive: true })
+      fs.writeFileSync(finalPath(video) + '.part', existing)
+      respondWith(HTML_BODY, { 'content-type': 'text/html', 'content-range': 'bytes 3-12/13' }, 206)
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      // The premise, read off the Response the manager was actually handed
+      // rather than assumed: a dropped `206` argument makes this a 200 case
+      // the gate already covers, and the mutant it exists to catch walks
+      // straight through it. (It did, once — the status defaults to 200.)
+      const served = (await (global.fetch as unknown as Mock).mock.results[0]
+        .value) as unknown as Response
+      expect(served.status).toBe(206)
+      expect(video.status).toBe('failed')
+      expect(store.entries).toEqual({})
+      expect(videoHookCalls).toEqual([])
+      // Byte-identical: not appended to, not truncated, and not renamed. The
+      // good bytes a later Restart would discard are at least still here for a
+      // Resume against a freshly resolved URL.
+      expect(fs.readFileSync(finalPath(video) + '.part', 'utf-8')).toBe(existing)
+      expect(fs.existsSync(finalPath(video))).toBe(false)
+    })
+
+    // ---- false-positive guards: a rule that reds a good download is worse ----
+
+    it('still completes a normal video response and still writes its entry', async () => {
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(VIDEO_BODY, {
+        'content-type': 'video/mp4',
+        'content-length': String(Buffer.byteLength(VIDEO_BODY))
+      })
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(video.status).toBe('completed')
+      expect(store.entries).toEqual({ '100:1:1': ENTRY })
+      expect(fs.readFileSync(finalPath(video), 'utf-8')).toBe(VIDEO_BODY)
+    })
+
+    it('still completes a response with no Content-Type at all', async () => {
+      // A missing header is not grounds for rejection: there is nothing to
+      // disagree with, and the alternative — rejecting the unknown — is the
+      // allowlist this rule deliberately is not.
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(VIDEO_BODY, { 'content-length': String(Buffer.byteLength(VIDEO_BODY)) })
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(video.status).toBe('completed')
+      expect(store.entries).toEqual({ '100:1:1': ENTRY })
+    })
+
+    it('still completes a stream served as application/octet-stream', async () => {
+      const video = makeItem({})
+      seed(dm, [video])
+      respondWith(VIDEO_BODY, { 'content-type': 'application/octet-stream' })
+
+      await (dm as unknown as Internals).startDownload(video)
+      await settleEpisodeComplete()
+
+      expect(video.status).toBe('completed')
+      expect(store.entries).toEqual({ '100:1:1': ENTRY })
+    })
+
+    it('leaves subtitle items alone — the gate is keyed on kind, not on the type', async () => {
+      // An `.ass` legitimately arrives as `text/plain`, so a document denylist
+      // applied to a subtitle would be a pure false-positive generator. The
+      // sharper half is the second case: even `text/html` on a subtitle
+      // completes, which is only true if the gate reads `item.kind`.
+      const subtitle = makeSubtitle({})
+      seed(dm, [subtitle])
+      respondWith('[Script Info]', { 'content-type': 'text/plain; charset=utf-8' })
+
+      await (dm as unknown as Internals).startDownload(subtitle)
+      expect(subtitle.status).toBe('completed')
+
+      const second = makeSubtitle({ id: 'sub-2', status: 'queued' })
+      seed(dm, [second])
+      respondWith('[Script Info]', { 'content-type': 'text/html' })
+
+      await (dm as unknown as Internals).startDownload(second)
+      expect(second.status).toBe('completed')
+    })
+
+    it('still completes a resumed 206, both with a video type and with none', async () => {
+      // The check runs above the 206 bookkeeping and gates both status paths,
+      // so the resume arm is where it could most easily misfire. A legitimate
+      // Range reply carries a video type or no type; neither is in the set.
+      const existing = 'abc'
+      const headerSets: Record<string, string>[] = [
+        { 'content-type': 'video/mp4', 'content-range': 'bytes 3-12/13' },
+        { 'content-range': 'bytes 3-12/13' }
+      ]
+      for (const headers of headerSets) {
+        const video = makeItem({})
+        seed(dm, [video])
+        // The hook closes over the `store` binding, so swapping the store is
+        // all the second iteration needs — re-registering `mirrorVideoHook`
+        // would be a no-op into a single slot it already occupies.
+        store = makeStore()
+        fs.mkdirSync(path.dirname(finalPath(video)), { recursive: true })
+        fs.writeFileSync(finalPath(video) + '.part', existing)
+        respondWith(VIDEO_BODY, headers, 206)
+
+        await (dm as unknown as Internals).startDownload(video)
+        await settleEpisodeComplete()
+
+        expect(video.status).toBe('completed')
+        expect(store.entries).toEqual({ '100:1:1': ENTRY })
+        // Appended, not truncated — the resume really resumed.
+        expect(fs.readFileSync(finalPath(video), 'utf-8')).toBe(existing + VIDEO_BODY)
+        expect(video.totalBytes).toBe(13)
+        fs.rmSync(finalPath(video), { force: true })
+      }
+    })
+
+    it('leaves a pre-existing .part in place on rejection', async () => {
+      // Nothing was streamed, so the only thing at stake is a `.part` from an
+      // earlier partial transfer whose `Range` the server ignored. It stays,
+      // consistent with every other failure out of this catch: `restart()` is
+      // what unlinks a `.part`, and deleting it here would discard resumable
+      // bytes over a response that never reached the disk.
+      const video = makeItem({})
+      seed(dm, [video])
+      fs.mkdirSync(path.dirname(finalPath(video)), { recursive: true })
+      fs.writeFileSync(finalPath(video) + '.part', 'partial-video-bytes')
+      respondWith(HTML_BODY, { 'content-type': 'text/html' })
+
+      await (dm as unknown as Internals).startDownload(video)
+
+      expect(video.status).toBe('failed')
+      expect(fs.readFileSync(finalPath(video) + '.part', 'utf-8')).toBe('partial-video-bytes')
+      expect(fs.existsSync(finalPath(video))).toBe(false)
+      expect(store.entries).toEqual({})
+    })
+
+    it('classifies types directly, including the ones it deliberately permits', () => {
+      // The conservative half of the rule, asserted where it is readable:
+      // `text/plain` is the type a dumb static server reaches for when it
+      // cannot guess a binary's, so denying it would be the first false
+      // positive.
+      for (const bad of [
+        'text/html',
+        'TEXT/HTML',
+        'text/html;charset=utf-8',
+        'application/xhtml+xml',
+        'application/json',
+        'application/ld+json',
+        'text/xml',
+        'application/xml'
+      ]) {
+        expect(isNonVideoContentType(bad)).toBe(true)
+      }
+      for (const good of [
+        null,
+        undefined,
+        '',
+        'video/mp4',
+        'video/x-matroska',
+        'audio/mpeg',
+        'application/octet-stream',
+        'binary/octet-stream',
+        'text/plain',
+        'text/vtt',
+        'application/vnd.apple.mpegurl'
+      ]) {
+        expect(isNonVideoContentType(good)).toBe(false)
+      }
+    })
+  })
+
   describe('deferred finalize — the player is holding the file', () => {
     it('still writes the entry while the video is parked as .part', async () => {
       const video = makeItem({})
@@ -374,7 +716,7 @@ describe('DownloadManager — episode metadata on video landing (#412)', () => {
 
     it('takes the group payload from the video item, not from whichever row is first', async () => {
       // The stale-embed divergence: `restart` re-resolves the embed and corrects
-      // only the VIDEO item's quality (`download-manager.ts:639`); the subtitle
+      // only the VIDEO item's quality (`download-manager.ts:701`); the subtitle
       // branch sets `url` alone, so the two genuinely disagree afterwards.
       // Queue order is then the only thing deciding which number gets persisted,
       // and the payload must not depend on it.

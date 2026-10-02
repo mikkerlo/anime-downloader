@@ -110,7 +110,14 @@ describe('ensureFpcalc on an unsupported platform', () => {
 
   it('rejects win32/ia32 without attempting a download', async () => {
     expect(fs.existsSync(getFpcalcDir())).toBe(false)
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    // Stubbed, not a bare spy: an unstubbed `spyOn` passes through to the real
+    // `fetch`, so reinstating the ia32 branch made this case hit GitHub for a
+    // URL that 404s and stage a temp archive before going red. Rejecting keeps
+    // the regression caught by `toHaveBeenCalledTimes(0)` below while the
+    // failure stays an assertion rather than whatever the network did today.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('network access is not expected in this test'))
 
     await expect(ensureFpcalc()).rejects.toThrow('fpcalc: unsupported platform win32/ia32')
 

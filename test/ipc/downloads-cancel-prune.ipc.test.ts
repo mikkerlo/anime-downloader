@@ -9,9 +9,13 @@
 // So cancelling the failed subtitle deleted the video's fresh entry, and
 // `finalizeDeferredEpisodes` never writes it again.
 //
-// The second group pins the reviewer's other case: the GC in
-// `downloaded-episodes-get` must not reap the entry while the sibling subtitle
-// is still downloading, which is now the normal state for every episode.
+// The second group pins the reviewer's other case: `downloaded-episodes-get`
+// must not drop the entry while the sibling subtitle is still downloading, which
+// is now the normal state for every episode. Since #423 that handler is a pure
+// read — it filters its return value and never writes — so the groups below
+// assert the returned rows plus the promise that invoking it leaves the store
+// alone. Collection lives in `reconcileDownloadedEpisodes`, tested in
+// `test/services/cold-storage.test.ts`.
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import * as fs from 'fs'
@@ -53,10 +57,11 @@ function makeItem(overrides: Partial<DownloadItem>): DownloadItem {
 }
 
 /**
- * Per-test storage wiring (#421). The GC's behaviour depends on which roots are
- * configured and which of them are on disk, so every root the handler can look
- * at — and the fallback behind an empty `downloadDir` — is an override here
- * rather than a second service built inside a test body.
+ * Per-test storage wiring (#421). Both the getter's filter and the cancel
+ * prune depend on which roots are configured and which of them are on disk, so
+ * every root the handler can look at — and the fallback behind an empty
+ * `downloadDir` — is an override here rather than a second service built inside
+ * a test body.
  */
 interface StorageWiring {
   storageMode?: string
@@ -207,7 +212,29 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
     })
   })
 
-  describe('downloaded-episodes-get GC', () => {
+  describe('downloaded-episodes-get filter', () => {
+    // #423: the handler is a pure read. Collection moved to
+    // `coldStorageService.reconcileDownloadedEpisodes`, whose cases live in
+    // `test/services/cold-storage.test.ts`; what is left here is the filter and
+    // the promise that invoking it does not touch the store.
+    it('does not write the store when it filters an entry whose file is absent', async () => {
+      items = []
+      activeTranslationIds = []
+
+      const result = (await invoke(CHANNELS.DOWNLOADED_EPISODES_GET, ANIME_ID)) as Record<
+        string,
+        unknown[]
+      >
+
+      // Red before #423: the handler deleted the row and committed it, so the
+      // key list came back empty. The row is filtered out of the RETURN VALUE
+      // and must still be in the store, where only the startup reconcile may
+      // collect it. Exact key list, not a shape check — `toEqual({})` on the
+      // store would also pass against a mutant that dropped a different key.
+      expect(result).toEqual({})
+      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
+    })
+
     it('keeps the fresh entry while the sibling subtitle is still downloading', async () => {
       items = [makeItem({ id: 'video-1', status: 'completed' })]
       activeTranslationIds = [TRANSLATION_ID]
@@ -218,13 +245,15 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
         unknown[]
       >
 
-      // No final file yet (deferred), so the entry survives only because the
+      // No final file yet (deferred), so the entry is returned only because the
       // group is still in `getEpisodeGroups()` — which skips 'cancelled' only.
+      // The exemption is not GC-only: it is why an in-progress episode shows its
+      // chip and lock state before any final file exists.
       expect(result['1']).toHaveLength(1)
-      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
+      expect(result['1'][0]).toMatchObject({ translationId: TRANSLATION_ID })
     })
 
-    it('reaps the entry once the group has left the queue with no file on disk', async () => {
+    it('omits the entry once the group has left the queue with no file on disk', async () => {
       items = []
       activeTranslationIds = []
 
@@ -233,8 +262,9 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
         unknown[]
       >
 
+      // Return-value only since #423. The store half of this case is the purity
+      // test above, and the deletion half moved to the reconcile.
       expect(result).toEqual({})
-      expect(episodes()).toEqual({})
     })
 
     it('keeps the entry after the group is cleared, on the renamed final file', async () => {
@@ -253,13 +283,15 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
     })
   })
 
-  // The GC persists its verdict, so a false `false` from `episodeFileExists` is
-  // bulk, irreversible metadata loss for files that are sitting on disk. Two
-  // independent causes, measured independently: the search scope used to move
-  // with `storageMode`, and a root that is away answers `false` for everything
-  // inside it. Each test below is reddened by exactly one of the four guard
-  // mutations listed in #421's Testing Strategy.
-  describe('downloaded-episodes-get GC — scan-root safety (#421)', () => {
+  // #421 measured a false `false` from `episodeFileExists` as bulk, irreversible
+  // metadata loss, because the getter persisted its verdict. Since #423 it does
+  // not, so the collection half of these cases moved to
+  // `test/services/cold-storage.test.ts` (see 'scan-root safety, ported from the
+  // getter'). What stays here is the half that is still the getter's: the FILTER
+  // has to see the whole root union, or a `storageMode` flip hides a row whose
+  // file is sitting on disk. Nothing writes the store on this path any more, so
+  // the mode-flip cases assert the return value.
+  describe('downloaded-episodes-get filter — scan-root safety (#421)', () => {
     /** The folder a cold move leaves behind: present, and empty. */
     const putAnimeDirIn = (root: string): void => {
       fs.mkdirSync(path.join(root, ANIME_NAME), { recursive: true })
@@ -268,25 +300,10 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
     const getEpisodes = async (): Promise<Record<string, unknown[]>> =>
       (await invoke(CHANNELS.DOWNLOADED_EPISODES_GET, ANIME_ID)) as Record<string, unknown[]>
 
-    it('keeps every entry when the cold drive is away, advanced mode (setup 3)', async () => {
-      // No settings change at all: `hot/<anime>/` is the folder the cold move
-      // left behind, so a folder-existence guard would pass here and still wipe.
-      wireStorage({
-        storageMode: 'advanced',
-        hotStorageDir: hotDir,
-        coldStorageDir: awayDir
-      })
-      putAnimeDirIn(hotDir)
-
-      await getEpisodes()
-
-      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
-    })
-
-    it('keeps a cold-resident entry after an advanced → simple flip (setup 2)', async () => {
+    it('returns a cold-resident entry after an advanced → simple flip (setup 2)', async () => {
       // `hotStorageDir` is empty, so the flip does not move the first scan root —
       // the cold root simply drops out of `dirsForScan()`, and every cold-resident
-      // entry was collected. Nothing rewrites the store when the mode comes back.
+      // entry vanished from the UI. The filter reads `allConfiguredRoots()`.
       wireStorage({
         storageMode: 'simple',
         downloadDir: hotDir,
@@ -296,12 +313,13 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
       putAnimeDirIn(hotDir)
       putFinalFileIn(coldDir)
 
-      await getEpisodes()
+      const result = await getEpisodes()
 
-      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
+      expect(Object.keys(result)).toEqual(['1'])
+      expect(result['1']).toHaveLength(1)
     })
 
-    it('keeps a downloadDir-resident entry after a simple → advanced flip (setup 4)', async () => {
+    it('returns a downloadDir-resident entry after a simple → advanced flip (setup 4)', async () => {
       // The counter-example to building the union from `getDownloadDir()`: it
       // returns `hotStorageDir` here, which drops `downloadDir` — the root every
       // simple-mode download landed in. Nothing migrates those files.
@@ -313,55 +331,33 @@ describe('downloads IPC — downloadedEpisodes metadata (#412)', () => {
       })
       putFinalFileIn(hotDir)
 
-      await getEpisodes()
-
-      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
-    })
-
-    it('still collects a genuinely absent file while the roots are readable', async () => {
-      // The case that stops the fix from being "disable the GC": both roots are
-      // on disk, episode 1 is there, episode 2 is nowhere. Deliberately kept
-      // insensitive to which root the survivor sits in, so it measures only that
-      // the GC still runs — the union's shape is what the three tests above pin.
-      wireStorage({
-        storageMode: 'advanced',
-        hotStorageDir: hotDir,
-        coldStorageDir: coldDir
-      })
-      const staleKey = `${ANIME_ID}:2:${TRANSLATION_ID}`
-      store.set('downloadedEpisodes', {
-        ...episodes(),
-        [staleKey]: {
-          translationType: 'subRu',
-          author: 'Author',
-          quality: 720,
-          translationId: TRANSLATION_ID
-        }
-      })
-      putFinalFileIn(hotDir)
-
       const result = await getEpisodes()
 
-      expect(Object.keys(episodes())).toEqual([ENTRY_KEY])
       expect(Object.keys(result)).toEqual(['1'])
+      expect(result['1']).toHaveLength(1)
     })
 
-    it('still collects when only the unused downloadsFallbackDir is missing', async () => {
-      // The exemption that keeps the GC alive on a straight-to-advanced profile:
-      // `downloadDir` is `''` by default and `<downloads>/anime-dl` was never
-      // created, so checking the fallback would report a missing root forever.
+    it('omits a cold-resident row while the drive is away (decision 2)', async () => {
+      // The getter deliberately has NO `missingConfiguredRoot()` branch — that
+      // guard existed to protect a `delete`, and there is none left. So an
+      // unmounted root costs the row in the UI and nothing else (a Play button
+      // for an unreachable file would fail anyway). The recoverability that makes
+      // that acceptable is pinned by its two owners rather than restated here:
+      // the purity test above (this handler never writes, under any root config)
+      // and the reconcile's root-away skip in `test/services/cold-storage.test.ts`
+      // (nothing else collects while a root is missing). Asserting the store here
+      // too would make this test red alongside the purity test under the
+      // restored-`delete` mutation, which is what cost #421's original
+      // cold-drive-away case its place in this file.
       wireStorage({
         storageMode: 'advanced',
-        downloadDir: '',
         hotStorageDir: hotDir,
-        coldStorageDir: '',
-        downloadsFallbackDir: awayDir
+        coldStorageDir: awayDir
       })
       putAnimeDirIn(hotDir)
 
       const result = await getEpisodes()
 
-      expect(episodes()).toEqual({})
       expect(result).toEqual({})
     })
   })

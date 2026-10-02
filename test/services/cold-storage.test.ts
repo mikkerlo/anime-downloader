@@ -253,6 +253,180 @@ describe('ColdStorageService write-side disk ops', () => {
     expect(store.get('downloadedEpisodes')).toEqual(entries)
   })
 
+  // #423: the getter stopped writing, so this is now the ONLY thing that
+  // collects `downloadedEpisodes`. Every case below asserts an exact key list —
+  // a "some key survived" shape assertion is blind to a mutant that drops one.
+  describe('reconcileDownloadedEpisodes (#423)', () => {
+    const META = { translationType: 'subRu', author: 'Crunchy', quality: 720, translationId: 7 }
+    const KEY_1 = '1:1:7'
+    const KEY_2 = '1:2:7'
+    /** `downloadedAnime` record for id 1, so the name resolves to 'Show'. */
+    const ANIME = { '1': { id: 1, title: 'Show', titles: {} } }
+
+    const keys = (store: InMemoryStorage): string[] =>
+      Object.keys(store.get<Record<string, unknown>>('downloadedEpisodes')!).sort()
+
+    it('drops the entry with no file on disk and keeps the one that has one', () => {
+      // Also the guard against copying `findCleanupCandidates`'s key split:
+      // `downloadedEpisodes` keys are `animeId:episodeInt:translationId`, so
+      // `key.slice(sep + 1)` yields '1:7' instead of '1'. `episodeFileExists`
+      // would then match nothing and `kept` would be 0 with BOTH keys dropped.
+      const { svc, store } = svcWithDirs({
+        downloadedAnime: ANIME,
+        downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+      })
+      writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv')
+
+      expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 1 })
+      expect(keys(store)).toEqual([KEY_1])
+    })
+
+    it('resolves a legacy two-part key, whose remainder is the whole episode', () => {
+      // The fallback branch of the parse: no second colon, so the rest of the
+      // key IS the episode. A parser that always cuts at the next colon would
+      // read '' here, miss the file and drop a healthy entry.
+      const { svc, store } = svcWithDirs({
+        downloadedAnime: ANIME,
+        downloadedEpisodes: { '1:1': META }
+      })
+      writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv')
+
+      expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 0 })
+      expect(keys(store)).toEqual(['1:1'])
+    })
+
+    it('skips an orphan entry whose animeId has no downloadedAnime record', () => {
+      // Decision 1: the getter has never collected these (its `animeName &&`
+      // term gates on the lookup), and the reconcile keeps that behaviour.
+      // Collecting orphans is a separate decision with its own blast radius.
+      const { svc, store } = svcWithDirs({
+        downloadedAnime: {},
+        downloadedEpisodes: { [KEY_1]: META }
+      })
+
+      expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 0 })
+      expect(keys(store)).toEqual([KEY_1])
+    })
+
+    it('keeps a restored paused group whose file is still only a .part', () => {
+      // The state `loadQueue` leaves at launch: queued/downloading items come
+      // back as `paused`, `getEpisodeGroups` skips only `cancelled`, and
+      // `episodeFileExists` never probes `.part`. Without the passed-in
+      // exemption this sweep would delete a live download's metadata on EVERY
+      // launch — worse than the bug #423 fixes, because it needs no settings
+      // change.
+      const { svc, store } = svcWithDirs({
+        downloadedAnime: ANIME,
+        downloadedEpisodes: { [KEY_1]: META }
+      })
+      writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv.part')
+
+      expect(svc.reconcileDownloadedEpisodes(new Set([7]))).toEqual({ kept: 1, dropped: 0 })
+      expect(keys(store)).toEqual([KEY_1])
+    })
+
+    // #421's guards have to travel with the deletion, or this issue silently
+    // reverts it. Each case names `allConfiguredRoots()` explicitly so a rebase
+    // cannot quietly re-point the predicate at the mode-scoped `dirsForScan()`.
+    describe('scan-root safety, ported from the getter (#421)', () => {
+      it('keeps every entry while the cold drive is away, advanced mode (setup 3)', () => {
+        // No settings change at all: `hot/Show/` is the folder a cold move left
+        // behind, so a folder-existence guard would pass here and still wipe.
+        const away = join(tmpRoot, 'away')
+        const { svc, store } = svcWithDirs({
+          coldStorageDir: away,
+          downloadedAnime: ANIME,
+          downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+        })
+        fs.mkdirSync(join(hotDir, 'Show'), { recursive: true })
+        expect(svc.allConfiguredRoots()).toContain(away)
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1, KEY_2])
+      })
+
+      it('keeps a cold-resident entry after an advanced → simple flip (setup 2)', () => {
+        // `hotStorageDir` is empty, so the flip does not move the first scan
+        // root — the cold root simply drops out of `dirsForScan()`, and every
+        // cold-resident entry was collected. Nothing rewrites the store when
+        // the mode comes back.
+        const { svc, store } = svcWithDirs({
+          storageMode: 'simple',
+          downloadDir: hotDir,
+          hotStorageDir: '',
+          coldStorageDir: coldDir,
+          downloadedAnime: ANIME,
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        writeFile(coldDir, 'Show', 'Show - 01 [Crunchy].mkv')
+        expect(svc.dirsForScan()).not.toContain(coldDir)
+        expect(svc.allConfiguredRoots()).toContain(coldDir)
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      it('keeps a downloadDir-resident entry after a simple → advanced flip (setup 4)', () => {
+        // The counter-example to building the union from `getDownloadDir()`: it
+        // returns `hotStorageDir` here, which drops `downloadDir` — the root
+        // every simple-mode download landed in. Nothing migrates those files.
+        const hot2Dir = join(tmpRoot, 'hot2')
+        fs.mkdirSync(hot2Dir, { recursive: true })
+        const { svc, store } = svcWithDirs({
+          downloadDir: hotDir,
+          hotStorageDir: hot2Dir,
+          coldStorageDir: '',
+          downloadedAnime: ANIME,
+          downloadedEpisodes: { [KEY_1]: META }
+        })
+        writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv')
+        expect(svc.getDownloadDir()).toBe(hot2Dir)
+        expect(svc.allConfiguredRoots()).toContain(hotDir)
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 0 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      it('still collects a genuinely absent file while the roots are readable', () => {
+        // The case that stops the fix from being "disable the collector": both
+        // roots are on disk, episode 1 is there, episode 2 is nowhere.
+        const { svc, store } = svcWithDirs({
+          downloadedAnime: ANIME,
+          downloadedEpisodes: { [KEY_1]: META, [KEY_2]: META }
+        })
+        writeFile(hotDir, 'Show', 'Show - 01 [Crunchy].mkv')
+        expect(svc.missingConfiguredRoot()).toBeNull()
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 1, dropped: 1 })
+        expect(keys(store)).toEqual([KEY_1])
+      })
+
+      it('still collects when only the unused downloadsFallbackDir is missing', () => {
+        // The exemption that keeps the collector alive on a straight-to-advanced
+        // profile: `downloadDir` is '' and `<downloads>/anime-dl` was never
+        // created, so checking the fallback would report a missing root forever.
+        const away = join(tmpRoot, 'away')
+        const { svc, store } = buildSvc({
+          downloadsFallbackDir: away,
+          initial: {
+            storageMode: 'advanced',
+            downloadDir: '',
+            hotStorageDir: hotDir,
+            coldStorageDir: '',
+            downloadedAnime: ANIME,
+            downloadedEpisodes: { [KEY_1]: META }
+          }
+        })
+        fs.mkdirSync(join(hotDir, 'Show'), { recursive: true })
+        expect(svc.missingConfiguredRoot()).toBeNull()
+        expect(svc.allConfiguredRoots()).toContain(join(away, 'anime-dl'))
+
+        expect(svc.reconcileDownloadedEpisodes(new Set())).toEqual({ kept: 0, dropped: 1 })
+        expect(keys(store)).toEqual([])
+      })
+    })
+  })
+
   it('episodeHasInProgressDownload detects a .part file', () => {
     const { svc } = svcWithDirs()
     expect(svc.episodeHasInProgressDownload('Show', '1')).toBe(false)

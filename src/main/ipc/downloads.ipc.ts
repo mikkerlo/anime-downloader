@@ -159,35 +159,28 @@ export function register(deps: AppDeps): void {
         .map((g) => g.translationId)
     )
 
-    // A configured root that is away (unmounted drive, re-pointed or deleted
-    // setting) makes `episodeFileExists` answer a false `false` for every file
-    // inside it, and this GC persists its verdict — so one page open would wipe
-    // all of this anime's metadata irreversibly. Skip collecting for the whole
-    // call instead; the trade is phantom ⬇ rows, which are recoverable (#421).
-    // Computed once: it is the same answer for every key and a syscall each time.
-    const missingRoot = coldStorageService.missingConfiguredRoot()
-    if (missingRoot) {
-      console.warn(
-        `[storage] skipping downloadedEpisodes GC — configured root is missing: ${missingRoot}`
-      )
-    }
-
-    let mutated = false
     for (const [key, val] of Object.entries(episodes)) {
       if (!key.startsWith(prefix)) continue
       const rest = key.substring(prefix.length)
       const colonIdx = rest.indexOf(':')
       const episodeInt = colonIdx >= 0 ? rest.substring(0, colonIdx) : rest
 
-      // GC stale metadata whose file is not on disk and which isn't an active download.
+      // Filter out stale metadata whose file is not on disk and which isn't an
+      // active download. Filter only — this handler does not write (#423);
+      // collection is the startup reconcile's job
+      // (`reconcileDownloadedEpisodes`), which is a moment that may write.
+      // Hence no `missingConfiguredRoot()` branch here: #421's skip existed to
+      // protect a `delete`, and there is none left. With a root away the rows
+      // inside it drop out of the return value until it comes back, which is
+      // recoverable because the store still has them.
+      // `animeName &&` stays: an orphan entry (no `downloadedAnime` record) is
+      // returned today, and without that term the condition would go on to ask
+      // `episodeFileExists('', …)` and hide it.
       if (
-        !missingRoot &&
         animeName &&
         !activeTrIds.has(val.translationId) &&
         !coldStorageService.episodeFileExists(animeName, episodeInt, val.author)
       ) {
-        delete episodes[key]
-        mutated = true
         continue
       }
 
@@ -195,7 +188,6 @@ export function register(deps: AppDeps): void {
       result[episodeInt].push(val)
     }
 
-    if (mutated) store.set('downloadedEpisodes', episodes)
     return result
   })
 

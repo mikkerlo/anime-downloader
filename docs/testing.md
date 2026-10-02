@@ -983,7 +983,14 @@ issue with its own measurement, not in the PR that first measured the count.
 `test/check-prose-shape.test.ts` drives `analyze()` over synthetic corpora rather
 than the real tree, for the reason the citation tests give: the real counts are
 the pin itself. The motivating 41-column line is frozen there as a corpus string,
-copied verbatim, because the widths **are** the fixture.
+copied verbatim, because the widths **are** the fixture. One block there does
+read this page (#464), and the reason above still holds of it: it checks that the
+pin's prose restatement — the paragraph immediately above **What it does not
+police.** — opens exactly once and does not spell `RAGGED_PIN`'s own value. That
+last is narrower than "states no figure": a deficit or a column count written
+there passes, deliberately, because this section measures its own population in
+prose. It compares the page with the constant and never with a count taken off
+the tree.
 
 ## Evidence retention
 

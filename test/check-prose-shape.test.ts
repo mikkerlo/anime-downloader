@@ -1,19 +1,36 @@
-// Fixtures for the prose-shape measurement (#370). Every case drives
-// `analyze()` over a synthetic corpus rather than the real tree, for the reason
-// test/check-line-citations.test.ts gives: the real tree's counts are the
-// gate's own pin and move with every repair. Here that is not a general
-// principle but a live constraint — docs/testing.md carries 8 of the 9 hits on
-// this tree and is the file #366 and #369 both renumber, so an assertion
+// Fixtures for the prose-shape measurement (#370). Every case that drives
+// `analyze()` drives it over a synthetic corpus rather than the real tree, for
+// the reason test/check-line-citations.test.ts gives: the real tree's counts are
+// the gate's own pin and move with every repair. Here that is not a general
+// principle but a live constraint — most of the ragged population sits in
+// docs/testing.md, the file #366 and #369 both renumber, so an assertion
 // written against a live line number is a test whose next rebase deletes it.
-// #379 proved the point between PR 1 and PR 2: it added four ragged lines to
-// that file and moved every other one, taking the count from 14 to 18 without
-// touching this gate at all.
+// #379 proved the renumbering half of that between PR 1 and PR 2: it added four
+// ragged lines to that file and moved every other one, taking the count from 14
+// to 18 without touching this gate at all.
+//
+// WHERE the population lives is stated above; HOW BIG it is deliberately is not.
+// This header used to say "docs/testing.md carries 8 of the 9 hits on this tree"
+// and was wrong on both halves from #368 until #464 came back for it. A
+// hand-copied census figure in the test file for the gate that polices
+// hand-copied figures is the defect this file now guards against below, so no
+// replacement figure is written here: the pin moves down whenever one of those
+// lines is genuinely repaired, and its distribution across files moves with it,
+// so any count stated here is one repair away from being the #368 defect again.
+//
+// The one block that does read a real file — the `RAGGED_PIN` restatement cases
+// at the foot of this file (#464) — reads docs/testing.md and compares it with
+// the pin constant, never with a count taken off the tree, so the reason above
+// still holds there.
 //
 // The corpus lives INLINE, which is also why this file needs no `EXCLUDED_PATHS`
 // entry: its ragged prose is a string handed to `analyze()`, never a file on
 // disk, so the gate cannot scan its own test data and there is no path-shaped
-// exclusion to keep in sync.
+// exclusion to keep in sync. The one real-file read above does not change that:
+// it reads another page as text and never hands it to `analyze()`.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import { analyze, classify, report, RAGGED_PIN } from '../scripts/check-prose-shape.mjs'
@@ -1047,5 +1064,381 @@ describe('check-prose-shape', () => {
     expect(report(run({ 'docs/notes.md': ragged })).out.join('\n')).toContain(
       'deficit >= 20 columns'
     )
+  })
+})
+
+// --- #464: the `RAGGED_PIN` restatement in `docs/testing.md` -------------------
+//
+// `scripts/check-prose-shape.mjs:100` ("export const RAGGED_PIN = 8") is
+// restated in prose at `docs/testing.md:935` ("The count is **pinned exactly**"),
+// and until this block nothing compared the restatement with the constant. The
+// restatement states NO figure, which is the only reason it has not rotted yet:
+// there is nothing there to go stale. The exposure is the next edit that adds
+// one — "pinned exactly at 8" — after which the page carries a hand-copied
+// number that moves only when someone remembers. #459 did exactly that to
+// `MARKED_PIN`'s figure on this same page — it raised the constant and left the
+// prose behind — and #460 repaired it by hand, with a human reading the
+// paragraph as the only thing that caught it.
+//
+// THE CLASS WAS LIVE IN THIS FILE, which is the argument for guarding a pin that
+// states no figure at all: the header of this file carried a stale hand-copied
+// census from #368 until #464, wrong in both its numerator and its denominator.
+// It is repaired and reworded above, where it now names the population instead
+// of counting it.
+//
+// SO THE GUARD IS MIRRORED, not a figure check — there is no figure to compare.
+// The anchor must occur exactly once, and the pin's own value must not appear in
+// the span it opens. A figure would naturally go in as "pinned exactly at 8",
+// which breaks the literal and reds on the count, so adding one forces the
+// choice between wiring it into a comparison and taking it back out. This is the
+// treatment #461 gives the citation gate's two figureless pins, for the same
+// reason, and the boundary logic below is that block's as merged.
+//
+// THE LOCATOR IS THE WHOLE DESIGN RISK, as it was there: a brittle one reds on
+// unrelated prose edits and trains people to adjust the pattern instead of the
+// number. This anchor is a bold span inside body text rather than a `- **`
+// bullet heading, so it is shorter and less distinctive than #461's headings,
+// and a rewrap splitting `**pinned\nexactly**` would red it. Taken as a literal
+// anyway, which is #461's split rather than a fresh judgement: it loosens its
+// two FIGURE headings to `\s+` because a rewrap there must not silence a live
+// comparison, and keeps its two FIGURELESS headings as literals because there is
+// no comparison to silence — the whole assertion is that the span states no
+// value of its own, and a rewrap is then a page edit whose loud zero-match red
+// is the correct outcome rather than a false alarm. (A pattern would locate the
+// span just as well: `index` and `[0].length` do what `indexOf` and `.length`
+// do. Nothing about the slice forces the choice; the precedent does.) The
+// exactly-once assertion is what keeps that honest in the other direction — a
+// reworded anchor reds instead of quietly matching nothing.
+//
+// There is no collision with the sibling gate's own pinned-exactly bullet, which
+// the page spells `**Suspicious landings, pinned exactly.**` — no `**` precedes
+// `pinned` there, so it does not contain this literal. Left to the exactly-once
+// count against the real page rather than asserted separately: if that bullet is
+// ever reworded INTO the literal, the count goes to 2 and reds, which is the
+// only direction that matters. Measured, not assumed — see the note at the
+// assertion below.
+//
+// MEASURED ON THE PAGE AS IT STANDS: from the anchor to the blank line that ends
+// its paragraph is 17 lines and 1216 characters, and that span contains no bare
+// integer at all. The issue's first draft claimed this guard fires today on
+// `docs/testing.md:927` ("8 of the 14 were short only because") as "a certainty,
+// not a risk". It does not: that sentence is in the PRECEDING paragraph, and the
+// span runs forward from the anchor, so it never reaches back to it. That is
+// case (b) below, and it is the case this guard exists for — a guard that
+// scanned the section rather than the paragraph would red on the page as it
+// stands, which is the misdiagnosis the bound prevents.
+//
+// Accepted blind spots, recorded rather than implied closed: a figure spelled as
+// a word ("pinned exactly at eight") gets through, and the guard cannot tell a
+// stale pin from a measurement that happens to equal it — hence the hedge in the
+// failure message rather than a flat instruction to move the pin.
+
+const TESTING_DOC = join(import.meta.dirname, '..', 'docs', 'testing.md')
+
+type PinName = 'ragged'
+type DocPins = Record<PinName, number>
+type DocMismatch = { pin: PinName; why: string }
+
+// A literal rather than a pattern, for the reason above. Shaped as a list of one
+// so the next figureless restatement on this page arrives as an entry rather
+// than as a rewrite — #461 carries two in exactly this shape.
+const FIGURELESS_PINS: { pin: PinName; anchor: string }[] = [
+  { pin: 'ragged', anchor: '**pinned exactly**' }
+]
+
+const countLiteral = (text: string, needle: string): number => text.split(needle).length - 1
+
+// Pure, and local to this file on purpose: `RAGGED_PIN` is an `export const` in
+// an ES module, so a test cannot make it disagree with the doc by reassignment.
+// The real-tree case passes `readFileSync` plus the imported constant; the
+// regression cases pass doctored text and frozen pins. The gate script is
+// unchanged and exports nothing new for this.
+const pinProseMismatches = (docText: string, pins: DocPins): DocMismatch[] => {
+  const out: DocMismatch[] = []
+
+  for (const { pin, anchor } of FIGURELESS_PINS) {
+    const found = countLiteral(docText, anchor)
+    if (found !== 1) {
+      out.push({ pin, why: `anchor matched ${found} times, expected exactly 1` })
+      continue
+    }
+    const start = docText.indexOf(anchor)
+    const from = start + anchor.length
+    // THE END BOUNDARY IS DELIBERATE, and it is #461's as merged rather than a
+    // fresh attempt. Its first version bounded on the next `- **` alone, which
+    // bounds nothing: `indexOf` searches the whole remainder of the document, so
+    // the slice runs to the end of the file whenever no further bullet follows —
+    // and on this page nothing follows the anchor's paragraph as a top-level
+    // bullet at all, so that version would take the span from 1216 characters to
+    // 7684, across two headings and every paragraph under them. Measured: that
+    // over-reach reaches no bare 8 on the page as it stands, which is the worse
+    // half of the problem rather than a reprieve — it means the real-tree case
+    // below cannot catch it, and a smaller pin collides far more easily than
+    // this one does. The doctored cases are what carry it.
+    //
+    // So bound at the FIRST of the next bullet, the next blank line and the next
+    // heading. On the real page the blank line is what fires. That leaves the -1
+    // branch below as defence rather than as the mechanism: all three absent
+    // means the page is not shaped the way this guard was written against — a
+    // lazy continuation of the paragraph, or the end of the file — so it is
+    // reported instead of guessed at.
+    const ends = [
+      docText.indexOf('\n- **', from),
+      docText.indexOf('\n\n', from),
+      docText.indexOf('\n#', from)
+    ].filter((at) => at !== -1)
+    if (ends.length === 0) {
+      out.push({
+        pin,
+        why: 'span has no following bullet, blank line or heading, so its body is unbounded'
+      })
+      continue
+    }
+    const body = docText.slice(start, Math.min(...ends))
+    // Keyed on the pin's OWN value rather than on digits in general, which is
+    // #461's revision and matters here too: this page measures its own
+    // population in prose, and the paragraph one blank line up spells a
+    // measurement that happens to equal the pin. The lookbehind drops `#NNN`
+    // issue references and `:NNN` anchors, and `\b` drops a longer run the digit
+    // merely starts.
+    if (new RegExp(String.raw`(?<![#:\d])\b${pins[pin]}\b`).test(body)) {
+      // HEDGED ON PURPOSE, following #461's merged message. The span is 1216
+      // characters of prose about how a pinned count is allowed to move, and it
+      // is clean today only because it spells no number at all; write one of its
+      // quantities as a digit and this fires on a measurement. A message that
+      // only said "move the pin" would then be telling the next reader to do
+      // precisely the wrong thing.
+      out.push({
+        pin,
+        why:
+          `span body contains ${pins[pin]}, this pin's own value — if that is the pin, ` +
+          `nothing compares it, so wire a figure check in or take it back out; if it is a ` +
+          `measurement that happens to equal the pin, spell it as a word so the two stay apart`
+      })
+    }
+  }
+
+  return out
+}
+
+// The number the doctored fixtures below state in their own prose. FROZEN
+// deliberately: a regression case has to keep reproducing this failure after the
+// next pin move, so it compares a fixture against a fixture pin and never
+// against the live constant. It equals `RAGGED_PIN` today, which is exactly why
+// it is written out — read the constant here instead and a pin move silently
+// retunes every case below, including (b), whose preceding paragraph is a
+// verbatim copy of a page that says 8 because the pin is 8.
+const FIXTURE_PINS: DocPins = { ragged: 8 }
+
+// Three paragraphs in the page's own order and shape, each replaceable: the
+// preceding one, which legitimately states a measurement equal to the pin; the
+// one the anchor opens; and a tail past the blank line. Every string here is
+// kept free of citation shapes — and unlike #461's fixtures this is not a
+// stylistic choice: that file sits in the citation gate's `EXCLUDED_PATHS` and
+// this one does not, so a `path:NNN` or bare `:NNN` here is a live anchor
+// against pins that are flush.
+const docFixture = (over: { preceding?: string; span?: string; tail?: string } = {}): string =>
+  [
+    // Copied from the paragraph above the anchor on the real page, digit and
+    // all. This is what makes case (b) a reproduction rather than an invention.
+    over.preceding ??
+      [
+        '**(e) is what keeps the rest honest, and it arrived after the population was',
+        'measured.** The first run reported 14 lines and claimed no false positives.',
+        'Asking _why_ each line was short showed that 8 of the 14 were short only because',
+        'the next thing in the paragraph was an unbreakable backticked path.'
+      ].join('\n'),
+    '',
+    over.span ??
+      [
+        'The count is **pinned exactly**, following `UNCHECKABLE_PIN` rather than',
+        '`SUSPICIOUS_LANDING_PIN`, and the choice is about the instruction the pin',
+        'carries to whoever next reds it. Every line under this one is a real defect',
+        'left unrepaired, so it moves one way only: down.',
+        '**Never re-pin to clear a red.** A number moved to match whatever the tree',
+        'happens to say measures nothing at all.'
+      ].join('\n'),
+    '',
+    // A sentinel tail: it says 8 past the blank line, so a slice that runs to
+    // the end of the document reds the clean case below instead of passing.
+    over.tail ??
+      [
+        'A later paragraph that mentions 8 for its own reasons, well past the blank',
+        'line that ends the span.'
+      ].join('\n')
+  ].join('\n')
+
+describe('the RAGGED_PIN restatement docs/testing.md carries', () => {
+  it('finds no figure in the span the real page opens at the anchor', () => {
+    const doc = readFileSync(TESTING_DOC, 'utf8')
+
+    // A renamed export would arrive here as `undefined`, which makes the
+    // value-not-in-body regex `\bundefined\b` and the whole guard vacuous
+    // instead of red. Stated rather than trusted.
+    expect(Number.isInteger(RAGGED_PIN)).toBe(true)
+
+    expect(pinProseMismatches(doc, { ragged: RAGGED_PIN })).toEqual([])
+
+    // The exactly-once property, stated directly as well as enforced through the
+    // helper, because it is what keeps the locator honest in the other
+    // direction: an anchor that stops matching must red, not pass vacuously.
+    //
+    // THIS IS ALSO WHAT COVERS THE NEAR-COLLISION, and it is the only assertion
+    // that needs to. The sibling gate's `**Suspicious landings, pinned
+    // exactly.**` bullet is on this page and does not contain the literal, so it
+    // does not count here; reword it INTO the literal and this goes to 2 and
+    // reds. Measured both ways: with that bullet reworded to contain the
+    // literal, the helper reports `anchor matched 2 times`. Nothing asserts that
+    // bullet's own wording from here — the other direction (a reword that does
+    // not create the literal) is that bullet's own business, it is pinned in
+    // test/check-line-citations.test.ts, which owns it, and an assertion here
+    // would only red on the page edits this guard has no opinion about.
+    for (const { anchor } of FIGURELESS_PINS) {
+      expect(countLiteral(doc, anchor)).toBe(1)
+    }
+  })
+
+  it('reds when the span states the pin value, and ignores the paragraph above it', () => {
+    // (a) THE EXPOSURE, in the shape it would arrive in: a figure written into
+    // the span body, where nothing compares it with the constant.
+    const stated = docFixture({
+      span: [
+        'The count is **pinned exactly**, following `UNCHECKABLE_PIN` rather than',
+        '`SUSPICIOUS_LANDING_PIN`. The pin is 8 on this tree.'
+      ].join('\n')
+    })
+    expect(pinProseMismatches(stated, FIXTURE_PINS)).toEqual([
+      {
+        pin: 'ragged',
+        why:
+          "span body contains 8, this pin's own value — if that is the pin, nothing compares " +
+          'it, so wire a figure check in or take it back out; if it is a measurement that ' +
+          'happens to equal the pin, spell it as a word so the two stay apart'
+      }
+    ])
+
+    // (b) THE CASE THIS GUARD EXISTS FOR. The default fixture's preceding
+    // paragraph is the real page's, digit and all: it says "8 of the 14" one
+    // blank line above the anchor, and that is a legitimate measurement, not the
+    // pin. A guard that scanned the section rather than the paragraph would red
+    // here — and on the real page — so this clean result is the property under
+    // test, not an absence of one.
+    expect(docFixture()).toContain('8 of the 14')
+    expect(pinProseMismatches(docFixture(), FIXTURE_PINS)).toEqual([])
+
+    // The tail carries the other half: a bare 8 past the blank line, which a
+    // slice that ran to the end of the document would reach. Both digits are in
+    // the fixture and neither is in the span.
+    expect(docFixture()).toContain('mentions 8 for its own reasons')
+  })
+
+  it('reds on a reworded or duplicated anchor rather than matching nothing', () => {
+    // (c) A ZERO-MATCH PASS IS THE FAILURE MODE THIS GUARD HAS, and the figure
+    // arrives in the wording that breaks the literal: "pinned exactly at 8"
+    // leaves `**pinned exactly**` unmatched, so without the count assertion the
+    // comparison would go silent at the exact moment it acquired something to
+    // compare.
+    const withFigure = docFixture({
+      span: [
+        'The count is **pinned exactly at 8**, following `UNCHECKABLE_PIN` rather',
+        'than `SUSPICIOUS_LANDING_PIN`.'
+      ].join('\n')
+    })
+    expect(pinProseMismatches(withFigure, FIXTURE_PINS)).toEqual([
+      { pin: 'ragged', why: 'anchor matched 0 times, expected exactly 1' }
+    ])
+
+    // An ordinary rewording reds the same way. Loud, and the message says what
+    // happened rather than reporting a clean page.
+    const reworded = docFixture({
+      span: 'The count is pinned to an exact figure, following `UNCHECKABLE_PIN`.'
+    })
+    expect(pinProseMismatches(reworded, FIXTURE_PINS)).toEqual([
+      { pin: 'ragged', why: 'anchor matched 0 times, expected exactly 1' }
+    ])
+
+    // Both directions, not just the zero one: weakening `found !== 1` to
+    // `found < 1` has to red here. Duplicated, the body slice would take
+    // whichever copy came first and the other would go unguarded.
+    const twice = docFixture({
+      span: [
+        'The count is **pinned exactly**, following `UNCHECKABLE_PIN`.',
+        'Restated in a later summary: the count is **pinned exactly**.'
+      ].join('\n')
+    })
+    expect(pinProseMismatches(twice, FIXTURE_PINS)).toEqual([
+      { pin: 'ragged', why: 'anchor matched 2 times, expected exactly 1' }
+    ])
+  })
+
+  it('ends the span at the next blank line, bullet or heading, whichever comes first', () => {
+    // A bullet list immediately below the anchor's sentence bounds it just as a
+    // blank line does. Not the arm the real page takes — nothing follows that
+    // paragraph as a top-level bullet — but it is the arm #461's first version
+    // relied on alone, and the only one of the three that can fire with no
+    // whitespace in front of it.
+    const bulleted = [
+      'The count is **pinned exactly**, following `UNCHECKABLE_PIN`.',
+      '- **A bullet immediately below.** It says 8, outside the span.',
+      '',
+      'And a paragraph that says 8 as well.'
+    ].join('\n')
+    expect(pinProseMismatches(bulleted, FIXTURE_PINS)).toEqual([])
+
+    // Same for a heading hard against the sentence.
+    const headed = [
+      'The count is **pinned exactly**, following `UNCHECKABLE_PIN`.',
+      '## What it does not police',
+      '',
+      'A section that says 8 well below the span.'
+    ].join('\n')
+    expect(pinProseMismatches(headed, FIXTURE_PINS)).toEqual([])
+
+    // DEFENCE, not the mechanism: with no following bullet, blank line or
+    // heading, the span's extent is whatever the rest of the file is — a lazy
+    // continuation line here, which markdown folds into the paragraph and this
+    // helper will not guess about.
+    const unbounded = [
+      'A preceding paragraph.',
+      '',
+      'The count is **pinned exactly**, following `UNCHECKABLE_PIN`.',
+      'A lazy continuation line, with no blank line before it, that says 8.'
+    ].join('\n')
+    expect(pinProseMismatches(unbounded, FIXTURE_PINS)).toEqual([
+      {
+        pin: 'ragged',
+        why: 'span has no following bullet, blank line or heading, so its body is unbounded'
+      }
+    ])
+  })
+
+  it('ignores an issue reference and a longer run the pin merely starts', () => {
+    // The keying, in the two arms this file can demonstrate. The lookbehind's
+    // third arm — a pathless anchor, spelled as a colon against the pin with no
+    // path in front of it — is NOT reproduced here, and measured rather than
+    // feared: the first draft of this comment spelled one out in backticks and
+    // took the sibling gate's uncheckable count from 116 to 117 against a pin
+    // that is exact. This file is outside that gate's `EXCLUDED_PATHS`, so it
+    // cannot write the shape it wants to talk about; #461's fixtures cover that
+    // arm from inside the excluded file.
+    const noise = [
+      'The count is **pinned exactly**, following `UNCHECKABLE_PIN`: #8 took it the',
+      'other way, the widest block is 88 columns and one paragraph runs to 8572.'
+    ].join('\n')
+    expect(pinProseMismatches(docFixture({ span: noise }), FIXTURE_PINS)).toEqual([])
+
+    // And the same span with a bare 8 in it does red, so the clean result above
+    // is a property of the keying rather than of a guard that never fires.
+    expect(
+      pinProseMismatches(docFixture({ span: `${noise} The pin is 8.` }), FIXTURE_PINS)
+    ).toEqual([
+      {
+        pin: 'ragged',
+        why:
+          "span body contains 8, this pin's own value — if that is the pin, nothing compares " +
+          'it, so wire a figure check in or take it back out; if it is a measurement that ' +
+          'happens to equal the pin, spell it as a word so the two stay apart'
+      }
+    ])
   })
 })

@@ -418,10 +418,19 @@ Metadata invariants:
   moved to `coldStorageService.reconcileDownloadedEpisodes(activeTranslationIds)`,
   a whole-store pass hosted by a delayed `setTimeout` in `bootstrap` beside the
   other startup sweeps — a moment that is allowed to write. It logs
-  `[storage] downloadedEpisodes reconcile: kept N, dropped M` only when it
-  dropped something. The trade: a genuinely stale entry survives in the store
-  until the next launch. It is invisible in the UI either way, so the cost is
-  store size, not correctness — but the store is no longer self-healing on read.
+  `[storage] downloadedEpisodes reconcile: kept N, dropped M stale entries` only
+  when it dropped something. The trade: a genuinely stale entry survives in the
+  store until the next launch. It is invisible in the UI, but **not** cost-free,
+  and the reason is a second reader that never passes through the getter's
+  filter: `auto-downloader.ts` reads raw `downloadedEpisodes` keys in
+  `isAlreadyDownloaded` (`src/main/auto-downloader.ts:211`, acted on at `:338`)
+  and in `mostRecentDownloadedTranslation` (`:198`). So for the rest of the
+  session a stale entry also stops auto-download from re-fetching that episode,
+  and can steer its preferred-translation pick. That was equally true before
+  this split — until whenever the user happened to open the page — so it is not
+  a regression, and a once-per-launch collection is more predictable than one
+  that depends on which pages got opened. Do not read this as "store size only"
+  when touching auto-dl dedup. The store is also no longer self-healing on read.
   Only the reconcile persists a verdict, so the search scope is part of *its*
   invariant: when the scope moved with `storageMode` (before #421), one settings
   toggle deleted every entry for the anime being viewed, permanently — nothing

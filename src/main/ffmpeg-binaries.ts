@@ -80,7 +80,7 @@ async function downloadToFile(
 const ISSUES_URL = 'https://github.com/mikkerlo/anime-downloader/issues'
 
 const DISK_ADVICE =
-  'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+  'Check free disk space and permissions on the temp and app data folders; the install retries on next launch.'
 
 /**
  * Tell a local filesystem failure apart from a transport one (#472).

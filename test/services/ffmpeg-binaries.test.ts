@@ -295,7 +295,7 @@ describe('ensureFfmpeg zip install', () => {
     // advice that would waste their time. A prefix match would pass on either.
     expect(failed![1].message).toBe(
       'ffmpeg: install failed (ENOSPC: no space left on device, write). ' +
-        'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+        'Check free disk space and permissions on the temp and app data folders; the install retries on next launch.'
     )
     expect(failed![1].message).not.toContain('Check your connection')
   })
@@ -360,7 +360,7 @@ describe('ensureFfmpeg zip install', () => {
       expect(failed).toBeDefined()
       expect(failed![1].message).toBe(
         `ffmpeg: install failed while extracting (EISDIR: illegal operation on a directory, open '${partialDir}'). ` +
-          'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+          'Check free disk space and permissions on the temp and app data folders; the install retries on next launch.'
       )
       expect(failed![1].message).not.toContain('probably truncated')
       expect(failed![1].message).not.toContain('Check your connection')

@@ -3,8 +3,10 @@ import { createPinia, setActivePinia } from 'pinia'
 
 type Listener<T> = (data: T) => void
 
+type FfmpegProgress = { status: string; progress?: number; message?: string }
+
 type Captured = {
-  ffmpeg: Listener<{ status: string; progress?: number }>[]
+  ffmpeg: Listener<FfmpegProgress>[]
   fpcalc: Listener<{ status: string; progress?: number }>[]
   updateStatus: Listener<unknown>[]
   getSetting: ReturnType<typeof vi.fn>
@@ -21,7 +23,7 @@ function installApi(getSetting?: ReturnType<typeof vi.fn>): void {
   }
   ;(globalThis as { window?: { api: unknown } }).window = {
     api: {
-      onFfmpegDownloadProgress: (cb: Listener<{ status: string; progress?: number }>) => {
+      onFfmpegDownloadProgress: (cb: Listener<FfmpegProgress>) => {
         captured.ffmpeg.push(cb)
         return () => {}
       },
@@ -62,6 +64,47 @@ describe('useSettingsStore', () => {
     expect(store.ffmpegProgress).toBe(42)
     captured.ffmpeg[0]({ status: 'done' })
     expect(store.ffmpegDownloading).toBe(false)
+  })
+
+  it('parks the reason in ffmpegError on a "failed" payload', async () => {
+    // On main a 'failed' status falls into the bare `else`, which only clears
+    // ffmpegDownloading — the overlay vanishes as if the install had worked and
+    // the message is dropped on the floor (#469).
+    const { useSettingsStore } = await import('../../../src/renderer/src/stores/settings')
+    const store = useSettingsStore()
+    captured.ffmpeg[0]({ status: 'downloading', progress: 30 })
+    captured.ffmpeg[0]({
+      status: 'failed',
+      message: 'ffmpeg: ffmpeg-6.1-linux-64.zip is not a valid zip archive'
+    })
+    expect(store.ffmpegDownloading).toBe(false)
+    expect(store.ffmpegError).toBe('ffmpeg: ffmpeg-6.1-linux-64.zip is not a valid zip archive')
+  })
+
+  it('falls back to a generic reason when a "failed" payload carries no message', async () => {
+    const { useSettingsStore } = await import('../../../src/renderer/src/stores/settings')
+    const store = useSettingsStore()
+    captured.ffmpeg[0]({ status: 'failed' })
+    expect(store.ffmpegError).toBe('ffmpeg installation failed.')
+  })
+
+  it('clearFfmpegError empties the error (the Dismiss button contract)', async () => {
+    const { useSettingsStore } = await import('../../../src/renderer/src/stores/settings')
+    const store = useSettingsStore()
+    captured.ffmpeg[0]({ status: 'failed', message: 'boom' })
+    expect(store.ffmpegError).toBe('boom')
+    store.clearFfmpegError()
+    expect(store.ffmpegError).toBe('')
+  })
+
+  it('a later "downloading" tick clears a stale ffmpegError', async () => {
+    const { useSettingsStore } = await import('../../../src/renderer/src/stores/settings')
+    const store = useSettingsStore()
+    captured.ffmpeg[0]({ status: 'failed', message: 'boom' })
+    captured.ffmpeg[0]({ status: 'downloading', progress: 10 })
+    expect(store.ffmpegError).toBe('')
+    expect(store.ffmpegDownloading).toBe(true)
+    expect(store.ffmpegProgress).toBe(10)
   })
 
   it('defaults ffmpegProgress to 0 when the payload omits it', async () => {

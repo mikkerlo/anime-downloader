@@ -4,9 +4,9 @@ import * as fs from 'fs'
 import * as fsPromises from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
-import { spawn } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
+import { extractZip } from './lib/unzip'
 
 const FFMPEG_VERSION = '6.1'
 const RELEASE_BASE = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}`
@@ -77,19 +77,76 @@ async function downloadToFile(
   await pipeline(reader, fs.createWriteStream(dest))
 }
 
-function runTar(args: string[], cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('tar', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stderr = ''
-    proc.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
-    proc.on('error', reject)
-    proc.on('exit', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`tar exited with ${code}: ${stderr.trim()}`))
-    })
-  })
+const ISSUES_URL = 'https://github.com/mikkerlo/anime-downloader/issues'
+
+const DISK_ADVICE =
+  'Check free disk space and permissions on the temp and app data folders; the install retries on next launch.'
+
+/**
+ * Tell a local filesystem failure apart from a transport one (#472).
+ *
+ * Node puts `syscall` on the error it raises for a failed syscall — `ENOSPC`
+ * from the write stream in `downloadToFile` (~29 MB per archive, ~79 MB once
+ * inflated), `EACCES`/`EPERM` from `fs.mkdirSync(dest)` or `fs.mkdtempSync`, a
+ * failed `rename`. An offline `fetch` rejects with a `TypeError` that keeps its
+ * errno detail on `cause` instead, so the property on the error itself is
+ * enough to split the two: without this check a full disk is reported as
+ * "Check your connection", which sends the user in the wrong direction.
+ */
+function isFilesystemError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'syscall' in err
+}
+
+/**
+ * Wrap `extractZip`'s structural message (#469) with the `ffmpeg:` prefix and
+ * the recovery step the user can actually take. The extractor is shared with
+ * fpcalc, so it deliberately knows nothing about either product; the split is
+ * asserted on both sides in the tests.
+ */
+function describeExtractFailure(err: unknown): string {
+  const inner = err instanceof Error ? err.message : String(err)
+  // An unsupported method is a zip-feature gap on our side — nothing the user
+  // can do but tell us. Everything else (no EOCD, truncated directory, a short
+  // entry) means the bytes on disk are bad, and deleting them is the fix.
+  if (/unsupported zip compression method/.test(inner)) {
+    return `ffmpeg: ${inner}. Please report this at ${ISSUES_URL}.`
+  }
+  // `extractEntry` rethrows the raw fs error, so an `ENOSPC` while inflating
+  // the ~79 MB of binaries arrives here too — and "probably truncated" is just
+  // as wrong an answer as blaming the network (#472).
+  if (isFilesystemError(err)) {
+    return `ffmpeg: install failed while extracting (${inner}). ${DISK_ADVICE}`
+  }
+  return (
+    `ffmpeg: ${inner} — the download was probably truncated. ` +
+    'Delete the ffmpeg binaries in Settings → Debug and relaunch to retry.'
+  )
+}
+
+/**
+ * Last stop before the text reaches the user (#469). Everything this module
+ * raises itself already names ffmpeg and carries its own next step — the
+ * extractor wrap above, the `!res.ok` text in `downloadToFile`, the
+ * binary-not-found throw, the unsupported-platform throw. Anything else came
+ * from under us, and an offline `fetch` rejects with the bare two words
+ * `fetch failed`, which is the single most likely thing the new error modal
+ * will ever display. Give those a prefix and a next step — but only after
+ * `isFilesystemError` has taken the local failures out, because a full disk or
+ * an unwritable app data folder has nothing to do with the connection.
+ *
+ * Only the broadcast text is rewritten; `ensureFfmpeg` still rethrows the
+ * original error so `cause` chains and existing callers are untouched.
+ */
+function describeInstallFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/^ffmpeg[: ]/.test(message)) return message
+  if (isFilesystemError(err)) {
+    return `ffmpeg: install failed (${message}). ${DISK_ADVICE}`
+  }
+  return (
+    `ffmpeg: download failed (${message}). ` +
+    'Check your connection; the install retries on next launch.'
+  )
 }
 
 async function findBinaryRecursively(dir: string, name: string): Promise<string | null> {
@@ -118,11 +175,18 @@ async function fetchComponent(
   finalPath: string,
   onProgress: (received: number, total: number) => void
 ): Promise<void> {
-  const tmpArchive = path.join(os.tmpdir(), `${randomToken()}-${component}-${FFMPEG_VERSION}.zip`)
+  // The randomness lives in the directory, not the filename, so the archive on
+  // disk keeps its real asset name — `extractZip` labels its errors with the
+  // basename and the user-facing message has to name the asset, not a token.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-dl-ffmpeg-'))
+  const tmpArchive = path.join(tmpDir, `${component}-${FFMPEG_VERSION}-${slug}.zip`)
   try {
     await downloadToFile(archiveUrl(component, slug), tmpArchive, onProgress)
-    // tar on Windows 10+, Linux, and macOS all extract .zip via -xf
-    await runTar(['-xf', tmpArchive], destDir)
+    try {
+      await extractZip(tmpArchive, destDir)
+    } catch (err) {
+      throw new Error(describeExtractFailure(err), { cause: err })
+    }
     const extracted = await findBinaryRecursively(destDir, binaryName)
     if (!extracted)
       throw new Error(
@@ -140,7 +204,7 @@ async function fetchComponent(
     }
   } finally {
     try {
-      fs.unlinkSync(tmpArchive)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
     } catch {
       /* ignore */
     }
@@ -159,23 +223,28 @@ export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
     return ffmpegBin
   }
 
-  const platInfo = detectFfmpegPlatform()
-  if (!platInfo) {
-    throw new Error(`ffmpeg: unsupported platform ${process.platform}/${process.arch}`)
-  }
-
-  fs.mkdirSync(dest, { recursive: true })
-
-  const sendProgress = (status: string, progress?: number): void => {
+  const sendProgress = (status: string, progress?: number, message?: string): void => {
     if (win && !win.isDestroyed()) {
-      win.webContents.send(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS, { status, progress })
+      win.webContents.send(EVENT_CHANNELS.FFMPEG_DOWNLOAD_PROGRESS, { status, progress, message })
     }
   }
 
-  console.log(`[ffmpeg] Downloading ffmpeg + ffprobe ${FFMPEG_VERSION} for ${platInfo.slug} ...`)
-  sendProgress('downloading', 0)
-
   try {
+    // Inside the `try`, and below `sendProgress`, on purpose (#469). This throw
+    // used to sit above both, so an unsupported platform was the one install
+    // failure that never emitted `'failed'` at all — not a renderer-subscription
+    // race, just a report that was never sent. It now reports like every other
+    // failure.
+    const platInfo = detectFfmpegPlatform()
+    if (!platInfo) {
+      throw new Error(`ffmpeg: unsupported platform ${process.platform}/${process.arch}`)
+    }
+
+    fs.mkdirSync(dest, { recursive: true })
+
+    console.log(`[ffmpeg] Downloading ffmpeg + ffprobe ${FFMPEG_VERSION} for ${platInfo.slug} ...`)
+    sendProgress('downloading', 0)
+
     const components: Array<{ name: 'ffmpeg' | 'ffprobe'; binary: string; finalPath: string }> = [
       { name: 'ffmpeg', binary: platInfo.binaryName, finalPath: ffmpegBin },
       {
@@ -202,12 +271,10 @@ export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
     console.log(`[ffmpeg] Installed ffmpeg + ffprobe at ${dest}`)
     return ffmpegBin
   } catch (err) {
-    sendProgress('failed')
+    // The renderer renders this verbatim (#469) — it is the only place a user
+    // ever learns why merging is unavailable.
+    sendProgress('failed', undefined, describeInstallFailure(err))
     console.error('[ffmpeg] Failed to install:', err)
     throw err
   }
-}
-
-function randomToken(): string {
-  return Math.random().toString(36).slice(2, 10)
 }

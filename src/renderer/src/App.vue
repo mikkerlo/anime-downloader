@@ -28,7 +28,7 @@ const settingsStore = useSettingsStore();
 const shikimoriStore = useShikimoriStore();
 const { currentView, activeAnimeId, activeFocusEpisodeInt } = storeToRefs(libraryStore);
 const { playerState, animePrefs } = storeToRefs(playerStore);
-const { shortcuts, ffmpegDownloading, ffmpegProgress } = storeToRefs(settingsStore);
+const { shortcuts, ffmpegDownloading, ffmpegProgress, ffmpegError } = storeToRefs(settingsStore);
 
 const searchViewRef = ref<InstanceType<typeof SearchView> | null>(null);
 
@@ -210,8 +210,14 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <div v-if="ffmpegDownloading" class="ffmpeg-overlay">
-      <div class="ffmpeg-modal">
+    <div v-if="ffmpegDownloading || ffmpegError" class="ffmpeg-overlay">
+      <div v-if="ffmpegError" class="ffmpeg-modal">
+        <p class="ffmpeg-title">ffmpeg install failed</p>
+        <p class="ffmpeg-error">{{ ffmpegError }}</p>
+        <p class="ffmpeg-hint">Merging video and subtitles stays unavailable until this works.</p>
+        <button class="ffmpeg-dismiss" @click="settingsStore.clearFfmpegError()">Dismiss</button>
+      </div>
+      <div v-else class="ffmpeg-modal">
         <div class="ffmpeg-spinner"></div>
         <p class="ffmpeg-title">Downloading ffmpeg...</p>
         <div class="ffmpeg-progress-bar">
@@ -303,6 +309,31 @@ onBeforeUnmount(() => {
   margin-top: 0.5rem;
   font-size: 0.75rem;
   color: var(--text-3);
+}
+
+.ffmpeg-error {
+  max-width: 420px;
+  margin: 0 auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-2);
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.ffmpeg-dismiss {
+  margin-top: 1.25rem;
+  padding: 0.5rem 1.25rem;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-btn);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.ffmpeg-dismiss:hover {
+  background: var(--surface-2);
 }
 
 .cleanup-toast {

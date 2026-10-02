@@ -4,8 +4,12 @@
 // - `shortcuts` — the resolved keyboard binding map used by App.vue to match
 //   keydown events. Loaded from `getSetting('keyboardShortcuts')` and refreshed
 //   whenever the user leaves the Settings tab.
-// - `ffmpegDownloading` / `ffmpegProgress` — drives the global "Downloading
-//   ffmpeg…" overlay App.vue renders on first launch.
+// - `ffmpegDownloading` / `ffmpegProgress` / `ffmpegError` — drives the global
+//   "Downloading ffmpeg…" overlay App.vue renders on first launch. A `'failed'`
+//   broadcast used to fall into the catch-all branch and just hide the overlay,
+//   so a broken install looked exactly like a successful one (#469); it now
+//   parks the reason in `ffmpegError` and the overlay stays up until the user
+//   dismisses it or a later `'downloading'` tick supersedes it.
 // - `fpcalcDownloading` / `fpcalcProgress` — parallel state for the chromaprint
 //   binary; no UI surface today, plumbed for future use.
 // - `updateStatus` — last seen auto-update status. Broader local UI type than
@@ -32,9 +36,15 @@ export const useSettingsStore = defineStore('settings', () => {
   const shortcuts = ref<Record<string, string>>({})
   const ffmpegDownloading = ref(false)
   const ffmpegProgress = ref(0)
+  const ffmpegError = ref('')
   const fpcalcDownloading = ref(false)
   const fpcalcProgress = ref(0)
   const updateStatus = ref<UiUpdateStatus>({ status: 'idle' })
+
+  /** Dismiss button on the ffmpeg error overlay; session-scoped, not persisted. */
+  function clearFfmpegError(): void {
+    ffmpegError.value = ''
+  }
 
   async function loadShortcuts(): Promise<void> {
     shortcuts.value =
@@ -48,6 +58,11 @@ export const useSettingsStore = defineStore('settings', () => {
     if (data.status === 'downloading') {
       ffmpegDownloading.value = true
       ffmpegProgress.value = data.progress ?? 0
+      // A retry that gets going must not keep painting the previous failure.
+      ffmpegError.value = ''
+    } else if (data.status === 'failed') {
+      ffmpegDownloading.value = false
+      ffmpegError.value = data.message ?? 'ffmpeg installation failed.'
     } else {
       ffmpegDownloading.value = false
     }
@@ -68,9 +83,11 @@ export const useSettingsStore = defineStore('settings', () => {
     shortcuts,
     ffmpegDownloading,
     ffmpegProgress,
+    ffmpegError,
     fpcalcDownloading,
     fpcalcProgress,
     updateStatus,
+    clearFfmpegError,
     loadShortcuts
   }
 })

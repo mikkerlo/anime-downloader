@@ -239,6 +239,29 @@ describe('extractZip', () => {
     }
   )
 
+  it.skipIf(process.platform === 'win32')(
+    'drops setuid/setgid/sticky from the recorded mode and keeps the permission bits',
+    async () => {
+      // A zip we fetched over the network gets to say "0755" and nothing more
+      // (#472). The mask used to be `& 0o7777`, which copied all three special
+      // bits straight out of the archive; `& 0o777` keeps only the bits this
+      // line exists to carry. Asserted against the full `& 0o7777` on purpose —
+      // the test above masks to `& 0o777` and is blind to exactly these bits.
+      const archive = writeArchive(
+        'special-bits.zip',
+        buildZip([
+          { name: 'ffmpeg', data: Buffer.from('x'), mode: 0o7755 },
+          { name: 'notes.txt', data: Buffer.from('y'), mode: 0o4644 }
+        ])
+      )
+
+      await extractZip(archive, destDir)
+
+      expect(fs.statSync(path.join(destDir, 'ffmpeg')).mode & 0o7777).toBe(0o755)
+      expect(fs.statSync(path.join(destDir, 'notes.txt')).mode & 0o7777).toBe(0o644)
+    }
+  )
+
   it('refuses an entry whose name escapes the destination directory', async () => {
     const archive = writeArchive(
       'traversal.zip',

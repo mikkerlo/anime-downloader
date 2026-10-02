@@ -220,7 +220,9 @@ async function extractEntry(
 
     // Unix mode lives in the high 16 bits of the external-attributes field.
     // Belt-and-braces only: ffmpeg-binaries.ts still chmods the final path.
-    const mode = (entry.externalAttributes >>> 16) & 0o7777
+    // Permission bits only (#472): a wider mask would copy setuid/setgid/sticky
+    // out of a fetched archive, and carrying execute over is all this is for.
+    const mode = (entry.externalAttributes >>> 16) & 0o777
     if (mode !== 0 && process.platform !== 'win32') {
       await fsPromises.chmod(target, mode)
     }

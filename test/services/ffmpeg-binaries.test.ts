@@ -264,7 +264,108 @@ describe('ensureFfmpeg zip install', () => {
     expect(failed![1].message).toBe(
       'ffmpeg: download failed (fetch failed). Check your connection; the install retries on next launch.'
     )
+    // Explicit: the fs branch added for #472 must not swallow this one.
+    expect(failed![1].message).not.toContain('free disk space')
   })
+
+  it('blames the disk, not the connection, for a local filesystem failure', async () => {
+    // `downloadToFile`'s write stream (~29 MB per archive), `fs.mkdirSync(dest)`,
+    // `fs.mkdtempSync` and the final `rename` all land in the same catch as an
+    // offline `fetch`, so a full disk used to be reported as "Check your
+    // connection" — which sends the user somewhere that cannot help (#472).
+    // Node puts `syscall` on the error it raises for a failed syscall, which is
+    // what splits the two cases.
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      Object.assign(new Error('ENOSPC: no space left on device, write'), {
+        code: 'ENOSPC',
+        syscall: 'write'
+      })
+    )
+
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+      typeof ensureFfmpeg
+    >[0]
+
+    await expect(ensureFfmpeg(win)).rejects.toThrow('ENOSPC: no space left on device, write')
+
+    const failed = send.mock.calls.find((c) => c[1]?.status === 'failed')
+    expect(failed).toBeDefined()
+    // Both halves asserted: the advice the user needs, and the absence of the
+    // advice that would waste their time. A prefix match would pass on either.
+    expect(failed![1].message).toBe(
+      'ffmpeg: install failed (ENOSPC: no space left on device, write). ' +
+        'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+    )
+    expect(failed![1].message).not.toContain('Check your connection')
+  })
+
+  it('still blames the connection for an offline fetch, whose errno hides on `cause`', async () => {
+    // The real offline shape, and the reason the check looks at the error itself
+    // rather than walking the chain: `fetch` rejects with a `TypeError` that
+    // carries no `syscall` of its own and keeps the errno detail on `cause`. If
+    // the #472 split consulted `cause`, this would be misfiled as a disk fault.
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), {
+          code: 'ENOTFOUND',
+          syscall: 'getaddrinfo'
+        })
+      })
+    )
+
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+      typeof ensureFfmpeg
+    >[0]
+
+    await expect(ensureFfmpeg(win)).rejects.toThrow('fetch failed')
+
+    const failed = send.mock.calls.find((c) => c[1]?.status === 'failed')
+    expect(failed).toBeDefined()
+    expect(failed![1].message).toBe(
+      'ffmpeg: download failed (fetch failed). Check your connection; the install retries on next launch.'
+    )
+    expect(failed![1].message).not.toContain('free disk space')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'blames the disk for a filesystem failure while extracting, not a truncated download',
+    async () => {
+      // `extractEntry` rethrows the raw fs error, so an `ENOSPC` while inflating
+      // the ~79 MB of binaries used to arrive as "the download was probably
+      // truncated" — and the recovery step it offers, deleting the binaries,
+      // does nothing about a full disk (#472). A directory sitting where the
+      // `.partial` wants to go is the same class of failure (`EISDIR`, with
+      // `syscall: 'open'`) and needs no stubbing of `fs`, which ESM forbids.
+      const partialDir = path.join(getFfmpegDir(), `${ffmpegEntry}.partial`)
+      fs.mkdirSync(partialDir, { recursive: true })
+
+      const archive = buildSingleEntryZip(ffmpegEntry, ffmpegBytes)
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        return new Response(new Uint8Array(archive), {
+          status: 200,
+          headers: { 'content-length': String(archive.length) }
+        })
+      })
+
+      const send = vi.fn()
+      const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+        typeof ensureFfmpeg
+      >[0]
+
+      await expect(ensureFfmpeg(win)).rejects.toThrow(/EISDIR/)
+
+      const failed = send.mock.calls.find((c) => c[1]?.status === 'failed')
+      expect(failed).toBeDefined()
+      expect(failed![1].message).toBe(
+        `ffmpeg: install failed while extracting (EISDIR: illegal operation on a directory, open '${partialDir}'). ` +
+          'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+      )
+      expect(failed![1].message).not.toContain('probably truncated')
+      expect(failed![1].message).not.toContain('Check your connection')
+    }
+  )
 
   it('leaves a message that already names ffmpeg alone', async () => {
     // `downloadToFile`'s `!res.ok` text reads well on its own; double-prefixing

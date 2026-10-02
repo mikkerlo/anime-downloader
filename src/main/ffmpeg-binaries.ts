@@ -79,6 +79,24 @@ async function downloadToFile(
 
 const ISSUES_URL = 'https://github.com/mikkerlo/anime-downloader/issues'
 
+const DISK_ADVICE =
+  'Check free disk space and permissions on the app data folder; the install retries on next launch.'
+
+/**
+ * Tell a local filesystem failure apart from a transport one (#472).
+ *
+ * Node puts `syscall` on the error it raises for a failed syscall — `ENOSPC`
+ * from the write stream in `downloadToFile` (~29 MB per archive, ~79 MB once
+ * inflated), `EACCES`/`EPERM` from `fs.mkdirSync(dest)` or `fs.mkdtempSync`, a
+ * failed `rename`. An offline `fetch` rejects with a `TypeError` that keeps its
+ * errno detail on `cause` instead, so the property on the error itself is
+ * enough to split the two: without this check a full disk is reported as
+ * "Check your connection", which sends the user in the wrong direction.
+ */
+function isFilesystemError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'syscall' in err
+}
+
 /**
  * Wrap `extractZip`'s structural message (#469) with the `ffmpeg:` prefix and
  * the recovery step the user can actually take. The extractor is shared with
@@ -93,6 +111,12 @@ function describeExtractFailure(err: unknown): string {
   if (/unsupported zip compression method/.test(inner)) {
     return `ffmpeg: ${inner}. Please report this at ${ISSUES_URL}.`
   }
+  // `extractEntry` rethrows the raw fs error, so an `ENOSPC` while inflating
+  // the ~79 MB of binaries arrives here too — and "probably truncated" is just
+  // as wrong an answer as blaming the network (#472).
+  if (isFilesystemError(err)) {
+    return `ffmpeg: install failed while extracting (${inner}). ${DISK_ADVICE}`
+  }
   return (
     `ffmpeg: ${inner} — the download was probably truncated. ` +
     'Delete the ffmpeg binaries in Settings → Debug and relaunch to retry.'
@@ -106,7 +130,9 @@ function describeExtractFailure(err: unknown): string {
  * binary-not-found throw, the unsupported-platform throw. Anything else came
  * from under us, and an offline `fetch` rejects with the bare two words
  * `fetch failed`, which is the single most likely thing the new error modal
- * will ever display. Give those a prefix and a next step.
+ * will ever display. Give those a prefix and a next step — but only after
+ * `isFilesystemError` has taken the local failures out, because a full disk or
+ * an unwritable app data folder has nothing to do with the connection.
  *
  * Only the broadcast text is rewritten; `ensureFfmpeg` still rethrows the
  * original error so `cause` chains and existing callers are untouched.
@@ -114,6 +140,9 @@ function describeExtractFailure(err: unknown): string {
 function describeInstallFailure(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
   if (/^ffmpeg[: ]/.test(message)) return message
+  if (isFilesystemError(err)) {
+    return `ffmpeg: install failed (${message}). ${DISK_ADVICE}`
+  }
   return (
     `ffmpeg: download failed (${message}). ` +
     'Check your connection; the install retries on next launch.'

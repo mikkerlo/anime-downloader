@@ -229,7 +229,7 @@ look the same from the outside.
 **Everything latency-shaped.** Loopback `serverRtt` measured between 0.0003 s and
 0.0013 s across every run here. That is three orders of magnitude below the
 paused tolerance, so the `messageAge` perturbation
-(`test/helpers/syncplay-min-election-server.ts:928` ("w.position = position +
+(`test/helpers/syncplay-min-election-server.ts:945` ("w.position = position +
 (ps.paused === true ? 0 : this.forwardDelayFor(w))")), `forwardDelay`, and the
 `echoHoldCorrection` echo are all unobservable: the model could compute them any
 way at all and this suite would still report agreement. They stay owned by

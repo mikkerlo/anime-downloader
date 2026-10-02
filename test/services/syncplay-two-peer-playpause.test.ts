@@ -59,7 +59,7 @@ const DELAY_MS = 50
  *    against the adopted exit at `src/main/syncplay.ts:2411-2415`, which does
  *    send `paused`). The server reads a missing `paused` as "not paused" and
  *    compensates it by a forward delay —
- *    `test/helpers/syncplay-min-election-server.ts:928` ("w.position = position +
+ *    `test/helpers/syncplay-min-election-server.ts:945` ("w.position = position +
  *    (ps.paused === true ? 0 : this.forwardDelayFor(w))") — so it stores this
  *    value for the host, the t=2000 election elects it, and the joiner's `Hello`,
  *    answered in that same second, carries it out.
@@ -190,7 +190,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // `paused: true`, `setBy` the host — and both halves of the apply rule have
     // to fire off that one frame. That it is the join-time frame and not a
     // periodic is measured, not assumed: suppressing the send guarded by
-    // `test/helpers/syncplay-min-election-server.ts:783` ("if (joined) {") in the
+    // `test/helpers/syncplay-min-election-server.ts:800` ("if (joined) {") in the
     // fixture's `Hello` arm moves the joiner's first frame from t=2050 to t=3050
     // and its single seek write from `JOIN_TIME_ROOM_POSITION` to `ROOM_START`.
     // The element is seated at 0 and *playing*, which is what a freshly bound

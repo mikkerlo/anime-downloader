@@ -471,7 +471,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
       // arm was contingent on a fixture infidelity that has since been repaired.
       // The helper now answers `Hello` with `Hello` *and* the reference's
       // join-time `State`
-      // (test/helpers/syncplay-min-election-server.ts:763 ("if ('Hello' in msg) {")),
+      // (test/helpers/syncplay-min-election-server.ts:780 ("if ('Hello' in msg) {")),
       // delivered through `sendState` so that frame pays the link delay like
       // every other `State`; the reference schedules its own just after the
       // handshake. That one frame is the whole of this literal's motion, and what

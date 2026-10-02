@@ -371,6 +371,9 @@ describe('MinElectionServer — PROTOCOL_TIMEOUT as a modelled drop', () => {
     expect(last.Set.user.alpha.event).toEqual({ left: true })
     expect(previous.State.playstate).toBeTruthy()
     expect(alpha.leaves()).toEqual(['alpha'])
+    // The drop tick's own `State` is among them: one per tick up to and including
+    // `edge`. A timeout test placed above the send would leave this one short.
+    expect(alpha.playstates()).toHaveLength(edge / STATE_INTERVAL_MS)
 
     const sent = alpha.frames.length
     vi.advanceTimersByTime(5000)

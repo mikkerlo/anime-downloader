@@ -139,9 +139,9 @@
 //    upstream's is gated on a rooms DB the conformance server is not started
 //    with.
 //
-//    Two pieces of `Room.removeWatcher`
-//    (`server.py:640-647` ("def removeWatcher(self, watcher):")) are
-//    **declared unmodelled** rather than skipped quietly. Its idempotence guard
+//    Three pieces of the removal path are **declared unmodelled** rather than
+//    skipped quietly. Two of them belong to `Room.removeWatcher`
+//    (`server.py:640-647` ("def removeWatcher(self, watcher):")). Its idempotence guard
 //    (`server.py:641` ("if watcher.getName() not in self._watchers:")) and its
 //    delete (`server.py:643` ("del self._watchers[watcher.getName()]")) *are*
 //    modelled; the room-emptied reset
@@ -152,6 +152,23 @@
 //    all: upstream's timer is per-watcher and this model's is room-wide, and
 //    `sendState` is only ever reached through a watcher snapshot, so a removed
 //    watcher stops being ticked by construction.
+//
+//    The third is the close itself. `server.py:863` ("self._connector.drop()")
+//    takes the socket down, where `removeWatcher` below only stops writing to
+//    it — nothing here ever emits `'close'` on the captured socket. That costs
+//    `conformance/`'s wire peers nothing, since they only read frames. But a
+//    `SyncplayClient`-backed fixture under `test/services/` that opted into
+//    `protocolTimeoutMs` would be handed a link that had gone quiet rather than
+//    one that had been dropped, and would reach neither
+//    `src/main/syncplay.ts:1134` ("sock.on('close', () => this.onSocketClose())")
+//    nor its TLS twin
+//    `src/main/syncplay.ts:1314` ("tlsSock.on('close', () => this.onSocketClose())"),
+//    and so not the reconnect `onSocketClose()` leads to — which is what this
+//    client actually does after a real drop. It is written down rather than
+//    half-modelled because the mock sockets cannot yet take a second
+//    `createConnection`, so the close would be a bigger change than it looks;
+//    the likely next user of `protocolTimeoutMs` is a fixture for #360's (h),
+//    and that is exactly the kind of test that would care.
 //
 // Deliberately **not** modelled: the `ignoringOnTheFly` ignore window (the
 // server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
@@ -172,7 +189,7 @@
 //
 // Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
 // **paused** arm — the `this.roomPaused ? w.position` half of
-// `test/helpers/syncplay-min-election-server.ts:599` ("return this.roomPaused
+// `test/helpers/syncplay-min-election-server.ts:616` ("return this.roomPaused
 // ? w.position") — is already checked against the real Syncplay 1.7.6 server in
 // both the steady state and the flip into it, so no new scenario is owed for it.
 //  - **Steady.** `conformance/syncplay-election.conformance.ts:27`
@@ -203,15 +220,15 @@
 //    tolerance, because that scenario never sets `playing`.
 //  - The clause a reader would otherwise go hunting for, stated rather than left as a
 //    hole: `forcePositionUpdate`'s own write, the
-//    `test/helpers/syncplay-min-election-server.ts:666` ("this.roomPosition =
+//    `test/helpers/syncplay-min-election-server.ts:683` ("this.roomPosition =
 //    this.watcherPosition(w)") line, reads through that same paused arm whenever the
 //    change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:915-937` ("if (ps.doSeek === true ||
+//    `test/helpers/syncplay-min-election-server.ts:932-954` ("if (ps.doSeek === true ||
 //    pausedChanged)") refreshes that watcher's `lastUpdatedOn`, flips `roomPaused`, and
 //    only then calls it, in that order. Safe for a stated reason rather than by luck:
 //    the refresh is what the *playing* arm would have projected from, and the paused
 //    arm ignores the stamp regardless, so either way that write reads the setter's own
-//    position at that instant. `test/helpers/syncplay-min-election-server.ts:710` ("for
+//    position at that instant. `test/helpers/syncplay-min-election-server.ts:727` ("for
 //    (const other of seated) other.position = this.roomPosition") then re-seats them all.
 //  - Option (B) — a scenario built to catch an election *flip* decided inside
 //    the paused arm — is structurally excluded rather than deferred, so nobody
@@ -972,9 +989,13 @@ export class MinElectionServer {
     // `server.py:860 ("self._connector.sendState(position, paused, doSeek, setBy, forcedUpdate)")`
     // and only then tests the clock at
     // `server.py:861 ("if time.time() - self._lastUpdatedOn > constants.PROTOCOL_TIMEOUT:")`.
-    // The ordering is the whole of vitest case 7 — on a delayed link the drop
-    // tick's `State` has to arrive and the leave notice to arrive after it, where
-    // a test placed above the send would eat the frame the reference delivers.
+    // What holds the ordering is vitest case 7's playstate **count** — one
+    // `State` per tick up to and including the drop tick, `edge /
+    // STATE_INTERVAL_MS` of them — and not the shape of its last two frames. A
+    // test placed above the send would eat the drop tick's own `State` and leave
+    // that count one short. The last-two-frames assertions cannot tell the two
+    // orders apart: with that frame gone the notice is simply preceded by the
+    // tick before it, which carries a playstate too.
     if (this.protocolTimeoutMs !== null && Date.now() - w.lastUpdatedOn > this.protocolTimeoutMs) {
       this.removeWatcher(w)
     }

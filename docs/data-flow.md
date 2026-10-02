@@ -423,8 +423,9 @@ Metadata invariants:
   store until the next launch. It is invisible in the UI, but **not** cost-free,
   and the reason is a second reader that never passes through the getter's
   filter: `auto-downloader.ts` reads raw `downloadedEpisodes` keys in
-  `isAlreadyDownloaded` (`src/main/auto-downloader.ts:211`, acted on at `:338`)
-  and in `mostRecentDownloadedTranslation` (`:198`). So for the rest of the
+  `isAlreadyDownloaded` (`src/main/auto-downloader.ts:211`, acted on at
+  `src/main/auto-downloader.ts:338`) and in `mostRecentDownloadedTranslation`
+  (`src/main/auto-downloader.ts:198`). So for the rest of the
   session a stale entry also stops auto-download from re-fetching that episode,
   and can steer its preferred-translation pick. That was equally true before
   this split — until whenever the user happened to open the page — so it is not

@@ -2693,7 +2693,7 @@ describe('the pin figures docs/testing.md restates', () => {
   it('bounds the bullet at a real ATX heading, hard against the text with no blank line', () => {
     // THE OTHER MUTANT. A heading in real markdown follows a blank line, so a
     // fixture shaped that way is bounded by the `\n\n` arm whether the heading
-    // arm exists or not — the `headed`-style case above is exactly that, and
+    // arm exists or not — the `relocated` case above is exactly that, and
     // deleting the heading arm leaves it green. Here the heading is hard against
     // the bullet and the blank line is PAST the value, so the heading arm is the
     // only thing keeping `116` out of the body: delete it and the `\n\n` arm

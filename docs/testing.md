@@ -523,12 +523,12 @@ tests* above — two exact, one a floor and one a ceiling:
   pin bounds how much the gate is blind to. Adding one reds the build; the fix
   is almost always to give the anchor a resolvable path rather than raise the
   number.
-- **Marked citations, floored at 64.** One of the two one-sided counts here,
+- **Marked citations, floored at 75.** One of the two one-sided counts here,
   because the marked class can only shrink silently — see *The marked form*
-  below. Falling below the floor reds; rising above it is free. #395 raised the
-  floor from the 12 #372 set and nothing had moved since: 52 anchors of slack let
-  the verified population lose 81% of its members with the gate green, which is a
-  floor that bounds nothing.
+  below. Falling below the floor reds; rising above it is free. #395 raised it
+  from the 12 #372 set, where 52 anchors of slack let the verified population
+  lose 81% of its members with the gate green; #459 took it 64 to 75 with its
+  retrofit, since slack is exactly what stops a floor from binding.
 - **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:

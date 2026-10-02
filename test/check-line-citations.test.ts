@@ -1,14 +1,27 @@
-// Fixtures for the citation gate (#336). Each case drives `analyze()` over a
-// synthetic corpus rather than the real tree, so the assertions stay exact:
-// the real tree's counts are the gate's own pins and move with every repair.
+// Fixtures for the citation gate (#336). Every case that drives `analyze()`
+// drives it over a synthetic corpus rather than the real tree, so the
+// assertions stay exact: the real tree's counts are the gate's own pins and
+// move with every repair. The one block that does read a real file — the
+// prose-figure cases at the foot of this file (#461) — reads `docs/testing.md`
+// and compares it with the pin constants, never with a count taken off the
+// tree, so the reason above still holds there.
 //
 // This file is in `EXCLUDED_PATHS`, and has to be. Its fixtures are citation
 // shapes on purpose — several are deliberately broken — so scanning it would
 // make the gate fail on its own test data.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
 import { analyze, report, driftBasePlan } from '../scripts/check-line-citations.mjs'
+// The four pin constants (#461), taken as a namespace and destructured below the
+// way this file already takes the nightly half's exports. A named import of all
+// four wraps past `printWidth`, and Prettier then puts the module specifier on a
+// line of its own, where the `@ts-expect-error` above no longer covers it —
+// `TS2578: Unused '@ts-expect-error' directive` plus the error it was suppressing.
+// @ts-expect-error — plain .mjs CI script, deliberately outside the tsconfig graph
+import * as citations from '../scripts/check-line-citations.mjs'
 // The nightly half of the same gate (#395 step 2). Importing it is safe rather
 // than lucky: its `main()` sits behind an `endsWith('check-upstream-citations.mjs')`
 // argv guard, exactly as this file's other import does, so loading the module
@@ -2238,5 +2251,377 @@ describe('check-upstream-citations', () => {
     // about — and it is just as clean here, because its `def` is on the start line
     // and the start line is exempt.
     expect(defClassBoundary(SERVER_PY, 848, 852)).toBeNull()
+  })
+})
+
+// --- #461: the pin figures `docs/testing.md` restates in prose ----------------
+//
+// Two of the four pins are restated as a figure in the prose, and until this
+// block nothing compared the figure with the constant. #459 took `MARKED_PIN`
+// from 64 to 75 and left the page saying "floored at 64"; #460 repaired it by
+// hand. Second time around, and both times a human reading the paragraph was
+// the only thing that caught it — which is the defect class the gate itself
+// exists to police, turned on the gate's own documentation.
+//
+// THE LOCATOR IS THE WHOLE DESIGN RISK, because a brittle one reds on unrelated
+// prose edits and trains people to adjust the pattern instead of the number. A
+// bare phrase will not do: `/floored at (\d+)/` matches three times on this
+// tree — the headline plus the two coverage floors in the thresholds section,
+// which are `vitest.config.ts` numbers and out of scope here. So each pattern is
+// the FULL bullet heading, matched against the whole document text rather than
+// line by line, since this page has multi-thousand-character lines. A match
+// count other than one is itself a mismatch, so a reworded heading reds instead
+// of quietly matching nothing.
+//
+// The two pins that state no figure get the mirrored guard, passed through the
+// same `pins` argument: the heading occurs exactly once, and the pin's own value
+// does not appear in the bullet body — so adding a figure there later reds and
+// forces the choice between wiring it in and taking it back out. The rule is
+// keyed on each pin's OWN value rather than on digits in general, which is the
+// revision that matters: a no-bare-integer rule reds on this tree, because the
+// suspicious-landings bullet legitimately measures two stale anchors as "one 81
+// lines behind its subject and one 119". Accepted blind spot, recorded rather
+// than implied closed: a figure spelled as a word ("pinned exactly at four")
+// gets through.
+//
+// Deliberately NOT asserted: the cap's value where the page restates it as a
+// *measurement* ("262 anchors across 27 citing files", "false by 262"). The cap
+// is one-sided, so after a retrofit the count and the cap can legitimately
+// differ and asserting them would be wrong.
+
+const { MARKED_PIN, UNMARKED_PY_PIN, SUSPICIOUS_LANDING_PIN, UNCHECKABLE_PIN } = citations
+
+const TESTING_DOC = join(import.meta.dirname, '..', 'docs', 'testing.md')
+
+type PinName = 'suspiciousLanding' | 'uncheckable' | 'marked' | 'unmarkedPy'
+type DocPins = Record<PinName, number>
+type DocMismatch = { pin: PinName; why: string }
+
+// The figure lives in the heading for both pins that carry one, which is also
+// where one would naturally be added to the other two. `\s+` rather than a
+// literal space because a hand rewrap splitting `floored at\n  75.**` would
+// otherwise read as a reworded heading — and `check:prose-shape` actively
+// pressures authors to rewrap short lines in this very list.
+const FIGURE_PINS: { pin: PinName; heading: RegExp }[] = [
+  { pin: 'marked', heading: /\*\*Marked\s+citations,\s+floored\s+at\s+(\d+)\.\*\*/ },
+  {
+    pin: 'unmarkedPy',
+    heading: /\*\*Unmarked\s+upstream\s+`\.py`\s+anchors,\s+capped\s+at\s+(\d+)\.\*\*/
+  }
+]
+
+// Literals rather than patterns, because this heading is also where the body
+// slice starts. A rewrap here is the same loud zero-match failure, just not
+// tolerated the way the two above tolerate it.
+const FIGURELESS_PINS: { pin: PinName; heading: string }[] = [
+  { pin: 'suspiciousLanding', heading: '**Suspicious landings, pinned exactly.**' },
+  { pin: 'uncheckable', heading: '**Uncheckable anchors.**' }
+]
+
+const countLiteral = (text: string, needle: string): number => text.split(needle).length - 1
+
+// Pure, and local to this file on purpose: the pins are `export const` in an ES
+// module, so a test cannot make one disagree with the doc by reassignment. The
+// real-tree case passes `readFileSync` plus the imported constants; the
+// regression cases pass doctored text. The gate script is unchanged and exports
+// nothing new for this.
+const pinProseMismatches = (docText: string, pins: DocPins): DocMismatch[] => {
+  const out: DocMismatch[] = []
+
+  for (const { pin, heading } of FIGURE_PINS) {
+    const hits = [...docText.matchAll(new RegExp(heading.source, 'g'))]
+    if (hits.length !== 1) {
+      out.push({ pin, why: `heading matched ${hits.length} times, expected exactly 1` })
+      continue
+    }
+    const documented = Number(hits[0][1])
+    if (documented !== pins[pin]) {
+      out.push({ pin, why: `prose says ${documented}, constant is ${pins[pin]}` })
+    }
+  }
+
+  for (const { pin, heading } of FIGURELESS_PINS) {
+    const found = countLiteral(docText, heading)
+    if (found !== 1) {
+      out.push({ pin, why: `heading matched ${found} times, expected exactly 1` })
+      continue
+    }
+    const start = docText.indexOf(heading)
+    const from = start + heading.length
+    // THE END BOUNDARY IS DELIBERATE, and the next bullet alone does not provide
+    // it. `indexOf('\n- **')` searches the whole remainder of the document, and
+    // this page carries 23 further top-level `- **` bullets below the pins list,
+    // so -1 is only reached if the bullet moves below the last of them —
+    // reordering it inside its own list does not get there. Measured: moving
+    // `**Uncheckable anchors.**` to the end of its list grows its body from 7
+    // lines (446 chars) to 31 (1946), across a `###` heading and three unrelated
+    // paragraphs, and the value scan then reaches a bare `87` in that prose. It
+    // stays green at 116 today, which is the problem: the over-reach is silent,
+    // and `4` collides far more easily than `116` does.
+    //
+    // So bound at the FIRST of the next bullet, the next blank line and the next
+    // heading. That really does end a bullet, and it leaves the -1 branch below
+    // as defence rather than as the mechanism: all three absent means the page
+    // is not shaped the way this guard was written against — the trailing text
+    // is a lazy continuation of the bullet or the end of the file — so it is
+    // reported instead of guessed at.
+    const ends = [
+      docText.indexOf('\n- **', from),
+      docText.indexOf('\n\n', from),
+      docText.indexOf('\n#', from)
+    ].filter((at) => at !== -1)
+    if (ends.length === 0) {
+      out.push({
+        pin,
+        why: 'bullet has no following bullet, blank line or heading, so its body is unbounded'
+      })
+      continue
+    }
+    const body = docText.slice(start, Math.min(...ends))
+    if (new RegExp(String.raw`(?<![#:\d])\b${pins[pin]}\b`).test(body)) {
+      // HEDGED ON PURPOSE. The suspicious-landings bullet is 2.9k characters of
+      // measurement prose about counts, and `\b4\b` is clean today only because
+      // the page spells its small numbers as words ("all thirteen", "catches
+      // two"). Write one of those as a digit and this fires on a measurement, so
+      // a message that only said "wire it into the heading" would be telling the
+      // next reader to do precisely the wrong thing — the same measurement-vs-pin
+      // distinction the cap's restatements are excluded under.
+      out.push({
+        pin,
+        why:
+          `bullet body contains ${pins[pin]}, this pin's own value — if that is the pin, ` +
+          `wire it into the heading or drop it; if it is a measurement that happens to equal ` +
+          `the pin, spell it as a word, as the rest of the bullet does`
+      })
+    }
+  }
+
+  return out
+}
+
+// The numbers the doctored fixtures below state in their own prose. Frozen
+// deliberately: a regression case must keep reproducing the #459 failure after
+// the next pin raise, so it compares a fixture against fixture pins and never
+// against the live constants.
+const FIXTURE_PINS: DocPins = {
+  suspiciousLanding: 4,
+  uncheckable: 116,
+  marked: 75,
+  unmarkedPy: 262
+}
+
+// Four bullets in the page's own order, each replaceable. Every string here is
+// kept free of `.py:NNN` shapes: this file is in `EXCLUDED_PATHS` so the gate
+// will not see them, but the direct-scan census in `docs/testing.md` counts
+// citation-shaped strings in this file against the gate's cap, and that cap is
+// currently flush — which is exactly how #457 carried a census forward wrong.
+const docFixture = (over: Partial<Record<PinName, string>> = {}): string =>
+  [
+    'Four pinned counts are what give that teeth — two exact, one a floor and',
+    'one a ceiling:',
+    '',
+    over.suspiciousLanding ??
+      '- **Suspicious landings, pinned exactly.** #344 repaired the two the\n  narrowing exposed, one 81 lines behind its subject and one 119, both into\n  `docs/syncplay.md:119`. #390 contributed three more and #384 one.',
+    // `#116` carries the `#` arm of the lookbehind, and nothing else in these
+    // fixtures does: `\b116\b` matches straight after a `#`, because `#` is not
+    // a word character, so an issue reference — ordinary prose in a repo whose
+    // issues are in the hundreds — would false-red without it. Drop `#` from
+    // `(?<![#:\d])` and every case using this default bullet reds.
+    over.uncheckable ??
+      '- **Uncheckable anchors.** Bare basenames more than one tracked file carries,\n  plus pathless anchors that inherit their path from a neighbour. #116 took\n  four of them the other way.',
+    over.marked ??
+      '- **Marked citations, floored at 75.** One of the two one-sided counts here,\n  because the marked class can only shrink silently.',
+    over.unmarkedPy ??
+      '- **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided\n  count, and the only one where growth is the hazard.',
+    '',
+    // A sentinel tail: it says 4 and 116 outside every bullet, so a body slice
+    // that over-reaches past its bullet reds the no-mismatch case above.
+    'That is 4 pins in total, 116 of them uncheckable on this tree.'
+  ].join('\n')
+
+describe('the pin figures docs/testing.md restates', () => {
+  it('matches every documented figure against the constant it restates', () => {
+    const doc = readFileSync(TESTING_DOC, 'utf8')
+    const pins: DocPins = {
+      suspiciousLanding: SUSPICIOUS_LANDING_PIN,
+      uncheckable: UNCHECKABLE_PIN,
+      marked: MARKED_PIN,
+      unmarkedPy: UNMARKED_PY_PIN
+    }
+
+    // A renamed export would arrive here as `undefined`, which makes the
+    // value-not-in-body regex `\bundefined\b` and the whole guard vacuous
+    // instead of red. Stated rather than trusted.
+    expect(Object.values(pins).every((n) => Number.isInteger(n))).toBe(true)
+
+    expect(pinProseMismatches(doc, pins)).toEqual([])
+
+    // The exactly-once property, stated directly as well as enforced through the
+    // helper, because it is what keeps the locator honest in the other
+    // direction: a heading that stops matching must red, not pass vacuously.
+    for (const { heading } of FIGURE_PINS) {
+      expect(doc.match(new RegExp(heading.source, 'g'))).toHaveLength(1)
+    }
+    for (const { heading } of FIGURELESS_PINS) {
+      expect(countLiteral(doc, heading)).toBe(1)
+    }
+  })
+
+  it('reds when a documented figure drifts from its constant', () => {
+    // THE #459 FAILURE, reproduced. On `main` nothing notices this, which is how
+    // it shipped: the page said "floored at 64" against a constant of 75 for a
+    // whole PR, and a human reading the paragraph was the only check.
+    const drifted = docFixture({
+      marked: '- **Marked citations, floored at 74.** One of the two one-sided counts.'
+    })
+    expect(pinProseMismatches(drifted, FIXTURE_PINS)).toEqual([
+      { pin: 'marked', why: 'prose says 74, constant is 75' }
+    ])
+
+    // The cap drifts the same way and is caught the same way.
+    const cap = docFixture({
+      unmarkedPy: '- **Unmarked upstream `.py` anchors, capped at 263.** The other one.'
+    })
+    expect(pinProseMismatches(cap, FIXTURE_PINS)).toEqual([
+      { pin: 'unmarkedPy', why: 'prose says 263, constant is 262' }
+    ])
+  })
+
+  it('reds on a reworded or duplicated heading rather than matching nothing', () => {
+    // A ZERO-MATCH PASS IS THE FAILURE MODE A FIGURE CHECK HAS. Rewording the
+    // heading is an ordinary prose edit, and without the count assertion it
+    // would silence the comparison for good.
+    const reworded = docFixture({
+      marked: '- **Marked citations, with a floor of 75.** One of the two one-sided counts.'
+    })
+    expect(pinProseMismatches(reworded, FIXTURE_PINS)).toEqual([
+      { pin: 'marked', why: 'heading matched 0 times, expected exactly 1' }
+    ])
+
+    // Same for a figureless heading, which is matched as a literal.
+    const renamed = docFixture({
+      uncheckable: '- **Uncheckable basename anchors.** Bare basenames and pathless anchors.'
+    })
+    expect(pinProseMismatches(renamed, FIXTURE_PINS)).toEqual([
+      { pin: 'uncheckable', why: 'heading matched 0 times, expected exactly 1' }
+    ])
+
+    // Both directions for the figureless pins too, not just the zero one:
+    // weakening `found !== 1` to `found < 1` has to red here. Duplicated, the
+    // body slice would take whichever copy came first and the other would go
+    // unguarded.
+    const twoCopies =
+      '- **Uncheckable anchors.** Bare basenames and pathless anchors.\n- **Uncheckable anchors.** Restated in a later summary.'
+    expect(pinProseMismatches(docFixture({ uncheckable: twoCopies }), FIXTURE_PINS)).toEqual([
+      { pin: 'uncheckable', why: 'heading matched 2 times, expected exactly 1' }
+    ])
+
+    // Two copies are as bad as none: the comparison would then be against
+    // whichever one happens to come first.
+    const twice = docFixture({
+      marked:
+        '- **Marked citations, floored at 75.** One of two.\n- **Marked citations, floored at 75.** Restated in a summary.'
+    })
+    expect(pinProseMismatches(twice, FIXTURE_PINS)).toEqual([
+      { pin: 'marked', why: 'heading matched 2 times, expected exactly 1' }
+    ])
+  })
+
+  it('reds when a figureless bullet states its own pin value, and ignores the rest', () => {
+    const stated = docFixture({
+      uncheckable:
+        '- **Uncheckable anchors.** Bare basenames and pathless anchors. The pin is\n  116 on this tree.'
+    })
+    expect(pinProseMismatches(stated, FIXTURE_PINS)).toEqual([
+      {
+        pin: 'uncheckable',
+        why:
+          "bullet body contains 116, this pin's own value — if that is the pin, wire it into " +
+          'the heading or drop it; if it is a measurement that happens to equal the pin, spell ' +
+          'it as a word, as the rest of the bullet does'
+      }
+    ])
+
+    // THE KEYING IS THE POINT, and the earlier revision of this rule got it
+    // wrong: "no bare integer in the body" reds on `main`, because the
+    // suspicious-landings bullet measures two stale anchors as "one 81 lines
+    // behind its subject and one 119". Keyed on the pin's own value it ignores
+    // those, every `#NNN` issue number, every `:NNN` anchor, and a longer run
+    // the digit merely starts.
+    const measurements =
+      '- **Suspicious landings, pinned exactly.** #344 repaired two, one 81 lines\n  behind its subject and one 119, at `docs/syncplay.md:4` and 44 lines apart.'
+    expect(
+      pinProseMismatches(docFixture({ suspiciousLanding: measurements }), FIXTURE_PINS)
+    ).toEqual([])
+
+    // And the same body with the pin written into it does red, so the clean
+    // result above is a property of the keying rather than of a guard that
+    // never fires.
+    expect(
+      pinProseMismatches(
+        docFixture({ suspiciousLanding: `${measurements} The pin is 4.` }),
+        FIXTURE_PINS
+      )
+    ).toEqual([
+      {
+        pin: 'suspiciousLanding',
+        why:
+          "bullet body contains 4, this pin's own value — if that is the pin, wire it into " +
+          'the heading or drop it; if it is a measurement that happens to equal the pin, spell ' +
+          'it as a word, as the rest of the bullet does'
+      }
+    ])
+  })
+
+  it('ends a bullet at the next bullet, blank line or heading, whichever comes first', () => {
+    // THE QUIET OVER-REACH, in the shape it takes on the real page. Bounding on
+    // the next `- **` alone does not fail loudly when a bullet moves to the end
+    // of its list, because the page has 23 more top-level bullets below: the
+    // body just grows across a heading and whatever prose follows, and the value
+    // scan reaches digits that have nothing to do with this pin. Measured on
+    // `docs/testing.md`, relocating `**Uncheckable anchors.**` takes its body
+    // from 7 lines to 31 and reaches a bare `87`.
+    const relocated = [
+      'Pins:',
+      '',
+      '- **Marked citations, floored at 75.** One of two.',
+      '- **Unmarked upstream `.py` anchors, capped at 262.** The other.',
+      '- **Suspicious landings, pinned exactly.** Still where it was.',
+      '- **Uncheckable anchors.** Moved to the end of its own list.',
+      '',
+      '### What `resolved` does and does not attest',
+      '',
+      'An unrelated paragraph that happens to say 116, well below the list.',
+      '',
+      '- **The marked form.** A bullet in a later list entirely.'
+    ].join('\n')
+
+    // The stray digit really is in reach of a slice that runs to the next
+    // bullet — this is the misdiagnosis the three-way bound prevents, not a
+    // hypothetical.
+    expect(new RegExp(String.raw`(?<![#:\d])\b116\b`).test('that happens to say 116, well')).toBe(
+      true
+    )
+    expect(pinProseMismatches(relocated, FIXTURE_PINS)).toEqual([])
+
+    // DEFENCE, not the mechanism: with no following bullet, blank line or
+    // heading, the bullet's extent is whatever the rest of the file is — a lazy
+    // continuation line here, which markdown would fold into the bullet and this
+    // helper will not guess about.
+    const unbounded = [
+      'Pins:',
+      '',
+      '- **Marked citations, floored at 75.** One of two.',
+      '- **Unmarked upstream `.py` anchors, capped at 262.** The other.',
+      '- **Uncheckable anchors.** Bare basenames and pathless anchors.',
+      '- **Suspicious landings, pinned exactly.** Last bullet in the file.',
+      'A lazy continuation line, with no blank line before it, that says 4.'
+    ].join('\n')
+    expect(pinProseMismatches(unbounded, FIXTURE_PINS)).toEqual([
+      {
+        pin: 'suspiciousLanding',
+        why: 'bullet has no following bullet, blank line or heading, so its body is unbounded'
+      }
+    ])
   })
 })

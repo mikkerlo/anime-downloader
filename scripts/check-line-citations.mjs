@@ -147,13 +147,13 @@ export const UNCHECKABLE_PIN = 116
 // `MARKED_OPEN` its zero false-positive rate is exactly what makes them quiet.
 // Growth must not cost a bump on every retrofit, so only the fall reds.
 //
-// 64 marked citations on this tree. #395 raised this from the 12 #372 set and
-// nothing has moved since: 52 anchors of slack, which is a floor that lets the
-// verified population lose 81% of its members with the gate green. Growth is
-// still free — that is the whole point of the direction — but a floor left
-// behind by every retrofit it was supposed to ratchet is decoration, and the
-// only edit that makes it bind is raising it to what the tree measures.
-export const MARKED_PIN = 64
+// 75 marked citations on this tree, raised from 64 in the change that retrofitted
+// every plain anchor into `test/helpers/syncplay-min-election-server.ts` — nine in
+// other files, two self-anchors in its own header — under #395's standing
+// instruction to move this floor with every retrofit. It had just reached 64
+// against 64 — slack 0, the state that makes it bind — so leaving it there would
+// have handed the eleven back as slack and made the floor decoration again.
+export const MARKED_PIN = 75
 
 // A CEILING, compared with `>`, and the only pin here that is. Upstream
 // Syncplay anchors are the one population where GROWTH is the dangerous

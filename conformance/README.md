@@ -141,13 +141,13 @@ look the same from the outside.
 **Everything latency-shaped.** Loopback `serverRtt` measured between 0.0003 s and
 0.0013 s across every run here. That is three orders of magnitude below the
 paused tolerance, so the `messageAge` perturbation
-(`test/helpers/syncplay-min-election-server.ts:757`), `forwardDelay`, and the
+(`test/helpers/syncplay-min-election-server.ts:757` ("w.position = position +
+(ps.paused === true ? 0 : this.forwardDelayFor(w))")), `forwardDelay`, and the
 `echoHoldCorrection` echo are all unobservable: the model could compute them any
 way at all and this suite would still report agreement. They stay owned by
 `test/services/syncplay-two-peer-rtt.test.ts`, which can inject a link delay.
-Adding an artificial delay here would mean delaying the model too, and a
-scenario in which both sides are delayed by the same harness is measuring the
-harness.
+Adding an artificial delay here would mean delaying the model too, and a scenario
+in which both sides are delayed by the same harness is measuring the harness.
 
 **Multi-peer `setBy` while the room plays.** In a paused room
 `Watcher.getPosition()` (`server.py:780-787`) returns `_position` verbatim, so

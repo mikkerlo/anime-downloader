@@ -380,7 +380,7 @@ export class Peer {
    * election where it was; the model has no ignore window to discard it with —
    * that window is on the fixture's deliberately-unmodelled list — and since
    * #384's item 4 it stamps at receipt, above the playstate guard
-   * (`test/helpers/syncplay-min-election-server.ts:744`), so it takes the frame
+   * (`test/helpers/syncplay-min-election-server.ts:744` ("w.lastUpdatedOn = Date.now()")), so it takes the frame
    * and elects the sender. `assertConforms` therefore reports a loud divergence
    * rather than two inert backends reading as agreement: with `ignoringOnTheFly`
    * dropped from the write below, `conf-forced-ping-stamps` reds with 5

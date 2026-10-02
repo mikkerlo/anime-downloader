@@ -55,8 +55,8 @@ const ALONE_SECONDS = 6
  *
  * Repeated addition rather than `ROOM_START + steps * d`, and the distinction is
  * load-bearing rather than cosmetic: the server re-stores each mirror frame with
- * `+= fd` — `test/helpers/syncplay-min-election-server.ts:757`
- * ("w.position = position + (ps.paused === true ? 0 : this.forwardDelayFor(w))")
+ * `+= fd` — `test/helpers/syncplay-min-election-server.ts:757` ("w.position =
+ * position + (ps.paused === true ? 0 : this.forwardDelayFor(w))")
  * — so three compensations of 0.05 arrive at 100.14999999999999, while
  * `100 + 3 * 0.05` is 100.15. Those are different doubles, and every exact
  * assertion below is an equality on the value the server actually built.
@@ -152,8 +152,8 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // (`src/main/syncplay.ts:2484-2487`
     // ("position: this.projectedRoomPosition(room)")). `paused` absent on every
     // frame is the observable that says it stayed on that exit —
-    // `test/helpers/syncplay-min-election-server.ts:314-319`
-    // ("paused?: boolean") is absent exactly for a mirror — and
+    // `test/helpers/syncplay-min-election-server.ts:314-319` ("paused?:
+    // boolean") is absent exactly for a mirror — and
     // `playbackAdopted` is the same fact read off the client.
     expect(spectator.el.currentTime).toBe(ROOM_START)
     expect(spectator.el.seekWrites).toEqual([])

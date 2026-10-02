@@ -2320,6 +2320,25 @@ const FIGURELESS_PINS: { pin: PinName; heading: string }[] = [
 
 const countLiteral = (text: string, needle: string): number => text.split(needle).length - 1
 
+// An ATX heading, spelled as a heading: 1-6 `#` opening a line, followed by a
+// space, a tab or the end of the line. #467's repair — this arm used to be the
+// literal `'\n#'`, which is looser than a heading and matches ANY line opening
+// with `#`, so an unindented lazy continuation that merely starts with an issue
+// reference (`#368 took 4 more`) counted as a heading, ended the span there, and
+// let every figure written after that point through SILENTLY. That is the quiet
+// direction and the one this guard exists for; the loud direction, a reworded
+// heading, already reds through the exactly-once count. The page's own habit
+// supplies the shape: two lines in `docs/testing.md` open with a non-heading `#`
+// today, and whether it bites is only a question of where a rewrap puts one.
+//
+// DUPLICATED ON PURPOSE RATHER THAN SHARED. test/check-prose-shape.test.ts
+// carries the same three-way boundary with its own copy of this predicate, and
+// #467 exists because one bug then had to be fixed in two places — so a change
+// here is a change there. Weighed and kept anyway: a module both files import
+// from, for one regex, buys less than it couples, and both helpers are local to
+// their own file on the same reasoning. THERE ARE TWO COPIES.
+const ATX_HEADING = /\n#{1,6}(?:[ \t]|$)/m
+
 // Pure, and local to this file on purpose: the pins are `export const` in an ES
 // module, so a test cannot make one disagree with the doc by reassignment. The
 // real-tree case passes `readFileSync` plus the imported constants; the
@@ -2365,10 +2384,17 @@ const pinProseMismatches = (docText: string, pins: DocPins): DocMismatch[] => {
     // is not shaped the way this guard was written against — the trailing text
     // is a lazy continuation of the bullet or the end of the file — so it is
     // reported instead of guessed at.
+    //
+    // The heading arm is `ATX_HEADING` (see its note above for why a literal
+    // `'\n#'` is not a heading, and for the second copy of it). `search` on the
+    // slice returns an offset relative to `from`, so its -1 is mapped through
+    // UNCHANGED: add it to `from` and `from - 1` survives the filter below, wins
+    // the `Math.min`, and the body collapses to the anchor alone.
+    const headingFrom = docText.slice(from).search(ATX_HEADING)
     const ends = [
       docText.indexOf('\n- **', from),
       docText.indexOf('\n\n', from),
-      docText.indexOf('\n#', from)
+      headingFrom === -1 ? -1 : from + headingFrom
     ].filter((at) => at !== -1)
     if (ends.length === 0) {
       out.push({
@@ -2623,5 +2649,124 @@ describe('the pin figures docs/testing.md restates', () => {
         why: 'bullet has no following bullet, blank line or heading, so its body is unbounded'
       }
     ])
+  })
+
+  it('reds on a figure past a continuation line that merely starts with a hash', () => {
+    // THE #467 FAILURE, reproduced. The heading arm used to be the literal
+    // `'\n#'`, which is not a heading: it matches any line opening with `#`. So
+    // a continuation that starts with an issue reference ended the bullet right
+    // there and everything after it — the pin's own value included — went
+    // through SILENTLY. Revert the arm to `'\n#'` and this case returns `[]`.
+    //
+    // THE MISSING INDENTATION ON THE `#368` LINE IS DELIBERATE — DO NOT TIDY IT
+    // UP TO MATCH ITS NEIGHBOURS. Continuations in this list are indented two
+    // spaces, and `'\n#'` never matched an indented line, which is precisely why
+    // this span has never truncated on the real page: `docs/testing.md` already
+    // carries `  #393 inserted exactly that line…` inside the
+    // suspicious-landings bullet, harmlessly. Indent the line below and the old
+    // and new predicates agree, the mismatch comes back under both, and the case
+    // stops reproducing anything. The unindented shape is the page's own habit
+    // too: two of its paragraph lines open with a non-heading `#` today.
+    const continued = docFixture({
+      uncheckable:
+        '- **Uncheckable anchors.** Bare basenames more than one tracked file carries,\n' +
+        '#368 took the mid-seek model the other way, and nothing on this line is a\n' +
+        '  heading. The pin is 116 on this tree.'
+    })
+    expect(pinProseMismatches(continued, FIXTURE_PINS)).toEqual([
+      {
+        pin: 'uncheckable',
+        why:
+          "bullet body contains 116, this pin's own value — if that is the pin, wire it into " +
+          'the heading or drop it; if it is a measurement that happens to equal the pin, spell ' +
+          'it as a word, as the rest of the bullet does'
+      }
+    ])
+
+    // And the halves of that, stated so the case cannot pass for the wrong
+    // reason: the `#368` line really is at column 0, and the value really is
+    // past it.
+    expect(continued).toContain('\n#368 took')
+    expect(continued.indexOf('The pin is 116')).toBeGreaterThan(continued.indexOf('\n#368'))
+  })
+
+  it('bounds the bullet at a real ATX heading, hard against the text with no blank line', () => {
+    // THE OTHER MUTANT. A heading in real markdown follows a blank line, so a
+    // fixture shaped that way is bounded by the `\n\n` arm whether the heading
+    // arm exists or not — the `headed`-style case above is exactly that, and
+    // deleting the heading arm leaves it green. Here the heading is hard against
+    // the bullet and the blank line is PAST the value, so the heading arm is the
+    // only thing keeping `116` out of the body: delete it and the `\n\n` arm
+    // wins, the body swallows the value, and this reds.
+    const headedHard = [
+      'Pins:',
+      '',
+      '- **Marked citations, floored at 75.** One of two.',
+      '- **Unmarked upstream `.py` anchors, capped at 262.** The other.',
+      '- **Suspicious landings, pinned exactly.** Still where it was.',
+      '- **Uncheckable anchors.** Bare basenames and pathless anchors.',
+      '## Next',
+      'The pin is 116 on this tree, one line past the heading.',
+      '',
+      'A closing paragraph.'
+    ].join('\n')
+    expect(pinProseMismatches(headedHard, FIXTURE_PINS)).toEqual([])
+
+    // Nothing else bounds it: no further `- **`, and the only blank line comes
+    // after the value. Asserted rather than assumed, because either one would
+    // make the mutant survive.
+    expect(headedHard.indexOf('\n- **', headedHard.indexOf('**Uncheckable anchors.**'))).toBe(-1)
+    expect(headedHard.indexOf('\n\n', headedHard.indexOf('## Next'))).toBeGreaterThan(
+      headedHard.indexOf('The pin is 116')
+    )
+  })
+
+  it('treats seven hashes and a hash run into text as prose, and a bare hash as a heading', () => {
+    // The predicate's other edge, pinned so a later loosening shows up rather
+    // than passing quietly. `#{1,6}` followed by a space, a tab or end of line
+    // is the whole rule.
+    const atxish = (second: string): string =>
+      [
+        'Pins:',
+        '',
+        '- **Marked citations, floored at 75.** One of two.',
+        '- **Unmarked upstream `.py` anchors, capped at 262.** The other.',
+        '- **Suspicious landings, pinned exactly.** Still where it was.',
+        '- **Uncheckable anchors.** Bare basenames and pathless anchors.',
+        second,
+        'The pin is 116 on this tree, one line past it.',
+        '',
+        'A closing paragraph.'
+      ].join('\n')
+
+    const stated = {
+      pin: 'uncheckable' as const,
+      why:
+        "bullet body contains 116, this pin's own value — if that is the pin, wire it into " +
+        'the heading or drop it; if it is a measurement that happens to equal the pin, spell ' +
+        'it as a word, as the rest of the bullet does'
+    }
+
+    // Seven hashes is not an ATX heading, so it does not end the bullet and the
+    // value past it is in the body. Loosen `#{1,6}` to `#+` and this goes green.
+    expect(
+      pinProseMismatches(atxish('####### Seven hashes is one too many.'), FIXTURE_PINS)
+    ).toEqual([stated])
+
+    // A hash run straight into text is not one either — the `#368` shape of the
+    // regression case above, in the same frame as its neighbours here.
+    expect(pinProseMismatches(atxish('#368 is an issue reference.'), FIXTURE_PINS)).toEqual([
+      stated
+    ])
+    expect(pinProseMismatches(atxish('###Three and no space.'), FIXTURE_PINS)).toEqual([stated])
+
+    // A bare hash alone on a line IS an ATX heading — the `$` arm under `/m` —
+    // so it does end the bullet. Drop `|$` from the predicate and this reds.
+    expect(pinProseMismatches(atxish('#'), FIXTURE_PINS)).toEqual([])
+    expect(pinProseMismatches(atxish('###'), FIXTURE_PINS)).toEqual([])
+
+    // A tab after the hashes counts as well, so the two arms of `[ \t]` are both
+    // live rather than one of them being decoration.
+    expect(pinProseMismatches(atxish('##\tTab after the hashes.'), FIXTURE_PINS)).toEqual([])
   })
 })

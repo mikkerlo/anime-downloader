@@ -196,15 +196,18 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
 7. startDownload():
    a. HTTP fetch with Range header (resume support)
    b. Handle 416 (Range Not Satisfiable): delete .part, retry from zero
-   c. Pipe through Transform (speed tracking) to .part file
-   d. On complete: rename .part --> final, check episode complete
+   c. Refuse a body that is clearly not video (#444), before anything is
+      opened for writing — see "What 'completed' attests" below
+   d. Pipe through Transform (speed tracking) to .part file
+   e. On complete: rename .part --> final, check episode complete
       - UNLESS the built-in player holds the file (playerLockService, #63):
         the .part stays put and the episode's merge status is set to
         'deferred' (persisted). finalizeDeferred() renames + re-queues the
         merge when the player releases the file, and again at boot for crash
         recovery. Renaming under the player would EPERM on Windows and 404
         the player's anime-video:// URL everywhere.
-   e. On failure: retry up to 3x with exponential backoff
+   f. On failure: retry up to 3x with exponential backoff — EXCEPT a
+      deterministic rejection from (c), which fails on the first response
 8. broadcastProgress() every 500ms --> renderer updates
 9. checkEpisodeComplete() --> trigger auto-merge if enabled
 10. persistQueue() on every state change --> queue.json in userData
@@ -216,6 +219,59 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
     - Active merges reset to pending
     - .part files resumed via existing Range header logic
 ```
+
+### What 'completed' attests
+
+`completed` says bytes were transferred — it does **not** say a playable file
+exists. That distinction is load-bearing because `completed` is what step 5
+keys the `downloadedEpisodes` entry on, and that entry is durable: the file
+satisfies `episodeFileExists`, so #421/#439's GC correctly refuses to collect
+it, and the only recovery from a bogus ⬇ is deleting the file by hand.
+
+#444 closed the one case where that was unambiguously wrong. An unauthenticated
+request answered **200 with a web page** was streamed to the episode's final
+filename and recorded `completed` (observed: 169 007 bytes, `totalBytes: 0`,
+`ffprobe`: `moov atom not found`). `startDownload` now refuses a response whose
+`Content-Type` is a **document** type — `text/html`, `application/xhtml+xml`,
+`application/json`, `application/ld+json`, `text/xml`, `application/xml` — and
+the item lands `failed` with that reason, so no completion hook and therefore no
+`persistDownloadedEpisode` ever runs. `checkEpisodeComplete` is not called on
+that path at all, and `allDone` *would* stay false if it were — a refused video
+is not `completed` — so the group gate's repair write cannot fire either: the
+refusal needs no change in `episode-completion.ts` / `downloaded-episodes.ts`.
+
+Four properties of that rule, each a deliberate limit:
+
+- **A denylist of wrong types, not an allowlist of video ones.** A false
+  positive breaks the app's core function, which is worse than the bug. A stream
+  served as `application/octet-stream`, or with **no `Content-Type` at all**,
+  still downloads; a missing header is not grounds for rejection. `text/plain`
+  is deliberately absent — it is what a dumb static server reaches for when it
+  cannot guess a binary's type.
+- **Video items only** (`item.kind === 'video'`). An `.ass` subtitle
+  legitimately arrives as `text/plain` or `text/vtt`, so the same denylist on a
+  subtitle would be a pure false-positive generator.
+- **Both status paths**, 200 and 206. A Range reply is checked for the same
+  reason the plain response is, and the resume arm is the worse of the two: it
+  opens the `.part` with `'a'`, so an interstitial served `206` on Resume
+  appends a page to bytes that were previously good. A legitimate resume
+  answers with a video type or none, neither of which this rule touches.
+- **Non-retryable.** A wrong content type is deterministic, so the catch skips
+  the retry ladder for it: one fetch, not four, and the row says what was wrong
+  immediately instead of ~7 s later.
+- **The `.part` is left alone.** Nothing has been streamed at the point of
+  refusal, so the only thing at stake is a `.part` from an earlier partial
+  transfer whose `Range` the server ignored. It stays, consistent with every
+  other failure on this path: `restart()` is what unlinks a `.part` (and
+  re-resolves the embed, which is the recovery the failure message points at —
+  `resume()` would re-fetch the same dead URL forever).
+
+What this does **not** cover, and is deliberately not attempted: a truncated
+transfer, a CDN error page served with a video content type, or any other body
+that is the wrong bytes under the right label. Container validation (ffprobe /
+`moov atom`) and treating `totalBytes: 0` as suspicious are options 3 and 2 in
+#444 and are left to a separate issue; existing bad entries and files are not
+repaired by this.
 
 ## Merge Pipeline
 

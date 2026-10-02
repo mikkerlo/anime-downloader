@@ -128,6 +128,68 @@ const PROGRESS_INTERVAL_MS = 500
  */
 export const PART_IN_FLIGHT_SLACK = 4 * 1024 * 1024
 
+/**
+ * MIME types a video response is never legitimately served as (#444).
+ *
+ * A **denylist of clearly-wrong types**, never an allowlist of video ones. The
+ * failure being closed is a 200 whose body is a web page — an unauthenticated
+ * request answered with an error/interstitial page, streamed to the episode's
+ * final filename and recorded `completed`, which writes a durable
+ * `downloadedEpisodes` entry for a file `ffprobe` calls `moov atom not found`.
+ * An allowlist would instead red every server that serves a stream as
+ * `application/octet-stream` or with no `Content-Type` at all, and a false
+ * positive here breaks the app's core function — strictly worse than the bug.
+ *
+ * So the set holds only document types: nothing here is a plausible labelling
+ * of a video byte range by any server, correct or sloppy. `text/plain` is
+ * deliberately **absent** — it is the type a dumb static server reaches for
+ * when it cannot guess a binary's type, so denying it would be the first false
+ * positive. `video/*`, `audio/*`, `application/octet-stream`, anything
+ * unrecognised and a missing header all pass; a missing `Content-Type` is not
+ * grounds for rejection.
+ */
+const NON_VIDEO_CONTENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'application/json',
+  'application/ld+json',
+  'text/xml',
+  'application/xml'
+])
+
+/**
+ * The bare MIME type of a `Content-Type` header, lowercased (#444) — the header
+ * carries parameters and arbitrary casing (`Text/HTML; charset=utf-8`), and
+ * only the part before the first `;` identifies the body. `''` for a missing or
+ * empty header, which is never a match below.
+ */
+function mimeTypeOf(header: string | null | undefined): string {
+  return header ? header.split(';')[0].trim().toLowerCase() : ''
+}
+
+/**
+ * Whether a `Content-Type` header names one of the document types above (#444).
+ */
+export function isNonVideoContentType(header: string | null | undefined): boolean {
+  return NON_VIDEO_CONTENT_TYPES.has(mimeTypeOf(header))
+}
+
+/**
+ * A rejection the same request cannot talk its way out of (#444).
+ *
+ * `startDownload`'s catch re-queues an item and re-fetches the same URL up to
+ * `RETRY_LIMIT` times with 1/2/4 s backoff. A wrong content type is
+ * deterministic, so retrying costs four requests and ~7 s of a user staring at
+ * 'queued' before the row finally says what was wrong on the first response.
+ * The catch skips the retry branch for this class.
+ */
+class NonRetryableDownloadError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NonRetryableDownloadError'
+  }
+}
+
 export function sanitizeFilename(name: string): string {
   return name
     .replace(/[<>:"/\\|?*]/g, '_')
@@ -858,7 +920,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1420-1425`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1482-1487`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -887,7 +949,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1416`)
+   * (`src/main/download-manager.ts:1478`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1461,6 +1523,43 @@ export class DownloadManager {
         throw new Error(`HTTP ${response.status} ${response.statusText}`)
       }
 
+      // A 200 (or 206) whose body is a document rather than video (#444).
+      // Checked HERE — above the progress bookkeeping and above
+      // `createWriteStream` — so nothing is written to the `.part` and nothing
+      // on the item is mutated: the row keeps the counters it had and the file
+      // on disk is untouched. A pre-existing `.part` from an earlier partial
+      // transfer is deliberately LEFT in place, consistent with every other
+      // failure out of this catch: deleting it here would throw away resumable
+      // bytes over a response that never reached the disk. Note that the
+      // message below points at Restart, which unlinks the `.part` as its
+      // first act — the two are not aligned, and that is the trade. Keeping
+      // the bytes leaves a Resume possible against a re-resolved URL; Restart
+      // spends them to get a URL that works at all, which is the only recovery
+      // when the link itself is dead, since `resume()` re-fetches the same one
+      // forever.
+      //
+      // Video items only. A subtitle legitimately arrives as `text/plain` or
+      // `text/vtt`, so a document denylist applied to one would be a pure
+      // false-positive generator. Both status paths are gated, because a 206
+      // carrying an HTML body is the same wrong answer in a Range reply — and a
+      // legitimate resume answers with a video type or none, neither of which
+      // this rule touches.
+      if (item.kind === 'video') {
+        const contentType = response.headers.get('content-type')
+        if (isNonVideoContentType(contentType)) {
+          // Release the connection: nothing downstream will read this body.
+          await response.body?.cancel().catch(() => {})
+          // Three causes, none of them asserted: a captive portal on hotel or
+          // airport WiFi is an ordinary producer of `text/html` on a video URL,
+          // and naming only an expired link would make the row confidently
+          // wrong there. Kept short — the row renders it unclamped, so it wraps.
+          throw new NonRetryableDownloadError(
+            `Server sent ${mimeTypeOf(contentType)} instead of video — expired link, ` +
+              `signed-out session, or a network portal. Restart re-resolves it.`
+          )
+        }
+      }
+
       if (response.status === 206) {
         item.bytesReceived = existingBytes
         const contentRange = response.headers.get('content-range')
@@ -1558,7 +1657,10 @@ export class DownloadManager {
         return
       }
 
-      if (retryCount < RETRY_LIMIT) {
+      // A deterministic rejection (#444) skips the retry ladder: the same URL
+      // would answer with the same wrong body three more times, and the user
+      // would wait ~7 s for a verdict the first response already gave.
+      if (retryCount < RETRY_LIMIT && !(err instanceof NonRetryableDownloadError)) {
         item.status = 'queued'
         this.activeCount--
         const delay = Math.pow(2, retryCount) * 1000

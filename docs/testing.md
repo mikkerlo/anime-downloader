@@ -78,6 +78,27 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   outbound playstate stamped at *send*, alongside where the room read at that instant —
   `elections` reports what the server made of a frame one delay after the fact,
   which is not the same quantity.
+
+  A fourth knob arrived with #384's item 4, and it is the only one whose
+  default is *not* the reference's behaviour: `protocolTimeoutMs` models
+  `PROTOCOL_TIMEOUT`, the drop a real server applies to a watcher that stops
+  sending `State`, and it is **off** unless a caller names a duration. Off
+  because every fixture here and all nineteen conformance scenarios predate it;
+  the reference's own value is exported beside it as `PROTOCOL_TIMEOUT_MS` so
+  nothing has to spell 12 500 out. What resets the clock is the part worth
+  reading rather than assuming, and it is read off the real server by
+  `conformance/syncplay-protocol-timeout.conformance.ts` rather than off
+  `server.py`: a **`State` frame and nothing else**, a ping-only one carrying no
+  `playstate` included, because the stamp sits above the guard the position work
+  is behind. `Chat`, `Set` and `List` traffic refreshes nothing however often it
+  arrives, so "silent" means *sends no `State`* and not *reports no position*.
+  The one refresh the reference itself skips is the one inside its own
+  `ignoringOnTheFly` window, which is this model's declared-unmodelled seam, so
+  it stays out of scope here too rather than quietly diverging. The drop is
+  quantised by the broadcast tick and not by the constant — a 12.5 s timeout on a
+  1 s interval drops at 13 s — and `test/services/syncplay-protocol-timeout.test.ts`
+  pins both edges from the pull-request gate, deriving them instead of writing
+  them.
 - **Integration** (`test/integration/`) — multi-service flows (auto-download
   tick, Shikimori offline-queue drain) wired through `test/helpers/app-harness.ts`
   (in-memory store + broadcast spy + stub HTTP/download seams). Not a full `App`
@@ -274,18 +295,30 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   declared cadence differences and the scenarios loopback cannot reach, is in
   `conformance/README.md`.
 
+  One scenario here is not a comparison of an existing model behaviour but the
+  **source** of one. `syncplay-protocol-timeout.conformance.ts` was written and
+  run before `MinElectionServer` could drop anyone, so its first run was red by
+  construction, and the reference half of that red is where the `PROTOCOL_TIMEOUT`
+  reset rule above was read: the real server's `"left"` notice, the surviving
+  peer's next `List` without the dropped row, and the room re-electing off the
+  departed watcher. Its premises assert all three before the comparison runs,
+  because `assertConforms` throws and cannot tell agreement about a drop from
+  agreement about nothing having happened.
+
   It runs nightly and on demand (`.github/workflows/syncplay-conformance.yml`),
   **not** in `quality`. It needs a Python server provisioned on the machine
   (`python3 -m venv` + `pip install --no-deps` from the pinned commit
   `993232ab095bb810593459bc705b3e6fc64ad161` — `--no-deps` because the declared
   set pulls 255 MB of PySide6 for a GUI the server entry point never starts), it
-  takes about four minutes of wall clock, and a red there is a claim about an
-  upstream project rather than about the PR's diff. If `SYNCPLAY_SERVER_BIN` is
+  takes about five minutes of wall clock — four until #384's item 4 added a
+  scenario that spends 41 s of it holding a peer past a 12.5 s timeout — and a red
+  there is a claim about an upstream project rather than about the PR's diff.
+  `conformance/README.md` carries the derivation. If `SYNCPLAY_SERVER_BIN` is
   unset and nothing named `syncplay-server` is on `PATH` the harness **throws**
   rather than skipping — a conformance suite that quietly passes because it
   never ran is the failure mode it exists to rule out.
 
-  Three of this layer's own properties are pinned from `quality`, because a
+  Four of this layer's own properties are pinned from `quality`, because a
   nightly-only layer is not exercised by the pull request that breaks it.
   `test/conformance-workflow.test.ts` asserts that every piped step in the
   workflow runs under a shell that sets `pipefail`: without it a diverged suite
@@ -298,6 +331,13 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   file pins `reachesFieldPath()`, the predicate behind "reaches every compared
   field at least once", on the case that made its predecessor weaker than it
   read: a join notice satisfying `Set.user.[].file.name` with no `file` in it.
+  It also pins the two option resolvers a scenario's declarations pass through,
+  `peerOptions()` and `modelOptions()`, in both directions each. Both fail
+  quietly rather than loudly if they are inverted — a peer that acks when it was
+  told not to collapses the wait its scenario measures, and a modelled timeout
+  resolved on for every scenario would start dropping watchers out of budgets
+  written to keep them alive — and a quiet failure in a nightly-only layer is a
+  night late at best.
 
   What this does and does not underwrite in the layers above. The mirror and
   two-peer fixtures split by what their *expected value* is derived from. One

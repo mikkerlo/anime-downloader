@@ -16,7 +16,7 @@
 // divergence; the pin reddened on its own, as designed, and the same PR swapped
 // it for `assertConforms`. The pin failed in *both* directions, and so does the
 // agreement check that replaced it, for a reason item 4 itself changed: the
-// model has no ignore window (`test/helpers/syncplay-min-election-server.ts:70` ("Deliberately **not** modelled"))
+// model has no ignore window (`test/helpers/syncplay-min-election-server.ts:156` ("Deliberately **not** modelled"))
 // and now stamps every frame above its playstate guard, so a `sendPingOnly` that
 // dropped its counter leaves the reference inert and the model re-electing — a
 // divergence `assertConforms` reports, measured at 4.094s against the pinned
@@ -37,8 +37,9 @@ import {
   reachesFieldPath,
   type Divergence
 } from '../conformance/helpers/trace-diff'
-import { peerOptions, type Scenario } from '../conformance/helpers/scenario'
+import { modelOptions, peerOptions, type Scenario } from '../conformance/helpers/scenario'
 import { Peer, type Transport } from '../conformance/helpers/wire-peer'
+import { PROTOCOL_TIMEOUT_MS } from './helpers/syncplay-min-election-server'
 
 describe('conformance harness: freePort hands out a port nothing answers on', () => {
   it('returns a port that is already refusing, not one still answering', async () => {
@@ -234,6 +235,56 @@ describe('conformance harness: peerOptions resolves manualAckPeers', () => {
     // The `?? []` arm reached from the other side: a declared-but-empty list
     // must not be the same thing as naming everyone.
     expect(peerOptions(scenario([]), 'alpha')).toEqual({ ackForcedUpdates: true })
+  })
+})
+
+describe('conformance harness: modelOptions resolves protocolTimeout', () => {
+  const scenario = (over: Partial<Scenario> = {}): Scenario => ({
+    name: 'conf-stub',
+    peers: ['pinger', 'quiet'],
+    steps: [],
+    ...over
+  })
+
+  it('leaves the modelled timeout off when no scenario asks for it', () => {
+    // The default carries all nineteen scenarios that predate #384's item 4. Its
+    // failure direction is the inert one, which is why it is pinned here rather
+    // than left to `conformance/`: a resolver that turned the drop on everywhere
+    // would start removing watchers out of scenarios whose budgets were written
+    // under `conf-forced-ping-stamps`'s *keep-it-alive* inequality, and the
+    // nightly is a night late.
+    expect(modelOptions(scenario())).toEqual({
+      room: 'conf-stub',
+      position: 0,
+      paused: true,
+      protocolTimeoutMs: null
+    })
+  })
+
+  it('passes a scenario timeout through to the model, in milliseconds', () => {
+    // `conf-timeout-idle-drop` is the only caller, and getting this backwards
+    // leaves it comparing a dropping reference against a never-dropping model —
+    // the exact red it was first run in, so it fails loudly rather than quietly.
+    expect(modelOptions(scenario({ protocolTimeout: PROTOCOL_TIMEOUT_MS })).protocolTimeoutMs).toBe(
+      PROTOCOL_TIMEOUT_MS
+    )
+  })
+
+  it('reads an explicit null as off, which is the escape hatch here', () => {
+    // The `?? null` arm from the other side, and the half that differs from
+    // `setBy` on the same model: there an explicit `null` is deliberately folded
+    // back onto the pairing rule, because a nameless playing room is unreachable
+    // upstream. Nothing is unreachable here, so `null` means what it says — which
+    // is what lets the band sweep in `conformance/README.md` name its off end.
+    expect(modelOptions(scenario({ protocolTimeout: null })).protocolTimeoutMs).toBe(null)
+  })
+
+  it('carries a swept value that is not the reference constant', () => {
+    // The band in `conformance/README.md` is measured by moving this number, so a
+    // resolver that clamped it to `PROTOCOL_TIMEOUT_MS` — or ignored anything but
+    // that value — would make both edges unmeasurable while the scenario itself
+    // stayed green.
+    expect(modelOptions(scenario({ protocolTimeout: 4400 })).protocolTimeoutMs).toBe(4400)
   })
 })
 

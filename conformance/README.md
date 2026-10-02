@@ -7,7 +7,7 @@ is true, by replaying the same scenarios against a **real Syncplay 1.7.6 server*
 and comparing the two on the wire.
 
 It does not run in the `quality` gate. It needs a Python server on the machine,
-it takes about four minutes of wall clock, and it is a claim about an upstream
+it takes about five minutes of wall clock, and it is a claim about an upstream
 project rather than about this one — so it runs nightly and on demand
 (`.github/workflows/syncplay-conformance.yml`), and `npm run test` stays the
 thing that gates a PR.
@@ -84,7 +84,7 @@ election scenarios and said nothing about the election.
 
 ## Findings
 
-Three things the real server settled that source reading alone had not.
+Four things the real server settled that source reading alone had not.
 
 **A seated-but-unheard watcher's position is known, not unknown.**
 `Room.addWatcher` (`server.py:634-637`) seeds a joiner from
@@ -113,6 +113,34 @@ entirely — not merely having its own inbound frames discarded by
 1.8 s and a flipped `setBy` that were really the reference saying nothing. The
 harness's peers ack immediately, which is what a conforming client does.
 
+**A `PROTOCOL_TIMEOUT` drop announces itself, and the roster is live rather than
+cached.** This is the one finding here that was *designed* as a finding:
+`syncplay-protocol-timeout.conformance.ts` was written and run before
+`MinElectionServer` could drop anyone, so its first run was red by construction
+and the reference half of that red is the evidence. `conf-timeout-idle-drop`
+holds `quiet` silent in `State` — while it keeps asking for rosters, so the
+"traffic does not refresh" arm is exercised too — and keeps `pinger` alive on
+ping-only frames alone. Captured against the pinned server, on `pinger`'s
+socket, with `t` measured from that peer's first frame:
+
+```
+18103ms << {"State": {…, "playstate": {"position": 300, …, "setBy": "quiet"}}}
+18106ms << {"Set": {"user": {"quiet": {"room": {"name": "conf-timeout-idle-drop"},
+                                      "event": {"left": true}}}}}
+19103ms << {"State": {…, "playstate": {"position": 500, …, "setBy": "pinger"}}}
+20820ms << {"List": {"conf-timeout-idle-drop": {"pinger": {…, "file": {"name": "a.mkv", …}}}}}
+```
+
+Three things in four frames. The notice is a `Set: {user}` with an `event` and
+**no `file` key**, so it is not a file relay and the suite's existing
+`Set.user.[].event.*` ignore entry already covers it. The room re-elects on the
+next tick, 500 and `pinger` replacing 300 and `quiet` — so a drop is visible as a
+`playstate` flip and not only as a roster change. And the `List` the server
+answers 1.7 s later carries one row, which is the half that tells a live removal
+from a stale read. The drop itself landed 12.902 s after `quiet`'s last `State`,
+on the tick after the one at 11.901 s: the comparison is a strict `>` sampled on
+the 1 Hz `LoopingCall`, so 12.5 s is not the edge and 13 s is.
+
 ## The #307 mutation control
 
 The suite's worth is whether it would have caught the bug it was built for. With
@@ -133,6 +161,66 @@ A second scenario reds alongside it (`conf-elect-announce-beats`, where the
 filtered model elects nobody at all and reports `setBy: null`). The mutation was
 reverted; it is recorded here rather than left in a branch.
 
+## The #384 mutation control, and the band it is green over
+
+`conf-timeout-idle-drop` needs the same treatment and gets it twice over, because
+it is the one scenario here whose assertion is a *removal* and removals are
+invisible at the transport layer.
+
+**With the model's drop switched off** — `protocolTimeout` dropped from the
+scenario, which is also the state the scenario was first written and run in — it
+reds with exactly three divergences, one label, and a 200 s position gap:
+
+```
+Error: scenario "conf-timeout-idle-drop" — 3 divergence(s) at ±0.05s
+  [quiet timed out; the room re-elects to pinger at 500] pinger.playstate.setBy: real="pinger" model="quiet"
+  [quiet timed out; the room re-elects to pinger at 500] pinger.playstate.position: real=500 model=300
+  [quiet timed out; the room re-elects to pinger at 500] pinger.roster: real={"pinger":"a.mkv"} model={"pinger":"a.mkv","quiet":"b.mkv"}
+```
+
+All three on `pinger`, which is the point: `quiet` is the peer that goes, and a
+peer that has gone reports nothing new, so the whole observable surface of a drop
+is on the survivor.
+
+**With the drop on, the duration swept.** The axis is the **model's**
+`protocolTimeoutMs`, never the scenario's idle — moving the idle moves both
+backends together and buys a green for the wrong reason. Twenty-six runs, each a
+full real-plus-model pass:
+
+| `protocolTimeoutMs` | verdict | why |
+| --- | --- | --- |
+| off (`null`) | red, 3 divergences | the model never drops; the control above |
+| 3000, 3400, 3500 | red, 1 divergence (`roster`) | **`pinger`** is dropped too, so its final `List` is never answered and its roster is the stale one from the first sample |
+| 4000 – 4500 | phase-dependent | both verdicts observed at 4000, 4400 and 4500 in different runs |
+| 5000, 12500, 13000, 13400, 13500 | green | |
+| 14000, 14400 | phase-dependent | green twice and red once at 14000 |
+| 14500 – 14800 | red, 2 divergences | the model *does* drop `quiet`, one tick too late for the re-election to reach the sample; the roster agrees because the final `List` is still answered after the removal |
+| 14900 – 17000 | red, 3 divergences | the model never drops before the sample at all |
+
+**Neither edge localises to 100 ms, and that is a property of the mechanism
+rather than a loose step list.** The threshold is read on the 1 Hz broadcast tick,
+so any value measured through it carries ±1 `SERVER_STATE_INTERVAL` of phase
+uncertainty, and `drive()` adds up to ~700 ms of accumulated `setTimeout` drift on
+top (measured: one 2600 ms `wait` took 3212 ms). Both edges therefore reproduce as
+*directions* with a one-tick shoulder, and both shoulders were measured rather
+than inferred:
+
+- **The floor is `pinger`'s largest tick-sampled idle**, which came out between
+  3803 ms and 4897 ms over twelve backend runs — nominally
+  `PING_EVERY_MS + LIST_MS`, 4400. Below the bottom of that range the scenario
+  reds every time; above the top it is green every time.
+- **The ceiling is how much of the run is left after the drop.** `quiet` is
+  dropped at an idle of 12512–13241 ms against the 12 500 ms timeout — always
+  inside one tick of it, which is the quantisation — leaving 2.0–3.2 s of tail,
+  where the re-election needs one tick and the final `List` 400 ms. Push the
+  timeout to 14 000 and the measured tail falls to 187 ms, which is the red above.
+
+At the shipped `PROTOCOL_TIMEOUT_MS` the worst-case arithmetic is
+`13500 + 1000 + 400 ≤ 15400`: the drop can be a full tick late, the re-election
+takes another, and there is still ~900 ms spare before the sample. Green in six
+independent runs at that value. It is the thinnest margin in this directory, so a
+flake here is a reason to raise `PINGS` rather than to widen anything.
+
 ## What could not be reached
 
 Recorded rather than quietly skipped, because an unrun scenario and a passing one
@@ -141,7 +229,7 @@ look the same from the outside.
 **Everything latency-shaped.** Loopback `serverRtt` measured between 0.0003 s and
 0.0013 s across every run here. That is three orders of magnitude below the
 paused tolerance, so the `messageAge` perturbation
-(`test/helpers/syncplay-min-election-server.ts:757` ("w.position = position +
+(`test/helpers/syncplay-min-election-server.ts:928` ("w.position = position +
 (ps.paused === true ? 0 : this.forwardDelayFor(w))")), `forwardDelay`, and the
 `echoHoldCorrection` echo are all unobservable: the model could compute them any
 way at all and this suite would still report agreement. They stay owned by
@@ -183,17 +271,24 @@ has an entry in `IGNORED_FIELDS` naming the fixture that does own it.
 
 ## Runtime
 
-19 scenarios across 4 files — 5 election, 5 file-membership, 6 forced-update,
-3 field-coverage — at about 273 s wall clock, run sequentially —
-`fileParallelism: false` and `maxConcurrency: 1`, because both backends are
-wall-clock-driven and a second suite running beside them becomes their jitter.
-Most of that is `wait` steps: a scenario has to let both backends re-elect at
-least once after the step under test before it looks.
+20 scenarios across 5 files — 5 election, 5 file-membership, 6 forced-update,
+3 field-coverage, 1 protocol-timeout — at about 314 s wall clock, run
+sequentially — `fileParallelism: false` and `maxConcurrency: 1`, because both
+backends are wall-clock-driven and a second suite running beside them becomes
+their jitter. Most of that is `wait` steps: a scenario has to let both backends
+re-elect at least once after the step under test before it looks.
 
-The 273 s is derived, not freshly measured. 249 s is the measurement, taken on a
-warm WSL2 box when this suite held 18 scenarios; `conf-forced-ping-stamps` then
-added `2 × SETTLE_MS + PING_WAIT_MS + SETTLE_MS` — 11.8 s of scheduled waits,
-paid once per backend, so 23.6 s. Re-measure rather than keep adding to it if the
+The 314 s is derived, not freshly measured, and it has now been derived twice.
+249 s is the original measurement, taken on a warm WSL2 box when this suite held
+18 scenarios; `conf-forced-ping-stamps` then added
+`2 × SETTLE_MS + PING_WAIT_MS + SETTLE_MS` — 11.8 s of scheduled waits, paid once
+per backend, so 23.6 s, for 273 s. `conf-timeout-idle-drop` adds 41.2 s, and that
+one **is** a measurement rather than a sum of its waits: it was timed on its own,
+both backends, at 41 213 ms, against 20.6 s of scheduled waits per backend — so
+the overhead the other two figures are sums of is about 2 % here, which is the
+only evidence this file has that those sums are honest. One scenario is now 13 %
+of the suite's budget, because holding a peer past a 12.5 s timeout costs 12.5 s
+twice however little else it does. Re-measure rather than keep adding to it if the
 number starts mattering.
 
 Give it the box. Running it alongside `npm run test:coverage` and an Electron

@@ -266,9 +266,9 @@ describe('conformance: forced updates', () => {
     // claim — and this scenario ran nightly and **passed**, holding the shape
     // of that one divergence exactly: the model lagged the reference by roughly
     // `PING_WAIT_MS`, the projection term the missing stamp left in place.
-    // Item 4 is `test/helpers/syncplay-min-election-server.ts:744` ("w.lastUpdatedOn = Date.now()"), the stamp
+    // Item 4 is `test/helpers/syncplay-min-election-server.ts:915` ("w.lastUpdatedOn = Date.now()"), the stamp
     // now sitting above the `if (!ps) return` at
-    // `test/helpers/syncplay-min-election-server.ts:745` ("if (!ps) return"), so the model
+    // `test/helpers/syncplay-min-election-server.ts:916` ("if (!ps) return"), so the model
     // re-stamps too and that divergence is closed. The pin went red on its own,
     // as designed, and the swap to `assertConforms(run)` at the foot of this
     // test landed with item 4 in the same PR — which is what #384's checkbox

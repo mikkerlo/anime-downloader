@@ -55,7 +55,7 @@ const ALONE_SECONDS = 6
  *
  * Repeated addition rather than `ROOM_START + steps * d`, and the distinction is
  * load-bearing rather than cosmetic: the server re-stores each mirror frame with
- * `+= fd` — `test/helpers/syncplay-min-election-server.ts:757` ("w.position =
+ * `+= fd` — `test/helpers/syncplay-min-election-server.ts:928` ("w.position =
  * position + (ps.paused === true ? 0 : this.forwardDelayFor(w))")
  * — so three compensations of 0.05 arrive at 100.14999999999999, while
  * `100 + 3 * 0.05` is 100.15. Those are different doubles, and every exact
@@ -108,7 +108,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // main and `lastSnapshotAt` stays 0. That is what keeps this peer on the
     // mirror exit for the whole run, and it is a gate rather than luck: with no
     // snapshot, `canAssertSnapshot()` is the false conjunct at
-    // `src/main/syncplay.ts:2403`
+    // `src/main/syncplay.ts:2410`
     // ("if (this.canAssertSnapshot() && this.isAdopted()) {") and the `&&`
     // short-circuits before `isAdopted()` can latch.
     const spectator = await room.seat({
@@ -135,7 +135,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // elections had exactly one candidate, so `min()` handed back the crept
     // value itself: it is not *above* the room, it **is** the room, and the
     // spectator is the peer the server names as having set it. The count is
-    // pinned before it is quantified over, per docs/testing.md:332 ("Pin the
+    // pinned before it is quantified over, per docs/testing.md:372 ("Pin the
     // count, never just loop over the set") — `every()` on an empty array is
     // `true`, and an `elections` array that stopped being filled would leave
     // the two lines below green while asserting nothing.
@@ -149,10 +149,10 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // element never moved off the truth, and it announced nothing discrete —
     // the creep is entirely the server's arithmetic over a frame that omits
     // `paused`, which is what `buildPlaystate()`'s mirror exit sends
-    // (`src/main/syncplay.ts:2484-2487`
+    // (`src/main/syncplay.ts:2491-2494`
     // ("position: this.projectedRoomPosition(room)")). `paused` absent on every
     // frame is the observable that says it stayed on that exit —
-    // `test/helpers/syncplay-min-election-server.ts:314-319` ("paused?:
+    // `test/helpers/syncplay-min-election-server.ts:449-454` ("paused?:
     // boolean") is absent exactly for a mirror — and
     // `playbackAdopted` is the same fact read off the client.
     expect(spectator.el.currentTime).toBe(ROOM_START)

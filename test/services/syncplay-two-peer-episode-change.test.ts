@@ -42,7 +42,7 @@
 // PLAYBACK_STALE_MS = 5000")) is the lower run's top edge exactly — 5000 drags,
 // 5001 is clean, and the operator that puts 5000 *inside* the horizon rather
 // than at the bottom of the next run is the `<=` at
-// `src/main/syncplay.ts:2341` ("return this.lastSnapshotAt > 0 && Date.now() -
+// `src/main/syncplay.ts:2348` ("return this.lastSnapshotAt > 0 && Date.now() -
 // this.lastSnapshotAt <= PLAYBACK_STALE_MS") — and it is the only edge on the
 // **drag** axis that lands on a named constant. That qualifier is load-bearing,
 // not pedantry: this header measures two axes, and the other one has an edge on
@@ -77,10 +77,10 @@
 // Two mechanisms, not one, which is why 3 s and 6.5 s are separate cases rather
 // than two rows of a table. At 3 s the seat de-adopts on the file change
 // (`src/main/syncplay.ts:789`) and then **re-latches before the next push, on
-// the previous episode's snapshot**: `src/main/syncplay.ts:2634` subtracts the
+// the previous episode's snapshot**: `src/main/syncplay.ts:2641` subtracts the
 // projected room from `this.snapshot.position`, and while a reloading element
 // announces nothing both terms are still the old episode's number, so the drift
-// is 0 and `src/main/syncplay.ts:2635` adopts a seat whose element reads ~0. The
+// is 0 and `src/main/syncplay.ts:2642` adopts a seat whose element reads ~0. The
 // latched seat then asserts the inbound write's 303 — #360 itself — and wins
 // `min()`. At 6.5 s a second path runs: the gap outlives `PLAYBACK_STALE_MS`
 // (`src/main/syncplay.ts:66`), so by the first post-bind push
@@ -105,7 +105,7 @@
 // The mirror's *width* is neither of those two paths. `buildPlaystate()` is
 // `canAssertSnapshot() && isAdopted()` with the snapshot timer first, so during
 // the bind gap — when no push arrives at all — `PLAYBACK_ASSERT_STALE_MS` (2 s,
-// `src/main/syncplay.ts:2369`) is what silences us, and the adoption latch does
+// `src/main/syncplay.ts:2376`) is what silences us, and the adoption latch does
 // not even run inside that window. That is the whole of "withholds our playstate
 // entirely" on this path: one frame at 3 s, five at 6.5 s, none at 500 ms. Width
 // is monotone non-decreasing in the gap — 28 cells swept, non-decreasing at
@@ -411,7 +411,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // PINS CURRENT BEHAVIOUR, BELIEVED WRONG. A peer that pressed nothing has
     // its playhead written backwards and loses ~5 s of playback. The analysis —
     // the de-adopt at `src/main/syncplay.ts:789`, the stale re-latch at
-    // `src/main/syncplay.ts:2635`, and why #360's own inbound write is upstream
+    // `src/main/syncplay.ts:2642`, and why #360's own inbound write is upstream
     // of both the room drag and this one — is in #360. This is not a guard: when
     // #360 is fixed, this case inverts.
     const { switcher, innocent, wireBefore } = await seatPair(3000)

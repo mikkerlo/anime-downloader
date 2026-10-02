@@ -81,7 +81,7 @@ export const COMPARED_FIELD_PATHS: readonly string[] = [
 export const IGNORED_FIELDS: readonly IgnoreEntry[] = [
   {
     path: 'State.ignoringOnTheFly.*',
-    seam: 'The ignore window, which the model declares unmodelled in its header and implements as a bare counter stamp — `test/helpers/syncplay-min-election-server.ts:795` ("frame.ignoringOnTheFly = { server: serverCounter }") is the whole of it, and the window itself never runs — while `test/services/syncplay-ignoring-on-the-fly.test.ts` owns the seam frame by frame. Comparing the counters here would assert parity for a mechanism one side does not implement.'
+    seam: 'The ignore window, which the model declares unmodelled in its header and implements as a bare counter stamp — `test/helpers/syncplay-min-election-server.ts:969` ("frame.ignoringOnTheFly = { server: serverCounter }") is the whole of it, and the window itself never runs — while `test/services/syncplay-ignoring-on-the-fly.test.ts` owns the seam frame by frame. Comparing the counters here would assert parity for a mechanism one side does not implement.'
   },
   {
     path: 'State.ping.latencyCalculation',
@@ -109,7 +109,7 @@ export const IGNORED_FIELDS: readonly IgnoreEntry[] = [
   },
   {
     path: 'Set.user.[].event.*',
-    seam: "`sendJoinMessage` (`server.py:168-173`). A join notice, not a file relay: the model stands a fresh `List` in for it, and `applySet`'s comment says so. The suite compares the relay (`Set.user.[].file`) and the roster instead."
+    seam: 'Two notices, and the entry named only the first until #384 item 4: `sendJoinMessage` (`server.py:168-173`) and `sendLeftMessage` (`server.py:163-165` ("def sendLeftMessage(self, watcher):")), which is the frame a `PROTOCOL_TIMEOUT` drop announces itself with. Neither is a file relay. For the join the model stands a fresh `List` in, as the comment on `applySet` says; the leave notice it now sends literally, because `src/main/syncplay.ts:1406` ("if (data.event.left === true) {") reads that exact shape. The suite compares the relay (`Set.user.[].file`) and the roster instead, which is how a drop is observed here at all.'
   },
   {
     path: 'Set.user.[].room.name',

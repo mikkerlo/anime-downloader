@@ -66,6 +66,92 @@
 //    *election* rather than the last write, and a playing room reads ahead of
 //    the position a seek or a pause just set (`:606`). Both artefacts are #279's
 //    subject; see `forcePositionUpdate()` for the measurements.
+//  - `Watcher.sendState` **drops** a watcher that has gone `PROTOCOL_TIMEOUT`
+//    without sending a `State` (#384 item 4), and the three lines are copied in
+//    their own order rather than approximated:
+//    `server.py:860` ("self._connector.sendState(position, paused, doSeek, setBy, forcedUpdate)")
+//    puts the frame on the wire, *then*
+//    `server.py:861` ("if time.time() - self._lastUpdatedOn > constants.PROTOCOL_TIMEOUT:")
+//    tests the clock, *then*
+//    `server.py:862` ("self._server.removeWatcher(self)") takes the watcher out
+//    of the room and `server.py:863` ("self._connector.drop()") closes the
+//    socket. So the drop tick's own `State` is **delivered**, not eaten — and
+//    `protocols.py:63` ("self.transport.loseConnection()") is a flushing close,
+//    which is the half of that argued from Twisted rather than from source text.
+//    `PROTOCOL_TIMEOUT_MS` is the duration and the drop is **off by default**
+//    (`protocolTimeoutMs`), because every fixture here predates it.
+//
+//    Four properties of it that are easy to model one step off:
+//
+//    **Quantised by the tick, not by the constant.** The comparison is a strict
+//    `>` and it is sampled only when the server sends that watcher a `State`,
+//    off the per-watcher 1 Hz `LoopingCall`
+//    (`server.py:842` ("self._sendStateTimer = task.LoopingCall(self._askForStateUpdate)"),
+//    `server.py:843` ("self._sendStateTimer.start(constants.SERVER_STATE_INTERVAL)"),
+//    restarted on the same interval by `_resetStateTimer` at
+//    `server.py:852` ("self._sendStateTimer.start(constants.SERVER_STATE_INTERVAL)");
+//    `constants.py:78` ("SERVER_STATE_INTERVAL = 1")). So an idle *of*
+//    `PROTOCOL_TIMEOUT` cannot drop at all, and the earliest drop is the first
+//    tick strictly past it. Measured against the pinned server by
+//    `conformance/syncplay-protocol-timeout.conformance.ts`: a watcher idle from
+//    its own last `State` was dropped 12.902 s later, on the tick after the one
+//    at 11.901 s.
+//
+//    **In `sendState`, not in the periodic broadcast.** Upstream's test is in
+//    `Watcher.sendState`, which the 1 Hz tick reaches, and so does
+//    `forcePositionUpdate`'s `broadcastRoom` and `setRoom`'s join-time forced
+//    update. Hooking `broadcastPeriodicState` here would model only the first of
+//    the three. And there is nothing to place the test *outside* of: upstream's
+//    sits below `server.py:859` ("if self._connector.isLogged():"), so a
+//    suppressed watcher is still on the clock, where this model has no
+//    `isLogged` and no suppression at all — stated rather than left looking like
+//    an omission.
+//
+//    **A `State` is the only thing that resets the clock, and traffic is not.**
+//    `_lastUpdatedOn` has exactly two writes — the constructor and
+//    `server.py:877` ("self._lastUpdatedOn = time.time()") in `updateState` —
+//    and `updateState` has exactly one caller,
+//    `protocols.py:789` ("self._watcher.updateState(position, paused, doSeek, self._pingService.getLastForwardDelay())"),
+//    at the tail of `handleState`. So Chat, `Set` and `List` do not refresh it,
+//    while a **ping-only** `State` carrying no playstate does: that same
+//    `server.py:877 ("self._lastUpdatedOn = time.time()")` stamps above the
+//    `if position is not None` guard, which is the same ordering
+//    `applyState` below copies. The one refresh upstream *skips* is the one
+//    inside its own ignore window (`protocols.py:788` ("if
+//    self.serverIgnoringOnTheFly == 0:")), and that window is on this file's
+//    deliberately-unmodelled list two paragraphs down — so it is out of scope
+//    here too, rather than quietly diverging.
+//
+//    **The leave notice is the departure's only announcement, and the departing
+//    watcher gets it.** `SyncFactory.removeWatcher`
+//    (`server.py:155-161` ("def removeWatcher(self, watcher):")) calls
+//    `sendLeftMessage` (`server.py:163-165` ("def sendLeftMessage(self, watcher):"))
+//    *before* `_roomManager.removeWatcher`, so the watcher still has a room and
+//    the notice can name it, and `broadcast`
+//    (`server.py:447-450` ("def broadcast(self, sender, whatLambda):")) has no
+//    sender exclusion. The frame is `Set: {user: {<name>: {room, event:
+//    {left: true}}}}` with **no `file` key** — `sendUserSetting` writes that key
+//    only for a truthy file — which is why `removeWatcher` below sends that
+//    literal rather than standing a fresh `List` in for it the way `applySet`
+//    does: `src/main/syncplay.ts:1406` ("if (data.event.left === true) {") reads
+//    this exact shape, and a `List` stand-in would leave that client path
+//    unreachable from any fixture. No `List` is pushed alongside, because
+//    upstream's is gated on a rooms DB the conformance server is not started
+//    with.
+//
+//    Two pieces of `Room.removeWatcher`
+//    (`server.py:640-647` ("def removeWatcher(self, watcher):")) are
+//    **declared unmodelled** rather than skipped quietly. Its idempotence guard
+//    (`server.py:641` ("if watcher.getName() not in self._watchers:")) and its
+//    delete (`server.py:643` ("del self._watchers[watcher.getName()]")) *are*
+//    modelled; the room-emptied reset
+//    (`server.py:646` ("self._position = 0")) is not, because no fixture here
+//    empties a room and modelling it would put a second write of `roomPosition`
+//    on a path nothing exercises. `_deactivateStateTimer`
+//    (`server.py:748` ("self._deactivateStateTimer()")) needs no counterpart at
+//    all: upstream's timer is per-watcher and this model's is room-wide, and
+//    `sendState` is only ever reached through a watcher snapshot, so a removed
+//    watcher stops being ticked by construction.
 //
 // Deliberately **not** modelled: the `ignoringOnTheFly` ignore window (the
 // server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
@@ -86,7 +172,7 @@
 //
 // Conformance-verified rather than merely modelled (#384): `watcherPosition()`'s
 // **paused** arm — the `this.roomPaused ? w.position` half of
-// `test/helpers/syncplay-min-election-server.ts:460` ("return this.roomPaused
+// `test/helpers/syncplay-min-election-server.ts:599` ("return this.roomPaused
 // ? w.position") — is already checked against the real Syncplay 1.7.6 server in
 // both the steady state and the flip into it, so no new scenario is owed for it.
 //  - **Steady.** `conformance/syncplay-election.conformance.ts:27`
@@ -117,16 +203,16 @@
 //    tolerance, because that scenario never sets `playing`.
 //  - The clause a reader would otherwise go hunting for, stated rather than left as a
 //    hole: `forcePositionUpdate`'s own write, the
-//    `test/helpers/syncplay-min-election-server.ts:527` ("this.roomPosition =
+//    `test/helpers/syncplay-min-election-server.ts:666` ("this.roomPosition =
 //    this.watcherPosition(w)") line, reads through that same paused arm whenever the
 //    change that forced it is a pause, because
-//    `test/helpers/syncplay-min-election-server.ts:744-766` ("if (ps.doSeek === true ||
+//    `test/helpers/syncplay-min-election-server.ts:915-937` ("if (ps.doSeek === true ||
 //    pausedChanged)") refreshes that watcher's `lastUpdatedOn`, flips `roomPaused`, and
 //    only then calls it, in that order. Safe for a stated reason rather than by luck:
 //    the refresh is what the *playing* arm would have projected from, and the paused
 //    arm ignores the stamp regardless, so either way that write reads the setter's own
-//    position at that instant. `test/helpers/syncplay-min-election-server.ts:563` ("for
-//    (const other of this.watchers.values())") then re-seats every watcher.
+//    position at that instant. `test/helpers/syncplay-min-election-server.ts:710` ("for
+//    (const other of seated) other.position = this.roomPosition") then re-seats them all.
 //  - Option (B) — a scenario built to catch an election *flip* decided inside
 //    the paused arm — is structurally excluded rather than deferred, so nobody
 //    need re-open it. A flip that arm could decide needs the watchers'
@@ -136,7 +222,7 @@
 //    the re-seat above leaves every watcher on the room position. They
 //    diverge again in exactly two ways — a fresh `State`, which is the steady
 //    case above, or the **playing** arm's per-watcher projection once the room
-//    resumes. The second is the seam `conformance/README.md:152-162` already
+//    resumes. The second is the seam `conformance/README.md:240-250` already
 //    records as unreachable here, with the reference and the model landing on
 //    different peers at a spread under a millisecond of loopback RTT.
 //
@@ -205,6 +291,30 @@ export type ModelSocket = EventEmitter & { write: (data: string) => void }
  * and holds it.
  */
 export const DEFAULT_PLAYING_SET_BY = 'departeduser'
+
+/**
+ * `PROTOCOL_TIMEOUT` — how long a watcher may go without sending a `State`
+ * before the reference drops it, in **milliseconds**.
+ *
+ * Upstream writes it in seconds, `constants.py:76 ("PROTOCOL_TIMEOUT = 12.5")`;
+ * this is the same number in the unit every other duration in this file carries.
+ *
+ * ONE DECLARATION, TWO READERS, AND NEITHER MAY SPELL THE NUMBER OUT. The
+ * readers are `sendState`'s drop test below and
+ * `conformance/syncplay-protocol-timeout.conformance.ts`'s idle budget, which
+ * writes its wait as `PROTOCOL_TIMEOUT_MS + IDLE_MARGIN_MS` rather than as
+ * 15000. The vitest band in `test/services/syncplay-protocol-timeout.test.ts`
+ * derives both its edges from this and `stateIntervalMs` rather than writing
+ * 13000. A literal anywhere would let an upstream version bump move the
+ * reference's rule while the fixtures kept asserting the old one — which is
+ * "assert the mechanism, never the threshold" applied to the harness's own
+ * clock.
+ *
+ * The drop itself is **off by default**: see `protocolTimeoutMs`. So this
+ * constant states the reference's duration rather than this model's behaviour
+ * until a caller asks for it.
+ */
+export const PROTOCOL_TIMEOUT_MS = 12_500
 
 export interface MinElectionServerOptions {
   /** The room name the `Hello` and `List` replies are keyed to. */
@@ -275,6 +385,31 @@ export interface MinElectionServerOptions {
    * `echoHoldCorrection: false`.
    */
   echoHoldCorrection?: boolean
+  /**
+   * `PROTOCOL_TIMEOUT` as a modelled disconnect: how long a watcher may go
+   * without sending a `State` before `sendState` removes it from the room and
+   * stops writing to its socket. `null` — **the default** — never drops, which is
+   * what every fixture written before #384's item 4 assumes.
+   *
+   * **An explicit `null` here IS the escape hatch**, and that is worth saying
+   * because `setBy` four interfaces up establishes the opposite convention: there
+   * `??` reads an explicit `null` as "unset" and lands it back on the pairing
+   * rule, deliberately, because a nameless playing room is a state the reference
+   * cannot reach. There is no such impossible state here. `null` means "model a
+   * server that never times anyone out", the resolver is `?? null`, and spelling
+   * it at a call site that is sweeping the value is the normal way to name the
+   * off end of the sweep.
+   *
+   * `number | null` rather than a boolean for that sweep's sake: the band this
+   * feature is pinned over is measured by varying the *duration* from the call
+   * site — `conformance/README.md` records both edges — and a boolean would make
+   * `PROTOCOL_TIMEOUT_MS` the only value anything could ever ask for.
+   *
+   * The drop is quantised by `stateIntervalMs`, not by this number, because
+   * upstream samples the test on its 1 Hz tick: pass `12_500` with a 1 s interval
+   * and the earliest drop is at 13 s. See the header block for the rest.
+   */
+  protocolTimeoutMs?: number | null
 }
 
 export interface SeatOptions {
@@ -367,6 +502,7 @@ export class MinElectionServer {
   private readonly electionAgeMs: number
   private readonly forwardDelay: 'avrRtt/2' | number
   private readonly echoHoldCorrection: boolean
+  private readonly protocolTimeoutMs: number | null
   private readonly watchers = new Map<string, Watcher>()
   private roomPosition: number
   private roomPaused: boolean
@@ -385,6 +521,9 @@ export class MinElectionServer {
     this.electionAgeMs = opts.electionAgeMs ?? 1000
     this.forwardDelay = opts.forwardDelay ?? 'avrRtt/2'
     this.echoHoldCorrection = opts.echoHoldCorrection ?? true
+    // `?? null`, and an explicit `null` reaches the same place an absent option
+    // does on purpose — unlike `setBy` above, where that collapse is the point.
+    this.protocolTimeoutMs = opts.protocolTimeoutMs ?? null
     this.roomLastUpdate = Date.now()
     this.timer = setInterval(() => this.broadcastPeriodicState(), this.stateIntervalMs)
   }
@@ -560,7 +699,15 @@ export class MinElectionServer {
     // because every watcher in these fixtures is *our* client, where a real
     // Syncplay peer asserts its own player position and is re-seated by nothing
     // else.
-    for (const other of this.watchers.values()) other.position = this.roomPosition
+    //
+    // Both loops iterate a **snapshot**, mirroring `Room.getWatchers()`'s
+    // `server.py:632` ("return list(self._watchers.values())"), which is what
+    // every broadcast path upstream walks. Behaviourally identical while nothing
+    // is removed; it matters once `sendState` can remove, because the second
+    // loop below reaches the drop test and a live `Map` iterator would then be
+    // mutated underneath itself.
+    const seated = [...this.watchers.values()]
+    for (const other of seated) other.position = this.roomPosition
     this.serverCounter += 1
     const playstate = {
       position: this.roomPosition,
@@ -568,9 +715,33 @@ export class MinElectionServer {
       doSeek,
       setBy: this.roomSetBy
     }
-    for (const other of this.watchers.values()) {
+    for (const other of seated) {
       this.sendState(other, playstate, this.serverCounter)
     }
+  }
+
+  /**
+   * `SyncFactory.removeWatcher` + `Room.removeWatcher`, folded into one call
+   * because this model has no `RoomManager` layer between them. See the header
+   * block for the upstream anchors, for what is deliberately unmodelled, and for
+   * why the frame is the literal leave notice rather than a fresh `List`.
+   *
+   * Order is load-bearing in two places. The notice goes out **before** the
+   * delete, so the departing watcher is still reachable and still has a room to
+   * be named in — and it goes to a snapshot taken before the delete for the same
+   * reason, so the departing watcher is one of the recipients. Idempotent, as
+   * upstream's own guard is, so a second drop tick is a no-op rather than a
+   * second notice.
+   */
+  private removeWatcher(w: Watcher): void {
+    if (!this.watchers.has(w.username)) return
+    const notice = {
+      Set: { user: { [w.username]: { room: { name: this.room }, event: { left: true } } } }
+    }
+    for (const other of [...this.watchers.values()]) {
+      this.send(other.username, notice, other.delayMs)
+    }
+    this.watchers.delete(w.username)
   }
 
   // --- the wire ----------------------------------------------------------
@@ -775,7 +946,10 @@ export class MinElectionServer {
       doSeek: false,
       setBy: this.roomSetBy
     }
-    for (const w of this.watchers.values()) this.sendState(w, playstate)
+    // A snapshot, as `forcePositionUpdate` takes: `sendState` below can remove a
+    // watcher, and `Room.getWatchers()` hands out a `list(...)` rather than a
+    // live view.
+    for (const w of [...this.watchers.values()]) this.sendState(w, playstate)
   }
 
   private sendState(w: Watcher, playstate: JsonRecord, serverCounter?: number): void {
@@ -794,6 +968,16 @@ export class MinElectionServer {
     const frame: JsonRecord = { ping, playstate }
     if (serverCounter !== undefined) frame.ignoringOnTheFly = { server: serverCounter }
     this.send(w.username, { State: frame }, w.delayMs)
+    // After the send, never before: upstream puts the frame on the wire at
+    // `server.py:860 ("self._connector.sendState(position, paused, doSeek, setBy, forcedUpdate)")`
+    // and only then tests the clock at
+    // `server.py:861 ("if time.time() - self._lastUpdatedOn > constants.PROTOCOL_TIMEOUT:")`.
+    // The ordering is the whole of vitest case 7 — on a delayed link the drop
+    // tick's `State` has to arrive and the leave notice to arrive after it, where
+    // a test placed above the send would eat the frame the reference delivers.
+    if (this.protocolTimeoutMs !== null && Date.now() - w.lastUpdatedOn > this.protocolTimeoutMs) {
+      this.removeWatcher(w)
+    }
   }
 
   private sendList(username: string): void {
@@ -814,13 +998,29 @@ export class MinElectionServer {
     this.send(username, { List: { [this.room]: entry } })
   }
 
+  /**
+   * One frame out, optionally one link delay late.
+   *
+   * The entry guard is a membership test — a call for a watcher that is no longer
+   * seated sends nothing — but the socket is captured **at call time** rather than
+   * re-looked-up in `deliver()`, and the difference is only visible once
+   * `sendState` can remove a watcher. With a non-zero `delayMs` (50–1500 ms
+   * across `test/services/`), a re-lookup would make a frame that was queued and
+   * then overtaken by a removal vanish — so the drop tick's own `State` would be
+   * eaten, which contradicts both the upstream order that puts
+   * `server.py:860 ("self._connector.sendState(position, paused, doSeek, setBy, forcedUpdate)")`
+   * ahead of `server.py:863 ("self._connector.drop()")` and
+   * Twisted's flushing `loseConnection`. **This is the one change here argued from
+   * transport semantics rather than from source text**, and `test/services/
+   * syncplay-protocol-timeout.test.ts` case 7 is what holds it.
+   */
   private send(username: string, obj: unknown, delayMs = 0): void {
     const w = this.watchers.get(username)
     if (!w) return
     const frame = JSON.stringify(obj) + '\r\n'
+    const socket = w.socket
     const deliver = (): void => {
-      const target = this.watchers.get(username)
-      if (target) target.socket.emit('data', Buffer.from(frame))
+      socket.emit('data', Buffer.from(frame))
     }
     if (delayMs <= 0) deliver()
     else setTimeout(deliver, delayMs)

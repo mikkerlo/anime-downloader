@@ -556,7 +556,7 @@ describe('two-peer syncplay harness', () => {
     // moved them is *when the playheads start* rather than any arithmetic about
     // the switch. `MinElectionServer` now answers a `Hello` with a join-time
     // `State` as well
-    // (`test/helpers/syncplay-min-election-server.ts:611` ("const joined = this.watchers.get(username)")),
+    // (`test/helpers/syncplay-min-election-server.ts:782` ("const joined = this.watchers.get(username)")),
     // so the first `State` either element ever sees is that one, arriving 50 ms
     // after the seat, where it used to be the room's periodic tick arriving at
     // 1050 ms. Both figures are arrivals rather than sends, and the trace below
@@ -754,7 +754,7 @@ describe('two-peer syncplay harness', () => {
 //
 // This census is the whole of the first half and stands on its own: how many
 // call sites exist, per file, before anything classifies them. Per
-// `docs/testing.md:332 ("Pin the count, never just loop over the set")` a scan
+// `docs/testing.md:372 ("Pin the count, never just loop over the set")` a scan
 // that only walks the occurrences it finds goes green on an eleventh site it
 // never sees, so the count is the assertion and the prefix check is layered on
 // top of it.

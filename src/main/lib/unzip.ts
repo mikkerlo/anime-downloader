@@ -48,6 +48,10 @@ const MAX_COMMENT_SIZE = 0xffff
 const METHOD_STORED = 0
 const METHOD_DEFLATE = 8
 
+/** Info-ZIP "extended timestamp" extra field: Unix seconds, UTC (#475). */
+const EXTRA_EXTENDED_TIMESTAMP = 0x5455
+const EXTRA_FIXED_SIZE = 4
+
 // Node >= 20.15 only; `engines.node` is ">=20", so feature-detect rather than
 // raising the floor. The byte-count check below is the unconditional guarantee.
 const crc32 = typeof zlib.crc32 === 'function' ? zlib.crc32 : null
@@ -60,6 +64,64 @@ interface ZipEntry {
   uncompressedSize: number
   localHeaderOffset: number
   externalAttributes: number
+  /** Resolved modification time, or `null` when the entry records none. */
+  mtime: Date | null
+}
+
+/**
+ * Walk a central-directory extra field for a `0x5455` extended-timestamp
+ * record and return its mtime.
+ *
+ * This is preferred over the DOS words because it is what the `tar` this
+ * module replaced in #472 used: libarchive (bsdtar, and Windows' `tar.exe`)
+ * takes the mtime from `0x5455` when present, and both assets we fetch carry
+ * one. They do not agree with the DOS words — `ffprobe-6.1-win-64.zip` records
+ * DOS `2023-11-11 13:55:58` against UT `2023-11-11 05:55:58Z`, i.e. the
+ * packager's clock was UTC+8 — and since the DOS words carry no timezone,
+ * reading them alone would stamp that binary 8 hours off for a UTC user and by
+ * a different amount everywhere else (#475).
+ *
+ * The record's first body byte is a flags bitmap; bit 0 says an mtime follows
+ * it as 32-bit Unix seconds. Access and creation times may follow under bits 1
+ * and 2 and are not read.
+ */
+function readExtendedTimestamp(extra: Buffer): Date | null {
+  let cursor = 0
+  while (cursor + EXTRA_FIXED_SIZE <= extra.length) {
+    const id = extra.readUInt16LE(cursor)
+    const size = extra.readUInt16LE(cursor + 2)
+    const body = cursor + EXTRA_FIXED_SIZE
+    if (body + size > extra.length) break
+    if (id === EXTRA_EXTENDED_TIMESTAMP && size >= 5 && (extra.readUInt8(body) & 1) !== 0) {
+      return new Date(extra.readUInt32LE(body + 1) * 1000)
+    }
+    cursor = body + size
+  }
+  return null
+}
+
+/**
+ * Convert the DOS date/time words to a `Date`, or `null` for a date or time
+ * that is absent or impossible.
+ *
+ * The words are local time with no timezone and 2-second granularity, so they
+ * are built with the local-time `Date` constructor rather than `Date.UTC`.
+ * A zero date word is the common case here — plenty of zips in the wild record
+ * no time at all — and such an entry is left alone rather than stamped 1980.
+ */
+function readDosTimestamp(time: number, date: number): Date | null {
+  const day = date & 0x1f
+  const month = (date >>> 5) & 0x0f
+  const year = 1980 + ((date >>> 9) & 0x7f)
+  const seconds = (time & 0x1f) * 2
+  const minutes = (time >>> 5) & 0x3f
+  const hours = (time >>> 11) & 0x1f
+  if (day === 0 || month < 1 || month > 12 || hours > 23 || minutes > 59 || seconds > 59) {
+    return null
+  }
+  const result = new Date(year, month - 1, day, hours, minutes, seconds)
+  // A day past the end of a short month rolls into the next one; refuse it.
+  return result.getDate() === day ? result : null
 }
 
 function notAZip(label: string, detail: string): Error {
@@ -109,6 +171,8 @@ async function readCentralDirectory(
     const nameStart = cursor + CENTRAL_FIXED_SIZE
     const next = nameStart + nameLength + extraLength + commentLength
     if (next > directory.length) throw notAZip(label, 'truncated central directory')
+    const extraStart = nameStart + nameLength
+    const extra = directory.subarray(extraStart, extraStart + extraLength)
     entries.push({
       name: directory.toString('utf8', nameStart, nameStart + nameLength),
       method: directory.readUInt16LE(cursor + 10),
@@ -116,7 +180,12 @@ async function readCentralDirectory(
       compressedSize: directory.readUInt32LE(cursor + 20),
       uncompressedSize: directory.readUInt32LE(cursor + 24),
       externalAttributes: directory.readUInt32LE(cursor + 38),
-      localHeaderOffset: directory.readUInt32LE(cursor + 42)
+      localHeaderOffset: directory.readUInt32LE(cursor + 42),
+      // Resolved here, not in `extractEntry`, so the extractor stays free of
+      // format parsing. UT first, DOS only as a fallback.
+      mtime:
+        readExtendedTimestamp(extra) ??
+        readDosTimestamp(directory.readUInt16LE(cursor + 12), directory.readUInt16LE(cursor + 14))
     })
     cursor = next
   }
@@ -214,6 +283,17 @@ async function extractEntry(
     }
     if (crc32 && entry.crc !== 0 && checksum >>> 0 !== entry.crc) {
       throw new Error(`${label}: entry ${entry.name} failed its CRC-32 check`)
+    }
+
+    // Stamped on the `.partial`, before the rename, because `rename` preserves
+    // mtime: the file turns up at its final path already carrying the
+    // archive's time, and the catch below keeps its one job of unlinking a
+    // leftover `.partial` (after the rename there is none left to unlink).
+    // Non-fatal — a correct binary with the install time beats a failed
+    // install — and skipped entirely for an entry that records no time, which
+    // must not be stamped with 1980 or the epoch (#475).
+    if (entry.mtime) {
+      await fsPromises.utimes(partial, entry.mtime, entry.mtime).catch(() => {})
     }
 
     await fsPromises.rename(partial, target)

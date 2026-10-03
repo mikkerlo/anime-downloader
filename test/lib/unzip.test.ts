@@ -7,8 +7,9 @@
 // it parses the on-disk format correctly, so a fixture that only resembles a
 // zip would prove nothing.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
+import * as fsPromises from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 import * as zlib from 'zlib'
@@ -27,10 +28,42 @@ interface FixtureEntry {
   mode?: number
   /** Override the uncompressed size written into both headers (truncation cases). */
   declaredSize?: number
+  /** DOS time word (offset 12 of the central header). Zero when omitted. */
+  dosTime?: number
+  /** DOS date word (offset 14). Zero when omitted, which means "no time". */
+  dosDate?: number
+  /** Raw central-directory extra field, e.g. a `0x5455` timestamp record. */
+  extra?: Buffer
 }
 
 function crc32(data: Buffer): number {
   return zlib.crc32(data) >>> 0
+}
+
+/** The DOS date/time words for a wall-clock instant, as a zip writer packs them. */
+function dosWords(
+  year: number,
+  month: number,
+  day: number,
+  hours: number,
+  minutes: number,
+  seconds: number
+): { dosTime: number; dosDate: number } {
+  return {
+    dosTime: (hours << 11) | (minutes << 5) | (seconds >>> 1),
+    dosDate: ((year - 1980) << 9) | (month << 5) | day
+  }
+}
+
+/** An Info-ZIP `0x5455` extended-timestamp record carrying only an mtime. */
+function utExtra(unixSeconds: number): Buffer {
+  const extra = Buffer.alloc(9)
+  extra.writeUInt16LE(0x5455, 0)
+  extra.writeUInt16LE(5, 2)
+  // Flags: bit 0 = mtime present.
+  extra.writeUInt8(0x01, 4)
+  extra.writeUInt32LE(unixSeconds, 5)
+  return extra
 }
 
 /** Assemble a real zip: local headers, then the central directory, then the EOCD. */
@@ -45,6 +78,7 @@ function buildZip(entries: FixtureEntry[]): Buffer {
     const payload = method === METHOD_DEFLATE ? zlib.deflateRawSync(raw) : raw
     const nameBytes = Buffer.from(entry.name, 'utf8')
     const declaredSize = entry.declaredSize ?? raw.length
+    const extraBytes = entry.extra ?? Buffer.alloc(0)
 
     const local = Buffer.alloc(30)
     local.writeUInt32LE(0x04034b50, 0)
@@ -63,17 +97,19 @@ function buildZip(entries: FixtureEntry[]): Buffer {
     header.writeUInt16LE(20, 6)
     header.writeUInt16LE(0, 8)
     header.writeUInt16LE(method, 10)
+    header.writeUInt16LE(entry.dosTime ?? 0, 12)
+    header.writeUInt16LE(entry.dosDate ?? 0, 14)
     header.writeUInt32LE(crc32(raw), 16)
     header.writeUInt32LE(payload.length, 20)
     header.writeUInt32LE(declaredSize, 24)
     header.writeUInt16LE(nameBytes.length, 28)
-    header.writeUInt16LE(0, 30)
+    header.writeUInt16LE(extraBytes.length, 30)
     header.writeUInt16LE(0, 32)
     header.writeUInt32LE(entry.mode ? entry.mode << 16 : 0, 38)
     header.writeUInt32LE(offset, 42)
 
     chunks.push(local, nameBytes, payload)
-    central.push(header, nameBytes)
+    central.push(header, nameBytes, extraBytes)
     offset += local.length + nameBytes.length + payload.length
   }
 
@@ -261,6 +297,189 @@ describe('extractZip', () => {
       expect(fs.statSync(path.join(destDir, 'notes.txt')).mode & 0o7777).toBe(0o644)
     }
   )
+
+  // The archive's recorded mtime, restored (#475). The `tar` this module
+  // replaced in #472 restored it; `extractZip` shipped stamping the install
+  // time instead, which is the behaviour difference these seven cases pin.
+  it('restores the extended-timestamp (0x5455) mtime, to the exact second', async () => {
+    // 2023-11-11 05:55:58 UTC — the ffprobe 6.1 asset's real UT value. Integer
+    // seconds, so this is an equality assertion with no tolerance.
+    const unixSeconds = Math.floor(Date.UTC(2023, 10, 11, 5, 55, 58) / 1000)
+    const archive = writeArchive(
+      'ut.zip',
+      buildZip([{ name: 'ffprobe', data: Buffer.from('x'), extra: utExtra(unixSeconds) }])
+    )
+
+    await extractZip(archive, destDir)
+
+    expect(fs.statSync(path.join(destDir, 'ffprobe')).mtime.getTime()).toBe(unixSeconds * 1000)
+  })
+
+  it('falls back to the DOS date/time words, read as local time, when no UT record is present', async () => {
+    // The DOS words carry no timezone, so the expectation is built with the
+    // local-time `Date` constructor and the case holds in any TZ. 2-second
+    // granularity is all the words have, hence the tolerance.
+    const expected = new Date(2021, 11, 23, 6, 5, 26)
+    const archive = writeArchive(
+      'dos.zip',
+      buildZip([
+        { name: 'fpcalc.exe', data: Buffer.from('x'), ...dosWords(2021, 12, 23, 6, 5, 26) }
+      ])
+    )
+
+    await extractZip(archive, destDir)
+
+    const actual = fs.statSync(path.join(destDir, 'fpcalc.exe')).mtime.getTime()
+    expect(Math.abs(actual - expected.getTime())).toBeLessThanOrEqual(2000)
+  })
+
+  it('prefers the UT record over disagreeing DOS words', async () => {
+    // The real ffprobe-6.1-win-64.zip numbers: DOS `2023-11-11 13:55:58`
+    // against UT `2023-11-11 05:55:58Z`, the packager's clock being UTC+8.
+    // libarchive takes UT, so DOS-first would have moved every tar-era install
+    // by 8 hours for a UTC user and by a different amount everywhere else.
+    const unixSeconds = Math.floor(Date.UTC(2023, 10, 11, 5, 55, 58) / 1000)
+    // `ffmpeg` carries the same UT second against DOS words that no UTC offset
+    // can turn into it, so a DOS-first reader reds here even on a UTC+8 box,
+    // where the faithful ffprobe fixture alone would pass by coincidence.
+    const archive = writeArchive(
+      'ut-vs-dos.zip',
+      buildZip([
+        {
+          name: 'ffprobe',
+          data: Buffer.from('x'),
+          extra: utExtra(unixSeconds),
+          ...dosWords(2023, 11, 11, 13, 55, 58)
+        },
+        {
+          name: 'ffmpeg',
+          data: Buffer.from('y'),
+          extra: utExtra(unixSeconds),
+          ...dosWords(2020, 1, 2, 3, 4, 6)
+        }
+      ])
+    )
+
+    await extractZip(archive, destDir)
+
+    expect(fs.statSync(path.join(destDir, 'ffprobe')).mtime.getTime()).toBe(unixSeconds * 1000)
+    expect(fs.statSync(path.join(destDir, 'ffmpeg')).mtime.getTime()).toBe(unixSeconds * 1000)
+  })
+
+  it('leaves an entry with a zero DOS date and no UT record at the write time, not 1980', async () => {
+    const before = Date.now()
+    const archive = writeArchive(
+      'no-time.zip',
+      buildZip([{ name: 'ffmpeg', data: Buffer.from('x') }])
+    )
+
+    await extractZip(archive, destDir)
+
+    const actual = fs.statSync(path.join(destDir, 'ffmpeg')).mtime.getTime()
+    expect(actual).toBeGreaterThanOrEqual(before - 2000)
+    expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
+  })
+
+  it('leaves an entry whose DOS time word is out of range at the write time, not the rolled-over instant', async () => {
+    // The time word has room for values the clock does not: hours 24–31,
+    // minutes 60–63, and a seconds field of 30–31 (60–62 s). The `Date`
+    // constructor carries each overflow into the next unit, so an unchecked
+    // reader turns `2023-11-11 31:63:62` into `2023-11-12 08:04:02` — a
+    // plausible-looking wrong time. Refusing it leaves the write time instead.
+    //
+    // `ffprobe` overflows the minutes within the same day, so the `getDate()`
+    // check cannot refuse it and only the range test on the time word can — the
+    // same blind-spot-closing trick the UT-vs-DOS case uses a second entry for.
+    const ffmpegRollover = new Date(2023, 10, 12, 8, 4, 2).getTime()
+    const ffprobeRollover = new Date(2023, 10, 11, 11, 4, 2).getTime()
+    const before = Date.now()
+    const archive = writeArchive(
+      'bad-time.zip',
+      buildZip([
+        { name: 'ffmpeg', data: Buffer.from('x'), ...dosWords(2023, 11, 11, 31, 63, 62) },
+        { name: 'ffprobe', data: Buffer.from('y'), ...dosWords(2023, 11, 11, 10, 63, 62) }
+      ])
+    )
+
+    await extractZip(archive, destDir)
+
+    for (const [name, rolledOver] of [
+      ['ffmpeg', ffmpegRollover],
+      ['ffprobe', ffprobeRollover]
+    ] as const) {
+      const actual = fs.statSync(path.join(destDir, name)).mtime.getTime()
+      expect(actual).not.toBe(rolledOver)
+      expect(actual).toBeGreaterThanOrEqual(before - 2000)
+      expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
+    }
+  })
+
+  it('leaves an entry whose DOS day is past the end of a short month at the write time', async () => {
+    // Day is 5 bits, so 31 fits a 30-day November; the constructor rolls it
+    // into December rather than rejecting it, which is what the
+    // post-construction `getDate()` check catches.
+    const rolledOver = new Date(2023, 11, 1, 6, 5, 26).getTime()
+    const before = Date.now()
+    const archive = writeArchive(
+      'short-month.zip',
+      buildZip([{ name: 'ffmpeg', data: Buffer.from('x'), ...dosWords(2023, 11, 31, 6, 5, 26) }])
+    )
+
+    await extractZip(archive, destDir)
+
+    const actual = fs.statSync(path.join(destDir, 'ffmpeg')).mtime.getTime()
+    expect(actual).not.toBe(rolledOver)
+    expect(actual).toBeGreaterThanOrEqual(before - 2000)
+    expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
+  })
+
+  it('survives a failing utimes — the file lands and no .partial is left behind', async () => {
+    // A wrong timestamp on a correct binary must never fail an install, and
+    // the stamp happens before the rename, so a throw here would reach the
+    // catch that unlinks the `.partial` and lose the file entirely.
+    //
+    // `vi.spyOn(fsPromises, 'utimes')` cannot redefine a non-configurable ESM
+    // namespace export (the same wall `download-manager-merge-cold-move`
+    // documents for `fs.renameSync`), and a file-wide `vi.mock('fs/promises')`
+    // would put every other case in this file through the stub. So the mock is
+    // scoped to one fresh module graph: `doMock` + a dynamic re-import, undone
+    // in the `finally`.
+    const utimes = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('EPERM: operation not permitted'), { syscall: 'utimes' })
+      )
+    vi.resetModules()
+    vi.doMock('fs/promises', async () => {
+      const actual = await vi.importActual<typeof fsPromises>('fs/promises')
+      return { ...actual, default: actual, utimes }
+    })
+    try {
+      const { extractZip: extractWithFailingUtimes } = await import('../../src/main/lib/unzip')
+      const content = Buffer.from('ffmpeg payload', 'utf8')
+      const archive = writeArchive(
+        'utimes-fails.zip',
+        buildZip([
+          {
+            name: 'ffmpeg',
+            data: content,
+            extra: utExtra(Math.floor(Date.UTC(2023, 10, 11, 5, 55, 58) / 1000))
+          }
+        ])
+      )
+
+      await expect(extractWithFailingUtimes(archive, destDir)).resolves.toBeUndefined()
+
+      // That the stub was reached at all: without this, a build that never
+      // calls `utimes` would pass this case for the wrong reason.
+      expect(utimes).toHaveBeenCalledTimes(1)
+      expect(listRecursively(destDir)).toEqual(['ffmpeg'])
+      expect(fs.readFileSync(path.join(destDir, 'ffmpeg'))).toEqual(content)
+    } finally {
+      vi.doUnmock('fs/promises')
+      vi.resetModules()
+    }
+  })
 
   it('refuses an entry whose name escapes the destination directory', async () => {
     const archive = writeArchive(

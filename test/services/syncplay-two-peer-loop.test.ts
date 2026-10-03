@@ -786,13 +786,26 @@ const CALL_NEEDLE = 'goToEpisode('
  *
  * Comments: raw text carries matches that are not call sites, and did before
  * this guard added any of its own. On trunk `f33fac1d`, three of the thirteen
- * raw matches were not call sites —
- * `test/services/syncplay-two-peer-episode-change.test.ts:260` and
- * `test/services/syncplay-two-peer-episode-change.test.ts:496` are
- * prose, and `test/services/syncplay-two-peer-loop.test.ts:726` is the expected
+ * raw matches were not call sites: two prose mentions in
+ * `syncplay-two-peer-episode-change.test.ts`, and
+ * `test/services/syncplay-two-peer-loop.test.ts:726` is the expected
  * error string of the rejection guard whose call site on the line *above* it
  * must stay counted. That adjacency is the sharpest single test of this pass.
- * Those two numbers are historical and deliberately not pinned anywhere: this
+ *
+ * **The two prose mentions are cited at where they are now, not where
+ * `f33fac1d` had them**, and "those two numbers are historical" is withdrawn as
+ * a description of them. It was never true of the anchors as written: they are
+ * live `path:line` pairs, `scripts/check-line-citations.mjs` drift-checks them
+ * against the PR base, and it reds when the cited content moves — which it did
+ * twice in #360's characterisation round, as that file grew by some 570 lines.
+ * They are marked with their quoted text now so the quote verifier checks them,
+ * because a bare anchor that has drifted by a few lines still passes the drift
+ * pass green and so retargets silently:
+ * `test/services/syncplay-two-peer-episode-change.test.ts:501` ("that rebound the
+ * element without flushing the index bump") and
+ * `test/services/syncplay-two-peer-episode-change.test.ts:819` ("where this read
+ * was 0.05 before #384 made").
+ * What *is* historical, and is pinned nowhere on purpose, is the count: this
  * docstring and the failure message below name the call often enough that the
  * live raw count is now well above 13, which is exactly why `RAW_CENSUS` is
  * reported and never asserted.
@@ -913,9 +926,18 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // prose has raised the raw half since, and is expected to. Files with no call
 // site are absent rather than zero, so a new sibling only enters this map once it
 // actually calls the helper.
+//
+// **Re-derived for #360's characterisation round: `episode-change` 5 → 9.** The
+// four cases that round added to `syncplay-two-peer-episode-change.test.ts` each
+// drive one switch, and three of the four drive it from inside a local helper
+// (`stairOf`, `adoptedAt`, `far`) called twice, so the call sites rose by four
+// where the cases rose by four and the *switches* rose by seven. This is the
+// upward move the failure message calls a real change, and it is re-derived here
+// rather than loosened: all four new sites are correctly awaited, which the
+// second assertion below is what actually establishes.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
-  'episode-change': 5,
+  'episode-change': 9,
   loop: 4
 }
 

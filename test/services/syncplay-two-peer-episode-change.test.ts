@@ -28,12 +28,101 @@
 // 5000 dragging against 5001 clean, and the same at 6000/6001, 7000/7001,
 // 8000/8001 and 11000/11001.
 //
+// **`k` is not the axis's index, and the sentence above is withdrawn as a
+// general claim rather than softened.** It is the index *of this file's
+// seating*, because `seatPair` switches on a whole second and the harness starts
+// the room broadcast, the renderer's snapshot push and main's heartbeat on
+// absolute 1 s boundaries — so the switch lands on all three at once. Place it
+// `φ` ms later and **every comb edge moves with `φ`**, period 2 × `HEARTBEAT_MS`,
+// measured on five seatings of `φ` at 50 ms sweep resolution over gaps 5050-9550
+// (91 cells each, 455 in all) and confirmed at 1 ms on two edges. **Five
+// seatings, four distinct phases** — the fifth is φ = 1000, which is one whole
+// `HEARTBEAT_MS` on from φ = 0 and therefore the same phase; it is a
+// reproducibility replicate rather than a sample, and it is reported as one
+// below because agreeing with φ = 0 on all 91 cells is what establishes the
+// 1 s periodicity the rest of this paragraph assumes:
+//
+//   φ = 0 ms     drag on (6000, 7000], (8000, 9000]   edges 6000/6001, 7000/7001
+//   φ = 250 ms   drag on ~(5700, 6700], ~(7700, 8700]
+//   φ = 500 ms   drag on (5450, 6450], (7450, 8450]   edges 5450/5451, 6450/6451
+//   φ = 750 ms   drag on ~(5200, 6200], ~(7200, 8200]
+//   φ = 1000 ms  identical to φ = 0, edge for edge (91/91 cells, separate run)
+//
+// So at φ = 500 the cell at gap 5600 — `k = 6`, **even** — drags, and the cell at
+// 6600 — `k = 7`, **odd** — is clean. Both halves of that sentence are φ = 500
+// readings and neither is a counter-example at φ = 0, where 6600 drags like every
+// other odd cell: **all 40 odd-`k` cells in the sweep drag at φ = 0 and all 51
+// even ones are clean**, so there is no odd-and-clean cell at this file's own
+// seating to point at.
+//
+// The parity of `k` predicts the outcome at φ = 0 and nowhere else — and *that*
+// sentence is the one-directional rule "odd ⇒ drags", which is the only form it
+// is true in. Stated as a correlation it is less clean and more interesting:
+// φ = 750 is still **79%** predictive with the **sign inverted** (8 of 40 odd
+// cells drag against 39 of 51 even ones), and φ = 500 is the only phase where
+// parity carries no signal at all (49%). A reader checking parity at an
+// unspecified phase can therefore get it exactly backwards rather than merely
+// get noise.
+//
+// φ = 0 is the one phase the app cannot arrange: a keypress is uncorrelated with
+// a 1 Hz interval, so φ is uniform on [0, `HEARTBEAT_MS`) in the field and zero
+// on a set of measure zero. **That is an argument about the index and not about
+// the defect, and it must not be read as the drag being rare in the field** —
+// the measurement says the opposite, and says it loudly. Off φ = 0 the comb does
+// not weaken, it only slides: every phase shows the same geometry, period
+// 2 × `HEARTBEAT_MS` with a 1000 ms dragging half and a 1000 ms clean half, and
+// the dragging fraction pooled over the three distinct non-zero phases is
+// **129 of 273 cells, 47.3%** — against 40 of 91, 44%, at φ = 0 itself. What
+// φ's uniformity destroys is `k`'s claim to be the axis. What survives it is the
+// drag, at roughly one gap in two, at every phase a keypress can land on. The
+// slide is not linear in `φ` either (-300, -250, -250 ms per quarter heartbeat,
+// returning to alignment at φ = 1000), so no closed form for the edge as a
+// function of `φ` is claimed here.
+//
+// Nothing below is re-pinned at another phase: the first seven cases all seat
+// φ = 0 and the eighth seats φ = 50 ms, and both name their φ in their titles.
+//
 // So "two disjoint drag bands separated by a ~1 s clean corridor" is withdrawn,
 // and so is anything of the shape "clean above 7000". The comb does not stop,
 // every cell here read at 20 s: `[]` at 7001-8000 and at 10000, then `[312.00]`
 // at 8001-9000, `[314.00]` at 10001-11000, `[316.00]` at 13000 and `[318.00]` at
 // 15000. What survives of the old map is only the cells it sampled — 7001 to
 // 8000 really are clean — never the conclusion that the axis ended there.
+//
+// **"No upper end measured" is withdrawn too, and it is answered rather than
+// just re-stated: there is no upper end out to a 30.5 s bind gap.** Swept on the
+// mid-run cell of every run from `k = 6` to `k = 31` (gaps 5500, 6500, … 30500),
+// twenty-six cells, at a 70 s read and at the **φ = 0** seating — the phase
+// qualifier is as load-bearing here as it is above, because the alternation this
+// paragraph reports is only parity-indexed at that phase: the comb is unbroken,
+// every odd `k` drags and every even `k` is clean, with no cell out of step.
+// Three closed forms hold at every cell in
+// that range, which is more than the old "+2.00 s per dragging run" said:
+//
+//   dragged value   =  304 + k         (311.00 at `k = 7` … 335.00 at `k = 31`)
+//   seek lands at   =  gap + 3550 ms   (post-switch, every dragging cell `k >= 7`)
+//   mirror width    =  k - 2 frames    (4 at `k = 6` … 29 at `k = 31`)
+//
+// All three at 26 of 26 cells, and **the last two are read at the 45 s and 70 s
+// windows, not at 20 s** — which is this file's window-relativity biting on its
+// own evidence rather than a footnote. Above gap 20500 only twenty seconds of
+// mirroring has elapsed by the 20 s read, so the width saturates at 18 there and
+// the closed form holds at just 15 of 26 cells; and the deficit at 20 s takes
+// five distinct values over the sweep ({0.95, 1, 1.95, 2, 3}) because above gap
+// ~14000 the drag has not landed yet. A 3.00 s deficit at gap 16500 read at 20 s
+// is that transient and **not** an exception to the 1.00 s figure: its seek lands
+// at 20050 ms, fifty milliseconds after that sample. At the 70 s read the value
+// sets are exactly {2.00} over all thirteen clean cells and {1.00} over all
+// thirteen dragging ones. Never quote a deficit here as a maximum over windows.
+//
+// Those two figures, holding all the way up, are the re-measurement against the
+// join-time `State` of the 60 s figure an earlier revision of the flush
+// paragraph below recorded as never re-run. **"The twenty-four cells
+// between the far pair and `k = 9` are described here only" is withdrawn as a
+// count**, because it counted neither the cells nor the pins: of the twenty-six
+// swept, **five** are pinned below — `k = 7`, `k = 8`, `k = 9` and the far pair
+// at `k = 30`/`k = 31` — and the other **twenty-one**, which are `k = 6` and
+// `k = 10` through `k = 29`, are described here and asserted nowhere.
 //
 // The dragged value is not one number either, every figure in this sentence a
 // 20 s read: 304.00 at the onset, 304.05 from 2000 through 5000, 311.00 across
@@ -61,10 +150,16 @@
 // untouched through the same 20 s. The drag is shipped, unflagged and unarmed,
 // and it costs playback on a peer that made no input at all.
 //
-// The four cases are one sweep over one knob — five rows of it, because the last
-// case seats two gaps rather than one: the assertion it carries *is* the
-// difference between them, and splitting it would let either half be deleted with
-// the other still green. `bindGapMs` (the harness's bind gap:
+// **Eight cases now, and the knob count went from one to two.** The first four
+// are one sweep over `bindGapMs` — five rows of it, because the alternation case
+// seats two gaps rather than one: the assertion it carries *is* the difference between
+// them, and splitting it would let either half be deleted with the other still
+// green. The four added since pin what decides that sweep rather than more of
+// it: the selector quantity at a dragging gap and a clean gap (two more rows of
+// the same knob), `src/main/syncplay.ts:903`'s own firing across its 1 ms edge
+// (two more), the comb's far end at a 30.5 s gap (two more), and — the second
+// knob — the **switch's phase**, one row at 50 ms where everything else sits at
+// 0. `bindGapMs` (the harness's bind gap:
 // `test/helpers/syncplay-two-peer.ts:393` arms `metadataDueAt` from it inside
 // `reload()`) is the gap between the media load algorithm's synchronous
 // reset and the `loadedmetadata` task, i.e. how long the switcher's new element
@@ -89,18 +184,83 @@
 // inbound write that closes the drift and re-latches us one episode's timestamp
 // later.
 //
-// What that second path does **not** account for is the shape of the axis it
-// sits on. Outliving `PLAYBACK_STALE_MS` is monotone in the gap; the comb is not,
-// and a monotone entry condition cannot produce a parity alternation — the cells
-// at `k = 8`, `k = 10` and `k = 12` outlive that horizon by seconds and are
-// clean, while 7001 is clean and carries a *wider* mirror than dragging 7000
-// does. So the paragraph above accounts for the path this one cell enters by and
-// for nothing wider: what selects odd `k` from even is **not identified** here —
-// the arm-frame census below rules the seek gate out as the selector without
-// naming what replaces it — which is why the 6.5 s case below is named for what it
-// writes rather than for the path it takes. It is, since the 7.5/8.5 s pair, at
-// least *pinned*: that case is the only thing in the suite a change collapsing
-// this axis back to one threshold above 5000 would have to go red on.
+// `src/main/syncplay.ts:903` is the boundary between those two paths and it is
+// now **instrumented rather than inferred**, which is what the 5000/5001 case
+// below pins. It writes the latch iff the elapsed time from the last pre-switch
+// snapshot push to the first post-bind one exceeds `PLAYBACK_STALE_MS`; at
+// φ = 0 that elapsed time *is* the gap, so the edge is exactly (5000, 5001] —
+// `Peer.adopted()` still true one slice after a 5000 ms release and already
+// false one slice after a 5001 ms one. The old reading of it as "inferred from
+// two gap samples" is discharged, and so is any remaining suspicion that it
+// selects the comb: over a 312-cell sweep it fired on **111 clean cells and 100
+// dragging ones**, so it partitions the lower run from the comb and says nothing
+// about which comb cells drag.
+//
+// **What selects a dragging comb cell from a clean one is identified, and the
+// header's "not identified" is withdrawn.** The old text said the selector sits
+// "upstream of `src/renderer/src/composables/use-syncplay-client.ts:1411`" and
+// named nothing; it is the room's own position at the instant the re-latched
+// seat first asserts, and it is one quantity across the *whole* axis rather than
+// a story about the comb alone.
+//
+// *First, what the room does while the element is dark.* During the bind gap the
+// switcher publishes a spectator mirror — `buildPlaystate()` past
+// `canAssertSnapshot()` — whose value is the last room state it received,
+// projected forward; the server stores that one forward delay late and
+// `min()`-elects it, so the room is re-derived from its own stale echo every
+// other second. The elected position is therefore a **staircase that holds for
+// two heartbeats and then jumps 2.00 s**, not a line: 303.95, 304.95, 304.95,
+// 306.95, 306.95, 308.95, 308.95 … measured on heartbeat boundaries and
+// **byte-identical at 6.5 s and 7.5 s**, which is the half that makes the
+// selector a phase rather than a magnitude. **Step 2.00 s**, period
+// 2 × `HEARTBEAT_MS`, both exact on the successive differences — `1, 0, 2, 0, 2,
+// 0, 2 …`, with the 2.0000 and the 0 carrying no rounding slop. "Step" rather
+// than "amplitude" on purpose: the *step* is 2.00 s, while the staircase's
+// peak-to-peak departure from the straight 1 s/s ramp underneath it is 1.00 s,
+// and "amplitude 2.00 s" is ambiguous between the two by a factor of two.
+//
+// Its phase is **reasoned, not measured**: the account is that it is set by the
+// first mirror frame — the first heartbeat at which `canAssertSnapshot()` goes
+// false, i.e. `PLAYBACK_ASSERT_STALE_MS` after the last pre-switch push — and
+// that is what the φ response above would be the response *of*. The probe that
+// would identify it was never run. What exists is the staircase sampled at two
+// cells, both at φ = 0, and they are the wrong pair to settle it: their stair
+// phase is identical while their mirror counts differ (5 frames at 6.5 s against
+// 6 at 7.5 s), so the data is consistent with the account and does not single it
+// out from any other quantity that is also constant across those two cells. The
+// φ sweep establishes *that* the staircase has a phase and that it tracks the
+// switch; which frame sets it is the open half.
+//
+// *Then, the one number.* At the release the parked frame writes the previous
+// episode's 303 and the resumed push stamps `lastSnapshotAt`; the next room
+// frame writes the element to that tick's elected room position; one heartbeat
+// later `src/main/syncplay.ts:2642` re-latches and the seat asserts it. Taking
+// `room - position` on that first assertion after the mirror run, it has
+// **exactly two values across the comb and five across the axis** — censused
+// over 312 cells spanning gaps 50-15500 and over 455 cells spanning five
+// seatings of the switch phase (four distinct, as above):
+//
+//   under = -0.05   111 clean,   0 dragging   (comb, room still holding)
+//   under =  0.95    19 clean,   0 dragging   (lower run, gap <= 1000)
+//   under =  1.95     1 clean, 140 dragging   (comb's other phase, and 1001-2000)
+//   under =  3.95     0 clean,  40 dragging   (lower run, 2000-5000)
+//   under =  5.95     0 clean,   1 dragging   (gap 5000)
+//
+// and the innocent peer's peak `diff` tracks it at `under + 1.00`: 2.00 at
+// -0.05, 2.10-2.95 at 0.95, 2.95-3.95 at 1.95, 4.95-5.95 at 3.95. **`peakDiff >
+// 3.0` and the drag agree on 312 of 312 cells.** The single clean cell at
+// under = 1.95 is gap 1000 itself, whose peak is 2.95 — the 0.05 s knife edge
+// this header already describes, now placed on the same axis as everything else
+// rather than beside it.
+//
+// So the comb is not a parity at all: it is the staircase's **hold half versus
+// its jump half**, sampled at whichever heartbeat the element's first live frame
+// arrives on. An odd `k` at φ = 0 is the one that lands the assertion one
+// heartbeat *after* a 2.00 s jump, and that is the whole of it. What survives
+// unchanged from the old paragraph is its negative half, and it survives on
+// stronger evidence: a monotone staleness horizon cannot produce an alternation,
+// and `src/main/syncplay.ts:903` now has the firing census to prove it is not
+// the selector rather than only the arithmetic.
 //
 // The mirror's *width* is neither of those two paths. `buildPlaystate()` is
 // `canAssertSnapshot() && isAdopted()` with the snapshot timer first, so during
@@ -169,7 +329,7 @@
 // *position* is not: every cell from 6001 to 7000 writes the same 311.00. The
 // `k = 8`/`k = 9` pair is chosen the same way. 7500 and 8500 are both mid-run;
 // 8000 and 8001 are the two sides of a 1 ms edge and would have pinned the edge's
-// position where what is wanted is the parity.
+// position where what is wanted is the alternation.
 //
 // The control is not decoration. `seekWrites` staying `[]` at gap 500 is the
 // only thing that makes the drag rows mean anything — without it they would
@@ -178,6 +338,79 @@
 // under the innocent peer's element for the whole 20 s window, and the renderer's
 // seek gate needs 3.0. 0.55 s of headroom nobody chose, which is pinned here as a
 // number rather than left as a passing boolean.
+//
+// **The deficit is a fixed point, not a window artefact — and the 0.55 s is not
+// a margin, because the regime it holds in is 5% of the switch's phase.** Both
+// halves are measured and the second one withdraws how this paragraph used to
+// read. 2.45 s exactly on every read out to **300 s** (a probe outside the
+// suite; the case below pays for 60 s), so it neither closes nor ramps. But move
+// the switch **one 50 ms slice** off the room broadcast, at the same shipped 500
+// ms gap, and there is no 2.45 s deficit to have headroom on: the innocent peer
+// is written **19 times in 20 s**, ten of them to 0, and the room alternates
+// between 0 and its walking position for the rest of the session. The last case
+// pins it. The boundary is exactly one link delay — censused over a
+// (switch offset, `delayMs`) grid, clean for every offset strictly below
+// `delayMs` and flapping from `delayMs` on, at 50, 200 and 400 ms of delay — so
+// the control's regime is the `delayMs / HEARTBEAT_MS` corner of that plane and
+// is 1 slice wide at the 50 ms this file seats.
+//
+// **The 5% is a measured 5 of 100 and not an arithmetic 50/1000**, which is
+// worth separating because the two agree here and need not have. Re-swept at
+// **10 ms** resolution over the whole phase period at gap 500 — 100 cells,
+// offsets 0 through 990 — the clean cells are exactly offsets 0, 10, 20, 30 and
+// 40, and the other **95 of 95 drag and are written to 0**. So the clean band is
+// 4.1-5.0% of the period (the true edge lies between 40 and 50 ms) and it ends
+// exactly where the 50 ms link delay does, which is the "one link delay" rule
+// above confirmed at five times the resolution it was found at rather than
+// merely restated. Two things the finer sweep adds: the period is exactly
+// `HEARTBEAT_MS` (offsets 1000-1040 are clean again and 1050 drags, and the same
+// at 2000), and the deficit inside the band **erodes** from 2.45 to 2.49 as the
+// offset walks to 40 ms — so the 0.55 s is itself the best value in the band and
+// 0.51 s is the worst. **There is no graceful degradation at the edge**: one
+// slice past it the peak difference is 314.5 s, over a hundred times the gate,
+// not a 3.05 s near miss.
+//
+// Why the corner protects: inside it the frame the room broadcast is still in
+// flight when `reload()` runs, so it parks and writes the *previous episode's*
+// position onto the rebound element, and that — #360's own titular defect — is
+// what keeps the latched seat's next assertion off 0. Outside it nothing writes
+// the element before the first push, the push carries the new element's
+// `{0, paused: true}`, and `canAssertSnapshot()`'s paused exemption at
+// `src/main/syncplay.ts:2375` ("if (this.snapshot.paused) return true") lets it
+// out as an assertion.
+//
+// Eight other parameters were swept at gap 500, 27 cells, and **not one moves
+// the deficit over 3.0 by arithmetic**: `delayMs` 0-1500 both-sided and
+// asymmetric (2.00-2.49), `forwardDelay` 0-1 (0.55-2.55), `echoHoldCorrection`
+// off (1.98), `electionAgeMs` 500/2000 against a 1 s tick (2.45 both),
+// `seekLandMs` 50-200 (2.50-2.65), room position 0 and 1200 (2.00/2.45), and the
+// room broadcast interval at 250, 500, 1000 and 2000 ms (2.20-2.45). **Two
+// settings break the regime rather than nudging the figure**, and the second is
+// recorded here rather than left out of the list because it reaches the same
+// failure by a second route: the switch's phase, as above, and the room
+// broadcast interval, where **2500 and 3000 ms both write the peer to 0** and
+// 1000, 1500, 2000 and **4000** are all a clean 2.45. So the answer to "can any
+// parameter push the deficit over 3.0" is **no** — and the question turns out to
+// be the wrong one, because what the parameters reach is not a 3.05 s deficit
+// but a 300 s one.
+//
+// **Three things about that interval route, because it is the easiest claim in
+// this header to overstate.** First, it is **not monotone in the interval** and
+// must not be written up as "a slower room is worse": 4000 ms is clean and 2500
+// is not, so it is a sampling alias against the 2 s staircase rather than a
+// trend. Second, **3000 ms is not a number this product has anywhere.** It is
+// `MinElectionServer`'s `stateIntervalMs`
+// (`test/helpers/syncplay-min-election-server.ts:537` ("this.stateIntervalMs =
+// opts.stateIntervalMs ?? 1000")) set to three times the reference cadence,
+// which is one second — `SERVER_STATE_INTERVAL = 1` upstream, and the harness
+// default the rest of this file runs at. So this route is a **misconfigured or
+// hypothetical server cadence**, not a second constant in the tree, and nothing
+// here says a shipped server does it. Third, "second route" is a claim about
+// **reachability and not about mechanism**: both routes end on the same two
+// lines, `use-syncplay-client.ts:1664` ("const target = Math.max(0,
+// state.position)") and `use-syncplay-client.ts:1680` ("v.currentTime =
+// target"), reached through the same gate. What differs is only how the room's
+// `min()` comes to hold 0.
 //
 // **That gate has two arms, and every account below is scoped to one of them.**
 // `src/renderer/src/composables/use-syncplay-client.ts:1411` ("const wouldSeek
@@ -233,6 +466,14 @@
 // headroom really is 0.05 s; above `k = 6` the clean side has a second of room,
 // and no edge of the comb is a near miss at the gate.
 //
+// **"Upstream of the gate" has since been given a name** — the staircase phase,
+// above — so this census no longer ends in a gap; its negative finding is what
+// pointed at the staircase, and the two agree where they overlap. The census's
+// 1.00/2.00 steady-state split *is* the `under + 1.00` relation measured on 312
+// cells: a clean cell's 2.00 is `under = -0.05` and a dragging cell's 1.00 is the
+// post-seek remainder of `under = 1.95`. Only the span is new — the census stops
+// at `k = 15` and the 70 s sweep carries the same two figures to `k = 31`.
+//
 // **Name the quantity before quoting the residue, because the figure moves with
 // it.** Sampling `el.currentTime - roomState().position` on 1 s boundaries reads
 // 3.000000047683727, about 4.8e-8 over; computing the composable's own expression
@@ -245,7 +486,7 @@
 // The onset is therefore a knife edge, and a wide one: 1001 through 1050 are
 // **identical** cells, and 1051 steps to the next 0.05 s of `diff` and writes
 // 303.95 where they write 304.00. `diff` moves in a 0.05 s quantum because that
-// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:779` ("const DEFAULT_STEP_MS = 50")),
+// is the harness's own timer slice (`test/helpers/syncplay-two-peer.ts:799` ("const DEFAULT_STEP_MS = 50")),
 // so this axis is a **step function rather than
 // a line** — a linear fit such as `1.95 + gap/1000` puts the crossing in the
 // wrong place. Rounding the other way would not nudge the onset; it would move it
@@ -255,10 +496,12 @@
 //
 // **The whole sweep above predates #384's flush, and only the cells
 // re-measured below have been re-run against it.** Every figure in it — the
-// 1001 onset, the 1051 step, the `k`-parity deficits at the 60 s read, the
+// 1001 onset, the 1051 step, the clean/dragging deficits at the 60 s read, the
 // arm-frame census from `k = 6` to `k = 15` — was measured against a
 // `goToEpisode()` that rebound the element without flushing the index bump
-// first. #384 moved three of the five pinned rows below, and what
+// first. #384 moved three of the five rows this file pinned *at that time* —
+// 500, 3000, 6500, 7500 and 8500, which is the whole of it rather than five of
+// the ten seatings there are now — and what
 // moved in them is `switcher.el.currentTime` only: 0.05 → 0 at 6500, 7500 and
 // 8500. Not one `innocent.el.currentTime` and not one
 // `server.roomState().position` changed at any of the five gaps across that
@@ -277,17 +520,40 @@
 // hold; only the written values move, each by exactly +1.00 s. At the 20 s
 // read 1001 and 1050 → 305.00, 1051 → 304.95, 6001/7000 → 311.00, 8001 →
 // 313.00, 10001/11000 → 315.00, 13000 → 317.00, 15000 → 319.00; at the 6 s
-// read 3950 writes `[304.05]`. **The 60 s-read `k`-parity deficits and the
-// `k = 6`–`k = 15` arm-frame census are not re-run.** None is asserted, so it
-// rots silently: flatten the parity either way and no case below would go red.
+// read 3950 writes `[304.05]`. **"The 60 s-read deficits are not re-run and
+// nothing asserts them" is withdrawn, on both halves.** They were re-run — the
+// 70 s sweep above carries the same 2.00 s clean / 1.00 s dragging pair from
+// `k = 6` to `k = 31` against this `State` — and the pair *is* asserted, at the
+// 20 s read, by the two `toBeCloseTo` lines that close the φ = 0 alternation
+// case below. Flattening it would go red there, so the "rots silently" clause
+// was wrong about the one figure it named.
 //
-// This file asserts against the model server, which is legitimate for these
-// four cases and would not be for an assertion-side fixture: every row here is
-// a *playing* room, and the divergence #360 records between
+// **What really is not re-run is the `k = 6`–`k = 15` arm-frame census**, and
+// that one does rot silently: nothing below reads the composable's expression at
+// frame-delivery time, so its residues (3.0000000953674544 and the 2.95 frame
+// before it) are described here and asserted nowhere.
+//
+// This file asserts against the model server, which is legitimate for seven of
+// the eight cases and would not be for an assertion-side fixture: those rows are
+// *playing* rooms, and the divergence #360 records between
 // `test/helpers/syncplay-min-election-server.ts` and a real 1.7.6 server is on a
-// **paused** minimum, which no case below produces (each asserts the room stays
+// **paused** minimum, which none of them produces (each asserts the room stays
 // unpaused, so a case that drifted into that regime goes red rather than quietly
 // measuring the model).
+//
+// **The off-phase case is the exception and it is flagged rather than quietly
+// seated.** What it pins is the switcher asserting `{0, paused: true}`, so it
+// drives the room *through* a paused minimum — exactly the regime #384 records
+// the model latching on where the reference flaps. Its room reads unpaused at
+// every window it asserts, because the flap passes back through playing each
+// second rather than latching; but the **magnitudes** in it (19 writes in 20 s,
+// 10 of them to 0, room 313.60) are model numbers and a real 1.7.6 server may
+// put different ones there. What is not at risk is the sign and the shape: the
+// assertion of a paused 0 is read off this client's own wire, and the forced
+// update it triggers is `test/helpers/syncplay-min-election-server.ts`'s
+// literal copy of the reference's. Treat the counts as the model's and the
+// mechanism as the tree's, and settle the counts against the real server
+// through #384's conformance harness before any of them is quoted elsewhere.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -301,6 +567,33 @@ const DELAY_MS = 50
  *  here rather than exported, because it is two lines and the two files are read
  *  separately. */
 const mirroring = (frames: WireFrame[]): WireFrame[] => frames.filter((f) => f.paused === undefined)
+
+/** The complement: a frame that made a pause claim, i.e. the seat asserting its
+ *  own snapshot rather than handing the room its own number back. */
+const asserting = (frames: WireFrame[]): WireFrame[] => frames.filter((f) => f.paused !== undefined)
+
+/**
+ * The switcher's first assertion *after* its mirror run, and how far under the
+ * room it landed.
+ *
+ * Sliced off the end of the mirror run rather than by timestamp, because the
+ * two frames the seat asserts *before* the mirror starts are also assertions —
+ * `PLAYBACK_ASSERT_STALE_MS` (2 s) has not expired yet at the first two
+ * heartbeats after the switch, so both carry the previous episode's frozen
+ * 303.95. Taking `asserting(post)[0]` would read one of those and measure
+ * nothing: it is the same number in a dragging cell and a clean one.
+ *
+ * `room - position` rather than the other way round so the sign reads as
+ * "under", which is the direction that wins `Room.getPosition()`'s `min()`.
+ */
+const firstAssertAfterMirror = (post: WireFrame[]): { under: number; frame: WireFrame } => {
+  let lastMirror = -1
+  post.forEach((f, i) => {
+    if (f.paused === undefined) lastMirror = i
+  })
+  const frame = post[lastMirror + 1]
+  return { under: frame.room - frame.position, frame }
+}
 
 describe('SyncplayClient — the non-switching peer across an episode change (#360)', () => {
   let room: TwoPeerRoom | undefined
@@ -324,9 +617,19 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
    *
    * `bindGapMs` lands on the switcher only. The innocent peer never reloads, so
    * a gap on it would be dead configuration that reads like a variable.
+   *
+   * `switchOffsetMs` moves the switch off the four-second boundary, and it is a
+   * knob rather than a constant because **everything else in this file is
+   * measured at zero and zero is a measure-zero case.** At `0` the switch lands
+   * on the same millisecond as a room broadcast, a renderer snapshot push and a
+   * main heartbeat — the harness seats all three on absolute 1 s boundaries —
+   * and the frame that broadcast puts in the air is still in flight when
+   * `reload()` runs, which is what makes the shipped 500 ms gap a 2.45 s near
+   * miss rather than a 1 Hz flap. See the last case.
    */
   const seatPair = async (
-    bindGapMs: number
+    bindGapMs: number,
+    switchOffsetMs = 0
   ): Promise<{ switcher: Peer; innocent: Peer; wireBefore: number }> => {
     room = await createTwoPeerRoom({ position: 300, paused: false })
     const switcher = await room.seat({
@@ -342,13 +645,17 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       paused: false,
       delayMs: DELAY_MS
     })
-    await room.advance(4)
+    await room.advance(4 + switchOffsetMs / 1000)
 
-    // Measured at all three gaps: neither element is written to before the
-    // switch. So nothing below clears `seekWrites`, and every list this file
-    // asserts is the switch's whole footprint rather than a window of it — which
-    // is the difference between "one write, to 303" and "one write since we
-    // stopped looking".
+    // Neither element is written to before the switch. "Measured at all three
+    // gaps" is withdrawn as the ground for that — it dated from the three-case
+    // file and would now be a claim about three of the nine bind gaps seated
+    // here (500, 3000, 5000, 5001, 6500, 7500, 8500, 29500, 30500). It is
+    // asserted instead, on the two lines below, so it holds at every seating by
+    // construction rather than at the gaps someone happened to check. So nothing
+    // below clears `seekWrites`, and every list this file asserts is the switch's
+    // whole footprint rather than a window of it — which is the difference
+    // between "one write, to 303" and "one write since we stopped looking".
     expect(switcher.el.seekWrites).toEqual([])
     expect(innocent.el.seekWrites).toEqual([])
 
@@ -358,8 +665,9 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
   it('leaves the non-switching peer where it is at the shipped 500 ms bind gap — the control', async () => {
     // PINS CURRENT BEHAVIOUR. The `[]` here is the outcome #360 wants at every
     // gap, so this case alone reads as a desired invariant — but the *margin* it
-    // holds by does not, and the two cases below are the same code failing. See
-    // #360.
+    // holds by does not, and the seven cases below are the same code failing.
+    // The last of them is the sharpest: it holds this gap at 500 and moves only
+    // the switch's phase, and the `[]` does not survive it. See #360.
     const { switcher, innocent, wireBefore } = await seatPair(500)
     const server = room!.server
 
@@ -368,7 +676,10 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
 
     // The switcher's own element takes #360's write: one seek, to the previous
     // episode's timestamp, on a file that has no such position. That is the
-    // defect this issue is titled after, and it is present in all three cases.
+    // defect this issue is titled after, and it is present in every case in this
+    // file — "all three cases" is withdrawn as a count, not as a claim: the 303
+    // write is asserted again at the 7.5/8.5 s pair, at the 29.5/30.5 s pair and,
+    // as the first assertion on the wire, in the off-phase case.
     expect(switcher.el.seekWrites).toHaveLength(1)
     expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
 
@@ -404,6 +715,18 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // 2.45, constant from the switch out to 20 s. The deficit does not close and
     // it does not grow — it is a standing 2.45 s error that survives because it
     // is 0.55 s short of being acted on.
+    expect(Math.abs(innocent.el.currentTime - server.roomState().position)).toBeCloseTo(2.45, 2)
+
+    // Out to 60 s, which is where the old 20 s read was the whole of the
+    // evidence. Still the same 2.45, still no seek: the deficit is a fixed point
+    // rather than a slow ramp, so "it did not cross in the window we looked at"
+    // is not what is being asserted here. Swept to **300 s** outside the suite
+    // (a probe, not a test, not in CI) at 2.45 on every read; 60 s is what the
+    // committed case pays for.
+    await room!.advance(40)
+    expect(innocent.el.seekWrites).toEqual([])
+    expect(server.roomState().position).toBeCloseTo(361.5, 1)
+    expect(innocent.el.currentTime).toBeCloseTo(363.95, 2)
     expect(Math.abs(innocent.el.currentTime - server.roomState().position)).toBeCloseTo(2.45, 2)
   })
 
@@ -545,11 +868,23 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(server.roomState().paused).toBe(false)
   })
 
-  it('alternates by the parity of k above k = 5 — clean at a 7.5 s bind gap, dragged to 313.00 at 8.5 s', async () => {
+  it('alternates above k = 5 at switch phase φ = 0 — clean at a 7.5 s bind gap, dragged to 313.00 at 8.5 s', async () => {
     // PINS CURRENT BEHAVIOUR, BELIEVED WRONG, in the dragging half — and the
-    // clean half is not the desired invariant either, it is the *other* value of
-    // a parity nobody chose. When #360 is fixed the 8.5 s half inverts; the 7.5 s
-    // half is expected to stay `[]` and to stop being a coincidence.
+    // clean half is not the desired invariant either, it is the *other* half of
+    // an alternation nobody chose. When #360 is fixed the 8.5 s half inverts; the
+    // 7.5 s half is expected to stay `[]` and to stop being a coincidence.
+    //
+    // **"Alternates by the parity of `k`" is withdrawn from this case's name and
+    // `φ = 0` put in its place.** Parity of `k` is not the axis — the header
+    // measures every comb edge moving with the switch's phase, so at φ = 500 the
+    // even `k = 6` cell at gap 5600 drags and the odd `k = 7` cell at 6600 is
+    // clean. What parity indexes is this seating, because `seatPair`'s
+    // `switchOffsetMs` defaults to 0 and the harness seats the room broadcast,
+    // the renderer push and main's heartbeat on absolute 1 s boundaries. The
+    // alternation below is real and is pinned as measured; only its *name* was
+    // claiming an axis the sweep took away. What it is underneath — the hold half
+    // of a 2.00 s staircase against its step half — is pinned by the case after
+    // this one, which is where that claim is asserted rather than described.
     //
     // This is the only case in the suite that pins the comb's **shape** rather
     // than one of its cells. The three cases above all sit at `k <= 7`, so a
@@ -563,8 +898,8 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // untouched elements, same four mirror frames — and they part company at the
     // 14 s read, which is also where the switcher's own footprint turns out to be
     // identical across the pair (`[303, 311]` at both). So the difference the
-    // parity makes is not visible in what the switcher does, and is not visible
-    // at all until the second window.
+    // alternation makes is not visible in what the switcher does, and is not
+    // visible at all until the second window.
     //
     // Two gaps in one case on purpose. The assertion here *is* the difference
     // between them, and as two cases either half could be deleted with the other
@@ -575,7 +910,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // 7500 and 8500 rather than the 8000/8001 pair the header's census
     // straddles: those two are the two sides of a 1 ms edge, and pinning them
     // would pin that edge's position. These two are mid-run in their respective
-    // runs, so what they pin is the parity.
+    // runs, so what they pin is the alternation.
 
     // ── `k = 8`, clean ──────────────────────────────────────────────────────
     const even = await seatPair(7500)
@@ -674,5 +1009,272 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // 2.00 — the two steady states the header's 60 s census reports, here at the
     // 20 s read the rest of this file uses.
     expect(Math.abs(odd.innocent.el.currentTime - oddServer.roomState().position)).toBeCloseTo(1, 2)
+  })
+
+  it('selects the dragging cell by where the first post-bind assertion lands against the room — 1.95 s under at 6.5 s, 0.05 s over at 7.5 s', async () => {
+    // PINS CURRENT BEHAVIOUR, BELIEVED WRONG, and it is the pin the header's
+    // account of the comb rests on. The three cases above pin cells and one
+    // alternation; this one pins the **quantity that decides them**, so a change
+    // that moved the comb's phase without moving 6.5/7.5 across it would still go
+    // red here. When #360 is fixed the 6.5 s half inverts.
+    //
+    // Two gaps in one case for the same reason as the alternation case: the
+    // assertion *is* the difference between the two numbers.
+    //
+    // What the room does during the bind gap, identical in both cells, sampled
+    // on heartbeat boundaries: it is a **staircase that holds for two heartbeats
+    // and then jumps 2.00 s**, not a line. That is the switcher's own spectator
+    // mirror feeding `Room.getPosition()`'s `min()` and being re-elected one
+    // link delay behind itself — the room's elected position is its own mirror's
+    // stale value every other second. Step 2.00 s — the successive differences
+    // are `1, 0, 2, 0, 2, 0` across the seven samples below — period
+    // 2 × `HEARTBEAT_MS`. See the header on why this says "step" and not
+    // "amplitude".
+    const stairOf = async (gapMs: number): Promise<{ stair: number[]; under: number }> => {
+      const { switcher, innocent, wireBefore } = await seatPair(gapMs)
+      const server = room!.server
+      await switcher.goToEpisode('8')
+      const stair: number[] = []
+      for (let i = 0; i < 7; i += 1) {
+        await room!.advance(1)
+        stair.push(server.roomState().position)
+      }
+      await room!.advance(13)
+      const { under, frame } = firstAssertAfterMirror(server.wireOf('hostuser').slice(wireBefore))
+      // The asserted number is the room's own elected position from two
+      // heartbeats earlier, carried on the element the inbound frame wrote and
+      // re-latched by `src/main/syncplay.ts:2642`. It is the *same* arithmetic in
+      // both cells; only which step of the staircase the room has reached by the
+      // time it goes out differs.
+      expect(frame.paused).toBe(false)
+      expect(innocent.el.seekWrites.length).toBe(under > 1 ? 1 : 0)
+      return { stair, under }
+    }
+
+    // ── `k = 7`, the room has just jumped: the assertion is 1.95 s under ──────
+    const odd = await stairOf(6500)
+    expect(odd.stair.map((p) => Number(p.toFixed(2)))).toEqual([
+      303.95, 304.95, 304.95, 306.95, 306.95, 308.95, 308.95
+    ])
+    expect(odd.under).toBeCloseTo(1.95, 2)
+
+    room!.dispose()
+    room = undefined
+
+    // ── `k = 8`, the room is still on the hold: the assertion is 0.05 s over ──
+    const even = await stairOf(7500)
+    // Byte-identical to the dragging cell's staircase. Asserted rather than
+    // described, because "the room does the same thing in both cells" is the
+    // half that makes the selector a *phase* and not a magnitude: nothing about
+    // the room's own motion distinguishes 6.5 s from 7.5 s.
+    expect(even.stair.map((p) => Number(p.toFixed(2)))).toEqual([
+      303.95, 304.95, 304.95, 306.95, 306.95, 308.95, 308.95
+    ])
+    expect(even.under).toBeCloseTo(-0.05, 2)
+
+    // The two values are 2.00 s apart, which is the staircase's step and
+    // not a coincidence — stated as the subtraction so a change that moved both
+    // by the same amount keeps this line green and reds the two above it.
+    expect(odd.under - even.under).toBeCloseTo(2, 2)
+  })
+
+  it('de-adopts the switcher at the bind release from a 5001 ms gap and not from 5000 — the lower run’s top edge is `src/main/syncplay.ts:903` itself', async () => {
+    // PINS CURRENT BEHAVIOUR. Not "believed wrong" on its own: this is the
+    // mechanism behind an edge the header already measured from the outside, and
+    // it is pinned because the outside measurement could not tell it from any
+    // other staleness story. #360 records the firing of
+    // `src/main/syncplay.ts:903` as *inferred from two gap samples*; this case is
+    // the instrument, and `Peer.adopted()` is the private read it needs.
+    //
+    // The edge is one millisecond wide and it is exactly `PLAYBACK_STALE_MS`
+    // (`src/main/syncplay.ts:66` ("const PLAYBACK_STALE_MS = 5000")), via the
+    // `<=` at `src/main/syncplay.ts:2348` ("return this.lastSnapshotAt > 0 &&
+    // Date.now() - this.lastSnapshotAt <= PLAYBACK_STALE_MS"): the first push
+    // after the bind release is `gap` ms after the last push before the switch,
+    // so 5000 is inside the horizon and 5001 is not.
+    //
+    // **This is also what rules `src/main/syncplay.ts:903` out as the comb's
+    // selector, by instrumentation rather than by the monotonicity argument the
+    // header gives.** It fires at *every* gap above 5000 — the clean cells at
+    // `k = 8`, `k = 10`, `k = 12` included — so it marks the boundary between
+    // the lower run and the comb and says nothing about which comb cells drag.
+    const adoptedAt = async (
+      gapMs: number
+    ): Promise<{ atRelease: boolean; afterRelease: boolean }> => {
+      const { switcher, innocent } = await seatPair(gapMs)
+      await switcher.goToEpisode('8')
+      await room!.advance(5)
+      // Still adopted in both cells: `src/main/syncplay.ts:789` de-adopted on the
+      // file change and `src/main/syncplay.ts:2642` re-latched one heartbeat
+      // later on the previous episode's snapshot, which is the self-cancelling
+      // de-adoption #360's chain opens with.
+      const atRelease = switcher.adopted()
+      await room!.advance(0.05)
+      const afterRelease = switcher.adopted()
+      await room!.advance(14.95)
+      // The outcome the two paths reach, which is the other half of why the edge
+      // matters: still adopted ⇒ the seat asserts the previous episode's 303 and
+      // the innocent peer is dragged; de-adopted ⇒ it waits for the new
+      // element's first live room frame and the comb decides.
+      //
+      // **Scoped to the 5000/5001 pair this case seats, and not a general rule —
+      // read it as `gap <= 5000 ⇒ dragged` and nothing wider.** De-adoption does
+      // *not* imply clean: the latch drops at the release slice at 6500, which
+      // drags, exactly as it does at 7500, which does not. That is the census two
+      // paragraphs up restated from the other side, so reusing this helper on a
+      // comb cell would go red here for the wrong reason — the line below is a
+      // convenience for two adjacent gaps, not the claim that
+      // `src/main/syncplay.ts:903` ("this.playbackAdopted = false") is not the
+      // selector. That claim is still **described and not asserted** anywhere in
+      // this file; pinning it wants its own 6500/7500 pair with the outcome check
+      // lifted out of this helper, which is #481.
+      expect(innocent.el.seekWrites.length).toBe(afterRelease ? 1 : 0)
+      return { atRelease, afterRelease }
+    }
+
+    const inside = await adoptedAt(5000)
+    expect(inside.atRelease).toBe(true)
+    expect(inside.afterRelease).toBe(true)
+
+    room!.dispose()
+    room = undefined
+
+    const outside = await adoptedAt(5001)
+    expect(outside.atRelease).toBe(true)
+    // One millisecond of bind gap, and the latch is gone at the release.
+    expect(outside.afterRelease).toBe(false)
+  })
+
+  it('keeps combing out to a 30.5 s bind gap — clean at `k = 30`, dragged to 335.00 at `k = 31`', async () => {
+    // PINS CURRENT BEHAVIOUR, BELIEVED WRONG, in the dragging half. #360 records
+    // the comb as having **no upper end measured**, with `k = 13` and `k = 15`
+    // the highest cells anyone had run. It has now been swept on mid-run cells
+    // from `k = 6` to `k = 31` — a 30.5 s gap — and it does not terminate: every
+    // odd `k` drags, every even `k` is clean, the dragged value is **304 + k**
+    // at every dragging cell in that range, and the mirror run is **k - 2**
+    // frames wide at every cell. This case pins the far end rather than the
+    // whole sweep, because a terminus would have to show up as the far pair
+    // collapsing to one outcome.
+    //
+    // Both windows named, as everywhere in this file. At 20 s the two gaps are
+    // **indistinguishable** — same room, same untouched elements, same mirror
+    // count, and the switcher has not been written to at all — because a 30 s
+    // bind gap has not released yet. They part company at the 36 s read.
+    const far = async (
+      gapMs: number
+    ): Promise<{ early: number[]; late: number[]; room: number; mirror: number; sw: number[] }> => {
+      const { switcher, innocent, wireBefore } = await seatPair(gapMs)
+      const server = room!.server
+      await switcher.goToEpisode('8')
+      await room!.advance(20)
+      const early = [...innocent.el.seekWrites]
+      expect(innocent.el.currentTime).toBeCloseTo(323.95, 2)
+      expect(server.roomState().position).toBeCloseTo(322.95, 1)
+      expect(switcher.el.seekWrites).toEqual([])
+      expect(mirroring(server.wireOf('hostuser').slice(wireBefore))).toHaveLength(18)
+      await room!.advance(16)
+      return {
+        early,
+        late: [...innocent.el.seekWrites],
+        room: server.roomState().position,
+        mirror: mirroring(server.wireOf('hostuser').slice(wireBefore)).length,
+        sw: [...switcher.el.seekWrites]
+      }
+    }
+
+    const evenCell = await far(29500)
+    expect(evenCell.early).toEqual([])
+    expect(evenCell.late).toEqual([])
+    expect(evenCell.room).toBeCloseTo(337.95, 1)
+    expect(evenCell.mirror).toBe(28)
+
+    room!.dispose()
+    room = undefined
+
+    const oddCell = await far(30500)
+    expect(oddCell.early).toEqual([])
+    expect(oddCell.late).toHaveLength(1)
+    expect(oddCell.late[0]).toBeCloseTo(335, 2)
+    expect(oddCell.room).toBeCloseTo(336, 1)
+    expect(oddCell.mirror).toBe(29)
+
+    // The switcher's own footprint is identical across the pair, as it is across
+    // the `k = 8`/`k = 9` pair twenty-two heartbeats below: 303 and then 333.
+    // So nothing the switcher's element does distinguishes the two cells here
+    // either, which is what keeps this a pin of the comb rather than of a cell.
+    expect(evenCell.sw.map((v) => Number(v.toFixed(2)))).toEqual([303, 333])
+    expect(oddCell.sw.map((v) => Number(v.toFixed(2)))).toEqual([303, 333])
+  })
+
+  it('replaces the 500 ms near miss with a 1 Hz room flap when the switch lands 50 ms off the room broadcast', async () => {
+    // PINS CURRENT BEHAVIOUR, BELIEVED WRONG, and it is the case that narrows
+    // the control above rather than adding to it. The control's 2.45 s is real
+    // and holds out to 300 s — but **only while the switch lands inside the
+    // flight time of a room frame**, which is what the harness's whole-second
+    // `advance(4)` arranges and what nothing in the app does. Move the switch
+    // one 50 ms slice later, at the same shipped 500 ms bind gap, and the
+    // innocent peer takes **19 seeks in 20 s**, half of them to 0.
+    //
+    // The chain, measured: with no frame in the air across `reload()` there is no
+    // parked apply, so nothing writes the previous episode's position onto the
+    // rebound element. The first push after the release therefore carries the new
+    // element's own `{0, paused: true}`; `src/main/syncplay.ts:903` cannot help
+    // at a 500 ms gap (see the case above), the seat is still latched from
+    // `src/main/syncplay.ts:2642`, and `canAssertSnapshot()` exempts a *paused*
+    // snapshot from `PLAYBACK_ASSERT_STALE_MS` at
+    // `src/main/syncplay.ts:2375` ("if (this.snapshot.paused) return true"). So
+    // `{0, paused: true}` goes out as an assertion, the server's forced update
+    // re-seats every watcher onto 0, and the room then alternates between 0 and
+    // its walking position for the rest of the session.
+    //
+    // The boundary is exactly one link delay, measured outside the suite across
+    // a (offset, delay) grid: clean for every offset strictly under `delayMs`
+    // and flapping from `delayMs` on, at 50, 200 and 400 ms of delay. So the
+    // control's regime is a `delayMs / HEARTBEAT_MS` slice of the switch's
+    // phase — 5% of it at the 50 ms this file seats.
+    //
+    // **This is not the drag this file is otherwise about, and it is not
+    // `use-syncplay-client.ts:1411`'s 3.0 being crossed by a little.** It is a
+    // different and worse failure reached from the shipped bind gap, and the
+    // `{0, paused: true}` assertion at its root is the seam #360 carves out to
+    // #383. Pinned here because it is what the control case means, not because
+    // #360 owns the fix.
+    const { switcher, innocent, wireBefore } = await seatPair(500, 50)
+    const server = room!.server
+
+    await switcher.goToEpisode('8')
+    await room!.advance(6)
+
+    // Six seconds in, the peer that pressed nothing has already been written to
+    // 0 three times.
+    expect(innocent.el.seekWrites).toHaveLength(5)
+    expect(innocent.el.seekWrites[0]).toBeCloseTo(0, 2)
+    expect(innocent.el.seekWrites.filter((v) => v === 0)).toHaveLength(3)
+    expect(innocent.el.currentTime).toBeCloseTo(0, 2)
+
+    // No spectator mirror anywhere in this run, against the control's zero for
+    // the opposite reason: there the seat asserted continuously because it never
+    // lost the latch, and here it asserts continuously *and* the thing it
+    // asserts is the new element.
+    expect(mirroring(server.wireOf('hostuser').slice(wireBefore))).toEqual([])
+    const asserts = asserting(server.wireOf('hostuser').slice(wireBefore))
+    // The first frame is the ordinary stale re-latch the control sends too. The
+    // second is the new one: a paused 0, into a room that read 304.95.
+    expect(asserts[0].position).toBeCloseTo(303.95, 2)
+    expect(asserts[0].paused).toBe(false)
+    expect(asserts[1].position).toBeCloseTo(0, 2)
+    expect(asserts[1].paused).toBe(true)
+    expect(asserts[1].room).toBeCloseTo(304.95, 2)
+    // …and by the frame after next the room itself is at 0.
+    expect(asserts[3].room).toBeCloseTo(0, 2)
+
+    await room!.advance(14)
+
+    // Nothing converges. One write per second, for as long as the session runs.
+    expect(innocent.el.seekWrites).toHaveLength(19)
+    expect(innocent.el.seekWrites.filter((v) => v === 0)).toHaveLength(10)
+    expect(innocent.el.currentTime).toBeCloseTo(0, 2)
+    expect(server.roomState().position).toBeCloseTo(313.6, 1)
+    expect(server.roomState().paused).toBe(false)
   })
 })

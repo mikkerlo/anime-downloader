@@ -101,8 +101,8 @@ function readExtendedTimestamp(extra: Buffer): Date | null {
 }
 
 /**
- * Convert the DOS date/time words to a `Date`, or `null` for a date that is
- * absent or impossible.
+ * Convert the DOS date/time words to a `Date`, or `null` for a date or time
+ * that is absent or impossible.
  *
  * The words are local time with no timezone and 2-second granularity, so they
  * are built with the local-time `Date` constructor rather than `Date.UTC`.
@@ -113,11 +113,15 @@ function readDosTimestamp(time: number, date: number): Date | null {
   const day = date & 0x1f
   const month = (date >>> 5) & 0x0f
   const year = 1980 + ((date >>> 9) & 0x7f)
-  if (day === 0 || month < 1 || month > 12) return null
   const seconds = (time & 0x1f) * 2
   const minutes = (time >>> 5) & 0x3f
   const hours = (time >>> 11) & 0x1f
-  return new Date(year, month - 1, day, hours, minutes, seconds)
+  if (day === 0 || month < 1 || month > 12 || hours > 23 || minutes > 59 || seconds > 59) {
+    return null
+  }
+  const result = new Date(year, month - 1, day, hours, minutes, seconds)
+  // A day past the end of a short month rolls into the next one; refuse it.
+  return result.getDate() === day ? result : null
 }
 
 function notAZip(label: string, detail: string): Error {

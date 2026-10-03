@@ -300,7 +300,7 @@ describe('extractZip', () => {
 
   // The archive's recorded mtime, restored (#475). The `tar` this module
   // replaced in #472 restored it; `extractZip` shipped stamping the install
-  // time instead, which is the behaviour difference these five cases pin.
+  // time instead, which is the behaviour difference these seven cases pin.
   it('restores the extended-timestamp (0x5455) mtime, to the exact second', async () => {
     // 2023-11-11 05:55:58 UTC — the ffprobe 6.1 asset's real UT value. Integer
     // seconds, so this is an equality assertion with no tolerance.
@@ -376,6 +376,59 @@ describe('extractZip', () => {
     await extractZip(archive, destDir)
 
     const actual = fs.statSync(path.join(destDir, 'ffmpeg')).mtime.getTime()
+    expect(actual).toBeGreaterThanOrEqual(before - 2000)
+    expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
+  })
+
+  it('leaves an entry whose DOS time word is out of range at the write time, not the rolled-over instant', async () => {
+    // The time word has room for values the clock does not: hours 24–31,
+    // minutes 60–63, and a seconds field of 30–31 (60–62 s). The `Date`
+    // constructor carries each overflow into the next unit, so an unchecked
+    // reader turns `2023-11-11 31:63:62` into `2023-11-12 08:04:02` — a
+    // plausible-looking wrong time. Refusing it leaves the write time instead.
+    //
+    // `ffprobe` overflows the minutes within the same day, so the `getDate()`
+    // check cannot refuse it and only the range test on the time word can — the
+    // same blind-spot-closing trick the UT-vs-DOS case uses a second entry for.
+    const ffmpegRollover = new Date(2023, 10, 12, 8, 4, 2).getTime()
+    const ffprobeRollover = new Date(2023, 10, 11, 11, 4, 2).getTime()
+    const before = Date.now()
+    const archive = writeArchive(
+      'bad-time.zip',
+      buildZip([
+        { name: 'ffmpeg', data: Buffer.from('x'), ...dosWords(2023, 11, 11, 31, 63, 62) },
+        { name: 'ffprobe', data: Buffer.from('y'), ...dosWords(2023, 11, 11, 10, 63, 62) }
+      ])
+    )
+
+    await extractZip(archive, destDir)
+
+    for (const [name, rolledOver] of [
+      ['ffmpeg', ffmpegRollover],
+      ['ffprobe', ffprobeRollover]
+    ] as const) {
+      const actual = fs.statSync(path.join(destDir, name)).mtime.getTime()
+      expect(actual).not.toBe(rolledOver)
+      expect(actual).toBeGreaterThanOrEqual(before - 2000)
+      expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
+    }
+  })
+
+  it('leaves an entry whose DOS day is past the end of a short month at the write time', async () => {
+    // Day is 5 bits, so 31 fits a 30-day November; the constructor rolls it
+    // into December rather than rejecting it, which is what the
+    // post-construction `getDate()` check catches.
+    const rolledOver = new Date(2023, 11, 1, 6, 5, 26).getTime()
+    const before = Date.now()
+    const archive = writeArchive(
+      'short-month.zip',
+      buildZip([{ name: 'ffmpeg', data: Buffer.from('x'), ...dosWords(2023, 11, 31, 6, 5, 26) }])
+    )
+
+    await extractZip(archive, destDir)
+
+    const actual = fs.statSync(path.join(destDir, 'ffmpeg')).mtime.getTime()
+    expect(actual).not.toBe(rolledOver)
     expect(actual).toBeGreaterThanOrEqual(before - 2000)
     expect(actual).toBeLessThanOrEqual(Date.now() + 2000)
   })

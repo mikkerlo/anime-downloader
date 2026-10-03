@@ -115,10 +115,9 @@
 // sets are exactly {2.00} over all thirteen clean cells and {1.00} over all
 // thirteen dragging ones. Never quote a deficit here as a maximum over windows.
 //
-// and the standing deficit at the 70 s read is **2.00 s at every clean `k` and
-// 1.00 s at every dragging one**, all the way up — which is the re-measurement,
-// against the join-time `State`, of the 60 s figure an earlier revision of the
-// flush paragraph below recorded as never re-run. **"The twenty-four cells
+// Those two figures, holding all the way up, are the re-measurement against the
+// join-time `State` of the 60 s figure an earlier revision of the flush
+// paragraph below recorded as never re-run. **"The twenty-four cells
 // between the far pair and `k = 9` are described here only" is withdrawn as a
 // count**, because it counted neither the cells nor the pins: of the twenty-six
 // swept, **five** are pinned below — `k = 7`, `k = 8`, `k = 9` and the far pair
@@ -1073,7 +1072,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     ])
     expect(even.under).toBeCloseTo(-0.05, 2)
 
-    // The two values are 2.00 s apart, which is the staircase's amplitude and
+    // The two values are 2.00 s apart, which is the staircase's step and
     // not a coincidence — stated as the subtraction so a change that moved both
     // by the same amount keeps this line green and reds the two above it.
     expect(odd.under - even.under).toBeCloseTo(2, 2)
@@ -1117,6 +1116,18 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       // matters: still adopted ⇒ the seat asserts the previous episode's 303 and
       // the innocent peer is dragged; de-adopted ⇒ it waits for the new
       // element's first live room frame and the comb decides.
+      //
+      // **Scoped to the 5000/5001 pair this case seats, and not a general rule —
+      // read it as `gap <= 5000 ⇒ dragged` and nothing wider.** De-adoption does
+      // *not* imply clean: the latch drops at the release slice at 6500, which
+      // drags, exactly as it does at 7500, which does not. That is the census two
+      // paragraphs up restated from the other side, so reusing this helper on a
+      // comb cell would go red here for the wrong reason — the line below is a
+      // convenience for two adjacent gaps, not the claim that
+      // `src/main/syncplay.ts:903` ("this.playbackAdopted = false") is not the
+      // selector. That claim is still **described and not asserted** anywhere in
+      // this file; pinning it wants its own 6500/7500 pair with the outcome check
+      // lifted out of this helper, which is #481.
       expect(innocent.el.seekWrites.length).toBe(afterRelease ? 1 : 0)
       return { atRelease, afterRelease }
     }

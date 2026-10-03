@@ -529,6 +529,26 @@ export interface Peer {
    *  that read them spell the field names in one place rather than one per
    *  scenario file. */
   counters(): IgnoreCounters
+  /** `SyncplayClient`'s private `playbackAdopted` — whether this seat may assert
+   *  its snapshot into the room right now, rather than mirror the room back.
+   *
+   *  Read here for the same reason as `seekIntent()` and `counters()`: it is
+   *  private, it is projected onto nothing — `SyncplayStatus` carries
+   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:596`)
+   *  and so cannot separate "not adopted" from the other two terms — and the
+   *  seven writers are what #360's gap axis turns on. A fixture that inferred it
+   *  from the wire would be asserting against its own reading of
+   *  `buildPlaystate()` rather than against the latch: the mirror/assert
+   *  distinction a wire frame carries is
+   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2410`), so a
+   *  mirror frame is evidence of the conjunction and not of either half.
+   *
+   *  **Sampled, not latched.** `isAdopted()` is a mutator — it writes `true` at
+   *  `src/main/syncplay.ts:2632` and `src/main/syncplay.ts:2642` — and the
+   *  heartbeat calls it once a second, so a read taken a second late sees the
+   *  re-latch rather than the de-adoption that preceded it. Read it in the slice
+   *  you mean. */
+  adopted(): boolean
   /** `SyncplayClient`'s private `serverRtt`, in **seconds** — the round trip the
    *  ping exchange last measured, and the term `handleState()` halves into both
    *  the position compensation and the room anchor's back-date.
@@ -908,6 +928,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       status: () => client.getStatus(),
       seekIntent: () => seekIntentOf(client),
       counters: () => countersOf(client),
+      adopted: () => adoptedOf(client),
       rtt: () => rttOf(client),
       userSeek: (to: number) => {
         el.currentTime = to
@@ -1025,7 +1046,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
   }
 }
 
-// The three readers below reach into `SyncplayClient`'s private state, and they
+// The four readers below reach into `SyncplayClient`'s private state, and they
 // are the only place in the two-peer fixtures that does. Element access rather
 // than `as unknown as { … }`: TypeScript resolves `client['seekIntent']`
 // against the real class — the escape hatch it leaves open for private members
@@ -1073,5 +1094,7 @@ const countersOf = (client: MainSyncplayClient): IgnoreCounters => ({
   pendingClientAck: client['pendingClientAck'],
   pendingServerAck: client['pendingServerAck']
 })
+
+const adoptedOf = (client: MainSyncplayClient): boolean => client['playbackAdopted']
 
 const rttOf = (client: MainSyncplayClient): number => client['serverRtt']

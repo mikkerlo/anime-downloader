@@ -801,9 +801,9 @@ const CALL_NEEDLE = 'goToEpisode('
  * They are marked with their quoted text now so the quote verifier checks them,
  * because a bare anchor that has drifted by a few lines still passes the drift
  * pass green and so retargets silently:
- * `test/services/syncplay-two-peer-episode-change.test.ts:501` ("that rebound the
+ * `test/services/syncplay-two-peer-episode-change.test.ts:504` ("that rebound the
  * element without flushing the index bump") and
- * `test/services/syncplay-two-peer-episode-change.test.ts:819` ("where this read
+ * `test/services/syncplay-two-peer-episode-change.test.ts:822` ("where this read
  * was 0.05 before #384 made").
  * What *is* historical, and is pinned nowhere on purpose, is the count: this
  * docstring and the failure message below name the call often enough that the

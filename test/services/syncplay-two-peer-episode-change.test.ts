@@ -80,7 +80,7 @@
 // function of `φ` is claimed here.
 //
 // Nothing below is re-pinned at another phase: the first eight cases all seat
-// φ = 0 and the ninth seats φ = 50 ms, and both name their φ in their titles.
+// φ = 0 and the ninth seats φ = 50 ms.
 // The eight φ = 0 cases stay there for comparability rather than realism: the
 // sibling suite's switch, `test/services/syncplay-two-peer-adoption.test.ts:419` ("await host.goToEpisode('8')"),
 // takes the default offset, so re-seating them would stop them reading the same switch.
@@ -1051,6 +1051,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       // time it goes out differs.
       expect(frame.paused).toBe(false)
       expect(innocent.el.seekWrites.length).toBe(under > 1 ? 1 : 0)
+      expect(server.roomState().paused).toBe(false)
       return { stair, under }
     }
 
@@ -1126,6 +1127,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       await room!.advance(0.05)
       const afterRelease = switcher.adopted()
       await room!.advance(14.95)
+      expect(room!.server.roomState().paused).toBe(false)
       return { atRelease, afterRelease, seekWrites: innocent.el.seekWrites }
     }
 
@@ -1186,6 +1188,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       await room!.advance(0.05)
       const afterRelease = switcher.adopted()
       await room!.advance(20 - gapMs / 1000 - 0.05)
+      expect(room!.server.roomState().paused).toBe(false)
       return { atStaleEdge, atRelease, afterRelease, seekWrites: innocent.el.seekWrites }
     }
 
@@ -1251,6 +1254,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       expect(switcher.el.seekWrites).toEqual([])
       expect(mirroring(server.wireOf('hostuser').slice(wireBefore))).toHaveLength(18)
       await room!.advance(16)
+      expect(server.roomState().paused).toBe(false)
       return {
         early,
         late: [...innocent.el.seekWrites],

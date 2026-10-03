@@ -194,7 +194,7 @@
 // two gap samples" is discharged, and so is any remaining suspicion that it
 // selects the comb: over a 312-cell sweep it fired on **111 clean cells and 100
 // dragging ones**, so it partitions the lower run from the comb and says nothing
-// about which comb cells drag.
+// about which comb cells drag — **pinned by the 6500/7500 case below**.
 //
 // **What selects a dragging comb cell from a clean one is identified, and the
 // header's "not identified" is withdrawn.** The old text said the selector sits
@@ -1147,7 +1147,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(outside.seekWrites.length).toBe(0)
   })
 
-  it('drops the latch at the bind release at 6500 and at 7500 alike — the staleness de-adoption fires on the clean comb cell too', async () => {
+  it('drops the latch at the bind release at 6500 (drags) and at 7500 (clean) alike at φ = 0 — the staleness de-adoption fires on the clean comb cell too', async () => {
     // PINS CURRENT BEHAVIOUR, and it is the pin this file's headline claim was
     // missing. The paragraph above says that
     // `src/main/syncplay.ts:903` ("this.playbackAdopted = false") is **not**
@@ -1207,12 +1207,11 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(clean.afterRelease).toBe(false)
     expect(clean.seekWrites).toEqual([])
 
-    // The whole claim, stated as the comparison so that a change moving both
-    // cells the same way reds here rather than passing: the latch history is the
-    // same in both and the outcomes differ, so whatever selects the comb is not
-    // this latch. Asserted on the triple rather than on `afterRelease` alone,
-    // because a regression that merely delayed the drop past the 20 s window
-    // would leave `afterRelease` false in both cells and say nothing.
+    // The whole claim, stated as the comparison: the latch history is the same
+    // in both cells and the outcomes differ, so whatever selects the comb is not
+    // this latch. The per-cell lines above already imply both assertions below;
+    // they are kept so that re-pinning one cell's latch reads or write count
+    // cannot go through without confronting the other cell.
     expect([dragging.atStaleEdge, dragging.atRelease, dragging.afterRelease]).toEqual([
       clean.atStaleEdge,
       clean.atRelease,

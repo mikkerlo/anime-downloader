@@ -935,9 +935,18 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // upward move the failure message calls a real change, and it is re-derived here
 // rather than loosened: all four new sites are correctly awaited, which the
 // second assertion below is what actually establishes.
+//
+// **Re-derived again on that round's review: `episode-change` 9 → 10.** The
+// 6500/7500 pair that pins
+// `src/main/syncplay.ts:903` ("this.playbackAdopted = false") firing on a
+// clean comb cell drives two more switches from one new local helper
+// (`latchAcrossRelease`), so the sites rose
+// by one where the switches rose by two. The review that asked for the pair
+// predicted 11, or 10 on one helper; 10 is what one helper measures, and the
+// number is re-derived here rather than the pin widened to admit either.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
-  'episode-change': 9,
+  'episode-change': 10,
   loop: 4
 }
 

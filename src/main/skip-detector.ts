@@ -442,6 +442,45 @@ function median(values: number[]): number {
   return (sorted[mid - 1] + sorted[mid]) / 2
 }
 
+export interface SearchWindows {
+  opOffsetHashes: number
+  opLengthHashes: number
+  edOffsetHashes: number
+  edLengthHashes: number
+}
+
+// Where the OP and the ED pass are allowed to look inside one episode's
+// fingerprint, in hash indices. #477: the two windows must be DISJOINT at
+// every duration, because `findBestMatch` keeps a single longest run and
+// nothing downstream distinguishes "the OP" from "the ED" — if both passes get
+// the same slice they get the same run, and the longer of the two shared
+// segments (usually the ED) is reported for both slots. That is strictly worse
+// than reporting no OP: a null marker costs one manual skip, an OP marker
+// aimed at the credits sends the viewer into the ending.
+//
+// `SEARCH_REGION_SECONDS` stays the upper bound, so from `2 ×
+// SEARCH_REGION_SECONDS` (16 min) upwards the windows are exactly what they
+// have always been — `[0, 480)` and `[duration - 480, duration)`. Below that
+// the boundary is the episode midpoint instead, so a 300 s short searches
+// `[0, 150)` / `[150, 300)` rather than `[0, 300)` / `[0, 300)`.
+//
+// No degenerate-length special case: a slice too short to hold
+// `MIN_RUN_SECONDS` simply cannot produce a qualifying run, and one shorter
+// than `windowHashes` is rejected by `findBestMatch` outright, so both slots
+// fall out as `null` on their own.
+export function computeSearchWindows(hashCount: number, hashesPerSec: number): SearchWindows {
+  const capHashes = Math.round(hashesPerSec * SEARCH_REGION_SECONDS)
+  const midpointHashes = Math.floor(hashCount / 2)
+  const opLengthHashes = Math.max(0, Math.min(capHashes, midpointHashes))
+  const edOffsetHashes = Math.min(hashCount, Math.max(midpointHashes, hashCount - capHashes))
+  return {
+    opOffsetHashes: 0,
+    opLengthHashes,
+    edOffsetHashes,
+    edLengthHashes: Math.max(0, hashCount - edOffsetHashes)
+  }
+}
+
 function matchFingerprintRegions(a: FingerprintRegion, b: FingerprintRegion): RegionMatch | null {
   if (a.lengthHashes <= 0 || b.lengthHashes <= 0) return null
   const minHashesPerSec = Math.min(a.fingerprint.hashesPerSec, b.fingerprint.hashesPerSec)
@@ -550,27 +589,26 @@ export async function analyzeShow(
 
     const a = loaded[pairs[p].i]
     const b = loaded[pairs[p].j]
-    // OP region: search the first 8 minutes of each episode
-    const opRegionHashesA = Math.min(
-      a.fingerprint.hashes.length,
-      Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
-    )
-    const opRegionHashesB = Math.min(
-      b.fingerprint.hashes.length,
-      Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
-    )
+    // Window geometry is per episode, so one side of a pair can be in the
+    // midpoint-clamped regime while the other is not (different encodes,
+    // different outro lengths).
+    const windowsA = computeSearchWindows(a.fingerprint.hashes.length, a.fingerprint.hashesPerSec)
+    const windowsB = computeSearchWindows(b.fingerprint.hashes.length, b.fingerprint.hashesPerSec)
+
+    // OP region: the first 8 minutes of each episode, or its first half when
+    // the episode is shorter than 16 minutes.
     const opMatch = matchFingerprintRegions(
       {
         fingerprint: a.fingerprint,
-        offsetHashes: 0,
-        lengthHashes: opRegionHashesA,
-        sourceOffsetSec: 0
+        offsetHashes: windowsA.opOffsetHashes,
+        lengthHashes: windowsA.opLengthHashes,
+        sourceOffsetSec: windowsA.opOffsetHashes / a.fingerprint.hashesPerSec
       },
       {
         fingerprint: b.fingerprint,
-        offsetHashes: 0,
-        lengthHashes: opRegionHashesB,
-        sourceOffsetSec: 0
+        offsetHashes: windowsB.opOffsetHashes,
+        lengthHashes: windowsB.opLengthHashes,
+        sourceOffsetSec: windowsB.opOffsetHashes / b.fingerprint.hashesPerSec
       }
     )
     if (opMatch) {
@@ -582,32 +620,30 @@ export async function analyzeShow(
       sB.opLength.push(opMatch.lengthSecB)
     }
 
-    // ED region: search the last 8 minutes of each episode
-    const edRegionHashesA = Math.min(
-      a.fingerprint.hashes.length,
-      Math.round(a.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
-    )
-    const edRegionHashesB = Math.min(
-      b.fingerprint.hashes.length,
-      Math.round(b.fingerprint.hashesPerSec * SEARCH_REGION_SECONDS)
-    )
-    const edStartA = a.fingerprint.hashes.length - edRegionHashesA
-    const edStartB = b.fingerprint.hashes.length - edRegionHashesB
+    // ED region: the last 8 minutes of each episode, or its second half when
+    // the episode is shorter than 16 minutes.
     const edMatch = matchFingerprintRegions(
       {
         fingerprint: a.fingerprint,
-        offsetHashes: edStartA,
-        lengthHashes: edRegionHashesA,
-        sourceOffsetSec: edStartA / a.fingerprint.hashesPerSec
+        offsetHashes: windowsA.edOffsetHashes,
+        lengthHashes: windowsA.edLengthHashes,
+        sourceOffsetSec: windowsA.edOffsetHashes / a.fingerprint.hashesPerSec
       },
       {
         fingerprint: b.fingerprint,
-        offsetHashes: edStartB,
-        lengthHashes: edRegionHashesB,
-        sourceOffsetSec: edStartB / b.fingerprint.hashesPerSec
+        offsetHashes: windowsB.edOffsetHashes,
+        lengthHashes: windowsB.edLengthHashes,
+        sourceOffsetSec: windowsB.edOffsetHashes / b.fingerprint.hashesPerSec
       }
     )
-    // Suppress duplicate detection of the OP showing through into ED region (rare with the offsets above, but possible for short shows)
+    // No overlap check is needed here, and one would be dead code: the two
+    // windows above are disjoint by construction (`computeSearchWindows`),
+    // `findBestMatch` only searches inside the slice it is handed, and
+    // `refineMatch` only moves edges inward. So an `opMatch` is always inside
+    // the OP window and an `edMatch` always inside the ED window, and the OP
+    // can no longer show through into the ED slot the way it did before #477.
+    // The invariant is held by the window arithmetic and asserted in
+    // `test/services/skip-detector-fingerprint.test.ts`.
     if (edMatch) {
       const sA = samplesByEpisode.get(a.episodeInt)!
       const sB = samplesByEpisode.get(b.episodeInt)!

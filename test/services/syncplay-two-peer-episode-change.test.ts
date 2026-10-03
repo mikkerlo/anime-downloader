@@ -58,7 +58,7 @@
 // The parity of `k` predicts the outcome at φ = 0 and nowhere else — and *that*
 // sentence is the one-directional rule "odd ⇒ drags", which is the only form it
 // is true in. Stated as a correlation it is less clean and more interesting:
-// φ = 750 is still **79%** predictive with the **sign inverted** (8 of 40 odd
+// φ = 750 is still **78%** predictive with the **sign inverted** (8 of 40 odd
 // cells drag against 39 of 51 even ones), and φ = 500 is the only phase where
 // parity carries no signal at all (49%). A reader checking parity at an
 // unspecified phase can therefore get it exactly backwards rather than merely
@@ -79,8 +79,11 @@
 // returning to alignment at φ = 1000), so no closed form for the edge as a
 // function of `φ` is claimed here.
 //
-// Nothing below is re-pinned at another phase: the first seven cases all seat
-// φ = 0 and the eighth seats φ = 50 ms, and both name their φ in their titles.
+// Nothing below is re-pinned at another phase: the first eight cases all seat
+// φ = 0 and the ninth seats φ = 50 ms, and both name their φ in their titles.
+// The eight φ = 0 cases stay there for comparability rather than realism: the
+// sibling suite's switch, `test/services/syncplay-two-peer-adoption.test.ts:419` ("await host.goToEpisode('8')"),
+// takes the default offset, so re-seating them would stop them reading the same switch.
 //
 // So "two disjoint drag bands separated by a ~1 s clean corridor" is withdrawn,
 // and so is anything of the shape "clean above 7000". The comb does not stop,
@@ -150,16 +153,16 @@
 // untouched through the same 20 s. The drag is shipped, unflagged and unarmed,
 // and it costs playback on a peer that made no input at all.
 //
-// **Eight cases now, and the knob count went from one to two.** The first four
+// **Nine cases now, and the knob count went from one to two.** The first four
 // are one sweep over `bindGapMs` — five rows of it, because the alternation case
 // seats two gaps rather than one: the assertion it carries *is* the difference between
 // them, and splitting it would let either half be deleted with the other still
-// green. The four added since pin what decides that sweep rather than more of
-// it: the selector quantity at a dragging gap and a clean gap (two more rows of
-// the same knob), `src/main/syncplay.ts:903`'s own firing across its 1 ms edge
-// (two more), the comb's far end at a 30.5 s gap (two more), and — the second
-// knob — the **switch's phase**, one row at 50 ms where everything else sits at
-// 0. `bindGapMs` (the harness's bind gap:
+// green. The five added since pin what decides that sweep rather than more of it: the
+// selector quantity at a dragging gap and a clean gap (two more rows of the same knob),
+// `src/main/syncplay.ts:903`'s own firing across its 1 ms edge (two more), the
+// bind-release latch drop at a dragging and a clean cell (two more), the comb's far
+// end at a 30.5 s gap (two more), and — the second knob — the **switch's phase**, one
+// row at 50 ms where everything else sits at 0. `bindGapMs` (the harness's bind gap:
 // `test/helpers/syncplay-two-peer.ts:393` arms `metadataDueAt` from it inside
 // `reload()`) is the gap between the media load algorithm's synchronous
 // reset and the `loadedmetadata` task, i.e. how long the switcher's new element
@@ -533,8 +536,8 @@
 // frame-delivery time, so its residues (3.0000000953674544 and the 2.95 frame
 // before it) are described here and asserted nowhere.
 //
-// This file asserts against the model server, which is legitimate for seven of
-// the eight cases and would not be for an assertion-side fixture: those rows are
+// This file asserts against the model server, which is legitimate for eight of
+// the nine cases and would not be for an assertion-side fixture: those rows are
 // *playing* rooms, and the divergence #360 records between
 // `test/helpers/syncplay-min-election-server.ts` and a real 1.7.6 server is on a
 // **paused** minimum, which none of them produces (each asserts the room stays
@@ -665,7 +668,7 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
   it('leaves the non-switching peer where it is at the shipped 500 ms bind gap — the control', async () => {
     // PINS CURRENT BEHAVIOUR. The `[]` here is the outcome #360 wants at every
     // gap, so this case alone reads as a desired invariant — but the *margin* it
-    // holds by does not, and the seven cases below are the same code failing.
+    // holds by does not, and the eight cases below are the same code failing.
     // The last of them is the sharpest: it holds this gap at 500 and moves only
     // the switch's phase, and the `[]` does not survive it. See #360.
     const { switcher, innocent, wireBefore } = await seatPair(500)

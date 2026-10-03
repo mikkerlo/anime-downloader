@@ -194,7 +194,7 @@
 // two gap samples" is discharged, and so is any remaining suspicion that it
 // selects the comb: over a 312-cell sweep it fired on **111 clean cells and 100
 // dragging ones**, so it partitions the lower run from the comb and says nothing
-// about which comb cells drag.
+// about which comb cells drag — **pinned by the 6500/7500 case below**.
 //
 // **What selects a dragging comb cell from a clean one is identified, and the
 // header's "not identified" is withdrawn.** The old text said the selector sits
@@ -1098,9 +1098,20 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     // header gives.** It fires at *every* gap above 5000 — the clean cells at
     // `k = 8`, `k = 10`, `k = 12` included — so it marks the boundary between
     // the lower run and the comb and says nothing about which comb cells drag.
+    // **That sentence is a census, and the case below is where it is asserted**;
+    // this one establishes only the edge, because a read positioned on the 5000
+    // boundary cannot see a drop that happens 1.5 s later.
+    //
+    // The helper reports the two latch reads and the innocent peer's writes and
+    // asserts neither. **The outcome is asserted at the call sites on purpose.**
+    // It used to be folded in here as `toBe(afterRelease ? 1 : 0)`, which reads
+    // as the rule "de-adopted ⇒ clean" — true at the two gaps seated below and
+    // **false one run up the comb**, where the latch drops at the release and
+    // the peer is dragged anyway. The case under this one pins that, so the
+    // implication is not restated here even as a convenience.
     const adoptedAt = async (
       gapMs: number
-    ): Promise<{ atRelease: boolean; afterRelease: boolean }> => {
+    ): Promise<{ atRelease: boolean; afterRelease: boolean; seekWrites: number[] }> => {
       const { switcher, innocent } = await seatPair(gapMs)
       await switcher.goToEpisode('8')
       await room!.advance(5)
@@ -1112,29 +1123,19 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
       await room!.advance(0.05)
       const afterRelease = switcher.adopted()
       await room!.advance(14.95)
-      // The outcome the two paths reach, which is the other half of why the edge
-      // matters: still adopted ⇒ the seat asserts the previous episode's 303 and
-      // the innocent peer is dragged; de-adopted ⇒ it waits for the new
-      // element's first live room frame and the comb decides.
-      //
-      // **Scoped to the 5000/5001 pair this case seats, and not a general rule —
-      // read it as `gap <= 5000 ⇒ dragged` and nothing wider.** De-adoption does
-      // *not* imply clean: the latch drops at the release slice at 6500, which
-      // drags, exactly as it does at 7500, which does not. That is the census two
-      // paragraphs up restated from the other side, so reusing this helper on a
-      // comb cell would go red here for the wrong reason — the line below is a
-      // convenience for two adjacent gaps, not the claim that
-      // `src/main/syncplay.ts:903` ("this.playbackAdopted = false") is not the
-      // selector. That claim is still **described and not asserted** anywhere in
-      // this file; pinning it wants its own 6500/7500 pair with the outcome check
-      // lifted out of this helper, which is #481.
-      expect(innocent.el.seekWrites.length).toBe(afterRelease ? 1 : 0)
-      return { atRelease, afterRelease }
+      return { atRelease, afterRelease, seekWrites: innocent.el.seekWrites }
     }
 
+    // The outcome the two paths reach, which is the other half of why the edge
+    // matters: still adopted ⇒ the seat asserts the previous episode's 303 and
+    // the innocent peer is dragged; de-adopted ⇒ it waits for the new element's
+    // first live room frame and the comb decides — and at 5001 the comb's answer
+    // happens to be "nothing". Read each pair of lines below as *this gap drags*
+    // and *this gap does not*, never as a rule keyed on the latch.
     const inside = await adoptedAt(5000)
     expect(inside.atRelease).toBe(true)
     expect(inside.afterRelease).toBe(true)
+    expect(inside.seekWrites.length).toBe(1)
 
     room!.dispose()
     room = undefined
@@ -1143,6 +1144,80 @@ describe('SyncplayClient — the non-switching peer across an episode change (#3
     expect(outside.atRelease).toBe(true)
     // One millisecond of bind gap, and the latch is gone at the release.
     expect(outside.afterRelease).toBe(false)
+    expect(outside.seekWrites.length).toBe(0)
+  })
+
+  it('drops the latch at the bind release at 6500 (drags) and at 7500 (clean) alike at φ = 0 — the staleness de-adoption fires on the clean comb cell too', async () => {
+    // PINS CURRENT BEHAVIOUR, and it is the pin this file's headline claim was
+    // missing. The paragraph above says that
+    // `src/main/syncplay.ts:903` ("this.playbackAdopted = false") is **not**
+    // the comb's selector, and until this case that was described in prose and
+    // asserted nowhere — which is the failure mode this file's own header
+    // records, an unasserted census rotting silently. Raised on review of #480
+    // and measured there independently, by stepping `adopted()` at 50 ms
+    // resolution across the release.
+    //
+    // It cannot reuse `adoptedAt` above, and the reason is the point: that
+    // helper reads the latch at a fixed 5.00 s and 5.05 s, positioned on the
+    // `PLAYBACK_STALE_MS` edge, and both reads land *before* the bind release at
+    // either gap here. Read there, both cells still say adopted — so the
+    // 5000/5001 instrument cannot see this drop at all, and the read has to
+    // follow the gap instead. This helper therefore takes three samples: the
+    // 5.05 s point the pair above uses, the release slice itself, and one slice
+    // past it. The window stays 20 s wide at both gaps so the write list is
+    // comparable with the rest of the file.
+    const latchAcrossRelease = async (
+      gapMs: number
+    ): Promise<{
+      atStaleEdge: boolean
+      atRelease: boolean
+      afterRelease: boolean
+      seekWrites: number[]
+    }> => {
+      const { switcher, innocent } = await seatPair(gapMs)
+      await switcher.goToEpisode('8')
+      await room!.advance(5.05)
+      const atStaleEdge = switcher.adopted()
+      await room!.advance(gapMs / 1000 - 5.05)
+      const atRelease = switcher.adopted()
+      await room!.advance(0.05)
+      const afterRelease = switcher.adopted()
+      await room!.advance(20 - gapMs / 1000 - 0.05)
+      return { atStaleEdge, atRelease, afterRelease, seekWrites: innocent.el.seekWrites }
+    }
+
+    // `k = 7`, a dragging cell. The latch is still up at the 5.05 s read, gone
+    // by the release — and the peer is dragged to 311.00 regardless, by the
+    // first post-bind push rather than by the assertion the latch would have
+    // authorised.
+    const dragging = await latchAcrossRelease(6500)
+    expect(dragging.atStaleEdge).toBe(true)
+    expect(dragging.atRelease).toBe(false)
+    expect(dragging.afterRelease).toBe(false)
+    expect(dragging.seekWrites.length).toBe(1)
+    expect(dragging.seekWrites[0]).toBeCloseTo(311, 2)
+
+    room!.dispose()
+    room = undefined
+
+    // `k = 8`, a clean cell, reached through a byte-identical latch history.
+    const clean = await latchAcrossRelease(7500)
+    expect(clean.atStaleEdge).toBe(true)
+    expect(clean.atRelease).toBe(false)
+    expect(clean.afterRelease).toBe(false)
+    expect(clean.seekWrites).toEqual([])
+
+    // The whole claim, stated as the comparison: the latch history is the same
+    // in both cells and the outcomes differ, so whatever selects the comb is not
+    // this latch. The per-cell lines above already imply both assertions below;
+    // they are kept so that re-pinning one cell's latch reads or write count
+    // cannot go through without confronting the other cell.
+    expect([dragging.atStaleEdge, dragging.atRelease, dragging.afterRelease]).toEqual([
+      clean.atStaleEdge,
+      clean.atRelease,
+      clean.afterRelease
+    ])
+    expect(dragging.seekWrites.length).not.toBe(clean.seekWrites.length)
   })
 
   it('keeps combing out to a 30.5 s bind gap — clean at `k = 30`, dragged to 335.00 at `k = 31`', async () => {

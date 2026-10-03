@@ -77,7 +77,16 @@ describe('ensureFfmpeg short-circuit', () => {
     fs.writeFileSync(ffmpegBin, 'fake-ffmpeg')
     fs.writeFileSync(ffprobeBin, 'fake-ffprobe')
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    // Stubbed, not a bare spy: an unstubbed `spyOn` passes through to the real
+    // `fetch`, so replacing the existence short-circuit with `if (false)` made
+    // this case download and extract both real release archives — about 150 MB
+    // into the shared mock `userData` — before going red on the call count, and
+    // on a slow link it would hit the 5 s `testTimeout` first. Rejecting keeps
+    // the regression caught by `not.toHaveBeenCalled()` below while the failure
+    // stays an assertion rather than whatever the network did today.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('network access is not expected in this test'))
 
     const result = await ensureFfmpeg()
 
@@ -395,7 +404,15 @@ describe('ensureFfmpeg zip install', () => {
     Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
     Object.defineProperty(process, 'arch', { value: 'mips', configurable: true })
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    // Stubbed, not a bare spy: an unstubbed `spyOn` passes through to the real
+    // `fetch`, so giving `detectFfmpegPlatform` a fallback descriptor instead of
+    // `null` made this case install real binaries and *resolve*, reporting a
+    // resolved promise rather than the missing platform error. Rejecting keeps
+    // the regression caught by `not.toHaveBeenCalled()` below while the failure
+    // stays an assertion rather than whatever the network did today.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('network access is not expected in this test'))
     const send = vi.fn()
     const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
       typeof ensureFfmpeg

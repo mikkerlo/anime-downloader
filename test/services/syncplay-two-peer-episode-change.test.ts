@@ -81,9 +81,9 @@
 //
 // Nothing below is re-pinned at another phase: the first seven cases all seat
 // φ = 0 and the eighth seats φ = 50 ms, and both name their φ in their titles.
-// They stay at φ = 0 for comparability rather than realism: the sibling suite's
-// episode change, `test/services/syncplay-two-peer-adoption.test.ts:419` ("await host.goToEpisode('8')"),
-// takes the default offset, so re-seating these pins would stop them reading the same switch.
+// The φ = 0 cases stay there for comparability rather than realism: the
+// sibling suite's switch, `test/services/syncplay-two-peer-adoption.test.ts:419` ("await host.goToEpisode('8')"),
+// takes the default offset, so re-seating them would stop them reading the same switch.
 //
 // So "two disjoint drag bands separated by a ~1 s clean corridor" is withdrawn,
 // and so is anything of the shape "clean above 7000". The comb does not stop,

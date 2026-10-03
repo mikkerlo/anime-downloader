@@ -244,10 +244,13 @@ describe('analyzeShow OP/ED search windows (#477)', () => {
 
     // Fixture self-check: the un-planted filler of the two episodes must be far
     // clear of MATCH_BIT_THRESHOLD, so a failure below is the detector's and not
-    // the generator's. Measured over the stretch between the planted segments.
+    // the generator's. Measured over the stretch between the planted segments;
+    // contiguous segments leave no filler to measure, so the check is skipped
+    // rather than dividing by a zero-width gap and reporting `NaN`.
     const gapFrom = Math.round(planted[0].endSec * HASHES_PER_SEC)
     const gapTo = Math.round(planted[planted.length - 1].startSec * HASHES_PER_SEC)
-    const fillerMeanBits = meanBitDistance(hashesA, hashesB, gapFrom, gapTo)
+    const fillerMeanBits =
+      gapTo > gapFrom ? meanBitDistance(hashesA, hashesB, gapFrom, gapTo) : Number.POSITIVE_INFINITY
 
     return {
       op: result.perEpisode['1'].op,
@@ -324,8 +327,8 @@ describe('analyzeShow OP/ED search windows (#477)', () => {
   // one shorter than `windowHashes` is rejected by `findBestMatch` outright.
   it('reports null for both slots on a sub-36 s episode with shared content in both halves', async () => {
     const { op, ed } = await runPair(30, [
-      { startSec: 0, endSec: 12, seed: 0x01020304 },
-      { startSec: 18, endSec: 30, seed: 0x04030201 }
+      { startSec: 0, endSec: 15, seed: 0x01020304 },
+      { startSec: 15, endSec: 30, seed: 0x04030201 }
     ])
     expect(op).toBeNull()
     expect(ed).toBeNull()

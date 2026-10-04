@@ -313,15 +313,16 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
 // `readyState` fork, retirement, expiry — is covered at the composable seam in
 // `use-syncplay-client.test.ts`; a scan can only settle that every `currentTime`
 // this file writes on the user's behalf is registered, and that the user's own
-// seek is not.
+// seek goes through the composable's `seekAsUser` instead (#488).
 //
 // The census is the load-bearing part, for the same reason it is for the plays.
-// Two raw `currentTime` writes exist: one inside `seekProgrammatically`, one
-// inside `seek()`. A third added without a decision is either a room-dragging
-// unregistered write — `forcePositionUpdate` fans it out to every watcher — or,
-// if it goes through the helper on the user's path, a seek the room never hears
-// at all. Both directions are #239's own defect returning at a new site, so the
-// count is pinned.
+// One raw `currentTime` write exists, inside `seekProgrammatically`; the user's
+// own write moved into `seekAsUser` with #488, which announces it to the room
+// at intent. A second raw write added without a decision is either a
+// room-dragging unregistered write — `forcePositionUpdate` fans it out to every
+// watcher — or a user seek that is announced only on its `seeked`, which a room
+// frame arriving mid-flight can undo before it is ever announced (#488). Both
+// directions are a defect returning at a new site, so the count is pinned.
 describe('PlayerView — programmatic seeks go through the operation helper (#306)', () => {
   const FLAT_NO_COMMENTS = SOURCE.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
 
@@ -329,9 +330,9 @@ describe('PlayerView — programmatic seeks go through the operation helper (#30
     // Every assignment to the element's playhead, comments stripped so the prose
     // above the helper cannot pad the count.
     const writes = FLAT_NO_COMMENTS.match(/\bv(?:ideo)?\.currentTime = /g) ?? []
-    // One inside `seekProgrammatically`, one inside `seek()`. Everything else
-    // goes through the helper.
-    expect(writes).toHaveLength(2)
+    // The one inside `seekProgrammatically`. The user's seek writes through
+    // `syncplay.seekAsUser` (#488), and everything else goes through the helper.
+    expect(writes).toHaveLength(1)
     const helpers = FLAT_NO_COMMENTS.match(/seekProgrammatically\(v(?:ideo)?, /g) ?? []
     // `resumeFromSavedPosition`, `selectQuality`'s restore, `selectTranslation`'s
     // two restores, and `goToEpisode`'s two rewinds to 0 — the seven external
@@ -345,17 +346,32 @@ describe('PlayerView — programmatic seeks go through the operation helper (#30
     expect(starts).toHaveLength(2)
   })
 
-  it('leaves the user’s own seek unregistered', () => {
-    // `seek()` is where the scrubber and the keyboard land. Its `seeked` *is*
-    // the intent the room needs to hear, so registering an operation here would
-    // silently swallow every user seek.
+  it('hands the user’s own seek to seekAsUser, not to the programmatic helper', () => {
+    // `seek()` is where the keyboard and skip OP/ED land. `seekAsUser`
+    // registers a strict `value` operation and announces the seek at intent
+    // (#488); the programmatic helper would register one that swallows its
+    // `seeked` and announce nothing, so the room would never hear the seek.
     const body = SOURCE.slice(
       SOURCE.indexOf('function seek(time: number)'),
       SOURCE.indexOf('function seekRelative(')
     )
-    expect(body).toContain('video.currentTime = target;')
+    expect(body).toContain('syncplay.seekAsUser(target);')
+    expect(body).not.toContain('currentTime =')
     expect(body).not.toContain('beginProgrammaticSeek')
     expect(body).not.toContain('seekProgrammatically(')
+  })
+
+  it('routes the scrubber release through seek(), the one user-seek door', () => {
+    // Before #488 `onSeekEnd` wrote the element itself through `commitSeek`, a
+    // second user write path that announced nothing at intent. It now goes
+    // through `seek()`, which also bounds the target with `resolveSeekTarget`.
+    const body = FLAT_NO_COMMENTS.slice(
+      FLAT_NO_COMMENTS.indexOf('function onSeekEnd()'),
+      FLAT_NO_COMMENTS.indexOf('function onSeekMouseMove(')
+    )
+    expect(body).toContain('seek(currentTime.value);')
+    expect(body).not.toContain('currentTime =')
+    expect(SOURCE).not.toContain('commitSeek')
   })
 
   it('registers before the write and retracts its own operation if it throws', () => {

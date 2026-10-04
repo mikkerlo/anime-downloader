@@ -88,41 +88,53 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     host.frames.length = 0
     expect(host.el.seekWrites).toEqual([])
 
-    // t=4000: a bare `currentTime` write, which is what a scrubber drag is. The
-    // `seeked` it queues is classified as the user's — no operation is armed —
-    // and leaves through `sendLocalState('seek')`.
+    // t=4000: a scrubber drag. Since #488 it is announced at intent —
+    // `seekAsUser` registers a `value` operation, writes, and leaves through
+    // `sendLocalState('seek')` in the same call — so the `seeked` the write
+    // queues is consumed rather than sent a second time.
     host.userSeek(FIRST_SEEK)
-    await room.advance(0.05)
 
-    // t=4050: the intent is armed at the send, with no attempt spent yet.
+    // Still t=4000: the intent is armed at the send, with no attempt spent yet.
+    // Before #488 this needed one slice, for the `seeked` that carried the send.
     expect(host.seekIntent()).not.toBeNull()
     expect(host.seekIntent()!.attempts).toBe(0)
 
     await room.advance(0.05)
     expect(host.seekIntent()!.attempts).toBe(0)
 
-    // t=4150: the server's forced update lands, the room agrees with us, and
+    // t=4100: the server's forced update lands, the room agrees with us, and
     // `maybeReassertSeek()` spends the intent on the drift test rather than on
     // an attempt.
     await room.advance(0.05)
     expect(host.seekIntent()).toBeNull()
 
-    await room.advance(6)
+    await room.advance(6.05)
 
-    // Propagation: the far element was written once, to our target.
+    // Propagation: the far element was written once, to our target — one link
+    // delay each way after the drag, where it used to be one slice more.
     expect(joiner.el.seekWrites).toHaveLength(1)
-    expect(joiner.el.seekWrites[0]).toBeCloseTo(FIRST_SEEK + 0.15, 2)
+    expect(joiner.el.seekWrites[0]).toBeCloseTo(FIRST_SEEK + 0.1, 2)
 
     // No self-apply: the originator's element carries the drag and nothing else,
     // across ten seconds in which the server broadcast the forced update back to
     // it and then six `doSeek: false` periodics naming it as the setter.
     expect(host.el.seekWrites).toEqual([FIRST_SEEK])
 
-    // And the reason: none of those frames ever reached the host's renderer.
-    // They are all `setBy` the host, so `src/main/syncplay.ts:2146` returns above
-    // the emit — the single guard on this path, which is why this assertion is
-    // the one worth making rather than a claim about the element.
-    expect(host.frames).toEqual([])
+    // And the reason: none of the frames naming the host ever reached the host's
+    // renderer — `src/main/syncplay.ts:2146` returns above the emit for them, the
+    // single guard on this path, which is why this assertion is the one worth
+    // making rather than a claim about the element.
+    //
+    // What does reach it since #488 is four periodics the server re-elected to
+    // the joiner, at t=7050 through t=10050. Announcing at intent put the
+    // joiner's landing exactly one round trip behind the drag, so from t=7000
+    // the two peers report bit-identical positions and the election's tie goes
+    // the joiner's way. They are foreign, so they pass the guard, and they sit
+    // one second inside the 3 s tolerance, so they move nothing — the element
+    // line above is what says so.
+    expect(host.frames.filter((f) => f.state.setBy === 'hostuser')).toEqual([])
+    expect(host.frames.map((f) => f.at)).toEqual([7050, 8050, 9050, 10050])
+    expect(host.frames.every((f) => f.state.setBy === 'joinuser' && !f.state.doSeek)).toBe(true)
 
     // No re-assert, and this is the arm that pins the tolerance from below: one
     // drag the room took produces exactly one `doSeek` frame. The joiner, which
@@ -134,14 +146,16 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // `every()` on an empty array is `true`, so without the pin a harness change
     // that stopped handing the joiner frames at all — a widened drop guard, a
     // rewired observer — would leave the line below green while asserting
-    // nothing. Twelve is what this fixture delivers: the ten 1 Hz periodics of
-    // the run, at t=1050 through t=10050, the forced update at t=4150 that
-    // carried the drag, and — ahead of both — the reference's join-time `State`
-    // at t=50. That one is admitted for the same reason the host's copy of it is
-    // (see the clear above): no election runs inside a fresh room's own election
-    // age, so it carries the `setBy` the room was constructed with and is nobody
-    // here's echo.
-    expect(joiner.frames).toHaveLength(12)
+    // nothing. Eight is what this fixture delivers: the six 1 Hz periodics at
+    // t=1050 through t=6050, the forced update at t=4100 that carried the drag,
+    // and — ahead of both — the reference's join-time `State` at t=50. That one
+    // is admitted for the same reason the host's copy of it is (see the clear
+    // above): no election runs inside a fresh room's own election age, so it
+    // carries the `setBy` the room was constructed with and is nobody here's
+    // echo. Twelve before #488: the periodics from t=7050 on now name the
+    // joiner itself (the tie described above), so its own drop guard takes
+    // them.
+    expect(joiner.frames).toHaveLength(8)
     expect(joiner.frames.every((f) => f.intent === null)).toBe(true)
   })
 
@@ -156,27 +170,30 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // at 800 — the shape `maybeReassertSeek()` exists for. A single drag cannot
     // produce it: the room agrees within one round trip and the intent is spent
     // on the drift test (the case above).
+    //
+    // Both drags are announced at intent (#488), so each leaves in the call that
+    // makes it — t=4000 and t=4050 — one slice earlier than the `seeked`-borne
+    // sends this file was first measured against.
     host.userSeek(FIRST_SEEK)
     await room.advance(0.05)
     host.userSeek(SECOND_SEEK)
-    await room.advance(0.05)
 
-    // t=4100. Both changes are outstanding, so `maybeReassertSeek()` is still
+    // t=4050. Both changes are outstanding, so `maybeReassertSeek()` is still
     // returning at its `pendingClientAck !== 0` gate and the intent is
     // untouched. The two numbers below are the drift test's own operands one
     // link delay early: the room reading here is exactly what the host is handed
-    // at t=4150, and `host.el.currentTime` is what its snapshot reports.
+    // at t=4100, and `host.el.currentTime` is what its snapshot reports.
     const roomInFlight = room.server.roomState().position
     const elementNow = host.el.currentTime
     expect(host.seekIntent()!.attempts).toBe(0)
-    expect(roomInFlight).toBeCloseTo(FIRST_SEEK + 0.2, 1)
-    expect(elementNow).toBeCloseTo(SECOND_SEEK + 0.05, 1)
+    expect(roomInFlight).toBeCloseTo(FIRST_SEEK + 0.1, 1)
+    expect(elementNow).toBe(SECOND_SEEK)
     // Not a tie. #363's review called out a fixture that sat on the tolerance
     // exactly; this disagreement is ~400 s in absolute terms, so the outcome
     // cannot turn on a rounding of either operand.
     expect(Math.abs(elementNow - roomInFlight)).toBeGreaterThan(300)
 
-    // t=4150: the forced update for the *first* drag arrives, clears the ack,
+    // t=4100: the forced update for the *first* drag arrives, clears the ack,
     // and the drift test now runs against a room 400 s behind us. One attempt is
     // spent and a third `doSeek` frame goes out.
     await room.advance(0.05)
@@ -191,7 +208,7 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // this line, or the mutation control would only be re-reading the constant.
     expect(Math.abs(elementNow - roomInFlight)).toBeGreaterThan(SEEK_REASSERT_TOLERANCE_S)
 
-    // t=4200: the forced update for the *second* drag arrives, the room agrees,
+    // t=4150: the forced update for the *second* drag arrives, the room agrees,
     // and the intent is retired rather than re-asserted again. The cap is 3
     // attempts; this run never reaches it because convergence gets there first.
     await room.advance(0.05)
@@ -204,8 +221,8 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     // far element is written three times — once per drag and once for the
     // re-assert — and the last two land on the same target.
     expect(joiner.el.seekWrites).toHaveLength(3)
-    expect(joiner.el.seekWrites[1]).toBeCloseTo(SECOND_SEEK + 0.15, 2)
-    expect(joiner.el.seekWrites[2]).toBeCloseTo(SECOND_SEEK + 0.15, 2)
+    expect(joiner.el.seekWrites[1]).toBeCloseTo(SECOND_SEEK + 0.1, 2)
+    expect(joiner.el.seekWrites[2]).toBeCloseTo(SECOND_SEEK + 0.1, 2)
 
     // Both peers end on the second target, and the originator still applied
     // nothing of its own: two drags in, two writes on its element.

@@ -36,22 +36,18 @@ export function sanitizeFilename(name: string): string {
     .trim()
 }
 
-// Slider seek helpers. Split into "preview" (drag in progress) and "commit"
-// (mouseup) so the video element's `currentTime` is written only once per user
-// gesture instead of once per drag tick. Each `video.currentTime = …` fires a
-// `seeking` event that churns the MSE pipeline, which on Linux/WSL has been
-// observed to cause repeated `readyState=1` stalls and audio dropout (#127).
+// Slider drag preview. The drag only moves the displayed time; the element's
+// `currentTime` is written once, on mouseup, by `PlayerView`'s `onSeekEnd`
+// through `seek()` — the same door as the keys and skip OP/ED, so a Watch
+// Together room hears the drag at intent (#488). Each `video.currentTime = …`
+// fires a `seeking` event that churns the MSE pipeline, which on Linux/WSL has
+// been observed to cause repeated `readyState=1` stalls and audio dropout
+// (#127).
 export function previewSeek(rawValue: string, currentTime: { value: number }): number {
   const time = parseFloat(rawValue)
   if (!isFinite(time)) return currentTime.value
   currentTime.value = time
   return time
-}
-
-export function commitSeek(time: number, video: { currentTime: number } | null | undefined): void {
-  if (!video) return
-  if (!isFinite(time)) return
-  video.currentTime = time
 }
 
 // Seek bounding for `PlayerView.seek()` (#237). `HTMLMediaElement.currentTime`

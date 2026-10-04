@@ -104,11 +104,14 @@ describe('SyncplayClient — RTT compensation across two peers', () => {
     host.userSeek(SEEK_TO)
     await room.advance(1.5)
 
-    // One write, and it is *ahead* of the 900 the user asked for. The 0.05 is
-    // the slice the host's element walked between the write and the `seeked`
-    // that announced it; the 0.5 on top is the flight time.
+    // One write, and it is *ahead* of the 900 the user asked for, by exactly
+    // the 1.0 s the seek spent on the wire — one 500 ms link to the server and
+    // one on to this peer. Since #488 the seek is announced at intent, in the
+    // call that writes it, so it leaves carrying 900 itself; it used to leave on
+    // the `seeked` one slice later, carrying the 0.05 the element had walked in
+    // between (901.05).
     expect(joiner.el.seekWrites).toHaveLength(1)
-    expect(joiner.el.seekWrites[0]).toBeCloseTo(901.05, 6)
+    expect(joiner.el.seekWrites[0]).toBeCloseTo(901, 6)
 
     // Which is the claim, and it is exact rather than approximate: the far
     // element is on the same frame as the seeking element. Uncompensated the two

@@ -19,7 +19,6 @@ import Anime4KMenu from '../player/Anime4KMenu.vue';
 import SyncplayMenu from '../player/SyncplayMenu.vue';
 import {
   previewSeek,
-  commitSeek,
   resolveSeekTarget,
   resolveMkvSpawnTarget,
   sanitizeDuration,
@@ -1571,8 +1570,9 @@ function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): 
 // saved-position resume, the three `savedTime` restores across a source swap,
 // and the two episode-nav rewinds to 0.
 //
-// The user's own paths (`seek()`, the scrubber's `commitSeek`) deliberately do
-// not come here: their `seeked` *is* the intent the room needs to hear.
+// The user's own seek does not come here: `seek()` (scrubber, keys, skip OP/ED)
+// calls `syncplay.seekAsUser`, which registers a strict `value` operation,
+// writes, and announces the seek at intent rather than on its `seeked` (#488).
 //
 // There is no kind to choose, unlike a play: a seek operation writes no intent,
 // it only decides that the resulting `seeked` is not the user's. Whether it is
@@ -1603,7 +1603,7 @@ function seek(time: number): void {
     refDuration: duration.value
   });
   if (target === null) return;
-  video.currentTime = target;
+  syncplay.seekAsUser(target);
 }
 
 function seekRelative(delta: number): void {
@@ -1754,7 +1754,7 @@ function onSeekEnd(): void {
   // Growing .part (#63): don't let the release land beyond the download
   // frontier — snap the preview position back to the clamped target too.
   currentTime.value = growingFile.clampSeekTarget(currentTime.value);
-  commitSeek(currentTime.value, videoRef.value);
+  seek(currentTime.value);
 }
 
 function onSeekMouseMove(e: MouseEvent): void {

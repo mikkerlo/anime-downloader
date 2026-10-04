@@ -103,7 +103,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
 
     // A spectator, which here means a peer whose element will never be worth
     // announcing: `readyState: 0` puts `hasAnnounceablePosition()` below its
-    // floor — `src/renderer/src/composables/use-syncplay-client.ts:813-815`
+    // floor — `src/renderer/src/composables/use-syncplay-client.ts:821-823`
     // ("return (v.readyState ?? 0) >= 1") — so no snapshot is ever pushed to
     // main and `lastSnapshotAt` stays 0. That is what keeps this peer on the
     // mirror exit for the whole run, and it is a gate rather than luck: with no

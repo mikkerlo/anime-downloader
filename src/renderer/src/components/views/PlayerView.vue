@@ -562,7 +562,7 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
-    () => goToEpisode(dir)
+    () => goToEpisode(dir, 'follow')
   );
 }
 
@@ -1821,10 +1821,10 @@ function onAuxMouseDown(e: MouseEvent): void {
 function onPlayerAction(action: PlayerAction): void {
   switch (action) {
     case 'prev-episode':
-      if (canPrev.value) goToEpisode('prev');
+      if (canPrev.value) goToEpisode('prev', 'local');
       break;
     case 'next-episode':
-      if (canNext.value) goToEpisode('next');
+      if (canNext.value) goToEpisode('next', 'local');
       break;
     case 'shader-mode-a':
       selectPreset('mode-a');
@@ -2258,7 +2258,14 @@ async function fetchEpisodeWindowTranslations(
   return fetchedTranslations.get(props.allEpisodes[targetIndex].id) || [];
 }
 
-async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutcome> {
+// `origin` says who started the move (#486): `'follow'` only from
+// `handleRemoteEpisodeChange`'s walk, `'local'` from every user-driven caller.
+// It rides the file push this step's index commit triggers, and main forces
+// the room to 0 for `'local'` only.
+async function goToEpisode(
+  direction: 'prev' | 'next',
+  origin: SyncplayEpisodeSwitch
+): Promise<EpisodeStepOutcome> {
   const targetIndex =
     direction === 'prev' ? activeEpisodeIndex.value - 1 : activeEpisodeIndex.value + 1;
   // Off the end of the list (#419). `unreachable`, not a third kind of "no" —
@@ -2371,6 +2378,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutco
 
     // Update episode state
     committed = true;
+    syncplay.markEpisodeSwitch(origin);
     activeEpisodeIndex.value = targetIndex;
     activeEpisodeLabel.value = targetEp.episodeInt;
     activeTranslations.value = targetTranslations;
@@ -2444,6 +2452,8 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutco
           if (navigationEpoch !== myNav) return 'moved';
           if (!prep.ok) {
             reportPrepareError(prep);
+            // No new source will reach `loadedmetadata` (#486).
+            syncplay.endEpisodeSwitchHold();
             // As in `selectTranslation` (#291). Skipping this unconditionally
             // on a superseded unwind would leave `navigating` true forever
             // whenever the superseder was a `selectTranslation` — nothing
@@ -2497,6 +2507,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutco
     if (navigationEpoch !== myNav) return 'moved';
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;
+      syncplay.endEpisodeSwitchHold();
       // The other arm this issue makes audible (#419). Until now this returned
       // with the episode label and translation list already pointed at the new
       // episode and no source behind them — a blank player and no message. It is
@@ -2538,6 +2549,7 @@ async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutco
     // guarded clear #302's classifier expects at a post-resume site.
     if (navigationEpoch !== myNav) return 'superseded';
     if (navigationEpoch === myNav) navigating.value = false;
+    if (committed) syncplay.endEpisodeSwitchHold();
     if (unmounted) return committed ? 'moved' : 'superseded';
     // A throw below the index write is a #354-shaped failure of the SOURCE, with
     // the UI already switched — so `moved`, and the walk keeps going. Above it,
@@ -2564,7 +2576,7 @@ function onVideoEnded(): void {
     autoAdvanceCountdown.value--;
     if (autoAdvanceCountdown.value <= 0) {
       cancelAutoAdvance();
-      goToEpisode('next');
+      goToEpisode('next', 'local');
     }
   }, 1000);
 }
@@ -3024,6 +3036,7 @@ const bufferedProgress = computed(() => {
         @seeked="onVideoSeekedAll"
         @loadstart="onLoadStart"
         @loadedmetadata="syncplay.onVideoLoadedMetadata"
+        @error="syncplay.endEpisodeSwitchHold"
         @timeupdate="onTimeUpdate"
         @durationchange="onDurationChange"
         @progress="onProgress"
@@ -3144,7 +3157,7 @@ const bufferedProgress = computed(() => {
             v-if="props.allEpisodes.length > 1"
             direction="prev"
             :disabled="!canPrev || navigating"
-            @nav="goToEpisode('prev')"
+            @nav="goToEpisode('prev', 'local')"
           />
 
           <!-- Play/Pause -->
@@ -3162,7 +3175,7 @@ const bufferedProgress = computed(() => {
             v-if="props.allEpisodes.length > 1"
             direction="next"
             :disabled="!canNext || navigating"
-            @nav="goToEpisode('next')"
+            @nav="goToEpisode('next', 'local')"
           />
 
           <!-- Volume -->

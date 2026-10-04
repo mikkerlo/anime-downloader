@@ -277,7 +277,7 @@ describe('two-peer syncplay harness', () => {
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
     // `readyState` 0, which is what `hasAnnounceablePosition()`
-    // (`src/renderer/src/composables/use-syncplay-client.ts:770`) and
+    // (`src/renderer/src/composables/use-syncplay-client.ts:813`) and
     // `onLocalPause`'s own `readyState > 0` conjunct are both reading.
     //
     // Before the fix this read `[['pause', 'loadedmetadata'], []]` with
@@ -358,9 +358,10 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-adoption.test.ts:320` run under their own
     // `syncplay-two-peer-adoption.test.ts:119 ("bindGapMs: 30_000")` and
     // `syncplay-two-peer-adoption.test.ts:309 ("bindGapMs: 30_000")` seats, the
-    // case above seats 0, and nine of the ten `goToEpisode` call sites across
-    // the suite rebind a switcher that was seated on a literal — the tenth is
-    // the rejection guard below, which never reaches `reload()` at all — so the
+    // case above seats 0, and when this case was written nine of the ten
+    // `goToEpisode` call sites across the suite rebound a switcher that was
+    // seated on a literal — the tenth is the rejection guard below, which never
+    // reaches `reload()` at all — so the
     // fallback at
     // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
@@ -381,14 +382,16 @@ describe('two-peer syncplay harness', () => {
     // "Reload site" rather than "seat", because the two populations differ and
     // only the first one can observe the fallback. Plenty of seats take the
     // `?? 500` silently — `seatSwitchScenario`'s joiner below passes no
-    // `bindGapMs`, and neither does the innocent peer in
+    // `bindGapMs`, and neither does the second peer in
     // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
     // the adoption file's switch fixture. All of them are inert, for one
     // reason: `bindGapMs` is read in exactly one place,
     // `test/helpers/syncplay-two-peer.ts:393 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
     // inside `HarnessVideo.reload()`, and a peer that never reloads never
     // reaches it. So the value they inherit is unobservable rather than
-    // pinned, and moving the default cannot red them.
+    // pinned, and moving the default cannot red them. #486 added the first
+    // exception: its follower, both-press and chained cases switch the second
+    // peer too, on the default, so those sites do observe it.
     //
     // Both counts in this file are the same kind of thing and rot together:
     // this one and the guard census in the block comment above the first guard
@@ -407,8 +410,10 @@ describe('two-peer syncplay harness', () => {
     // *third* of three 200 ms steps is what says the gap outlived a step it was
     // given the chance to beat. The case therefore holds for a gap in (400, 600]
     // and reds on both sides: on a revert to the old `0` default, and on any
-    // `k >= 2` one — 3000 is `k = 3`, mid-drag, the regime where #360 pulls the
-    // non-switching peer backwards.
+    // `k >= 2` one — 3000 is `k = 3`, which was mid-drag, the regime where #360
+    // pulled the non-switching peer backwards. #486's forced seek to 0 retired
+    // that drag at every gap, so the band now holds the default where the
+    // suite's numbers were measured rather than out of a regime.
     const el = new HarnessVideo({ position: 100, paused: false })
     el.reload('harness://ep-8')
 
@@ -432,7 +437,7 @@ describe('two-peer syncplay harness', () => {
    * The log is built **here rather than in the helper**, and by wrapping the
    * *method* rather than replacing the handle: the composable resolves its
    * bridge once, at setup, and never re-reads it
-   * (`src/renderer/src/composables/use-syncplay-client.ts:270` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
+   * (`src/renderer/src/composables/use-syncplay-client.ts:277` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
    * `peer.api = {…}` would hand the wrapper to nobody and leave a green case
    * sampling an empty array. Writing one property on the retained object is
    * seen, because the push site reads `api.syncplaySetFile` at call time.
@@ -484,11 +489,11 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2374` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2382` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
-    // (`src/renderer/src/composables/use-syncplay-client.ts:1882`) is a default
+    // (`src/renderer/src/composables/use-syncplay-client.ts:1928`) is a default
     // **pre-flush** `watch`, so Vue's scheduler runs it inside that suspension —
     // against the element still bound to the *old* episode, at HAVE_METADATA.
     // The helper had no suspension, so the watcher only ever ran after
@@ -511,7 +516,7 @@ describe('two-peer syncplay harness', () => {
     // the watcher's other three calls (`clearPendingUserPause()`,
     // `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()`) touch no
     // element at all; the push's own duration read is
-    // `src/renderer/src/composables/use-syncplay-client.ts:721` ("const dur =
+    // `src/renderer/src/composables/use-syncplay-client.ts:733` ("const dur =
     // deps.getVideoEl()?.duration || deps.getDuration() || 0") and `reload()`
     // never writes `duration`, so it is identical in all three; both forms send
     // inside the same 50 ms slice at the same `Date.now()`, so neither the wire
@@ -525,10 +530,10 @@ describe('two-peer syncplay harness', () => {
 
     // The wrapper fired — see `seatSwitchScenario`'s note on why this is not a
     // formality — and it fired once: the transition-into-ready push
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2182`, the
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2233`, the
     // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
     // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2305 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2356 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
     // inside `onMounted`) are both spent by the `advance(4)` above, so this one
     // is the watcher's. Each anchor carries the construct it lands in because
     // the two were paired the wrong way round here until #384, and nothing
@@ -552,68 +557,14 @@ describe('two-peer syncplay harness', () => {
     expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
     expect(switcher.el.readyStates).toEqual([1, 0, 1])
     expect(switcher.el.seekWrites).toHaveLength(1)
-    // Both numbers below moved by exactly one second at #384's Half B, and what
-    // moved them is *when the playheads start* rather than any arithmetic about
-    // the switch. `MinElectionServer` now answers a `Hello` with a join-time
-    // `State` as well
-    // (`test/helpers/syncplay-min-election-server.ts:799` ("const joined = this.watchers.get(username)")),
-    // so the first `State` either element ever sees is that one, arriving 50 ms
-    // after the seat, where it used to be the room's periodic tick arriving at
-    // 1050 ms. Both figures are arrivals rather than sends, and the trace below
-    // is what makes that the distinction to quote: the arrival is the event that
-    // moves an element.
-    //
-    // The construction is the opposite of what it looks like, so it is written
-    // out rather than left to be re-derived. `HarnessVideo` is built **unpaused**
-    // here — `seatSwitchScenario` passes `paused: false` — and *production* is
-    // what pauses it before `seat()` returns: the readiness gate's
-    // `src/renderer/src/composables/use-syncplay-client.ts:1260` ("v.pause()"),
-    // under the `!shouldPlay && !v.paused` guard at `use-syncplay-client.ts:1258`,
-    // reached from the `watch(syncplayRoomUsers, …)` call at
-    // `src/renderer/src/composables/use-syncplay-client.ts:2296` ("applySyncplayReadyGate()").
-    // At the instant each seat returns, both elements read `paused === true` at
-    // their seeded 300 with an empty `seekWrites` — on both variants, and the
-    // pause lands at t = 0, inside the seat rather than after it. Measured per
-    // element it is one *effective* pause reached by several raw `pause()` calls
-    // — four on the switcher and two on the joiner with the join-time `State`,
-    // eight and four without it, the extra ones at 50 ms — which is
-    // `HarnessVideo.pause()` being idempotent, not several pauses.
-    //
-    // The first `State` then **un-pauses** that element and does not seek it,
-    // and the difference matters because a seek would produce a one-second
-    // family of numbers too. The `play()` is in `applyRemoteStateToElement`, at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1698` ("v.play().catch(() => op.retract())");
-    // the frame carries `doSeek: false`; the element keeps its own 300 rather
-    // than taking the frame's position; and neither peer takes a single
-    // `currentTime` write, on either variant — traced every 50 ms through
-    // 1200 ms and read again at 2000 ms and at the 4000 ms switch instant, with
-    // exactly **one** `play()` call and zero writes on each element throughout,
-    // differing only in when that call lands.
-    // So the playhead starts walking when the first `State` lands, which the
-    // per-slice trace reads off directly: the un-pause lands at 50 ms with the
-    // join-time `State` and at 1050 ms without it, and at each of those two
-    // samples the position still reads exactly 300 — the first *moved* reading
-    // is one slice later either way, 300.05 at 100 ms against 300.05 at
-    // 1100 ms, and without the frame the flat run at 300 covers every sample
-    // from 50 ms through 1000 ms. One extra second of walking, so every position
-    // gains 1.000 s.
-    //
-    // Nothing else about the switch moved, which is why this is a renumber and
-    // not a scenario change: still exactly one write, still the single frame the
-    // rebind applies, and at the assertion instant — `room.elapsed()` 10000, the
-    // 4 s seat plus this case's `advance(6)` — the room still trails the
-    // switcher's own playhead by the same 1.0 s, on both variants and to the last
-    // digit. The frame and the write want separate timestamps, because they are
-    // 450 ms apart rather than simultaneous: the frame arrives at 4050 ms
-    // carrying 302.9999999523163 against an element the reload has already taken
-    // to HAVE_NOTHING, and the apply lands with `loadedmetadata` at 4500 ms
-    // (`bindGapMs: 500`) — which is where the one `currentTime` write and the
-    // element's only paused → playing flip of the whole post-switch window both
-    // happen. So the shift is bit-for-bit — the write was 301.9999999523163 and
-    // is 302.9999999523163, the room was 306.4999999523163 and is
-    // 307.4999999523163, both deltas exactly 1 with the float noise unchanged.
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
-    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
+    // Since #486 the switch forces the room to 0, so the one write is the room's
+    // ~0.1 applied at `loadedmetadata`, and the room reads 4.6 at this instant
+    // (`room.elapsed()` 10000). Until #486 these were 303 — the previous
+    // episode's position, #360's defect — and 307.5, and the explanation of how
+    // the join-time `State` set them is in this file's history; none of it
+    // bears on a room that is forced to 0 at the switch.
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(0.1, 2)
+    expect(room.server.roomState().position).toBeCloseTo(4.6, 1)
   })
 
   it('is additive at suspendMs = 0 — the same push and the same switch footprint', async () => {
@@ -622,10 +573,9 @@ describe('two-peer syncplay harness', () => {
     // below is copied from the case above on purpose — the claim is that the two
     // calls are indistinguishable, so a divergence has to red one of them.
     //
-    // That includes the two figures #384's Half B moved a second: they are
-    // copied down from the case above, for the reason written out there, rather
-    // than re-derived here. A divergence between the two sets is exactly the red
-    // this pairing exists to produce.
+    // That includes the two figures #486 moved onto the new episode: they are
+    // copied down from the case above rather than re-derived here. A divergence
+    // between the two sets is exactly the red this pairing exists to produce.
     room = await createTwoPeerRoom({ position: 300, paused: false })
     const { switcher, pushes } = await seatSwitchScenario()
 
@@ -638,8 +588,8 @@ describe('two-peer syncplay harness', () => {
     expect(switcher.el.loads).toEqual(['harness://initial', 'harness://hostuser/ep-8'])
     expect(switcher.el.readyStates).toEqual([1, 0, 1])
     expect(switcher.el.seekWrites).toHaveLength(1)
-    expect(switcher.el.seekWrites[0]).toBeCloseTo(303, 2)
-    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
+    expect(switcher.el.seekWrites[0]).toBeCloseTo(0.1, 2)
+    expect(room.server.roomState().position).toBeCloseTo(4.6, 1)
   })
 
   it('keeps the switcher on the old episode for the whole of a non-zero suspension', async () => {
@@ -770,7 +720,7 @@ describe('two-peer syncplay harness', () => {
 // — a different function, called un-awaited on purpose at
 // `src/renderer/src/components/views/PlayerView.vue:1824`,
 // `src/renderer/src/components/views/PlayerView.vue:1827` and
-// `src/renderer/src/components/views/PlayerView.vue:2567`.
+// `src/renderer/src/components/views/PlayerView.vue:2579`.
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 
 const SIBLING_PREFIX = 'syncplay-two-peer-'
@@ -788,24 +738,14 @@ const CALL_NEEDLE = 'goToEpisode('
  * this guard added any of its own. On trunk `f33fac1d`, three of the thirteen
  * raw matches were not call sites: two prose mentions in
  * `syncplay-two-peer-episode-change.test.ts`, and
- * `test/services/syncplay-two-peer-loop.test.ts:726` is the expected
+ * `test/services/syncplay-two-peer-loop.test.ts:676` is the expected
  * error string of the rejection guard whose call site on the line *above* it
  * must stay counted. That adjacency is the sharpest single test of this pass.
  *
- * **The two prose mentions are cited at where they are now, not where
- * `f33fac1d` had them**, and "those two numbers are historical" is withdrawn as
- * a description of them. It was never true of the anchors as written: they are
- * live `path:line` pairs, `scripts/check-line-citations.mjs` drift-checks them
- * against the PR base, and it reds when the cited content moves — which it did
- * twice in #360's characterisation round, as that file grew by some 570 lines.
- * They are marked with their quoted text now so the quote verifier checks them,
- * because a bare anchor that has drifted by a few lines still passes the drift
- * pass green and so retargets silently:
- * `test/services/syncplay-two-peer-episode-change.test.ts:504` ("that rebound the
- * element without flushing the index bump") and
- * `test/services/syncplay-two-peer-episode-change.test.ts:822` ("where this read
- * was 0.05 before #384 made").
- * What *is* historical, and is pinned nowhere on purpose, is the count: this
+ * The two prose mentions went with #486's rewrite of that file, which replaced
+ * its characterisation pins with guards; until then they were cited here as
+ * live, quote-marked anchors. What is historical, and is pinned nowhere on
+ * purpose, is the count: this
  * docstring and the failure message below name the call often enough that the
  * live raw count is now well above 13, which is exactly why `RAW_CENSUS` is
  * reported and never asserted.
@@ -819,11 +759,11 @@ const CALL_NEEDLE = 'goToEpisode('
  * comment, and that is not a refinement — it decides the number. The glob
  * carries 16 `harness://` string literals — the mention on this line is prose,
  * not a seventeenth — at
- * `test/services/syncplay-two-peer-loop.test.ts:552`,
- * `test/services/syncplay-two-peer-loop.test.ts:638`,
- * `test/services/syncplay-two-peer-loop.test.ts:686`,
+ * `test/services/syncplay-two-peer-loop.test.ts:557`,
+ * `test/services/syncplay-two-peer-loop.test.ts:588`,
+ * `test/services/syncplay-two-peer-loop.test.ts:636`,
  * `test/services/syncplay-two-peer-adoption.test.ts:325`,
- * `test/services/syncplay-two-peer-adoption.test.ts:425` and elsewhere. A
+ * `test/services/syncplay-two-peer-adoption.test.ts:424` and elsewhere. A
  * quote-unaware `//` rule truncates `toEqual(['harness:` mid-expression and
  * leaves an unterminated quote that the string pass then swallows forward across
  * real call sites: measured on this tree, that variant reports 8 rather than 10
@@ -938,23 +878,31 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 //
 // **Re-derived again on that round's review: `episode-change` 9 → 10.** The
 // 6500/7500 pair that pins
-// `src/main/syncplay.ts:903` ("this.playbackAdopted = false") firing on a
+// `src/main/syncplay.ts:952` ("this.playbackAdopted = false") firing on a
 // clean comb cell drives two more switches from one new local helper
 // (`latchAcrossRelease`), so the sites rose
 // by one where the switches rose by two. The review that asked for the pair
 // predicted 11, or 10 on one helper; 10 is what one helper measures, and the
 // number is re-derived here rather than the pin widened to admit either.
+//
+// **Re-derived for #486: `episode-change` 10 → 11, `ignore-counters` 0 → 4.**
+// #486 replaced the characterisation round with guards: one parametrised sweep
+// site, the MKV-seed, ownership and re-push cases, and the follower, both-press,
+// paused and chained cases, where the second peer switches too (follow sites pass
+// `'follow'` as the fourth argument). `ignore-counters` enters the map with the
+// crossing cases. Every new site is awaited.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
-  'episode-change': 10,
+  'episode-change': 11,
+  'ignore-counters': 4,
   loop: 4
 }
 
 // The text between `await` and the call, anchored to end at the call. The member
-// chain is deliberately unconstrained: none of the ten sites reads `await
-// goToEpisode(` verbatim, and they do not share one receiver either — five are
-// `await switcher.`, one is `await host.`, two are `await even.switcher.` and
-// `await odd.switcher.`, and the rejection guard is wrapped in `await expect(`.
+// chain is deliberately unconstrained: no site reads `await goToEpisode(`
+// verbatim, and they do not share one receiver either — `await switcher.`,
+// `await other.`, `await host.`, `await joiner.`, and the rejection guard is
+// wrapped in `await expect(`.
 // Hardcoding any one of those reds the other shapes, so the rule is `await` plus
 // a chain rather than `await` plus a name.
 //

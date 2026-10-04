@@ -274,7 +274,7 @@ export class HarnessVideo {
   /** True while a write is in flight, the way a real element reports it through
    *  the whole of the capture in #368. Nothing reads it yet: the outbound
    *  announceability door is `readyState` alone
-   *  (`use-syncplay-client.ts:770`), which is exactly why a mid-seek element at
+   *  (`use-syncplay-client.ts:813`), which is exactly why a mid-seek element at
    *  `readyState` 1 gets into the election holding a position it has no data
    *  for. Any fix on that door gates on this, and a harness that could not say
    *  `seeking` could not express the fix.
@@ -361,7 +361,7 @@ export class HarnessVideo {
    *  - a playing element is paused and a `pause` task is queued. Not incidental
    *    either: that pause is delivered while the element still reports
    *    HAVE_NOTHING, where `hasAnnounceablePosition()`
-   *    (`use-syncplay-client.ts:770`) drops it before it can reach the wire and
+   *    (`use-syncplay-client.ts:813`) drops it before it can reach the wire and
    *    `onLocalPause`'s `readyState > 0` conjunct keeps it from arming the
    *    pending user pause. An element that reloaded without queuing one would
    *    leave both guards unobserved.
@@ -372,7 +372,7 @@ export class HarnessVideo {
    *
    * What this is deliberately *not* is a new element. A real episode change
    * rebinds the same `<video>`, which is why `newPlayer` exists on the file push
-   * at all (`src/main/syncplay.ts:743`) and why the harness keeps one object
+   * at all (`src/main/syncplay.ts:751`) and why the harness keeps one object
    * here: a fixture that swapped the element out would be testing a mount, and
    * the mount is the case main can already see.
    */
@@ -486,7 +486,7 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
 export interface IgnoreCounters {
   /** Bumped once per *discrete* change the client originates, and by nothing
    *  else. Monotonic within a connection: `resetTransportState()` zeroes it
-   *  with the other two (`src/main/syncplay.ts:1071-1073`). */
+   *  with the other two (`src/main/syncplay.ts:1120-1122`). */
   clientIgnoreCounter: number
   /** The counter of our newest outstanding change, or 0. */
   pendingClientAck: number
@@ -534,17 +534,17 @@ export interface Peer {
    *
    *  Read here for the same reason as `seekIntent()` and `counters()`: it is
    *  private, it is projected onto nothing — `SyncplayStatus` carries
-   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:596`)
+   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:604`)
    *  and so cannot separate "not adopted" from the other two terms — and the
    *  seven writers are what #360's gap axis turns on. A fixture that inferred it
    *  from the wire would be asserting against its own reading of
    *  `buildPlaystate()` rather than against the latch: the mirror/assert
    *  distinction a wire frame carries is
-   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2410`), so a
+   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2462`), so a
    *  mirror frame is evidence of the conjunction and not of either half.
    *
    *  **Sampled, not latched.** `isAdopted()` is a mutator — it writes `true` at
-   *  `src/main/syncplay.ts:2632` and `src/main/syncplay.ts:2642` — and the
+   *  `src/main/syncplay.ts:2684` and `src/main/syncplay.ts:2694` — and the
    *  heartbeat calls it once a second, so a read taken a second late sees the
    *  re-latch rather than the de-adoption that preceded it. Read it in the slice
    *  you mean. */
@@ -589,11 +589,11 @@ export interface Peer {
    * pass one to pin an exact `v.src` an assertion reads back.
    *
    * **Await it.** The index write is flushed before the rebind, because that is
-   * the order the app runs them in: `PlayerView.vue:2374` writes
+   * the order the app runs them in: `PlayerView.vue:2382` writes
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
-   * (`src/renderer/src/composables/use-syncplay-client.ts:1882`) runs against
+   * (`src/renderer/src/composables/use-syncplay-client.ts:1928`) runs against
    * the element still bound to the **old** episode. Without the flush the
    * watcher only ever saw an element `reload()` had already dropped to
    * HAVE_NOTHING. A forgotten `await` at a call site is a silent mis-sequence
@@ -616,8 +616,17 @@ export interface Peer {
    * the element still on the old source. Leaving it to `advance()` would put
    * the throw after the switch had already been announced, and a case that
    * catches the rejection would then be asserting against a half-switched peer.
+   *
+   * `origin` is what `PlayerView.goToEpisode` hands `markEpisodeSwitch()` right
+   * before its index commit (#486): `'local'`, the default, for a press,
+   * `'follow'` for a step of `handleRemoteEpisodeChange`'s walk.
    */
-  goToEpisode(episodeInt: string, src?: string, suspendMs?: number): Promise<void>
+  goToEpisode(
+    episodeInt: string,
+    src?: string,
+    suspendMs?: number,
+    origin?: SyncplayEpisodeSwitch
+  ): Promise<void>
   /** Deliver whatever the element has queued, into the composable. */
   tick(): void
   unmount(): void
@@ -909,7 +918,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
         if (event === 'seeked') ui!.onVideoSeeked()
         else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
-        // `src/renderer/src/components/views/PlayerView.vue:3026` is the
+        // `src/renderer/src/components/views/PlayerView.vue:3038` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
         else ui!.onVideoLoadedMetadata()
       }
@@ -939,7 +948,12 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       userPause: () => {
         el.pause()
       },
-      goToEpisode: async (ep: string, src?: string, suspendMs = 0) => {
+      goToEpisode: async (
+        ep: string,
+        src?: string,
+        suspendMs = 0,
+        origin: SyncplayEpisodeSwitch = 'local'
+      ) => {
         // Validated *before* anything is written, so a bad `suspendMs` is a
         // no-op rather than a half-switched room. Letting `advance()` reject it
         // further down would be too late: `episodeInt`, the index bump and the
@@ -960,6 +974,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
           )
         }
         episodeInt = ep
+        ui!.markEpisodeSwitch(origin)
         activeEpisodeIndex.value += 1
         // The flush is the whole point, not tidiness: the composable's
         // episode-change watcher is a pre-flush `watch`, so it is *queued* by

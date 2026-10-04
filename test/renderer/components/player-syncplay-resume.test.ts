@@ -410,7 +410,7 @@ function loadPlayProgrammatically(syncplay: unknown): PlayHelper {
 
 function selectTranslationBody(): string {
   const start = SOURCE.indexOf('async function selectTranslation(')
-  const end = SOURCE.indexOf("async function goToEpisode(direction: 'prev' | 'next')")
+  const end = SOURCE.indexOf('async function goToEpisode(\n')
   expect(start).toBeGreaterThan(-1)
   expect(end).toBeGreaterThan(start)
   return SOURCE.slice(start, end)

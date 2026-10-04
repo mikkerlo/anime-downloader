@@ -888,7 +888,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
       slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
     )
     expect(handler).toContain('void walkEpisodeSteps(')
-    expect(handler).toContain('() => goToEpisode(dir)')
+    expect(handler).toContain("() => goToEpisode(dir, 'follow')")
     // The loop itself is gone from the component — the break-on-outcome rule
     // lives in `walkEpisodeSteps` (see `test/renderer/utils.test.ts`), where it
     // is reachable by a real unit test instead of only by a source scan.
@@ -897,7 +897,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `Promise<void>` signature here would type-error, but a scan is what keeps
     // the claim visible next to the walk it protects.
     expect(SRC).toContain(
-      "async function goToEpisode(direction: 'prev' | 'next'): Promise<EpisodeStepOutcome> {"
+      "async function goToEpisode(\n  direction: 'prev' | 'next',\n  origin: SyncplayEpisodeSwitch\n): Promise<EpisodeStepOutcome> {"
     )
   })
 })
@@ -1728,8 +1728,11 @@ describe('#419 review — the ladder reaches the toast arms and the on-demand fe
     expect(bail).toBeLessThan(arm.indexOf(TOAST))
     // And `committed` means what the outcome claims it does: set immediately
     // above the index write, so "committed" and "the index reached the target"
-    // cannot come apart.
-    expect(GO_TO).toContain('committed = true;\n    activeEpisodeIndex.value = targetIndex;')
+    // cannot come apart. The one statement between them is #486's synchronous
+    // episode-switch mark, which has to sit directly on the commit it describes.
+    expect(GO_TO).toContain(
+      'committed = true;\n    syncplay.markEpisodeSwitch(origin);\n    activeEpisodeIndex.value = targetIndex;'
+    )
   })
 
   // #280's ladder is sliced per flow, and this network call is the one that sits
@@ -1956,7 +1959,8 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
   // side only). The listener total is pinned too: the element carried 13 before
   // this change, and an accidental removal that swaps in some other listener
   // would hold the count while breaking the binding, so both are asserted.
-  it('exposes loadstart in the compiled <video> listener table, 14 handlers in all', () => {
+  // #486 added `error` (the episode switch's snapshot-hold release), so 15.
+  it('exposes loadstart in the compiled <video> listener table, 15 handlers in all', () => {
     const { descriptor, errors } = parse(readFileSync(PLAYER_VIEW, 'utf8'), {
       filename: PLAYER_VIEW
     })
@@ -1976,8 +1980,9 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
       .filter((p) => p.type === 7 && (p as { name: string }).name === 'on')
       .map((p) => (p as { arg?: { content?: string } }).arg?.content)
 
-    expect(handlers).toHaveLength(14)
+    expect(handlers).toHaveLength(15)
     expect(handlers).toContain('loadstart')
+    expect(handlers).toContain('error')
 
     const loadstart = videos[0].props.find(
       (p) =>
@@ -1986,6 +1991,16 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
         (p as { arg?: { content?: string } }).arg?.content === 'loadstart'
     )
     expect((loadstart as { exp?: { content?: string } }).exp?.content).toBe('onLoadStart')
+
+    const error = videos[0].props.find(
+      (p) =>
+        p.type === 7 &&
+        (p as { name: string }).name === 'on' &&
+        (p as { arg?: { content?: string } }).arg?.content === 'error'
+    )
+    expect((error as { exp?: { content?: string } }).exp?.content).toBe(
+      'syncplay.endEpisodeSwitchHold'
+    )
   })
 
   it('calls seedPlayingEpisode exactly once, from inside onMounted', () => {
@@ -2017,5 +2032,41 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
     // unseeded on a resumed continuation (#280's rule, same reason).
     expect(seed).toBeLessThan(firstAwait)
     expect(seed).toBeLessThan(directResume)
+  })
+})
+
+describe('#486 — who started an episode change, and the hold every failure arm releases', () => {
+  // Main forces the room to 0 only for `'local'`, so a user-driven caller that
+  // passed `'follow'` would leave the room on the old episode's number, and a
+  // walk step that passed `'local'` would rewind the presser who is already
+  // playing the new episode from 0. Read over the whole SFC because the nav
+  // buttons call from the template.
+  it("passes 'follow' from the remote walk alone, and 'local' from every other caller", () => {
+    // `[^)\n]` keeps the multi-line declaration out of the census.
+    const calls = [...SOURCE.matchAll(/goToEpisode\(([^)\n]*)\)/g)].map((m) => m[1])
+    expect(calls).toEqual([
+      "dir, 'follow'",
+      "'prev', 'local'",
+      "'next', 'local'",
+      "'next', 'local'",
+      "'prev', 'local'",
+      "'next', 'local'"
+    ])
+  })
+
+  // A source that never reaches `loadedmetadata` has to release the snapshot
+  // hold some other way, or a dead episode silences this peer's snapshots for
+  // the rest of the mount: the prepare failure, the no-source arm, and the
+  // throw below the index write.
+  it('releases the snapshot hold on each of goToEpisode’s failure arms', () => {
+    const goTo = stripComments(
+      slice('async function goToEpisode(', '\nfunction cancelAutoAdvance(')
+    )
+    expect(goTo.split('syncplay.endEpisodeSwitchHold();').length - 1).toBe(3)
+    expect(goTo).toContain('if (committed) syncplay.endEpisodeSwitchHold();')
+    expect(goTo).toMatch(/reportPrepareError\(prep\);\s*syncplay\.endEpisodeSwitchHold\(\);/)
+    expect(goTo).toMatch(
+      /if \(!result\) \{\s*if \(navigationEpoch === myNav\) navigating\.value = false;\s*syncplay\.endEpisodeSwitchHold\(\);/
+    )
   })
 })

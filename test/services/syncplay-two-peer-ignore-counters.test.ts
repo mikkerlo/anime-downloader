@@ -8,13 +8,13 @@
 // and 50 ms hops, so the window in which a change of ours is outstanding is a
 // real interval with real frames arriving inside it.
 //
-// The three private fields (`src/main/syncplay.ts:475-477`):
+// The three private fields (`src/main/syncplay.ts:483-485`):
 //
 //  - `clientIgnoreCounter` — monotonic, bumped once per *discrete* change we
 //    originate. Heartbeats, acks and seek re-asserts do not touch it.
 //  - `pendingClientAck` — the counter of our newest outstanding change, or 0.
 //    While it is non-zero `handleState` drops every inbound state
-//    (`src/main/syncplay.ts:2098`).
+//    (`src/main/syncplay.ts:2147`).
 //  - `pendingServerAck` — the server counter we owe an answer for.
 //
 // ── Two things this harness cannot show, stated rather than worked around ────
@@ -28,16 +28,16 @@
 //    they are not evidence the counter was ever set. They are not inert either,
 //    and the distinction matters to anyone tempted to drop the field from the
 //    triple: stub out the `this.pendingServerAck = 0` in `sendAck()`
-//    (`src/main/syncplay.ts:2791`) so the counter latches instead of being spent,
+//    (`src/main/syncplay.ts:2843`) so the counter latches instead of being spent,
 //    and two cases below go red on the triple — the clean round trip and the
 //    crossing case, each reading `pendingServerAck: 1`. What the zeros pin is
 //    "cleared before every boundary", i.e. the counter never latches, which is a
 //    different regression class from "it was set at some point".
-//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1793`)
+//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1842`)
 //    is unreachable here.** `MinElectionServer` never writes a `client` key —
 //    the reference only writes one when its own counter is truthy
 //    (`protocols.py:758-760`) — so on this link `pendingClientAck` is only ever
-//    cleared by the unconditional zero at `src/main/syncplay.ts:1782`. That is
+//    cleared by the unconditional zero at `src/main/syncplay.ts:1831`. That is
 //    the path the comment there calls the "~1 RTT of lost echo protection", and
 //    the third case below is what it costs.
 
@@ -163,7 +163,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     })
 
     // t=4150. The forced update for the *first* drag arrives — counter 1, not 2
-    // — and closes the window anyway: `src/main/syncplay.ts:1782` zeroes
+    // — and closes the window anyway: `src/main/syncplay.ts:1831` zeroes
     // `pendingClientAck` unconditionally rather than comparing it. The second
     // drag is still in flight at this instant.
     await room.advance(0.05)
@@ -212,7 +212,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // t=4100. The joiner's `doSeek` forced update reaches the host. Our pause is
     // still on the wire — its own echo is 50 ms away — yet the window is closed
     // and the frame is delivered rather than dropped. That is the trade-off the
-    // comment above `src/main/syncplay.ts:1782` names: without that zero the
+    // comment above `src/main/syncplay.ts:1831` names: without that zero the
     // peer's seek would die at the drop guard, and a forced State is one-shot,
     // so the room would silently revert it.
     await room.advance(0.05)
@@ -225,7 +225,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // a slice *before* our press is classified, so the window is not open yet
     // and it is foreign — #384's join-time State moved the 4000 election from us
     // (`hostuser` by 49 ms) to the joiner (by 951 ms), so this periodic no longer
-    // dies at `src/main/syncplay.ts:2097`. It moves nothing: |102.049 − 103.95|
+    // dies at `src/main/syncplay.ts:2146`. It moves nothing: |102.049 − 103.95|
     // < 3, so the renderer applies no seek.
     expect(host.frames).toHaveLength(2)
     expect(host.frames[0].at).toBe(4050)
@@ -239,7 +239,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     expect(host.el.seekWrites[0]).toBeCloseTo(700.1, 1)
 
     // Our own echo, arriving a slice later, adds nothing — it is `setBy` us and
-    // dies at `src/main/syncplay.ts:2097`. One delivered frame for the crossing,
+    // dies at `src/main/syncplay.ts:2146`. One delivered frame for the crossing,
     // beside the pre-window periodic, and nothing more.
     await room.advance(0.05)
     expect(host.frames).toHaveLength(2)
@@ -252,7 +252,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // watcher onto one position, and a tied election falls back to the
     // first-inserted watcher. That keeps the host's inbound periodics
     // *foreign*-`setBy` on both sides of the window, which is what makes the gap
-    // below attributable to the ack rather than to `src/main/syncplay.ts:2097`.
+    // below attributable to the ack rather than to `src/main/syncplay.ts:2146`.
     const joiner = await room.seat({
       username: 'joinuser',
       position: ROOM_START - 2,
@@ -286,8 +286,8 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // broadcast onward — visible as the frame that would land at 7500 going
     // missing, dropped as self-`setBy`. A press at t=8000 gives a window over the
     // broadcasts at 7000, 8000 and 9000, all past that flip, so all three die at
-    // `src/main/syncplay.ts:2097` before the ack guard at
-    // `src/main/syncplay.ts:2098` is ever reached — and the case then passes with
+    // `src/main/syncplay.ts:2146` before the ack guard at
+    // `src/main/syncplay.ts:2147` is ever reached — and the case then passes with
     // the ack guard deleted, which is the one thing it exists to hold. Pressing
     // at t=4000 puts the window over the broadcasts at 3000, 4000 and 5000
     // instead, all still the joiner's, so the ack guard is what drops them.
@@ -316,5 +316,128 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     expect(host.frames[0].state.setBy).toBe('joinuser')
     expect(host.frames[0].at - before[before.length - 1]).toBe(4000)
     expect(joiner.el.paused).toBe(true)
+  })
+})
+
+// #486's file-change seek opens the same window as any local seek, and the
+// unconditional zero at `src/main/syncplay.ts:1831` closes it early on any
+// frame carrying `ignoringOnTheFly.server`. So the in-flight drop guard is not
+// what keeps the old episode's position out of the new one; these cases are.
+describe('SyncplayClient — a forced update crossing the file-change seek (#486)', () => {
+  let room: TwoPeerRoom
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    vi.useRealTimers()
+  })
+
+  const OLD = 300
+  const STALE_FLOOR = 50
+
+  const seatSwitch = async (
+    joinerDelayMs: number,
+    paused = false
+  ): Promise<{ host: Peer; joiner: Peer }> => {
+    room = await createTwoPeerRoom({ position: OLD, paused })
+    const host = await room.seat({ username: 'hostuser', position: OLD, paused, delayMs: DELAY_MS })
+    const joiner = await room.seat({
+      username: 'joinuser',
+      position: OLD,
+      paused,
+      delayMs: joinerDelayMs
+    })
+    await room.advance(4)
+    host.frames.length = 0
+    return { host, joiner }
+  }
+
+  it('a peer’s seek to 0 crossing ours (both press) closes the window early and is benign', async () => {
+    // The joiner's link is 0 ms, so its own file-change seek reaches the host at
+    // t=4050, inside the host's window [4000, 4100).
+    const { host, joiner } = await seatSwitch(0)
+
+    await host.goToEpisode('8')
+    await joiner.goToEpisode('8')
+    expect(counters(host).pendingClientAck).toBe(1)
+
+    await room.advance(0.05)
+    // Zeroed by the crossing frame, a slice before our own echo.
+    expect(counters(host)).toEqual({
+      clientIgnoreCounter: 1,
+      pendingClientAck: 0,
+      pendingServerAck: 0
+    })
+    expect(host.frames).toHaveLength(1)
+    expect(host.frames[0].at).toBe(4050)
+    expect(host.frames[0].state.setBy).toBe('joinuser')
+    expect(host.frames[0].state.doSeek).toBe(true)
+    expect(host.frames[0].state.position).toBeLessThan(1)
+
+    await room.advance(10)
+    expect(host.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+    expect(joiner.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+    expect(room.server.roomState().position).toBeLessThan(STALE_FLOOR)
+    expect(room.server.roomState().paused).toBe(false)
+  })
+
+  it.each([50, 100])(
+    'a peer’s pause %i ms after the switch lands the room paused at the new episode’s start',
+    async (afterMs) => {
+      const { host, joiner } = await seatSwitch(DELAY_MS)
+
+      await host.goToEpisode('8')
+      await room.advance(afterMs / 1000)
+      joiner.userPause()
+      await room.advance(10)
+
+      expect(host.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+      expect(joiner.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+      expect(room.server.roomState().paused).toBe(true)
+      expect(room.server.roomState().position).toBeLessThan(1)
+      expect(host.el.paused).toBe(true)
+      expect(joiner.el.paused).toBe(true)
+    }
+  )
+
+  it('a peer’s pause at the old position in the same slice flaps both peers — the pre-#486 seek/pause crossfire, not the file-change seek', async () => {
+    // PINS CURRENT BEHAVIOUR, BELIEVED WRONG. Symmetric 50 ms links, and the
+    // joiner pauses at ~304 in the slice the host presses next. Our echo closes
+    // the window at t=4100; the joiner's forced pause, sent before it had heard
+    // our seek, arrives at 4150 with a server counter, is foreign and is
+    // applied. From then on each peer asserts the state the other one handed it
+    // and the room swaps between the two every heartbeat.
+    //
+    // The control below is why this is not #486's: the same crossing with a
+    // same-episode user seek in place of the episode change flaps the same way,
+    // write for write. The switch therefore inherits the crossfire rather than
+    // causing it, and the old episode's number reaches the new one only through
+    // the peer's own pause. Fixing it means deciding what a crossed pause and
+    // seek should resolve to, which is a separate question from #486's.
+    const flap = async (press: (host: Peer) => Promise<void>): Promise<[number, number]> => {
+      const { host, joiner } = await seatSwitch(DELAY_MS)
+      await press(host)
+      joiner.userPause()
+      await room.advance(10)
+      const counts: [number, number] = [host.el.seekWrites.length, joiner.el.seekWrites.length]
+      // Half of each peer's writes are the other episode's ~304.
+      expect(host.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toHaveLength(5)
+      expect(joiner.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toHaveLength(5)
+      room.dispose()
+      return counts
+    }
+
+    const episode = await flap(async (host) => {
+      await host.goToEpisode('8')
+    })
+    const control = await flap(async (host) => host.userSeek(0))
+
+    expect(episode).toEqual([10, 10])
+    // The control's host carries one more write: the user's own scrub to 0.
+    expect(control).toEqual([episode[0] + 1, episode[1]])
   })
 })

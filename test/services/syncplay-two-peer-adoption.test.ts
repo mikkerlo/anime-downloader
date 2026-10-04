@@ -98,7 +98,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // that actually keeps a peer's own position out of the room while the room
     // plays on is readiness, so that is the door this case now comes through,
     // and the outbound gate it exercises is `hasAnnounceablePosition()`'s
-    // `readyState >= 1` (`use-syncplay-client.ts:770`).
+    // `readyState >= 1` (`use-syncplay-client.ts:813`).
     //
     // The slow-seek version of this peer is not harmless — it is *worse*, and
     // it is the subject of `syncplay-two-peer-inflight-seek.test.ts`: under the
@@ -132,7 +132,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // assert `currentTime === 0` as part of the premise. It no longer is one:
     // the join-time frame arrives carrying `paused: false`, `recordRemoteState`
     // writes `syncplayLastRemotePlaying = true` **above** the `readyState < 1`
-    // park (`use-syncplay-client.ts:1774`), and the roster watch's ready-gate
+    // park (`use-syncplay-client.ts:1818`), and the roster watch's ready-gate
     // pass then calls `play()` on a dataless element — the play arm carries no
     // readiness floor. The harness's playhead has no `readyState` term either,
     // so it walks on the wall clock and reads 7.95 with nothing behind it. The
@@ -155,7 +155,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // (#348) while `play()` on a dataless element is only a request the browser
     // honours once data arrives, and its one real cost — announcing `position: 0`
     // — is already contained outbound by `hasAnnounceablePosition()`
-    // (`use-syncplay-client.ts:770`), in whose preceding comment `play()` firing
+    // (`use-syncplay-client.ts:813`), in whose preceding comment `play()` firing
     // at `HAVE_NOTHING` from PlayerView's restore is recorded as deliberately
     // swallowed rather than as a defect.
     //
@@ -384,12 +384,11 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
       paused: false,
       delayMs: DELAY_MS,
       // Explicit although 500 has been the helper's own default since #387, and
-      // kept that way on purpose: this is a **pin**, not a leftover. Every
-      // number this case asserts — the single 303 write, the room's 307.5, the
-      // zero mirror frames the note below measures — belongs to this one cell of
-      // #360's gap axis, and that axis is a comb rather than a slope, so a
-      // default that moved would not degrade these assertions, it would silently
-      // re-measure a different cell and still be green on some of them. The
+      // kept that way on purpose: this is a **pin**, not a leftover. The room's
+      // 4.6 below is measured at this gap, and before #486 every number
+      // here belonged to one cell of #360's gap axis, which was a comb rather
+      // than a slope, so a default that moved would not degrade these
+      // assertions, it would silently re-measure a different cell. The
       // pin is therefore about *this fixture's* numbers being addressable, not
       // about disagreeing with the default; the guard that the default itself is
       // still 500 is `syncplay-two-peer-loop.test.ts`'s own, and deleting this
@@ -448,61 +447,27 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // present.
     expect(host.remoteEpisodes).toHaveLength(1)
 
-    // The switcher's element is at 0 with the room near 303, so it is placed
-    // back at the room — one write. That write is #360 verbatim: a brand-new
-    // episode's element seeked to the *previous* episode's timestamp, a position
-    // the new file bears no relation to. Pinned as shipped behaviour, not as a
-    // desired one.
-    //
-    // This comment used to read "de-adoption is what keeps the switch from
-    // costing the room its position", and that stated reason is contradicted at
-    // this fixture's own bind gap. `bindGapMs: 500` puts the element back well
-    // inside `PLAYBACK_ASSERT_STALE_MS` (2 s), so the de-adoption
-    // `src/main/syncplay.ts:789` ("if (isNewPlayer) this.playbackAdopted = false")
-    // performs never reaches the wire at all: measured on this exact scenario,
-    // every post-switch frame this peer sends carries a `paused` key — zero
-    // spectator-mirror frames — so it asserts continuously straight through the
-    // switch. The seat is de-adopted for less than one push and re-latches at
-    // `src/main/syncplay.ts:2642` on a drift of 0 taken from the previous
-    // episode's snapshot, before the new element has pushed anything.
-    // `syncplay-two-peer-episode-change.test.ts` sweeps the gap and #360 has the
-    // chain.
+    // The switcher's element is placed at the new episode's start — one write,
+    // to ~0.1. Before #486 this was #360 verbatim: the element was written to the
+    // *previous* episode's 303, because the seat re-latched adoption at
+    // `src/main/syncplay.ts:2694` on the old episode's snapshot and asserted it
+    // under the new file. `setFile()` now drops that snapshot and forces the room
+    // to 0, and the parked frame applied at `loadedmetadata` is the room's 0.
     expect(host.el.seekWrites).toHaveLength(1)
-    expect(host.el.seekWrites[0]).toBeCloseTo(303, 2)
+    expect(host.el.seekWrites[0]).toBeLessThan(1)
 
-    // The room is nowhere near the 0 the switcher's element passed through, and
-    // the other peer was neither paused nor moved. What 307.5 is *not* is "where
-    // six more seconds of playback should have left it" — that is ~309.95, which
-    // is precisely where the untouched peer's element reads at this instant. 307.5
-    // is the switcher's **dragged** value, so this line has been encoding a 2.45 s
-    // room deficit as expected since before anyone had measured it. It is kept as
-    // an assertion — renumbered, never widened — because it is a true statement
-    // about shipped behaviour; it is not a statement that the behaviour is right.
-    //
-    // Every absolute figure in this case is one second higher than it was, and
-    // that is the *only* thing that changed here: the join-time `State` un-pauses
-    // each element at t=50 rather than t=1050, banking 1000 ms of playback before
-    // the run starts. It is a rigid translation — the 2.45 s deficit and the
-    // 0.55 s margin below are both differences, and both are unmoved.
-    //
-    // And that 2.45 is the whole reason `joiner.el.seekWrites` two lines down is
-    // still `[]`. Not de-adoption: the renderer's seek gate is
-    // `src/renderer/src/composables/use-syncplay-client.ts:1411` ("const wouldSeek = state.doSeek || diff > 3.0")
-    // over the difference computed at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1403` ("const diff = Math.abs(v.currentTime - state.position)")
-    // — this peer's own element against the state it was handed — and 2.45 clears
-    // 3.0 by 0.55. Measured constant from the switch out to a 20 s window, so it
-    // is a standing near miss rather than a transient one. Raise the bind gap to
-    // 3000 ms and the same shipped code writes 304.05 to that element instead;
-    // `syncplay-two-peer-episode-change.test.ts` pins that. So nothing below is a
-    // guarantee that a non-switching peer is never dragged — it is the 500 ms
-    // corner in which it happens not to be.
-    expect(room.server.roomState().position).toBeCloseTo(307.5, 1)
+    // The other peer takes the same forced seek, once, on its own unswitched
+    // episode — #486's stated product decision — and keeps playing. The room is
+    // on the new episode's clock, a second under the switcher's element: the
+    // switcher's new element is the `min()` the room elects.
+    expect(room.server.roomState().position).toBeCloseTo(4.6, 1)
     expect(room.server.roomState().paused).toBe(false)
-    expect(joiner.el.seekWrites).toEqual([])
+    expect(joiner.el.seekWrites).toHaveLength(1)
+    expect(joiner.el.seekWrites[0]).toBeLessThan(1)
     expect(joiner.el.paused).toBe(false)
 
-    // An episode change announces a file, not a playstate.
-    expect(host.counters().clientIgnoreCounter).toBe(0)
+    // A local episode change now announces exactly one playstate: the
+    // file-change seek, counted like any local seek.
+    expect(host.counters().clientIgnoreCounter).toBe(1)
   })
 })

@@ -6575,6 +6575,45 @@ describe('useSyncplayClient — seekAsUser announces the user’s seek at intent
       expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
     })
 
+    // The two below are the controls for the retract in `onVideoSeeked`. The
+    // case above releases the hold through `consumeSeekOp` removing the user's
+    // own operation, so deleting the retract leaves it green; these are the
+    // `seeked`s that do not consume the user's operation.
+    it('lets go when a peer’s doSeek supersedes the seek and its seeked lands', async () => {
+      const { v, client, emitRemoteState } = await inFlight()
+      // The peer's deliberate seek wins and registers the apply's operation.
+      emitRemoteState({ position: 900, paused: true, doSeek: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 900])
+      // The surviving `seeked` is the peer's: the apply's operation eats it,
+      // and the user's stale one at 600 must not keep holding for its TTL.
+      client.onVideoSeeked()
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 900, 105])
+      expect(v.currentTime).toBe(105)
+    })
+
+    it('lets go when the element lands away from the target and the fallback sends', async () => {
+      vi.useFakeTimers()
+      // The element clamps the write to its 590 s duration, 10 s short of the
+      // announced target, so the `seeked` matches no operation.
+      const v = fakeVideo({ currentTime: 100, duration: 590 } as Partial<HTMLVideoElement>)
+      const sendLocalState = vi.fn()
+      setApi({ syncplaySendLocalState: sendLocalState })
+      const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }))
+      client.seekAsUser(600)
+      expect(v.currentTime).toBe(590)
+      client.onVideoSeeked()
+      expect(sendLocalState).toHaveBeenCalledTimes(2)
+      expect(sendLocalState).toHaveBeenLastCalledWith({
+        paused: true,
+        position: 590,
+        cause: 'seek'
+      })
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
+      expect(v.currentTime).toBe(105)
+    })
+
     it('lets go when the operation expires without a seeked', async () => {
       const { v, emitRemoteState } = await inFlight()
       vi.advanceTimersByTime(15000)

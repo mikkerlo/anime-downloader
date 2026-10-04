@@ -249,16 +249,17 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
       )
     }
     const s = row.score()
+    const scoreable = s.records.filter((r) => r.setupOk)
+    // With no scoreable press inside #487's window, `skipped == 0` tests
+    // nothing: print the count beside the score, before any assertion, so a
+    // vacuous pass is visible and a red row still logs it.
+    process.stdout.write(
+      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} of scoreable=${s.scoreable}\n`
+    )
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
     // The row guards two bugs, each asserted on its own so a regression names
     // its half. #493 flipped #486's, #492 flipped #487's.
-    const scoreable = s.records.filter((r) => r.setupOk)
-    // With no scoreable press inside #487's window, `skipped == 0` tests
-    // nothing: print the count beside the score so a vacuous pass is visible.
-    process.stdout.write(
-      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} of scoreable=${s.scoreable}\n`
-    )
     expect(scoreable.filter((r) => r.stale).length, '#486 stale start after #493').toBe(0)
     expect(scoreable.filter((r) => r.skipped).length, '#487 skip to N+2 after #492').toBe(0)
   } finally {

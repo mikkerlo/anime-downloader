@@ -63,7 +63,7 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
       // Every failing clause, so a red row says which half broke in the job log
       // itself rather than only in the uploaded JSONL.
       const reasons = [
-        !paused && `not both paused within 3 s (A ${ap.paused}, B ${bp.paused})`,
+        !paused && `not both paused within 3 s (1 s later: A ${ap.paused}, B ${bp.paused})`,
         Math.abs(ap.ct - bp.ct) > 1 && `paused spread ${(ap.ct - bp.ct).toFixed(2)} s > 1`,
         !resumed && `not both playing within 4 s (A ${!ar.paused}, B ${!br.paused})`,
         Math.abs(ar.ct - br.ct) > 1.5 && `playing spread ${(ar.ct - br.ct).toFixed(2)} s > 1.5`

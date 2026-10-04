@@ -1,31 +1,30 @@
 // Episode-change rows of the #489 catalog on the two-instance rig.
 //
-//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 ✗
-//   E6  A presses prev — the mirror of E1, run on the way back       #486 ✗
-//   E2  Both press next, B 0–1.5 s after A                           #486 ✗, #487 ✗
-//   E5  Next pressed while the room is paused                        docs/syncplay.md, #486 ✗
+//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
+//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
+//   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 ✗
+//   E5  Next pressed while the room is paused                        #486 (fixed), resume ✗
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
-// The exact pins live in Tier 1 (`test/services/syncplay-two-peer-next-episode.test.ts`,
-// `test/services/syncplay-two-peer-double-next.test.ts`). What is *not* ✗ is
-// asserted as a pass on every scoreable run: both instances agree on the
-// episode in E1 / E6 (a follow is absolute and deduped), and E5's paused state.
+// #493 fixed #486, so E1 / E6, E2's stale half and E5 are flipped. The exact
+// pins live in Tier 1 (`test/services/syncplay-two-peer-next-episode.test.ts`,
+// `test/services/syncplay-two-peer-double-next.test.ts`). Both instances must
+// also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
+// every scoreable run.
 //
 // E5 is pinned against the documented rule rather than decided here:
 // `docs/syncplay.md` says an episode switch ends the pending-pause hold and "a
 // new episode deliberately auto-resumes the binge through the gate". So after
-// next in a paused room both instances end playing, on the same episode.
-// On current main #486 breaks that rule in a measurable way: the paused room
-// frame carrying the old position is parked on the new element and applied at
-// `loadedmetadata`, which seeks it back *and pauses it*, and the room never
-// resumes (the first local run: 1 of 2 scoreable runs, both stuck paused at
-// the old timestamp; Tier 1's paused grid in
-// `syncplay-two-peer-next-episode.test.ts` shows the same `p` ends). So E5
-// asserts two things: the documented rule holds on every run #486 did not
-// touch (`bad == 0`, where a not-resumed run counts as bad only if it was not
-// stale), and the rig sees #486 at all (`stale ≥ 1`). The fix PR for #486
-// flips it to "every run resumed".
+// next in a paused room both instances end playing, on the same episode, near
+// 0. Before #493, #486 broke that rule: the paused room frame carrying the old
+// position was parked on the new element and applied at `loadedmetadata`,
+// which seeked it back *and paused it*, and the room never resumed. #493 fixed
+// the position, so E5's #486 half is flipped (no stale run, right episode). The
+// resume half did not follow: on the first two local runs after the rebase onto
+// #493, 5 of 6 scoreable runs ended with both instances paused at ~0 on the new
+// episode, not stale. That half is ✗ (`not resumed ≥ 1`) until its own fix flips it to
+// "every run resumed".
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -125,7 +124,7 @@ async function transition(
   }
 }
 
-test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486 ✗)', async () => {
+test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486, fixed by #493)', async () => {
   const { A, B } = await seatDuo(rig)
   const e1 = new RowScorer('E1')
   const e6 = new RowScorer('E6')
@@ -167,17 +166,17 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486 
     }
     const s1 = e1.score()
     const s6 = e6.score()
-    // ✗ rows: the rig must see #486 at least once in each direction.
+    // Flipped by #493: no stale start in either direction.
     expect(s1.scoreable).toBeGreaterThanOrEqual(1)
-    expect(s1.bad).toBeGreaterThanOrEqual(1)
+    expect(s1.bad).toBe(0)
     expect(s6.scoreable).toBeGreaterThanOrEqual(1)
-    expect(s6.bad).toBeGreaterThanOrEqual(1)
+    expect(s6.bad).toBe(0)
   } finally {
     await closeDuo(A, B)
   }
 })
 
-test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 ✗, #487 ✗)', async () => {
+test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed, #487 ✗)', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E2')
   try {
@@ -213,16 +212,16 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 ✗, 
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBeGreaterThanOrEqual(1)
     // The row guards two bugs; each must be visible on its own, so the fix PR
-    // for either one flips only its half.
+    // for either one flips only its half. #493 flipped #486's.
     const scoreable = s.records.filter((r) => r.setupOk)
-    expect(scoreable.filter((r) => r.stale).length, '#486 never seen').toBeGreaterThanOrEqual(1)
+    expect(scoreable.filter((r) => r.stale).length, '#486 stale start after #493').toBe(0)
     expect(scoreable.filter((r) => r.skipped).length, '#487 never seen').toBeGreaterThanOrEqual(1)
   } finally {
     await closeDuo(A, B)
   }
 })
 
-test('E5 — next in a paused room: both move to N+1 and the binge auto-resumes (docs/syncplay.md)', async () => {
+test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md) ✗', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E5')
   try {
@@ -248,7 +247,7 @@ test('E5 — next in a paused room: both move to N+1 and the binge auto-resumes 
       const resumed = !a.paused && !b.paused
       const stale = r.a.stale || r.b.stale
       const wrongEp = r.epA !== want || r.epB !== want
-      const bad = wrongEp || (!resumed && !stale)
+      const bad = wrongEp || stale
       row.add(
         {
           setupOk: setupOk && paused && r.changed,
@@ -267,11 +266,15 @@ test('E5 — next in a paused room: both move to N+1 and the binge auto-resumes 
       if ((await A.state()).paused) await A.togglePlayButton()
     }
     const s = row.score()
-    const scoreable = s.records.filter((r) => r.setupOk)
+    // #486 half, flipped by #493: every scoreable run on the right episode, near 0.
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
-    // ✗ half (#486): the rig must see the stale position at least once.
-    expect(scoreable.filter((r) => r.stale).length, '#486 never seen').toBeGreaterThanOrEqual(1)
+    // ✗ half: the rig must see the room stay paused at least once.
+    const scoreable = s.records.filter((r) => r.setupOk)
+    expect(
+      scoreable.filter((r) => !r.resumed).length,
+      'paused room never stayed paused'
+    ).toBeGreaterThanOrEqual(1)
   } finally {
     await closeDuo(A, B)
   }

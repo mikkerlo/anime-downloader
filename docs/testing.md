@@ -1117,9 +1117,9 @@ covers are not redone:
 
 | Rows | Tier 1 | Tier 2 |
 | --- | --- | --- |
-| E1, E2, E3, E5 position (#486 ✗) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2) |
+| E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
 | E2 double advance (#487 ✗) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2) |
-| E5 paused state: `docs/syncplay.md`'s auto-resume rule, broken by #486 (✗ half) | — | `episode.spec.ts` (E5) |
+| E5 paused state: `docs/syncplay.md`'s auto-resume rule (✗: still not resumed after #493, at ~0 rather than stale) | — | `episode.spec.ts` (E5) |
 | S1, S2, S9 (#488 ✗) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
 | P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |

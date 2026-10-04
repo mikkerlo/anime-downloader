@@ -259,7 +259,7 @@ describe('PlayerView anchors for the #487 navigation model', () => {
 
   it('follows a remote change as a relative walk gated on !navigating', () => {
     expect(SRC.replace(/\s+/g, ' ')).toContain(
-      '() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir)'
+      "() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir, 'follow')"
     )
   })
 })

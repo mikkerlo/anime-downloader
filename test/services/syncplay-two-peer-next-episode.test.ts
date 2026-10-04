@@ -3,11 +3,20 @@
 // Where the *new* episode starts after "next" in a two-peer room (#489 Tier 1,
 // rows E1 / E2 / E3 — the #486 half).
 //
-// **This file pins a known-broken behaviour (#486 ✗).** The tables below are
-// what current `main` does; the fix for #486 ("force the room to 0 on file
-// change") is expected to turn them red, and the fix PR rewrites them —
-// every `stale` count to 0, every end position near the read-out time — rather
-// than deleting the file.
+// **This file pinned #486 ✗ and now pins its fix (#493).** Before #493 every
+// cell of E1 / E2 / E3 and the paused grid was stale, and most ended stuck at
+// the old position or diverged. #493 forces the room to 0 on a local in-player
+// switch (`'local'` origin) and leaves a follow alone (`'follow'`); B's follows
+// below pass `'follow'`, as `handleRemoteEpisodeChange`'s walk does. Nine of
+// ten phases now read clean on both peers. One residual is pinned as measured
+// rather than rounded to 0: at the 900 ms phase B's outgoing snapshot still
+// carries the old position when A's forced 0 reaches the room, and since B's
+// follow forces nothing, 305 / 300 lands on A's new element and the follow
+// picks it up (E1 ends stuck at 311 on B; E3 and the paused grid walk it off).
+// With B's step tagged `'local'` instead, the same cell is clean. It is the
+// same phase as #491's CROSSING cell (`syncplay-two-peer-seek-revert.test.ts`),
+// a heartbeat the reference server may discard inside its `ignoringOnTheFly`
+// window; this file has not established that it does.
 //
 // Why not `syncplay-two-peer-episode-change.test.ts`: that file is #360's, and
 // its header declares every assertion in it a characterisation of what happens
@@ -37,10 +46,7 @@
 // `stale` is any `currentTime` write past 5 s on a peer from the switch on —
 // the old position landing on the new source, whether or not it later snaps
 // back. The end tuple `A/B` is each element's rounded position, with `p` for a
-// paused element; a correct cell reads ~12 on both, playing. Most cells below
-// are worse than stale: one peer plays on at the old position while the other
-// sits paused at 0, which is #486's "stuck" outcome plus a divergence the room
-// never repairs inside the read-out window.
+// paused element; a correct cell reads ~12 on both, playing.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -75,7 +81,7 @@ interface Grid {
   ends: string[]
 }
 
-describe('SyncplayClient — the next episode starts at the old timestamp (#486 ✗)', () => {
+describe('SyncplayClient — the next episode starts near 0 after #493 (#486)', () => {
   let room: TwoPeerRoom | undefined
 
   beforeEach(() => {
@@ -96,8 +102,8 @@ describe('SyncplayClient — the next episode starts at the old timestamp (#486 
     expect(p.remoteEpisodes.length).toBeGreaterThanOrEqual(n)
   }
 
-  const nav = async (p: Peer, ep: string): Promise<void> => {
-    await p.goToEpisode(ep)
+  const nav = async (p: Peer, ep: string, origin: 'local' | 'follow' = 'local'): Promise<void> => {
+    await p.goToEpisode(ep, undefined, 0, origin)
     postBind(p)
   }
 
@@ -127,7 +133,7 @@ describe('SyncplayClient — the next episode starts at the old timestamp (#486 
         await nav(a, '8')
         await waitRemote(b, 1)
         await room.advance(0.1)
-        await nav(b, '8')
+        await nav(b, '8', 'follow')
       } else if (kind === 'both') {
         await nav(a, '8')
         await room.advance(0.1)
@@ -137,7 +143,7 @@ describe('SyncplayClient — the next episode starts at the old timestamp (#486 
           await nav(a, ep)
           await waitRemote(b, Number(ep) - 7)
           await room.advance(0.1)
-          await nav(b, ep)
+          await nav(b, ep, 'follow')
           await room.advance(3)
         }
       }
@@ -153,84 +159,63 @@ describe('SyncplayClient — the next episode starts at the old timestamp (#486 
     return g
   }
 
-  it('writes the old position onto both new elements when B follows A (E1)', async () => {
+  it('starts both new elements near 0 when B follows A, but for the 900 ms residual (E1)', async () => {
     const g = await grid('follow', false)
-    expect(g.staleA).toBe(10)
-    expect(g.staleB).toBe(10)
-    expect(g.stuck).toBe(9)
+    expect(g.staleA).toBe(1)
+    expect(g.staleB).toBe(1)
+    expect(g.stuck).toBe(1)
     expect(g.ends).toEqual([
-      '315/315',
-      '309/0p',
-      '309/0p',
-      '309/0p',
-      '309/0p',
-      '0p/310',
-      '0p/310',
-      '0p/310',
-      '0p/310',
-      '0p/0p'
+      '12/11',
+      '12/11',
+      '12/11',
+      '12/11',
+      '12/12',
+      '12/12',
+      '12/12',
+      '12/12',
+      '12/12',
+      '7/311'
     ])
   }, 60_000)
 
-  it('does the same when both press, B 100 ms after A (E2)', async () => {
+  it('is clean in every phase when both press, B 100 ms after A (E2)', async () => {
     const g = await grid('both', false)
-    expect(g.staleA).toBe(10)
-    expect(g.staleB).toBe(10)
-    expect(g.stuck).toBe(10)
-    expect(g.ends).toEqual([
-      '315/315',
-      '309/0p',
-      '309/0p',
-      '309/0p',
-      '309/0p',
-      '0p/310',
-      '0p/310',
-      '0p/310',
-      '0p/310',
-      '0p/310'
-    ])
+    expect(g.staleA).toBe(0)
+    expect(g.staleB).toBe(0)
+    expect(g.stuck).toBe(0)
+    expect(g.ends).toEqual(Array(10).fill('12/12'))
   }, 60_000)
 
-  it('writes it on every chain of three, but mostly self-corrects by the end (E3)', async () => {
+  it('ends every chain of three near 0, writing the old position only in the 900 ms residual (E3)', async () => {
     const g = await grid('chain', false)
-    expect(g.staleA).toBe(10)
-    expect(g.staleB).toBe(10)
-    expect(g.stuck).toBe(2)
+    expect(g.staleA).toBe(1)
+    expect(g.staleB).toBe(1)
+    expect(g.stuck).toBe(0)
     expect(g.ends).toEqual([
-      '8/7p',
-      '0p/2p',
-      '8p/7',
-      '8p/7',
-      '8p/7',
-      '315/0p',
-      '313/313',
-      '0p/0p',
-      '8/7p',
-      '14/15'
+      '15/14',
+      '15/15',
+      '15/15',
+      '15/15',
+      '15/15',
+      '15/15',
+      '15/14',
+      '15/14',
+      '15/14',
+      '15/14'
     ])
   }, 60_000)
 
   // E5's paused-state half is not decided here: `docs/syncplay.md` already says an
   // episode switch ends the pending-pause hold and "a new episode deliberately
   // auto-resumes the binge through the gate", and `e2e-syncplay/episode.spec.ts`
-  // pins that on the real `PlayerView`. The `p` ends below are #486's stale
-  // position parking an element, not a reading of that rule.
-  it('carries the old position in a paused room too, where nothing can walk it off (E5 position half)', async () => {
+  // pins that on the real `PlayerView`. The `p` ends below are the paused room
+  // this harness never resumes (it has no `PlayerView` gate), not a reading of
+  // that rule; what this case pins is the position.
+  it('starts both new elements at 0 in a paused room, the 900 ms residual walked back (E5 position half)', async () => {
     const g = await grid('follow', true)
-    expect(g.staleA).toBe(10)
-    expect(g.staleB).toBe(10)
-    expect(g.stuck).toBe(9)
-    expect(g.ends).toEqual([
-      '300p/300p',
-      '300p/6',
-      '300p/6',
-      '300p/6',
-      '300p/6',
-      '6/300p',
-      '6/300p',
-      '6/300p',
-      '6/300p',
-      '6/6'
-    ])
+    expect(g.staleA).toBe(1)
+    expect(g.staleB).toBe(1)
+    expect(g.stuck).toBe(0)
+    expect(g.ends).toEqual([...Array(8).fill('0p/1p'), '0p/0p', '0p/0p'])
   }, 60_000)
 })

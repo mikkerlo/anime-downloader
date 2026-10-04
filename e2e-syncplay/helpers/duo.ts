@@ -174,7 +174,9 @@ export interface Instance {
   pressNext(how?: 'button' | 'key'): Promise<void>
   pressPrev(): Promise<void>
   togglePlayButton(): Promise<void>
-  /** A user seek: a bare `currentTime` write, the way the seek bar does it. */
+  /** A user seek through the seek bar's own `mousedown` / `input` / `change`,
+   *  so it takes `PlayerView.seek()` → `seekAsUser` (announced at intent since
+   *  #491) rather than a bare `currentTime` write. */
   seek(t: number): Promise<void>
   switchTranslation(): Promise<void>
   switchQuality(): Promise<void>
@@ -527,7 +529,11 @@ export async function launchInstance(
     },
     seek: async (t) => {
       await page.evaluate((t) => {
-        ;(document.querySelector('video.player-video') as HTMLVideoElement).currentTime = t
+        const bar = document.querySelector('input.seek-input') as HTMLInputElement
+        bar.dispatchEvent(new MouseEvent('mousedown'))
+        bar.value = String(t)
+        bar.dispatchEvent(new Event('input'))
+        bar.dispatchEvent(new Event('change'))
       }, t)
     },
     // The menu waits are `attached`, not visible: the control bar auto-hides

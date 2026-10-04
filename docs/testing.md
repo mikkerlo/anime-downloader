@@ -1120,7 +1120,7 @@ covers are not redone:
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
 | E2 double advance (#487 ✗) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2) |
 | E5 paused state: `docs/syncplay.md`'s auto-resume rule (✗: still not resumed after #493, at ~0 rather than stale) | — | `episode.spec.ts` (E5) |
-| S1, S2, S9 (#488 ✗) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
+| S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
 | P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |
 | P2 (✗ band), P3, M8 | `syncplay-two-peer-interactions.test.ts` | — |

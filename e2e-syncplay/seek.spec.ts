@@ -1,20 +1,21 @@
 // Seek rows of the #489 catalog on the two-instance rig.
 //
-//   S1  Far seek by the non-`setBy` peer, load delay swept 100–3000 ms    #488 ✗
-//   S9  No false "<peer> seeked to …" toast during S1                      #488 ✗
+//   S1  Far seek by the non-`setBy` peer, load delay swept 100–3000 ms    #488 (fixed by #491)
+//   S9  No false "<peer> seeked to …" toast during S1                      #488 (fixed by #491)
 //   S6  Seek while paused: the peer moves, the room stays paused            —
 //
-// S1 / S9 follow the ✗ rule (`bad ≥ 1` at N on current main; the exact
-// role × landing × phase pins are `test/services/syncplay-seek-revert.test.ts`).
-// S6 is a non-✗ row and asserts `bad == 0`.
+// S1 / S9 were ✗ rows (`bad ≥ 1` at N) until #491 fixed #488; they now assert
+// `bad == 0`, as S6 always has. The exact role × landing × phase pins are
+// `test/services/syncplay-seek-revert.test.ts`.
 //
-// The seek is a bare `currentTime` write, which is exactly what the seek bar,
-// the ±5 s keys and skip OP/ED do on current main. The fixture server's
+// The seek goes through the seek bar (`Instance.seek`), so it takes
+// `PlayerView.seek()` → `seekAsUser`, which since #491 announces at intent.
+// Before #491 the seek bar, the ±5 s keys and skip OP/ED made a bare
+// `currentTime` write, and the rig did the same. The fixture server's
 // per-request delay is what keeps the seek in flight long enough for the next
 // room frame to land on it. S1 also throttles each response, so on fixtures
-// even the 100 ms cell lands in seconds; the first local runs saw every
-// scoreable S1 run undone, well above the ~24% measured on real streams,
-// which is why the row asserts `bad ≥ 1` and nothing about the rate.
+// even the 100 ms cell lands in seconds; before #491 the first local runs saw
+// every scoreable S1 run undone, well above the ~24% measured on real streams.
 
 import { test, expect } from '@playwright/test'
 import {
@@ -55,7 +56,7 @@ async function nonSetBy(A: Instance, B: Instance): Promise<Instance | null> {
   return null
 }
 
-test('S1 / S9 — a far seek by the non-setBy peer is undone and never announced (#488 ✗)', async () => {
+test('S1 / S9 — a far seek by the non-setBy peer sticks and is announced once (#488, fixed by #491)', async () => {
   // ~3x the fixtures' bitrate: playback never starves, but the buffer stays
   // seconds ahead rather than the whole file, so a far seek needs a fresh
   // ranged request and waits out the per-request delay.
@@ -109,9 +110,10 @@ test('S1 / S9 — a far seek by the non-setBy peer is undone and never announced
     }
     const r1 = s1.score()
     const r9 = s9.score()
+    // Flipped by #491.
     expect(r1.scoreable).toBeGreaterThanOrEqual(1)
-    expect(r1.bad).toBeGreaterThanOrEqual(1)
-    expect(r9.bad).toBeGreaterThanOrEqual(1)
+    expect(r1.bad).toBe(0)
+    expect(r9.bad).toBe(0)
   } finally {
     rig.fixtures.setDelay(0)
     await closeDuo(A, B)

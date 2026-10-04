@@ -3,11 +3,17 @@
 // A user seek still in flight when the next room frame lands, swept over both
 // roles × landing time × heartbeat phase (#489 Tier 1, rows S1 / S2 / S9).
 //
-// **This file pins a known-broken behaviour (#488 ✗).** Every table below is
-// what current `main` does, cell for cell, and the fix for #488 is expected to
-// turn it red. That is the contract: the fix PR rewrites the tables (the
-// `other` role's `UNDONE_UNANNOUNCED` cells go empty) rather than deleting the
-// file, so the sweep that proved the bug is the sweep that proves the fix.
+// **This file pinned #488 ✗ and now pins its fix (#491).** Before #491 the
+// `other` role's `UNDONE_UNANNOUNCED` cells grew with the landing time to every
+// phase from 1500 ms, and the `setBy` role's filled at 3000 ms. #491 announces
+// a user seek at intent, and every `UNDONE_UNANNOUNCED` cell is now empty. What
+// is left is one phase, 900 ms, for every landing under 1500 ms in both roles:
+// #491's CROSSING cell (`syncplay-two-peer-seek-revert.test.ts`). The seek is
+// announced once and the room takes it, then the other peer's heartbeat, sent
+// 100 ms after our `doSeek` and still carrying the old position, is re-elected
+// and moves both peers back, with a false toast. The reference server discards
+// that heartbeat inside its own `ignoringOnTheFly` window, which the
+// min-election server does not model, so it is pinned as measured, not as #488.
 //
 // The mechanism, as #488 traces it: a user seek is a bare `currentTime` write
 // and reaches the room only when its own `seeked` fires
@@ -36,11 +42,9 @@
 //    reason the crossfire file stays a characterisation rather than growing a
 //    role axis it would then have to explain twice.
 //
-// PR #491 (the #488 fix, open when this landed) carries its own regression
-// sweep, `syncplay-two-peer-seek-revert.test.ts`, written against the fixed
-// code. Whichever of the two merges second reconciles: if #491 lands after
-// this, it flips the tables here; if before, this file's tables are re-measured
-// on the fixed tree.
+// PR #491 (the #488 fix) carries its own regression sweep,
+// `syncplay-two-peer-seek-revert.test.ts`, over the non-`setBy` role only. It
+// landed first, so this file's tables were re-measured on the fixed tree.
 //
 // ── What a cell is ───────────────────────────────────────────────────────────
 //
@@ -58,12 +62,11 @@
 // `doSeek` ever left. A false toast (S9) is a "<peer> seeked …" toast on the
 // seeker naming the other peer, who never touched anything.
 //
-// The `setBy` role's scattered single-phase cells at short landings are not
-// #488: there the seek is announced, sticks, and the *other* peer ends back near
-// the start. They are the crossing case — the other peer's heartbeat, carrying
-// the old position, crosses our `doSeek` on the wire and is re-elected — and they
-// are pinned here because a pass condition fails on them, not because this file
-// claims to explain them.
+// The 900 ms cells below are the crossing case, not #488: the seek is
+// announced, once, and the other peer's heartbeat, carrying the old position,
+// crosses our `doSeek` on the wire and is re-elected. They are pinned here
+// because a pass condition fails on them, not because this file claims to
+// explain them.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { watch } from 'vue'
@@ -97,79 +100,33 @@ interface Cell {
 const isBad = (c: Cell): boolean =>
   c.undone || c.doSeeks !== 1 || Math.abs(c.otherEnd - c.seekerEnd) > NEAR_S
 
-// ── Current-main tables (#488 ✗). The fix PR rewrites these. ─────────────────
+// ── Tables after #491 (the #488 fix). ────────────────────────────────────────
 
-const ALL = PHASES_MS
+const NONE: Table = { 100: [], 250: [], 400: [], 650: [], 900: [], 1500: [], 3000: [] }
 
-/** Undone and never announced — the #488 signature. Grows with the landing
- *  time on the `other` role (P ≈ landing / 1000 ms), and is empty on the
- *  `setBy` role until the landing outlasts the server's re-election. */
-const UNDONE_UNANNOUNCED: Record<Role, Table> = {
-  other: {
-    100: [0],
-    250: [0, 800, 900],
-    400: [0, 700, 800, 900],
-    650: [0, 400, 500, 600, 700, 800, 900],
-    900: [0, 200, 300, 400, 500, 600, 700, 800, 900],
-    1500: ALL,
-    3000: ALL
-  },
-  setBy: {
-    100: [],
-    250: [],
-    400: [],
-    650: [],
-    900: [],
-    1500: [],
-    3000: [100, 200, 300, 400, 500, 600, 700, 800, 900]
-  }
+/** Undone and never announced — the #488 signature. Empty in both roles. */
+const UNDONE_UNANNOUNCED: Record<Role, Table> = { other: NONE, setBy: NONE }
+
+/** The crossing cell: phase 900 at every landing that has landed before the
+ *  re-elected frame arrives; from 1500 ms the seek is still in flight then and
+ *  the apply's belt holds it. */
+const CROSSING: Table = {
+  100: [900],
+  250: [900],
+  400: [900],
+  650: [900],
+  900: [900],
+  1500: [],
+  3000: []
 }
 
 /** Any S1 / S2 pass condition failed. */
-const BAD: Record<Role, Table> = {
-  other: {
-    100: [0, 800],
-    250: [0, 700, 800, 900],
-    400: [0, 500, 700, 800, 900],
-    650: [0, 300, 400, 500, 600, 700, 800, 900],
-    900: [0, 200, 300, 400, 500, 600, 700, 800, 900],
-    1500: ALL,
-    3000: ALL
-  },
-  setBy: {
-    100: [800],
-    250: [700],
-    400: [500],
-    650: [300],
-    900: [],
-    1500: [400],
-    3000: [100, 200, 300, 400, 500, 600, 700, 800, 900]
-  }
-}
+const BAD: Record<Role, Table> = { other: CROSSING, setBy: CROSSING }
 
 /** S9: a "<peer> seeked" toast on the seeker, naming a peer who did nothing. */
-const FALSE_TOAST: Record<Role, Table> = {
-  other: {
-    100: [0, 800],
-    250: [0, 700, 800, 900],
-    400: [0, 500, 700, 800, 900],
-    650: [0, 300, 400, 500, 600, 700, 800, 900],
-    900: [0, 200, 300, 400, 500, 600, 700, 800, 900],
-    1500: ALL,
-    3000: ALL
-  },
-  setBy: {
-    100: [800],
-    250: [700],
-    400: [500],
-    650: [300],
-    900: [0],
-    1500: [400],
-    3000: [100, 200, 300, 400, 500, 600, 700, 800, 900]
-  }
-}
+const FALSE_TOAST: Record<Role, Table> = { other: CROSSING, setBy: CROSSING }
 
-describe('SyncplayClient — a user seek in flight vs the next room frame, both roles (#488 ✗)', () => {
+describe('SyncplayClient — a user seek in flight vs the next room frame, both roles (#488, fixed by #491)', () => {
   let room: TwoPeerRoom | null = null
 
   beforeEach(() => {
@@ -247,18 +204,18 @@ describe('SyncplayClient — a user seek in flight vs the next room frame, both 
     return out
   }
 
-  it('undoes the non-setBy peer’s seek in proportion to its landing time, and never announces it (S1)', async () => {
+  it('keeps and announces the non-setBy peer’s seek at every landing time, but for the crossing cell (S1)', async () => {
     const got = await sweep('other')
     expect(got.undoneUnannounced).toEqual(UNDONE_UNANNOUNCED.other)
     expect(got.bad).toEqual(BAD.other)
     expect(got.falseToast).toEqual(FALSE_TOAST.other)
-    // The proportionality #488 predicts (P ≈ landing / 1000 ms), as a count:
-    // monotone non-decreasing over the landing axis, saturated from 1500 ms.
+    // Before #491 these counts grew with the landing time (P ≈ landing /
+    // 1000 ms) to [1, 3, 4, 7, 9, 10, 10].
     const counts = LANDINGS_MS.map((l) => got.undoneUnannounced[l].length)
-    expect(counts).toEqual([1, 3, 4, 7, 9, 10, 10])
+    expect(counts).toEqual([0, 0, 0, 0, 0, 0, 0])
   }, 60_000)
 
-  it('spares the setBy peer until its landing outlasts the re-election (S2)', async () => {
+  it('keeps the setBy peer’s seek past the re-election too, but for the crossing cell (S2)', async () => {
     const got = await sweep('setBy')
     expect(got.undoneUnannounced).toEqual(UNDONE_UNANNOUNCED.setBy)
     expect(got.bad).toEqual(BAD.setBy)

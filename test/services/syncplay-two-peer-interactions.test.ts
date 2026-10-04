@@ -150,12 +150,12 @@ describe('SyncplayClient — two-peer interaction rows (#489 Tier 1)', () => {
     // The non-setBy seeker's undone-and-unannounced count per landing time
     // (ten heartbeat phases each), at 50 ms each way on both legs and with the
     // seeker's leg at 150 ms. The catalog's M8 asks for "the same pass
-    // conditions as without latency"; on current main S1 is itself ✗ (#488),
-    // so this pins how the slow leg *moves* the ✗ rather than a pass. What
-    // moves it is the role, not the seek: measured at every drag, the slow-leg
-    // peer is the room's `setBy`, so it is not handed foreign frames at 1 Hz
-    // and the non-setBy exposure is gone. The latency did not cure #488; it
-    // changed which peer is exposed to it (S2's row, not S1's).
+    // conditions as without latency". Before #491 S1 was itself ✗ (#488) and
+    // the symmetric counts were [1, 4, 9, 10]; the slow leg spared the joiner
+    // only by moving it into the room's `setBy` role (measured at every drag),
+    // so it was not handed foreign frames at 1 Hz. Since #491 both sweeps read
+    // zero, and the role split stays pinned so a change in who is exposed
+    // still reds.
     const sweep = async (joinDelayMs: number): Promise<{ counts: number[]; setBy: string[] }> => {
       const counts: number[] = []
       const setBy = new Set<string>()
@@ -180,7 +180,7 @@ describe('SyncplayClient — two-peer interaction rows (#489 Tier 1)', () => {
       return { counts, setBy: [...setBy].sort() }
     }
 
-    it('moves the joiner into the setBy role on the slow leg, which is what spares it (#488 ✗)', async () => {
+    it('keeps the joiner’s seek on both legs, the slow one still moving it into the setBy role (#488, fixed by #491)', async () => {
       const symmetric = await sweep(DELAY_MS)
       const slow = await sweep(150)
       expect(symmetric).toEqual({ counts: SYMMETRIC, setBy: SYMMETRIC_SETBY })
@@ -189,7 +189,7 @@ describe('SyncplayClient — two-peer interaction rows (#489 Tier 1)', () => {
   })
 })
 
-const SYMMETRIC = [1, 4, 9, 10]
+const SYMMETRIC = [0, 0, 0, 0]
 const SLOW = [0, 0, 0, 0]
 const SYMMETRIC_SETBY = ['hostuser']
 const SLOW_SETBY = ['joinuser']

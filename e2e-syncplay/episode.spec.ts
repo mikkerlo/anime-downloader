@@ -195,7 +195,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
   }
 })
 
-test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed, #487 fixed)', async () => {
+test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's window, both near 0 (#486 fixed, #487 fixed)", async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E2')
   try {
@@ -220,6 +220,11 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
       // Next, and N+2 is what it asks for: #492 swallows only inside the window.
       const bMetaAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadedmetadata')?.at
       const bPress = bPressAt - (r.pressAt - 3000)
+      // The follow's lock release, proxied by B's first `loadstart` after A's
+      // press: the release is queued right behind the source write.
+      const bLoadAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadstart')?.at
+      const inWindow =
+        bLoadAt !== undefined && bMetaAt !== undefined && bPress >= bLoadAt && bPress < bMetaAt
       const n2 = r.epA === '3' || r.epB === '3'
       const skipped = n2 && (bMetaAt === undefined || bPress < bMetaAt)
       const diverged = r.epA !== r.epB
@@ -232,8 +237,10 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
           secondNext: n2 && !skipped,
           swallowed: traceB.toasts.some((t) => t.txt.startsWith('Already switching')),
           diverged,
+          inWindow,
           gap,
           bPress,
+          bLoadAt,
           bMetaAt,
           epA: r.epA,
           epB: r.epB
@@ -247,6 +254,11 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
     // The row guards two bugs, each asserted on its own so a regression names
     // its half. #493 flipped #486's, #492 flipped #487's.
     const scoreable = s.records.filter((r) => r.setupOk)
+    // With no scoreable press inside #487's window, `skipped == 0` tests
+    // nothing: print the count beside the score so a vacuous pass is visible.
+    process.stdout.write(
+      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} of scoreable=${s.scoreable}\n`
+    )
     expect(scoreable.filter((r) => r.stale).length, '#486 stale start after #493').toBe(0)
     expect(scoreable.filter((r) => r.skipped).length, '#487 skip to N+2 after #492').toBe(0)
   } finally {

@@ -60,12 +60,21 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
       await A.togglePlayButton()
       const resumed = await bothPlaying(A, B, 4000)
       const [ar, br] = await Promise.all([A.state(), B.state()])
-      const bad =
-        !paused || !resumed || Math.abs(ap.ct - bp.ct) > 1 || Math.abs(ar.ct - br.ct) > 1.5
+      // Every failing clause, so a red row says which half broke in the job log
+      // itself rather than only in the uploaded JSONL.
+      const reasons = [
+        !paused && `not both paused within 3 s (A ${ap.paused}, B ${bp.paused})`,
+        Math.abs(ap.ct - bp.ct) > 1 && `paused spread ${(ap.ct - bp.ct).toFixed(2)} s > 1`,
+        !resumed && `not both playing within 4 s (A ${!ar.paused}, B ${!br.paused})`,
+        Math.abs(ar.ct - br.ct) > 1.5 && `playing spread ${(ar.ct - br.ct).toFixed(2)} s > 1.5`
+      ].filter((r): r is string => typeof r === 'string')
+      const bad = reasons.length > 0
+      if (bad) process.stdout.write(`[syncplay-e2e] P1 run ${i} bad: ${reasons.join('; ')}\n`)
       row.add(
         {
           setupOk: true,
           bad,
+          reasons,
           paused,
           resumed,
           pausedSpread: ap.ct - bp.ct,

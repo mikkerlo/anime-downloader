@@ -26,7 +26,9 @@ export class App {
     protocol.registerSchemesAsPrivileged([
       {
         scheme: 'anime-video',
-        privileges: { stream: true, bypassCSP: true, supportFetchAPI: true }
+        // corsEnabled: the player's crossorigin <video> loads from a file:// page,
+        // which Electron >= 41.4 blocks as a cross-origin read without it.
+        privileges: { stream: true, bypassCSP: true, supportFetchAPI: true, corsEnabled: true }
       }
     ])
 

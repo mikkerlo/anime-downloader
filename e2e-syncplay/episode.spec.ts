@@ -3,7 +3,7 @@
 //   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
 //   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 ✗
-//   E5  Next pressed while the room is paused                        #486 (fixed), resume ✗
+//   E5  Next pressed while the room is paused                        #486 (fixed), resume #496 ✗
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -23,7 +23,7 @@
 // the position, so E5's #486 half is flipped (no stale run, right episode). The
 // resume half did not follow: on the first two local runs after the rebase onto
 // #493, 5 of 6 scoreable runs ended with both instances paused at ~0 on the new
-// episode, not stale. That half is ✗ (`not resumed ≥ 1`) until its own fix flips it to
+// episode, not stale. That half is #496 ✗ (`not resumed ≥ 1`) until #496's fix flips it to
 // "every run resumed".
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
@@ -221,7 +221,7 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
   }
 })
 
-test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md) ✗', async () => {
+test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md, #496 ✗)', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E5')
   try {
@@ -269,7 +269,7 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
     // #486 half, flipped by #493: every scoreable run on the right episode, near 0.
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
-    // ✗ half: the rig must see the room stay paused at least once.
+    // ✗ half (#496): the rig must see the room stay paused at least once.
     const scoreable = s.records.filter((r) => r.setupOk)
     expect(
       scoreable.filter((r) => !r.resumed).length,

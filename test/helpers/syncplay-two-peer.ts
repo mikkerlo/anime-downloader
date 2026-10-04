@@ -437,17 +437,20 @@ export class HarnessVideo {
       // always standing in for, and it has to stay. Re-anchoring
       // unconditionally snaps every `seekLandMs: 0` element back onto its
       // target on the following slice, discarding the ~0.05 s it has already
-      // walked since the write landed, and reds three files by exactly that
-      // much for reasons with no connection to the mid-seek reading:
-      // `syncplay-two-peer-seek-echo.test.ts:114` reads 400.1000000715256
-      // against a close-to of 400.15, the same shape repeats at
-      // `syncplay-two-peer-seek-echo.test.ts:207` and
-      // `syncplay-two-peer-seek-echo.test.ts:208` (800.1 against 800.15), and
-      // `syncplay-two-peer-ignore-counters.test.ts:239` reads 700.0499999523163
-      // against 700.1 — plus `syncplay-two-peer-rtt.test.ts` and one adoption
-      // test off the same shift. The numbers are written down because keeping
-      // this guard is what makes deleting the field free, and the next person
-      // tidying the field's leftovers away will try exactly this.
+      // walked since the write landed, and reds eight tests across six files
+      // for reasons with no connection to the mid-seek reading (re-measured on
+      // #488's tip, `test/services/` run):
+      // `syncplay-two-peer-rtt.test.ts:122` reads 901.5 against a close-to of
+      // 901.45, `syncplay-two-peer-inflight-seek.test.ts:281` reads 300
+      // against 300.05, an adoption test, two loop tests and two episode-change
+      // tests read the same 0.05 short (307.45 against 307.5, say), and
+      // `syncplay-two-peer-seek-echo.test.ts:136` loses its four tie-broken
+      // periodics because the two elements no longer report bit-identical
+      // positions. Before #488 announced user seeks at intent the shift showed
+      // in the seek-echo and ignore-counter close-tos instead (400.1 against
+      // 400.15, 700.05 against 700.1). The numbers are written down because
+      // keeping this guard is what makes deleting the field free, and the next
+      // person tidying the field's leftovers away will try exactly this.
       if (this.seekLandMs > 0) {
         this.anchor = this.pending.target
         this.anchorAt = Date.now()
@@ -560,9 +563,12 @@ export interface Peer {
    *  what the client measured. It is 0 until the first echo completes a round
    *  trip, which is itself worth being able to say. */
   rtt(): number
-  /** The user drags the scrubber: a bare `currentTime` write with no
-   *  programmatic operation armed, so the resulting `seeked` reaches the room as
-   *  the user's own seek. */
+  /** The user drags the scrubber: the composable's `seekAsUser`, the door
+   *  `PlayerView.seek()` hands every user seek to. It registers a `value`
+   *  operation, writes `currentTime` and announces the seek at intent (#488),
+   *  so the eventual `seeked` is consumed rather than announced a second time.
+   *  A bare `el.currentTime = to` here would exercise the pre-#488 path, and
+   *  #488's regression sweep would stay red whatever the composable did. */
   userSeek(to: number): void
   /** The user presses play / pause. */
   userPlay(): void
@@ -629,6 +635,10 @@ export interface Peer {
   ): Promise<void>
   /** Deliver whatever the element has queued, into the composable. */
   tick(): void
+  /** Fan this element's `seeked` to one more consumer, ahead of the
+   *  composable's — the order `PlayerView`'s `onVideoSeekedAll` runs them in,
+   *  where `useSkipMarkers` is the other consumer (#238). */
+  onSeeked(listener: () => void): void
   unmount(): void
 }
 
@@ -913,10 +923,13 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
     await flushPromises()
 
     const client = graph.client
+    const seekedListeners: (() => void)[] = []
     const deliver = (): void => {
       for (const event of el.tick()) {
-        if (event === 'seeked') ui!.onVideoSeeked()
-        else if (event === 'play') ui!.onLocalPlay()
+        if (event === 'seeked') {
+          for (const listener of seekedListeners) listener()
+          ui!.onVideoSeeked()
+        } else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
         // `src/renderer/src/components/views/PlayerView.vue:3038` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
@@ -940,7 +953,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       adopted: () => adoptedOf(client),
       rtt: () => rttOf(client),
       userSeek: (to: number) => {
-        el.currentTime = to
+        ui!.seekAsUser(to)
       },
       userPlay: () => {
         void el.play()
@@ -1001,6 +1014,9 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
         el.reload(src ?? `harness://${peerOpts.username}/ep-${ep}`)
       },
       tick: deliver,
+      onSeeked: (listener) => {
+        seekedListeners.push(listener)
+      },
       unmount: () => wrapper.unmount()
     }
     peers.push(peer)

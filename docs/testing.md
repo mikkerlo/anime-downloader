@@ -135,11 +135,11 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1455` could drift from it
-  and nothing would notice. Both peers now run the shipped rule, and mutating
-  that literal reds the file for any narrowing and for any widening to 4.0 s or
-  beyond — every drift in that run lands on an exact integer, so what the file
-  pins the literal into is the half-open window `[3.0, 4.0)` rather than a point.
+  `src/renderer/src/composables/use-syncplay-client.ts:1485` could drift from it
+  and nothing would notice. Both peers now run the shipped rule. The file no
+  longer pins that literal: #488 rewrote it to pin the yank's absence in both
+  roles, and the window `[3.0, 4.0)` it held the literal in is now named only
+  by `use-syncplay-client.test.ts`'s 1 Hz mirror-sourced playing-frames case.
 
   The loop is **not** built on the in-process IPC loop above, because that mock's
   registries are process-wide and keyed by channel name — two peers would

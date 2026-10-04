@@ -154,15 +154,18 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // advances and the ack is *re-armed* on the newer value: only the newest
     // change is tracked, so the first one's echo protection is given up here and
     // not when it is answered.
+    //
+    // Read in the same call, at t=4050: since #488 a drag is announced at
+    // intent, inside `userSeek`, so each change leaves one slice earlier than
+    // the `seeked`-borne sends this file was first written against.
     host.userSeek(800)
-    await room.advance(0.05)
     expect(counters(host)).toEqual({
       clientIgnoreCounter: 2,
       pendingClientAck: 2,
       pendingServerAck: 0
     })
 
-    // t=4150. The forced update for the *first* drag arrives — counter 1, not 2
+    // t=4100. The forced update for the *first* drag arrives — counter 1, not 2
     // — and closes the window anyway: `src/main/syncplay.ts:1831` zeroes
     // `pendingClientAck` unconditionally rather than comparing it. The second
     // drag is still in flight at this instant.
@@ -202,10 +205,16 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     await room.advance(4)
     host.frames.length = 0
 
-    // Both users act in the same slice.
+    // Both changes leave in the same slice. The joiner drags one slice after the
+    // host presses pause: since #488 a drag is announced at intent, inside
+    // `userSeek`, so pressing both at t=4000 would put the seek on the wire a
+    // slice *ahead* of the pause — which is only classified, and sent, when its
+    // `pause` event is delivered at t=4050 — and the crossing would collapse
+    // into a tie. Dragging at t=4050 is when the `seeked`-borne send this case
+    // was written against left anyway.
     host.userPause()
-    joiner.userSeek(700)
     await room.advance(0.05)
+    joiner.userSeek(700)
     expect(counters(host).pendingClientAck).toBe(1)
     expect(counters(joiner).pendingClientAck).toBe(1)
 
@@ -236,7 +245,9 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // And it was applied: the host's element, which the user had just paused at
     // ~103, is written to the peer's target.
     expect(host.el.seekWrites).toHaveLength(1)
-    expect(host.el.seekWrites[0]).toBeCloseTo(700.1, 1)
+    // 700 plus the 50 ms flight; 700.1 before #488, when the drag left on its
+    // `seeked` carrying the slice the joiner's element had walked since.
+    expect(host.el.seekWrites[0]).toBeCloseTo(700.05, 1)
 
     // Our own echo, arriving a slice later, adds nothing — it is `setBy` us and
     // dies at `src/main/syncplay.ts:2146`. One delivered frame for the crossing,

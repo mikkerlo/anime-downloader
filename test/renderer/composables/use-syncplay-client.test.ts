@@ -5076,14 +5076,16 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // **This line is the only mutation control that names the tolerance
     // literal's value rather than merely tripping over it, and it has to be
     // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1455` reds five
-    // tests across four files; the other four red on counts and positions a
-    // reader cannot invert back into a tolerance —
-    // `syncplay-seek-crossfire.test.ts` reports `to have a length of 5 but
-    // got 2`, two tests in `syncplay-two-peer-episode-change.test.ts` report
-    // `to have a length of 1 but got +0`, and
+    // `src/renderer/src/composables/use-syncplay-client.ts:1485` reds seven
+    // tests across three files (re-measured on #488's tip, full suite); the
+    // other six red on counts and positions a reader cannot invert back into a
+    // tolerance — five in `syncplay-two-peer-episode-change.test.ts` report
+    // `to have a length of 1 but got +0` or `expected +0 to be 1`, and
     // `syncplay-two-peer-inflight-seek.test.ts` reports `expected [ 6, 6, 6 ]
     // to deeply equal [ 6, 4, 6 ]`. Only this line's failure states the number.
+    // `syncplay-seek-crossfire.test.ts` used to be on this list (`to have a
+    // length of 5 but got 2`); #488 rewrote it to pin the yank's absence, and
+    // it no longer reacts to the literal.
     //
     // What it pins is the half-open window `[3.0, 4.0)`, not a point. The
     // element is parked at 600 and handed seven 1 Hz frames at 601…607, so the
@@ -6422,5 +6424,181 @@ describe('useSyncplayClient — the episode-switch mark and snapshot hold (#486)
     client.onVideoTimeUpdate()
 
     expect(sendSnapshot).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #488. The user's own seek is announced at intent, by `seekAsUser`, rather
+// than on its `seeked`: a room frame landing while the seek was still loading
+// used to write the old position back, abort the seek, and leave the user's
+// target unannounced. The two-peer sweep in
+// `test/services/syncplay-two-peer-seek-revert.test.ts` is the end-to-end
+// regression; these pin the composable's half of the contract one rule at a
+// time, each with the mutation it is the control for.
+describe('useSyncplayClient — seekAsUser announces the user’s seek at intent (#488)', () => {
+  it('registers, writes, then announces — the target, once, with the seeked consumed', async () => {
+    // Read the element *at the send*: announcing before the write would send
+    // the position we are leaving with `doSeek: true`, and the server's
+    // `forcePositionUpdate` would pin the whole room there.
+    const v = fakeVideo({ currentTime: 100 } as Partial<HTMLVideoElement>)
+    const atSend: number[] = []
+    const sendLocalState = vi.fn(() => {
+      atSend.push(v.currentTime)
+    })
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }))
+
+    client.seekAsUser(600)
+
+    expect(rawCurrentTimeWrites.get(v)).toEqual([600])
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 600, cause: 'seek' })
+    expect(atSend).toEqual([600])
+
+    // The landing is consumed by the operation registered at intent, so the
+    // room hears the seek exactly once.
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the seeked when it cannot announce below HAVE_METADATA', async () => {
+    // `hasAnnounceablePosition` drops a send at `readyState 0`, so an operation
+    // registered there would consume the eventual `seeked` and the seek would
+    // reach the room by neither route. Nothing is registered; the `seeked`
+    // announces it — the one send `onVideoSeeked` still owns.
+    const v = fakeVideo({ readyState: 0 } as Partial<HTMLVideoElement>)
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }))
+
+    client.seekAsUser(300)
+    expect(rawCurrentTimeWrites.get(v)).toEqual([300])
+    expect(sendLocalState).not.toHaveBeenCalled()
+    ;(v as unknown as { readyState: number }).readyState = 1
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+    expect(sendLocalState).toHaveBeenCalledWith({ paused: true, position: 300, cause: 'seek' })
+  })
+
+  it('is a bare write outside a session', async () => {
+    const v = fakeVideo()
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }), { state: 'idle' })
+
+    client.seekAsUser(42)
+    client.onVideoSeeked()
+    expect(rawCurrentTimeWrites.get(v)).toEqual([42])
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('retracts its operation and rethrows when the write throws, announcing nothing', async () => {
+    const v = fakeVideo()
+    Object.defineProperty(v, 'currentTime', {
+      configurable: true,
+      get: () => 10,
+      set: () => {
+        throw new TypeError('restricted double')
+      }
+    })
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }))
+
+    expect(() => client.seekAsUser(500)).toThrow(TypeError)
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // Retracted, not left armed: a `seeked` at that position is the user's.
+    Object.defineProperty(v, 'currentTime', { configurable: true, get: () => 500 })
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves nothing behind from a superseded press that could swallow a later seek', async () => {
+    // A second write aborts the first seek, whose `seeked` then never comes.
+    // Without the retract in `seekAsUser` the first press's operation would
+    // stay armed for the full TTL, and here it consumes the fallback-path
+    // `seeked` of a later seek to the same position, which then never reaches
+    // the room. (Held keys also used to push the registry at its cap of 16.)
+    const v = fakeVideo({ currentTime: 100 } as Partial<HTMLVideoElement>)
+    const sendLocalState = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState })
+    const { client } = await mountWithRemoteState(makeDeps({ video: v }))
+
+    client.seekAsUser(110)
+    client.seekAsUser(105)
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(2)
+
+    // A seek the composable cannot announce at intent (an element reloading,
+    // say), whose `seeked` arrives once it has metadata again.
+    ;(v as unknown as { readyState: number }).readyState = 0
+    client.seekAsUser(110)
+    ;(v as unknown as { readyState: number }).readyState = 1
+    client.onVideoSeeked()
+    expect(sendLocalState).toHaveBeenCalledTimes(3)
+    expect(sendLocalState).toHaveBeenLastCalledWith({ paused: true, position: 110, cause: 'seek' })
+  })
+
+  describe('the apply holds a heartbeat correction while the seek is in flight', () => {
+    async function inFlight(): Promise<{
+      v: FakeVideo
+      client: Client
+      emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+    }> {
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100 } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }))
+      client.seekAsUser(600)
+      return { v, client, emitRemoteState }
+    }
+
+    it('does not write a heartbeat-shaped correction over the in-flight target', async () => {
+      const { v, client, emitRemoteState } = await inFlight()
+      // The other peer's heartbeat re-elected the old position: foreign, no
+      // `doSeek`, 495 s from the target the element already reports.
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600])
+      expect(v.currentTime).toBe(600)
+      // And nobody is named for a seek they did not make.
+      expect(client.syncplayToast.value).toBe('')
+    })
+
+    it('still applies a peer’s deliberate doSeek — last writer wins', async () => {
+      const { v, emitRemoteState } = await inFlight()
+      emitRemoteState({ position: 900, paused: true, doSeek: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 900])
+    })
+
+    it('lets go on the seek’s own seeked', async () => {
+      const { v, client, emitRemoteState } = await inFlight()
+      client.onVideoSeeked()
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
+    })
+
+    it('lets go when the operation expires without a seeked', async () => {
+      const { v, emitRemoteState } = await inFlight()
+      vi.advanceTimersByTime(15000)
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
+    })
+
+    it('lets go on a source swap', async () => {
+      const { v, client, emitRemoteState } = await inFlight()
+      client.bumpPlaybackSourceGeneration()
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
+    })
+
+    it('keys on the user’s seek, not on any seek in flight', async () => {
+      // A programmatic write (a resume land, a restore) arms nothing here: the
+      // hold is for the user's announced seek, not for `v.seeking`.
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100 } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }))
+      client.beginProgrammaticSeek(600)
+      v.currentTime = 600
+      emitRemoteState({ position: 105, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([600, 105])
+    })
   })
 })

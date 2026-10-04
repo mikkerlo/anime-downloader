@@ -48,8 +48,10 @@
 // minutes, and the bound is the point rather than a weakness of the fixture:
 // what a mid-seek peer announces is its **target**, so the damage is bounded by
 // how far the target lags the room, not by 0. `syncplay-seek-crossfire.test.ts`
-// is the same mechanism at the scale the capture found it, where the target is
-// 545 s away from where the room ends up.
+// was the same mechanism at the scale the capture found it, where the target
+// was 545 s away from where the room ended up; since #488 announces a user seek
+// at intent that file pins the yank's absence, and the seconds-scale drag of
+// the *buffered* peer it still sees at long landings is this file's mechanism.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -113,7 +115,7 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
 
     // Readiness is what lags, not the position — which is exactly why the
     // outbound door lets this out. `hasAnnounceablePosition()` tests
-    // `readyState >= 1` (`use-syncplay-client.ts:813`) and the element is at 1
+    // `readyState >= 1` (`use-syncplay-client.ts:778`) and the element is at 1
     // throughout, with no data anywhere near the position it is announcing.
     expect(joiner.el.readyState).toBe(1)
     expect(joiner.el.readyStates).toEqual([1])

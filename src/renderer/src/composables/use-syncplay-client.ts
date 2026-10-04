@@ -235,6 +235,14 @@ export type SyncplayClient = {
    *  The returned handle retracts exactly this operation, for a `currentTime`
    *  write that throws and whose `seeked` therefore never arrives. */
   beginProgrammaticSeek: (target: number) => SyncplaySeekOp
+  /** Perform the **user's** own seek to an already-clamped `target` — the
+   *  scrubber, the ±5 s keys, skip OP/ED (#488). Registers a `value` operation
+   *  (retracting the previous user seek's), writes `currentTime`, then
+   *  announces the seek to the room at once, so a room frame arriving while
+   *  the seek is still loading cannot undo it. Outside a session, or below
+   *  HAVE_METADATA, it is a bare write and the element's `seeked` announces
+   *  it instead. A write that throws retracts its operation and rethrows. */
+  seekAsUser: (target: number) => void
   /** "Should this element be playing right now?" — the readiness gate's own
    *  decision, exposed so a caller that is about to move the element can ask it
    *  instead of guessing (#347).
@@ -816,14 +824,14 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
 
   function sendSyncplayLocalState(cause: 'play' | 'pause' | 'seek'): void {
     if (syncplayStatus.value.state !== 'ready') return
-    // No cause is gated on the clock any more (#304). Every cause this function
-    // takes — `play`, `pause`, `seek` — reaches it only past its own operation
-    // registry: `onVideoSeeked` returns above the send on `consumeSeekOp`
-    // (#306 Phase B) and `onLocalPlay` / `onLocalPause` return above theirs on
-    // `consumePlaybackOp` (#306 Phase A). So everything arriving here has
-    // already been classified as the user's, and the 1500 ms
-    // `suppressNextLocalEventUntil` window that used to sit on this line could
-    // only drop presses the registries had already vouched for.
+    // No cause is gated on the clock any more (#304). Every caller of this
+    // function is already the user's by construction: `onVideoSeeked` returns
+    // above the send on `consumeSeekOp` (#306 Phase B), `onLocalPlay` /
+    // `onLocalPause` return above theirs on `consumePlaybackOp` (#306 Phase A),
+    // and `seekAsUser` (#488) is called only from the user's own seek paths and
+    // announces at intent, after its write, so `v.currentTime` below already
+    // reads the target. The 1500 ms `suppressNextLocalEventUntil` window that
+    // used to sit on this line could only drop events that were the user's.
     //
     // Seek lost the window first (#239), for the reason the whole shape was
     // wrong: it dropped *every* seek inside it — including the user's, to a
@@ -1075,7 +1083,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // intent and only the enactment block's bumps. The narrow adoption above the
     // early-out (use-syncplay-client.ts:1584) deliberately does not, so a room state that reaches
     // the element half by the no-op path writes intent without superseding anything
-    // — the argument for that omission is at :1474-1487, and
+    // — the argument for that omission is at :1558-1571, and
     // `does not supersede a queued episode-start across a run of no-op applies (#331)`
     // pins it.
     //
@@ -1151,8 +1159,9 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // restores, the episode-nav rewind to 0 — must arm this before the write, or
   // the resulting `seeked` reads as intent and the reference server broadcasts
   // it to the whole room (`forcePositionUpdate` sets *every* watcher's
-  // position). The user's own paths (`seek()`, the scrubber's `commitSeek`)
-  // deliberately do not.
+  // position). The user's own paths (PlayerView's `seek()`, which the scrubber,
+  // the keys and skip OP/ED all reach) go through `seekAsUser` instead, which
+  // registers a strict `value` operation and announces the seek itself (#488).
   //
   // TTL-bounded, and value-agnostic for the ordinary write — see the seek
   // registry block above.
@@ -1240,6 +1249,71 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       return registerSeekOp(target, 'value')
     }
     return registerSeekOp(target, 'any')
+  }
+
+  // The user's own seek (#488): the scrubber, the ±5 s keys and skip OP/ED all
+  // land in PlayerView's `seek()`, which hands the clamped target here.
+  //
+  // It is announced at *intent*, not on `seeked`. While the write is in flight
+  // the element already reports the target, so the 1 Hz snapshot carries it
+  // with `doSeek: false`, the server's `min()` election keeps the room at the
+  // other peer's old position, and the next foreign frame used to reach the
+  // apply with `diff > 3.0`, write the old position back and abort this seek —
+  // whose own `seeked` then never fired, so the room never heard of it.
+  // Announcing now bumps main's ignore counter for the flight
+  // (`sendLocalState`) and moves the peers without waiting for our buffering.
+  //
+  // The order is the whole contract, and it is `seekProgrammatically`'s:
+  // register, write, announce. Registered first so the element's `seeked`
+  // cannot beat the operation into the registry. Announced *after* the write
+  // because `sendSyncplayLocalState` reads `v.currentTime`: announcing first
+  // would send the position we are leaving with `doSeek: true`, and
+  // `forcePositionUpdate` would pin the whole room there.
+  //
+  // A `value` operation, directly, never `beginProgrammaticSeek`: that one
+  // registers `any` whenever the element is not already at the target, and an
+  // `any` operation consumes the next `seeked` wherever it lands — a remote
+  // apply's echo included.
+  //
+  // The previous user operation is retracted first. A second write aborts the
+  // first seek, whose `seeked` then never comes, so without this a held arrow
+  // key leaves one orphan per repeat alive for the full TTL, each able to
+  // consume some later `seeked` near its target.
+  //
+  // Nothing is registered when nothing can be announced — no session, or an
+  // element below HAVE_METADATA, where `hasAnnounceablePosition` would drop the
+  // send. Then the write is the bare write it always was, and the `seeked` it
+  // eventually fires is what announces it (`onVideoSeeked`): an operation here
+  // would consume that `seeked` and the seek would reach the room by neither
+  // route.
+  let userSeekOp: SyncplaySeekOp = NO_SEEK_OP
+
+  function seekAsUser(target: number): void {
+    const v = deps.getVideoEl()
+    if (!v) return
+    userSeekOp.retract()
+    userSeekOp = NO_SEEK_OP
+    const announce = syncplayStatus.value.state === 'ready' && hasAnnounceablePosition(v)
+    const op = announce ? registerSeekOp(target, 'value') : NO_SEEK_OP
+    try {
+      v.currentTime = target
+    } catch (err) {
+      op.retract()
+      throw err
+    }
+    userSeekOp = op
+    if (announce) sendSyncplayLocalState('seek')
+  }
+
+  // Whether the user's announced seek is still in flight: its operation is
+  // still registered, on this source. Cleared by its `seeked` (consumed, or
+  // retracted in `onVideoSeeked`), by the next user seek, by expiry, and by a
+  // source swap (retired). Deliberately not `v.seeking`: the apply's own write,
+  // an MSE respawn land and the programmatic restores all set that too.
+  function isUserSeekInFlight(): boolean {
+    if (userSeekOp.id === 0) return false
+    const now = Date.now()
+    return seekOps.some((o) => o.id === userSeekOp.id && now < o.expiresAt && !isSeekOpRetired(o))
   }
 
   function setSyncplayLocalReady(ready: boolean): void {
@@ -1467,7 +1541,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       refusedToastShown = true
       showSyncplayToast(OUT_OF_FILE_TOAST)
     }
-    const needsSeek = !outOfFile && wouldSeek
+    // The belt to `seekAsUser`'s announcement (#488). Our `doSeek` bump only
+    // protects the flight until the server acks it, and a peer heartbeat sent
+    // before that peer received our seek can still re-elect the old position
+    // and arrive here as an inferred `diff > 3.0` correction — `diff` measured
+    // against our in-flight target. Writing it would abort the seek. So while
+    // the user's announced seek is in flight, only the heartbeat-shaped arm is
+    // held; a `doSeek` frame is a peer's deliberate seek and still wins (last
+    // writer wins). The hold moves nothing else: the paused half below is
+    // computed independently.
+    const heldForUserSeek = !state.doSeek && isUserSeekInFlight()
+    const needsSeek = !outOfFile && wouldSeek && !heldForUserSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     // The resume half of the same refusal (#281, slice B). A room *pause* is
     // still honored — that direction costs the user nothing and keeps the two
@@ -1490,7 +1574,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // sits above that write, so an apply whose position and paused-ness the
     // element already matches used to adopt nothing — while
     // `pushSyncplaySnapshot` announces `intentOr(v)` (`intendedPaused ??
-    // v.paused`, :444), not `v.paused`.
+    // v.paused`, :452), not `v.paused`.
     //
     // What makes that a lost pause rather than a cosmetic gap. Nothing but the
     // user handlers and this adoption writes `intendedPaused`: an `echo`
@@ -1533,11 +1617,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // **`!outOfFile`, deliberately broader than `!refusingResume`:** *any*
     // intent write above the early-out is unsafe for the whole out-of-file
     // divergence, not only for the frames the refusal is actually firing on.
-    // `refusingResume` carries `!effectivePaused` (:1441) and `effectivePaused`
-    // folds in `!syncplayAllUsersReady()` (:1427), so one peer going not-ready
+    // `refusingResume` carries `!effectivePaused` (:1525) and `effectivePaused`
+    // folds in `!syncplayAllUsersReady()` (:1511), so one peer going not-ready
     // makes the refusal false while `outOfFileUserPause` is still armed: a room
     // resume then reaches this line with `v.paused` still true (the gate's
-    // resume arm needs `!outOfFileUserPause`, :1243, so nothing resumed us),
+    // resume arm needs `!outOfFileUserPause`, :1317, so nothing resumed us),
     // `needsPlayPause` false and `needsSeek` false under `outOfFile`, and
     // nothing clears the marker in the meantime. A `!refusingResume` guard would perform there,
     // once a second for the whole divergence — main is de-adopted for its length, so the room's
@@ -1773,7 +1857,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // hold is waiting for"), and a gate here contradicted it.
     //
     // The gate never withheld a payload in any case, only delayed one: the 1 s
-    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2340) is
+    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2438) is
     // unconditional and `pushSyncplaySnapshot` has no `holding` term of its
     // own, so the identical snapshot reached main within a second regardless.
     // Dropping it is a latency change, not a semantic one.
@@ -2010,8 +2094,22 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // does not match is left registered on purpose, because this `seeked` belongs
   // to some other write and consuming it there is what let the real echo escape
   // (#224); and a `seeked` matching nothing outstanding is the user's.
+  //
+  // Since #488 the user's own seek is announced at intent (`seekAsUser`) and
+  // its `seeked` is consumed here like any other operation's. The send below
+  // stays as the fallback for the seeks `seekAsUser` could not announce — no
+  // session yet, or an element below HAVE_METADATA — and for a landing the
+  // element clamped away from the announced target.
+  //
+  // Whatever this `seeked` is, the user's pending seek is over: a later write
+  // aborts an earlier seek, so the first `seeked` after the user's write is the
+  // survivor's — the user's own landing, or a peer's `doSeek` that superseded
+  // it. Its operation is retracted so the apply's hold ends with it.
   function onVideoSeeked(): void {
-    if (consumeSeekOp(deps.getVideoEl())) return
+    const consumed = consumeSeekOp(deps.getVideoEl())
+    userSeekOp.retract()
+    userSeekOp = NO_SEEK_OP
+    if (consumed) return
     sendSyncplayLocalState('seek')
   }
 
@@ -2461,6 +2559,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     beginProgrammaticPlayback,
     bumpPlaybackSourceGeneration,
     beginProgrammaticSeek,
+    seekAsUser,
     shouldElementPlay,
     applySyncplayReadyGate,
     toggleSyncplayConnection,

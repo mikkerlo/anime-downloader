@@ -888,6 +888,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
       slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
     )
     expect(handler).toContain('void walkEpisodeSteps(')
+    // `'follow'` since #486 — also the origin that arms the #487 token.
     expect(handler).toContain("() => goToEpisode(dir, 'follow')")
     // The loop itself is gone from the component — the break-on-outcome rule
     // lives in `walkEpisodeSteps` (see `test/renderer/utils.test.ts`), where it
@@ -899,6 +900,120 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     expect(SRC).toContain(
       "async function goToEpisode(\n  direction: 'prev' | 'next',\n  origin: SyncplayEpisodeSwitch\n): Promise<EpisodeStepOutcome> {"
     )
+  })
+})
+
+describe('#487 — the pending-follow token: armed by a remote Next, read only by the user’s Next', () => {
+  // `PlayerView` has no mount harness, so the decision lives in
+  // `shouldSwallowLocalNext` (unit-tested in
+  // `test/renderer/should-swallow-local-next.test.ts`, driven end to end in
+  // `test/services/syncplay-two-peer-episode-change.test.ts`) and these scans pin
+  // the component to it: who sets the token, who clears it, and who reads it.
+  const GO_TO = stripComments(slice('async function goToEpisode(', '\nfunction cancelAutoAdvance('))
+  const USER_NEXT = stripComments(
+    slice('function onUserNext(', '\nfunction onPrefetchSettingChanged(')
+  )
+  const CLEAR = 'if (navigationEpoch === myNav) pendingFollowIndex = null;'
+
+  it('routes the button and the keyboard Next through onUserNext, and nothing else', () => {
+    // The two user-facing call sites, and the wrapper is their only route.
+    expect(SOURCE).toContain('@nav="onUserNext"')
+    expect(SOURCE.split('@nav="onUserNext"').length - 1).toBe(1)
+    const keyboard = stripComments(slice("case 'next-episode':", 'break;'))
+    expect(keyboard.trim()).toBe("case 'next-episode':\n      onUserNext();")
+    // Exactly two callers: the template binding above and the keyboard case.
+    expect(SRC.split('onUserNext();').length - 1).toBe(1)
+
+    // The wrapper consults the helper with the token and the ACTIVE index, and
+    // consumes the token on a swallow — before the `goToEpisode` it skips.
+    expect(USER_NEXT).toContain(
+      'if (shouldSwallowLocalNext(pendingFollowIndex, activeEpisodeIndex.value)) {'
+    )
+    const consume = USER_NEXT.indexOf('pendingFollowIndex = null;')
+    expect(consume).toBeGreaterThan(USER_NEXT.indexOf('shouldSwallowLocalNext('))
+    expect(consume).toBeLessThan(USER_NEXT.indexOf("void goToEpisode('next', 'local');"))
+    // The `navigating` term sits ABOVE the helper call: a keyboard press during
+    // the follow's own in-flight step must not consume the token, or the press
+    // that lands after the source swap is free to skip.
+    const guard = USER_NEXT.indexOf('if (!canNext.value || navigating.value) return;')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(USER_NEXT.indexOf('shouldSwallowLocalNext('))
+  })
+
+  it('leaves Prev, auto-advance and the walk off the helper', () => {
+    // Whole-script: the helper is called from exactly one place.
+    expect(SRC.split('shouldSwallowLocalNext(').length - 1).toBe(1)
+    expect(SRC).toContain("if (canPrev.value) goToEpisode('prev', 'local');")
+    expect(SOURCE).toContain(`@nav="goToEpisode('prev', 'local')"`)
+    const ended = stripComments(slice('function onVideoEnded(', '\nfunction onUserNext('))
+    expect(ended).toContain("goToEpisode('next', 'local');")
+    expect(ended).not.toContain('onUserNext')
+    // The token is READ nowhere but the wrapper.
+    const reads = [...SRC.matchAll(/pendingFollowIndex(?!\s*=[^=])/g)].map((m) => m.index!)
+    const userStart = SRC.indexOf('function onUserNext(')
+    const userEnd = SRC.indexOf('\nfunction onPrefetchSettingChanged(')
+    // The declaration plus the one read in the helper call.
+    expect(reads).toHaveLength(2)
+    expect(reads.filter((at) => at > userStart && at < userEnd)).toHaveLength(1)
+  })
+
+  it('arms the token at the commit, for a remote Next only, and clears it on every other commit', () => {
+    const write =
+      "pendingFollowIndex = origin === 'follow' && direction === 'next' ? targetIndex : null;"
+    expect(GO_TO).toContain(write)
+    // In the episode-identity block, under the same ownership compare as every
+    // other write there — which is what stops a superseded step setting it.
+    const identity = GO_TO.indexOf('activeEpisodeIndex.value = targetIndex;')
+    expect(identity).toBeGreaterThan(-1)
+    expect(GO_TO.indexOf(write)).toBeGreaterThan(identity)
+    expect(
+      GO_TO.lastIndexOf("if (navigationEpoch !== myNav) return 'superseded';", identity)
+    ).toBeGreaterThan(GO_TO.lastIndexOf('await ', identity))
+    // The one place a token is armed: no other write outside goToEpisode but
+    // the consume in the wrapper.
+    const writes = [...SRC.matchAll(/pendingFollowIndex = (?!=)/g)].length
+    // Commit + loadedmetadata + three failure arms + the consume.
+    expect(writes).toBe(6)
+  })
+
+  it('clears it under ownership on loadedmetadata and on all three no-source arms', () => {
+    // Exactly four guarded clears in goToEpisode: the metadata listener and the
+    // three arms that return `'moved'` with no `loadedmetadata` behind them.
+    expect(GO_TO.split(CLEAR).length - 1).toBe(4)
+    // Both source arms install the same listener, so both clear it.
+    expect(
+      GO_TO.split("v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });")
+        .length - 1
+    ).toBe(2)
+    const listener = GO_TO.slice(GO_TO.indexOf('const onTargetMetadata = (): void => {'))
+    expect(listener.slice(0, listener.indexOf('};'))).toContain(CLEAR)
+
+    // Each failure arm clears it right beside its own `navigating` release.
+    const NAV = 'if (navigationEpoch === myNav) navigating.value = false;'
+    const arms = [
+      ['!prep.ok', GO_TO.indexOf('if (!prep.ok) {')],
+      ['null stream', GO_TO.indexOf('if (!result) {')],
+      ['catch', GO_TO.indexOf('} catch {')]
+    ] as const
+    for (const [name, at] of arms) {
+      expect(at, `${name}: arm missing`).toBeGreaterThan(-1)
+      const nav = GO_TO.indexOf(NAV, at)
+      const clear = GO_TO.indexOf(CLEAR, at)
+      expect(clear, `${name}: no token clear`).toBeGreaterThan(-1)
+      // Beside the arm's own `navigating` release — at most #486's hold release
+      // between them — and above the arm's first `return`, so no exit path
+      // skips it.
+      expect(
+        GO_TO.slice(nav + NAV.length, clear)
+          .replace('if (committed) syncplay.endEpisodeSwitchHold();', '')
+          .replace('syncplay.endEpisodeSwitchHold();', '')
+          .trim(),
+        `${name}: clear not beside release`
+      ).toBe('')
+      expect(GO_TO.indexOf('return ', nav), `${name}: a return above the clear`).toBeGreaterThan(
+        clear
+      )
+    }
   })
 })
 
@@ -2043,14 +2158,15 @@ describe('#486 — who started an episode change, and the hold every failure arm
   // buttons call from the template.
   it("passes 'follow' from the remote walk alone, and 'local' from every other caller", () => {
     // `[^)\n]` keeps the multi-line declaration out of the census.
+    // Both user-facing Nexts reach `goToEpisode` through `onUserNext` (#487),
+    // so the keyboard case and the template's Next button are one site.
     const calls = [...SOURCE.matchAll(/goToEpisode\(([^)\n]*)\)/g)].map((m) => m[1])
     expect(calls).toEqual([
       "dir, 'follow'",
       "'prev', 'local'",
       "'next', 'local'",
       "'next', 'local'",
-      "'prev', 'local'",
-      "'next', 'local'"
+      "'prev', 'local'"
     ])
   })
 

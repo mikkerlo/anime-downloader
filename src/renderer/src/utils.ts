@@ -259,6 +259,22 @@ export async function walkEpisodeSteps(
   return 'arrived'
 }
 
+// The follower's half of a both-press-next collision (#487). After a room
+// follow commits N+1, `navigating` is released at the source swap, well before
+// N+1's metadata loads, so a local Next pressed while the user is still looking
+// at N would step from the already-committed N+1 to N+2: one episode skipped on
+// both peers. `pending` is the index the last remote follow committed to, held
+// until that source loads (or one of its failure arms runs); a local Next while
+// it still names `active` is the press the follow has already answered.
+//
+// Only a remote Next follow sets `pending`, and only the user-facing Next consults
+// this — solo chained Next, Prev, auto-advance and the walk itself never do. The
+// caller CONSUMES the token on a swallow, so a deliberate second press goes
+// through and a follow that never loads cannot trap the user.
+export function shouldSwallowLocalNext(pending: number | null, active: number): boolean {
+  return pending !== null && pending === active
+}
+
 export type EpisodeResolutionTarget = {
   translations: PlayerTranslationEntry[]
   downloadedTrIds: number[]

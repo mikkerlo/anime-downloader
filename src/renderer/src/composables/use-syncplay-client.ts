@@ -766,7 +766,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // Scoped to the index change. A translation or quality switch keeps adoption
   // on purpose, and muting it past PLAYBACK_ASSERT_STALE_MS (2 s) would demote
   // a playing claim to the mirror mid-switch. Released on `loadedmetadata`, on
-  // `endEpisodeSwitchHold()` (a load error or a source that never arrived), on
+  // `endEpisodeSwitchHold()` (a load error or a source that never arrived),
   // and on a commit that is not an episode change. Like the mark, it lives in
   // this mount's closure, so `playerClosed` ends it with the mount and a
   // reopen starts unheld. Every step of a multi-step follow re-arms it.

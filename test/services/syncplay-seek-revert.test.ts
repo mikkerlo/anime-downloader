@@ -11,10 +11,10 @@
 //
 // The mechanism, as #488 traces it: a user seek is a bare `currentTime` write
 // and reaches the room only when its own `seeked` fires
-// (`onVideoSeeked`, `src/renderer/src/composables/use-syncplay-client.ts:1962`).
+// (`onVideoSeeked`, `src/renderer/src/composables/use-syncplay-client.ts:2108`).
 // While it is in flight the 1 Hz push carries the target with `doSeek: false`
 // and loses the server's `min()` election, and the next foreign frame reaches
-// the apply with `diff > 3.0` (`use-syncplay-client.ts:1411`), which writes the
+// the apply with `diff > 3.0` (`use-syncplay-client.ts:1529`), which writes the
 // room's old position back. That write aborts the user's seek, the only
 // `seeked` left is the apply's own, and the user's target is never announced.
 //

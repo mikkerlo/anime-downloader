@@ -9,19 +9,19 @@
 //
 // The mechanism, from #487: B follows A's change with an absolute index lookup
 // and a relative walk (`handleRemoteEpisodeChange`,
-// `src/renderer/src/components/views/PlayerView.vue:508`), and B's `navigating`
+// `src/renderer/src/components/views/PlayerView.vue:507`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3164`) — is released in the `nextTick` after
-// `playerGetStreamUrl` resolves (`PlayerView.vue:2484`), not when the followed
+// (`PlayerView.vue:3177`) — is released in the `nextTick` after
+// `playerGetStreamUrl` resolves (`PlayerView.vue:2494`), not when the followed
 // episode has loaded. B's user is still looking at episode N; if they press
 // Next after that release, `goToEpisode` reads its target relative to the
-// already-committed N+1 (`PlayerView.vue:2261`) and both peers land on N+2.
+// already-committed N+1 (`PlayerView.vue:2265`) and both peers land on N+2.
 //
 // ── What is real and what is modelled ────────────────────────────────────────
 //
 // Real: both main `SyncplayClient`s and their IPC routers, both mounted
 // `use-syncplay-client` composables, `MinElectionServer`, and
-// `walkEpisodeSteps` (`src/renderer/src/utils.ts:255`), the loop B's follow
+// `walkEpisodeSteps` (`src/renderer/src/utils.ts:251`), the loop B's follow
 // runs through. Modelled: `PlayerView`'s `goToEpisode` /
 // `handleRemoteEpisodeChange`, because there is no `PlayerView` mount harness.
 // The model is three properties, and the source-scan block at the end of this

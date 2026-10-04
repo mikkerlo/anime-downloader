@@ -17,11 +17,13 @@
     "test/**/*",
     "conformance/**/*",
     "e2e/**/*",
+    "e2e-syncplay/**/*",
     "src/shared/types/**/*.d.ts",
     "src/preload/types.d.ts",
     "src/renderer/src/env.d.ts",
     "vitest.config.ts",
     "vitest.conformance.config.ts",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "playwright.syncplay.config.ts"
   ]
 }

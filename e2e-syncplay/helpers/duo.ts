@@ -307,13 +307,16 @@ export async function launchInstance(
   app.process().stdout?.on('data', onMain)
   app.process().stderr?.on('data', onMain)
 
+  // `bootstrap()` calls `createWindow()` right after `registerIpcHandlers()`, so
+  // once the first window exists the app's own handlers are registered and the
+  // swap cannot race them into a "second handler" throw.
+  const page = await app.firstWindow()
   await swapPlayerHandlers(app, {
     base: rig.fixtures.base,
     local: opts.local ?? [],
     failing: opts.failing ?? [],
     resolveMs: opts.resolveMs ?? 300
   })
-  const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   // The cold-start IPC race (first window's listeners can miss the earliest
   // broadcasts): settle, then reload once, as every capture rig here does.

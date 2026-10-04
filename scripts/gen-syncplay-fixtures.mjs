@@ -110,6 +110,8 @@ function main() {
     JSON.stringify(have.params) === JSON.stringify(want) &&
     files.every((f) => fs.existsSync(path.join(OUT, f.name)))
   if (!fresh) {
+    // An interrupted run must not leave a truncated file the next one reads as fresh.
+    fs.rmSync(manifestPath, { force: true })
     for (const f of files) {
       process.stdout.write(`generating ${f.name} (${f.ep.durationS} s, ${f.height}p)\n`)
       encode(f.ep, f.height, path.join(OUT, f.name), f.container)

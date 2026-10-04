@@ -277,10 +277,10 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence
-  round-trip, keyboard shortcuts). Network/media-bound flows (search→enqueue,
-  player seek, live Shikimori sync) are deliberately excluded to keep CI
-  deterministic; their underlying logic is covered at the unit + integration
-  layers.
+  round-trip, keyboard shortcuts; `e2e/anime-video.spec.ts`: crossorigin
+  `<video>` + ranged `fetch()` of a 2 KB fixture over `anime-video://`).
+  Search→enqueue, player seek and live Shikimori sync are excluded to keep
+  CI deterministic; their logic is covered at the unit + integration layers.
 - **Conformance** (`conformance/`, #367) — the only layer whose subject is
   `MinElectionServer` itself rather than our code. Every fixture above believes
   the model; this one replays two-peer scenarios through real sockets against a

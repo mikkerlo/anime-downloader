@@ -913,7 +913,10 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
   const USER_NEXT = stripComments(
     slice('function onUserNext(', '\nfunction onPrefetchSettingChanged(')
   )
-  const CLEAR = 'if (navigationEpoch === myNav) pendingFollowIndex = null;'
+  // Keyed to the run that ARMED the token, not to whoever owns the epoch now
+  // (#492 review): a later run can bump `navigationEpoch` and return before its
+  // commit, and an epoch compare would then disarm the only clear still coming.
+  const CLEAR = 'if (pendingFollow?.nav === myNav) pendingFollow = null;'
 
   it('routes the button and the keyboard Next through onUserNext, and nothing else', () => {
     // The two user-facing call sites, and the wrapper is their only route.
@@ -927,9 +930,9 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     // The wrapper consults the helper with the token and the ACTIVE index, and
     // consumes the token on a swallow — before the `goToEpisode` it skips.
     expect(USER_NEXT).toContain(
-      'if (shouldSwallowLocalNext(pendingFollowIndex, activeEpisodeIndex.value)) {'
+      'if (shouldSwallowLocalNext(pendingFollow?.index ?? null, activeEpisodeIndex.value)) {'
     )
-    const consume = USER_NEXT.indexOf('pendingFollowIndex = null;')
+    const consume = USER_NEXT.indexOf('pendingFollow = null;')
     expect(consume).toBeGreaterThan(USER_NEXT.indexOf('shouldSwallowLocalNext('))
     expect(consume).toBeLessThan(USER_NEXT.indexOf("void goToEpisode('next', 'local');"))
     // The `navigating` term sits ABOVE the helper call: a keyboard press during
@@ -948,37 +951,56 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     const ended = stripComments(slice('function onVideoEnded(', '\nfunction onUserNext('))
     expect(ended).toContain("goToEpisode('next', 'local');")
     expect(ended).not.toContain('onUserNext')
-    // The token is READ nowhere but the wrapper.
-    const reads = [...SRC.matchAll(/pendingFollowIndex(?!\s*=[^=])/g)].map((m) => m.index!)
+    // The token's index is READ nowhere but the wrapper; every other read is a
+    // clear's owner compare on `.nav`.
+    const reads = [...SRC.matchAll(/pendingFollow\??\.index/g)].map((m) => m.index!)
     const userStart = SRC.indexOf('function onUserNext(')
     const userEnd = SRC.indexOf('\nfunction onPrefetchSettingChanged(')
-    // The declaration plus the one read in the helper call.
-    expect(reads).toHaveLength(2)
+    expect(reads).toHaveLength(1)
     expect(reads.filter((at) => at > userStart && at < userEnd)).toHaveLength(1)
   })
 
   it('arms the token at the commit, for a remote Next only, and clears it on every other commit', () => {
+    const flat = GO_TO.replace(/\s+/g, ' ')
     const write =
-      "pendingFollowIndex = origin === 'follow' && direction === 'next' ? targetIndex : null;"
-    expect(GO_TO).toContain(write)
+      "pendingFollow = origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;"
+    expect(flat).toContain(write)
     // In the episode-identity block, under the same ownership compare as every
     // other write there — which is what stops a superseded step setting it.
-    const identity = GO_TO.indexOf('activeEpisodeIndex.value = targetIndex;')
+    const identity = flat.indexOf('activeEpisodeIndex.value = targetIndex;')
     expect(identity).toBeGreaterThan(-1)
-    expect(GO_TO.indexOf(write)).toBeGreaterThan(identity)
+    expect(flat.indexOf(write)).toBeGreaterThan(identity)
     expect(
-      GO_TO.lastIndexOf("if (navigationEpoch !== myNav) return 'superseded';", identity)
-    ).toBeGreaterThan(GO_TO.lastIndexOf('await ', identity))
+      flat.lastIndexOf("if (navigationEpoch !== myNav) return 'superseded';", identity)
+    ).toBeGreaterThan(flat.lastIndexOf('await ', identity))
     // The one place a token is armed: no other write outside goToEpisode but
     // the consume in the wrapper.
-    const writes = [...SRC.matchAll(/pendingFollowIndex = (?!=)/g)].length
+    const writes = [...SRC.matchAll(/pendingFollow\s*=(?!=)/g)].length
     // Commit + loadedmetadata + three failure arms + the consume.
     expect(writes).toBe(6)
   })
 
+  it('keys every clear to the arming run, and leaves the pre-commit unreachable arm alone', () => {
+    // No clear compares on the current epoch owner: that is the compare a later
+    // run's pre-commit return disarms (#492 review).
+    expect(SRC).not.toMatch(/navigationEpoch === myNav\)\s*pendingFollow\s*=/)
+    // Every token clear inside goToEpisode is the owner-keyed one.
+    expect(GO_TO.split('pendingFollow = null;').length - 1).toBe(GO_TO.split(CLEAR).length - 1)
+    // The resolution's `unreachable` arm runs after this run's epoch bump and
+    // before its commit: it armed nothing, so it writes nothing — the token
+    // still set there is an earlier step's, for that step's metadata to clear.
+    const at = GO_TO.indexOf("if (resolution.outcome === 'unreachable') {")
+    expect(at).toBeGreaterThan(-1)
+    const arm = GO_TO.slice(at, GO_TO.indexOf("return 'unreachable';", at))
+    expect(arm).not.toContain('pendingFollow')
+    expect(at).toBeGreaterThan(GO_TO.indexOf('const myNav = ++navigationEpoch;'))
+    expect(at).toBeLessThan(GO_TO.indexOf('committed = true;'))
+  })
+
   it('clears it under ownership on loadedmetadata and on all three no-source arms', () => {
-    // Exactly four guarded clears in goToEpisode: the metadata listener and the
-    // three arms that return `'moved'` with no `loadedmetadata` behind them.
+    // Exactly four owner-keyed clears in goToEpisode: the metadata listener and
+    // the three arms that return `'moved'` with no `loadedmetadata` behind them.
+    // The pre-commit `unreachable` arm is not a fifth: it armed nothing.
     expect(GO_TO.split(CLEAR).length - 1).toBe(4)
     // Both source arms install the same listener, so both clear it.
     expect(

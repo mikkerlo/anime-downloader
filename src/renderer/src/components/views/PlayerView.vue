@@ -682,15 +682,19 @@ let translationEpoch = 0;
 let navigationEpoch = 0;
 
 // The pending-follow token (#487): the index a room-driven Next step committed
-// to, held until that step's source loads metadata. Set in exactly one place,
-// `goToEpisode`'s commit — `targetIndex` for a `'follow'` Next step, `null` for
-// every other one, which is what makes any local navigation (auto-advance
-// included) clear it. A remote Prev arms nothing: a local Next after it is not
-// the press the room already answered. Cleared by the committing run only
-// (`navigationEpoch === myNav`) on its `loadedmetadata` and on the three arms
-// that return `'moved'` with no source behind them, and consumed by
-// `onUserNext` — the one reader; see `shouldSwallowLocalNext`.
-let pendingFollowIndex: number | null = null;
+// to, held until that step's source loads metadata, stamped with the `myNav` of
+// the run that armed it. Set in exactly one place, `goToEpisode`'s commit — a
+// token for a `'follow'` Next step, `null` for every other one, which is what
+// makes any local navigation (auto-advance included) clear it. A remote Prev
+// arms nothing: a local Next after it is not the press the room already
+// answered. Cleared by the run that ARMED it (`pendingFollow?.nav === myNav`),
+// not by whoever owns `navigationEpoch` now, on its `loadedmetadata` and on the
+// three arms that return `'moved'` with no source behind them, and consumed by
+// `onUserNext` — the one reader; see `shouldSwallowLocalNext`. Keyed to the
+// owner because a later run can bump the epoch and then return before its own
+// commit (the `unreachable` resolution arm): an epoch compare would disarm this
+// source's clear and orphan the token on an episode that loaded long ago.
+let pendingFollow: { index: number; nav: number } | null = null;
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -2312,9 +2316,12 @@ async function goToEpisode(
   const targetEp = props.allEpisodes[targetIndex];
   // Both source arms' one-shot `loadedmetadata`. The token clear (#487) carries
   // its own compare: this fires long after the `nextTick` guard that installed
-  // it, and a later run's token is not this source's to clear.
+  // it, and a later run's token is not this source's to clear. The compare is
+  // on the token's owner, not on `navigationEpoch`: a later run that bumped the
+  // epoch and failed before its commit leaves this run's token in place, and
+  // only this listener is still coming to clear it.
   const onTargetMetadata = (): void => {
-    if (navigationEpoch === myNav) pendingFollowIndex = null;
+    if (pendingFollow?.nav === myNav) pendingFollow = null;
     resumeFromSavedPosition();
   };
 
@@ -2358,6 +2365,10 @@ async function goToEpisode(
     // `showNavToast`. Both halves land here: an episode with no usable
     // translation at all, and a fetch that failed (network down, API refused),
     // because the user cannot act differently on the two.
+    //
+    // No token clear here (#487): this run armed nothing, and a token still set
+    // belongs to an earlier step whose own `loadedmetadata` clears it, because
+    // that clear compares on the token's owner, not on this run's epoch bump.
     if (navigationEpoch === myNav) navigating.value = false;
     showNavToast(NAV_FAILED_MESSAGE);
     return 'unreachable';
@@ -2410,7 +2421,8 @@ async function goToEpisode(
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
     pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
-    pendingFollowIndex = origin === 'follow' && direction === 'next' ? targetIndex : null;
+    pendingFollow =
+      origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;
 
     // Try local file first if downloaded (forceLocal means we specifically chose a downloaded translation)
     if (forceLocal || targetEp.downloadedTrIds.includes(resolvedTr.id)) {
@@ -2492,7 +2504,7 @@ async function goToEpisode(
             // No `loadedmetadata` is coming for this step, so its pending-follow
             // token (#487) goes here or it swallows a press once the user is
             // already looking at the failure.
-            if (navigationEpoch === myNav) pendingFollowIndex = null;
+            if (pendingFollow?.nav === myNav) pendingFollow = null;
             // `moved`, not `unreachable`: the remux failed, but the episode
             // switch itself happened and `reportPrepareError` already put the
             // reason on screen, so a nav toast would be a second notice for one
@@ -2539,7 +2551,7 @@ async function goToEpisode(
       syncplay.endEpisodeSwitchHold();
       // No source, so no `loadedmetadata` to clear the follow token (#487) —
       // left set, the user's next press after this failure would be swallowed.
-      if (navigationEpoch === myNav) pendingFollowIndex = null;
+      if (pendingFollow?.nav === myNav) pendingFollow = null;
       // The other arm this issue makes audible (#419). Until now this returned
       // with the episode label and translation list already pointed at the new
       // episode and no source behind them — a blank player and no message. It is
@@ -2583,7 +2595,7 @@ async function goToEpisode(
     if (navigationEpoch === myNav) navigating.value = false;
     if (committed) syncplay.endEpisodeSwitchHold();
     // The third arm with no `loadedmetadata` behind it (#487).
-    if (navigationEpoch === myNav) pendingFollowIndex = null;
+    if (pendingFollow?.nav === myNav) pendingFollow = null;
     if (unmounted) return committed ? 'moved' : 'superseded';
     // A throw below the index write is a #354-shaped failure of the SOURCE, with
     // the UI already switched — so `moved`, and the walk keeps going. Above it,
@@ -2628,8 +2640,8 @@ function onVideoEnded(): void {
 // to skip.
 function onUserNext(): void {
   if (!canNext.value || navigating.value) return;
-  if (shouldSwallowLocalNext(pendingFollowIndex, activeEpisodeIndex.value)) {
-    pendingFollowIndex = null;
+  if (shouldSwallowLocalNext(pendingFollow?.index ?? null, activeEpisodeIndex.value)) {
+    pendingFollow = null;
     showNavToast(`Already switching to episode ${activeEpisodeLabel.value}`);
     return;
   }

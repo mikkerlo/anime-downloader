@@ -317,9 +317,11 @@ describe('SyncplayClient — both peers across an episode change (#360, #486)', 
 // `PlayerView`'s `goToEpisode` / `handleRemoteEpisodeChange` / `onUserNext`,
 // because `PlayerView` has no mount harness; the source scans in
 // `test/renderer/components/player-lifecycle-scope.test.ts` pin the component to
-// the shape modelled here (who arms the token, the four guarded clears, the one
-// reader). The model is the probe from the `syncplay-investigation-artifacts`
-// branch with the token added.
+// the shape modelled here (who arms the token, the four owner-keyed clears, the
+// one reader). The model is the probe from the `syncplay-investigation-artifacts`
+// branch with the token added, and with `goToEpisode`'s pre-commit
+// `unreachable` resolution arm, the return that bumps the epoch and writes
+// nothing (#492 review).
 
 const EPISODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 /** `playerGetStreamUrl`, commit to source swap — where `navigating` is released. */
@@ -341,6 +343,11 @@ interface Navigator {
   pickTranslation(): void
   /** Outcome of the next step this peer commits; reset to `loads` after use. */
   nextSource: SourceOutcome
+  /**
+   * An index whose `resolveEpisodeTranslation` comes back `unreachable`: a step
+   * to it bumps the epoch and returns before its commit, writing nothing.
+   */
+  unreachableIndex: number | null
 }
 
 function attachNavigator(peer: Peer, startIdx: number): Navigator {
@@ -348,7 +355,8 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
   let navigating = false
   let navigationEpoch = 0
   let translationEpoch = 0
-  let pendingFollowIndex: number | null = null
+  // Stamped with the arming run's `myNav`, and cleared only by that run.
+  let pendingFollow: { index: number; nav: number } | null = null
 
   // `goToEpisode(direction, origin)`.
   async function step(
@@ -361,10 +369,20 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     await Promise.resolve() // saveProgress(true)
     navigating = true
     const myNav = ++navigationEpoch
-    await Promise.resolve() // resolveEpisodeTranslation + playerCleanupRemux
+    await Promise.resolve() // resolveEpisodeTranslation
+    if (navigationEpoch !== myNav) return 'superseded'
+    // The pre-commit `unreachable` arm: the epoch is already bumped, nothing is
+    // written, and no token is touched — an earlier step's token stays for
+    // that step's own metadata to clear.
+    if (targetIndex === nav.unreachableIndex) {
+      if (navigationEpoch === myNav) navigating = false
+      return 'unreachable'
+    }
+    await Promise.resolve() // playerCleanupRemux
     if (navigationEpoch !== myNav) return 'superseded'
     idx = targetIndex
-    pendingFollowIndex = origin === 'follow' && direction === 'next' ? targetIndex : null
+    pendingFollow =
+      origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null
     const source = nav.nextSource
     nav.nextSource = 'loads'
     // The commit is what the composable's watcher announces as `Set file`.
@@ -373,14 +391,14 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     if (navigationEpoch !== myNav) return 'moved'
     if (source === 'null-stream') {
       if (navigationEpoch === myNav) navigating = false
-      if (navigationEpoch === myNav) pendingFollowIndex = null
+      if (pendingFollow?.nav === myNav) pendingFollow = null
       return 'moved'
     }
     await Promise.resolve() // nextTick
     if (navigationEpoch !== myNav) return 'moved'
     if (source === 'loads') {
       setTimeout(() => {
-        if (navigationEpoch === myNav) pendingFollowIndex = null
+        if (pendingFollow?.nav === myNav) pendingFollow = null
       }, METADATA_MS)
     }
     navigating = false
@@ -409,12 +427,12 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
 
   const nav: Navigator = {
     episode: () => EPISODES[idx],
-    pending: () => pendingFollowIndex,
+    pending: () => pendingFollow?.index ?? null,
     pressNext: () => {
       // `if (!canNext.value || navigating.value) return;`
       if (idx >= EPISODES.length - 1 || navigating) return 'button-disabled'
-      if (shouldSwallowLocalNext(pendingFollowIndex, idx)) {
-        pendingFollowIndex = null
+      if (shouldSwallowLocalNext(pendingFollow?.index ?? null, idx)) {
+        pendingFollow = null
         return 'swallowed'
       }
       void step('next', 'local')
@@ -426,7 +444,8 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     pickTranslation: () => {
       translationEpoch++
     },
-    nextSource: 'loads'
+    nextSource: 'loads',
+    unreachableIndex: null
   }
   return nav
 }
@@ -447,6 +466,21 @@ describe('both peers press next within about a second (#487)', () => {
 
   /** Both seated on episode 6 (index 5), agreed for four seconds. */
   const seatBoth = async (): Promise<{ a: Navigator; b: Navigator }> => {
+    const { A, B } = await seatPeers()
+    return { a: attachNavigator(A, 5), b: attachNavigator(B, 5) }
+  }
+
+  /**
+   * As `seatBoth`, but A stays a bare peer: a case that moves A's file directly
+   * (a pick from the episode list) has no navigator on A to walk back after B's
+   * follow announces its own steps.
+   */
+  const seatFollower = async (): Promise<{ A: Peer; b: Navigator }> => {
+    const { A, B } = await seatPeers()
+    return { A, b: attachNavigator(B, 5) }
+  }
+
+  const seatPeers = async (): Promise<{ A: Peer; B: Peer }> => {
     room = await createTwoPeerRoom({ position: 100, paused: false })
     const A = await room.seat({
       username: 'rigA',
@@ -463,7 +497,7 @@ describe('both peers press next within about a second (#487)', () => {
       episodeInt: '6'
     })
     await room.advance(4)
-    return { a: attachNavigator(A, 5), b: attachNavigator(B, 5) }
+    return { A, B }
   }
 
   /** A presses at 0, B at `d`; read both once everything has settled. */
@@ -561,5 +595,61 @@ describe('both peers press next within about a second (#487)', () => {
     await room!.advance(6)
     expect([a.episode(), b.episode()]).toEqual(['7', '7'])
     expect(b.pending()).toBeNull()
+  })
+
+  // The two pre-commit paths from #492's review. A run that bumps
+  // `navigationEpoch` and returns before its commit writes no token, so the
+  // token still set is the previous step's, and only that step's metadata is
+  // coming to clear it. Keyed to the epoch, that clear was disarmed by the bump:
+  // the token outlived the source load, and the first Next pressed afterwards,
+  // whenever it came, was swallowed for a switch that had ended long ago.
+  it('clears step 1’s token on its metadata when a room walk N → N+2 dies at step 2’s resolution', async () => {
+    const { A, b } = await seatFollower()
+    b.unreachableIndex = 7 // episode 8: the off-page fetch fails
+    await A.goToEpisode('8')
+    await room!.advance(0.6)
+    // Step 1 committed 7 and swapped its source; step 2 ran straight after it,
+    // bumped the epoch and returned `unreachable` before its commit.
+    expect(b.episode()).toBe('7')
+    expect(b.pending()).toBe(6)
+    await room!.advance(6)
+    // Episode 7 has loaded: the token cannot outlive that.
+    expect(b.pending()).toBeNull()
+    b.unreachableIndex = null
+    expect(b.pressNext()).toBe('dispatched')
+    await room!.advance(6)
+    expect(b.episode()).toBe('8')
+  })
+
+  it('clears the follow’s token on its metadata when a local Prev in the load window fails to resolve', async () => {
+    const { a, b } = await seatBoth()
+    a.pressNext()
+    await room!.advance(0.6)
+    // B's follow committed 7 and swapped its source; 7 is still loading.
+    expect(b.pending()).toBe(6)
+    b.unreachableIndex = 5 // episode 6
+    b.pressPrev()
+    await room!.advance(6)
+    expect(b.episode()).toBe('7')
+    expect(b.pending()).toBeNull()
+    b.unreachableIndex = null
+    expect(b.pressNext()).toBe('dispatched')
+    await room!.advance(6)
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+  })
+
+  // The other half of the owner rule: when step 2 DOES commit it re-stamps the
+  // token with its own run, so step 1's metadata, landing while step 2's source
+  // is still loading, leaves it alone.
+  it('keeps step 2’s token through step 1’s metadata on a room walk N → N+2', async () => {
+    const { A, b } = await seatFollower()
+    await A.goToEpisode('8')
+    // Step 1's metadata lands ~1955 ms in, step 2's ~2355 ms.
+    await room!.advance(2.1)
+    expect(b.episode()).toBe('8')
+    expect(b.pending()).toBe(7)
+    expect(b.pressNext()).toBe('swallowed')
+    await room!.advance(6)
+    expect(b.episode()).toBe('8')
   })
 })

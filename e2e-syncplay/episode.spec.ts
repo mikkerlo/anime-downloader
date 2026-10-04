@@ -3,7 +3,7 @@
 //   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
 //   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 ✗
-//   E5  Next pressed while the room is paused                        #486 (fixed), resume #496 ✗
+//   E5  Next pressed while the room is paused                        #486 (fixed), #496 ✗, #497 (recorded)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -20,11 +20,20 @@
 // 0. Before #493, #486 broke that rule: the paused room frame carrying the old
 // position was parked on the new element and applied at `loadedmetadata`,
 // which seeked it back *and paused it*, and the room never resumed. #493 fixed
-// the position, so E5's #486 half is flipped (no stale run, right episode). The
-// resume half did not follow: on the first two local runs after the rebase onto
-// #493, 5 of 6 scoreable runs ended with both instances paused at ~0 on the new
-// episode, not stale. That half is #496 ✗ (`not resumed ≥ 1`) until #496's fix flips it to
-// "every run resumed".
+// the position, so E5's #486 half is flipped: `bad == 0`, where bad is the
+// wrong episode or a seek on the new element back to the old position (the
+// room's, in a paused room). Two findings from the rebase are kept out of it:
+//
+//  - #496 ✗, the resume half. Across three local runs after the rebase, 7 of 9
+//    scoreable runs ended with both instances paused on the new episode (6 at
+//    ~0, one after the #497 seek below). Asserted as `not resumed ≥ 1` until
+//    #496's fix flips it to "every run resumed".
+//  - #497, a follower seeking its new element to its *saved watch progress*
+//    at `loadedmetadata` (591 s against a room at ~324 s, back to 0 ~300 ms
+//    later): a seek past 5 s whose target is neither 0 nor the old position.
+//    Seen in 1 of those 9 runs, so it is recorded per run (`foreignSeek`) but
+//    not asserted: at E5's 3 runs a night `≥ 1` would itself be red on most
+//    nights. #497's fix asserts it `== 0`.
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -82,14 +91,18 @@ async function waitBothSrcChanged(
   return ca && cb
 }
 
-/** Walk both to `ep` with A's Prev / Next (B follows). Setup; reports failure. */
+/** Walk both to `ep` with Prev / Next: A's while A is off `ep` (B follows),
+ *  then B's if a lost follow left only B off it. Setup; reports failure. */
 async function resetTo(A: Instance, B: Instance, ep: string): Promise<boolean> {
   for (let i = 0; i < 4; i++) {
     const [a, b] = await Promise.all([A.state(), B.state()])
     if (epIntOf(a.label) === ep && epIntOf(b.label) === ep) return bothPlaying(A, B, 20_000)
     const at = Number(epIntOf(a.label))
+    const bt = Number(epIntOf(b.label))
     if (at > Number(ep)) await A.pressPrev()
     else if (at < Number(ep)) await A.pressNext()
+    else if (bt > Number(ep)) await B.pressPrev()
+    else if (bt < Number(ep)) await B.pressNext()
     await sleep(4000)
   }
   return false
@@ -221,7 +234,7 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
   }
 })
 
-test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md, #496 ✗)', async () => {
+test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md, #496 ✗); the saved-progress seek recorded (#497)', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E5')
   try {
@@ -241,11 +254,32 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
         5000
       )
       await sleep(2500)
+      // Paused, so each element's position is the room's and the old one both.
+      const [pa, pb] = await Promise.all([A.state(), B.state()])
       const r = await transition(A, B, () => (forward ? A.pressNext() : A.pressPrev()))
       const want = forward ? '2' : '1'
       const [a, b] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(r.pressAt), B.collect(r.pressAt)])
       const resumed = !a.paused && !b.paused
-      const stale = r.a.stale || r.b.stale
+      const split = (
+        d: { ev: { at: number; t: string; ct: number; src: string }[] },
+        before: { ct: number; src: string },
+        outcome: { stale: boolean }
+      ): { old: boolean; foreign: boolean } => {
+        const targets = d.ev
+          .filter((e) => e.t === 'seeking' && e.at >= 0 && e.src !== before.src.slice(-40))
+          .map((e) => e.ct)
+          .filter((ct) => ct > 5)
+        const foreign = targets.some((ct) => Math.abs(ct - before.ct) > 15)
+        const old = targets.some((ct) => Math.abs(ct - before.ct) <= 15)
+        // `staleOutcome` also reads positions; a stale reading the foreign seek
+        // explains is #497's, not #486's.
+        return { old: old || (outcome.stale && !foreign), foreign }
+      }
+      const sa = split(da, pa, r.a)
+      const sb = split(db, pb, r.b)
+      const stale = sa.old || sb.old
+      const foreignSeek = sa.foreign || sb.foreign
       const wrongEp = r.epA !== want || r.epB !== want
       const bad = wrongEp || stale
       row.add(
@@ -254,11 +288,12 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
           bad,
           resumed,
           stale,
+          foreignSeek,
           wrongEp,
           epA: r.epA,
           epB: r.epB
         },
-        bad || !resumed
+        bad || !resumed || foreignSeek
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -266,11 +301,13 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
       if ((await A.state()).paused) await A.togglePlayButton()
     }
     const s = row.score()
-    // #486 half, flipped by #493: every scoreable run on the right episode, near 0.
+    // #486 half, flipped by #493: every scoreable run on the right episode, and
+    // no seek back to the old position.
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
-    // ✗ half (#496): the rig must see the room stay paused at least once.
     const scoreable = s.records.filter((r) => r.setupOk)
+    // #497: recorded in the JSONL (`foreignSeek`), not asserted — see the header.
+    // ✗ half (#496): the rig must see the room stay paused at least once.
     expect(
       scoreable.filter((r) => !r.resumed).length,
       'paused room never stayed paused'

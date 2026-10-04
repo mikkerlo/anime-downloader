@@ -53,7 +53,7 @@ describe('syncplay-e2e workflow', () => {
     // its StartTLS probe at setup (the first CI run on #495).
     const step = yml.slice(yml.indexOf('- name: Install Syncplay 1.7.6'))
     const block = step.slice(0, step.indexOf('\n      - '))
-    expect(block).toMatch(/pip" install [^\n]*\bpyOpenSSL\b[^\n]*\bservice_identity\b/)
+    expect(block).toMatch(/pip" install [^\n]*(?:'twisted\[tls\]'|\bpyopenssl\b)/i)
     expect(block).toContain("-c 'import OpenSSL, service_identity'")
   })
 

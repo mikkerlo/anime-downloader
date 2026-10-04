@@ -563,10 +563,17 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // `'follow'` is also what arms the pending-follow token (#487) at the step's
   // own commit, under its own `myNav` — set there rather than after `step()`
   // resolves, which would land after a failure arm's clear.
+  //
+  // The `!navigating.value` term only lets a second step through because a
+  // step's `'moved'` resolves after its own release (#501): both source arms
+  // await the `nextTick` that clears the flag. Every step after the first
+  // passes `continuesWalk`, so the walk's first step owns the pending
+  // mark-watched.
+  let steps = 0;
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
-    () => goToEpisode(dir, 'follow')
+    () => goToEpisode(dir, 'follow', steps++ > 0)
   );
 }
 
@@ -2283,9 +2290,15 @@ async function fetchEpisodeWindowTranslations(
 // It rides the file push this step's index commit triggers, and main forces
 // the room to 0 for `'local'` only. A `'follow'` Next step also arms the
 // pending-follow token (#487) at the commit.
+//
+// `continuesWalk` is true for the second and later steps of one room walk
+// (#501). Such a step keeps the `pendingPrevEpisodeInt` the walk's first step
+// set: a room jump N → N+2 leaves the user having watched N, and the
+// intermediate N+1 is an episode nobody watched.
 async function goToEpisode(
   direction: 'prev' | 'next',
-  origin: SyncplayEpisodeSwitch
+  origin: SyncplayEpisodeSwitch,
+  continuesWalk = false
 ): Promise<EpisodeStepOutcome> {
   const targetIndex =
     direction === 'prev' ? activeEpisodeIndex.value - 1 : activeEpisodeIndex.value + 1;
@@ -2420,7 +2433,7 @@ async function goToEpisode(
     activeDownloadedTrIds.value = targetEp.downloadedTrIds;
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
-    pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
+    if (!continuesWalk) pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
     pendingFollow =
       origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;
 
@@ -2517,7 +2530,13 @@ async function goToEpisode(
         // Orphan-`SubtitlesOctopus` guard (#280) — see `selectTranslation`.
         if (activeSubtitleContent.value && video && !unmounted) initSubtitles(video);
 
-        nextTick(() => {
+        // Awaited, so `'moved'` resolves only after `navigating` is released
+        // (#501). The source writes above queued a render, so `nextTick(fn)`
+        // chains `fn` behind that flush; un-awaited, the walk resumed first,
+        // read `navigating` still true and stopped one step into a room jump.
+        // A superseded run's early return still settles it, and a throw inside
+        // now lands in the `catch` below instead of escaping unhandled.
+        await nextTick(() => {
           if (navigationEpoch !== myNav) return;
           const v = videoRef.value;
           if (v) {
@@ -2575,7 +2594,8 @@ async function goToEpisode(
     // Orphan-`SubtitlesOctopus` guard (#280), after a network round trip.
     if (result.subtitleContent && video && !unmounted) initSubtitles(video);
 
-    nextTick(() => {
+    // Awaited for the same reason as the local-file arm's (#501).
+    await nextTick(() => {
       if (navigationEpoch !== myNav) return;
       const v = videoRef.value;
       if (v) {

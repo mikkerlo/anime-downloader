@@ -889,7 +889,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     )
     expect(handler).toContain('void walkEpisodeSteps(')
     // `'follow'` since #486 — also the origin that arms the #487 token.
-    expect(handler).toContain("() => goToEpisode(dir, 'follow')")
+    expect(handler).toContain("() => goToEpisode(dir, 'follow', steps++ > 0)")
     // The loop itself is gone from the component — the break-on-outcome rule
     // lives in `walkEpisodeSteps` (see `test/renderer/utils.test.ts`), where it
     // is reachable by a real unit test instead of only by a source scan.
@@ -898,7 +898,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `Promise<void>` signature here would type-error, but a scan is what keeps
     // the claim visible next to the walk it protects.
     expect(SRC).toContain(
-      "async function goToEpisode(\n  direction: 'prev' | 'next',\n  origin: SyncplayEpisodeSwitch\n): Promise<EpisodeStepOutcome> {"
+      "async function goToEpisode(\n  direction: 'prev' | 'next',\n  origin: SyncplayEpisodeSwitch,\n  continuesWalk = false\n): Promise<EpisodeStepOutcome> {"
     )
   })
 })
@@ -1036,6 +1036,71 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
         clear
       )
     }
+  })
+})
+
+describe('#501 — a step resolves only after it releases navigating', () => {
+  // The walk's `!navigating.value` term reads the flag right after `await
+  // step()` resumes. Both source arms release it in a `nextTick` callback that
+  // is chained behind the render flush their source writes queued, so an
+  // un-awaited `nextTick` leaves the walk reading `true` and a room jump of two
+  // or more episodes stops after one step. The behaviour is driven against real
+  // Vue in `test/renderer/episode-walk-release.test.ts`; these scans pin the
+  // component to that shape, one arm at a time.
+  const GO_TO = stripComments(slice('async function goToEpisode(', '\nfunction cancelAutoAdvance('))
+  const STREAM = 'await window.api.playerGetStreamUrl(resolvedTr.id, resolvedTr.height)'
+  const arms = {
+    'local-file': GO_TO.slice(GO_TO.indexOf('if (localResult) {'), GO_TO.indexOf(STREAM)),
+    stream: GO_TO.slice(GO_TO.indexOf(STREAM), GO_TO.indexOf('} catch {'))
+  }
+
+  it.each(Object.keys(arms) as (keyof typeof arms)[])(
+    'awaits the release nextTick on the %s arm, inside the try',
+    (name) => {
+      const arm = arms[name]
+      expect(arm.length, `${name}: arm not found`).toBeGreaterThan(0)
+      // Exactly one release callback per arm, and it is awaited. A bare
+      // `nextTick(` would mean `'moved'` resolves before the release runs.
+      expect(arm.split('nextTick(').length - 1, `${name}: nextTick count`).toBe(1)
+      expect(arm, `${name}: release not awaited`).toContain('await nextTick(() => {')
+      // `nextTick(fn)` itself, not a hand-rolled `new Promise` around it: the
+      // callback's early return would then skip the `resolve` and hang the walk.
+      expect(arm).not.toContain('new Promise')
+      // The awaited callback is the arm's release, directly above its return.
+      expect(arm.slice(arm.indexOf('await nextTick(() => {'))).toMatch(
+        /^await nextTick\(\(\) => \{[^]*?navigating\.value = false;\s*\}\);\s*return 'moved';/
+      )
+    }
+  )
+
+  it('keeps both awaits inside the try, so a throw in the callback reaches the catch', () => {
+    const tryAt = GO_TO.indexOf('  try {')
+    const catchAt = GO_TO.indexOf('} catch {')
+    const awaits = [...GO_TO.matchAll(/await nextTick\(/g)].map((m) => m.index!)
+    expect(awaits).toHaveLength(2)
+    for (const at of awaits) {
+      expect(at).toBeGreaterThan(tryAt)
+      expect(at).toBeLessThan(catchAt)
+    }
+  })
+
+  it('lets only a walk step after the first keep the pending mark-watched', () => {
+    // Step 1 of a room walk N → N+2 sets `pendingPrevEpisodeInt` to N; step 2
+    // must not overwrite it with N+1, an episode nobody watched.
+    expect(GO_TO).toContain(
+      "if (!continuesWalk) pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';"
+    )
+    const handler = stripComments(
+      slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
+    )
+    const counter = handler.indexOf('let steps = 0;')
+    expect(counter).toBeGreaterThan(-1)
+    expect(counter).toBeLessThan(handler.indexOf('void walkEpisodeSteps('))
+    expect(handler).toContain("() => goToEpisode(dir, 'follow', steps++ > 0)")
+    // The walk is the only caller that passes it.
+    expect(SRC.split('goToEpisode(dir, ').length - 1).toBe(1)
+    expect([...SRC.matchAll(/goToEpisode\('(?:next|prev)', 'local'\)/g)].length).toBeGreaterThan(0)
+    expect(SRC).not.toMatch(/goToEpisode\('(?:next|prev)', 'local',/)
   })
 })
 
@@ -2184,7 +2249,7 @@ describe('#486 — who started an episode change, and the hold every failure arm
     // so the keyboard case and the template's Next button are one site.
     const calls = [...SOURCE.matchAll(/goToEpisode\(([^)\n]*)\)/g)].map((m) => m[1])
     expect(calls).toEqual([
-      "dir, 'follow'",
+      "dir, 'follow', steps++ > 0",
       "'prev', 'local'",
       "'next', 'local'",
       "'next', 'local'",

@@ -8,6 +8,7 @@ package-lock.json
 *.tsbuildinfo
 resources/
 src/renderer/public/
+investigations/
 
 # Docs are owned by the Phase 6 split (#84); keep them out of code formatting.
 **/*.md

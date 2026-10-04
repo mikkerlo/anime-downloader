@@ -1,0 +1,16 @@
+const net = require('net')
+const tls = require('tls')
+const fs = require('fs')
+const port = Number(process.argv[2] || 18999)
+const ca = fs.readFileSync(__dirname + '/tls/ca.pem')
+const s = net.connect(port, '127.0.0.1', () => s.write(JSON.stringify({ TLS: { startTLS: 'send' } }) + '\r\n'))
+s.once('data', (d) => {
+  console.log('plain reply:', String(d).trim())
+  const t = tls.connect({ socket: s, ca, servername: undefined, host: '127.0.0.1' }, () => {
+    console.log('TLS ok, authorized=', t.authorized, t.authorizationError || '')
+    t.end()
+    process.exit(0)
+  })
+  t.on('error', (e) => { console.log('TLS error', e.message); process.exit(1) })
+})
+setTimeout(() => { console.log('timeout'); process.exit(1) }, 5000)

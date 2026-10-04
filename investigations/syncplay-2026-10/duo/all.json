@@ -1,0 +1,2486 @@
+[
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "1->2/2",
+    "t0": 3.65,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.7,
+        "ct10": 8.5,
+        "max4": 3.3,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 3.49,
+        "ct2": 5.24,
+        "ct10": 7.9,
+        "max4": 5.64,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 1,
+    "sc": "follow",
+    "pos": "early",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "2->3/3",
+    "t0": 33.63,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.78,
+        "ct10": 9.78,
+        "max4": 3.78,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 33.36,
+        "ct2": 1.16,
+        "ct10": 9.16,
+        "max4": 34.6,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 2,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "key",
+    "relay": 0,
+    "setupOk": false,
+    "ep": "3->4/4",
+    "t0": 74.44,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.67,
+        "ct10": 8.47,
+        "max4": 3.67,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 74.13,
+        "ct2": 0.84,
+        "ct10": 7.44,
+        "max4": 75.24,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "late",
+    "how": "button",
+    "relay": 0,
+    "setupOk": false,
+    "ep": "4->5/5",
+    "t0": 74.57,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 74.86,
+        "ct2": 76,
+        "ct10": 76.04,
+        "max4": 76.04,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 75.67,
+        "ct10": 76.06,
+        "max4": 76.06,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 4,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": false,
+    "ep": "5->6/6",
+    "t0": 76.04,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.47,
+        "ct10": 9.47,
+        "max4": 77.39,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.88,
+        "ct10": 9.88,
+        "max4": 3.88,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 5,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "6->7/7",
+    "t0": 507,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 506.62,
+        "ct2": 1.15,
+        "ct10": 9.15,
+        "max4": 506.62,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.79,
+        "ct10": 8.79,
+        "max4": 2.79,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 6,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "7->9/9",
+    "t0": 448.67,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.22,
+        "ct10": 8.02,
+        "max4": 449.51,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 448.97,
+        "ct2": 450.46,
+        "ct10": 7.78,
+        "max4": 451.06,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 1,
+    "series": "Frieren",
+    "idx": 7,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": false,
+    "ep": "9->9/9",
+    "t0": 70.84,
+    "inst": [
+      {
+        "k": "A",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "series": "Spy x Fami",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "1->2/2",
+    "t0": 3.52,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 3.27,
+        "ct2": 1.5,
+        "ct10": 8.3,
+        "max4": 4.78,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.57,
+        "ct10": 8.37,
+        "max4": 3.57,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "series": "Spy x Fami",
+    "idx": 1,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": false,
+    "ep": "2->4/4",
+    "t0": 74.64,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 76.68,
+        "ct10": 8.18,
+        "max4": 76.88,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 76.93,
+        "ct10": 7.96,
+        "max4": 78.33,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "series": "Spy x Fami",
+    "idx": 2,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "4->5/5",
+    "t0": 558.07,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 557.92,
+        "ct2": 0.15,
+        "ct10": 6.95,
+        "max4": 557.92,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.26,
+        "ct10": 8.06,
+        "max4": 3.26,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "series": "Spy x Fami",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "early",
+    "how": "key",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 33.38,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 33.1,
+        "ct2": 34.28,
+        "ct10": 42.28,
+        "max4": 36.28,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 34.92,
+        "ct10": 42.92,
+        "max4": 36.92,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "series": "Spy x Fami",
+    "idx": 4,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "6->7/7",
+    "t0": 612.21,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 612.08,
+        "ct2": 1.32,
+        "ct10": 9.32,
+        "max4": 612.44,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.3,
+        "ct10": 9.3,
+        "max4": 3.3,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "1->2/2",
+    "t0": 2.98,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 4.93,
+        "ct10": 11.93,
+        "max4": 6.93,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 5.15,
+        "ct10": 12.15,
+        "max4": 7.15,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 1,
+    "sc": "follow",
+    "pos": "early",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "2->3/3",
+    "t0": 21.29,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.37,
+        "ct10": 8.96,
+        "max4": 2.96,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 21.62,
+        "ct10": 9.41,
+        "max4": 21.62,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 2,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "key",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "3->4/4",
+    "t0": 609.05,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 609.06,
+        "ct2": 0.94,
+        "ct10": 8.94,
+        "max4": 609.26,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.34,
+        "ct10": 9.34,
+        "max4": 3.34,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "late",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "4->5/5",
+    "t0": 1222.69,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 1222.22,
+        "ct2": 1223.54,
+        "ct10": 1227.01,
+        "max4": 1225.02,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 1222.05,
+        "ct2": 1222.56,
+        "ct10": 1226.53,
+        "max4": 1224.56,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 4,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 461.53,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 460.91,
+        "ct2": 460.91,
+        "ct10": 460.91,
+        "max4": 460.91,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 460.91,
+        "ct10": 460.91,
+        "max4": 460.91,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 5,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "6->8/8",
+    "t0": 430.15,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 431.32,
+        "ct2": 431.37,
+        "ct10": 9.2,
+        "max4": 431.37,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.03,
+        "ct10": 7.23,
+        "max4": 1.23,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 6,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "8->9/9",
+    "t0": 359.63,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 360.02,
+        "ct2": 360.94,
+        "ct10": 7.98,
+        "max4": 361.94,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.11,
+        "ct10": 9.11,
+        "max4": 3.11,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 7,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "9->10/10",
+    "t0": 1457.62,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.19,
+        "ct10": 7.39,
+        "max4": 2.19,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.86,
+        "ct10": 8.33,
+        "max4": 3.73,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 8,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "10->11/11",
+    "t0": 16.62,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 18.82,
+        "ct10": 18.82,
+        "max4": 18.82,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 17.61,
+        "ct2": 18.84,
+        "ct10": 18.84,
+        "max4": 18.84,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 9,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "11->12/12",
+    "t0": 22.72,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.69,
+        "ct10": 0.69,
+        "max4": 0.69,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 23.59,
+        "ct2": 24.26,
+        "ct10": 24.26,
+        "max4": 24.26,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 10,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "12->13/13",
+    "t0": 2.35,
+    "inst": [
+      {
+        "k": "A",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 3.84,
+        "ct2": 3.84,
+        "ct10": 3.84,
+        "max4": 3.84,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 11,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "13->14/14",
+    "t0": 616.64,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.82,
+        "ct10": 8.62,
+        "max4": 3.82,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.54,
+        "ct10": 8.34,
+        "max4": 617.96,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Frieren",
+    "idx": 12,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "14->16/16",
+    "t0": 339.03,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 340.47,
+        "ct2": 340.54,
+        "ct10": 348.54,
+        "max4": 342.54,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 339.73,
+        "ct2": 340.19,
+        "ct10": 348.19,
+        "max4": 342.19,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "1->2/2",
+    "t0": 4.07,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 5.84,
+        "ct10": 13.84,
+        "max4": 7.84,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 3.56,
+        "ct2": 5.11,
+        "ct10": 13.11,
+        "max4": 7.11,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 1,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "2->3/3",
+    "t0": 322.71,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.52,
+        "ct10": 9.52,
+        "max4": 3.52,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 323.04,
+        "ct2": 1.15,
+        "ct10": 9.15,
+        "max4": 323.21,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 2,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "3->4/4",
+    "t0": 533.66,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.92,
+        "ct10": 9.92,
+        "max4": 3.92,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.54,
+        "ct10": 9.54,
+        "max4": 533.66,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "early",
+    "how": "key",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "4->5/5",
+    "t0": 33.87,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.61,
+        "ct10": 9.61,
+        "max4": 35.37,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.94,
+        "ct10": 9.94,
+        "max4": 3.94,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 4,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 629.04,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 629.18,
+        "ct2": 1.47,
+        "ct10": 8.07,
+        "max4": 629.18,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.4,
+        "ct10": 8.2,
+        "max4": 3.4,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 5,
+    "sc": "follow",
+    "pos": "late",
+    "how": "key",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "6->7/7",
+    "t0": 1188.39,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 1188.38,
+        "ct2": 1189.9,
+        "ct10": 1197.9,
+        "max4": 1191.9,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1189.66,
+        "ct10": 1197.66,
+        "max4": 1191.66,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 6,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "7->8/8",
+    "t0": 1437.85,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.94,
+        "ct10": 9.94,
+        "max4": 3.94,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1451.26,
+        "ct10": 8.11,
+        "max4": 1451.26,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 7,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "8->9/9",
+    "t0": 16.86,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.59,
+        "ct10": 1.99,
+        "max4": 1.99,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 16.97,
+        "ct2": 1.02,
+        "ct10": 1.62,
+        "max4": 17.4,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 8,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "9->10/10",
+    "t0": 5.3,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 7.09,
+        "ct10": 7.69,
+        "max4": 7.69,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 6.02,
+        "ct2": 7.19,
+        "ct10": 7.79,
+        "max4": 7.79,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 9,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "10->11/11",
+    "t0": 11.61,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 12.49,
+        "ct2": 13.25,
+        "ct10": 13.25,
+        "max4": 13.25,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 12.12,
+        "ct2": 12.92,
+        "ct10": 12.92,
+        "max4": 12.92,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 10,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "11->12/12",
+    "t0": 588.07,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 588.8,
+        "ct2": 588.92,
+        "ct10": 589.54,
+        "max4": 589.54,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 589.06,
+        "ct10": 589.06,
+        "max4": 589.06,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Spy x Fami",
+    "idx": 11,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 0,
+    "setupOk": true,
+    "ep": "12->12/12",
+    "t0": 332.12,
+    "inst": [
+      {
+        "k": "A",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "3->4/4",
+    "t0": 3.69,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 5.41,
+        "ct10": 13.41,
+        "max4": 7.41,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 3.87,
+        "ct2": 5.69,
+        "ct10": 13.69,
+        "max4": 7.69,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 1,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "4->5/5",
+    "t0": 497.51,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.31,
+        "ct10": 9.31,
+        "max4": 3.31,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 497.82,
+        "ct2": 1.67,
+        "ct10": 9.65,
+        "max4": 499.02,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 2,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 538.41,
+    "inst": [
+      {
+        "k": "A",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "button",
+    "relay": 100,
+    "setupOk": false,
+    "ep": "6->7/7",
+    "t0": 0,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 538.45,
+        "ct2": 538.45,
+        "ct10": 538.45,
+        "max4": 538.45,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 538.45,
+        "ct2": 538.45,
+        "ct10": 538.45,
+        "max4": 538.45,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 4,
+    "sc": "follow",
+    "pos": "late",
+    "how": "key",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "7->8/8",
+    "t0": 1182.89,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 1183.57,
+        "ct2": 1185.05,
+        "ct10": 1193.05,
+        "max4": 1187.05,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 1183.14,
+        "ct2": 1183.66,
+        "ct10": 1191.66,
+        "max4": 1185.66,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 5,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "8->9/9",
+    "t0": 1358.14,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.09,
+        "ct10": 7.89,
+        "max4": 1.89,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 1372,
+        "ct2": 0.84,
+        "ct10": 7.44,
+        "max4": 1372,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 6,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "9->10/10",
+    "t0": 17.79,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 20.22,
+        "ct10": 21.22,
+        "max4": 21.22,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.46,
+        "ct10": 1.46,
+        "max4": 1.46,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 7,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "10->11/11",
+    "t0": 4.46,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 4.95,
+        "ct2": 6.56,
+        "ct10": 1.94,
+        "max4": 6.76,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.44,
+        "ct10": 2.04,
+        "max4": 2.04,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 8,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "11->12/12",
+    "t0": 4.99,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 9.35,
+        "ct10": 9.55,
+        "max4": 9.55,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 7.01,
+        "ct2": 8.69,
+        "ct10": 8.69,
+        "max4": 8.69,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 9,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "12->14/14",
+    "t0": 350.61,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0,
+        "ct10": 7.63,
+        "max4": 1.63,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 351.89,
+        "ct2": 1.01,
+        "ct10": 9.01,
+        "max4": 351.89,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Kusuriya n",
+    "idx": 10,
+    "sc": "follow",
+    "pos": "early",
+    "how": "button",
+    "relay": 100,
+    "setupOk": true,
+    "ep": "14->15/15",
+    "t0": 33.79,
+    "inst": [
+      {
+        "k": "A",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": false,
+        "ctLm": null,
+        "ct2": null,
+        "ct10": null,
+        "max4": null,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 3.4,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.59,
+        "ct10": 9.59,
+        "max4": 3.59,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 2.09,
+        "ct10": 10.09,
+        "max4": 4.94,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 1,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "6->7/7",
+    "t0": 558.29,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 558.73,
+        "ct10": 566.73,
+        "max4": 560.73,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 558.79,
+        "ct10": 566.59,
+        "max4": 560.59,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 2,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "7->9/9",
+    "t0": 603.04,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 603.45,
+        "ct2": 605.03,
+        "ct10": 613.03,
+        "max4": 607.03,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 605.08,
+        "ct10": 613.08,
+        "max4": 607.08,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 3,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "9->10/10",
+    "t0": 433.71,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.16,
+        "ct10": 9.16,
+        "max4": 433.62,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.93,
+        "ct10": 9.93,
+        "max4": 3.93,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 4,
+    "sc": "follow",
+    "pos": "early",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "10->11/11",
+    "t0": 33.1,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 34.05,
+        "ct10": 40.85,
+        "max4": 35.65,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 33.09,
+        "ct2": 34.51,
+        "ct10": 41.11,
+        "max4": 35.91,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 5,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "key",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "11->12/12",
+    "t0": 638.2,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 639.59,
+        "ct10": 8.77,
+        "max4": 639.99,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.76,
+        "ct10": 9.76,
+        "max4": 3.76,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 6,
+    "sc": "follow",
+    "pos": "late",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "12->13/13",
+    "t0": 1221.32,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 1221.51,
+        "ct2": 1222.2,
+        "ct10": 7.84,
+        "max4": 1223,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.98,
+        "ct10": 8.98,
+        "max4": 2.98,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 7,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "13->14/14",
+    "t0": 1422.43,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 1436.02,
+        "ct2": 0.85,
+        "ct10": 8.85,
+        "max4": 1436.02,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.59,
+        "ct10": 8.59,
+        "max4": 2.59,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 8,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "14->15/15",
+    "t0": 16.94,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.6,
+        "ct10": 0.6,
+        "max4": 0.6,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 17.84,
+        "ct2": 18.62,
+        "ct10": 18.62,
+        "max4": 18.62,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 9,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "15->16/16",
+    "t0": 5.13,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 5.83,
+        "ct2": 1.04,
+        "ct10": 1.04,
+        "max4": 6.74,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1,
+        "ct10": 1.4,
+        "max4": 1.4,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Jujutsu Ka",
+    "idx": 10,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 150,
+    "setupOk": true,
+    "ep": "16->17/17",
+    "t0": 4.79,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.78,
+        "ct10": 3.18,
+        "max4": 3.18,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.97,
+        "ct10": 2.37,
+        "max4": 6.17,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 0,
+    "sc": "follow",
+    "pos": "open",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "2->3/3",
+    "t0": 4.18,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 4.97,
+        "ct2": 1.44,
+        "ct10": 9.44,
+        "max4": 5.5,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0.05,
+        "ct2": 1.94,
+        "ct10": 9.94,
+        "max4": 3.94,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 1,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "3->4/4",
+    "t0": 601.09,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.62,
+        "ct10": 8.42,
+        "max4": 602.7,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.93,
+        "ct10": 8.53,
+        "max4": 3.93,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 2,
+    "sc": "paused",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "4->5/5",
+    "t0": 503.53,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.86,
+        "ct10": 8.66,
+        "max4": 3.86,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 0.77,
+        "ct10": 7.57,
+        "max4": 2.77,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 3,
+    "sc": "follow",
+    "pos": "mid",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "5->6/6",
+    "t0": 612.66,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.44,
+        "ct10": 8.04,
+        "max4": 3.44,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 613.46,
+        "ct2": 614.66,
+        "ct10": 7.7,
+        "max4": 615.46,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 4,
+    "sc": "auto",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "6->7/7",
+    "t0": 1421.1,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.76,
+        "ct10": 9.76,
+        "max4": 3.76,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.3,
+        "ct10": 9.3,
+        "max4": 1434.95,
+        "strict": false,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 5,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "7->8/8",
+    "t0": 17.82,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 18.34,
+        "ct10": 19.54,
+        "max4": 19.54,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 19.66,
+        "ct10": 20.86,
+        "max4": 20.86,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 6,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "8->9/9",
+    "t0": 22.77,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.61,
+        "ct10": 2.21,
+        "max4": 2.21,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 23.69,
+        "ct2": 1.05,
+        "ct10": 1.45,
+        "max4": 25.13,
+        "strict": true,
+        "ext": true,
+        "fate": "stuck"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 7,
+    "sc": "chain",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "9->10/10",
+    "t0": 5.78,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.22,
+        "ct10": 2.22,
+        "max4": 6.35,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.58,
+        "ct10": 2.58,
+        "max4": 2.58,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "series": "Chainsaw M",
+    "idx": 8,
+    "sc": "both",
+    "pos": "-",
+    "how": "button",
+    "relay": 50,
+    "setupOk": true,
+    "ep": "10->11/11",
+    "t0": 592.13,
+    "inst": [
+      {
+        "k": "A",
+        "changed": true,
+        "ctLm": 0,
+        "ct2": 1.44,
+        "ct10": 8.23,
+        "max4": 3.43,
+        "strict": false,
+        "ext": false,
+        "fate": "ok"
+      },
+      {
+        "k": "B",
+        "changed": true,
+        "ctLm": 591.84,
+        "ct2": 593.44,
+        "ct10": 7.13,
+        "max4": 594.04,
+        "strict": true,
+        "ext": true,
+        "fate": "self-corrected"
+      }
+    ]
+  }
+]

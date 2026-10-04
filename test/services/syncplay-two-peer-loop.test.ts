@@ -746,8 +746,8 @@ describe('two-peer syncplay harness', () => {
 // own correctly-awaited call — so deleting one `await` anywhere else in the glob
 // restores that ordering on the site that lost it while all four stay green.
 // Nothing in the toolchain catches that, which was checked rather than assumed:
-// `eslint.config.mjs:22 ("...tseslint.configs.recommended,")` is the untyped
-// preset, and `eslint.config.mjs:29 ("parserOptions: {")` carries no `project`
+// `eslint.config.mjs:23 ("...tseslint.configs.recommended,")` is the untyped
+// preset, and `eslint.config.mjs:30 ("parserOptions: {")` carries no `project`
 // or `projectService`, so `no-floating-promises` cannot be turned on as
 // configured; `npm run typecheck` is indifferent to a dropped `await` on a
 // `Promise<void>`.

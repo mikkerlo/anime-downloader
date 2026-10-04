@@ -1,0 +1,858 @@
+=== S3lag paused=false skew=0 phase=0 follow=true switch@4000
+4000 hostuser adopted=false
+4000 hostuser readyState=0
+4050 hostuser IN pos=301.50 setBy=joinuser doSeek=false paused=false el=0.00 rs=0
+4050 hostuser SEEKWRITE 0.00
+4150 joinuser NAV
+4150 joinuser adopted=false
+4150 joinuser readyState=0
+4200 joinuser SEEKWRITE 0.00
+4500 hostuser SEEKWRITE 301.50
+4500 hostuser readyState=1
+4650 joinuser readyState=1
+5000 hostuser OUT pos=301.50 ASSERT paused=false
+5000 hostuser adopted=true
+5000 joinuser OUT pos=302.45 ASSERT paused=false
+5000 joinuser adopted=true
+5050 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=302.05 rs=1
+6000 hostuser OUT pos=302.00 ASSERT paused=false
+6000 joinuser OUT pos=0.05 ASSERT paused=true
+6050 joinuser IN pos=302.55 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+6050 joinuser SEEKWRITE 302.55
+6100 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.10 rs=1
+6100 hostuser SEEKWRITE 0.05
+7000 hostuser OUT pos=0.05 ASSERT paused=true
+7000 joinuser OUT pos=302.55 ASSERT paused=false
+7050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=303.55 rs=1
+7050 joinuser SEEKWRITE 0.05
+7100 hostuser IN pos=302.65 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+7100 hostuser SEEKWRITE 302.65
+8000 hostuser OUT pos=302.65 ASSERT paused=false
+8000 joinuser OUT pos=0.05 ASSERT paused=true
+8050 joinuser IN pos=303.50 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+8050 joinuser SEEKWRITE 303.50
+8100 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.65 rs=1
+8100 hostuser SEEKWRITE 0.05
+9000 hostuser OUT pos=0.05 ASSERT paused=true
+9000 joinuser OUT pos=303.50 ASSERT paused=false
+9050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=304.50 rs=1
+9050 joinuser SEEKWRITE 0.05
+9100 hostuser IN pos=303.60 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+9100 hostuser SEEKWRITE 303.60
+10000 hostuser OUT pos=303.60 ASSERT paused=false
+10000 joinuser OUT pos=0.05 ASSERT paused=true
+10050 joinuser IN pos=304.45 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+10050 joinuser SEEKWRITE 304.45
+10100 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.60 rs=1
+10100 hostuser SEEKWRITE 0.05
+11000 hostuser OUT pos=0.05 ASSERT paused=true
+11000 joinuser OUT pos=304.45 ASSERT paused=false
+11050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=305.45 rs=1
+11050 joinuser SEEKWRITE 0.05
+11100 hostuser IN pos=304.55 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+11100 hostuser SEEKWRITE 304.55
+12000 hostuser OUT pos=304.55 ASSERT paused=false
+12000 joinuser OUT pos=0.05 ASSERT paused=true
+12050 joinuser IN pos=305.40 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+12050 joinuser SEEKWRITE 305.40
+12100 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=305.55 rs=1
+12100 hostuser SEEKWRITE 0.05
+END A.ct=0.05 B.ct=305.45 room=0.05/joinuser
+=== S3lag paused=false skew=0 phase=50 follow=true switch@16150
+16150 hostuser adopted=false
+16150 hostuser readyState=0
+16200 hostuser SEEKWRITE 0.00
+16300 joinuser NAV
+16300 joinuser adopted=false
+16300 joinuser readyState=0
+16350 joinuser SEEKWRITE 0.00
+16650 hostuser readyState=1
+16800 joinuser readyState=1
+17100 hostuser OUT pos=303.95 ASSERT paused=false
+17100 hostuser adopted=true
+17100 joinuser OUT pos=302.45 ASSERT paused=false
+17100 joinuser adopted=true
+17150 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+17150 hostuser SEEKWRITE 302.50
+18100 hostuser OUT pos=302.50 ASSERT paused=false
+18100 joinuser OUT pos=0.05 ASSERT paused=true
+18150 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+18200 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+18200 hostuser SEEKWRITE 0.05
+19100 hostuser OUT pos=0.05 ASSERT paused=true
+19100 joinuser OUT pos=0.05 ASSERT paused=true
+19150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+20100 hostuser OUT pos=0.05 ASSERT paused=true
+20100 joinuser OUT pos=0.05 ASSERT paused=true
+20150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+21100 hostuser OUT pos=0.05 ASSERT paused=true
+21100 joinuser OUT pos=0.05 ASSERT paused=true
+21150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+22100 hostuser OUT pos=0.05 ASSERT paused=true
+22100 joinuser OUT pos=0.05 ASSERT paused=true
+22150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+23100 hostuser OUT pos=0.05 ASSERT paused=true
+23100 joinuser OUT pos=0.05 ASSERT paused=true
+23150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+24100 hostuser OUT pos=0.05 ASSERT paused=true
+24100 joinuser OUT pos=0.05 ASSERT paused=true
+24150 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=100 follow=true switch@28350
+28350 hostuser adopted=false
+28350 hostuser readyState=0
+28400 hostuser SEEKWRITE 0.00
+28500 joinuser NAV
+28500 joinuser adopted=false
+28500 joinuser readyState=0
+28550 joinuser SEEKWRITE 0.00
+28850 hostuser readyState=1
+29000 joinuser readyState=1
+29250 hostuser OUT pos=303.95 ASSERT paused=false
+29250 hostuser adopted=true
+29250 joinuser OUT pos=302.45 ASSERT paused=false
+29250 joinuser adopted=true
+29300 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+29300 hostuser SEEKWRITE 302.50
+30250 hostuser OUT pos=302.50 ASSERT paused=false
+30250 joinuser OUT pos=0.05 ASSERT paused=true
+30300 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+30350 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+30350 hostuser SEEKWRITE 0.05
+31250 hostuser OUT pos=0.05 ASSERT paused=true
+31250 joinuser OUT pos=0.05 ASSERT paused=true
+31300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+32250 hostuser OUT pos=0.05 ASSERT paused=true
+32250 joinuser OUT pos=0.05 ASSERT paused=true
+32300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+33250 hostuser OUT pos=0.05 ASSERT paused=true
+33250 joinuser OUT pos=0.05 ASSERT paused=true
+33300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+34250 hostuser OUT pos=0.05 ASSERT paused=true
+34250 joinuser OUT pos=0.05 ASSERT paused=true
+34300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+35250 hostuser OUT pos=0.05 ASSERT paused=true
+35250 joinuser OUT pos=0.05 ASSERT paused=true
+35300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+36250 hostuser OUT pos=0.05 ASSERT paused=true
+36250 joinuser OUT pos=0.05 ASSERT paused=true
+36300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=150 follow=true switch@40600
+40600 hostuser adopted=false
+40600 hostuser readyState=0
+40650 hostuser SEEKWRITE 0.00
+40750 joinuser NAV
+40750 joinuser adopted=false
+40750 joinuser readyState=0
+40800 joinuser SEEKWRITE 0.00
+41100 hostuser readyState=1
+41250 joinuser readyState=1
+41450 hostuser OUT pos=303.95 ASSERT paused=false
+41450 hostuser adopted=true
+41450 joinuser OUT pos=302.45 ASSERT paused=false
+41450 joinuser adopted=true
+41500 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+41500 hostuser SEEKWRITE 302.50
+42450 hostuser OUT pos=302.50 ASSERT paused=false
+42450 joinuser OUT pos=0.05 ASSERT paused=true
+42500 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+42550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+42550 hostuser SEEKWRITE 0.05
+43450 hostuser OUT pos=0.05 ASSERT paused=true
+43450 joinuser OUT pos=0.05 ASSERT paused=true
+43500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+44450 hostuser OUT pos=0.05 ASSERT paused=true
+44450 joinuser OUT pos=0.05 ASSERT paused=true
+44500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+45450 hostuser OUT pos=0.05 ASSERT paused=true
+45450 joinuser OUT pos=0.05 ASSERT paused=true
+45500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+46450 hostuser OUT pos=0.05 ASSERT paused=true
+46450 joinuser OUT pos=0.05 ASSERT paused=true
+46500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+47450 hostuser OUT pos=0.05 ASSERT paused=true
+47450 joinuser OUT pos=0.05 ASSERT paused=true
+47500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+48450 hostuser OUT pos=0.05 ASSERT paused=true
+48450 joinuser OUT pos=0.05 ASSERT paused=true
+48500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=200 follow=true switch@52900
+52900 hostuser adopted=false
+52900 hostuser readyState=0
+52950 hostuser SEEKWRITE 0.00
+53050 joinuser NAV
+53050 joinuser adopted=false
+53050 joinuser readyState=0
+53100 joinuser SEEKWRITE 0.00
+53400 hostuser readyState=1
+53550 joinuser readyState=1
+53700 hostuser OUT pos=303.95 ASSERT paused=false
+53700 hostuser adopted=true
+53700 joinuser OUT pos=302.45 ASSERT paused=false
+53700 joinuser adopted=true
+53750 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+53750 hostuser SEEKWRITE 302.50
+54700 hostuser OUT pos=302.50 ASSERT paused=false
+54700 joinuser OUT pos=0.05 ASSERT paused=true
+54750 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+54800 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+54800 hostuser SEEKWRITE 0.05
+55700 hostuser OUT pos=0.05 ASSERT paused=true
+55700 joinuser OUT pos=0.05 ASSERT paused=true
+55750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+56700 hostuser OUT pos=0.05 ASSERT paused=true
+56700 joinuser OUT pos=0.05 ASSERT paused=true
+56750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+57700 hostuser OUT pos=0.05 ASSERT paused=true
+57700 joinuser OUT pos=0.05 ASSERT paused=true
+57750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+58700 hostuser OUT pos=0.05 ASSERT paused=true
+58700 joinuser OUT pos=0.05 ASSERT paused=true
+58750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+59700 hostuser OUT pos=0.05 ASSERT paused=true
+59700 joinuser OUT pos=0.05 ASSERT paused=true
+59750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+60700 hostuser OUT pos=0.05 ASSERT paused=true
+60700 joinuser OUT pos=0.05 ASSERT paused=true
+60750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=250 follow=true switch@65250
+65250 hostuser adopted=false
+65250 hostuser readyState=0
+65300 hostuser SEEKWRITE 0.00
+65400 joinuser NAV
+65400 joinuser adopted=false
+65400 joinuser readyState=0
+65450 joinuser SEEKWRITE 0.00
+65750 hostuser readyState=1
+65900 joinuser readyState=1
+66000 hostuser OUT pos=303.95 ASSERT paused=false
+66000 hostuser adopted=true
+66000 joinuser OUT pos=302.45 ASSERT paused=false
+66000 joinuser adopted=true
+66050 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+66050 hostuser SEEKWRITE 302.50
+67000 hostuser OUT pos=302.50 ASSERT paused=false
+67000 joinuser OUT pos=0.05 ASSERT paused=true
+67050 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+67100 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+67100 hostuser SEEKWRITE 0.05
+68000 hostuser OUT pos=0.05 ASSERT paused=true
+68000 joinuser OUT pos=0.05 ASSERT paused=true
+68050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+69000 hostuser OUT pos=0.05 ASSERT paused=true
+69000 joinuser OUT pos=0.05 ASSERT paused=true
+69050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+70000 hostuser OUT pos=0.05 ASSERT paused=true
+70000 joinuser OUT pos=0.05 ASSERT paused=true
+70050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+71000 hostuser OUT pos=0.05 ASSERT paused=true
+71000 joinuser OUT pos=0.05 ASSERT paused=true
+71050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+72000 hostuser OUT pos=0.05 ASSERT paused=true
+72000 joinuser OUT pos=0.05 ASSERT paused=true
+72050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+73000 hostuser OUT pos=0.05 ASSERT paused=true
+73000 joinuser OUT pos=0.05 ASSERT paused=true
+73050 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=300 follow=true switch@77650
+77650 hostuser adopted=false
+77650 hostuser readyState=0
+77700 hostuser SEEKWRITE 0.00
+77800 joinuser NAV
+77800 joinuser adopted=false
+77800 joinuser readyState=0
+77850 joinuser SEEKWRITE 0.00
+78150 hostuser readyState=1
+78300 joinuser readyState=1
+78350 hostuser OUT pos=303.95 ASSERT paused=false
+78350 hostuser adopted=true
+78350 joinuser OUT pos=302.45 ASSERT paused=false
+78350 joinuser adopted=true
+78400 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+78400 hostuser SEEKWRITE 302.50
+79350 hostuser OUT pos=302.50 ASSERT paused=false
+79350 joinuser OUT pos=0.05 ASSERT paused=true
+79400 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+79450 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=303.55 rs=1
+79450 hostuser SEEKWRITE 0.05
+80350 hostuser OUT pos=0.05 ASSERT paused=true
+80350 joinuser OUT pos=0.05 ASSERT paused=true
+80400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+81350 hostuser OUT pos=0.05 ASSERT paused=true
+81350 joinuser OUT pos=0.05 ASSERT paused=true
+81400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+82350 hostuser OUT pos=0.05 ASSERT paused=true
+82350 joinuser OUT pos=0.05 ASSERT paused=true
+82400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+83350 hostuser OUT pos=0.05 ASSERT paused=true
+83350 joinuser OUT pos=0.05 ASSERT paused=true
+83400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+84350 hostuser OUT pos=0.05 ASSERT paused=true
+84350 joinuser OUT pos=0.05 ASSERT paused=true
+84400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+85350 hostuser OUT pos=0.05 ASSERT paused=true
+85350 joinuser OUT pos=0.05 ASSERT paused=true
+85400 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=350 follow=true switch@90100
+90100 hostuser adopted=false
+90100 hostuser readyState=0
+90150 hostuser SEEKWRITE 0.00
+90250 joinuser NAV
+90250 joinuser adopted=false
+90250 joinuser readyState=0
+90300 joinuser SEEKWRITE 0.00
+90600 hostuser readyState=1
+90750 hostuser OUT pos=303.95 ASSERT paused=false
+90750 hostuser adopted=true
+90750 joinuser OUT pos=302.45 ASSERT paused=false
+90750 joinuser adopted=true
+90750 joinuser readyState=1
+90800 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+90800 hostuser SEEKWRITE 302.50
+91750 hostuser OUT pos=302.50 ASSERT paused=false
+91750 joinuser OUT pos=302.45 ASSERT paused=false
+91800 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+92750 hostuser OUT pos=303.45 ASSERT paused=false
+92750 joinuser OUT pos=0.05 ASSERT paused=true
+92800 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.50 rs=1
+92850 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.55 rs=1
+92850 hostuser SEEKWRITE 0.05
+93750 hostuser OUT pos=0.05 ASSERT paused=true
+93750 joinuser OUT pos=0.05 ASSERT paused=true
+93800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+94750 hostuser OUT pos=0.05 ASSERT paused=true
+94750 joinuser OUT pos=0.05 ASSERT paused=true
+94800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+95750 hostuser OUT pos=0.05 ASSERT paused=true
+95750 joinuser OUT pos=0.05 ASSERT paused=true
+95800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+96750 hostuser OUT pos=0.05 ASSERT paused=true
+96750 joinuser OUT pos=0.05 ASSERT paused=true
+96800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+97750 hostuser OUT pos=0.05 ASSERT paused=true
+97750 joinuser OUT pos=0.05 ASSERT paused=true
+97800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=400 follow=true switch@102600
+102600 hostuser adopted=false
+102600 hostuser readyState=0
+102650 hostuser SEEKWRITE 0.00
+102750 joinuser NAV
+102750 joinuser adopted=false
+102750 joinuser readyState=0
+102800 joinuser SEEKWRITE 0.00
+103100 hostuser readyState=1
+103200 hostuser OUT pos=303.95 ASSERT paused=false
+103200 hostuser adopted=true
+103200 joinuser OUT pos=302.45 ASSERT paused=false
+103200 joinuser adopted=true
+103250 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+103250 hostuser SEEKWRITE 302.50
+103250 joinuser readyState=1
+104200 hostuser OUT pos=302.50 ASSERT paused=false
+104200 joinuser OUT pos=302.45 ASSERT paused=false
+104250 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+105200 hostuser OUT pos=303.45 ASSERT paused=false
+105200 joinuser OUT pos=0.05 ASSERT paused=true
+105250 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.50 rs=1
+105300 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.55 rs=1
+105300 hostuser SEEKWRITE 0.05
+106200 hostuser OUT pos=0.05 ASSERT paused=true
+106200 joinuser OUT pos=0.05 ASSERT paused=true
+106250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+107200 hostuser OUT pos=0.05 ASSERT paused=true
+107200 joinuser OUT pos=0.05 ASSERT paused=true
+107250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+108200 hostuser OUT pos=0.05 ASSERT paused=true
+108200 joinuser OUT pos=0.05 ASSERT paused=true
+108250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+109200 hostuser OUT pos=0.05 ASSERT paused=true
+109200 joinuser OUT pos=0.05 ASSERT paused=true
+109250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+110200 hostuser OUT pos=0.05 ASSERT paused=true
+110200 joinuser OUT pos=0.05 ASSERT paused=true
+110250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=450 follow=true switch@115150
+115150 hostuser adopted=false
+115150 hostuser readyState=0
+115200 hostuser SEEKWRITE 0.00
+115300 joinuser NAV
+115300 joinuser adopted=false
+115300 joinuser readyState=0
+115350 joinuser SEEKWRITE 0.00
+115650 hostuser readyState=1
+115700 hostuser OUT pos=303.95 ASSERT paused=false
+115700 hostuser adopted=true
+115700 joinuser OUT pos=302.45 ASSERT paused=false
+115700 joinuser adopted=true
+115750 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+115750 hostuser SEEKWRITE 302.50
+115800 joinuser readyState=1
+116700 hostuser OUT pos=302.50 ASSERT paused=false
+116700 joinuser OUT pos=302.45 ASSERT paused=false
+116750 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+117700 hostuser OUT pos=303.45 ASSERT paused=false
+117700 joinuser OUT pos=0.05 ASSERT paused=true
+117750 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.50 rs=1
+117800 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.55 rs=1
+117800 hostuser SEEKWRITE 0.05
+118700 hostuser OUT pos=0.05 ASSERT paused=true
+118700 joinuser OUT pos=0.05 ASSERT paused=true
+118750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+119700 hostuser OUT pos=0.05 ASSERT paused=true
+119700 joinuser OUT pos=0.05 ASSERT paused=true
+119750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+120700 hostuser OUT pos=0.05 ASSERT paused=true
+120700 joinuser OUT pos=0.05 ASSERT paused=true
+120750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+121700 hostuser OUT pos=0.05 ASSERT paused=true
+121700 joinuser OUT pos=0.05 ASSERT paused=true
+121750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+122700 hostuser OUT pos=0.05 ASSERT paused=true
+122700 joinuser OUT pos=0.05 ASSERT paused=true
+122750 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=500 follow=true switch@127750
+127750 hostuser adopted=false
+127750 hostuser readyState=0
+127800 hostuser SEEKWRITE 0.00
+127900 joinuser NAV
+127900 joinuser adopted=false
+127900 joinuser readyState=0
+127950 joinuser SEEKWRITE 0.00
+128250 hostuser OUT pos=303.95 ASSERT paused=false
+128250 hostuser adopted=true
+128250 hostuser readyState=1
+128250 joinuser OUT pos=302.45 ASSERT paused=false
+128250 joinuser adopted=true
+128300 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+128300 hostuser SEEKWRITE 302.50
+128400 joinuser readyState=1
+129250 hostuser OUT pos=302.50 ASSERT paused=false
+129250 joinuser OUT pos=302.45 ASSERT paused=false
+129300 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+130250 hostuser OUT pos=303.45 ASSERT paused=false
+130250 joinuser OUT pos=0.05 ASSERT paused=true
+130300 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.50 rs=1
+130350 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.55 rs=1
+130350 hostuser SEEKWRITE 0.05
+131250 hostuser OUT pos=0.05 ASSERT paused=true
+131250 joinuser OUT pos=0.05 ASSERT paused=true
+131300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+132250 hostuser OUT pos=0.05 ASSERT paused=true
+132250 joinuser OUT pos=0.05 ASSERT paused=true
+132300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+133250 hostuser OUT pos=0.05 ASSERT paused=true
+133250 joinuser OUT pos=0.05 ASSERT paused=true
+133300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+134250 hostuser OUT pos=0.05 ASSERT paused=true
+134250 joinuser OUT pos=0.05 ASSERT paused=true
+134300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+135250 hostuser OUT pos=0.05 ASSERT paused=true
+135250 joinuser OUT pos=0.05 ASSERT paused=true
+135300 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=550 follow=true switch@140400
+140400 hostuser adopted=false
+140400 hostuser readyState=0
+140450 hostuser SEEKWRITE 0.00
+140550 joinuser NAV
+140550 joinuser adopted=false
+140550 joinuser readyState=0
+140600 joinuser SEEKWRITE 0.00
+140850 hostuser OUT pos=303.95 ASSERT paused=false
+140850 hostuser adopted=true
+140850 joinuser OUT pos=302.45 ASSERT paused=false
+140850 joinuser adopted=true
+140900 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+140900 hostuser SEEKWRITE 302.50
+140900 hostuser readyState=1
+141050 joinuser readyState=1
+141850 hostuser OUT pos=302.50 ASSERT paused=false
+141850 joinuser OUT pos=302.45 ASSERT paused=false
+141900 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.50 rs=1
+142850 hostuser OUT pos=303.45 ASSERT paused=false
+142850 joinuser OUT pos=0.05 ASSERT paused=true
+142900 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.50 rs=1
+142950 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.55 rs=1
+142950 hostuser SEEKWRITE 0.05
+143850 hostuser OUT pos=0.05 ASSERT paused=true
+143850 joinuser OUT pos=0.05 ASSERT paused=true
+143900 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+144850 hostuser OUT pos=0.05 ASSERT paused=true
+144850 joinuser OUT pos=0.05 ASSERT paused=true
+144900 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+145850 hostuser OUT pos=0.05 ASSERT paused=true
+145850 joinuser OUT pos=0.05 ASSERT paused=true
+145900 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+146850 hostuser OUT pos=0.05 ASSERT paused=true
+146850 joinuser OUT pos=0.05 ASSERT paused=true
+146900 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+147850 hostuser OUT pos=0.05 ASSERT paused=true
+147850 joinuser OUT pos=0.05 ASSERT paused=true
+147900 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=600 follow=true switch@153100
+153100 hostuser adopted=false
+153100 hostuser readyState=0
+153150 hostuser SEEKWRITE 0.00
+153250 joinuser NAV
+153250 joinuser adopted=false
+153250 joinuser readyState=0
+153300 joinuser SEEKWRITE 0.00
+153500 hostuser OUT pos=303.95 ASSERT paused=false
+153500 hostuser adopted=true
+153500 joinuser OUT pos=302.45 ASSERT paused=false
+153500 joinuser adopted=true
+153550 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+153600 hostuser SEEKWRITE 302.50
+153600 hostuser readyState=1
+153750 joinuser readyState=1
+154500 hostuser OUT pos=302.50 ASSERT paused=false
+154500 joinuser OUT pos=302.45 ASSERT paused=false
+154550 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.45 rs=1
+155500 hostuser OUT pos=303.40 ASSERT paused=false
+155500 joinuser OUT pos=0.05 ASSERT paused=true
+155550 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.45 rs=1
+155600 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.50 rs=1
+155600 hostuser SEEKWRITE 0.05
+156500 hostuser OUT pos=0.05 ASSERT paused=true
+156500 joinuser OUT pos=0.05 ASSERT paused=true
+156550 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+157500 hostuser OUT pos=0.05 ASSERT paused=true
+157500 joinuser OUT pos=0.05 ASSERT paused=true
+157550 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+158500 hostuser OUT pos=0.05 ASSERT paused=true
+158500 joinuser OUT pos=0.05 ASSERT paused=true
+158550 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+159500 hostuser OUT pos=0.05 ASSERT paused=true
+159500 joinuser OUT pos=0.05 ASSERT paused=true
+159550 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+160500 hostuser OUT pos=0.05 ASSERT paused=true
+160500 joinuser OUT pos=0.05 ASSERT paused=true
+160550 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=650 follow=true switch@165850
+165850 hostuser adopted=false
+165850 hostuser readyState=0
+165900 hostuser SEEKWRITE 0.00
+166000 joinuser NAV
+166000 joinuser adopted=false
+166000 joinuser readyState=0
+166050 joinuser SEEKWRITE 0.00
+166200 hostuser OUT pos=303.95 ASSERT paused=false
+166200 hostuser adopted=true
+166200 joinuser OUT pos=302.45 ASSERT paused=false
+166200 joinuser adopted=true
+166250 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+166350 hostuser SEEKWRITE 302.50
+166350 hostuser readyState=1
+166500 joinuser readyState=1
+167200 hostuser OUT pos=302.50 ASSERT paused=false
+167200 joinuser OUT pos=302.45 ASSERT paused=false
+167250 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.40 rs=1
+168200 hostuser OUT pos=303.35 ASSERT paused=false
+168200 joinuser OUT pos=0.05 ASSERT paused=true
+168250 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.40 rs=1
+168300 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.45 rs=1
+168300 hostuser SEEKWRITE 0.05
+169200 hostuser OUT pos=0.05 ASSERT paused=true
+169200 joinuser OUT pos=0.05 ASSERT paused=true
+169250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+170200 hostuser OUT pos=0.05 ASSERT paused=true
+170200 joinuser OUT pos=0.05 ASSERT paused=true
+170250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+171200 hostuser OUT pos=0.05 ASSERT paused=true
+171200 joinuser OUT pos=0.05 ASSERT paused=true
+171250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+172200 hostuser OUT pos=0.05 ASSERT paused=true
+172200 joinuser OUT pos=0.05 ASSERT paused=true
+172250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+173200 hostuser OUT pos=0.05 ASSERT paused=true
+173200 joinuser OUT pos=0.05 ASSERT paused=true
+173250 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=700 follow=true switch@178650
+178650 hostuser adopted=false
+178650 hostuser readyState=0
+178700 hostuser SEEKWRITE 0.00
+178800 joinuser NAV
+178800 joinuser adopted=false
+178800 joinuser readyState=0
+178850 joinuser SEEKWRITE 0.00
+178950 hostuser OUT pos=303.95 ASSERT paused=false
+178950 hostuser adopted=true
+178950 joinuser OUT pos=302.45 ASSERT paused=false
+178950 joinuser adopted=true
+179000 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+179150 hostuser SEEKWRITE 302.50
+179150 hostuser readyState=1
+179300 joinuser readyState=1
+179950 hostuser OUT pos=302.50 ASSERT paused=false
+179950 joinuser OUT pos=302.45 ASSERT paused=false
+180000 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.35 rs=1
+180950 hostuser OUT pos=303.30 ASSERT paused=false
+180950 joinuser OUT pos=0.05 ASSERT paused=true
+181000 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.35 rs=1
+181050 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.40 rs=1
+181050 hostuser SEEKWRITE 0.05
+181950 hostuser OUT pos=0.05 ASSERT paused=true
+181950 joinuser OUT pos=0.05 ASSERT paused=true
+182000 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+182950 hostuser OUT pos=0.05 ASSERT paused=true
+182950 joinuser OUT pos=0.05 ASSERT paused=true
+183000 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+183950 hostuser OUT pos=0.05 ASSERT paused=true
+183950 joinuser OUT pos=0.05 ASSERT paused=true
+184000 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+184950 hostuser OUT pos=0.05 ASSERT paused=true
+184950 joinuser OUT pos=0.05 ASSERT paused=true
+185000 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+185950 hostuser OUT pos=0.05 ASSERT paused=true
+185950 joinuser OUT pos=0.05 ASSERT paused=true
+186000 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=750 follow=true switch@191500
+191500 hostuser adopted=false
+191500 hostuser readyState=0
+191550 hostuser SEEKWRITE 0.00
+191650 joinuser NAV
+191650 joinuser adopted=false
+191650 joinuser readyState=0
+191700 joinuser SEEKWRITE 0.00
+191750 hostuser OUT pos=303.95 ASSERT paused=false
+191750 hostuser adopted=true
+191750 joinuser OUT pos=302.45 ASSERT paused=false
+191750 joinuser adopted=true
+191800 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+192000 hostuser SEEKWRITE 302.50
+192000 hostuser readyState=1
+192150 joinuser readyState=1
+192750 hostuser OUT pos=302.50 ASSERT paused=false
+192750 joinuser OUT pos=302.45 ASSERT paused=false
+192800 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.30 rs=1
+193750 hostuser OUT pos=303.25 ASSERT paused=false
+193750 joinuser OUT pos=0.05 ASSERT paused=true
+193800 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.30 rs=1
+193850 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.35 rs=1
+193850 hostuser SEEKWRITE 0.05
+194750 hostuser OUT pos=0.05 ASSERT paused=true
+194750 joinuser OUT pos=0.05 ASSERT paused=true
+194800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+195750 hostuser OUT pos=0.05 ASSERT paused=true
+195750 joinuser OUT pos=0.05 ASSERT paused=true
+195800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+196750 hostuser OUT pos=0.05 ASSERT paused=true
+196750 joinuser OUT pos=0.05 ASSERT paused=true
+196800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+197750 hostuser OUT pos=0.05 ASSERT paused=true
+197750 joinuser OUT pos=0.05 ASSERT paused=true
+197800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+198750 hostuser OUT pos=0.05 ASSERT paused=true
+198750 joinuser OUT pos=0.05 ASSERT paused=true
+198800 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=800 follow=true switch@204400
+204400 hostuser adopted=false
+204400 hostuser readyState=0
+204450 hostuser SEEKWRITE 0.00
+204550 joinuser NAV
+204550 joinuser adopted=false
+204550 joinuser readyState=0
+204600 hostuser OUT pos=303.95 ASSERT paused=false
+204600 hostuser adopted=true
+204600 joinuser SEEKWRITE 0.00
+204600 joinuser OUT pos=302.45 ASSERT paused=false
+204600 joinuser adopted=true
+204650 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+204900 hostuser SEEKWRITE 302.50
+204900 hostuser readyState=1
+205050 joinuser readyState=1
+205600 hostuser OUT pos=302.50 ASSERT paused=false
+205600 joinuser OUT pos=302.45 ASSERT paused=false
+205650 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.25 rs=1
+206600 hostuser OUT pos=303.20 ASSERT paused=false
+206600 joinuser OUT pos=0.05 ASSERT paused=true
+206650 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=304.25 rs=1
+206700 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.30 rs=1
+206700 hostuser SEEKWRITE 0.05
+207600 hostuser OUT pos=0.05 ASSERT paused=true
+207600 joinuser OUT pos=0.05 ASSERT paused=true
+207650 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+208600 hostuser OUT pos=0.05 ASSERT paused=true
+208600 joinuser OUT pos=0.05 ASSERT paused=true
+208650 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+209600 hostuser OUT pos=0.05 ASSERT paused=true
+209600 joinuser OUT pos=0.05 ASSERT paused=true
+209650 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+210600 hostuser OUT pos=0.05 ASSERT paused=true
+210600 joinuser OUT pos=0.05 ASSERT paused=true
+210650 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+211600 hostuser OUT pos=0.05 ASSERT paused=true
+211600 joinuser OUT pos=0.05 ASSERT paused=true
+211650 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=0.05 rs=1
+END A.ct=0.05 B.ct=0.05 room=0.05/hostuser
+=== S3lag paused=false skew=0 phase=850 follow=true switch@217350
+217350 hostuser adopted=false
+217350 hostuser readyState=0
+217400 hostuser SEEKWRITE 0.00
+217500 hostuser OUT pos=303.95 ASSERT paused=false
+217500 hostuser adopted=true
+217500 joinuser OUT pos=302.45 ASSERT paused=false
+217500 joinuser NAV
+217500 joinuser adopted=false
+217500 joinuser readyState=0
+217550 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+217550 joinuser IN pos=302.50 setBy=null doSeek=false paused=false el=0.00 rs=0
+217550 joinuser SEEKWRITE 0.00
+217850 hostuser SEEKWRITE 302.50
+217850 hostuser readyState=1
+218000 joinuser SEEKWRITE 302.50
+218000 joinuser readyState=1
+218500 hostuser OUT pos=302.50 ASSERT paused=false
+218500 joinuser OUT pos=302.50 ASSERT paused=false
+218500 joinuser adopted=true
+218550 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.20 rs=1
+219500 hostuser OUT pos=303.15 ASSERT paused=false
+219500 joinuser OUT pos=303.00 ASSERT paused=false
+219550 joinuser IN pos=303.55 setBy=hostuser doSeek=false paused=false el=304.05 rs=1
+220500 hostuser OUT pos=304.15 ASSERT paused=false
+220500 joinuser OUT pos=304.00 ASSERT paused=false
+220550 hostuser IN pos=304.05 setBy=joinuser doSeek=false paused=false el=305.20 rs=1
+221500 hostuser OUT pos=305.15 ASSERT paused=false
+221500 joinuser OUT pos=305.00 ASSERT paused=false
+221550 hostuser IN pos=305.05 setBy=joinuser doSeek=false paused=false el=306.20 rs=1
+222500 hostuser OUT pos=306.15 ASSERT paused=false
+222500 joinuser OUT pos=306.00 ASSERT paused=false
+222550 hostuser IN pos=306.05 setBy=joinuser doSeek=false paused=false el=307.20 rs=1
+223500 hostuser OUT pos=307.15 ASSERT paused=false
+223500 joinuser OUT pos=307.00 ASSERT paused=false
+223550 hostuser IN pos=307.05 setBy=joinuser doSeek=false paused=false el=308.20 rs=1
+224500 hostuser OUT pos=308.15 ASSERT paused=false
+224500 joinuser OUT pos=308.00 ASSERT paused=false
+224550 hostuser IN pos=308.05 setBy=joinuser doSeek=false paused=false el=309.20 rs=1
+END A.ct=310.10 B.ct=309.95 room=308.95/joinuser
+=== S3lag paused=false skew=0 phase=900 follow=true switch@230350
+230350 hostuser adopted=false
+230350 hostuser readyState=0
+230400 hostuser SEEKWRITE 0.00
+230500 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+230500 hostuser OUT pos=303.95 ASSERT paused=false
+230500 hostuser adopted=true
+230500 joinuser OUT pos=302.45 ASSERT paused=false
+230500 joinuser NAV
+230500 joinuser adopted=false
+230500 joinuser readyState=0
+230550 joinuser SEEKWRITE 0.00
+230850 hostuser SEEKWRITE 302.50
+230850 hostuser readyState=1
+231000 joinuser readyState=1
+231450 hostuser OUT pos=302.50 ASSERT paused=false
+231450 joinuser OUT pos=303.45 ASSERT paused=false
+231450 joinuser adopted=true
+231500 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.15 rs=1
+232450 hostuser OUT pos=303.10 ASSERT paused=false
+232450 joinuser OUT pos=0.05 ASSERT paused=true
+232500 joinuser IN pos=303.55 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+232500 joinuser SEEKWRITE 303.55
+232550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.20 rs=1
+232550 hostuser SEEKWRITE 0.05
+233450 hostuser OUT pos=0.05 ASSERT paused=true
+233450 joinuser OUT pos=303.55 ASSERT paused=false
+233500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=304.55 rs=1
+233500 joinuser SEEKWRITE 0.05
+233550 hostuser IN pos=303.65 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+233550 hostuser SEEKWRITE 303.65
+234450 hostuser OUT pos=303.65 ASSERT paused=false
+234450 joinuser OUT pos=0.05 ASSERT paused=true
+234500 joinuser IN pos=304.50 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+234500 joinuser SEEKWRITE 304.50
+234550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.65 rs=1
+234550 hostuser SEEKWRITE 0.05
+235450 hostuser OUT pos=0.05 ASSERT paused=true
+235450 joinuser OUT pos=304.50 ASSERT paused=false
+235500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=305.50 rs=1
+235500 joinuser SEEKWRITE 0.05
+235550 hostuser IN pos=304.60 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+235550 hostuser SEEKWRITE 304.60
+236450 hostuser OUT pos=304.60 ASSERT paused=false
+236450 joinuser OUT pos=0.05 ASSERT paused=true
+236500 joinuser IN pos=305.45 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+236500 joinuser SEEKWRITE 305.45
+236550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=305.60 rs=1
+236550 hostuser SEEKWRITE 0.05
+237450 hostuser OUT pos=0.05 ASSERT paused=true
+237450 joinuser OUT pos=305.45 ASSERT paused=false
+237500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=306.45 rs=1
+237500 joinuser SEEKWRITE 0.05
+237550 hostuser IN pos=305.55 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+237550 hostuser SEEKWRITE 305.55
+238450 hostuser OUT pos=305.55 ASSERT paused=false
+238450 joinuser OUT pos=0.05 ASSERT paused=true
+END A.ct=306.45 B.ct=0.05 room=306.35/hostuser
+=== S3lag paused=false skew=0 phase=950 follow=true switch@243400
+243400 hostuser adopted=false
+243400 hostuser readyState=0
+243450 hostuser SEEKWRITE 0.00
+243450 hostuser OUT pos=303.95 ASSERT paused=false
+243450 hostuser adopted=true
+243450 joinuser OUT pos=302.45 ASSERT paused=false
+243550 hostuser IN pos=302.50 setBy=joinuser doSeek=false paused=false el=0.05 rs=0
+243550 joinuser NAV
+243550 joinuser adopted=false
+243550 joinuser readyState=0
+243600 joinuser SEEKWRITE 0.00
+243900 hostuser SEEKWRITE 302.50
+243900 hostuser readyState=1
+244050 joinuser readyState=1
+244450 hostuser OUT pos=302.50 ASSERT paused=false
+244450 joinuser OUT pos=303.45 ASSERT paused=false
+244450 joinuser adopted=true
+244500 hostuser IN pos=303.50 setBy=joinuser doSeek=false paused=false el=303.10 rs=1
+245450 hostuser OUT pos=303.05 ASSERT paused=false
+245450 joinuser OUT pos=0.05 ASSERT paused=true
+245500 joinuser IN pos=303.55 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+245500 joinuser SEEKWRITE 303.55
+245550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.15 rs=1
+245550 hostuser SEEKWRITE 0.05
+246450 hostuser OUT pos=0.05 ASSERT paused=true
+246450 joinuser OUT pos=303.55 ASSERT paused=false
+246500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=304.55 rs=1
+246500 joinuser SEEKWRITE 0.05
+246550 hostuser IN pos=303.65 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+246550 hostuser SEEKWRITE 303.65
+247450 hostuser OUT pos=303.65 ASSERT paused=false
+247450 joinuser OUT pos=0.05 ASSERT paused=true
+247500 joinuser IN pos=304.50 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+247500 joinuser SEEKWRITE 304.50
+247550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=304.65 rs=1
+247550 hostuser SEEKWRITE 0.05
+248450 hostuser OUT pos=0.05 ASSERT paused=true
+248450 joinuser OUT pos=304.50 ASSERT paused=false
+248500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=305.50 rs=1
+248500 joinuser SEEKWRITE 0.05
+248550 hostuser IN pos=304.60 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+248550 hostuser SEEKWRITE 304.60
+249450 hostuser OUT pos=304.60 ASSERT paused=false
+249450 joinuser OUT pos=0.05 ASSERT paused=true
+249500 joinuser IN pos=305.45 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+249500 joinuser SEEKWRITE 305.45
+249550 hostuser IN pos=0.05 setBy=joinuser doSeek=false paused=true el=305.60 rs=1
+249550 hostuser SEEKWRITE 0.05
+250450 hostuser OUT pos=0.05 ASSERT paused=true
+250450 joinuser OUT pos=305.45 ASSERT paused=false
+250500 joinuser IN pos=0.05 setBy=hostuser doSeek=false paused=true el=306.45 rs=1
+250500 joinuser SEEKWRITE 0.05
+250550 hostuser IN pos=305.55 setBy=joinuser doSeek=false paused=false el=0.05 rs=1
+250550 hostuser SEEKWRITE 305.55
+251450 hostuser OUT pos=305.55 ASSERT paused=false
+251450 joinuser OUT pos=0.05 ASSERT paused=true
+251500 joinuser IN pos=306.40 setBy=hostuser doSeek=false paused=false el=0.05 rs=1
+251500 joinuser SEEKWRITE 306.40
+END A.ct=306.50 B.ct=306.40 room=0.05/joinuser

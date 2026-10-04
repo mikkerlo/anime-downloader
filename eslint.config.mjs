@@ -15,6 +15,7 @@ export default tseslint.config(
       'playwright-report/**',
       'scripts/**',
       'src/renderer/public/**',
+      'investigations/**',
       '**/*.tsbuildinfo'
     ]
   },

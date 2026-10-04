@@ -1,0 +1,120 @@
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > double-advances when B presses after its follow released navigating
+d=600
+0 rigA press next from ep6
+0 rigA commit ep7 (press)
+50 rigB remote ep7 from rigA (local idx ep6, nav=false)
+50 rigB commit ep7 (follow)
+100 rigA remote ep7 from rigB (local idx ep7, nav=true)
+450 rigA release navigating
+450 rigB release navigating
+600 rigB press next from ep7
+600 rigB commit ep8 (press)
+650 rigA remote ep8 from rigB (local idx ep7, nav=false)
+650 rigA commit ep8 (follow)
+700 rigB remote ep8 from rigA (local idx ep8, nav=true)
+1050 rigA release navigating
+1050 rigB release navigating
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] rigB switched to "Some Anime - 6"
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] rigB switched to "Some Anime - 6"
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] rigA switched to "Some Anime - 7"
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] rigB switched to "Some Anime - 7"
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+[syncplay] status: ready 
+
+stdout | test/services/syncplay-two-peer-double-next.probe.test.ts > PROBE — both peers press next d ms apart > single-advances when B presses while its follow is in flight
+0 rigA press next from ep6
+0 rigA commit ep7 (press)
+50 rigB remote ep7 from rigA (local idx ep6, nav=false)
+50 rigB commit ep7 (follow)
+100 rigA remote ep7 from rigB (local idx ep7, nav=true)
+200 rigB press next: button disabled
+450 rigA release navigating
+450 rigB release navigating
+
+ ✓ test/services/syncplay-two-peer-double-next.probe.test.ts (6 tests) 584ms
+   ✓ PROBE — both peers press next d ms apart > sweeps d over 0..1000 ms  537ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  03:27:20
+   Duration  1.26s (transform 167ms, setup 26ms, collect 159ms, tests 584ms, environment 239ms, prepare 121ms)
+

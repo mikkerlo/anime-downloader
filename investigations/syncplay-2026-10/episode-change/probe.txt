@@ -1,0 +1,201 @@
+=== TRACE phase=0 switch at t=4000
+i= 0 A.ct=0.00 rs=0 adoptA=false room=302.95/hostuser B.ct=303.95 inA= inB= outA=
+i= 1 A.ct=0.00 rs=0 adoptA=false room=303.00/hostuser B.ct=304.00 inA=303.00/null inB=303.00/hostuser outA=
+i= 2 A.ct=0.00 rs=0 adoptA=false room=303.05/hostuser B.ct=304.05 inA= inB= outA=
+i= 3 A.ct=0.00 rs=0 adoptA=false room=303.10/hostuser B.ct=304.10 inA= inB= outA=
+i= 4 A.ct=0.00 rs=0 adoptA=false room=303.15/hostuser B.ct=304.15 inA= inB= outA=
+i= 5 A.ct=0.00 rs=0 adoptA=false room=303.20/hostuser B.ct=304.20 inA= inB= outA=
+i= 6 A.ct=0.00 rs=0 adoptA=false room=303.25/hostuser B.ct=304.25 inA= inB= outA=
+i= 7 A.ct=0.00 rs=0 adoptA=false room=303.30/hostuser B.ct=304.30 inA= inB= outA=
+i= 8 A.ct=0.00 rs=0 adoptA=false room=303.35/hostuser B.ct=304.35 inA= inB= outA=
+i= 9 A.ct=0.00 rs=0 adoptA=false room=303.40/hostuser B.ct=304.40 inA= inB= outA=
+i=10 A.ct=303.00 rs=1 adoptA=false room=303.45/hostuser B.ct=304.45 inA= inB= outA=
+i=11 A.ct=303.05 rs=1 adoptA=false room=303.50/hostuser B.ct=304.50 inA= inB= outA=
+i=12 A.ct=303.10 rs=1 adoptA=false room=303.55/hostuser B.ct=304.55 inA= inB= outA=
+i=13 A.ct=303.15 rs=1 adoptA=false room=303.60/hostuser B.ct=304.60 inA= inB= outA=
+i=14 A.ct=303.20 rs=1 adoptA=false room=303.65/hostuser B.ct=304.65 inA= inB= outA=
+i=15 A.ct=303.25 rs=1 adoptA=false room=303.70/hostuser B.ct=304.70 inA= inB= outA=
+i=16 A.ct=303.30 rs=1 adoptA=false room=303.75/hostuser B.ct=304.75 inA= inB= outA=
+i=17 A.ct=303.35 rs=1 adoptA=false room=303.80/hostuser B.ct=304.80 inA= inB= outA=
+i=18 A.ct=303.40 rs=1 adoptA=false room=303.85/hostuser B.ct=304.85 inA= inB= outA=
+i=19 A.ct=303.45 rs=1 adoptA=false room=303.90/hostuser B.ct=304.90 inA= inB= outA=
+i=20 A.ct=303.50 rs=1 adoptA=true room=303.95/hostuser B.ct=304.95 inA= inB= outA=303.00A
+i=21 A.ct=303.55 rs=1 adoptA=true room=304.00/hostuser B.ct=305.00 inA= inB=304.00/hostuser outA=
+i=22 A.ct=303.60 rs=1 adoptA=true room=304.05/hostuser B.ct=305.05 inA= inB= outA=
+i=23 A.ct=303.65 rs=1 adoptA=true room=304.10/hostuser B.ct=305.10 inA= inB= outA=
+i=24 A.ct=303.70 rs=1 adoptA=true room=304.15/hostuser B.ct=305.15 inA= inB= outA=
+i=25 A.ct=303.75 rs=1 adoptA=true room=304.20/hostuser B.ct=305.20 inA= inB= outA=
+i=26 A.ct=303.80 rs=1 adoptA=true room=304.25/hostuser B.ct=305.25 inA= inB= outA=
+i=27 A.ct=303.85 rs=1 adoptA=true room=304.30/hostuser B.ct=305.30 inA= inB= outA=
+i=28 A.ct=303.90 rs=1 adoptA=true room=304.35/hostuser B.ct=305.35 inA= inB= outA=
+i=29 A.ct=303.95 rs=1 adoptA=true room=304.40/hostuser B.ct=305.40 inA= inB= outA=
+i=30 A.ct=304.00 rs=1 adoptA=true room=304.45/hostuser B.ct=305.45 inA= inB= outA=
+i=31 A.ct=304.05 rs=1 adoptA=true room=304.50/hostuser B.ct=305.50 inA= inB= outA=
+i=32 A.ct=304.10 rs=1 adoptA=true room=304.55/hostuser B.ct=305.55 inA= inB= outA=
+i=33 A.ct=304.15 rs=1 adoptA=true room=304.60/hostuser B.ct=305.60 inA= inB= outA=
+i=34 A.ct=304.20 rs=1 adoptA=true room=304.65/hostuser B.ct=305.65 inA= inB= outA=
+i=35 A.ct=304.25 rs=1 adoptA=true room=304.70/hostuser B.ct=305.70 inA= inB= outA=
+i=36 A.ct=304.30 rs=1 adoptA=true room=304.75/hostuser B.ct=305.75 inA= inB= outA=
+i=37 A.ct=304.35 rs=1 adoptA=true room=304.80/hostuser B.ct=305.80 inA= inB= outA=
+i=38 A.ct=304.40 rs=1 adoptA=true room=304.85/hostuser B.ct=305.85 inA= inB= outA=
+i=39 A.ct=304.45 rs=1 adoptA=true room=304.90/hostuser B.ct=305.90 inA= inB= outA=
+i=40 A.ct=304.50 rs=1 adoptA=true room=304.00/hostuser B.ct=305.95 inA= inB= outA=303.50A
+i=41 A.ct=304.55 rs=1 adoptA=true room=304.05/hostuser B.ct=306.00 inA= inB=304.05/hostuser outA=
+i=42 A.ct=304.60 rs=1 adoptA=true room=304.10/hostuser B.ct=306.05 inA= inB= outA=
+i=43 A.ct=304.65 rs=1 adoptA=true room=304.15/hostuser B.ct=306.10 inA= inB= outA=
+i=44 A.ct=304.70 rs=1 adoptA=true room=304.20/hostuser B.ct=306.15 inA= inB= outA=
+i=45 A.ct=304.75 rs=1 adoptA=true room=304.25/hostuser B.ct=306.20 inA= inB= outA=
+i=46 A.ct=304.80 rs=1 adoptA=true room=304.30/hostuser B.ct=306.25 inA= inB= outA=
+i=47 A.ct=304.85 rs=1 adoptA=true room=304.35/hostuser B.ct=306.30 inA= inB= outA=
+i=48 A.ct=304.90 rs=1 adoptA=true room=304.40/hostuser B.ct=306.35 inA= inB= outA=
+i=49 A.ct=304.95 rs=1 adoptA=true room=304.45/hostuser B.ct=306.40 inA= inB= outA=
+i=50 A.ct=305.00 rs=1 adoptA=true room=304.50/hostuser B.ct=306.45 inA= inB= outA=
+i=51 A.ct=305.05 rs=1 adoptA=true room=304.55/hostuser B.ct=306.50 inA= inB= outA=
+i=52 A.ct=305.10 rs=1 adoptA=true room=304.60/hostuser B.ct=306.55 inA= inB= outA=
+i=53 A.ct=305.15 rs=1 adoptA=true room=304.65/hostuser B.ct=306.60 inA= inB= outA=
+i=54 A.ct=305.20 rs=1 adoptA=true room=304.70/hostuser B.ct=306.65 inA= inB= outA=
+i=55 A.ct=305.25 rs=1 adoptA=true room=304.75/hostuser B.ct=306.70 inA= inB= outA=
+i=56 A.ct=305.30 rs=1 adoptA=true room=304.80/hostuser B.ct=306.75 inA= inB= outA=
+i=57 A.ct=305.35 rs=1 adoptA=true room=304.85/hostuser B.ct=306.80 inA= inB= outA=
+i=58 A.ct=305.40 rs=1 adoptA=true room=304.90/hostuser B.ct=306.85 inA= inB= outA=
+i=59 A.ct=305.45 rs=1 adoptA=true room=304.95/hostuser B.ct=306.90 inA= inB= outA=
+i=60 A.ct=305.50 rs=1 adoptA=true room=304.50/hostuser B.ct=306.95 inA= inB= outA=304.50A
+i=61 A.ct=305.55 rs=1 adoptA=true room=304.55/hostuser B.ct=307.00 inA= inB=304.55/hostuser outA=
+i=62 A.ct=305.60 rs=1 adoptA=true room=304.60/hostuser B.ct=307.05 inA= inB= outA=
+i=63 A.ct=305.65 rs=1 adoptA=true room=304.65/hostuser B.ct=307.10 inA= inB= outA=
+i=64 A.ct=305.70 rs=1 adoptA=true room=304.70/hostuser B.ct=307.15 inA= inB= outA=
+i=65 A.ct=305.75 rs=1 adoptA=true room=304.75/hostuser B.ct=307.20 inA= inB= outA=
+i=66 A.ct=305.80 rs=1 adoptA=true room=304.80/hostuser B.ct=307.25 inA= inB= outA=
+i=67 A.ct=305.85 rs=1 adoptA=true room=304.85/hostuser B.ct=307.30 inA= inB= outA=
+i=68 A.ct=305.90 rs=1 adoptA=true room=304.90/hostuser B.ct=307.35 inA= inB= outA=
+i=69 A.ct=305.95 rs=1 adoptA=true room=304.95/hostuser B.ct=307.40 inA= inB= outA=
+i=70 A.ct=306.00 rs=1 adoptA=true room=305.00/hostuser B.ct=307.45 inA= inB= outA=
+i=71 A.ct=306.05 rs=1 adoptA=true room=305.05/hostuser B.ct=307.50 inA= inB= outA=
+i=72 A.ct=306.10 rs=1 adoptA=true room=305.10/hostuser B.ct=307.55 inA= inB= outA=
+i=73 A.ct=306.15 rs=1 adoptA=true room=305.15/hostuser B.ct=307.60 inA= inB= outA=
+i=74 A.ct=306.20 rs=1 adoptA=true room=305.20/hostuser B.ct=307.65 inA= inB= outA=
+i=75 A.ct=306.25 rs=1 adoptA=true room=305.25/hostuser B.ct=307.70 inA= inB= outA=
+i=76 A.ct=306.30 rs=1 adoptA=true room=305.30/hostuser B.ct=307.75 inA= inB= outA=
+i=77 A.ct=306.35 rs=1 adoptA=true room=305.35/hostuser B.ct=307.80 inA= inB= outA=
+i=78 A.ct=306.40 rs=1 adoptA=true room=305.40/hostuser B.ct=307.85 inA= inB= outA=
+i=79 A.ct=306.45 rs=1 adoptA=true room=305.45/hostuser B.ct=307.90 inA= inB= outA=
+A.seekWrites=[303.00] B.seekWrites=[]
+=== TRACE phase=300 switch at t=12300
+i= 0 A.ct=0.00 rs=0 adoptA=false room=303.25/hostuser B.ct=304.25 inA= inB= outA=
+i= 1 A.ct=0.00 rs=0 adoptA=false room=303.30/hostuser B.ct=304.30 inA= inB= outA=
+i= 2 A.ct=0.00 rs=0 adoptA=false room=303.35/hostuser B.ct=304.35 inA= inB= outA=
+i= 3 A.ct=0.00 rs=0 adoptA=false room=303.40/hostuser B.ct=304.40 inA= inB= outA=
+i= 4 A.ct=0.00 rs=0 adoptA=false room=303.45/hostuser B.ct=304.45 inA= inB= outA=
+i= 5 A.ct=0.00 rs=0 adoptA=false room=303.50/hostuser B.ct=304.50 inA= inB= outA=
+i= 6 A.ct=0.00 rs=0 adoptA=false room=303.55/hostuser B.ct=304.55 inA= inB= outA=
+i= 7 A.ct=0.00 rs=0 adoptA=false room=303.60/hostuser B.ct=304.60 inA= inB= outA=
+i= 8 A.ct=0.00 rs=0 adoptA=false room=303.65/hostuser B.ct=304.65 inA= inB= outA=
+i= 9 A.ct=0.00 rs=0 adoptA=false room=303.70/hostuser B.ct=304.70 inA= inB= outA=
+i=10 A.ct=0.00 rs=1 adoptA=false room=303.75/hostuser B.ct=304.75 inA= inB= outA=
+i=11 A.ct=0.00 rs=1 adoptA=false room=303.80/hostuser B.ct=304.80 inA= inB= outA=
+i=12 A.ct=0.00 rs=1 adoptA=false room=303.85/hostuser B.ct=304.85 inA= inB= outA=
+i=13 A.ct=0.00 rs=1 adoptA=false room=303.90/hostuser B.ct=304.90 inA= inB= outA=
+i=14 A.ct=0.00 rs=1 adoptA=true room=303.95/hostuser B.ct=304.95 inA= inB= outA=303.95A
+i=15 A.ct=0.00 rs=1 adoptA=true room=304.00/hostuser B.ct=305.00 inA= inB=304.00/hostuser outA=
+i=16 A.ct=0.00 rs=1 adoptA=true room=304.05/hostuser B.ct=305.05 inA= inB= outA=
+i=17 A.ct=0.00 rs=1 adoptA=true room=304.10/hostuser B.ct=305.10 inA= inB= outA=
+i=18 A.ct=0.00 rs=1 adoptA=true room=304.15/hostuser B.ct=305.15 inA= inB= outA=
+i=19 A.ct=0.00 rs=1 adoptA=true room=304.20/hostuser B.ct=305.20 inA= inB= outA=
+i=20 A.ct=0.00 rs=1 adoptA=true room=304.25/hostuser B.ct=305.25 inA= inB= outA=
+i=21 A.ct=0.00 rs=1 adoptA=true room=304.30/hostuser B.ct=305.30 inA= inB= outA=
+i=22 A.ct=0.00 rs=1 adoptA=true room=304.35/hostuser B.ct=305.35 inA= inB= outA=
+i=23 A.ct=0.00 rs=1 adoptA=true room=304.40/hostuser B.ct=305.40 inA= inB= outA=
+i=24 A.ct=0.00 rs=1 adoptA=true room=304.45/hostuser B.ct=305.45 inA= inB= outA=
+i=25 A.ct=0.00 rs=1 adoptA=true room=304.50/hostuser B.ct=305.50 inA= inB= outA=
+i=26 A.ct=0.00 rs=1 adoptA=true room=304.55/hostuser B.ct=305.55 inA= inB= outA=
+i=27 A.ct=0.00 rs=1 adoptA=true room=304.60/hostuser B.ct=305.60 inA= inB= outA=
+i=28 A.ct=0.00 rs=1 adoptA=true room=304.65/hostuser B.ct=305.65 inA= inB= outA=
+i=29 A.ct=0.00 rs=1 adoptA=true room=304.70/hostuser B.ct=305.70 inA= inB= outA=
+i=30 A.ct=0.00 rs=1 adoptA=true room=304.75/hostuser B.ct=305.75 inA= inB= outA=
+i=31 A.ct=0.00 rs=1 adoptA=true room=304.80/hostuser B.ct=305.80 inA= inB= outA=
+i=32 A.ct=0.00 rs=1 adoptA=true room=304.85/hostuser B.ct=305.85 inA= inB= outA=
+i=33 A.ct=0.00 rs=1 adoptA=true room=304.90/hostuser B.ct=305.90 inA= inB= outA=
+i=34 A.ct=0.00 rs=1 adoptA=true room=304.95/hostuser B.ct=305.95 inA= inB= outA=0.00A
+i=35 A.ct=0.00 rs=1 adoptA=true room=305.05/joinuser B.ct=306.00 inA= inB=305.00/hostuser outA=
+i=36 A.ct=305.05 rs=1 adoptA=true room=305.10/joinuser B.ct=0.00 inA=305.05/joinuser inB=0.00/hostuser outA=
+i=37 A.ct=305.10 rs=1 adoptA=true room=305.15/joinuser B.ct=0.00 inA= inB= outA=
+i=38 A.ct=305.15 rs=1 adoptA=true room=305.20/joinuser B.ct=0.00 inA= inB= outA=
+i=39 A.ct=305.20 rs=1 adoptA=true room=305.25/joinuser B.ct=0.00 inA= inB= outA=
+i=40 A.ct=305.25 rs=1 adoptA=true room=305.30/joinuser B.ct=0.00 inA= inB= outA=
+i=41 A.ct=305.30 rs=1 adoptA=true room=305.35/joinuser B.ct=0.00 inA= inB= outA=
+i=42 A.ct=305.35 rs=1 adoptA=true room=305.40/joinuser B.ct=0.00 inA= inB= outA=
+i=43 A.ct=305.40 rs=1 adoptA=true room=305.45/joinuser B.ct=0.00 inA= inB= outA=
+i=44 A.ct=305.45 rs=1 adoptA=true room=305.50/joinuser B.ct=0.00 inA= inB= outA=
+i=45 A.ct=305.50 rs=1 adoptA=true room=305.55/joinuser B.ct=0.00 inA= inB= outA=
+i=46 A.ct=305.55 rs=1 adoptA=true room=305.60/joinuser B.ct=0.00 inA= inB= outA=
+i=47 A.ct=305.60 rs=1 adoptA=true room=305.65/joinuser B.ct=0.00 inA= inB= outA=
+i=48 A.ct=305.65 rs=1 adoptA=true room=305.70/joinuser B.ct=0.00 inA= inB= outA=
+i=49 A.ct=305.70 rs=1 adoptA=true room=305.75/joinuser B.ct=0.00 inA= inB= outA=
+i=50 A.ct=305.75 rs=1 adoptA=true room=305.80/joinuser B.ct=0.00 inA= inB= outA=
+i=51 A.ct=305.80 rs=1 adoptA=true room=305.85/joinuser B.ct=0.00 inA= inB= outA=
+i=52 A.ct=305.85 rs=1 adoptA=true room=305.90/joinuser B.ct=0.00 inA= inB= outA=
+i=53 A.ct=305.90 rs=1 adoptA=true room=305.95/joinuser B.ct=0.00 inA= inB= outA=
+i=54 A.ct=305.95 rs=1 adoptA=true room=305.85/hostuser B.ct=0.00 inA= inB= outA=305.05A
+i=55 A.ct=306.00 rs=1 adoptA=true room=0.00/joinuser B.ct=305.90 inA= inB=305.90/hostuser outA=
+i=56 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=305.95 inA=0.00/joinuser inB= outA=
+i=57 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.00 inA= inB= outA=
+i=58 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.05 inA= inB= outA=
+i=59 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.10 inA= inB= outA=
+i=60 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.15 inA= inB= outA=
+i=61 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.20 inA= inB= outA=
+i=62 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.25 inA= inB= outA=
+i=63 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.30 inA= inB= outA=
+i=64 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.35 inA= inB= outA=
+i=65 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.40 inA= inB= outA=
+i=66 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.45 inA= inB= outA=
+i=67 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.50 inA= inB= outA=
+i=68 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.55 inA= inB= outA=
+i=69 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.60 inA= inB= outA=
+i=70 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.65 inA= inB= outA=
+i=71 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.70 inA= inB= outA=
+i=72 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.75 inA= inB= outA=
+i=73 A.ct=0.00 rs=1 adoptA=true room=0.00/joinuser B.ct=306.80 inA= inB= outA=
+i=74 A.ct=0.00 rs=1 adoptA=true room=0.00/hostuser B.ct=306.85 inA= inB= outA=0.00A
+i=75 A.ct=0.00 rs=1 adoptA=true room=306.00/joinuser B.ct=0.00 inA= inB=0.00/hostuser outA=
+i=76 A.ct=306.00 rs=1 adoptA=true room=306.05/joinuser B.ct=0.00 inA=306.00/joinuser inB= outA=
+i=77 A.ct=306.05 rs=1 adoptA=true room=306.10/joinuser B.ct=0.00 inA= inB= outA=
+i=78 A.ct=306.10 rs=1 adoptA=true room=306.15/joinuser B.ct=0.00 inA= inB= outA=
+i=79 A.ct=306.15 rs=1 adoptA=true room=306.20/joinuser B.ct=0.00 inA= inB= outA=
+A.seekWrites=[305.05,0.00,306.00] B.seekWrites=[0.00,305.90,0.00]
+=== SWEEP (counts over 20 phases at 50 ms; bad = a seek write > 5 s on the switched element)
+S1-never gap=100 g1=0            badA=20/20 badB=0/20 B-dragged-before-own-switch=19/20
+S2-both d=0 gap=100 g1=0         badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=100 g1=0       badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=100 g1=0           badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=100 g1=200          badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=100 g1=200       badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=100 g1=200     badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=100 g1=200         badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=100 g1=1000         badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=100 g1=1000      badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=100 g1=1000    badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=100 g1=1000        badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=500 g1=0            badA=20/20 badB=0/20 B-dragged-before-own-switch=19/20
+S2-both d=0 gap=500 g1=0         badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=500 g1=0       badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=500 g1=0           badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=500 g1=200          badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=500 g1=200       badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=500 g1=200     badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=500 g1=200         badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=500 g1=1000         badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=500 g1=1000      badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=500 g1=1000    badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=500 g1=1000        badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=1500 g1=0           badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=1500 g1=0        badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=1500 g1=0      badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=1500 g1=0          badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=1500 g1=200         badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=1500 g1=200      badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=1500 g1=200    badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=1500 g1=200        badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S1-never gap=1500 g1=1000        badA=20/20 badB=0/20 B-dragged-before-own-switch=20/20
+S2-both d=0 gap=1500 g1=1000     badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S2-both d=300 gap=1500 g1=1000   badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20
+S3-follow gap=1500 g1=1000       badA=20/20 badB=20/20 B-dragged-before-own-switch=0/20

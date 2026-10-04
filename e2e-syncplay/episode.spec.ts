@@ -2,12 +2,18 @@
 //
 //   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
 //   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
-//   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 ✗
+//   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 ✗, #497 (recorded)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
-// #493 fixed #486, so E1 / E6, E2's stale half and E5 are flipped. The exact
+// #493 fixed #486, so E1 / E6, E2's stale half and E5 are flipped; #492 fixed
+// #487, so E2's skip half is flipped too and the whole row is `bad == 0`. A
+// skip counts against #487 only when B pressed inside #487's window, before its
+// followed N+1 loaded metadata: on the first local run after the rebase, 3 of
+// 6 runs (gaps 900–1500 ms) reached N+2 from a press 190–490 ms after B's N+1
+// had loaded, the deliberate second Next #492 lets through, and the 600 ms run
+// was swallowed. Those are recorded (`secondNext`, `swallowed`). The exact
 // pins live in Tier 1 (`test/services/syncplay-two-peer-next-episode.test.ts`,
 // `test/services/syncplay-two-peer-double-next.test.ts`). Both instances must
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
@@ -189,7 +195,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
   }
 })
 
-test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed, #487 ✗)', async () => {
+test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's window, both near 0 (#486 fixed, #487 fixed)", async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E2')
   try {
@@ -200,12 +206,27 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
       await sleep(2500 + Math.random() * 1500)
       // A controlled spread over the gap, not single-run luck.
       const gap = Math.round((i / Math.max(1, N - 1)) * 1500)
+      let bPressAt = 0
       const r = await transition(A, B, async () => {
         await A.pressNext()
         await sleep(gap)
+        bPressAt = Date.now()
         await B.pressNext()
       })
-      const skipped = r.epA === '3' || r.epB === '3'
+      const traceB = await B.collect(r.pressAt - 3000)
+      // #487's window is B's press landing after its follow released the lock
+      // but before the followed episode's `loadedmetadata`, while B's user is
+      // still looking at N. A press after that metadata is the user's own second
+      // Next, and N+2 is what it asks for: #492 swallows only inside the window.
+      const bMetaAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadedmetadata')?.at
+      const bPress = bPressAt - (r.pressAt - 3000)
+      // The follow's lock release, proxied by B's first `loadstart` after A's
+      // press: the release is queued right behind the source write.
+      const bLoadAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadstart')?.at
+      const inWindow =
+        bLoadAt !== undefined && bMetaAt !== undefined && bPress >= bLoadAt && bPress < bMetaAt
+      const n2 = r.epA === '3' || r.epB === '3'
+      const skipped = n2 && (bMetaAt === undefined || bPress < bMetaAt)
       const diverged = r.epA !== r.epB
       row.add(
         {
@@ -213,22 +234,34 @@ test('E2 — both press next 0–1.5 s apart: never N+2, both near 0 (#486 fixed
           bad: r.a.stale || r.b.stale || skipped || diverged,
           stale: r.a.stale || r.b.stale,
           skipped,
+          secondNext: n2 && !skipped,
+          swallowed: traceB.toasts.some((t) => t.txt.startsWith('Already switching')),
           diverged,
+          inWindow,
           gap,
+          bPress,
+          bLoadAt,
+          bMetaAt,
           epA: r.epA,
           epB: r.epB
         },
-        { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
+        { A: await A.collect(r.pressAt - 3000), B: traceB }
       )
     }
     const s = row.score()
-    expect(s.scoreable).toBeGreaterThanOrEqual(1)
-    expect(s.bad).toBeGreaterThanOrEqual(1)
-    // The row guards two bugs; each must be visible on its own, so the fix PR
-    // for either one flips only its half. #493 flipped #486's.
     const scoreable = s.records.filter((r) => r.setupOk)
+    // With no scoreable press inside #487's window, `skipped == 0` tests
+    // nothing: print the count beside the score, before any assertion, so a
+    // vacuous pass is visible and a red row still logs it.
+    process.stdout.write(
+      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} of scoreable=${s.scoreable}\n`
+    )
+    expect(s.scoreable).toBeGreaterThanOrEqual(1)
+    expect(s.bad).toBe(0)
+    // The row guards two bugs, each asserted on its own so a regression names
+    // its half. #493 flipped #486's, #492 flipped #487's.
     expect(scoreable.filter((r) => r.stale).length, '#486 stale start after #493').toBe(0)
-    expect(scoreable.filter((r) => r.skipped).length, '#487 never seen').toBeGreaterThanOrEqual(1)
+    expect(scoreable.filter((r) => r.skipped).length, '#487 skip to N+2 after #492').toBe(0)
   } finally {
     await closeDuo(A, B)
   }

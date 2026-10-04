@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2382` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2417` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -718,10 +718,13 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1824`,
-// `src/renderer/src/components/views/PlayerView.vue:1827` and
-// `src/renderer/src/components/views/PlayerView.vue:2579`.
+// `src/renderer/src/components/views/PlayerView.vue:1844`,
+// `src/renderer/src/components/views/PlayerView.vue:2625` and
+// `src/renderer/src/components/views/PlayerView.vue:2648` (`onUserNext`, which
+// the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
+// The #487 block in the episode-change sibling MODELS that function as a local
+// `step`, so it adds no site of that name; its one site is the harness call.
 
 const SIBLING_PREFIX = 'syncplay-two-peer-'
 const SIBLING_SUFFIX = '.test.ts'
@@ -896,10 +899,19 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // harness's own `peer.goToEpisode(`; `double-next` drives it once from its
 // `PlayerView` model, whose own function is named `viewGoToEpisode` so its
 // deliberately unawaited button press is not read as a harness call.
+//
+// **Re-derived for #487: `episode-change` 11 → 12.** The both-press-next block
+// adds one modelled `goToEpisode` step whose commit announces the file through
+// one awaited `peer.` call; every case in that block drives its switches
+// through it, so one site covers them all.
+//
+// **Re-derived for #492's review: `episode-change` 12 → 14.** The two room-walk
+// N → N+2 cases move A's file directly with one awaited `A.goToEpisode('8')`
+// each, because a pick from the episode list is a jump, not a modelled step.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 11,
+  'episode-change': 14,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

@@ -2,71 +2,89 @@
 //
 // Both peers press "next episode" d ms apart (#489 Tier 1, row E2's #487 half).
 //
-// **This file pins a known-broken behaviour (#487 ✗).** The double advance
-// below is what current `main` does; the fix for #487 is expected to turn the
-// sweep red, and the fix PR rewrites `SWEEP_50_400` (every cell `7/7`) rather
-// than deleting the file.
+// **#487 is fixed; this file pins the fix.** Until the fix PR it pinned the
+// double advance (12 of 21 presses landing both peers on N+2); the fix turned
+// that sweep red, and `SWEEP_50_400` is now re-derived, every cell `7/7`.
 //
 // The mechanism, from #487: B follows A's change with an absolute index lookup
 // and a relative walk (`handleRemoteEpisodeChange`,
-// `src/renderer/src/components/views/PlayerView.vue:507`), and B's `navigating`
+// `src/renderer/src/components/views/PlayerView.vue:508`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3177`) — is released in the `nextTick` after
-// `playerGetStreamUrl` resolves (`PlayerView.vue:2494`), not when the followed
-// episode has loaded. B's user is still looking at episode N; if they press
-// Next after that release, `goToEpisode` reads its target relative to the
-// already-committed N+1 (`PlayerView.vue:2265`) and both peers land on N+2.
+// (`PlayerView.vue:3244`) — is released in the `nextTick` after
+// `playerGetStreamUrl` resolves (`PlayerView.vue:2535`), not when the followed
+// episode has loaded. B's user is still looking at episode N; a Next pressed
+// after that release reads its target relative to the already-committed N+1
+// (`PlayerView.vue:2286`), and before the fix both peers landed on N+2. The
+// fix leaves the early release alone and adds a pending-follow token: a room
+// follow's Next step arms it at its commit, the step's `loadedmetadata` clears
+// it, and the user's Next (`onUserNext`) swallows one press while it still
+// names the active episode (`shouldSwallowLocalNext`,
+// `src/renderer/src/utils.ts:274`).
 //
 // ── What is real and what is modelled ────────────────────────────────────────
 //
 // Real: both main `SyncplayClient`s and their IPC routers, both mounted
-// `use-syncplay-client` composables, `MinElectionServer`, and
+// `use-syncplay-client` composables, `MinElectionServer`,
 // `walkEpisodeSteps` (`src/renderer/src/utils.ts:251`), the loop B's follow
-// runs through. Modelled: `PlayerView`'s `goToEpisode` /
-// `handleRemoteEpisodeChange`, because there is no `PlayerView` mount harness.
-// The model is three properties, and the source-scan block at the end of this
-// file pins each of them against `PlayerView.vue` so the model cannot drift from
-// the component without a red here:
+// runs through, and `shouldSwallowLocalNext`. Modelled: `PlayerView`'s
+// `goToEpisode` / `handleRemoteEpisodeChange` / `onUserNext`, because there is
+// no `PlayerView` mount harness. The model is four properties, and the
+// source-scan block at the end of this file pins each of them against
+// `PlayerView.vue` so the model cannot drift from the component without a red
+// here:
 //
 //  1. the target is read relative to `activeEpisodeIndex` at entry, *before*
 //     the `navigating` guard;
 //  2. `navigating` is released in the `nextTick` after the stream URL
 //     resolves, not on `loadedmetadata`;
-//  3. a remote change is followed as a relative walk gated on `!navigating`.
+//  3. a remote change is followed as a relative walk gated on `!navigating`;
+//  4. a follow's Next step arms the token at its commit, its `loadedmetadata`
+//     clears it, and the user's Next consumes it instead of stepping.
 //
-// `RESOLVE_MS` is the time `playerGetStreamUrl` takes. The boundary between a
-// converging press and a double advance sits at `DELAY_MS + RESOLVE_MS` (one
+// `RESOLVE_MS` is the time `playerGetStreamUrl` takes; `METADATA_MS` is the
+// source swap to `loadedmetadata`. The boundary between a press the button
+// turns away and one the token swallows sits at `DELAY_MS + RESOLVE_MS` (one
 // hop for A's `Set{file}` to reach B, then B's own stream resolve), which is the
-// relation #487 measured on real streams at 352–598 ms.
+// relation #487 measured on real streams at 352–598 ms; before the fix the same
+// boundary separated a converging press from a double advance.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { Peer, TwoPeerRoom } from '../helpers/syncplay-two-peer'
-import { walkEpisodeSteps } from '../../src/renderer/src/utils'
+import { walkEpisodeSteps, shouldSwallowLocalNext } from '../../src/renderer/src/utils'
 import type { EpisodeStepOutcome } from '../../src/renderer/src/utils'
 
 const EPISODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 /** Both peers start on episode 6 (index 5). */
 const START_IDX = 5
+/** Source swap to `loadedmetadata` — where the token is cleared. */
+const METADATA_MS = 1500
+
+type Press = 'dispatched' | 'button-disabled' | 'swallowed'
 
 interface Nav {
   idx(): number
-  pressNext(): 'dispatched' | 'button-disabled'
+  pressNext(): Press
 }
 
-/** The three-property model of `PlayerView`'s navigation; see the header. */
+/** The four-property model of `PlayerView`'s navigation; see the header. */
 function attachNavigator(peer: Peer, resolveMs: number): Nav {
   let idx = START_IDX
   let navigating = false
   let epoch = 0
+  // (4) the pending-follow token, stamped with the run that armed it.
+  let pendingFollow: { index: number; nav: number } | null = null
 
   // `viewGoToEpisode`, not `goToEpisode`: this is the model of `PlayerView`'s
   // function, and the harness's `peer.goToEpisode(` call-site census in
   // `syncplay-two-peer-loop.test.ts` would otherwise count it, and its
   // deliberately unawaited button press, as harness calls.
-  async function viewGoToEpisode(dir: 'prev' | 'next'): Promise<EpisodeStepOutcome> {
+  async function viewGoToEpisode(
+    dir: 'prev' | 'next',
+    origin: 'local' | 'follow'
+  ): Promise<EpisodeStepOutcome> {
     // (1) target from the index at entry, ahead of the guard.
     const target = dir === 'prev' ? idx - 1 : idx + 1
     if (target < 0 || target >= EPISODES.length) return 'unreachable'
@@ -77,11 +95,17 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
     await Promise.resolve()
     if (epoch !== my) return 'superseded'
     idx = target
+    // (4) armed at the commit by a follow's Next step, cleared by any other.
+    pendingFollow = origin === 'follow' && dir === 'next' ? { index: target, nav: my } : null
     await peer.goToEpisode(EPISODES[target])
     await new Promise((r) => setTimeout(r, resolveMs))
     if (epoch !== my) return 'moved'
     // (2) released in the nextTick after the stream URL resolved.
     await Promise.resolve()
+    // (4) the step's own `loadedmetadata` clears its own token.
+    setTimeout(() => {
+      if (pendingFollow?.nav === my) pendingFollow = null
+    }, METADATA_MS)
     navigating = false
     return 'moved'
   }
@@ -93,7 +117,7 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
     const dir = i > idx ? 'next' : 'prev'
     void walkEpisodeSteps(
       () => idx !== i && !navigating,
-      () => viewGoToEpisode(dir)
+      () => viewGoToEpisode(dir, 'follow')
     )
   }
   // `remoteEpisodes` is the harness's record of what the composable handed its
@@ -108,9 +132,14 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
 
   return {
     idx: () => idx,
+    // (4) `onUserNext`: the button's guard, then the token, then the step.
     pressNext: () => {
       if (navigating) return 'button-disabled'
-      void viewGoToEpisode('next')
+      if (shouldSwallowLocalNext(pendingFollow?.index ?? null, idx)) {
+        pendingFollow = null
+        return 'swallowed'
+      }
+      void viewGoToEpisode('next', 'local')
       return 'dispatched'
     }
   }
@@ -119,10 +148,10 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
 interface Run {
   a: string
   b: string
-  bPress: 'dispatched' | 'button-disabled'
+  bPress: Press
 }
 
-describe('SyncplayClient — both peers press next d ms apart (#487 ✗)', () => {
+describe('SyncplayClient — both peers press next d ms apart (#487, fixed)', () => {
   let room: TwoPeerRoom | undefined
 
   beforeEach(() => {
@@ -166,10 +195,11 @@ describe('SyncplayClient — both peers press next d ms apart (#487 ✗)', () =>
   }
 
   const fmt = (r: Run): string =>
-    `${r.a}/${r.b}${r.bPress === 'button-disabled' ? ' disabled' : ''}`
+    `${r.a}/${r.b}${r.bPress === 'dispatched' ? '' : ` ${r.bPress === 'button-disabled' ? 'disabled' : 'swallowed'}`}`
 
   /** d = 0..1000 ms in 50 ms steps at 50 ms each way and a 400 ms stream
-   *  resolve — the probe's grid, and #487's in-process evidence. */
+   *  resolve — the probe's grid, and #487's in-process evidence. Before the
+   *  fix, d = 450..1000 read `8/8`. */
   const SWEEP_50_400: Record<number, string> = {
     0: '7/7',
     50: '7/7 disabled',
@@ -180,45 +210,48 @@ describe('SyncplayClient — both peers press next d ms apart (#487 ✗)', () =>
     300: '7/7 disabled',
     350: '7/7 disabled',
     400: '7/7 disabled',
-    450: '8/8',
-    500: '8/8',
-    550: '8/8',
-    600: '8/8',
-    650: '8/8',
-    700: '8/8',
-    750: '8/8',
-    800: '8/8',
-    850: '8/8',
-    900: '8/8',
-    950: '8/8',
-    1000: '8/8'
+    450: '7/7 swallowed',
+    500: '7/7 swallowed',
+    550: '7/7 swallowed',
+    600: '7/7 swallowed',
+    650: '7/7 swallowed',
+    700: '7/7 swallowed',
+    750: '7/7 swallowed',
+    800: '7/7 swallowed',
+    850: '7/7 swallowed',
+    900: '7/7 swallowed',
+    950: '7/7 swallowed',
+    1000: '7/7 swallowed'
   }
 
-  it('double-advances every press that lands after the follower’s lock released (E2)', async () => {
+  it('swallows every press that lands after the follower’s lock released, so neither peer skips (E2)', async () => {
     const got: Record<number, string> = {}
     for (let d = 0; d <= 1000; d += 50) got[d] = fmt(await run(d, 50, 400))
     expect(got).toEqual(SWEEP_50_400)
-    // Both peers always agree — this is a skip, not a divergence.
-    expect(Object.values(got).every((v) => v.slice(0, 1) === v.slice(2, 3))).toBe(true)
-    // As a count, the way Tier 2 scores the row: 12 of 21 presses skip.
-    expect(Object.values(got).filter((v) => v.startsWith('8/8'))).toHaveLength(12)
+    // As a count, the way Tier 2 scores the row: none of 21 presses skips, and
+    // the 12 that skipped before the fix are the 12 the token swallows.
+    expect(Object.values(got).filter((v) => v.startsWith('8'))).toHaveLength(0)
+    expect(Object.values(got).filter((v) => v.endsWith('swallowed'))).toHaveLength(12)
   }, 60_000)
 
-  it('moves the boundary with link delay + stream resolve, not with anything else', async () => {
-    // The first press gap (50 ms grid) that double-advances, per (delay,
-    // resolve). Measured: 50+400 → 450, 100+250 → 350, 100+400 → 500, and at a
-    // 1000 ms resolve no press inside the first second skips at all.
-    const firstSkip = async (delayMs: number, resolveMs: number): Promise<number | null> => {
+  it('moves the swallow boundary with link delay + stream resolve, and never skips', async () => {
+    // The first press gap (50 ms grid) the token swallows, per (delay,
+    // resolve) — the gaps that double-advanced before the fix. Measured:
+    // 50+400 → 450, 100+250 → 350, 100+400 → 500, and at a 1000 ms resolve
+    // the button is still disabled for every press inside the first second.
+    const firstSwallow = async (delayMs: number, resolveMs: number): Promise<number | null> => {
+      let first: number | null = null
       for (let d = 0; d <= 1000; d += 50) {
         const r = await run(d, delayMs, resolveMs)
-        if (r.a === '8') return d
+        expect([r.a, r.b], `skip at d=${d}, ${delayMs}+${resolveMs}`).toEqual(['7', '7'])
+        if (first === null && r.bPress === 'swallowed') first = d
       }
-      return null
+      return first
     }
-    expect(await firstSkip(50, 400)).toBe(450)
-    expect(await firstSkip(100, 250)).toBe(350)
-    expect(await firstSkip(100, 400)).toBe(500)
-    expect(await firstSkip(50, 1000)).toBeNull()
+    expect(await firstSwallow(50, 400)).toBe(450)
+    expect(await firstSwallow(100, 250)).toBe(350)
+    expect(await firstSwallow(100, 400)).toBe(500)
+    expect(await firstSwallow(50, 1000)).toBeNull()
   }, 60_000)
 
   it('converges when B presses before A’s change has reached it (d = 0)', async () => {
@@ -227,7 +260,7 @@ describe('SyncplayClient — both peers press next d ms apart (#487 ✗)', () =>
   })
 })
 
-// The three properties of the real code the navigator model relies on. A
+// The four properties of the real code the navigator model relies on. A
 // PlayerView change that breaks one of them reds here, which is the signal that
 // the model above (and its pinned table) needs re-deriving.
 describe('PlayerView anchors for the #487 navigation model', () => {
@@ -261,5 +294,31 @@ describe('PlayerView anchors for the #487 navigation model', () => {
     expect(SRC.replace(/\s+/g, ' ')).toContain(
       "() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir, 'follow')"
     )
+  })
+  it('arms the token at a follow Next commit and clears it on that run’s own loadedmetadata', () => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain(
+      "pendingFollow = origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;"
+    )
+    expect(flat).toContain(
+      'const onTargetMetadata = (): void => { if (pendingFollow?.nav === myNav) pendingFollow = null;'
+    )
+    // Both source arms, the local file and the stream, clear through it.
+    expect(
+      body.split("v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });")
+    ).toHaveLength(3)
+  })
+
+  it('routes the user’s Next through onUserNext, which consumes the token instead of stepping', () => {
+    const user = SRC.slice(SRC.indexOf('function onUserNext('))
+    const flat = user.slice(0, user.indexOf('\n}\n')).replace(/\s+/g, ' ')
+    expect(flat).toContain(
+      'if (!canNext.value || navigating.value) return; if (shouldSwallowLocalNext(pendingFollow?.index ?? null, activeEpisodeIndex.value)) { pendingFollow = null;'
+    )
+    expect(flat.indexOf('shouldSwallowLocalNext(')).toBeLessThan(
+      flat.indexOf("goToEpisode('next', 'local')")
+    )
+    expect(SRC).toContain('@nav="onUserNext"')
+    expect(SRC.replace(/\s+/g, ' ')).toContain("case 'next-episode': onUserNext(); break;")
   })
 })

@@ -25,6 +25,7 @@ import {
   waitingToastVisible,
   toPlayerTranslations,
   walkEpisodeSteps,
+  shouldSwallowLocalNext,
   resolveEpisodeTranslation,
   type EpisodeStepOutcome,
   type PlayerTranslationEntry
@@ -558,6 +559,10 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // starved timers, input and rAF for as long as the room stayed on that
   // episode. `walkEpisodeSteps` breaks on anything but `moved`; the toast is
   // `goToEpisode`'s, at the arm that knows which failure it was.
+  //
+  // `'follow'` is also what arms the pending-follow token (#487) at the step's
+  // own commit, under its own `myNav` — set there rather than after `step()`
+  // resolves, which would land after a failure arm's clear.
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
@@ -675,6 +680,21 @@ function shouldBail(myPrepare: number): boolean {
 // loser's own compare is still true and it still releases its own flag.
 let translationEpoch = 0;
 let navigationEpoch = 0;
+
+// The pending-follow token (#487): the index a room-driven Next step committed
+// to, held until that step's source loads metadata, stamped with the `myNav` of
+// the run that armed it. Set in exactly one place, `goToEpisode`'s commit — a
+// token for a `'follow'` Next step, `null` for every other one, which is what
+// makes any local navigation (auto-advance included) clear it. A remote Prev
+// arms nothing: a local Next after it is not the press the room already
+// answered. Cleared by the run that ARMED it (`pendingFollow?.nav === myNav`),
+// not by whoever owns `navigationEpoch` now, on its `loadedmetadata` and on the
+// three arms that return `'moved'` with no source behind them, and consumed by
+// `onUserNext` — the one reader; see `shouldSwallowLocalNext`. Keyed to the
+// owner because a later run can bump the epoch and then return before its own
+// commit (the `unreachable` resolution arm): an epoch compare would disarm this
+// source's clear and orphan the token on an episode that loaded long ago.
+let pendingFollow: { index: number; nav: number } | null = null;
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -1824,7 +1844,7 @@ function onPlayerAction(action: PlayerAction): void {
       if (canPrev.value) goToEpisode('prev', 'local');
       break;
     case 'next-episode':
-      if (canNext.value) goToEpisode('next', 'local');
+      onUserNext();
       break;
     case 'shader-mode-a':
       selectPreset('mode-a');
@@ -2261,7 +2281,8 @@ async function fetchEpisodeWindowTranslations(
 // `origin` says who started the move (#486): `'follow'` only from
 // `handleRemoteEpisodeChange`'s walk, `'local'` from every user-driven caller.
 // It rides the file push this step's index commit triggers, and main forces
-// the room to 0 for `'local'` only.
+// the room to 0 for `'local'` only. A `'follow'` Next step also arms the
+// pending-follow token (#487) at the commit.
 async function goToEpisode(
   direction: 'prev' | 'next',
   origin: SyncplayEpisodeSwitch
@@ -2293,6 +2314,16 @@ async function goToEpisode(
   const myNav = ++navigationEpoch;
   const video = videoRef.value;
   const targetEp = props.allEpisodes[targetIndex];
+  // Both source arms' one-shot `loadedmetadata`. The token clear (#487) carries
+  // its own compare: this fires long after the `nextTick` guard that installed
+  // it, and a later run's token is not this source's to clear. The compare is
+  // on the token's owner, not on `navigationEpoch`: a later run that bumped the
+  // epoch and failed before its commit leaves this run's token in place, and
+  // only this listener is still coming to clear it.
+  const onTargetMetadata = (): void => {
+    if (pendingFollow?.nav === myNav) pendingFollow = null;
+    resumeFromSavedPosition();
+  };
 
   // Find the current translation type for resolution
   const currentTr = activeTranslations.value.find((t) => t.id === activeTranslationId.value);
@@ -2334,6 +2365,10 @@ async function goToEpisode(
     // `showNavToast`. Both halves land here: an episode with no usable
     // translation at all, and a fetch that failed (network down, API refused),
     // because the user cannot act differently on the two.
+    //
+    // No token clear here (#487): this run armed nothing, and a token still set
+    // belongs to an earlier step whose own `loadedmetadata` clears it, because
+    // that clear compares on the token's owner, not on this run's epoch bump.
     if (navigationEpoch === myNav) navigating.value = false;
     showNavToast(NAV_FAILED_MESSAGE);
     return 'unreachable';
@@ -2386,6 +2421,8 @@ async function goToEpisode(
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
     pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
+    pendingFollow =
+      origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;
 
     // Try local file first if downloaded (forceLocal means we specifically chose a downloaded translation)
     if (forceLocal || targetEp.downloadedTrIds.includes(resolvedTr.id)) {
@@ -2464,6 +2501,10 @@ async function goToEpisode(
             // compare above this arm with no await between them — kept for
             // #302's flag-clear classifier, not as live protection.
             if (navigationEpoch === myNav) navigating.value = false;
+            // No `loadedmetadata` is coming for this step, so its pending-follow
+            // token (#487) goes here or it swallows a press once the user is
+            // already looking at the failure.
+            if (pendingFollow?.nav === myNav) pendingFollow = null;
             // `moved`, not `unreachable`: the remux failed, but the episode
             // switch itself happened and `reportPrepareError` already put the
             // reason on screen, so a nav toast would be a second notice for one
@@ -2481,7 +2522,7 @@ async function goToEpisode(
           const v = videoRef.value;
           if (v) {
             seekProgrammatically(v, 0);
-            v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
+            v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
             playProgrammatically(v, 'episode-start');
           }
           navigating.value = false;
@@ -2508,6 +2549,9 @@ async function goToEpisode(
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;
       syncplay.endEpisodeSwitchHold();
+      // No source, so no `loadedmetadata` to clear the follow token (#487) —
+      // left set, the user's next press after this failure would be swallowed.
+      if (pendingFollow?.nav === myNav) pendingFollow = null;
       // The other arm this issue makes audible (#419). Until now this returned
       // with the episode label and translation list already pointed at the new
       // episode and no source behind them — a blank player and no message. It is
@@ -2536,7 +2580,7 @@ async function goToEpisode(
       const v = videoRef.value;
       if (v) {
         seekProgrammatically(v, 0);
-        v.addEventListener('loadedmetadata', () => resumeFromSavedPosition(), { once: true });
+        v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
         playProgrammatically(v, 'episode-start');
       }
       navigating.value = false;
@@ -2550,6 +2594,8 @@ async function goToEpisode(
     if (navigationEpoch !== myNav) return 'superseded';
     if (navigationEpoch === myNav) navigating.value = false;
     if (committed) syncplay.endEpisodeSwitchHold();
+    // The third arm with no `loadedmetadata` behind it (#487).
+    if (pendingFollow?.nav === myNav) pendingFollow = null;
     if (unmounted) return committed ? 'moved' : 'superseded';
     // A throw below the index write is a #354-shaped failure of the SOURCE, with
     // the UI already switched — so `moved`, and the walk keeps going. Above it,
@@ -2579,6 +2625,27 @@ function onVideoEnded(): void {
       goToEpisode('next', 'local');
     }
   }, 1000);
+}
+
+// The user's Next — the button and the keyboard shortcut, and nothing else
+// (#487). A press after a room follow committed N+1 but before N+1 has loaded is
+// the same press the follow already answered, so it is swallowed once with a
+// toast instead of stepping to N+2. Auto-advance above and the room walk call
+// `goToEpisode` directly on purpose: neither is a user reacting to N.
+//
+// The `navigating` term mirrors the button's `:disabled` for the keyboard path,
+// and it has to sit above the swallow: a press taken while the follow's step is
+// still in flight would be turned away by `goToEpisode` anyway, and consuming
+// the token there would leave the press that lands after the source swap free
+// to skip.
+function onUserNext(): void {
+  if (!canNext.value || navigating.value) return;
+  if (shouldSwallowLocalNext(pendingFollow?.index ?? null, activeEpisodeIndex.value)) {
+    pendingFollow = null;
+    showNavToast(`Already switching to episode ${activeEpisodeLabel.value}`);
+    return;
+  }
+  void goToEpisode('next', 'local');
 }
 
 function onPrefetchSettingChanged(ev: Event): void {
@@ -3175,7 +3242,7 @@ const bufferedProgress = computed(() => {
             v-if="props.allEpisodes.length > 1"
             direction="next"
             :disabled="!canNext || navigating"
-            @nav="goToEpisode('next', 'local')"
+            @nav="onUserNext"
           />
 
           <!-- Volume -->

@@ -51,15 +51,20 @@ jobs:
           python-version: '3.12'
 
       - name: Install Syncplay 1.7.6 from the pinned commit
-        # Exactly as `syncplay-conformance.yml` provisions it (the commit, not
-        # the tag; `--no-deps` plus the three the server imports), and
-        # `test/syncplay-e2e-workflow.test.ts` holds the two pins equal.
+        # The same commit as `syncplay-conformance.yml` (the commit, not the
+        # tag; `--no-deps` plus what the server imports), and
+        # `test/syncplay-e2e-workflow.test.ts` holds the two pins equal. Unlike
+        # conformance, this rig needs `--tls`: the app's client is TLS-only.
+        # Without pyOpenSSL and service_identity, Twisted cannot do StartTLS and
+        # the server silently answers `startTLS: "false"`, so they are installed
+        # here and imported below to fail at provisioning, not in every spec.
         run: |
           python3 -m venv "$RUNNER_TEMP/sp176"
           "$RUNNER_TEMP/sp176/bin/pip" install --upgrade pip
           "$RUNNER_TEMP/sp176/bin/pip" install --no-deps \
             'git+https://github.com/Syncplay/syncplay@993232ab095bb810593459bc705b3e6fc64ad161'
-          "$RUNNER_TEMP/sp176/bin/pip" install twisted certifi pem
+          "$RUNNER_TEMP/sp176/bin/pip" install twisted certifi pem pyOpenSSL service_identity
+          "$RUNNER_TEMP/sp176/bin/python" -c 'import OpenSSL, service_identity'
           "$RUNNER_TEMP/sp176/bin/syncplay-server" --help > /dev/null
 
       - name: Install ffmpeg, Electron runtime and xvfb

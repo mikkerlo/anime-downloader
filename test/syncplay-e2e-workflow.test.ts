@@ -48,6 +48,15 @@ describe('syncplay-e2e workflow', () => {
     expect(pinnedCommitFromWorkflow(yml)).toBe(pinnedCommitFromWorkflow(conformance))
   })
 
+  it('installs the TLS dependencies the StartTLS upgrade needs, and checks them', () => {
+    // Without them the server answers `startTLS: "false"` and every spec fails
+    // its StartTLS probe at setup (the first CI run on #495).
+    const step = yml.slice(yml.indexOf('- name: Install Syncplay 1.7.6'))
+    const block = step.slice(0, step.indexOf('\n      - '))
+    expect(block).toMatch(/pip" install [^\n]*\bpyOpenSSL\b[^\n]*\bservice_identity\b/)
+    expect(block).toContain("-c 'import OpenSSL, service_identity'")
+  })
+
   it('is non-blocking and runs the suite under pipefail', () => {
     expect(yml).toMatch(/\n {4}continue-on-error: true\n/)
     const step = yml.slice(yml.indexOf('- name: Run the two-instance suite'))

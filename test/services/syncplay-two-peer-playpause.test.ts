@@ -217,10 +217,10 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // `JOIN_TIME_ROOM_POSITION`; the host's first adopted heartbeat then drops
     // the room back to `ROOM_START`, so every later periodic carries a
     // *different* position, 0.05 s away. The tolerance is what swallows those:
-    // `src/renderer/src/composables/use-syncplay-client.ts:1455` ("const
+    // `src/renderer/src/composables/use-syncplay-client.ts:1529` ("const
     // wouldSeek = state.doSeek || diff > 3.0") leaves `needsSeek` un-armed at a
     // 0.05 s gap, and with the element already paused
-    // `src/renderer/src/composables/use-syncplay-client.ts:1632` ("if (!needsSeek
+    // `src/renderer/src/composables/use-syncplay-client.ts:1716` ("if (!needsSeek
     // && !needsPlayPause) return") returns before the write.
     expect(joiner.el.seekWrites).toEqual([JOIN_TIME_ROOM_POSITION])
     expect(joiner.el.currentTime).toBe(JOIN_TIME_ROOM_POSITION)

@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2391` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2489` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1923,9 +1923,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1109`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1117`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1144`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1152`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -5076,11 +5076,13 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // **This line is the only mutation control that names the tolerance
     // literal's value rather than merely tripping over it, and it has to be
     // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1485` reds seven
-    // tests across three files (re-measured on #488's tip, full suite); the
-    // other six red on counts and positions a reader cannot invert back into a
-    // tolerance — five in `syncplay-two-peer-episode-change.test.ts` report
-    // `to have a length of 1 but got +0` or `expected +0 to be 1`, and
+    // `src/renderer/src/composables/use-syncplay-client.ts:1529` reds seven
+    // tests across three files (re-measured on #488's tip after its rebase onto
+    // #493, full suite); the other six red on drifts and positions a reader
+    // cannot invert back into a tolerance — five in
+    // `syncplay-two-peer-episode-change.test.ts` report `<peer> vs room:
+    // expected 3.05…4.0 to be less than or equal to 3`, against that file's own
+    // `APPLY_TOLERANCE_S` copy, and
     // `syncplay-two-peer-inflight-seek.test.ts` reports `expected [ 6, 6, 6 ]
     // to deeply equal [ 6, 4, 6 ]`. Only this line's failure states the number.
     // `syncplay-seek-crossfire.test.ts` used to be on this list (`to have a

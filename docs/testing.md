@@ -135,7 +135,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1485` could drift from it
+  `src/renderer/src/composables/use-syncplay-client.ts:1529` could drift from it
   and nothing would notice. Both peers now run the shipped rule. The file no
   longer pins that literal: #488 rewrote it to pin the yank's absence in both
   roles, and the window `[3.0, 4.0)` it held the literal in is now named only

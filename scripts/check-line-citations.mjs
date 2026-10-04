@@ -129,7 +129,7 @@ export const SUSPICIOUS_LANDING_PIN = 2
 // an anchor the gate cannot see reds this, and the fix is almost always to
 // spell the path out rather than to raise the number.
 //
-// 11 ambiguous basenames + 105 pathless anchors on this tree.
+// 10 ambiguous basenames + 105 pathless anchors on this tree.
 //
 // #392 is the first move in the reducing direction: four anchors that had been
 // leaning on a neighbouring line for their path — one `server.py:877` and three
@@ -137,7 +137,7 @@ export const SUSPICIOUS_LANDING_PIN = 2
 // which are foreign extensions. Spelled out they are unresolvable by
 // construction rather than uncheckable, so they left this class outright and
 // the pin falls with them rather than absorbing them.
-export const UNCHECKABLE_PIN = 116
+export const UNCHECKABLE_PIN = 115
 
 // A FLOOR, not an exact count — the only pin here that is one-sided, because
 // the marked class is asymmetric. It cannot grow silently: marking is opt-in,
@@ -359,7 +359,7 @@ export function extractMarkedQuote(lines, i, rest) {
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
  * interior line is a brace or a comment (src/main/syncplay.ts:951-957,
  * src/main/syncplay.ts:911-919 and
- * src/renderer/src/composables/use-syncplay-client.ts:1795-1797), so
+ * src/renderer/src/composables/use-syncplay-client.ts:1879-1881), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  *

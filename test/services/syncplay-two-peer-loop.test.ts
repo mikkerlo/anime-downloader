@@ -891,11 +891,18 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // paused and chained cases, where the second peer switches too (follow sites pass
 // `'follow'` as the fourth argument). `ignore-counters` enters the map with the
 // crossing cases. Every new site is awaited.
+//
+// **#489 added two keys, one awaited site each.** `next-episode` drives the
+// harness's own `peer.goToEpisode(`; `double-next` drives it once from its
+// `PlayerView` model, whose own function is named `viewGoToEpisode` so its
+// deliberately unawaited button press is not read as a harness call.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
+  'double-next': 1,
   'episode-change': 11,
   'ignore-counters': 4,
-  loop: 4
+  loop: 4,
+  'next-episode': 1
 }
 
 // The text between `await` and the call, anchored to end at the call. The member

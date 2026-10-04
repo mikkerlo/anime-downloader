@@ -1,0 +1,105 @@
+name: Syncplay e2e
+
+# Tier 2 of the Syncplay interaction suite (#489): two built app instances in
+# one room on a real Syncplay 1.7.6 server, playing generated fixture videos
+# from a local server that slows every byte-range request. The specs live in
+# `e2e-syncplay/` under their own `playwright.syncplay.config.ts`, so the
+# blocking `quality` job's `npm run test:e2e` can never collect them.
+#
+# NON-BLOCKING until it has five consecutive green nightlies on its non-✗ rows
+# (#489 Testing Strategy): the job is `continue-on-error`, so a red run here is
+# news on the PR's checks list, not a merge gate. Runs nightly, on dispatch,
+# and on PRs that touch the Syncplay client, the player view or the rig.
+
+on:
+  schedule:
+    # 05:10 UTC — after the 04:20 conformance nightly, off the hour.
+    - cron: '10 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/main/syncplay.ts'
+      - 'src/main/syncplay-*.ts'
+      - 'src/main/ipc/syncplay.ipc.ts'
+      - 'src/renderer/src/composables/use-syncplay-client.ts'
+      - 'src/renderer/src/stores/syncplay.ts'
+      - 'src/renderer/src/components/views/PlayerView.vue'
+      - 'e2e-syncplay/**'
+      - 'playwright.syncplay.config.ts'
+      - 'conformance/helpers/real-server.ts'
+      - 'scripts/gen-syncplay-fixtures.mjs'
+      - '.github/workflows/syncplay-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  syncplay-e2e:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Syncplay 1.7.6 from the pinned commit
+        # The same commit as `syncplay-conformance.yml` (the commit, not the
+        # tag; `--no-deps` plus what the server imports), and
+        # `test/syncplay-e2e-workflow.test.ts` holds the two pins equal. Unlike
+        # conformance, this rig passes `--tls` (the app's client is TLS-only),
+        # so Twisted needs its `tls` extra: `server.py` imports `OpenSSL` inside
+        # a bare `try/except: pass`, and without pyOpenSSL the server silently
+        # answers `startTLS: "false"`. The import check fails provisioning
+        # instead of every spec's StartTLS probe.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sp176"
+          "$RUNNER_TEMP/sp176/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/sp176/bin/pip" install --no-deps \
+            'git+https://github.com/Syncplay/syncplay@993232ab095bb810593459bc705b3e6fc64ad161'
+          "$RUNNER_TEMP/sp176/bin/pip" install 'twisted[tls]' certifi pem
+          "$RUNNER_TEMP/sp176/bin/python" -c 'import OpenSSL, service_identity'
+          "$RUNNER_TEMP/sp176/bin/syncplay-server" --help > /dev/null
+
+      - name: Install ffmpeg, Electron runtime and xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libgtk-3-0 libgbm1 libasound2t64 libxshmfence1 libdrm2
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Generate the fixtures
+        run: npm run gen:syncplay-fixtures
+
+      - name: Run the two-instance suite
+        # `shell: bash` for `pipefail`: a bare `run:` is `bash -e`, and the
+        # pipeline would exit with `tee`'s 0 and land red rows as green.
+        shell: bash
+        env:
+          SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
+          PYTHONUNBUFFERED: '1'
+        run: npm run test:e2e:syncplay 2>&1 | tee syncplay-e2e.log
+
+      - name: Upload the per-row JSONL traces
+        # Per-transition summaries plus bounded trace slices, sized for `jq`;
+        # the raw wire logs are too large to read.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: syncplay-e2e-traces
+          path: |
+            syncplay-e2e.log
+            test-results/syncplay-traces/
+            playwright-report-syncplay/
+          if-no-files-found: ignore
+          retention-days: 14

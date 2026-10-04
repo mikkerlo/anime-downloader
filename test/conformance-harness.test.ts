@@ -31,7 +31,7 @@ import {
   type ConformanceRun,
   type PinnedDivergence
 } from '../conformance/helpers/conform'
-import { bootRealServer, connects, freePort } from '../conformance/helpers/real-server'
+import { bootRealServer, connects, freePort, serverArgs } from '../conformance/helpers/real-server'
 import {
   COMPARED_FIELD_PATHS,
   reachesFieldPath,
@@ -523,5 +523,28 @@ describe('conformance harness: assertPinnedDivergence', () => {
     expect(redFor({ maxPositionDelta: 600 })).toContain(
       '600.000s is at or above the pinned ceiling'
     )
+  })
+})
+
+describe('conformance harness: the server flags are a parameter, not a copied line', () => {
+  // #489: the two-instance e2e rig shares this bootstrap and needs readiness ON
+  // (its P8 row is about the ready gate), while the conformance suite needs it
+  // off. A default that flipped would either make P8 vacuous or add
+  // `Set: {ready}` traffic the conformance model never sends.
+  it('keeps --disable-ready by default, which is what the conformance suite boots with', () => {
+    expect(serverArgs(4321)).toEqual(['--port', '4321', '--disable-ready'])
+  })
+
+  it('drops --disable-ready only when a caller asks for readiness', () => {
+    expect(serverArgs(4321, { readiness: true })).toEqual(['--port', '4321'])
+  })
+
+  it('passes the TLS directory through to --tls', () => {
+    expect(serverArgs(4321, { readiness: true, tlsDir: 'tls-dir' })).toEqual([
+      '--port',
+      '4321',
+      '--tls',
+      'tls-dir'
+    ])
   })
 })

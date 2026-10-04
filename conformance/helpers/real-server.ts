@@ -14,8 +14,8 @@ import net from 'node:net'
  * The upstream commit the suite is written against. `v1.7.6` is a lightweight
  * tag pointing here, but a tag can be moved and a generated
  * `archive/refs/tags/*.tar.gz` is not byte-stable, so the commit is what the
- * provisioning line pins (#367). Quoted in `conformance/README.md` and in
- * `.github/workflows/syncplay-conformance.yml`; the three must agree.
+ * provisioning line pins (#367). Quoted in `conformance/README.md`, `docs/syncplay.md` and both
+ * Syncplay workflows; `test/{conformance,syncplay-e2e}-workflow.test.ts` hold them all equal.
  */
 export const SYNCPLAY_PINNED_COMMIT = '993232ab095bb810593459bc705b3e6fc64ad161'
 
@@ -100,7 +100,42 @@ async function waitForListen(port: number, deadlineMs: number): Promise<void> {
 
 export interface RealServer {
   port: number
+  /** The server's pid, so a caller that owns other processes can tear down by
+   *  explicit pid (`pkill -f syncplay-server` matches the shell that ran it). */
+  pid: number | undefined
   stop: () => Promise<void>
+}
+
+export interface RealServerOptions {
+  /**
+   * Whether the server runs its readiness feature. **Off by default**, which is
+   * what the conformance suite wants: it compares the playstate election, and
+   * the readiness seam is `test/services/syncplay-two-peer-loop.test.ts`'s.
+   * Leaving readiness on there would add `Set: {ready}` traffic the model never
+   * sends, for no observable the suite reads.
+   *
+   * The two-instance e2e rig (`e2e-syncplay/`, #489) passes `true`: its P8 / P9
+   * rows are *about* the ready gate, and a server started with
+   * `--disable-ready` would make them vacuous.
+   */
+  readiness?: boolean
+  /**
+   * A directory holding `privkey.pem`, `cert.pem` and `chain.pem`, handed to
+   * `--tls`. The app's client is TLS-only, so the e2e rig needs it; the
+   * conformance wire peers speak plaintext and leave it unset. A directory
+   * missing one of the three makes the server silently serve plaintext rather
+   * than fail, so `e2e-syncplay/helpers/tls.ts` probes the upgrade afterwards.
+   */
+  tlsDir?: string
+}
+
+/** The argv `bootRealServer()` spawns the server with. Pure, so the flag set
+ *  is testable on a runner with no server (`test/conformance-harness.test.ts`). */
+export function serverArgs(port: number, opts: RealServerOptions = {}): string[] {
+  const args = ['--port', String(port)]
+  if (!opts.readiness) args.push('--disable-ready')
+  if (opts.tlsDir) args.push('--tls', opts.tlsDir)
+  return args
 }
 
 /**
@@ -109,17 +144,15 @@ export interface RealServer {
  * observe each other, so a fresh room name is as isolating as a fresh process
  * and costs ~1.6 s less per scenario.
  *
- * `--disable-ready` is deliberate: this suite compares the playstate election,
- * and the readiness seam is `test/services/syncplay-two-peer-loop.test.ts`'s.
- * Leaving readiness on would add `Set: {ready}` traffic the model never sends,
- * for no observable the suite reads.
+ * The flags are `serverArgs()`'s; see `RealServerOptions` for why readiness is
+ * off unless a caller asks for it.
  */
-export async function bootRealServer(): Promise<RealServer> {
+export async function bootRealServer(opts: RealServerOptions = {}): Promise<RealServer> {
   const port = await freePort()
   const bin = serverBin()
   let proc: ChildProcess
   try {
-    proc = spawn(bin, ['--port', String(port), '--disable-ready'], {
+    proc = spawn(bin, serverArgs(port, opts), {
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (err) {
@@ -189,6 +222,7 @@ export async function bootRealServer(): Promise<RealServer> {
 
   return {
     port,
+    pid: proc.pid,
     stop: async () => {
       stopping = true
       if (proc.exitCode !== null) return

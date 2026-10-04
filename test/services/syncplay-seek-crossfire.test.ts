@@ -35,7 +35,7 @@
 // 645: the yank replaced the in-flight write before it came due, and an
 // interrupted seek fires none of its own. That surviving `seeked` matches a
 // registered `value` seek operation, so `onVideoSeeked` returns inside
-// `consumeSeekOp` (`use-syncplay-client.ts:1963`) without ever reaching
+// `consumeSeekOp` (`use-syncplay-client.ts:2014`) without ever reaching
 // `sendSyncplayLocalState('seek')`. The user's 645 never gets a `seeked` of its
 // own, so it never arms an intent, so there is no lifetime for a rule of this
 // shape to extend. #278's rewrite is keyed on exactly that value.
@@ -53,7 +53,7 @@
 //    already sends `position: v.currentTime`, and on a mid-seek element
 //    `v.currentTime` **is** the target. Pushing the target is the cause here,
 //    not the cure. The door it leaves through is `hasAnnounceablePosition()`'s
-//    `readyState >= 1` (`use-syncplay-client.ts:770`), which admits an element
+//    `readyState >= 1` (`use-syncplay-client.ts:813`), which admits an element
 //    sitting at exactly HAVE_METADATA with no data at the position it is
 //    announcing. Widening that door is a production change and is out of scope
 //    for #368.
@@ -72,7 +72,7 @@
 // renderer applies it" was being made against the copy. Both peers now run the
 // real composable over the real preload bridge and the real IPC router
 // (`test/helpers/syncplay-two-peer.ts`), so the rule under test is the one that
-// ships: mutating the `3.0` at `src/renderer/src/composables/use-syncplay-client.ts:1411`
+// ships: mutating the `3.0` at `src/renderer/src/composables/use-syncplay-client.ts:1455`
 // reds this file.
 //
 // The three things `LaggyElement` did are still done, by the harness rather
@@ -211,7 +211,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
 
     // 2. **The intent is null when it lands — because it was never armed.**
     //    Not, as this file said before #368, because the server's reflected
-    //    forced update (`syncplay.ts:2143-2148`, drift ≈ 0) retired it one round
+    //    forced update (`syncplay.ts:2192-2197`, drift ≈ 0) retired it one round
     //    trip after the seek. That retirement path is real and still reachable,
     //    but it is not what happens here: with the scrubber unbuffered there is
     //    no `seeked` for the user's 645 to arm an intent from in the first
@@ -236,7 +236,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     //
     // Before the #368 role swap this run produced two applies against two
     // qualifying frames, so mutating the `3.0` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1411` moved the two
+    // `src/renderer/src/composables/use-syncplay-client.ts:1455` moved the two
     // sides apart and red this file. On the swapped fixture both sides are 1,
     // so the cross-check agrees with itself under a `3.0` → `4.0` mutation and
     // stops being the thing that catches it. The file still reds under that
@@ -250,7 +250,7 @@ describe('SyncplayClient — the post-agreement re-election #278 does not reach'
     // at 1. No run length puts a frame on the widened edge.
     //
     // **The pin is not lost; it moved.**
-    // `use-syncplay-client.test.ts:5090 ("expect(v.currentTime).toBe(604)")`
+    // `use-syncplay-client.test.ts:5094 ("expect(v.currentTime).toBe(604)")`
     // pins the same half-open `[3.0, 4.0)` window and pins it more tightly, on
     // a fake element parked at 600 handed seven 1 Hz frames at 601…607: the
     // surviving write is 604 for any tolerance in `[3.0, 4.0)`, 605 at `4.0`

@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2340` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2391` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1923,9 +1923,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1065`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1109`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1100`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1144`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -2722,12 +2722,12 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
 })
 
 // #281 slice B, the renderer half. Main de-adopts for the length of the
-// divergence (`src/main/syncplay.ts:1930`), so `sendLocalState()` returns at its
+// divergence (`src/main/syncplay.ts:1979`), so `sendLocalState()` returns at its
 // adoption gate — no assertion, not even an ignore-counter bump — and a local
 // pause can no longer reach the room. That clear is also what lets the room's own
-// periodics survive `src/main/syncplay.ts:2097`, whose gate is `isForeignState ||
+// periodics survive `src/main/syncplay.ts:2146`, whose gate is `isForeignState ||
 // (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)` with
-// `src/main/syncplay.ts:2098`'s unacked-local-change drop below it. De-adoption is
+// `src/main/syncplay.ts:2147`'s unacked-local-change drop below it. De-adoption is
 // necessary and not sufficient: with `List` unkeyable (#223) `rosterReceived` stays
 // false and only a peer's own foreign-`setBy` move arrives — which is what the
 // fixtures below emit. So the room's next 1 Hz *playing* state would then resume the
@@ -2780,7 +2780,7 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     // …and it keeps holding, because the room is going to say the same thing
     // once a second for the whole divergence — and these frames do arrive. They
     // carry `setBy: 'peer'`, so `isForeignState` is true and they are past
-    // `src/main/syncplay.ts:2097` unconditionally, with no adoption reasoning
+    // `src/main/syncplay.ts:2146` unconditionally, with no adoption reasoning
     // needed: this fixture pins the foreign-`setBy` regime, not the de-adopted one.
     emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
     emitRemoteState({ position: 3002, paused: false, doSeek: false, setBy: 'peer' })
@@ -3034,9 +3034,9 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 // every other syncplay toast for the whole divergence: the pending-pause pair,
 // the reconnect notice and all `room-event` text. Not a universal — a stream
 // sparser than one per 3500 ms does let the notice clear. It is the room's cadence
-// here because the out-of-file divergence is the window `src/main/syncplay.ts:1930`
+// here because the out-of-file divergence is the window `src/main/syncplay.ts:1979`
 // de-adopts for, so the room's own periodics stop dying at
-// `src/main/syncplay.ts:2097` and arrive as room voice — which needs de-adoption
+// `src/main/syncplay.ts:2146` and arrive as room voice — which needs de-adoption
 // *and* a keyed roster with a peer in it, not de-adoption alone — while a peer's
 // explicit move is foreign-`setBy` and past that guard regardless. The refusal is
 // therefore emitted on the transition *into* the refusal only.
@@ -3159,7 +3159,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
   // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
   // *also* true at the ordinary end of an episode where every peer holds the
   // same file: main emits `position + serverRtt / 2` for a playing room
-  // (`src/main/syncplay.ts:2115`), so the last state or two before our own end
+  // (`src/main/syncplay.ts:2164`), so the last state or two before our own end
   // already read past `duration`. Nothing is refused that the user can see — the
   // room is well inside the 3 s tolerance, so no seek was suppressed — and the
   // message would land in the middle of the 5 s next-episode countdown, on every
@@ -3194,7 +3194,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     })
 
     // A periodic, not a seek: main's heartbeat sends `doSeek: false`
-    // (`src/main/syncplay.ts:2202`), and only a genuine room seek sets the bit.
+    // (`src/main/syncplay.ts:2251`), and only a genuine room seek sets the bit.
     emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
 
     expect(client.syncplayToast.value).toBe('')
@@ -3657,8 +3657,8 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   // bumping the revision in `recordRemoteState` instead would supersede a queued
   // operation within a second of registration — but only *pre-adoption*, which is
   // where `episode-start` is registered. The three same-episode `restore`s are not:
-  // `isNewPlayer` is false at `src/main/syncplay.ts:789`, adoption holds, and their
-  // own periodics die at `src/main/syncplay.ts:2097`. What bounds it is asserted
+  // `isNewPlayer` is false at `src/main/syncplay.ts:797`, adoption holds, and their
+  // own periodics die at `src/main/syncplay.ts:2146`. What bounds it is asserted
   // below.
   //
   // #350 note: this case's original badge characterisation — "the badge blinks
@@ -3719,7 +3719,7 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     // left. That is the bound — not "about one heartbeat of blink", which #340
     // falsified: the
     // other repair channel waits on the next inbound state to survive
-    // `src/main/syncplay.ts:2097` and `src/main/syncplay.ts:2098`, and nothing in
+    // `src/main/syncplay.ts:2146` and `src/main/syncplay.ts:2147`, and nothing in
     // the tree schedules that state. Either way, not a room-dragging resume.
     sendSnapshot.mockClear()
     client.onVideoLoadedMetadata()
@@ -3746,6 +3746,9 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     deps.activeEpisodeIndex.value = 1
     await nextTick()
     ;(v as { currentTime: number }).currentTime = 0
+    // The new source reaches metadata, which ends the episode switch's
+    // snapshot hold (#486).
+    client.onVideoLoadedMetadata()
     client.beginProgrammaticPlayback('play', 'episode-start')
     v.paused = false
     client.onLocalPlay()
@@ -3817,6 +3820,7 @@ describe('useSyncplayClient — late operations from a replaced source (#306)', 
     deps.activeEpisodeIndex.value = 1
     await nextTick()
     ;(v as { currentTime: number }).currentTime = 0
+    client.onVideoLoadedMetadata()
     client.beginProgrammaticPlayback('play', 'episode-start')
     v.paused = false
     client.onLocalPlay()
@@ -5072,7 +5076,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // **This line is the only mutation control that names the tolerance
     // literal's value rather than merely tripping over it, and it has to be
     // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1411` reds five
+    // `src/renderer/src/composables/use-syncplay-client.ts:1455` reds five
     // tests across four files; the other four red on counts and positions a
     // reader cannot invert back into a tolerance —
     // `syncplay-seek-crossfire.test.ts` reports `to have a length of 5 but
@@ -5859,8 +5863,8 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 // #324 closed the *racing* half of the stale-assert family. This is the half it
 // left open, and the worse-shaped one: the value the 1 Hz interval pushes is
 // itself wrong, so nothing self-corrects on a schedule. The repair waits on an
-// inbound state surviving `src/main/syncplay.ts:2097` and
-// `src/main/syncplay.ts:2098`, and on a same-episode swap, past adoption, that may
+// inbound state surviving `src/main/syncplay.ts:2146` and
+// `src/main/syncplay.ts:2147`, and on a same-episode swap, past adoption, that may
 // be no state at all (#340) — a heartbeat is not the bound.
 //
 // The mechanism. `applyRemoteStateToElement` used to return at
@@ -6087,7 +6091,7 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
   // supersede a queued `restore` or `episode-start` within a second of registration
   // — but only *pre-adoption*, which is where `episode-start` is registered and
   // where the three same-episode `restore`s are not: their periodics arrive
-  // self-`setBy` and die at `src/main/syncplay.ts:2097`. A superseded operation
+  // self-`setBy` and die at `src/main/syncplay.ts:2146`. A superseded operation
   // writes nothing at all.
   //
   // The probe is `episode-start` since #347, for the reason above: a `restore`
@@ -6251,5 +6255,172 @@ describe('useSyncplayClient — a restore never clobbers a live paused intent (#
     sendSnapshot.mockClear()
     vi.advanceTimersByTime(1000)
     expect(sendSnapshot).toHaveBeenCalledWith({ position: 100, paused: false })
+  })
+})
+
+// The renderer half of #486. `goToEpisode` marks who started the move right
+// before its index commit; the episode-change watcher carries the mark on its
+// one file push and nowhere else, and holds snapshot pushes from the outgoing
+// element until the new source has metadata.
+describe('useSyncplayClient — the episode-switch mark and snapshot hold (#486)', () => {
+  const ready = async (
+    deps: Deps
+  ): Promise<{ client: Client; setFile: ReturnType<typeof vi.fn> }> => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const { client } = trackedMount(deps)
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    setFile.mockClear()
+    return { client, setFile }
+  }
+
+  const switches = (setFile: ReturnType<typeof vi.fn>): unknown[] =>
+    setFile.mock.calls.map(([p]) => (p as SyncplayFilePayload).episodeSwitch)
+
+  it('carries a local mark on the episode push once, and never on a later re-push', async () => {
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 600 } as Partial<HTMLVideoElement>) })
+    const { client, setFile } = await ready(deps)
+
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    // `onDurationChange`'s re-push and a transition-into-ready push.
+    client.pushSyncplayFile()
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+
+    expect(switches(setFile)).toEqual(['local', undefined, undefined])
+  })
+
+  it('carries a follow mark as follow', async () => {
+    const deps = makeDeps({ video: fakeVideo() })
+    const { client, setFile } = await ready(deps)
+
+    client.markEpisodeSwitch('follow')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+
+    expect(switches(setFile)).toEqual(['follow'])
+  })
+
+  it('consumes the mark even when the push is skipped, so a reconnect cannot replay it', async () => {
+    const deps = makeDeps({ video: fakeVideo() })
+    const { client, setFile } = await ready(deps)
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    setFile.mockClear()
+
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    expect(switches(setFile)).toEqual([undefined])
+
+    // The mark went with the skipped push: the next index change that nobody
+    // marked does not inherit it.
+    deps.activeEpisodeIndex.value = 2
+    await nextTick()
+    expect(switches(setFile)).toEqual([undefined, undefined])
+  })
+
+  it('a translation switch carries no mark', async () => {
+    const deps = makeDeps({ video: fakeVideo() })
+    const { client, setFile } = await ready(deps)
+
+    // A stale mark with no index change behind it is dropped, not deferred.
+    client.markEpisodeSwitch('local')
+    deps.activeTranslationId.value = 2
+    await nextTick()
+    deps.activeTranslationId.value = 3
+    await nextTick()
+
+    expect(switches(setFile)).toEqual([undefined, undefined])
+  })
+
+  it('holds snapshot pushes from the outgoing element until loadedmetadata', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 600, paused: false } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const { client } = await ready(deps)
+
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    // The old source is still bound and still at HAVE_METADATA.
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).not.toHaveBeenCalled()
+    ;(v as { currentTime: number }).currentTime = 0
+    client.onVideoLoadedMetadata()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+  })
+
+  it('holds through every step of a multi-step follow', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 600 } as Partial<HTMLVideoElement>) })
+    const { client } = await ready(deps)
+
+    for (const idx of [1, 2, 3]) {
+      client.markEpisodeSwitch('follow')
+      deps.activeEpisodeIndex.value = idx
+      await nextTick()
+      client.onVideoTimeUpdate()
+    }
+
+    expect(sendSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('releases the hold on endEpisodeSwitchHold() for a source that never loads', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 600 } as Partial<HTMLVideoElement>) })
+    const { client } = await ready(deps)
+
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    client.endEpisodeSwitchHold()
+    client.onVideoTimeUpdate()
+
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hold on a translation switch, which keeps adoption on purpose', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 600 } as Partial<HTMLVideoElement>) })
+    const { client } = await ready(deps)
+
+    deps.activeTranslationId.value = 2
+    await nextTick()
+    client.onVideoTimeUpdate()
+
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('a translation commit after an episode change releases the hold', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const deps = makeDeps({ video: fakeVideo({ currentTime: 600 } as Partial<HTMLVideoElement>) })
+    const { client } = await ready(deps)
+
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value = 1
+    await nextTick()
+    deps.activeTranslationId.value = 2
+    await nextTick()
+    client.onVideoTimeUpdate()
+
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
   })
 })

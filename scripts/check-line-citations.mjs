@@ -114,7 +114,12 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // two. Deliberately written without an anchor of its own, for the reason the
 // #390 paragraph gives: citing the target here would land on the same comment
 // line again and double the count this pin is trying to state. A fifth reds.
-export const SUSPICIOUS_LANDING_PIN = 4
+//
+// #486 removed two of #390's three: the episode-change sibling's prose matches
+// went with the believed-wrong cases that fix inverted, and the loop test's
+// docstring stopped citing them. What remains is #390's player-lifecycle-scope
+// anchor and #384's one, so the pin drops to two. A third reds.
+export const SUSPICIOUS_LANDING_PIN = 2
 
 // Anchors that name something in this repo and still cannot be checked:
 // basenames carried by more than one tracked file, plus pathless `:NNN`
@@ -352,9 +357,9 @@ export function extractMarkedQuote(lines, i, rest) {
 /**
  * Classify the line a citation lands on. A range is classified by its START
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
- * interior line is a brace or a comment (src/main/syncplay.ts:902-908,
- * src/main/syncplay.ts:862-870 and
- * src/renderer/src/composables/use-syncplay-client.ts:1751-1753), so
+ * interior line is a brace or a comment (src/main/syncplay.ts:951-957,
+ * src/main/syncplay.ts:911-919 and
+ * src/renderer/src/composables/use-syncplay-client.ts:1795-1797), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  *
@@ -377,9 +382,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:378 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:383 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:402 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:407 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -388,8 +393,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:332 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:401 and the `<!--` test at
-  // scripts/check-line-citations.mjs:419 have no measured false positive in
+  // scripts/check-line-citations.mjs:406 and the `<!--` test at
+  // scripts/check-line-citations.mjs:424 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and

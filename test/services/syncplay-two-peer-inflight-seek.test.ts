@@ -113,7 +113,7 @@ describe('SyncplayClient — a peer announcing a seek target it has not reached'
 
     // Readiness is what lags, not the position — which is exactly why the
     // outbound door lets this out. `hasAnnounceablePosition()` tests
-    // `readyState >= 1` (`use-syncplay-client.ts:770`) and the element is at 1
+    // `readyState >= 1` (`use-syncplay-client.ts:813`) and the element is at 1
     // throughout, with no data anywhere near the position it is announcing.
     expect(joiner.el.readyState).toBe(1)
     expect(joiner.el.readyStates).toEqual([1])

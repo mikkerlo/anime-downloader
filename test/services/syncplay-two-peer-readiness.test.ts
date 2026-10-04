@@ -136,11 +136,11 @@ describe('SyncplayClient — the readiness gate across two peers', () => {
     // Both absolute positions gained exactly 1.00 s at #384's Half B, and what
     // moved them is *when the playhead starts walking* rather than anything
     // about readiness. The element is held paused until the room's playstate is
-    // first heard: `use-syncplay-client.ts:468` initialises
+    // first heard: `use-syncplay-client.ts:475` initialises
     // `syncplayLastRemotePlaying` to `false` — deliberately, as the doc comment
     // on `shouldElementPlay()` records — it is the first conjunct of that
-    // function at `use-syncplay-client.ts:1240`, and the only place it is ever
-    // written is the inbound path at `use-syncplay-client.ts:1333`. A join-time
+    // function at `use-syncplay-client.ts:1284`, and the only place it is ever
+    // written is the inbound path at `use-syncplay-client.ts:1377`. A join-time
     // `State` makes that first hearing happen 1000 ms earlier, so the playhead
     // starts walking 1000 ms earlier and every absolute position below gains
     // the same second.

@@ -135,7 +135,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1411` could drift from it
+  `src/renderer/src/composables/use-syncplay-client.ts:1455` could drift from it
   and nothing would notice. Both peers now run the shipped rule, and mutating
   that literal reds the file for any narrowing and for any widening to 4.0 s or
   beyond — every drift in that run lands on an exact integer, so what the file
@@ -250,14 +250,14 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   with no wire playstate at all — one peer's `setSyncplayLocalReady(false)`
   travels `Set: {ready}` → `List` → `room-users` → the *other* peer's
   `watch(syncplayRoomUsers)` and pauses an element that received no state and
-  made no call of its own) and `syncplay-two-peer-episode-change.test.ts` (the one
-  file here whose every assertion is a *characterisation* pin rather than a guard:
-  a peer that changes episode drags the peer that did not, backwards, at bind gaps
-  of 3000, 6500 and 8500 ms but not 7500, the parity pair, and the 500 ms control
-  is a 0.55 s near miss rather than a clean pass — #360 has the analysis, and a
-  red there may well be a fix). The adoption file reads the mirror straight off
-  the wire — an asserting frame carries a `paused` key and a mirror does not —
-  which is what makes "this peer cannot drag the room to 0"
+  made no call of its own) and `syncplay-two-peer-episode-change.test.ts` (until
+  #486 every assertion there was a *characterisation* pin of #360's drag; since
+  #486's forced seek to 0 they are guards that both peers land on the new
+  episode's start and stay there, at the bind gaps and switch phases #360
+  measured, plus the follower, both-press, paused-room and chained cases).
+  The adoption file reads the mirror straight off the wire — an asserting frame
+  carries a `paused` key and a mirror does not — which is what makes "this peer
+  cannot drag the room to 0"
   an observation rather than an inference; the readiness file reads the same
   wire for the opposite claim, that a gate pause is announced as nothing,
   because the snapshot carries the user's intent rather than `v.paused`.

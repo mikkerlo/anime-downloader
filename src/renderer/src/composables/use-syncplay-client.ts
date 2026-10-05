@@ -179,7 +179,7 @@ export type SyncplayDeps = {
   onRemoteEpisodeChange: (ep: SyncplayRemoteEpisode) => void
 }
 
-export type SyncplayClient = {
+export type SyncplayClient = SyncplayFollowWalkHold & {
   syncplayStatus: Ref<SyncplayStatus>
   syncplayRoomUsers: Ref<SyncplayRoomUser[]>
   syncplayRoomInput: Ref<string>
@@ -731,13 +731,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   const sessionEntropy = crypto.getRandomValues(new Uint32Array(1))[0].toString(36)
   const playerSessionId = `p-${Date.now().toString(36)}-${sessionEntropy}`
 
-  // `episodeSwitch` is passed only by the episode-change watcher (#486), which
-  // consumes the mark `markEpisodeSwitch()` left. Every other caller (the
-  // duration re-push, the transition-into-ready push, the mount push) passes
-  // nothing, so a later re-push can never re-send it and seek the room to 0 a
-  // second time.
+  // `episodeSwitch` comes from the episode-change watcher (#486), which consumes
+  // the mark `markEpisodeSwitch()` left, or from `settleFollowWalk` (#501). Every
+  // other caller (the duration re-push, the transition-into-ready push, the
+  // mount push) passes nothing, so a re-push can never seek the room to 0 again.
+  // While a follow walk runs, every caller is held, these two included (#501).
   function pushSyncplayFile(episodeSwitch?: SyncplayEpisodeSwitch): void {
-    if (syncplayStatus.value.state !== 'ready') return
+    if (holdForFollowWalk() || syncplayStatus.value.state !== 'ready') return
     const dur = deps.getVideoEl()?.duration || deps.getDuration() || 0
     const newPlayer = !announcedThisMount
     announcedThisMount = true
@@ -886,7 +886,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // See hasAnnounceablePosition: a reloading element's 0 is not a position
     // claim, and this door had no readiness term at all (#284).
     if (!hasAnnounceablePosition(v)) return
-    if (episodeSwitchHold) return
+    if (episodeSwitchHold || followWalkDepth > 0) return
     lastSnapshotPushAt = Date.now()
     api.syncplaySendLocalSnapshot({
       position: v.currentTime,
@@ -2489,7 +2489,60 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     syncplaySnapshotTimer = setInterval(pushSyncplaySnapshot, 1000)
   })
 
+  // A room-driven follow walk in progress (#501). The walk reaches N+k through
+  // k one-step `goToEpisode` calls, and each commit fires the episode-change
+  // watcher. Pushed, the intermediate N+1 is a new `user|anime|episode` key on
+  // the leader, whose own `handleRemoteEpisodeChange` then walks it back
+  // toward N+1. So while the walk runs, `pushSyncplayFile` holds every push
+  // (the watcher's, the duration re-push, the transition-into-ready push) and
+  // `pushSyncplaySnapshot` every snapshot, and `settleFollowWalk` announces the
+  // index the walk actually reached, once, as a `'follow'`. The watcher's other
+  // work still runs on every step.
+  //
+  // The snapshot term outlasts #486's per-source hold on purpose. That hold is
+  // released by the *intermediate* source's `loadedmetadata`, while main still
+  // holds the walk's first file, so the position would go out under that
+  // file's name. After the settle, the per-source hold alone decides.
+  //
+  // A depth rather than a flag: a second room move mid-walk starts a walk that
+  // returns `'arrived'` at once, and its settle must not release the first
+  // walk's hold. Only the outermost settle pushes.
+  let followWalkDepth = 0
+  let followWalkStartIndex = 0
+  // A push some source attempted while the walk held it. A walk that ends on
+  // the episode it started on announces nothing new, but a reconnect it held
+  // still owes the room its file.
+  let followWalkHeldPush = false
+  let disposed = false
+
+  function holdForFollowWalk(): boolean {
+    if (followWalkDepth === 0) return false
+    followWalkHeldPush = true
+    return true
+  }
+
+  function beginFollowWalk(): void {
+    if (followWalkDepth === 0) {
+      followWalkStartIndex = deps.activeEpisodeIndex.value
+      followWalkHeldPush = false
+    }
+    followWalkDepth += 1
+  }
+
+  function settleFollowWalk(): void {
+    if (followWalkDepth === 0) return
+    followWalkDepth -= 1
+    if (followWalkDepth > 0 || disposed) return
+    const moved = deps.activeEpisodeIndex.value !== followWalkStartIndex
+    if (moved) pushSyncplayFile('follow')
+    else if (followWalkHeldPush) pushSyncplayFile()
+    followWalkHeldPush = false
+  }
+
   onBeforeUnmount(() => {
+    // A walk still running when the player closes settles after this, and must
+    // not announce a dead mount's file (#501).
+    disposed = true
     unsubRemoteState?.()
     unsubRemoteState = null
     unsubRoomEvent?.()
@@ -2555,6 +2608,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     pushSyncplayFile: () => pushSyncplayFile(),
     markEpisodeSwitch,
     endEpisodeSwitchHold,
+    beginFollowWalk,
+    settleFollowWalk,
     setSyncplayLocalReady,
     beginProgrammaticPlayback,
     bumpPlaybackSourceGeneration,
@@ -2572,4 +2627,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     onLocalPause,
     onLocalCanPlay
   }
+}
+
+/** The room-driven follow walk's hold on announcements (#501). */
+type SyncplayFollowWalkHold = {
+  /** A room-driven follow walk is starting. Until the matching
+   *  `settleFollowWalk`, every file push and snapshot push is held, so the
+   *  walk's intermediate episodes never reach the room. */
+  beginFollowWalk: () => void
+  /** The walk has stopped, for any reason: call it from a `finally`. The
+   *  outermost settle announces the reached episode once, as a `'follow'`. */
+  settleFollowWalk: () => void
 }

@@ -1104,6 +1104,43 @@ describe('#501 — a step resolves only after it releases navigating', () => {
   })
 })
 
+describe('#501 — the follow walk announces only where it ends up', () => {
+  // The hold itself is the composable's (`beginFollowWalk` / `settleFollowWalk`
+  // gate `pushSyncplayFile` and `pushSyncplaySnapshot`), driven through the real
+  // composable in `test/services/syncplay-two-peer-episode-change.test.ts` and
+  // `test/renderer/composables/use-syncplay-client.test.ts`. The navigator
+  // there calls the pair where these scans say `PlayerView` does.
+  const handler = stripComments(
+    slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
+  )
+
+  it('begins the hold before the walk and settles it in the walk’s finally', () => {
+    const begin = handler.indexOf('syncplay.beginFollowWalk();')
+    const walk = handler.indexOf('void walkEpisodeSteps(')
+    expect(begin).toBeGreaterThan(-1)
+    expect(begin).toBeLessThan(walk)
+    // `finally`, so arrival, `unreachable`, a translation pick and a throw
+    // all settle. A `.then` would skip the throw.
+    expect(handler.slice(walk)).toMatch(
+      /^void walkEpisodeSteps\([^]*?\)\.finally\(\(\) => syncplay\.settleFollowWalk\(\)\);\s*\}\s*$/
+    )
+    // Every early return sits above the begin, so no path begins without
+    // reaching the walk.
+    expect(handler.slice(begin).includes('return;')).toBe(false)
+  })
+
+  it('is the only begin/settle site, and every push source stays inside the composable', () => {
+    expect(SRC.split('beginFollowWalk(').length - 1).toBe(1)
+    expect(SRC.split('settleFollowWalk(').length - 1).toBe(1)
+    // The duration re-push goes through the composable's gated
+    // `pushSyncplayFile`, not around it.
+    expect(SRC).not.toContain('syncplaySetFile')
+    expect(stripComments(slice('function onDurationChange(', '\n}'))).toContain(
+      'pushSyncplayFile();'
+    )
+  })
+})
+
 describe('#302 — every caller-side flag clear is guarded by ownership', () => {
   // #291 gave `switchingTranslation` / `navigating` an ownership token where
   // each flag is SET, but only one clear per flow read it — the `!prep.ok`

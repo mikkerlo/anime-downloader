@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2430` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2439` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -718,9 +718,9 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1851`,
-// `src/renderer/src/components/views/PlayerView.vue:2645` and
-// `src/renderer/src/components/views/PlayerView.vue:2668` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:1860`,
+// `src/renderer/src/components/views/PlayerView.vue:2654` and
+// `src/renderer/src/components/views/PlayerView.vue:2677` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local
@@ -908,10 +908,14 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // **Re-derived for #492's review: `episode-change` 12 → 14.** The two room-walk
 // N → N+2 cases move A's file directly with one awaited `A.goToEpisode('8')`
 // each, because a pick from the episode list is a jump, not a modelled step.
+//
+// **Re-derived for #501: `episode-change` 14 → 15.** The navigator model gains
+// `pick()`, the leader's list pick, whose one awaited `peer.goToEpisode(` call
+// every #501 case drives its jump through.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 14,
+  'episode-change': 15,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

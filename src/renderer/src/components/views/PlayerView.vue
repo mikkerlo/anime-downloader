@@ -569,12 +569,21 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // await the `nextTick` that clears the flag. Every step after the first
   // passes `continuesWalk`, so the walk's first step owns the pending
   // mark-watched.
+  //
+  // The walk announces only where it ends up (#501). Each step's commit would
+  // otherwise push the intermediate episode, a new key on the leader, whose own
+  // walk then pulls it back toward that episode. `beginFollowWalk` holds every
+  // file and snapshot push until `settleFollowWalk`, which pushes the reached
+  // index once as a `'follow'`. The settle sits in `finally`, so arrival,
+  // `unreachable`, a translation pick and a throw all announce where this peer
+  // really is. A one-step follow takes the same path.
   let steps = 0;
+  syncplay.beginFollowWalk();
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
     () => goToEpisode(dir, 'follow', steps++ > 0)
-  );
+  ).finally(() => syncplay.settleFollowWalk());
 }
 
 // Disposers for the non-syncplay broadcast subs (syncplay owns its own).

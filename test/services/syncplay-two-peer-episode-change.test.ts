@@ -335,6 +335,10 @@ type Press = 'dispatched' | 'button-disabled' | 'swallowed'
 
 interface Navigator {
   episode(): string
+  /** `handleRemoteEpisodeChange`'s `moved to episode` toasts, in order. */
+  toasts: string[]
+  /** A pick from the episode list: straight to `episodeInt`, one commit. */
+  pick(episodeInt: string): Promise<void>
   pending(): number | null
   /** `onUserNext` — the button and the keyboard. */
   pressNext(): Press
@@ -348,6 +352,8 @@ interface Navigator {
    * to it bumps the epoch and returns before its commit, writing nothing.
    */
   unreachableIndex: number | null
+  /** Commit to source swap for this peer's steps; `RESOLVE_MS` by default. */
+  resolveMs: number
 }
 
 function attachNavigator(peer: Peer, startIdx: number): Navigator {
@@ -387,7 +393,7 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     nav.nextSource = 'loads'
     // The commit is what the composable's watcher announces as `Set file`.
     await peer.goToEpisode(EPISODES[targetIndex], undefined, 0, origin)
-    await new Promise((r) => setTimeout(r, RESOLVE_MS))
+    await new Promise((r) => setTimeout(r, nav.resolveMs))
     if (navigationEpoch !== myNav) return 'moved'
     if (source === 'null-stream') {
       if (navigationEpoch === myNav) navigating = false
@@ -405,28 +411,36 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     return 'moved'
   }
 
-  // `handleRemoteEpisodeChange`: absolute index, then a relative walk.
-  const handleRemote = (episodeInt: string): void => {
-    const target = EPISODES.indexOf(episodeInt)
+  // `handleRemoteEpisodeChange`: absolute index, then a relative walk, held
+  // between the composable's real `beginFollowWalk` / `settleFollowWalk` (#501).
+  const handleRemote = (ep: SyncplayRemoteEpisode): void => {
+    const target = EPISODES.indexOf(ep.episodeInt)
     if (target < 0 || target === idx) return
+    nav.toasts.push(`${ep.fromUser} moved to episode ${ep.episodeInt}`)
     const dir = target > idx ? 'next' : 'prev'
     const walkTranslation = translationEpoch
+    peer.ui.beginFollowWalk()
     void walkEpisodeSteps(
       () => idx !== target && !navigating && translationEpoch === walkTranslation,
       () => step(dir, 'follow')
-    )
+    ).finally(() => peer.ui.settleFollowWalk())
   }
   // `remoteEpisodes` records rather than acts (see the harness); act on each.
   const arr = peer.remoteEpisodes as unknown as { push: (...x: unknown[]) => number }
   const origPush = Array.prototype.push
   arr.push = function (...eps: unknown[]) {
     const n = origPush.apply(this, eps)
-    for (const e of eps as { episodeInt: string }[]) handleRemote(e.episodeInt)
+    for (const e of eps as SyncplayRemoteEpisode[]) handleRemote(e)
     return n
   }
 
   const nav: Navigator = {
     episode: () => EPISODES[idx],
+    toasts: [],
+    pick: async (episodeInt: string) => {
+      idx = EPISODES.indexOf(episodeInt)
+      await peer.goToEpisode(episodeInt, undefined, 0, 'local')
+    },
     pending: () => pendingFollow?.index ?? null,
     pressNext: () => {
       // `if (!canNext.value || navigating.value) return;`
@@ -445,7 +459,8 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
       translationEpoch++
     },
     nextSource: 'loads',
-    unreachableIndex: null
+    unreachableIndex: null,
+    resolveMs: RESOLVE_MS
   }
   return nav
 }
@@ -651,5 +666,197 @@ describe('both peers press next within about a second (#487)', () => {
     expect(b.pressNext()).toBe('swallowed')
     await room!.advance(6)
     expect(b.episode()).toBe('8')
+  })
+})
+
+// ── #501: a follow walk announces only where it ends up ───────────────────────
+//
+// The leader picks N+k from the list. The follower reaches it through k
+// one-step follows, and every step's commit fires the composable's
+// episode-change watcher. Pushed, the intermediate episode is a new
+// `user|anime|episode` key on the leader, and the leader's own
+// `handleRemoteEpisodeChange` walks it back toward it: measured 6/6 on the real
+// server with the `await` fix alone. The walk now holds every file push until
+// it settles, then announces the reached index once.
+//
+// Both peers carry a navigator here, unlike `seatFollower`, because the
+// subject is what the follower's pushes do to the leader. The hold is the real
+// composable's; the navigator only calls `beginFollowWalk` / `settleFollowWalk`
+// where `PlayerView` does, which the source scans in
+// `test/renderer/components/player-lifecycle-scope.test.ts` pin.
+
+describe('a follow walk announces only where it ends up (#501)', () => {
+  let room: TwoPeerRoom | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    room = undefined
+    vi.useRealTimers()
+  })
+
+  interface Seated {
+    A: Peer
+    B: Peer
+    a: Navigator
+    b: Navigator
+    /** B's `setFile` pushes from the moment of seating, as [episode, switch, ms]. */
+    bPushes: [string, SyncplayEpisodeSwitch | undefined, number][]
+    /** B's snapshot pushes, by `Date.now()`. */
+    bSnapshots: number[]
+    /** B's `loadedmetadata` deliveries, by `Date.now()`. */
+    bMetadata: number[]
+    /** The episodes A's main handed A's renderer from B since seating. */
+    fromB: () => string[]
+  }
+
+  /** Both on episode 6 (index 5), agreed for four seconds. */
+  const seat = async (bindGapMs?: number): Promise<Seated> => {
+    room = await createTwoPeerRoom({ position: 100, paused: false })
+    const A = await room.seat({
+      username: 'rigA',
+      position: 100,
+      paused: false,
+      delayMs: DELAY_MS,
+      episodeInt: '6'
+    })
+    const B = await room.seat({
+      username: 'rigB',
+      position: 100,
+      paused: false,
+      delayMs: DELAY_MS,
+      episodeInt: '6',
+      ...(bindGapMs !== undefined ? { bindGapMs } : {})
+    })
+    await room.advance(4)
+    const bPushes: Seated['bPushes'] = []
+    const bSnapshots: number[] = []
+    const bMetadata: number[] = []
+    const setFile = B.api.syncplaySetFile.bind(B.api)
+    vi.spyOn(B.api, 'syncplaySetFile').mockImplementation((f: SyncplayFilePayload) => {
+      bPushes.push([f.episodeInt, f.episodeSwitch, Date.now()])
+      return setFile(f)
+    })
+    const snapshot = B.api.syncplaySendLocalSnapshot.bind(B.api)
+    vi.spyOn(B.api, 'syncplaySendLocalSnapshot').mockImplementation((s) => {
+      bSnapshots.push(Date.now())
+      return snapshot(s)
+    })
+    const metadata = B.ui.onVideoLoadedMetadata.bind(B.ui)
+    vi.spyOn(B.ui, 'onVideoLoadedMetadata').mockImplementation(() => {
+      bMetadata.push(Date.now())
+      metadata()
+    })
+    // B's seating announced episode 6 to A; only what follows the pick counts.
+    const heardBefore = A.remoteEpisodes.length
+    const fromB = (): string[] =>
+      A.remoteEpisodes
+        .slice(heardBefore)
+        .filter((e) => e.fromUser === 'rigB')
+        .map((e) => e.episodeInt)
+    return {
+      A,
+      B,
+      a: attachNavigator(A, 5),
+      b: attachNavigator(B, 5),
+      bPushes,
+      bSnapshots,
+      bMetadata,
+      fromB
+    }
+  }
+
+  /** Run `seconds` in slices, sampling the leader's episode after each, and
+   *  the room's position into `positions` when given. */
+  const sampleLeader = async (
+    a: Navigator,
+    seconds: number,
+    positions?: number[]
+  ): Promise<string[]> => {
+    const seen: string[] = []
+    for (let t = 0; t < seconds * 1000; t += 50) {
+      await room!.advance(0.05)
+      seen.push(a.episode())
+      positions?.push(room!.server.roomState().position)
+    }
+    return seen
+  }
+
+  it.each([
+    [1, '7'],
+    [2, '8'],
+    [3, '9']
+  ] as const)(
+    'a +%i pick: the leader stays on %s and hears exactly one file from the follower',
+    async (_k, target) => {
+      const { a, b, bPushes, fromB } = await seat()
+      await a.pick(target)
+      const positions: number[] = []
+      const leader = await sampleLeader(a, 8, positions)
+
+      // Main keeps B's episode-6 file and snapshot until the settle; neither
+      // may put episode 6's ~100 s back into the room the pick took to 0.
+      expect(Math.max(...positions)).toBeLessThan(STALE_FLOOR)
+      expect(b.episode()).toBe(target)
+      expect(new Set(leader)).toEqual(new Set([target]))
+      expect(a.toasts).toEqual([])
+      expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([[target, 'follow']])
+      expect(fromB()).toEqual([target])
+    }
+  )
+
+  it('an intermediate source’s durationchange re-push is held', async () => {
+    const { B, a, b, bPushes, fromB } = await seat()
+    await a.pick('8')
+    // Step 1 has committed episode 7 and its source is resolving.
+    while (b.episode() !== '7') await room!.advance(0.05)
+    // `onDurationChange` → `pushSyncplayFile()`, on the intermediate source.
+    B.ui.pushSyncplayFile()
+    expect(bPushes).toEqual([])
+    const leader = await sampleLeader(a, 8)
+
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['8', 'follow']])
+    expect(fromB()).toEqual(['8'])
+  })
+
+  // (b1): the follower can't fetch N+2's page. It announces N+1, where it really
+  // is, once, and the leader is pulled back once. That is the decision's
+  // expected outcome and the follow-up issue's subject, pinned here so a change
+  // to it is deliberate.
+  it('a walk that dies at step 2 announces N+1 exactly once', async () => {
+    const { a, b, bPushes, fromB } = await seat()
+    b.unreachableIndex = 7 // episode 8
+    await a.pick('8')
+    await sampleLeader(a, 8)
+
+    expect(b.episode()).toBe('7')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['7', 'follow']])
+    expect(fromB()).toEqual(['7'])
+    expect(a.toasts).toEqual(['rigB moved to episode 7'])
+  })
+
+  it('holds the follower’s snapshots across an intermediate loadedmetadata', async () => {
+    // A 200 ms bind gap against a 1.5 s resolve: each step's source reaches
+    // metadata, and so drops #486's per-source hold, 1.3 s before the walk
+    // takes its next step, while main still holds episode 6 as B's file.
+    const { a, b, bPushes, bSnapshots, bMetadata } = await seat(200)
+    b.resolveMs = 1500
+    const pickedAt = Date.now()
+    await a.pick('8')
+    await sampleLeader(a, 10)
+
+    expect(b.episode()).toBe('8')
+    expect(bPushes).toHaveLength(1)
+    const settledAt = bPushes[0][2]
+    // Both sources reached metadata inside the walk…
+    expect(bMetadata.filter((t) => t > pickedAt && t < settledAt)).toHaveLength(2)
+    // …and no snapshot went out until the walk had announced where it ended.
+    expect(bSnapshots.filter((t) => t > pickedAt && t < settledAt)).toEqual([])
+    expect(bSnapshots.some((t) => t >= settledAt)).toBe(true)
   })
 })

@@ -1118,7 +1118,7 @@ covers are not redone:
 | Rows | Tier 1 | Tier 2 |
 | --- | --- | --- |
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
-| E2 double advance (#487, fixed by #492; Tier 1 pins the swallowed presses) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half) |
+| E2 double advance (#487, fixed by #492; window moved to first frame + grace by #500; Tier 1 pins the swallowed presses, the component's grace-timer lifecycle is run from its own source in `player-lifecycle-scope.test.ts`) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half, scored on `loadeddata` + `FOLLOW_GRACE_MS`) |
 | E5 paused state: `docs/syncplay.md`'s auto-resume rule (#496 ✗: still not resumed after #493, at ~0 rather than stale) | — | `episode.spec.ts` (E5) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
@@ -1126,5 +1126,20 @@ covers are not redone:
 | P2 (✗ band), P3, M8 | `syncplay-two-peer-interactions.test.ts` | — |
 | P5, M1 | `syncplay-two-peer-adoption.test.ts`, `syncplay-two-peer-playpause.test.ts` | — |
 | P6, P7, P8 | — | `pause.spec.ts` |
+| P7f, P6f: pause, then a quality / translation switch 0 / 20 / 50 / 200 ms later, the gaps recorded per run; `SYNCPLAY_E2E_N` is the per-bucket N, default 10 (#498; P7f was ✗ before its fix) | `syncplay-two-peer-quality-switch.test.ts` | `pause.spec.ts` |
 | P12 | the #350 block of `test/renderer/composables/use-syncplay-client.test.ts` | — |
 | M3 | `syncplay-frozen-snapshot.test.ts` | — |
+
+P7f's Tier 1 half needs an element that can start itself, which
+`HarnessVideo` cannot by default. `autoplay: true` is the opt-in model of the
+`<video>`'s bare `autoplay` attribute (#498): a load arms the can-autoplay
+flag, `play()` and `pause()` clear it (`pause()` even on an already-paused
+element, which fires nothing, the #348 disarm), and a `readyState` write
+reaching HAVE_ENOUGH_DATA with it armed on a paused element starts playback
+and queues `play` with no `play()` call. Off by default, because every older
+fixture assumes an element that never starts itself. `HarnessVideo.delivered`
+logs every event `tick()` hands out, which is what the file's model of
+`PlayerView`'s `awaitingFirstAutostart` latch reads: set at construction (the
+mount), cleared by the first delivered `play` or `pause`. The pre-start cases
+(a switch before the first autostart, solo and in a live room) pin that the
+disarm leaves a solo autostart alone and still disarms inside a session.

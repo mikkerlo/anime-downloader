@@ -363,7 +363,7 @@ describe('two-peer syncplay harness', () => {
     // seated on a literal — the tenth is the rejection guard below, which never
     // reaches `reload()` at all — so the
     // fallback at
-    // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // `test/helpers/syncplay-two-peer.ts:258 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
     // option's doc block spends its longest paragraph calling a trap, left the
     // suite at 1822 passed across 122 files. That figure is **historical and no
@@ -386,7 +386,7 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
     // the adoption file's switch fixture. All of them are inert, for one
     // reason: `bindGapMs` is read in exactly one place,
-    // `test/helpers/syncplay-two-peer.ts:393 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
+    // `test/helpers/syncplay-two-peer.ts:432-433 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
     // inside `HarnessVideo.reload()`, and a peer that never reloads never
     // reaches it. So the value they inherit is unobservable rather than
     // pinned, and moving the default cannot red them. #486 added the first
@@ -405,7 +405,7 @@ describe('two-peer syncplay harness', () => {
     // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
     // than one step is invisible here — a reload queues `pause`, and `tick()`
     // holds metadata back while that queue is non-empty
-    // (`test/helpers/syncplay-two-peer.ts:429 ("this.queued.length === 0")`), so
+    // (`test/helpers/syncplay-two-peer.ts:469 ("this.queued.length === 0")`), so
     // 0 and 300 both land in the second batch and read the same. Landing in the
     // *third* of three 200 ms steps is what says the gap outlived a step it was
     // given the chance to beat. The case therefore holds for a gap in (400, 600]
@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2417` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2470` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -718,9 +718,9 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1844`,
-// `src/renderer/src/components/views/PlayerView.vue:2625` and
-// `src/renderer/src/components/views/PlayerView.vue:2648` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:1871`,
+// `src/renderer/src/components/views/PlayerView.vue:2686` and
+// `src/renderer/src/components/views/PlayerView.vue:2709` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local
@@ -771,9 +771,9 @@ const CALL_NEEDLE = 'goToEpisode('
  * leaves an unterminated quote that the string pass then swallows forward across
  * real call sites: measured on this tree, that variant reports 8 rather than 10
  * and takes the adoption file's only site to 0. This is the same carve-out
- * `test/renderer/components/player-lifecycle-scope.test.ts:90` documents for
+ * `test/renderer/components/player-lifecycle-scope.test.ts:91` documents for
  * `stripComments`, re-implemented here rather than lifted —
- * `test/renderer/components/player-lifecycle-scope.test.ts:107`'s docstring
+ * `test/renderer/components/player-lifecycle-scope.test.ts:108`'s docstring
  * scopes that helper to one file and it copies string bodies through verbatim,
  * so it supplies neither half on its own. Promoting it is a separate change with
  * its own review surface.

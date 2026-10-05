@@ -7,8 +7,10 @@
 //       send path); the gate pauses both, and both resume when B is ready
 //       again (#355). Readiness is ON in this rig's server, which is why the
 //       shared bootstrap takes it as a flag.
+//   P7f Pause, then a quality switch 0 / 20 / 50 / 200 ms later (#498).
+//   P6f The same for a translation switch.
 //
-// All four are non-✗ rows: `bad == 0` over the scoreable runs.
+// All six are non-✗ rows: `bad == 0` over the scoreable runs.
 
 import { test, expect } from '@playwright/test'
 import {
@@ -109,9 +111,8 @@ for (const [rowId, what] of [
         const paused = await bothPaused(A, B, 4000)
         // "Pause, then switch": the pause has settled (both elements paused and
         // a couple of room ticks gone by) before the switch starts. A switch
-        // tens of ms after the press is a different scenario; the first local
-        // run reached it by accident and saw the room resume, which is recorded
-        // on the PR for its own issue rather than folded into this row.
+        // tens of ms after the press is a different scenario, #498's, and it is
+        // the P7f / P6f rows below rather than folded into this one.
         await sleep(2000)
         const before = await A.state()
         if (what === 'translation') await A.switchTranslation()
@@ -141,6 +142,84 @@ for (const [rowId, what] of [
       }
       const s = row.score()
       expect(s.scoreable).toBeGreaterThanOrEqual(1)
+      expect(s.bad).toBe(0)
+    } finally {
+      await closeDuo(A, B)
+    }
+  })
+}
+
+// P7f / P6f — pause, then a switch tens of ms later (#498). No `bothPaused`
+// before the switch: the press and both clicks run in one `page.evaluate`, and
+// each run records its real gaps. The quality switch rebinds the element and
+// re-arms its `autoplay`; before #498's fix nothing on that path disarmed it,
+// so a fast fixture reload autostarted it and `onLocalPlay` told the room
+// `paused: false` (P7f was ✗: 10/10 bad at 0 and 20 ms, 0/10 at 50). The
+// translation switch resolves its stream first (the rig's 300 ms), and the
+// episode/translation watcher disarms in that window, so P6f was never ✗.
+const BUCKETS_MS = [0, 20, 50, 200] as const
+const N_PER_BUCKET = Number(process.env.SYNCPLAY_E2E_N ?? 10)
+
+for (const [rowId, what] of [
+  ['P7f', 'quality'],
+  ['P6f', 'translation']
+] as const) {
+  test(`${rowId} — pause, then a ${what} switch within tens of ms`, async () => {
+    const { A, B } = await seatDuo(rig)
+    const row = new RowScorer(rowId)
+    try {
+      expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+      let k = 0
+      for (const delayMs of BUCKETS_MS) {
+        for (let i = 0; i < N_PER_BUCKET; i++, k++) {
+          const setupOk =
+            (await bothPlaying(A, B, 20_000)) && (await positionBoth(A, B, 120 + (k % 20) * 60))
+          await sleep(1500)
+          const before = await A.state()
+          const at = Date.now()
+          const clicks = await A.pauseThenSwitch(what, delayMs)
+          const swapped = await waitFor(
+            'src changed',
+            async () => (await A.state()).src !== before.src,
+            15_000
+          )
+          await sleep(4000)
+          const [a, b] = await Promise.all([A.state(), B.state()])
+          const dA = await A.collect(at)
+          // From A's own `paused: true` on, any outbound `paused: false` is a
+          // resume nobody pressed — counted, so one a later frame undid shows.
+          const out = dA.wire.filter((w) => w.dir === 'out' && w.ps)
+          const press = out.findIndex((w) => w.ps!.paused === true)
+          const resumesSent =
+            press < 0 ? 0 : out.slice(press).filter((w) => w.ps!.paused === false).length
+          const bad = !a.paused || !b.paused || resumesSent > 0
+          row.add(
+            {
+              setupOk: setupOk && swapped && press >= 0,
+              bad,
+              delayMs,
+              gapToFirstClick: clicks.firstClickAt - clicks.pressAt,
+              gapToSecondClick: clicks.secondClickAt - clicks.pressAt,
+              aPaused: a.paused,
+              bPaused: b.paused,
+              resumesSent
+            },
+            bad ? { A: dA, B: await B.collect(at) } : undefined
+          )
+          if ((await A.state()).paused) await A.togglePlayButton()
+          await bothPlaying(A, B, 15_000)
+        }
+      }
+      const s = row.score()
+      const bucket = (d: number): { n: number; bad: number } => {
+        const rs = s.records.filter((r) => r.setupOk && r.delayMs === d)
+        return { n: rs.length, bad: rs.filter((r) => r.bad).length }
+      }
+      for (const d of BUCKETS_MS) {
+        const b = bucket(d)
+        process.stdout.write(`[syncplay-e2e] ${rowId} ${d} ms: n=${b.n} bad=${b.bad}\n`)
+        expect(b.n, `${rowId} ${d} ms: no scoreable runs`).toBeGreaterThanOrEqual(1)
+      }
       expect(s.bad).toBe(0)
     } finally {
       await closeDuo(A, B)

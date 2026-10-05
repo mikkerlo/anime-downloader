@@ -363,7 +363,7 @@ describe('two-peer syncplay harness', () => {
     // seated on a literal — the tenth is the rejection guard below, which never
     // reaches `reload()` at all — so the
     // fallback at
-    // `test/helpers/syncplay-two-peer.ts:239 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // `test/helpers/syncplay-two-peer.ts:254 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
     // option's doc block spends its longest paragraph calling a trap, left the
     // suite at 1822 passed across 122 files. That figure is **historical and no
@@ -386,7 +386,7 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
     // the adoption file's switch fixture. All of them are inert, for one
     // reason: `bindGapMs` is read in exactly one place,
-    // `test/helpers/syncplay-two-peer.ts:393 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
+    // `test/helpers/syncplay-two-peer.ts:428-429 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
     // inside `HarnessVideo.reload()`, and a peer that never reloads never
     // reaches it. So the value they inherit is unobservable rather than
     // pinned, and moving the default cannot red them. #486 added the first
@@ -405,7 +405,7 @@ describe('two-peer syncplay harness', () => {
     // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
     // than one step is invisible here — a reload queues `pause`, and `tick()`
     // holds metadata back while that queue is non-empty
-    // (`test/helpers/syncplay-two-peer.ts:429 ("this.queued.length === 0")`), so
+    // (`test/helpers/syncplay-two-peer.ts:465 ("this.queued.length === 0")`), so
     // 0 and 300 both land in the second batch and read the same. Landing in the
     // *third* of three 200 ms steps is what says the gap outlived a step it was
     // given the chance to beat. The case therefore holds for a gap in (400, 600]

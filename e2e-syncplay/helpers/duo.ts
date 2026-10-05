@@ -180,6 +180,15 @@ export interface Instance {
   seek(t: number): Promise<void>
   switchTranslation(): Promise<void>
   switchQuality(): Promise<void>
+  /** Press pause, then switch `what` `delayMs` later, all inside one
+   *  `page.evaluate` (#498): `switchQuality()`'s `waitForSelector` puts a
+   *  Playwright round trip between its two clicks, which is longer than the
+   *  gaps this measures. Returns the in-page `Date.now()` of the press and of
+   *  both clicks, so a run records its real gaps rather than the asked-for one. */
+  pauseThenSwitch(
+    what: 'quality' | 'translation',
+    delayMs: number
+  ): Promise<{ pressAt: number; firstClickAt: number; secondClickAt: number }>
   /** Everything recorded since `from` (Date.now() ms), relative to `from`. */
   collect(from: number): Promise<{ ev: MediaEv[]; smp: Sample[]; wire: WireRec[]; toasts: Toast[] }>
   close(): Promise<void>
@@ -569,6 +578,34 @@ export async function launchInstance(
         ).click()
       )
     },
+    pauseThenSwitch: async (what, delayMs) =>
+      page.evaluate(
+        async ({ what, delayMs }) => {
+          const opener =
+            what === 'quality' ? 'button[title="Video quality"]' : 'button[title="Translation"]'
+          const option =
+            what === 'quality'
+              ? '.preset-menu .preset-option:not(.selected)'
+              : '.translation-menu .preset-option:not(.selected):not(.back-option)'
+          const q = (s: string): HTMLButtonElement | null => document.querySelector(s)
+          const pressAt = Date.now()
+          q('button.ctrl-btn.big')!.click()
+          if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs))
+          const firstClickAt = Date.now()
+          q(opener)!.click()
+          // The menu renders on Vue's next flush, a microtask after the click.
+          let opt = q(option)
+          for (let i = 0; !opt && i < 2000; i++) {
+            await new Promise((r) => setTimeout(r, 0))
+            opt = q(option)
+          }
+          if (!opt) throw new Error(`pauseThenSwitch: no ${what} option rendered`)
+          const secondClickAt = Date.now()
+          opt.click()
+          return { pressAt, firstClickAt, secondClickAt }
+        },
+        { what, delayMs }
+      ),
     collect: async (from) => {
       const d = await page.evaluate((from) => {
         const rig = (window as unknown as { __rig: Record<string, { at: number }[]> }).__rig

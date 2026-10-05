@@ -42,9 +42,23 @@
 //    the third case below is what it costs.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { watch } from 'vue'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom, Peer, IgnoreCounters } from '../helpers/syncplay-two-peer'
 import { DEFAULT_PLAYING_SET_BY } from '../helpers/syncplay-min-election-server'
+
+/** Every non-empty value the peer's toast takes, in order, from here on. */
+const toastLog = (p: Peer): string[] => {
+  const log: string[] = []
+  watch(
+    p.ui.syncplayToast,
+    (t) => {
+      if (t) log.push(t)
+    },
+    { flush: 'sync' }
+  )
+  return log
+}
 
 const ROOM_START = 100
 const DELAY_MS = 50
@@ -284,11 +298,23 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
       delayMs: 0
     })
     await room.advance(4)
+    const hostToasts = toastLog(host)
 
     host.userPause()
     await room.advance(0.05)
     joiner.userSeek(700)
+    // t=4100: the joiner's seek crosses our pause and is toasted, correctly.
+    await room.advance(0.05)
+    expect(host.ui.syncplayToast.value).toBe('joinuser seeked to 11:40')
+    // t=4150: our own pause's echo is delivered (#494) and seeks the element
+    // back from ~700 to ~104, with `setBy` still our username for the badge.
+    // It must not toast: "hostuser seeked to 1:43" named the user to
+    // themselves, called their pause a seek, and replaced the peer's toast.
+    await room.advance(0.05)
+    expect(host.ui.syncplayPausedBy.value).toBe('hostuser')
+    expect(host.ui.syncplayToast.value).toBe('joinuser seeked to 11:40')
     await room.advance(10)
+    expect(hostToasts.filter((t) => t.includes('hostuser'))).toEqual([])
 
     expect(room.server.roomState().paused).toBe(true)
     expect(room.server.roomState().position).toBeCloseTo(103.95, 1)
@@ -481,9 +507,13 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
     // position from the crossing is #502.
     const settle = async (press: (host: Peer) => Promise<void>): Promise<[number[], number[]]> => {
       const { host, joiner } = await seatSwitch(DELAY_MS)
+      const joinerToasts = toastLog(joiner)
       await press(host)
       joiner.userPause()
       await room.advance(10)
+      // The joiner's own pause echo seeks its element from ~0 back to ~304;
+      // that is the joiner's pause, not a seek, and never "joinuser seeked to".
+      expect(joinerToasts.filter((t) => t.includes('joinuser'))).toEqual([])
       expect(room.server.roomState().paused).toBe(true)
       expect(room.server.roomState().position).toBeCloseTo(303.95, 1)
       for (const p of [host, joiner]) {

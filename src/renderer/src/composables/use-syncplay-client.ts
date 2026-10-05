@@ -1876,7 +1876,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // `timeupdate` would have carried is the one just pushed.
     pushSyncplaySnapshot()
     const describesAMove = (!deferred && !firstApply) || state.doSeek
-    if (state.setBy && needsSeek && !holding && describesAMove) {
+    if (state.setBy && !namesUs(state.setBy) && needsSeek && !holding && describesAMove) {
       showSyncplayToast(`${state.setBy} seeked to ${deps.formatTime(state.position)}`)
     }
   }
@@ -2537,6 +2537,20 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       pendingPauseTimer = null
     }
   })
+
+  // "This `setBy` is our own username", for the seek toast in
+  // `applyRemoteStateToElement`, which must never name the user to themselves.
+  // Since #494 main delivers our own forced update when a peer's crossed it
+  // (`isCrossedEcho` in src/main/syncplay.ts), and unlike room voice it keeps
+  // `setBy` — the badge needs it ("Paused by you"). That frame seeks the element
+  // off the peer's target by construction, so the toast would read "<me> seeked
+  // to …" for what was often our pause, over the peer's correct toast.
+  // Case-insensitive, like main's `isForeignSetBy()`, which classified it ours.
+  // Declared down here so the insertion shifts no line anchor above it.
+  function namesUs(setBy: string): boolean {
+    const me = syncplayStatus.value.username
+    return !!me && setBy.toLowerCase() === me.toLowerCase()
+  }
 
   return {
     syncplayStatus,

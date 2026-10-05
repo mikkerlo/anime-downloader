@@ -1486,6 +1486,27 @@ describe('useSyncplayClient — applyRemoteState', () => {
     expect(client.syncplayToast.value).toBe('peer seeked to 2:05')
   })
 
+  // #494 delivers our own forced update when a peer's crossed it, `setBy` intact
+  // for the badge. It seeks the element, but naming the user to themselves —
+  // for what was often their pause — is wrong, and it replaced the peer's toast.
+  // Matched case-insensitively, as main's `isForeignSetBy()` classifies it.
+  it('does not toast a seek that names us, and keeps the peer’s toast standing', async () => {
+    const v = fakeVideo({ currentTime: 0, paused: true } as Partial<HTMLVideoElement>)
+    const { emitRemoteState, client } = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'HostUser'
+    })
+
+    emitRemoteState({ position: 700, paused: false, doSeek: true, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('peer seeked to 11:40')
+
+    v.paused = false
+    emitRemoteState({ position: 103, paused: true, doSeek: true, setBy: 'hostuser' })
+    expect(v.currentTime).toBe(103)
+    expect(client.syncplayPausedBy.value).toBe('hostuser')
+    expect(client.syncplayToast.value).toBe('peer seeked to 11:40')
+  })
+
   // (The "keeps the element paused while a peer is not ready" case that used to
   // sit here is gone: it could only ever pass through the `!needsSeek &&
   // !needsPlayPause` early return — position matched and the element was already

@@ -302,8 +302,9 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     // In the `nextTick`, so after Vue has patched `src`: the load algorithm
     // re-arms `autoplay` on the patch, so a disarm before it does nothing. And
     // bare — no operation registered — because on an already-paused element the
-    // pause fires no event to consume. The behaviour is pinned in
-    // `syncplay-two-peer-quality-switch.test.ts`.
+    // pause fires no event to consume. Skipped while the mount's first autostart
+    // is still pending outside a session (#509 review). The behaviour is pinned
+    // in `syncplay-two-peer-quality-switch.test.ts`.
     const body = SOURCE.slice(
       SOURCE.indexOf('function selectQuality('),
       SOURCE.indexOf('const TRANSLATION_TYPE_LABELS')
@@ -311,7 +312,9 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     const flat = body.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
     expect(flat).toContain(
       'nextTick(() => { const v = videoRef.value; if (!v) return; seekProgrammatically(v, savedTime); ' +
-        "if (!wasPlaying && v.paused) v.pause(); if (wasPlaying) playProgrammatically(v, 'restore'); });"
+        'const autostartPending = awaitingFirstAutostart && !syncplaySessionLive(); ' +
+        'if (!wasPlaying && v.paused && !autostartPending) { awaitingFirstAutostart = false; v.pause(); } ' +
+        "if (wasPlaying) playProgrammatically(v, 'restore'); });"
     )
   })
 

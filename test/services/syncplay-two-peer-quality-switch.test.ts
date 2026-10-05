@@ -17,6 +17,14 @@
 // The `'none'` cases below keep the pre-fix shape reproducible, so the harness's
 // `autoplay` model stays proven able to see the bug.
 //
+// **Except before the first autostart (#509 review).** On mount playback rests
+// on the bare `autoplay` alone, so for the whole initial load the element is
+// paused with nobody having paused it. A switch taken there must not disarm the
+// autostart the user is waiting for, so outside a session the disarm is skipped
+// while `PlayerView`'s `awaitingFirstAutostart` latch is set. The
+// `'after-rebind-unlatched'` cases keep the first cut of the fix, which had no
+// latch, reproducible.
+//
 // ── What is real and what is modelled ────────────────────────────────────────
 //
 // Real: both main `SyncplayClient`s, their routers, both mounted composables,
@@ -41,14 +49,36 @@ const HAVE_ENOUGH_DATA = 4
  *
  *  - `'none'`: no disarm, `PlayerView` before #498.
  *  - `'after-rebind'`: in the `nextTick`, after Vue has patched `src` and the
- *    load algorithm has re-armed the element — what `PlayerView` does.
+ *    load algorithm has re-armed the element, skipped while the first autostart
+ *    is pending outside a session — what `PlayerView` does.
+ *  - `'after-rebind-unlatched'`: the same place with no latch, the first cut of
+ *    the #498 fix. Only here to show what the latch changes.
  *  - `'before-rebind'`: ahead of the patch, which the load algorithm then
  *    undoes. Only here to prove the order is what holds.
  */
-type Disarm = 'none' | 'after-rebind' | 'before-rebind'
+type Disarm = 'none' | 'after-rebind' | 'after-rebind-unlatched' | 'before-rebind'
 
 /** What `PlayerView.selectQuality` does today; the scan below holds it there. */
 const PLAYER_VIEW_DISARM = 'after-rebind' as Disarm
+
+/** Elements whose latch the disarm has cleared (`awaitingFirstAutostart = false`
+ *  in the disarm's own branch). */
+const disarmedLatch = new WeakSet<HarnessVideo>()
+
+/**
+ * `PlayerView`'s `awaitingFirstAutostart`, read off the element: a
+ * `HarnessVideo` is constructed where `PlayerView` mounts, so the latch starts
+ * set, and `onPlay` / `onPause` clear it on the first `play` / `pause` the
+ * element delivers. The disarm clears it too.
+ */
+const awaitingFirstAutostart = (el: HarnessVideo): boolean =>
+  !disarmedLatch.has(el) && !el.delivered.some((e) => e === 'play' || e === 'pause')
+
+/** `PlayerView`'s `syncplaySessionLive()`; `ui` is `null` outside any room. */
+const syncplaySessionLive = (ui: Pick<Peer['ui'], 'syncplayStatus'> | null): boolean => {
+  const state = ui?.syncplayStatus.value.state ?? 'idle'
+  return state !== 'idle' && state !== 'disconnected'
+}
 
 /**
  * `PlayerView.selectQuality`, statement for statement. `ui` is `null` for a
@@ -71,12 +101,17 @@ function selectQuality(
   // ── nextTick ──
   if (ui) ui.beginProgrammaticSeek(savedTime)
   el.currentTime = savedTime
-  if (disarm === 'after-rebind' && !wasPlaying && el.paused) el.pause()
+  if (disarm === 'after-rebind') {
+    const autostartPending = awaitingFirstAutostart(el) && !syncplaySessionLive(ui)
+    if (!wasPlaying && el.paused && !autostartPending) {
+      disarmedLatch.add(el)
+      el.pause()
+    }
+  }
+  if (disarm === 'after-rebind-unlatched' && !wasPlaying && el.paused) el.pause()
   if (wasPlaying) {
     // `playProgrammatically(v, 'restore')`, #347 veto included.
-    const state = ui?.syncplayStatus.value.state ?? 'idle'
-    const sessionLive = state !== 'idle' && state !== 'disconnected'
-    if (sessionLive && !ui!.shouldElementPlay()) return
+    if (syncplaySessionLive(ui) && !ui!.shouldElementPlay()) return
     ui?.beginProgrammaticPlayback('play', 'restore')
     void el.play()
   }
@@ -220,6 +255,46 @@ describe('a quality switch right after a pause (#498)', () => {
     expect(discreteSends(switcher)).toBe(0)
   })
 
+  it('disarms a not-yet-started element in a live session, and the latch stays cleared after leaving', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: true })
+    // Mounted into a paused room mid-load: the element has not started and has
+    // delivered no `play` or `pause`, so the latch is still set.
+    const switcher = await room.seat({
+      username: 'switcher',
+      position: ROOM_START,
+      paused: true,
+      readyState: 1,
+      delayMs: DELAY_MS,
+      autoplay: true
+    })
+    await room.seat({ username: 'watcher', position: ROOM_START, paused: true, delayMs: DELAY_MS })
+    await room.advance(4)
+    expect(switcher.el.paused).toBe(true)
+    expect(awaitingFirstAutostart(switcher.el)).toBe(true)
+    const before = Date.now()
+
+    // In a session the disarm stands whatever the latch says: whether this
+    // element plays is `shouldElementPlay()`'s call, and the room is paused.
+    selectQuality(switcher.el, switcher.ui, 'harness://switcher/1080p')
+    fastLoad(switcher)
+    await room.advance(10)
+    expect(switcher.el.paused).toBe(true)
+    expect(awaitingFirstAutostart(switcher.el)).toBe(false)
+    const sent = room.server.wire.filter((f) => f.username === 'switcher' && f.at >= before)
+    expect(sent.filter((f) => f.paused === false)).toHaveLength(0)
+    expect(room.server.roomState().paused).toBe(true)
+
+    // The disarm cleared the latch, so a second switch after leaving the room
+    // still disarms: this element was held, not waiting to autostart.
+    switcher.client.disconnect()
+    await room.advance(2)
+    expect(syncplaySessionLive(switcher.ui)).toBe(false)
+    selectQuality(switcher.el, switcher.ui, 'harness://switcher/720p')
+    switcher.el.readyState = HAVE_ENOUGH_DATA
+    expect(switcher.el.paused).toBe(true)
+    expect(switcher.el.tick()).not.toContain('play')
+  })
+
   describe('solo, outside any room', () => {
     const soloSwitch = (disarm: Disarm = PLAYER_VIEW_DISARM): HarnessVideo => {
       const el = new HarnessVideo({
@@ -265,6 +340,39 @@ describe('a quality switch right after a pause (#498)', () => {
       expect(el.paused).toBe(false)
       expect(el.tick()).toContain('play')
     })
+
+    // The #509 review's case: an episode opened and switched 720p → 1080p
+    // before the stream has started for the first time. The element is paused
+    // only because the initial load has not reached HAVE_ENOUGH_DATA yet.
+    const preStartSwitch = (
+      switches: number,
+      disarm: Disarm = PLAYER_VIEW_DISARM
+    ): HarnessVideo => {
+      const el = new HarnessVideo({ position: 0, paused: true, readyState: 1, autoplay: true })
+      expect(awaitingFirstAutostart(el)).toBe(true)
+      for (let i = 0; i < switches; i++) selectQuality(el, null, `harness://solo/${i}`, disarm)
+      el.readyState = HAVE_ENOUGH_DATA
+      return el
+    }
+
+    it('still autostarts after a switch taken before the first autostart', () => {
+      const el = preStartSwitch(1)
+      expect(el.paused).toBe(false)
+      expect(el.tick()).toEqual(['play', 'seeked'])
+      expect(awaitingFirstAutostart(el)).toBe(false)
+    })
+
+    it('still autostarts after two quick switches before the first autostart', () => {
+      const el = preStartSwitch(2)
+      expect(el.paused).toBe(false)
+      expect(el.tick()).toContain('play')
+    })
+
+    it('stays paused before the first autostart without the latch (the first cut of the fix)', () => {
+      const el = preStartSwitch(1, 'after-rebind-unlatched')
+      expect(el.paused).toBe(true)
+      expect(el.tick()).not.toContain('play')
+    })
   })
 })
 
@@ -295,9 +403,37 @@ describe('PlayerView anchors for the #498 selectQuality model', () => {
 
   it('disarms in the nextTick only where the model says it does', () => {
     const tick = flat.slice(flat.indexOf('nextTick('))
-    const disarm = 'if (!wasPlaying && v.paused) v.pause();'
+    const disarm =
+      'const autostartPending = awaitingFirstAutostart && !syncplaySessionLive(); ' +
+      'if (!wasPlaying && v.paused && !autostartPending) { awaitingFirstAutostart = false; v.pause(); }'
     expect(tick.includes(disarm)).toBe(PLAYER_VIEW_DISARM === 'after-rebind')
     // Nothing pauses ahead of the rebind, where the load would re-arm it.
     expect(flat.slice(0, flat.indexOf('nextTick('))).not.toMatch(/\.pause\(\)/)
+  })
+
+  // The latch the model reads off `HarnessVideo.delivered`: set at mount, and
+  // cleared only by the first `play` / `pause` and by the disarm above.
+  const strip = (s: string): string => s.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
+  const fn = (name: string): string => {
+    const start = SRC.indexOf(`function ${name}(`)
+    return strip(SRC.slice(start, SRC.indexOf('\n}\n', start) + 2))
+  }
+
+  it('sets awaitingFirstAutostart once, at mount, and clears it in onPlay, onPause and the disarm', () => {
+    expect(SRC).toContain('let awaitingFirstAutostart = true;')
+    expect(SRC.match(/awaitingFirstAutostart = true/g)).toHaveLength(1)
+    expect(SRC.match(/awaitingFirstAutostart = false;/g)).toHaveLength(3)
+    expect(fn('onPlay')).toMatch(/^function onPlay\(\): void \{ awaitingFirstAutostart = false;/)
+    expect(fn('onPause')).toMatch(/^function onPause\(\): void \{ awaitingFirstAutostart = false;/)
+  })
+
+  it('reads the same session term as the #347 restore veto', () => {
+    expect(fn('syncplaySessionLive')).toBe(
+      'function syncplaySessionLive(): boolean { const state = syncplay.syncplayStatus.value.state; ' +
+        "return state !== 'idle' && state !== 'disconnected'; }"
+    )
+    expect(fn('playProgrammatically')).toContain(
+      "if (kind === 'restore' && syncplaySessionLive() && !syncplay.shouldElementPlay()) return;"
+    )
   })
 })

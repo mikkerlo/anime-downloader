@@ -224,6 +224,10 @@ export class HarnessVideo {
   /** Every source this element has been bound to, in order, seeded with the
    *  constructor's. `loads.length - 1` is the number of reloads. */
   readonly loads: string[] = []
+  /** Every media event `tick()` has handed out, in order. What a model of a
+   *  `PlayerView` handler reads to know which events reached it (#498's
+   *  first-autostart latch). */
+  readonly delivered: QueuedMediaEvent[] = []
 
   private readyStateFlag: number
   private pausedFlag: boolean
@@ -496,7 +500,9 @@ export class HarnessVideo {
       this.pending = null
       this.queued.push('seeked')
     }
-    return this.queued.splice(0)
+    const events = this.queued.splice(0)
+    this.delivered.push(...events)
+    return events
   }
 }
 
@@ -633,7 +639,7 @@ export interface Peer {
    * pass one to pin an exact `v.src` an assertion reads back.
    *
    * **Await it.** The index write is flushed before the rebind, because that is
-   * the order the app runs them in: `PlayerView.vue:2423` writes
+   * the order the app runs them in: `PlayerView.vue:2446` writes
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
@@ -969,7 +975,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
           ui!.onVideoSeeked()
         } else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
-        // `src/renderer/src/components/views/PlayerView.vue:3111` is the
+        // `src/renderer/src/components/views/PlayerView.vue:3134` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
         else ui!.onVideoLoadedMetadata()
       }

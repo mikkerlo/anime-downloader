@@ -1137,4 +1137,9 @@ flag, `play()` and `pause()` clear it (`pause()` even on an already-paused
 element, which fires nothing, the #348 disarm), and a `readyState` write
 reaching HAVE_ENOUGH_DATA with it armed on a paused element starts playback
 and queues `play` with no `play()` call. Off by default, because every older
-fixture assumes an element that never starts itself.
+fixture assumes an element that never starts itself. `HarnessVideo.delivered`
+logs every event `tick()` hands out, which is what the file's model of
+`PlayerView`'s `awaitingFirstAutostart` latch reads: set at construction (the
+mount), cleared by the first delivered `play` or `pause`. The pre-start cases
+(a switch before the first autostart, solo and in a live room) pin that the
+disarm leaves a solo autostart alone and still disarms inside a session.

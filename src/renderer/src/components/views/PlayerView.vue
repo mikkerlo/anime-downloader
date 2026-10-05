@@ -1578,11 +1578,15 @@ function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): 
   // way `use-syncplay-client.ts`'s `clearPendingUserPause()` note describes:
   // across an episode switch taken during a divergence the projection still says
   // `outOfFile` and the ready gate declines the resume.
-  const state = syncplay.syncplayStatus.value.state;
-  const sessionLive = state !== 'idle' && state !== 'disconnected';
-  if (kind === 'restore' && sessionLive && !syncplay.shouldElementPlay()) return;
+  if (kind === 'restore' && syncplaySessionLive() && !syncplay.shouldElementPlay()) return;
   const op = syncplay.beginProgrammaticPlayback('play', kind);
   void Promise.resolve(v.play()).catch(() => op.retract());
+}
+
+// The session term the veto above reads, and `selectQuality`'s #498 disarm with it.
+function syncplaySessionLive(): boolean {
+  const state = syncplay.syncplayStatus.value.state;
+  return state !== 'idle' && state !== 'disconnected';
 }
 
 // The seek twin of the helper above (#306 Phase B), and the single place every
@@ -1693,8 +1697,18 @@ function onMouseMove(): void {
   showControlsBriefly();
 }
 
+// True while the mount's source is still waiting on its first autostart: the
+// initial load relies on the bare `autoplay` alone (`onMounted` never calls
+// `play()`), so until the element's first `play` or `pause` event a paused
+// element is not one the user paused. `selectQuality` reads it to keep its
+// #498 disarm off an autostart the user is still waiting for. Cleared on that
+// first event and on the disarm itself; never set again, because every later
+// load either plays programmatically or follows a play/pause the user saw.
+let awaitingFirstAutostart = true;
+
 // Video event handlers
 function onPlay(): void {
+  awaitingFirstAutostart = false;
   playing.value = true;
   showControlsBriefly();
   lastTimeUpdateAt = Date.now();
@@ -1702,6 +1716,7 @@ function onPlay(): void {
 }
 
 function onPause(): void {
+  awaitingFirstAutostart = false;
   playing.value = false;
   showControls.value = true;
   if (controlsTimer) clearTimeout(controlsTimer);
@@ -1943,7 +1958,15 @@ function selectQuality(stream: { height: number; url: string }): void {
     // `onLocalPlay` announces a play nobody pressed (#498). A bare pause on an
     // already-paused element that registers nothing, under the #348 contract
     // written above use-syncplay-client.ts:1714 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
-    if (!wasPlaying && v.paused) v.pause();
+    // Except while the mount's first autostart is still pending outside a
+    // session: that element is paused because it has not started yet, not
+    // because anyone paused it, and the re-armed `autoplay` is what starts it.
+    // In a session `shouldElementPlay()` decides, so the disarm stands there.
+    const autostartPending = awaitingFirstAutostart && !syncplaySessionLive();
+    if (!wasPlaying && v.paused && !autostartPending) {
+      awaitingFirstAutostart = false;
+      v.pause();
+    }
     if (wasPlaying) playProgrammatically(v, 'restore');
   });
 }

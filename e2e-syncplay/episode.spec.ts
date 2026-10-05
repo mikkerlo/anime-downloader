@@ -39,7 +39,13 @@
 //    later): a seek past 5 s whose target is neither 0 nor the old position.
 //    Seen in 1 of those 9 runs, so it is recorded per run (`foreignSeek`) but
 //    not asserted: at E5's 3 runs a night `≥ 1` would itself be red on most
-//    nights. #497's fix asserts it `== 0`.
+//    nights. #497's fix asserts it `== 0`. Its saved position is wherever the
+//    previous run left the episode it lands on (runs alternate next/prev), so
+//    E5 positions even runs in 300–420 s and odd runs in 480–600 s
+//    (`e5Position`). Consecutive positions are ≥ 60 s apart and a #497 seek
+//    can never land within the ±15 s of the old position that `e5Split`
+//    counts as #486 (#499). A timing rule (a snap-back to 0 means #497) would
+//    not do: #486's stale seek can snap back too.
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -57,7 +63,7 @@ import {
   type Rig,
   type Instance
 } from './helpers/duo'
-import { RowScorer, staleOutcome } from './helpers/score'
+import { RowScorer, staleOutcome, e5Position, e5Split } from './helpers/score'
 
 let rig: Rig
 test.beforeAll(async () => {
@@ -275,7 +281,8 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
     for (let i = 0; i < Math.min(N, 3); i++) {
       const forward = i % 2 === 0
       const setupOk =
-        (await bothPlaying(A, B, 20_000)) && (await positionBoth(A, B, 300 + Math.random() * 300))
+        (await bothPlaying(A, B, 20_000)) &&
+        (await positionBoth(A, B, e5Position(i, Math.random())))
       await sleep(2000)
       await A.togglePlayButton()
       const paused = await waitFor(
@@ -294,23 +301,8 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
       const [a, b] = await Promise.all([A.state(), B.state()])
       const [da, db] = await Promise.all([A.collect(r.pressAt), B.collect(r.pressAt)])
       const resumed = !a.paused && !b.paused
-      const split = (
-        d: { ev: { at: number; t: string; ct: number; src: string }[] },
-        before: { ct: number; src: string },
-        outcome: { stale: boolean }
-      ): { old: boolean; foreign: boolean } => {
-        const targets = d.ev
-          .filter((e) => e.t === 'seeking' && e.at >= 0 && e.src !== before.src.slice(-40))
-          .map((e) => e.ct)
-          .filter((ct) => ct > 5)
-        const foreign = targets.some((ct) => Math.abs(ct - before.ct) > 15)
-        const old = targets.some((ct) => Math.abs(ct - before.ct) <= 15)
-        // `staleOutcome` also reads positions; a stale reading the foreign seek
-        // explains is #497's, not #486's.
-        return { old: old || (outcome.stale && !foreign), foreign }
-      }
-      const sa = split(da, pa, r.a)
-      const sb = split(db, pb, r.b)
+      const sa = e5Split(da, pa, r.a)
+      const sb = e5Split(db, pb, r.b)
       const stale = sa.old || sb.old
       const foreignSeek = sa.foreign || sb.foreign
       const wrongEp = r.epA !== want || r.epB !== want

@@ -69,6 +69,36 @@ export function staleOutcome(
   }
 }
 
+/** E5's position before run `i`'s pause, from `rand` in [0, 1). Runs alternate
+ *  next/prev, so the episode run `i` lands on was last left at run `i - 1`, and
+ *  #497's saved-progress seek targets that run's position. Even runs draw from
+ *  300–420 s and odd runs from 480–600 s: consecutive positions are always
+ *  ≥ 60 s apart, so a #497 seek can never fall inside `e5Split`'s ±15 s window
+ *  around the old position and be counted as #486 (#499). */
+export function e5Position(i: number, rand: number): number {
+  return (i % 2 === 0 ? 300 : 480) + rand * 120
+}
+
+/** Splits E5's seeks on the new element past 5 s by target: within ±15 s of
+ *  the old position is #486's stale seek (`old`), whether or not it later snaps
+ *  back; anything else is #497's saved-progress seek (`foreign`). Sound only
+ *  because `e5Position` keeps #497's target out of the window. */
+export function e5Split(
+  d: { ev: { at: number; t: string; ct: number; src: string }[] },
+  before: { ct: number; src: string },
+  outcome: { stale: boolean }
+): { old: boolean; foreign: boolean } {
+  const targets = d.ev
+    .filter((e) => e.t === 'seeking' && e.at >= 0 && e.src !== before.src.slice(-40))
+    .map((e) => e.ct)
+    .filter((ct) => ct > 5)
+  const foreign = targets.some((ct) => Math.abs(ct - before.ct) > 15)
+  const old = targets.some((ct) => Math.abs(ct - before.ct) <= 15)
+  // `staleOutcome` also reads positions; a stale reading the foreign seek
+  // explains is #497's, not #486's.
+  return { old: old || (outcome.stale && !foreign), foreign }
+}
+
 export interface RunRecord {
   row: string
   i: number

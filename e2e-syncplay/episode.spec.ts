@@ -10,10 +10,14 @@
 // #493 fixed #486, so E1 / E6, E2's stale half and E5 are flipped; #492 fixed
 // #487, so E2's skip half is flipped too and the whole row is `bad == 0`. A
 // skip counts against #487 only when B pressed inside #487's window, before its
-// followed N+1 loaded metadata: on the first local run after the rebase, 3 of
-// 6 runs (gaps 900–1500 ms) reached N+2 from a press 190–490 ms after B's N+1
-// had loaded, the deliberate second Next #492 lets through, and the 600 ms run
-// was swallowed. Those are recorded (`secondNext`, `swallowed`). The exact
+// followed N+1's first frame (`loadeddata`) plus `FOLLOW_GRACE_MS`. Until #500
+// the window, like #492's token, closed at `loadedmetadata`: on the first local
+// run after the rebase, 3 of 6 runs (gaps 900–1500 ms) reached N+2 from a press
+// 190–490 ms after B's N+1 had loaded metadata, scored as a deliberate second
+// Next. #500 moved both the token's clear and this carve-out to the first frame
+// plus grace, so those presses are now `skipped` unless swallowed; a press past
+// it is still recorded (`secondNext`, `swallowed`), and `past-metadata` counts
+// the in-window presses #500 added. The exact
 // pins live in Tier 1 (`test/services/syncplay-two-peer-next-episode.test.ts`,
 // `test/services/syncplay-two-peer-double-next.test.ts`). Both instances must
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
@@ -46,7 +50,13 @@
 //    later): a seek past 5 s whose target is neither 0 nor the old position.
 //    Seen in 1 of those 9 runs, so it is recorded per run (`foreignSeek`) but
 //    not asserted: at E5's 3 runs a night `≥ 1` would itself be red on most
-//    nights. #497's fix asserts it `== 0`.
+//    nights. #497's fix asserts it `== 0`. Its saved position is wherever the
+//    previous run left the episode it lands on (runs alternate next/prev), so
+//    E5 positions even runs in 300–420 s and odd runs in 480–600 s
+//    (`e5Position`). Consecutive positions are ≥ 60 s apart and a #497 seek
+//    can never land within the ±15 s of the old position that `e5Split`
+//    counts as #486 (#499). A timing rule (a snap-back to 0 means #497) would
+//    not do: #486's stale seek can snap back too.
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -64,7 +74,8 @@ import {
   type Rig,
   type Instance
 } from './helpers/duo'
-import { RowScorer, staleOutcome } from './helpers/score'
+import { RowScorer, staleOutcome, e5Position, e5Split } from './helpers/score'
+import { FOLLOW_GRACE_MS } from '../src/renderer/src/utils'
 
 let rig: Rig
 test.beforeAll(async () => {
@@ -244,18 +255,24 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
       })
       const traceB = await B.collect(r.pressAt - 3000)
       // #487's window is B's press landing after its follow released the lock
-      // but before the followed episode's `loadedmetadata`, while B's user is
-      // still looking at N. A press after that metadata is the user's own second
-      // Next, and N+2 is what it asks for: #492 swallows only inside the window.
+      // but before the followed episode's first frame (`loadeddata`) plus
+      // `FOLLOW_GRACE_MS`, while B's user is still looking at N. A press after
+      // that is the user's own second Next, and N+2 is what it asks for: the
+      // token swallows only inside the window. Until #500 the window closed at
+      // `loadedmetadata`, and presses 190–590 ms past it reached N+2 unscored.
       const bMetaAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadedmetadata')?.at
+      const bDataAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadeddata')?.at
+      const bClearAt = bDataAt === undefined ? undefined : bDataAt + FOLLOW_GRACE_MS
       const bPress = bPressAt - (r.pressAt - 3000)
       // The follow's lock release, proxied by B's first `loadstart` after A's
       // press: the release is queued right behind the source write.
       const bLoadAt = traceB.ev.find((e) => e.at >= 3000 && e.t === 'loadstart')?.at
       const inWindow =
-        bLoadAt !== undefined && bMetaAt !== undefined && bPress >= bLoadAt && bPress < bMetaAt
+        bLoadAt !== undefined && bClearAt !== undefined && bPress >= bLoadAt && bPress < bClearAt
+      // The band #500 added: past metadata, still inside first frame + grace.
+      const pastMeta = inWindow && bMetaAt !== undefined && bPress >= bMetaAt
       const n2 = r.epA === '3' || r.epB === '3'
-      const skipped = n2 && (bMetaAt === undefined || bPress < bMetaAt)
+      const skipped = n2 && (bClearAt === undefined || bPress < bClearAt)
       const diverged = r.epA !== r.epB
       row.add(
         {
@@ -267,10 +284,12 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
           swallowed: traceB.toasts.some((t) => t.txt.startsWith('Already switching')),
           diverged,
           inWindow,
+          pastMeta,
           gap,
           bPress,
           bLoadAt,
           bMetaAt,
+          bDataAt,
           epA: r.epA,
           epB: r.epB
         },
@@ -283,14 +302,15 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
     // nothing: print the count beside the score, before any assertion, so a
     // vacuous pass is visible and a red row still logs it.
     process.stdout.write(
-      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} of scoreable=${s.scoreable}\n`
+      `[syncplay-e2e] E2: in-window=${scoreable.filter((r) => r.inWindow).length} (past-metadata=${scoreable.filter((r) => r.pastMeta).length}) of scoreable=${s.scoreable}\n`
     )
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
     // The row guards two bugs, each asserted on its own so a regression names
-    // its half. #493 flipped #486's, #492 flipped #487's.
+    // its half. #493 flipped #486's, #492 flipped #487's, and #500 widened
+    // #487's window from metadata to first frame + grace.
     expect(scoreable.filter((r) => r.stale).length, '#486 stale start after #493').toBe(0)
-    expect(scoreable.filter((r) => r.skipped).length, '#487 skip to N+2 after #492').toBe(0)
+    expect(scoreable.filter((r) => r.skipped).length, '#487 skip to N+2 after #492/#500').toBe(0)
   } finally {
     await closeDuo(A, B)
   }
@@ -304,7 +324,8 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
     for (let i = 0; i < Math.min(N, 3); i++) {
       const forward = i % 2 === 0
       const setupOk =
-        (await bothPlaying(A, B, 20_000)) && (await positionBoth(A, B, 300 + Math.random() * 300))
+        (await bothPlaying(A, B, 20_000)) &&
+        (await positionBoth(A, B, e5Position(i, Math.random())))
       await sleep(2000)
       await A.togglePlayButton()
       const paused = await waitFor(
@@ -325,23 +346,8 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
       // Either instance playing is a resume: the room is one room.
       const resumed = !a.paused || !b.paused
       const atZero = Math.abs(a.ct) < 2 && Math.abs(b.ct) < 2
-      const split = (
-        d: { ev: { at: number; t: string; ct: number; src: string }[] },
-        before: { ct: number; src: string },
-        outcome: { stale: boolean }
-      ): { old: boolean; foreign: boolean } => {
-        const targets = d.ev
-          .filter((e) => e.t === 'seeking' && e.at >= 0 && e.src !== before.src.slice(-40))
-          .map((e) => e.ct)
-          .filter((ct) => ct > 5)
-        const foreign = targets.some((ct) => Math.abs(ct - before.ct) > 15)
-        const old = targets.some((ct) => Math.abs(ct - before.ct) <= 15)
-        // `staleOutcome` also reads positions; a stale reading the foreign seek
-        // explains is #497's, not #486's.
-        return { old: old || (outcome.stale && !foreign), foreign }
-      }
-      const sa = split(da, pa, r.a)
-      const sb = split(db, pb, r.b)
+      const sa = e5Split(da, pa, r.a)
+      const sb = e5Split(db, pb, r.b)
       const stale = sa.old || sb.old
       const foreignSeek = sa.foreign || sb.foreign
       const wrongEp = r.epA !== want || r.epB !== want

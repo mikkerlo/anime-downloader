@@ -6262,6 +6262,143 @@ describe('useSyncplayClient — a restore never clobbers a live paused intent (#
   })
 })
 
+// #496: an episode start establishes the room's paused-ness instead of assuming
+// "playing". Keyed on main's `roomPaused`, never on the mirror, and only while
+// the gate itself is live (`state === 'ready'`).
+describe('useSyncplayClient — an episode start in a paused room lands paused (#496)', () => {
+  const mountReady = async (
+    status: SyncplayStatus
+  ): Promise<{
+    client: Client
+    v: FakeVideo
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+    sendLocalState: ReturnType<typeof vi.fn>
+    sendSnapshot: ReturnType<typeof vi.fn>
+  }> => {
+    vi.useFakeTimers()
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({
+      currentTime: 0,
+      paused: true,
+      readyState: 4
+    } as Partial<HTMLVideoElement>)
+    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), status)
+    // A buffered element: readiness is what lets the gate's resume arm take it.
+    client.onLocalCanPlay()
+    return { client, v, emitRemoteState, sendLocalState, sendSnapshot }
+  }
+
+  const consumeEpisodeStart = (client: Client, v: FakeVideo): void => {
+    client.beginProgrammaticPlayback('play', 'episode-start')
+    ;(v as { paused: boolean }).paused = false
+    client.onLocalPlay()
+  }
+
+  it('pauses the element as an echo and asserts paused when the room is paused', async () => {
+    const { client, v, sendLocalState, sendSnapshot } = await mountReady({
+      state: 'ready',
+      username: 'me',
+      roomPaused: true
+    })
+
+    consumeEpisodeStart(client, v)
+
+    // The gate's pause arm, right after the consume: the mirror says paused.
+    expect(v.pause).toHaveBeenCalledTimes(1)
+    expect(client.shouldElementPlay()).toBe(false)
+    // That pause is registered, so its event is not the user's.
+    client.onLocalPause()
+    expect(sendLocalState).not.toHaveBeenCalled()
+    // And the heartbeat asserts the room's pause from intent, not a resume.
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: true })
+    expect(sendSnapshot).not.toHaveBeenCalledWith(expect.objectContaining({ paused: false }))
+  })
+
+  it('still resumes the binge when the room is playing', async () => {
+    const { client, v, sendSnapshot } = await mountReady({
+      state: 'ready',
+      username: 'me',
+      roomPaused: false
+    })
+
+    consumeEpisodeStart(client, v)
+
+    expect(v.pause).not.toHaveBeenCalled()
+    expect(client.shouldElementPlay()).toBe(true)
+    sendSnapshot.mockClear()
+    vi.advanceTimersByTime(1000)
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 0, paused: false })
+  })
+
+  it('keys on roomPaused, not the mirror: a switch inside the pending-pause hold resumes', async () => {
+    // The room is playing and the user has just paused: the mirror is already
+    // `false` from the user's own prediction, but the room has not said paused.
+    // The documented hold clause lets this switch resume.
+    const { client, v, emitRemoteState } = await mountReady({
+      state: 'ready',
+      username: 'me',
+      roomPaused: false
+    })
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    // The apply's own play, and the gate's behind it: deliver every echo so the
+    // episode start below is the operation its `play` consumes.
+    ;(v as { paused: boolean }).paused = false
+    for (let i = 0; i < vi.mocked(v.play).mock.calls.length; i += 1) client.onLocalPlay()
+    ;(v as { paused: boolean }).paused = true
+    client.onLocalPause()
+    expect(client.shouldElementPlay()).toBe(false)
+    vi.mocked(v.pause).mockClear()
+
+    consumeEpisodeStart(client, v)
+
+    expect(v.pause).not.toHaveBeenCalled()
+    expect(client.shouldElementPlay()).toBe(true)
+  })
+
+  it('writes the mirror too, when roomPaused lands ahead of the paused frame', async () => {
+    // Main emits the status projection before it forwards the inbound state, so
+    // in Electron there is a window where `roomPaused` is already true and the
+    // mirror still says playing. The gate reads the mirror, not intent, so a
+    // consume there that wrote intent alone would leave the resume arm open.
+    const { client, v, emitRemoteState } = await mountReady({
+      state: 'ready',
+      username: 'me',
+      roomPaused: false
+    })
+    emitRemoteState({ position: 100, paused: false, doSeek: false, setBy: 'peer' })
+    ;(v as { paused: boolean }).paused = false
+    for (let i = 0; i < vi.mocked(v.play).mock.calls.length; i += 1) client.onLocalPlay()
+    expect(client.shouldElementPlay()).toBe(true)
+    client.syncplayStatus.value = { state: 'ready', username: 'me', roomPaused: true }
+    ;(v as { paused: boolean }).paused = true
+    vi.mocked(v.pause).mockClear()
+
+    consumeEpisodeStart(client, v)
+
+    expect(client.shouldElementPlay()).toBe(false)
+    expect(v.pause).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes nothing paused while the gate is not live (reconnecting)', async () => {
+    // "Live" is the gate's own `state === 'ready'`. Outside it the gate returns
+    // early, so paused intent written here would never be enacted and the
+    // element would play against it.
+    const { client, v } = await mountReady({
+      state: 'connecting',
+      username: 'me',
+      roomPaused: true
+    })
+
+    consumeEpisodeStart(client, v)
+
+    expect(client.shouldElementPlay()).toBe(true)
+  })
+})
+
 // The renderer half of #486. `goToEpisode` marks who started the move right
 // before its index commit; the episode-change watcher carries the mark on its
 // one file push and nowhere else, and holds snapshot pushes from the outgoing

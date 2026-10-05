@@ -205,17 +205,17 @@ describe('SyncplayClient — the next episode starts near 0 after #493 (#486)', 
     ])
   }, 60_000)
 
-  // E5's paused-state half is not decided here: `docs/syncplay.md` already says an
-  // episode switch ends the pending-pause hold and "a new episode deliberately
-  // auto-resumes the binge through the gate", and `e2e-syncplay/episode.spec.ts`
-  // pins that on the real `PlayerView`. The `p` ends below are the paused room
-  // this harness never resumes (it has no `PlayerView` gate), not a reading of
-  // that rule; what this case pins is the position.
+  // E5's paused-state half too: a paused room stays paused at 0 (#493's spec). Until
+  // #496 B's `episode-start` consume wrote "playing" and B's new element walked to ~1 s
+  // before a paused room frame stopped it (`0p/1p` in eight phases). The consume now
+  // adopts main's `roomPaused`, so both ends read `0p` in every phase. The ordering in
+  // which that walk reached the room is pinned in `syncplay-two-peer-episode-change`'s
+  // #496 block; this case pins the position, and that nothing walks.
   it('starts both new elements at 0 in a paused room, the 900 ms residual walked back (E5 position half)', async () => {
     const g = await grid('follow', true)
     expect(g.staleA).toBe(1)
     expect(g.staleB).toBe(1)
     expect(g.stuck).toBe(0)
-    expect(g.ends).toEqual([...Array(8).fill('0p/1p'), '0p/0p', '0p/0p'])
+    expect(g.ends).toEqual(Array(10).fill('0p/0p'))
   }, 60_000)
 })

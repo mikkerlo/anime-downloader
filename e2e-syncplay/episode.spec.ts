@@ -3,7 +3,7 @@
 //   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
 //   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
-//   E5  Next pressed while the room is paused                        #486 (fixed), #496 ✗, #497 (recorded)
+//   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (recorded)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -23,21 +23,28 @@
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
 // every scoreable run.
 //
-// E5 is pinned against the documented rule rather than decided here:
-// `docs/syncplay.md` says an episode switch ends the pending-pause hold and "a
-// new episode deliberately auto-resumes the binge through the gate". So after
-// next in a paused room both instances end playing, on the same episode, near
-// 0. Before #493, #486 broke that rule: the paused room frame carrying the old
-// position was parked on the new element and applied at `loadedmetadata`,
-// which seeked it back *and paused it*, and the room never resumed. #493 fixed
-// the position, so E5's #486 half is flipped: `bad == 0`, where bad is the
-// wrong episode or a seek on the new element back to the old position (the
-// room's, in a paused room). Two findings from the rebase are kept out of it:
+// E5's spec is #493's: a paused room stays paused at 0 across a local Next or
+// Prev (`test/services/syncplay-file-change-seek.test.ts`,
+// `test/services/syncplay-two-peer-episode-change.test.ts`). Before #493, #486
+// put the new element at the old position: the paused room frame carrying it
+// was parked on the new element and applied at `loadedmetadata`. #493 fixed
+// the position, so E5's #486 half is `bad == 0`, where bad is the wrong
+// episode or a seek on the new element back to the old position (the room's,
+// in a paused room). Two findings from the rebase are kept out of it:
 //
-//  - #496 ✗, the resume half. Across three local runs after the rebase, 7 of 9
-//    scoreable runs ended with both instances paused on the new episode (6 at
-//    ~0, one after the #497 seek below). Asserted as `not resumed ≥ 1` until
-//    #496's fix flips it to "every run resumed".
+//  - #496, the paused half, fixed. Across three local runs after the rebase, 2
+//    of 9 scoreable runs resumed on their own: the `episode-start` consume
+//    wrote "playing", and when no paused frame landed between `loadedmetadata`
+//    and the next snapshot the room started playing. An earlier reading of
+//    `docs/syncplay.md` scored those 2 as the correct ones; it was a misreading
+//    of the hold paragraph, which only resumes a room that is still playing.
+//    The consume now adopts main's `roomPaused`, so every scoreable run must
+//    end with both instances paused at ~0 (`resumed == 0`). Each run records
+//    the presser's file-change seek `paused=` and each instance's first
+//    outbound `paused` after its new element's metadata, and a resumed run
+//    keeps its trace. At 3 runs a night a 10–20 % regression usually goes
+//    green here; Tier 1 (`syncplay-two-peer-episode-change.test.ts`, #496
+//    block) is the deterministic guard.
 //  - #497, a follower seeking its new element to its *saved watch progress*
 //    at `loadedmetadata` (591 s against a room at ~324 s, back to 0 ~300 ms
 //    later): a seek past 5 s whose target is neither 0 nor the old position.
@@ -123,6 +130,28 @@ async function resetTo(A: Instance, B: Instance, ep: string): Promise<boolean> {
     await sleep(4000)
   }
   return false
+}
+
+type Collected = Awaited<ReturnType<Instance['collect']>>
+
+/** #496: the `paused=` the presser's main sent its file-change seek with. */
+function fileChangeSeekPaused(presser: Instance, from: number): boolean | null {
+  const line = presser.mainLog.find((l) => l.at >= from && /file-change seek/.test(l.line))
+  // Lazy, not `\s*`: main's log colours the value, so an ANSI escape sits
+  // between `paused=` and `true`.
+  const m = line?.line.match(/paused=.*?(true|false)/)
+  return m ? m[1] === 'true' : null
+}
+
+/** #496: the first outbound `paused` after the new element's `loadedmetadata`
+ *  — in the original traces, the frame that decided whether the room resumed. */
+function firstOutPausedAfterMetadata(d: Collected, srcBefore: string): boolean | null {
+  const lmd = d.ev.find(
+    (e) => e.at >= 0 && e.t === 'loadedmetadata' && e.src !== srcBefore.slice(-40)
+  )
+  if (!lmd) return null
+  const out = d.wire.find((w) => w.dir === 'out' && w.ps && w.at >= lmd.at)
+  return out?.ps?.paused ?? null
 }
 
 async function transition(
@@ -287,7 +316,7 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
   }
 })
 
-test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the binge auto-resume (docs/syncplay.md, #496 ✗); the saved-progress seek recorded (#497)', async () => {
+test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and stay paused there (#496 fixed); the saved-progress seek recorded (#497)', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E5')
   try {
@@ -314,7 +343,9 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
       const want = forward ? '2' : '1'
       const [a, b] = await Promise.all([A.state(), B.state()])
       const [da, db] = await Promise.all([A.collect(r.pressAt), B.collect(r.pressAt)])
-      const resumed = !a.paused && !b.paused
+      // Either instance playing is a resume: the room is one room.
+      const resumed = !a.paused || !b.paused
+      const atZero = Math.abs(a.ct) < 2 && Math.abs(b.ct) < 2
       const sa = e5Split(da, pa, r.a)
       const sb = e5Split(db, pb, r.b)
       const stale = sa.old || sb.old
@@ -326,13 +357,17 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
           setupOk: setupOk && paused && r.changed,
           bad,
           resumed,
+          atZero,
           stale,
           foreignSeek,
           wrongEp,
           epA: r.epA,
-          epB: r.epB
+          epB: r.epB,
+          seekPaused: fileChangeSeekPaused(A, r.pressAt),
+          firstOutPausedA: firstOutPausedAfterMetadata(da, pa.src),
+          firstOutPausedB: firstOutPausedAfterMetadata(db, pb.src)
         },
-        bad || !resumed || foreignSeek
+        bad || resumed || !atZero || foreignSeek
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -346,11 +381,13 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed); the bi
     expect(s.bad).toBe(0)
     const scoreable = s.records.filter((r) => r.setupOk)
     // #497: recorded in the JSONL (`foreignSeek`), not asserted — see the header.
-    // ✗ half (#496): the rig must see the room stay paused at least once.
+    // #496, fixed: every scoreable run stayed paused, at ~0. A #497 run is
+    // excluded from the position half only: its seek is recorded, not asserted.
+    expect(scoreable.filter((r) => r.resumed).length, '#496 paused room resumed').toBe(0)
     expect(
-      scoreable.filter((r) => !r.resumed).length,
-      'paused room never stayed paused'
-    ).toBeGreaterThanOrEqual(1)
+      scoreable.filter((r) => !r.foreignSeek && !r.atZero).length,
+      '#496 paused room left 0'
+    ).toBe(0)
   } finally {
     await closeDuo(A, B)
   }

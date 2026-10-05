@@ -264,7 +264,7 @@ export async function walkEpisodeSteps(
 // N+1's metadata loads, so a local Next pressed while the user is still looking
 // at N would step from the already-committed N+1 to N+2: one episode skipped on
 // both peers. `pending` is the index the last remote follow committed to, held
-// until that source loads (or one of its failure arms runs); a local Next while
+// until that source can show a frame (or a failure arm runs); a local Next while
 // it still names `active` is the press the follow has already answered.
 //
 // Only a remote Next follow sets `pending`, and only the user-facing Next consults
@@ -274,6 +274,14 @@ export async function walkEpisodeSteps(
 export function shouldSwallowLocalNext(pending: number | null, active: number): boolean {
   return pending !== null && pending === active
 }
+
+// How long the pending-follow token outlives the followed episode's first
+// renderable frame (`loadeddata`) before a local Next counts as deliberate
+// (#500). Clearing at `loadedmetadata` let a reflex press 190–590 ms later,
+// made while the user still saw N, step to N+2. 600, not 500: on the
+// two-instance rig `loadeddata` trails `loadedmetadata` by only 6–10 ms, so the
+// grace alone has to cover the 590 ms press.
+export const FOLLOW_GRACE_MS = 600
 
 export type EpisodeResolutionTarget = {
   translations: PlayerTranslationEntry[]

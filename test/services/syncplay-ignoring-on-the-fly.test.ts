@@ -1361,4 +1361,207 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       })
     })
   })
+
+  // A peer's forced update crossing our unacked change, followed by our own
+  // forced update — the server's verdict on our change, ordered after the
+  // peer's (#494). The crossing frame is applied (#232), so the element no
+  // longer holds our change, and dropping our echo at the self-`setBy` guard
+  // left us on a state the server had already replaced.
+  describe('our own forced update after a peer’s crossed it (#494)', () => {
+    type Latch = { position: number; paused: boolean; at: number } | null
+    const latch = (): Latch => (client as unknown as { crossedByForeign: Latch }).crossedByForeign
+
+    const OURS = 100
+    const PEERS = 500
+
+    // We pause at OURS; the peer's seek to PEERS (playing) crosses it.
+    const pauseCrossedByPeerSeek = (): void => {
+      client.updateSnapshot({ position: OURS, paused: false })
+      client.sendLocalState({ paused: true, position: OURS, cause: 'pause' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      forcedState({ server: 7, setBy: 'peer', position: PEERS, paused: false, doSeek: true })
+      expect(remoteStates).toHaveLength(1)
+      expect(latch()).toEqual({ position: PEERS, paused: false, at: Date.now() })
+    }
+    const ourPauseEcho = (server = 8): void =>
+      forcedState({ server, setBy: 'me', position: OURS, paused: true, doSeek: false })
+
+    it('delivers our own forced update when it disagrees with the crossing frame', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      ourPauseEcho()
+
+      // Fails on the old code: dropped at the self-`setBy` guard.
+      expect(remoteStates).toHaveLength(2)
+      expect(remoteStates[1]).toEqual({ position: OURS, paused: true, setBy: 'me', doSeek: false })
+      expect(latch()).toBeNull()
+    })
+
+    it('leaves a matching crossed echo a no-op, aging a playing pair by wall time', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      // 5 s on, the room the peer handed us has played on to PEERS + 5. An echo
+      // there matches, though it is 5 s (> ADOPT_TOLERANCE_S) from the stored
+      // position.
+      vi.advanceTimersByTime(5000)
+      forcedState({ server: 8, setBy: 'me', position: PEERS + 5, paused: false, doSeek: false })
+
+      expect(remoteStates).toHaveLength(1)
+      expect(latch()).toBeNull()
+    })
+
+    it('does not age a paused pair', () => {
+      handshake()
+      // A paused room: we seek to PEERS + 5 and the peer's seek to PEERS
+      // crosses it (retiring our intent through #274, so nothing is rewritten).
+      const ours = PEERS + ADOPT_TOLERANCE_S + 2
+      client.updateSnapshot({ position: OURS, paused: true })
+      client.sendLocalState({ paused: true, position: ours, cause: 'seek' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      forcedState({ server: 7, setBy: 'peer', position: PEERS, paused: true, doSeek: true })
+      expect(remoteStates).toHaveLength(1)
+      expect(latch()?.position).toBe(PEERS)
+
+      // 5 s on, a paused pair is still at PEERS, so our echo disagrees with it.
+      // Aged as if playing it would read `ours` and the echo would be dropped.
+      vi.advanceTimersByTime((ADOPT_TOLERANCE_S + 2) * 1000)
+      forcedState({ server: 8, setBy: 'me', position: ours, paused: true, doSeek: true })
+
+      expect(remoteStates).toHaveLength(2)
+      expect(remoteStates[1].position).toBe(ours)
+    })
+
+    it('compares against what the crossing frame handed the renderer, not the snapshot', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      // The renderer has not pushed since our pause: main's snapshot still
+      // reads OURS. An echo at OURS "matches" that and would be dropped.
+      expect((client as unknown as { snapshot: { position: number } }).snapshot.position).toBe(OURS)
+      ourPauseEcho()
+
+      expect(remoteStates).toHaveLength(2)
+    })
+
+    it('is spent by the next counter-bearing self frame whether or not it passes', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      forcedState({ server: 8, setBy: 'me', position: PEERS, paused: false, doSeek: false })
+      expect(remoteStates).toHaveLength(1)
+      expect(latch()).toBeNull()
+
+      ourPauseEcho(9)
+      expect(remoteStates).toHaveLength(1)
+    })
+
+    it('is neither spent nor consulted by a self frame without a server counter', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      forcedState({ setBy: 'me', position: OURS, paused: true, doSeek: false })
+      expect(remoteStates).toHaveLength(1)
+      expect(latch()).not.toBeNull()
+
+      ourPauseEcho()
+      expect(remoteStates).toHaveLength(2)
+    })
+
+    it('survives a foreign counter-bearing frame in between (a third peer)', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      forcedState({ server: 8, setBy: 'third', position: 600, paused: false, doSeek: true })
+      expect(remoteStates).toHaveLength(2)
+      expect(latch()).not.toBeNull()
+
+      ourPauseEcho(9)
+      expect(remoteStates).toHaveLength(3)
+      expect(remoteStates[2].setBy).toBe('me')
+    })
+
+    it('is cleared by a new local change, so the echo of a later doSeek is still dropped (#220)', () => {
+      handshake()
+      pauseCrossedByPeerSeek()
+
+      client.sendLocalState({ paused: false, position: 200, cause: 'seek' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      expect(latch()).toBeNull()
+
+      // Our new seek reflected back: 200 is far from the crossing's PEERS, so
+      // a stale latch would hand the renderer our own doSeek.
+      forcedState({ server: 8, setBy: 'me', position: 200, paused: false, doSeek: true })
+      expect(remoteStates).toHaveLength(1)
+    })
+
+    it('is cleared by the file-change seek', () => {
+      handshake()
+      client.setFile({
+        animeId: 1,
+        malId: null,
+        episodeInt: '1',
+        translationId: null,
+        canonicalName: 'Show - 1',
+        duration: 1440,
+        newPlayer: true
+      })
+      pauseCrossedByPeerSeek()
+      const before = pendingClientAck()
+
+      client.setFile({
+        animeId: 1,
+        malId: null,
+        episodeInt: '2',
+        translationId: null,
+        canonicalName: 'Show - 2',
+        duration: 1440,
+        newPlayer: false,
+        episodeSwitch: 'local'
+      })
+
+      expect(pendingClientAck()).toBeGreaterThan(before)
+      expect(latch()).toBeNull()
+    })
+
+    it('is cleared by a transport reset', () => {
+      handshake({ autoReconnect: true })
+      pauseCrossedByPeerSeek()
+
+      lastTlsSocket!.emit('close')
+
+      expect(latch()).toBeNull()
+    })
+
+    it('latches the rewritten position under a live seek intent, and its echo does not retire the intent through #274', () => {
+      handshake()
+      client.updateSnapshot({ position: OURS, paused: false })
+      armLocalSeek(OURS + 16)
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      // Two seconds of playback past the seek target.
+      client.updateSnapshot({ position: OURS + 18, paused: false })
+
+      // The peer's pause crosses our seek. The intent is live, so the renderer
+      // is handed our own snapshot (#278), and that is what is latched — not
+      // the frame's OURS.
+      forcedState({ server: 7, setBy: 'peer', position: OURS, paused: true, doSeek: false })
+      expect(remoteStates[0].position).toBe(OURS + 18)
+      expect(latch()?.position).toBe(OURS + 18)
+      expect(latch()?.paused).toBe(true)
+
+      // Our own seek, ordered after the pause: playing vs paused, so it passes.
+      // Not foreign, so #274's retraction does not see it: the intent is still
+      // live at the capture and the position handed over is our snapshot, not
+      // the echo's OURS + 16.
+      forcedState({ server: 8, setBy: 'me', position: OURS + 16, paused: false, doSeek: true })
+      expect(remoteStates).toHaveLength(2)
+      expect(remoteStates[1]).toEqual({
+        position: OURS + 18,
+        paused: false,
+        setBy: 'me',
+        doSeek: true
+      })
+    })
+  })
 })

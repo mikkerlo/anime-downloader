@@ -881,7 +881,7 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 //
 // **Re-derived again on that round's review: `episode-change` 9 → 10.** The
 // 6500/7500 pair that pins
-// `src/main/syncplay.ts:952` ("this.playbackAdopted = false") firing on a
+// `src/main/syncplay.ts:967` ("this.playbackAdopted = false") firing on a
 // clean comb cell drives two more switches from one new local helper
 // (`latchAcrossRelease`), so the sites rose
 // by one where the switches rose by two. The review that asked for the pair

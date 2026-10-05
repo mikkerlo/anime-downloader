@@ -372,7 +372,7 @@ export class HarnessVideo {
    *
    * What this is deliberately *not* is a new element. A real episode change
    * rebinds the same `<video>`, which is why `newPlayer` exists on the file push
-   * at all (`src/main/syncplay.ts:751`) and why the harness keeps one object
+   * at all (`src/main/syncplay.ts:764`) and why the harness keeps one object
    * here: a fixture that swapped the element out would be testing a mount, and
    * the mount is the case main can already see.
    */
@@ -489,7 +489,7 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
 export interface IgnoreCounters {
   /** Bumped once per *discrete* change the client originates, and by nothing
    *  else. Monotonic within a connection: `resetTransportState()` zeroes it
-   *  with the other two (`src/main/syncplay.ts:1120-1122`). */
+   *  with the other two (`src/main/syncplay.ts:1135-1137`). */
   clientIgnoreCounter: number
   /** The counter of our newest outstanding change, or 0. */
   pendingClientAck: number
@@ -537,17 +537,17 @@ export interface Peer {
    *
    *  Read here for the same reason as `seekIntent()` and `counters()`: it is
    *  private, it is projected onto nothing — `SyncplayStatus` carries
-   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:604`)
+   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:617`)
    *  and so cannot separate "not adopted" from the other two terms — and the
    *  seven writers are what #360's gap axis turns on. A fixture that inferred it
    *  from the wire would be asserting against its own reading of
    *  `buildPlaystate()` rather than against the latch: the mirror/assert
    *  distinction a wire frame carries is
-   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2462`), so a
+   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2512`), so a
    *  mirror frame is evidence of the conjunction and not of either half.
    *
    *  **Sampled, not latched.** `isAdopted()` is a mutator — it writes `true` at
-   *  `src/main/syncplay.ts:2684` and `src/main/syncplay.ts:2694` — and the
+   *  `src/main/syncplay.ts:2734` and `src/main/syncplay.ts:2744` — and the
    *  heartbeat calls it once a second, so a read taken a second late sees the
    *  re-latch rather than the de-adoption that preceded it. Read it in the slice
    *  you mean. */

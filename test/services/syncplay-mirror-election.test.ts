@@ -687,7 +687,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // seeded `paused: false` carries `DEFAULT_PLAYING_SET_BY` on it — a departed
     // watcher, so `isForeignSetBy()` is true, and because the room-voice flag is
     // a conjunction with the negation of that
-    // (src/main/syncplay.ts:2137 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
+    // (src/main/syncplay.ts:2162 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
     // the room-voice predicate is never consulted for this frame at all — quoted as
     // a marked quote so the gate re-checks it if that line moves, which is the
     // point of the branch this commit sits on. It is emitted on the
@@ -698,7 +698,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // frame is emitted, and suppressing only the helper's `Hello`-time `State`
     // takes the array back to empty — so that handshake frame is the whole of the
     // difference. `getRoomPosition()` still answers `null` beside it, because the
-    // read's own alone test (src/main/syncplay.ts:725 ("if (alone) return null"))
+    // read's own alone test (src/main/syncplay.ts:738 ("if (alone) return null"))
     // refuses a solo room whatever was applied.
     run(8, () => null)
 
@@ -1277,8 +1277,8 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     // (`server.py:636`, then `server.py:637`), so the next election returns
     // this same position. Nor can the drop move the room: un-adopted,
     // `buildPlaystate()` never asserts our own snapshot
-    // (`src/main/syncplay.ts:2462`) — it mirrors the room's own last state, or
-    // sends no playstate at all (`src/main/syncplay.ts:2469-2470`).
+    // (`src/main/syncplay.ts:2512`) — it mirrors the room's own last state, or
+    // sends no playstate at all (`src/main/syncplay.ts:2519-2520`).
     tls().emit(
       'data',
       Buffer.from(

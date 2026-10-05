@@ -2722,12 +2722,12 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
 })
 
 // #281 slice B, the renderer half. Main de-adopts for the length of the
-// divergence (`src/main/syncplay.ts:1979`), so `sendLocalState()` returns at its
+// divergence (`src/main/syncplay.ts:2004`), so `sendLocalState()` returns at its
 // adoption gate — no assertion, not even an ignore-counter bump — and a local
 // pause can no longer reach the room. That clear is also what lets the room's own
-// periodics survive `src/main/syncplay.ts:2146`, whose gate is `isForeignState ||
+// periodics survive `src/main/syncplay.ts:2193`, whose gate is `isForeignState ||
 // (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)` with
-// `src/main/syncplay.ts:2147`'s unacked-local-change drop below it. De-adoption is
+// `src/main/syncplay.ts:2194`'s unacked-local-change drop below it. De-adoption is
 // necessary and not sufficient: with `List` unkeyable (#223) `rosterReceived` stays
 // false and only a peer's own foreign-`setBy` move arrives — which is what the
 // fixtures below emit. So the room's next 1 Hz *playing* state would then resume the
@@ -2780,7 +2780,7 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     // …and it keeps holding, because the room is going to say the same thing
     // once a second for the whole divergence — and these frames do arrive. They
     // carry `setBy: 'peer'`, so `isForeignState` is true and they are past
-    // `src/main/syncplay.ts:2146` unconditionally, with no adoption reasoning
+    // `src/main/syncplay.ts:2193` unconditionally, with no adoption reasoning
     // needed: this fixture pins the foreign-`setBy` regime, not the de-adopted one.
     emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
     emitRemoteState({ position: 3002, paused: false, doSeek: false, setBy: 'peer' })
@@ -3034,9 +3034,9 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 // every other syncplay toast for the whole divergence: the pending-pause pair,
 // the reconnect notice and all `room-event` text. Not a universal — a stream
 // sparser than one per 3500 ms does let the notice clear. It is the room's cadence
-// here because the out-of-file divergence is the window `src/main/syncplay.ts:1979`
+// here because the out-of-file divergence is the window `src/main/syncplay.ts:2004`
 // de-adopts for, so the room's own periodics stop dying at
-// `src/main/syncplay.ts:2146` and arrive as room voice — which needs de-adoption
+// `src/main/syncplay.ts:2193` and arrive as room voice — which needs de-adoption
 // *and* a keyed roster with a peer in it, not de-adoption alone — while a peer's
 // explicit move is foreign-`setBy` and past that guard regardless. The refusal is
 // therefore emitted on the transition *into* the refusal only.
@@ -3159,7 +3159,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
   // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
   // *also* true at the ordinary end of an episode where every peer holds the
   // same file: main emits `position + serverRtt / 2` for a playing room
-  // (`src/main/syncplay.ts:2164`), so the last state or two before our own end
+  // (`src/main/syncplay.ts:2211`), so the last state or two before our own end
   // already read past `duration`. Nothing is refused that the user can see — the
   // room is well inside the 3 s tolerance, so no seek was suppressed — and the
   // message would land in the middle of the 5 s next-episode countdown, on every
@@ -3194,7 +3194,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     })
 
     // A periodic, not a seek: main's heartbeat sends `doSeek: false`
-    // (`src/main/syncplay.ts:2251`), and only a genuine room seek sets the bit.
+    // (`src/main/syncplay.ts:2301`), and only a genuine room seek sets the bit.
     emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
 
     expect(client.syncplayToast.value).toBe('')
@@ -3657,8 +3657,8 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   // bumping the revision in `recordRemoteState` instead would supersede a queued
   // operation within a second of registration — but only *pre-adoption*, which is
   // where `episode-start` is registered. The three same-episode `restore`s are not:
-  // `isNewPlayer` is false at `src/main/syncplay.ts:797`, adoption holds, and their
-  // own periodics die at `src/main/syncplay.ts:2146`. What bounds it is asserted
+  // `isNewPlayer` is false at `src/main/syncplay.ts:810`, adoption holds, and their
+  // own periodics die at `src/main/syncplay.ts:2193`. What bounds it is asserted
   // below.
   //
   // #350 note: this case's original badge characterisation — "the badge blinks
@@ -3719,7 +3719,7 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     // left. That is the bound — not "about one heartbeat of blink", which #340
     // falsified: the
     // other repair channel waits on the next inbound state to survive
-    // `src/main/syncplay.ts:2146` and `src/main/syncplay.ts:2147`, and nothing in
+    // `src/main/syncplay.ts:2193` and `src/main/syncplay.ts:2194`, and nothing in
     // the tree schedules that state. Either way, not a room-dragging resume.
     sendSnapshot.mockClear()
     client.onVideoLoadedMetadata()
@@ -5867,8 +5867,8 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 // #324 closed the *racing* half of the stale-assert family. This is the half it
 // left open, and the worse-shaped one: the value the 1 Hz interval pushes is
 // itself wrong, so nothing self-corrects on a schedule. The repair waits on an
-// inbound state surviving `src/main/syncplay.ts:2146` and
-// `src/main/syncplay.ts:2147`, and on a same-episode swap, past adoption, that may
+// inbound state surviving `src/main/syncplay.ts:2193` and
+// `src/main/syncplay.ts:2194`, and on a same-episode swap, past adoption, that may
 // be no state at all (#340) — a heartbeat is not the bound.
 //
 // The mechanism. `applyRemoteStateToElement` used to return at
@@ -6095,7 +6095,7 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
   // supersede a queued `restore` or `episode-start` within a second of registration
   // — but only *pre-adoption*, which is where `episode-start` is registered and
   // where the three same-episode `restore`s are not: their periodics arrive
-  // self-`setBy` and die at `src/main/syncplay.ts:2146`. A superseded operation
+  // self-`setBy` and die at `src/main/syncplay.ts:2193`. A superseded operation
   // writes nothing at all.
   //
   // The probe is `episode-start` since #347, for the reason above: a `restore`

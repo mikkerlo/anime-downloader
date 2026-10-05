@@ -43,7 +43,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { Peer, TwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { WireFrame } from '../helpers/syncplay-min-election-server'
-import { shouldSwallowLocalNext, walkEpisodeSteps } from '../../src/renderer/src/utils'
+import {
+  shouldSwallowLocalNext,
+  walkEpisodeSteps,
+  FOLLOW_GRACE_MS
+} from '../../src/renderer/src/utils'
 import type { EpisodeStepOutcome } from '../../src/renderer/src/utils'
 
 const DELAY_MS = 50
@@ -326,8 +330,10 @@ describe('SyncplayClient — both peers across an episode change (#360, #486)', 
 const EPISODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 /** `playerGetStreamUrl`, commit to source swap — where `navigating` is released. */
 const RESOLVE_MS = 400
-/** Source swap to `loadedmetadata` — where the token is cleared. */
+/** Source swap to `loadedmetadata` — the resume, no longer the token (#500). */
 const METADATA_MS = 1500
+/** Source swap to `loadeddata`, the first frame — where the grace starts (#500). */
+const LOADEDDATA_MS = 1600
 
 /** How the next step's source ends: loads, resolves to null, or never loads. */
 type SourceOutcome = 'loads' | 'null-stream' | 'stalls'
@@ -363,6 +369,12 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
   let translationEpoch = 0
   // Stamped with the arming run's `myNav`, and cleared only by that run.
   let pendingFollow: { index: number; nav: number } | null = null
+  // `followGraceTimer`: one handle, cancelled at every commit and failure arm.
+  let grace: ReturnType<typeof setTimeout> | null = null
+  const cancelGrace = (): void => {
+    if (grace) clearTimeout(grace)
+    grace = null
+  }
 
   // `goToEpisode(direction, origin)`.
   async function step(
@@ -387,6 +399,7 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     await Promise.resolve() // playerCleanupRemux
     if (navigationEpoch !== myNav) return 'superseded'
     idx = targetIndex
+    cancelGrace()
     pendingFollow =
       origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null
     const source = nav.nextSource
@@ -398,14 +411,22 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     if (source === 'null-stream') {
       if (navigationEpoch === myNav) navigating = false
       if (pendingFollow?.nav === myNav) pendingFollow = null
+      cancelGrace()
       return 'moved'
     }
     await Promise.resolve() // nextTick
     if (navigationEpoch !== myNav) return 'moved'
+    // `onTargetMetadata` at `METADATA_MS` is the resume and leaves the token
+    // alone; `onTargetFirstFrame` at `LOADEDDATA_MS` starts the grace (#500).
     if (source === 'loads') {
       setTimeout(() => {
-        if (pendingFollow?.nav === myNav) pendingFollow = null
-      }, METADATA_MS)
+        if (pendingFollow?.nav !== myNav) return
+        cancelGrace()
+        grace = setTimeout(() => {
+          grace = null
+          if (pendingFollow?.nav === myNav) pendingFollow = null
+        }, FOLLOW_GRACE_MS)
+      }, LOADEDDATA_MS)
     }
     navigating = false
     return 'moved'
@@ -495,19 +516,19 @@ describe('both peers press next within about a second (#487)', () => {
     return { A, b: attachNavigator(B, 5) }
   }
 
-  const seatPeers = async (): Promise<{ A: Peer; B: Peer }> => {
-    room = await createTwoPeerRoom({ position: 100, paused: false })
+  const seatPeers = async (paused = false): Promise<{ A: Peer; B: Peer }> => {
+    room = await createTwoPeerRoom({ position: 100, paused })
     const A = await room.seat({
       username: 'rigA',
       position: 100,
-      paused: false,
+      paused,
       delayMs: DELAY_MS,
       episodeInt: '6'
     })
     const B = await room.seat({
       username: 'rigB',
       position: 100,
-      paused: false,
+      paused,
       delayMs: DELAY_MS,
       episodeInt: '6'
     })
@@ -525,9 +546,11 @@ describe('both peers press next within about a second (#487)', () => {
     return { a: a.episode(), b: b.episode(), bPress }
   }
 
-  // The three bands, plus the press after N+1 has loaded. B receives A's change
-  // one hop in (~50 ms), its follow releases `navigating` a resolve later
-  // (~455 ms) and N+1's metadata lands `METADATA_MS` after that (~1955 ms).
+  // The three bands, plus the press after N+1 is on screen. B receives A's
+  // change one hop in (~50 ms), its follow releases `navigating` a resolve
+  // later (~455 ms), N+1's metadata lands `METADATA_MS` after that (~1955 ms),
+  // its first frame `LOADEDDATA_MS` after it (~2055 ms), and the token clears
+  // `FOLLOW_GRACE_MS` later still (~2655 ms).
   it.each([
     [0, 'dispatched', '7'], // before A's change arrives: both target 7
     [200, 'button-disabled', '7'], // follow in flight: the button is disabled
@@ -535,7 +558,9 @@ describe('both peers press next within about a second (#487)', () => {
     [1000, 'swallowed', '7'],
     [1500, 'swallowed', '7'],
     [1900, 'swallowed', '7'],
-    [2500, 'dispatched', '8'] // after 7 has loaded: a deliberate press still goes to 8
+    [2000, 'swallowed', '7'], // after metadata, before the first frame: 8 until #500
+    [2500, 'swallowed', '7'], // inside the grace: a reflex press, 8 until #500
+    [3000, 'dispatched', '8'] // past it: a deliberate press still goes to 8
   ] as const)('B pressing at d = %i ms is %s, and both end on episode %s', async (d, press, ep) => {
     const r = await bothPress(d)
     expect(r.bPress).toBe(press)
@@ -602,7 +627,7 @@ describe('both peers press next within about a second (#487)', () => {
     expect([a.episode(), b.episode()]).toEqual(['6', '6'])
   })
 
-  it('advances exactly once when only one peer presses, and clears the token on metadata', async () => {
+  it('advances exactly once when only one peer presses, and clears the token after the first frame', async () => {
     const { a, b } = await seatBoth()
     a.pressNext()
     await room!.advance(0.6)
@@ -656,16 +681,58 @@ describe('both peers press next within about a second (#487)', () => {
   // The other half of the owner rule: when step 2 DOES commit it re-stamps the
   // token with its own run, so step 1's metadata, landing while step 2's source
   // is still loading, leaves it alone.
-  it('keeps step 2’s token through step 1’s metadata on a room walk N → N+2', async () => {
+  it('keeps step 2’s token through step 1’s first frame on a room walk N → N+2', async () => {
     const { A, b } = await seatFollower()
     await A.goToEpisode('8')
-    // Step 1's metadata lands ~1955 ms in, step 2's ~2355 ms.
+    // Step 1's first frame lands ~2055 ms in, with step 2's token already
+    // armed, so it starts no timer; step 2's lands ~2455 ms.
     await room!.advance(2.1)
     expect(b.episode()).toBe('8')
     expect(b.pending()).toBe(7)
     expect(b.pressNext()).toBe('swallowed')
     await room!.advance(6)
     expect(b.episode()).toBe('8')
+  })
+
+  // #500 review, the lifecycle half: a grace timer started for step 1's token
+  // must not clear the token a later follow step armed while it ran. Guarded
+  // twice — the commit cancels the timer, and the timer compares on its owner
+  // — so this goes red only with both removed; the single-guard mutations are
+  // pinned on the component's own statements in `player-lifecycle-scope.test.ts`.
+  it('keeps a second follow’s token through the first follow’s grace timer', async () => {
+    const { a, b } = await seatBoth()
+    a.pressNext()
+    // B's 7 shows its first frame ~2055 ms in; its grace runs until ~2655 ms.
+    await room!.advance(2.2)
+    expect(b.pending()).toBe(6)
+    a.pressNext()
+    // B's follow to 8 commits ~50 ms later and re-stamps the token; 8 itself
+    // has no frame until ~4300 ms.
+    await room!.advance(0.6)
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+    expect(b.pending()).toBe(7)
+    expect(b.pressNext()).toBe('swallowed')
+    await room!.advance(6)
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+  })
+
+  // #496's paused room: the followed episode may never play, and `loadeddata`
+  // fires playing or paused, so the same clear covers it with no second path.
+  it('clears the token in a paused room, so the next real Next goes through', async () => {
+    const { A, B } = await seatPeers(true)
+    const a = attachNavigator(A, 5)
+    const b = attachNavigator(B, 5)
+    expect(room!.server.roomState().paused).toBe(true)
+    a.pressNext()
+    await room!.advance(2.1)
+    // First frame shown (~2055 ms), grace still running.
+    expect(b.episode()).toBe('7')
+    expect(b.pending()).toBe(6)
+    await room!.advance(FOLLOW_GRACE_MS / 1000)
+    expect(b.pending()).toBeNull()
+    expect(b.pressNext()).toBe('dispatched')
+    await room!.advance(6)
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
   })
 })
 

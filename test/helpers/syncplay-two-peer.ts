@@ -173,6 +173,18 @@ export interface HarnessVideoOptions {
    *  depends on it seats it explicitly, in a bare `new HarnessVideo({…})` rather
    *  than through `seat()`. */
   bindGapMs?: number
+  /** The bare `autoplay` attribute `PlayerView`'s `<video>` carries (#348,
+   *  #498), as the spec's can-autoplay flag: a load sets it, the internal play
+   *  and pause steps clear it — `pause()` unconditionally, even on an element
+   *  that is already paused and fires nothing — and reaching HAVE_ENOUGH_DATA
+   *  (4) with it set on a paused element starts playback and queues `play`
+   *  without `play()` ever being called. 4 rather than 3 because that is the
+   *  transition Chromium autostarts on, and the one #498's probe saw `play` at.
+   *
+   *  **Opt-in, default off.** Every other fixture in this suite was written
+   *  against an element that never starts itself, and turning this on under
+   *  them changes what they measure. */
+  autoplay?: boolean
 }
 
 type QueuedMediaEvent = 'play' | 'pause' | 'seeked' | 'loadedmetadata'
@@ -212,6 +224,10 @@ export class HarnessVideo {
   /** Every source this element has been bound to, in order, seeded with the
    *  constructor's. `loads.length - 1` is the number of reloads. */
   readonly loads: string[] = []
+  /** Every media event `tick()` has handed out, in order. What a model of a
+   *  `PlayerView` handler reads to know which events reached it (#498's
+   *  first-autostart latch). */
+  readonly delivered: QueuedMediaEvent[] = []
 
   private readyStateFlag: number
   private pausedFlag: boolean
@@ -225,6 +241,9 @@ export class HarnessVideo {
   private readonly queued: QueuedMediaEvent[] = []
   private readonly seekLandMs: number
   private readonly bindGapMs: number
+  private readonly autoplay: boolean
+  /** The spec's can-autoplay flag; only ever true on an `autoplay` element. */
+  private canAutoplay: boolean
 
   constructor(opts: HarnessVideoOptions = {}) {
     this.duration = opts.duration ?? 1440
@@ -237,6 +256,8 @@ export class HarnessVideo {
     this.anchorAt = Date.now()
     this.seekLandMs = opts.seekLandMs ?? 0
     this.bindGapMs = opts.bindGapMs ?? 500
+    this.autoplay = opts.autoplay ?? false
+    this.canAutoplay = this.autoplay
   }
 
   get readyState(): number {
@@ -250,6 +271,16 @@ export class HarnessVideo {
     if (next === this.readyStateFlag) return
     this.readyStateFlag = next
     this.readyStates.push(next)
+    // The autoplay transition (`autoplay` option). Decided here, at the
+    // transition, and only *delivered* through `tick()` — on a real element the
+    // flag is consulted when the state changes and `play` is a queued task, so
+    // a handler that runs before it is delivered cannot take it back.
+    if (next >= 4 && this.canAutoplay && this.pausedFlag) {
+      this.canAutoplay = false
+      this.reanchor()
+      this.pausedFlag = false
+      this.queued.push('play')
+    }
   }
 
   private live(): number {
@@ -329,6 +360,7 @@ export class HarnessVideo {
   }
 
   play(): Promise<void> {
+    this.canAutoplay = false
     if (this.pausedFlag) {
       this.reanchor()
       this.pausedFlag = false
@@ -337,7 +369,12 @@ export class HarnessVideo {
     return Promise.resolve()
   }
 
+  /** The internal pause steps: the can-autoplay flag is cleared before, and
+   *  independently of, the already-paused guard that decides whether a `pause`
+   *  event fires. That split is the whole #348 disarm — a bare `pause()` on a
+   *  paused element disarms it and is invisible to every listener. */
   pause(): void {
+    this.canAutoplay = false
     if (!this.pausedFlag) {
       this.reanchor()
       this.pausedFlag = true
@@ -379,6 +416,9 @@ export class HarnessVideo {
   reload(src: string): void {
     this.src = src
     this.loads.push(src)
+    // The load algorithm re-arms `autoplay`, which is why a disarm only holds
+    // if it runs *after* the rebind (#498).
+    this.canAutoplay = this.autoplay
     if (!this.pausedFlag) {
       this.pausedFlag = true
       this.queued.push('pause')
@@ -429,7 +469,9 @@ export class HarnessVideo {
       this.queued.length === 0
     ) {
       this.metadataDueAt = null
-      this.readyState = 1
+      // Never *down*: a fixture that walked the load to HAVE_ENOUGH_DATA by
+      // hand (#498's fast reload) has already passed HAVE_METADATA.
+      this.readyState = Math.max(this.readyStateFlag, 1)
       this.queued.push('loadedmetadata')
     }
     if (this.pending !== null && Date.now() >= this.pending.dueAt) {
@@ -458,7 +500,9 @@ export class HarnessVideo {
       this.pending = null
       this.queued.push('seeked')
     }
-    return this.queued.splice(0)
+    const events = this.queued.splice(0)
+    this.delivered.push(...events)
+    return events
   }
 }
 
@@ -595,7 +639,7 @@ export interface Peer {
    * pass one to pin an exact `v.src` an assertion reads back.
    *
    * **Await it.** The index write is flushed before the rebind, because that is
-   * the order the app runs them in: `PlayerView.vue:2439` writes
+   * the order the app runs them in: `PlayerView.vue:2492` writes
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
@@ -931,7 +975,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
           ui!.onVideoSeeked()
         } else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
-        // `src/renderer/src/components/views/PlayerView.vue:3134` is the
+        // `src/renderer/src/components/views/PlayerView.vue:3196` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
         else ui!.onVideoLoadedMetadata()
       }

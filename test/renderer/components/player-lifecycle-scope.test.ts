@@ -18,13 +18,14 @@
 // SFC and `test/ipc-channels.test.ts` takes for the channel table. The one
 // behavioral test here (#1) reduces the scope question to our own invariant on
 // a throwaway component instead.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineComponent, h, ref, watch, onMounted, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { parse } from '@vue/compiler-sfc'
 import type { ElementNode, TemplateChildNode } from '@vue/compiler-core'
+import { FOLLOW_GRACE_MS } from '../../../src/renderer/src/utils'
 
 const PLAYER_VIEW = resolve(__dirname, '../../../src/renderer/src/components/views/PlayerView.vue')
 const APP_VUE = resolve(__dirname, '../../../src/renderer/src/App.vue')
@@ -976,7 +977,7 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     // The one place a token is armed: no other write outside goToEpisode but
     // the consume in the wrapper.
     const writes = [...SRC.matchAll(/pendingFollow\s*=(?!=)/g)].length
-    // Commit + loadedmetadata + three failure arms + the consume.
+    // Commit + the loadeddata grace timer + three failure arms + the consume.
     expect(writes).toBe(6)
   })
 
@@ -997,18 +998,34 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     expect(at).toBeLessThan(GO_TO.indexOf('committed = true;'))
   })
 
-  it('clears it under ownership on loadedmetadata and on all three no-source arms', () => {
-    // Exactly four owner-keyed clears in goToEpisode: the metadata listener and
-    // the three arms that return `'moved'` with no `loadedmetadata` behind them.
-    // The pre-commit `unreachable` arm is not a fifth: it armed nothing.
+  it('clears it under ownership through the loadeddata grace timer and on all three no-source arms', () => {
+    // Exactly four owner-keyed clears in goToEpisode: the grace timer the
+    // first-frame listener starts, and the three arms that return `'moved'`
+    // with no `loadeddata` behind them. The pre-commit `unreachable` arm is not
+    // a fifth: it armed nothing.
     expect(GO_TO.split(CLEAR).length - 1).toBe(4)
-    // Both source arms install the same listener, so both clear it.
+    // Both source arms install both listeners: the resume on metadata, the
+    // token's grace timer on the first frame (#500).
     expect(
       GO_TO.split("v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });")
         .length - 1
     ).toBe(2)
-    const listener = GO_TO.slice(GO_TO.indexOf('const onTargetMetadata = (): void => {'))
-    expect(listener.slice(0, listener.indexOf('};'))).toContain(CLEAR)
+    expect(
+      GO_TO.split("v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });").length -
+        1
+    ).toBe(2)
+    // #500: metadata is the resume and only the resume. Before #500 the clear
+    // sat here, and a reflex press 190–590 ms after metadata reached N+2.
+    expect(bodyOf(GO_TO, 'const onTargetMetadata = (): void => {').trim()).toBe(
+      'resumeFromSavedPosition();'
+    )
+    // The first-frame listener is owner-keyed at its door and clears through a
+    // `FOLLOW_GRACE_MS` timer whose own callback is owner-keyed again.
+    const frame = bodyOf(GO_TO, 'const onTargetFirstFrame = (): void => {')
+    expect(frame.trim().startsWith('if (pendingFollow?.nav !== myNav) return;')).toBe(true)
+    const timer = frame.slice(frame.indexOf('followGraceTimer = setTimeout('))
+    expect(timer).toContain(CLEAR)
+    expect(timer.replace(/\s+/g, ' ')).toContain('}, FOLLOW_GRACE_MS);')
 
     // Each failure arm clears it right beside its own `navigating` release.
     const NAV = 'if (navigationEpoch === myNav) navigating.value = false;'
@@ -1035,7 +1052,198 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
       expect(GO_TO.indexOf('return ', nav), `${name}: a return above the clear`).toBeGreaterThan(
         clear
       )
+      // #500 review: no grace on a failure — the clear is immediate — and the
+      // grace timer is cancelled right after it, so none outlives the arm. The
+      // `catch` cancels only past the commit: above it the running timer is an
+      // earlier step's, for a token this run never replaced.
+      const cancel =
+        name === 'catch' ? 'if (committed) cancelFollowGrace();' : 'cancelFollowGrace();'
+      expect(
+        GO_TO.slice(clear + CLEAR.length)
+          .trimStart()
+          .startsWith(cancel),
+        `${name}: no grace-timer cancel beside the clear`
+      ).toBe(true)
     }
+  })
+
+  it('cancels the grace timer at every commit and at unmount, and nowhere a token it does not own', () => {
+    // One module-level handle (#500 review): every commit replaces the token,
+    // so any timer still running belongs to a token that is gone.
+    const flat = GO_TO.replace(/\s+/g, ' ')
+    expect(flat).toContain(
+      "cancelFollowGrace(); pendingFollow = origin === 'follow' && direction === 'next'"
+    )
+    expect(unmountedBody()).toContain('cancelFollowGrace();')
+    expect(bodyOf(SRC, 'function cancelFollowGrace(): void {').replace(/\s+/g, ' ').trim()).toBe(
+      'if (followGraceTimer) clearTimeout(followGraceTimer); followGraceTimer = null;'
+    )
+    // The pre-commit `unreachable` arm cancels nothing: the timer running there
+    // is an earlier step's, still owed to that step's token.
+    const at = GO_TO.indexOf("if (resolution.outcome === 'unreachable') {")
+    expect(GO_TO.slice(at, GO_TO.indexOf("return 'unreachable';", at))).not.toContain('FollowGrace')
+    // Written in exactly three places: the cancel, the listener's start, and the
+    // timer's own callback dropping its handle as it fires.
+    expect([...SRC.matchAll(/followGraceTimer\s*=(?!=)/g)]).toHaveLength(3)
+    // Call sites: commit, three failure arms, the listener's restart, unmount.
+    expect(SRC.split('cancelFollowGrace();').length - 1).toBe(6)
+  })
+})
+
+/**
+ * The braced body that opens at the end of `head`. `head` must end in `{`.
+ * Comment-free input only — a brace in prose would unbalance it.
+ */
+function bodyOf(src: string, head: string): string {
+  const at = src.indexOf(head)
+  expect(at, `missing: ${head}`).toBeGreaterThan(-1)
+  const open = at + head.length - 1
+  let depth = 0
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++
+    else if (src[i] === '}' && --depth === 0) return src.slice(open + 1, i)
+  }
+  throw new Error(`unbalanced body: ${head}`)
+}
+
+describe('#500 — the grace timer’s lifecycle, run from the component’s own source', () => {
+  // `PlayerView` has no mount harness, so instead of a model this RUNS the
+  // component's own statements, lifted out of the stripped source: the
+  // first-frame listener body, `cancelFollowGrace`'s body, the commit's
+  // cancel-and-arm pair, and the unmount hook's grace-timer line. Each runs
+  // inside `with (env)`, so `pendingFollow` / `followGraceTimer` resolve to
+  // one shared object standing in for the component's module scope, `myNav` to
+  // the run's own number, and `setTimeout` to vitest's fake clock. An edit to
+  // any of those statements changes what runs here. Lifted per test, so a
+  // source without them reds each case rather than the file's collection.
+  function lift(): { FRAME: string; CANCEL: string; COMMIT: string; UNMOUNT: string } {
+    const GO_TO = stripComments(
+      slice('async function goToEpisode(', '\nfunction cancelAutoAdvance(')
+    )
+    // Everything the commit runs after `pendingPrevEpisodeInt`'s write, through
+    // the token write: today the cancel and the arm, and whatever replaces them.
+    const prev = "pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';"
+    const from = GO_TO.indexOf(prev)
+    expect(from).toBeGreaterThan(-1)
+    const arm = GO_TO.indexOf('pendingFollow =', from)
+    return {
+      FRAME: bodyOf(GO_TO, 'const onTargetFirstFrame = (): void => {'),
+      CANCEL: bodyOf(SRC, 'function cancelFollowGrace(): void {'),
+      COMMIT: GO_TO.slice(from + prev.length, GO_TO.indexOf(': null;', arm) + ': null;'.length),
+      UNMOUNT: unmountedBody()
+        .split('\n')
+        .filter((l) => /FollowGrace|followGraceTimer/.test(l))
+        .join('\n')
+    }
+  }
+
+  type Env = {
+    pendingFollow: { index: number; nav: number } | null
+    followGraceTimer: unknown
+    FOLLOW_GRACE_MS: number
+    cancelFollowGrace: () => void
+  }
+
+  function component(): {
+    env: Env
+    commit: (myNav: number, origin: 'follow' | 'local', targetIndex: number) => void
+    loadeddata: (myNav: number) => void
+    unmount: () => void
+  } {
+    const { FRAME, CANCEL, COMMIT, UNMOUNT } = lift()
+    const run = (code: string, params: string[] = []): ((...a: unknown[]) => void) =>
+      new Function('env', ...params, `with (env) { ${code} }`) as (...a: unknown[]) => void
+    const env = {
+      pendingFollow: null,
+      followGraceTimer: null,
+      FOLLOW_GRACE_MS
+    } as unknown as Env
+    const cancel = run(CANCEL)
+    env.cancelFollowGrace = () => cancel(env)
+    const frame = run(FRAME, ['myNav'])
+    const commit = run(COMMIT, ['myNav', 'origin', 'direction', 'targetIndex'])
+    const unmount = run(UNMOUNT)
+    return {
+      env,
+      commit: (myNav, origin, targetIndex) => commit(env, myNav, origin, 'next', targetIndex),
+      loadeddata: (myNav) => frame(env, myNav),
+      unmount: () => unmount(env)
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('lifts real statements, not empty ones', () => {
+    const { FRAME, CANCEL, COMMIT, UNMOUNT } = lift()
+    expect(FRAME).toContain('setTimeout(')
+    expect(CANCEL).toContain('clearTimeout(')
+    expect(COMMIT).toContain('pendingFollow =')
+    expect(UNMOUNT.trim()).toBe('cancelFollowGrace();')
+  })
+
+  it('holds the token for FOLLOW_GRACE_MS past the first frame, then clears it', () => {
+    const c = component()
+    c.commit(1, 'follow', 6)
+    // No frame yet: no timer, however long the load takes (the stalled-load
+    // bound is the consume, not a cap timer — docs/player.md).
+    vi.advanceTimersByTime(10_000)
+    expect(c.env.pendingFollow).toEqual({ index: 6, nav: 1 })
+    c.loadeddata(1)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS - 1)
+    expect(c.env.pendingFollow).toEqual({ index: 6, nav: 1 })
+    vi.advanceTimersByTime(1)
+    expect(c.env.pendingFollow).toBeNull()
+    expect(c.env.followGraceTimer).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps run 2’s token through run 1’s late loadeddata', () => {
+    // Run 1's one-shot listener is never removed on supersede; it fires on the
+    // first `loadeddata` the element has, which is run 2's source.
+    const c = component()
+    c.commit(1, 'follow', 6)
+    c.commit(2, 'follow', 7)
+    c.loadeddata(1)
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS * 4)
+    expect(c.env.pendingFollow).toEqual({ index: 7, nav: 2 })
+    c.loadeddata(2)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS)
+    expect(c.env.pendingFollow).toBeNull()
+  })
+
+  it('keeps run 2’s token through run 1’s grace timer, started before run 2 committed', () => {
+    const c = component()
+    c.commit(1, 'follow', 6)
+    c.loadeddata(1)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS / 2)
+    c.commit(2, 'follow', 7)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS * 4)
+    expect(c.env.pendingFollow).toEqual({ index: 7, nav: 2 })
+  })
+
+  it('leaves no live timer after an unmount inside the grace window', () => {
+    const c = component()
+    c.commit(1, 'follow', 6)
+    c.loadeddata(1)
+    vi.advanceTimersByTime(FOLLOW_GRACE_MS / 2)
+    expect(vi.getTimerCount()).toBe(1)
+    c.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(c.env.followGraceTimer).toBeNull()
+  })
+
+  it('starts no timer for a local step, which arms nothing', () => {
+    const c = component()
+    c.commit(1, 'local', 6)
+    c.loadeddata(1)
+    expect(c.env.pendingFollow).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

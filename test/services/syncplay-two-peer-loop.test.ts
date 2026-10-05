@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2446` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2470` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -718,9 +718,9 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1859`,
-// `src/renderer/src/components/views/PlayerView.vue:2654` and
-// `src/renderer/src/components/views/PlayerView.vue:2677` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:1871`,
+// `src/renderer/src/components/views/PlayerView.vue:2686` and
+// `src/renderer/src/components/views/PlayerView.vue:2709` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local
@@ -771,9 +771,9 @@ const CALL_NEEDLE = 'goToEpisode('
  * leaves an unterminated quote that the string pass then swallows forward across
  * real call sites: measured on this tree, that variant reports 8 rather than 10
  * and takes the adoption file's only site to 0. This is the same carve-out
- * `test/renderer/components/player-lifecycle-scope.test.ts:90` documents for
+ * `test/renderer/components/player-lifecycle-scope.test.ts:91` documents for
  * `stripComments`, re-implemented here rather than lifted —
- * `test/renderer/components/player-lifecycle-scope.test.ts:107`'s docstring
+ * `test/renderer/components/player-lifecycle-scope.test.ts:108`'s docstring
  * scopes that helper to one file and it copies string bodies through verbatim,
  * so it supplies neither half on its own. Promoting it is a separate change with
  * its own review surface.

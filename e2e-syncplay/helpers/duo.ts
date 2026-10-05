@@ -383,6 +383,7 @@ export async function launchInstance(
         'emptied',
         'loadstart',
         'loadedmetadata',
+        'loadeddata',
         'seeking',
         'seeked',
         'playing',

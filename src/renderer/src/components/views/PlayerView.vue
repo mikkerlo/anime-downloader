@@ -26,6 +26,7 @@ import {
   toPlayerTranslations,
   walkEpisodeSteps,
   shouldSwallowLocalNext,
+  FOLLOW_GRACE_MS,
   resolveEpisodeTranslation,
   type EpisodeStepOutcome,
   type PlayerTranslationEntry
@@ -682,19 +683,30 @@ let translationEpoch = 0;
 let navigationEpoch = 0;
 
 // The pending-follow token (#487): the index a room-driven Next step committed
-// to, held until that step's source loads metadata, stamped with the `myNav` of
-// the run that armed it. Set in exactly one place, `goToEpisode`'s commit — a
-// token for a `'follow'` Next step, `null` for every other one, which is what
-// makes any local navigation (auto-advance included) clear it. A remote Prev
-// arms nothing: a local Next after it is not the press the room already
-// answered. Cleared by the run that ARMED it (`pendingFollow?.nav === myNav`),
-// not by whoever owns `navigationEpoch` now, on its `loadedmetadata` and on the
-// three arms that return `'moved'` with no source behind them, and consumed by
-// `onUserNext` — the one reader; see `shouldSwallowLocalNext`. Keyed to the
-// owner because a later run can bump the epoch and then return before its own
-// commit (the `unreachable` resolution arm): an epoch compare would disarm this
-// source's clear and orphan the token on an episode that loaded long ago.
+// to, held until that step's source can show its first frame and
+// `FOLLOW_GRACE_MS` more (#500), stamped with the `myNav` of the run that armed
+// it. Set in exactly one place, `goToEpisode`'s commit — a token for a
+// `'follow'` Next step, `null` for every other one, which is what makes any
+// local navigation (auto-advance included) clear it. A remote Prev arms
+// nothing: a local Next after it is not the press the room already answered.
+// Cleared by the run that ARMED it (`pendingFollow?.nav === myNav`), not by
+// whoever owns `navigationEpoch` now, when the grace timer its `loadeddata`
+// started fires and on the three arms that return `'moved'` with no source
+// behind them, and consumed by `onUserNext` — the one reader; see
+// `shouldSwallowLocalNext`. Keyed to the owner because a later run can bump the
+// epoch and then return before its own commit (the `unreachable` resolution
+// arm): an epoch compare would disarm this source's clear and orphan the token
+// on an episode that loaded long ago.
 let pendingFollow: { index: number; nav: number } | null = null;
+// The one grace timer (#500). The owner compare inside it is the guard; this
+// handle exists so every commit, the three failure arms and the unmount can
+// cancel it, and no timer outlives the token it was started for.
+let followGraceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelFollowGrace(): void {
+  if (followGraceTimer) clearTimeout(followGraceTimer);
+  followGraceTimer = null;
+}
 
 const WATCH_THRESHOLD_RATIO = 0.8;
 const WATCH_THRESHOLD_SECONDS = 180;
@@ -2343,15 +2355,26 @@ async function goToEpisode(
   const myNav = ++navigationEpoch;
   const video = videoRef.value;
   const targetEp = props.allEpisodes[targetIndex];
-  // Both source arms' one-shot `loadedmetadata`. The token clear (#487) carries
-  // its own compare: this fires long after the `nextTick` guard that installed
-  // it, and a later run's token is not this source's to clear. The compare is
+  // Both source arms' one-shot `loadedmetadata`: the resume, and only the
+  // resume. The token outlives metadata (#500).
+  const onTargetMetadata = (): void => {
+    resumeFromSavedPosition();
+  };
+  // Both source arms' one-shot `loadeddata`, the first frame the element can
+  // render, playing or paused: it starts the grace timer that clears the token
+  // (#487, #500). Both carry their own owner compare: they fire long after the
+  // `nextTick` guard that installed them, on whatever source the element has by
+  // then, and a later run's token is not this source's to clear. The compare is
   // on the token's owner, not on `navigationEpoch`: a later run that bumped the
   // epoch and failed before its commit leaves this run's token in place, and
   // only this listener is still coming to clear it.
-  const onTargetMetadata = (): void => {
-    if (pendingFollow?.nav === myNav) pendingFollow = null;
-    resumeFromSavedPosition();
+  const onTargetFirstFrame = (): void => {
+    if (pendingFollow?.nav !== myNav) return;
+    cancelFollowGrace();
+    followGraceTimer = setTimeout(() => {
+      followGraceTimer = null;
+      if (pendingFollow?.nav === myNav) pendingFollow = null;
+    }, FOLLOW_GRACE_MS);
   };
 
   // Find the current translation type for resolution
@@ -2396,8 +2419,9 @@ async function goToEpisode(
     // because the user cannot act differently on the two.
     //
     // No token clear here (#487): this run armed nothing, and a token still set
-    // belongs to an earlier step whose own `loadedmetadata` clears it, because
+    // belongs to an earlier step whose own `loadeddata` timer clears it, because
     // that clear compares on the token's owner, not on this run's epoch bump.
+    // Nor a grace-timer cancel: that timer is the earlier step's too.
     if (navigationEpoch === myNav) navigating.value = false;
     showNavToast(NAV_FAILED_MESSAGE);
     return 'unreachable';
@@ -2450,6 +2474,7 @@ async function goToEpisode(
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
     pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
+    cancelFollowGrace();
     pendingFollow =
       origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;
 
@@ -2530,10 +2555,11 @@ async function goToEpisode(
             // compare above this arm with no await between them — kept for
             // #302's flag-clear classifier, not as live protection.
             if (navigationEpoch === myNav) navigating.value = false;
-            // No `loadedmetadata` is coming for this step, so its pending-follow
-            // token (#487) goes here or it swallows a press once the user is
-            // already looking at the failure.
+            // No `loadeddata` is coming for this step, so its pending-follow
+            // token (#487) goes here, with no grace (#500), or it swallows a
+            // press once the user is already looking at the failure.
             if (pendingFollow?.nav === myNav) pendingFollow = null;
+            cancelFollowGrace();
             // `moved`, not `unreachable`: the remux failed, but the episode
             // switch itself happened and `reportPrepareError` already put the
             // reason on screen, so a nav toast would be a second notice for one
@@ -2552,6 +2578,7 @@ async function goToEpisode(
           if (v) {
             seekProgrammatically(v, 0);
             v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
+            v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });
             playProgrammatically(v, 'episode-start');
           }
           navigating.value = false;
@@ -2578,9 +2605,10 @@ async function goToEpisode(
     if (!result) {
       if (navigationEpoch === myNav) navigating.value = false;
       syncplay.endEpisodeSwitchHold();
-      // No source, so no `loadedmetadata` to clear the follow token (#487) —
-      // left set, the user's next press after this failure would be swallowed.
+      // No source, so no `loadeddata` to clear the follow token (#487) — left
+      // set, the user's next press after this failure would be swallowed.
       if (pendingFollow?.nav === myNav) pendingFollow = null;
+      cancelFollowGrace();
       // The other arm this issue makes audible (#419). Until now this returned
       // with the episode label and translation list already pointed at the new
       // episode and no source behind them — a blank player and no message. It is
@@ -2610,6 +2638,7 @@ async function goToEpisode(
       if (v) {
         seekProgrammatically(v, 0);
         v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
+        v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });
         playProgrammatically(v, 'episode-start');
       }
       navigating.value = false;
@@ -2623,8 +2652,11 @@ async function goToEpisode(
     if (navigationEpoch !== myNav) return 'superseded';
     if (navigationEpoch === myNav) navigating.value = false;
     if (committed) syncplay.endEpisodeSwitchHold();
-    // The third arm with no `loadedmetadata` behind it (#487).
+    // The third arm with no `loadeddata` behind it (#487). The grace timer is
+    // cancelled only past the commit: above it, the timer still running is an
+    // earlier step's, for a token this run never replaced.
     if (pendingFollow?.nav === myNav) pendingFollow = null;
+    if (committed) cancelFollowGrace();
     if (unmounted) return committed ? 'moved' : 'superseded';
     // A throw below the index write is a #354-shaped failure of the SOURCE, with
     // the UI already switched — so `moved`, and the walk keeps going. Above it,
@@ -2905,6 +2937,7 @@ onBeforeUnmount(() => {
   }
   if (prefetchToastTimer) clearTimeout(prefetchToastTimer);
   if (navToastTimer) clearTimeout(navToastTimer);
+  cancelFollowGrace();
   if (resumeToastTimer) clearTimeout(resumeToastTimer);
   if (skipClampToastTimer) clearTimeout(skipClampToastTimer);
   // The document keydown listener is removed by usePlayerKeyboard's

@@ -8,18 +8,18 @@
 //
 // The mechanism, from #487: B follows A's change with an absolute index lookup
 // and a relative walk (`handleRemoteEpisodeChange`,
-// `src/renderer/src/components/views/PlayerView.vue:508`), and B's `navigating`
+// `src/renderer/src/components/views/PlayerView.vue:509`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3273`) — is released in the `nextTick` after
-// `playerGetStreamUrl` resolves (`PlayerView.vue:2564`), not when the followed
+// (`PlayerView.vue:3306`) — is released in the `nextTick` after
+// `playerGetStreamUrl` resolves (`PlayerView.vue:2591`), not when the followed
 // episode has loaded. B's user is still looking at episode N; a Next pressed
 // after that release reads its target relative to the already-committed N+1
-// (`PlayerView.vue:2315`), and before the fix both peers landed on N+2. The
+// (`PlayerView.vue:2327`), and before the fix both peers landed on N+2. The
 // fix leaves the early release alone and adds a pending-follow token: a room
-// follow's Next step arms it at its commit, the step's `loadedmetadata` clears
-// it, and the user's Next (`onUserNext`) swallows one press while it still
-// names the active episode (`shouldSwallowLocalNext`,
-// `src/renderer/src/utils.ts:274`).
+// follow's Next step arms it at its commit, `FOLLOW_GRACE_MS` after the step's
+// `loadeddata` it clears (#500; it cleared at `loadedmetadata` until then), and
+// the user's Next (`onUserNext`) swallows one press while it still names the
+// active episode (`shouldSwallowLocalNext`, `src/renderer/src/utils.ts:274`).
 //
 // ── What is real and what is modelled ────────────────────────────────────────
 //
@@ -38,11 +38,16 @@
 //  2. `navigating` is released in the `nextTick` after the stream URL
 //     resolves, not on `loadedmetadata`;
 //  3. a remote change is followed as a relative walk gated on `!navigating`;
-//  4. a follow's Next step arms the token at its commit, its `loadedmetadata`
-//     clears it, and the user's Next consumes it instead of stepping.
+//  4. a follow's Next step arms the token at its commit, its `loadeddata`
+//     starts a `FOLLOW_GRACE_MS` timer that clears it (every commit cancels a
+//     running one), and the user's Next consumes it instead of stepping.
 //
 // `RESOLVE_MS` is the time `playerGetStreamUrl` takes; `METADATA_MS` is the
-// source swap to `loadedmetadata`. The boundary between a press the button
+// source swap to `loadedmetadata`, which no longer touches the token (#500),
+// and `LOADEDDATA_MS` the swap to the first renderable frame. The model's
+// sweep can only be green by construction; what goes red against a component
+// that clears on metadata again is the source-scan block at the end. The
+// boundary between a press the button
 // turns away and one the token swallows sits at `DELAY_MS + RESOLVE_MS` (one
 // hop for A's `Set{file}` to reach B, then B's own stream resolve), which is the
 // relation #487 measured on real streams at 352–598 ms; before the fix the same
@@ -53,20 +58,29 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { Peer, TwoPeerRoom } from '../helpers/syncplay-two-peer'
-import { walkEpisodeSteps, shouldSwallowLocalNext } from '../../src/renderer/src/utils'
+import {
+  walkEpisodeSteps,
+  shouldSwallowLocalNext,
+  FOLLOW_GRACE_MS
+} from '../../src/renderer/src/utils'
 import type { EpisodeStepOutcome } from '../../src/renderer/src/utils'
 
 const EPISODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
 /** Both peers start on episode 6 (index 5). */
 const START_IDX = 5
-/** Source swap to `loadedmetadata` — where the token is cleared. */
-const METADATA_MS = 1500
+/** Source swap to `loadedmetadata` — the low end of #487's 300–850 ms. */
+const METADATA_MS = 300
+/** Source swap to `loadeddata`, the first frame — where the grace starts. The
+ *  two-instance rig measured it 6–10 ms behind `loadedmetadata` (#500). */
+const LOADEDDATA_MS = 310
 
 type Press = 'dispatched' | 'button-disabled' | 'swallowed'
 
 interface Nav {
   idx(): number
   pressNext(): Press
+  /** When the first step's source swap happened (`Date.now()`), or null. */
+  swapAt(): number | null
 }
 
 /** The four-property model of `PlayerView`'s navigation; see the header. */
@@ -76,6 +90,13 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
   let epoch = 0
   // (4) the pending-follow token, stamped with the run that armed it.
   let pendingFollow: { index: number; nav: number } | null = null
+  // (4) the one grace timer, `followGraceTimer`.
+  let grace: ReturnType<typeof setTimeout> | null = null
+  const cancelGrace = (): void => {
+    if (grace) clearTimeout(grace)
+    grace = null
+  }
+  let firstSwapAt: number | null = null
 
   // `viewGoToEpisode`, not `goToEpisode`: this is the model of `PlayerView`'s
   // function, and the harness's `peer.goToEpisode(` call-site census in
@@ -96,16 +117,24 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
     if (epoch !== my) return 'superseded'
     idx = target
     // (4) armed at the commit by a follow's Next step, cleared by any other.
+    cancelGrace()
     pendingFollow = origin === 'follow' && dir === 'next' ? { index: target, nav: my } : null
     await peer.goToEpisode(EPISODES[target])
     await new Promise((r) => setTimeout(r, resolveMs))
     if (epoch !== my) return 'moved'
     // (2) released in the nextTick after the stream URL resolved.
     await Promise.resolve()
-    // (4) the step's own `loadedmetadata` clears its own token.
+    firstSwapAt ??= Date.now()
+    // (4) the step's own `loadeddata` starts the grace that clears its own
+    // token; its `loadedmetadata` (`METADATA_MS`) is the resume and nothing else.
     setTimeout(() => {
-      if (pendingFollow?.nav === my) pendingFollow = null
-    }, METADATA_MS)
+      if (pendingFollow?.nav !== my) return
+      cancelGrace()
+      grace = setTimeout(() => {
+        grace = null
+        if (pendingFollow?.nav === my) pendingFollow = null
+      }, FOLLOW_GRACE_MS)
+    }, LOADEDDATA_MS)
     navigating = false
     return 'moved'
   }
@@ -132,6 +161,7 @@ function attachNavigator(peer: Peer, resolveMs: number): Nav {
 
   return {
     idx: () => idx,
+    swapAt: () => firstSwapAt,
     // (4) `onUserNext`: the button's guard, then the token, then the step.
     pressNext: () => {
       if (navigating) return 'button-disabled'
@@ -149,6 +179,8 @@ interface Run {
   a: string
   b: string
   bPress: Press
+  /** B's press minus B's follow's `loadedmetadata`, ms; null if B never swapped first. */
+  bSinceMeta: number | null
 }
 
 describe('SyncplayClient — both peers press next d ms apart (#487, fixed)', () => {
@@ -186,9 +218,16 @@ describe('SyncplayClient — both peers press next d ms apart (#487, fixed)', ()
     const nb = attachNavigator(B, resolveMs)
     na.pressNext()
     if (dMs > 0) await room.advance(dMs / 1000)
+    const bPressAt = Date.now()
     const bPress = nb.pressNext()
+    const bSwapAt = nb.swapAt()
     await room.advance(6)
-    const r: Run = { a: EPISODES[na.idx()], b: EPISODES[nb.idx()], bPress }
+    const r: Run = {
+      a: EPISODES[na.idx()],
+      b: EPISODES[nb.idx()],
+      bPress,
+      bSinceMeta: bSwapAt === null ? null : bPressAt - (bSwapAt + METADATA_MS)
+    }
     room.dispose()
     room = undefined
     return r
@@ -254,6 +293,46 @@ describe('SyncplayClient — both peers press next d ms apart (#487, fixed)', ()
     expect(await firstSwallow(50, 1000)).toBeNull()
   }, 60_000)
 
+  /** d = 700..1600 ms at 50 + 400: B's press against its own N+1's
+   *  `loadedmetadata` (the `+N` after the cell, ms). Until #500 the token
+   *  cleared at that metadata, and every cell from +0 on read `8/8`: #500's
+   *  measured reflex presses sat at +190..+590. Now the boundary is
+   *  `LOADEDDATA_MS - METADATA_MS + FOLLOW_GRACE_MS` = +610. */
+  const SWEEP_PAST_METADATA: Record<number, string> = {
+    700: '7/7 swallowed -50',
+    750: '7/7 swallowed +0',
+    800: '7/7 swallowed +50',
+    850: '7/7 swallowed +100',
+    900: '7/7 swallowed +150',
+    950: '7/7 swallowed +200',
+    1000: '7/7 swallowed +250',
+    1050: '7/7 swallowed +300',
+    1100: '7/7 swallowed +350',
+    1150: '7/7 swallowed +400',
+    1200: '7/7 swallowed +450',
+    1250: '7/7 swallowed +500',
+    1300: '7/7 swallowed +550',
+    1350: '7/7 swallowed +600',
+    1400: '8/8 +650',
+    1450: '8/8 +700',
+    1500: '8/8 +750',
+    1550: '8/8 +800',
+    1600: '8/8 +850'
+  }
+
+  it('swallows a press after the follower’s metadata until its first frame + FOLLOW_GRACE_MS, and lets a later one through (#500)', async () => {
+    const got: Record<number, string> = {}
+    for (let d = 700; d <= 1600; d += 50) {
+      const r = await run(d, 50, 400)
+      got[d] = `${fmt(r)} ${r.bSinceMeta! >= 0 ? '+' : ''}${r.bSinceMeta}`
+    }
+    expect(got).toEqual(SWEEP_PAST_METADATA)
+    // The mirror: past first frame + grace, a press is the user's own second
+    // Next and still reaches N+2 — the grace is a window, not a lock.
+    expect(Object.values(got).filter((v) => v.startsWith('8/8'))).toHaveLength(5)
+    expect(LOADEDDATA_MS - METADATA_MS + FOLLOW_GRACE_MS).toBe(610)
+  }, 60_000)
+
   it('converges when B presses before A’s change has reached it (d = 0)', async () => {
     const r = await run(0, 50, 400)
     expect([r.a, r.b, r.bPress]).toEqual(['7', '7', 'dispatched'])
@@ -295,17 +374,22 @@ describe('PlayerView anchors for the #487 navigation model', () => {
       "() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir, 'follow')"
     )
   })
-  it('arms the token at a follow Next commit and clears it on that run’s own loadedmetadata', () => {
+  it('arms the token at a follow Next commit and clears it FOLLOW_GRACE_MS after that run’s own loadeddata', () => {
     const flat = body.replace(/\s+/g, ' ')
     expect(flat).toContain(
-      "pendingFollow = origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;"
+      "cancelFollowGrace(); pendingFollow = origin === 'follow' && direction === 'next' ? { index: targetIndex, nav: myNav } : null;"
     )
+    // #500: the clear left `loadedmetadata`, which keeps only the resume.
+    expect(flat).toContain('const onTargetMetadata = (): void => { resumeFromSavedPosition(); };')
     expect(flat).toContain(
-      'const onTargetMetadata = (): void => { if (pendingFollow?.nav === myNav) pendingFollow = null;'
+      'const onTargetFirstFrame = (): void => { if (pendingFollow?.nav !== myNav) return; cancelFollowGrace(); followGraceTimer = setTimeout(() => { followGraceTimer = null; if (pendingFollow?.nav === myNav) pendingFollow = null; }, FOLLOW_GRACE_MS); };'
     )
-    // Both source arms, the local file and the stream, clear through it.
+    // Both source arms, the local file and the stream, install both.
     expect(
       body.split("v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });")
+    ).toHaveLength(3)
+    expect(
+      body.split("v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });")
     ).toHaveLength(3)
   })
 

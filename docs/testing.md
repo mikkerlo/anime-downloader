@@ -1118,7 +1118,7 @@ covers are not redone:
 | Rows | Tier 1 | Tier 2 |
 | --- | --- | --- |
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
-| E2 double advance (#487, fixed by #492; Tier 1 pins the swallowed presses) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half) |
+| E2 double advance (#487, fixed by #492; window moved to first frame + grace by #500; Tier 1 pins the swallowed presses, the component's grace-timer lifecycle is run from its own source in `player-lifecycle-scope.test.ts`) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half, scored on `loadeddata` + `FOLLOW_GRACE_MS`) |
 | E5 paused state: `docs/syncplay.md`'s auto-resume rule (#496 ✗: still not resumed after #493, at ~0 rather than stale) | — | `episode.spec.ts` (E5) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |

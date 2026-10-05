@@ -737,7 +737,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // mount push) passes nothing, so a re-push can never seek the room to 0 again.
   // While a follow walk runs, every caller is held, these two included (#501).
   function pushSyncplayFile(episodeSwitch?: SyncplayEpisodeSwitch): void {
-    if (holdForFollowWalk() || syncplayStatus.value.state !== 'ready') return
+    if (holdForFollowWalk(episodeSwitch) || syncplayStatus.value.state !== 'ready') return
     const dur = deps.getVideoEl()?.duration || deps.getDuration() || 0
     const newPlayer = !announcedThisMount
     announcedThisMount = true
@@ -2513,11 +2513,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // the episode it started on announces nothing new, but a reconnect it held
   // still owes the room its file.
   let followWalkHeldPush = false
+  // A user-driven commit (#486 `'local'`) that landed mid-walk: a Prev or an
+  // auto-advance admitted during a later step's `saveProgress`, before that
+  // step sets `navigating`. The user's own move outranks the walk's
+  // `'follow'`, so the settle announces it as `'local'` — even when it brought
+  // the index back to where the walk started — and main forces the room to 0.
+  let followWalkHeldLocal = false
   let disposed = false
 
-  function holdForFollowWalk(): boolean {
+  function holdForFollowWalk(episodeSwitch?: SyncplayEpisodeSwitch): boolean {
     if (followWalkDepth === 0) return false
     followWalkHeldPush = true
+    if (episodeSwitch === 'local') followWalkHeldLocal = true
     return true
   }
 
@@ -2525,6 +2532,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     if (followWalkDepth === 0) {
       followWalkStartIndex = deps.activeEpisodeIndex.value
       followWalkHeldPush = false
+      followWalkHeldLocal = false
     }
     followWalkDepth += 1
   }
@@ -2534,9 +2542,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     followWalkDepth -= 1
     if (followWalkDepth > 0 || disposed) return
     const moved = deps.activeEpisodeIndex.value !== followWalkStartIndex
-    if (moved) pushSyncplayFile('follow')
+    if (followWalkHeldLocal) pushSyncplayFile('local')
+    else if (moved) pushSyncplayFile('follow')
     else if (followWalkHeldPush) pushSyncplayFile()
     followWalkHeldPush = false
+    followWalkHeldLocal = false
   }
 
   onBeforeUnmount(() => {

@@ -6749,6 +6749,54 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(pushes(setFile)).toEqual([['29', undefined]])
   })
 
+  it('a local commit the walk held is announced as local, not downgraded to a follow', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    // A user Prev admitted during step 2's `saveProgress`, before `navigating`
+    // is set: it supersedes the step and commits as `'local'`.
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    // An auto-advance tick in the same window, so the walk did move.
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value += 2
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['31', 'local']])
+  })
+
+  it('a held local commit back to the start index still forces the room to 0', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['29', 'local']])
+
+    // The latch is per walk: the next walk's settle is a plain follow.
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([
+      ['29', 'local'],
+      ['30', 'follow']
+    ])
+  })
+
   it('an overlapping walk’s settle does not release the outer walk', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)

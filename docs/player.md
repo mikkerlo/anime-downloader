@@ -79,7 +79,7 @@ ASS subtitles are rendered natively using [JASSUB](https://github.com/ThaUnknown
 
 ## Quality Selector
 
-Dropdown in player controls showing all available stream heights (e.g., 1080p, 720p, 480p). Available streams are returned by `player:get-stream-url` IPC. On quality switch: updates `<video>` src, preserves playback position. Only visible when streaming (not for local files).
+Dropdown in player controls showing all available stream heights (e.g., 1080p, 720p, 480p). Available streams are returned by `player:get-stream-url` IPC. On quality switch: updates `<video>` src, preserves playback position, and keeps the play/pause state — a playing player is restored through `playProgrammatically(v, 'restore')`, and a paused one is disarmed with a bare `v.pause()` in the same `nextTick` (#498), because the rebind re-arms the `<video>`'s `autoplay` and nothing else on this path disarms it (see `docs/syncplay.md`, #348). Without it a fast reload autostarted the player, solo or in a room, and in a room `onLocalPlay` announced that as the user's play. Only visible when streaming (not for local files).
 
 ## Translation Selector
 

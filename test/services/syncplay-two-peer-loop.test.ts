@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2417` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2423` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -719,8 +719,8 @@ describe('two-peer syncplay harness', () => {
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
 // `src/renderer/src/components/views/PlayerView.vue:1844`,
-// `src/renderer/src/components/views/PlayerView.vue:2625` and
-// `src/renderer/src/components/views/PlayerView.vue:2648` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:2631` and
+// `src/renderer/src/components/views/PlayerView.vue:2654` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local

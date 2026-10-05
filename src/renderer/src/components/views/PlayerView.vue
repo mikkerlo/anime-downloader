@@ -1938,6 +1938,12 @@ function selectQuality(stream: { height: number; url: string }): void {
     const v = videoRef.value;
     if (!v) return;
     seekProgrammatically(v, savedTime);
+    // The rebind above re-armed `autoplay`, and no watcher sees this swap, so a
+    // paused player is disarmed here or a fast reload autostarts it and
+    // `onLocalPlay` announces a play nobody pressed (#498). A bare pause on an
+    // already-paused element that registers nothing, under the #348 contract
+    // written above use-syncplay-client.ts:1714 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
+    if (!wasPlaying && v.paused) v.pause();
     if (wasPlaying) playProgrammatically(v, 'restore');
   });
 }

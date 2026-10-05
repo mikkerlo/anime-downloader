@@ -12,6 +12,11 @@
 // not a race at all: `applySyncplayReadyGate` returns at once outside a ready
 // session, so nothing ever disarms there.
 //
+// **This file pinned #498 ✗ and now pins its fix.** `selectQuality` disarms in
+// its `nextTick`, after the rebind: `if (!wasPlaying && v.paused) v.pause()`.
+// The `'none'` cases below keep the pre-fix shape reproducible, so the harness's
+// `autoplay` model stays proven able to see the bug.
+//
 // ── What is real and what is modelled ────────────────────────────────────────
 //
 // Real: both main `SyncplayClient`s, their routers, both mounted composables,
@@ -43,7 +48,7 @@ const HAVE_ENOUGH_DATA = 4
 type Disarm = 'none' | 'after-rebind' | 'before-rebind'
 
 /** What `PlayerView.selectQuality` does today; the scan below holds it there. */
-const PLAYER_VIEW_DISARM = 'none' as Disarm
+const PLAYER_VIEW_DISARM = 'after-rebind' as Disarm
 
 /**
  * `PlayerView.selectQuality`, statement for statement. `ui` is `null` for a
@@ -150,9 +155,19 @@ describe('a quality switch right after a pause (#498)', () => {
     return sent.slice(press).filter((f) => f.paused === false).length
   }
 
-  it('resumes the room nobody un-paused (✗ #498)', async () => {
+  it('keeps the room paused: the switcher puts no paused: false on the wire', async () => {
     const [switcher, watcher] = await seatPlayingPair(true)
     const resumes = await pauseThenSwitch(switcher)
+
+    expect(resumes).toBe(0)
+    expect(switcher.el.paused).toBe(true)
+    expect(watcher.el.paused).toBe(true)
+    expect(room.server.roomState().paused).toBe(true)
+  })
+
+  it('resumes the room nobody un-paused without the disarm (the pre-fix shape)', async () => {
+    const [switcher, watcher] = await seatPlayingPair(true)
+    const resumes = await pauseThenSwitch(switcher, 'none')
 
     expect(resumes).toBeGreaterThan(0)
     expect(switcher.el.paused).toBe(false)
@@ -239,10 +254,10 @@ describe('a quality switch right after a pause (#498)', () => {
       expect(el.currentTime).toBe(ROOM_START)
     })
 
-    it('autostarts after a pause → quality switch at any gap (✗ #498)', () => {
+    it('stays paused after a pause → quality switch', () => {
       const el = soloSwitch()
-      expect(el.paused).toBe(false)
-      expect(el.tick()).toContain('play')
+      expect(el.paused).toBe(true)
+      expect(el.tick()).not.toContain('play')
     })
 
     it('autostarts with no disarm at all: nothing outside a room disarms it', () => {
@@ -282,6 +297,7 @@ describe('PlayerView anchors for the #498 selectQuality model', () => {
     const tick = flat.slice(flat.indexOf('nextTick('))
     const disarm = 'if (!wasPlaying && v.paused) v.pause();'
     expect(tick.includes(disarm)).toBe(PLAYER_VIEW_DISARM === 'after-rebind')
-    expect(flat.slice(0, flat.indexOf('nextTick(')).includes('v.pause()')).toBe(false)
+    // Nothing pauses ahead of the rebind, where the load would re-arm it.
+    expect(flat.slice(0, flat.indexOf('nextTick('))).not.toMatch(/\.pause\(\)/)
   })
 })

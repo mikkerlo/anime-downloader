@@ -7,10 +7,10 @@
 //       send path); the gate pauses both, and both resume when B is ready
 //       again (#355). Readiness is ON in this rig's server, which is why the
 //       shared bootstrap takes it as a flag.
-//   P7f Pause, then a quality switch 0 / 20 / 50 / 200 ms later (#498) — ✗.
+//   P7f Pause, then a quality switch 0 / 20 / 50 / 200 ms later (#498).
 //   P6f The same for a translation switch.
 //
-// All but P7f are non-✗ rows: `bad == 0` over the scoreable runs.
+// All six are non-✗ rows: `bad == 0` over the scoreable runs.
 
 import { test, expect } from '@playwright/test'
 import {
@@ -151,11 +151,12 @@ for (const [rowId, what] of [
 
 // P7f / P6f — pause, then a switch tens of ms later (#498). No `bothPaused`
 // before the switch: the press and both clicks run in one `page.evaluate`, and
-// each run records its real gaps. The quality switch rebinds the element with
-// nothing on its path to disarm the re-armed `autoplay`, so a fast fixture
-// reload autostarts it and `onLocalPlay` tells the room `paused: false`. The
+// each run records its real gaps. The quality switch rebinds the element and
+// re-arms its `autoplay`; before #498's fix nothing on that path disarmed it,
+// so a fast fixture reload autostarted it and `onLocalPlay` told the room
+// `paused: false` (P7f was ✗: 10/10 bad at 0 and 20 ms, 0/10 at 50). The
 // translation switch resolves its stream first (the rig's 300 ms), and the
-// episode/translation watcher disarms in that window, so P6f is a non-✗ guard.
+// episode/translation watcher disarms in that window, so P6f was never ✗.
 const BUCKETS_MS = [0, 20, 50, 200] as const
 const N_PER_BUCKET = Number(process.env.SYNCPLAY_E2E_N ?? 10)
 
@@ -219,12 +220,7 @@ for (const [rowId, what] of [
         process.stdout.write(`[syncplay-e2e] ${rowId} ${d} ms: n=${b.n} bad=${b.bad}\n`)
         expect(b.n, `${rowId} ${d} ms: no scoreable runs`).toBeGreaterThanOrEqual(1)
       }
-      if (rowId === 'P7f') {
-        // ✗ (#498): the rig sees the bug in the 0 ms bucket.
-        expect(bucket(0).bad).toBeGreaterThanOrEqual(1)
-      } else {
-        expect(s.bad).toBe(0)
-      }
+      expect(s.bad).toBe(0)
     } finally {
       await closeDuo(A, B)
     }

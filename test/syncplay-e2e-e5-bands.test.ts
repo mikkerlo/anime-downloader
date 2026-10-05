@@ -14,8 +14,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { e5Position, e5Split } from '../e2e-syncplay/helpers/score'
 
-const OLD = 'file:///fixtures/ep1.mp4'
-const NEW = 'file:///fixtures/ep2.mp4'
+const OLD = 'file:///anime-dl-e2e/syncplay-fixtures/ep1.mp4'
+const NEW = 'file:///anime-dl-e2e/syncplay-fixtures/ep2.mp4'
 type Ev = { at: number; t: string; ct: number; src: string }
 const seek = (at: number, ct: number, src = NEW): Ev => ({ at, t: 'seeking', ct, src })
 const NOT_STALE = { stale: false }
@@ -86,6 +86,8 @@ describe('e5Split', () => {
   })
 
   it('ignores seeks before the press and seeks on the old element', () => {
+    // Longer than the 40-char tail the probe records, so this case pins the truncation.
+    expect(OLD.length).toBeGreaterThan(40)
     const ev = [seek(-200, 330), seek(400, 330, OLD.slice(-40))]
     expect(e5Split({ ev }, before, NOT_STALE)).toEqual({ old: false, foreign: false })
   })

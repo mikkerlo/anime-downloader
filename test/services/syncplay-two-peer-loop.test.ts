@@ -909,13 +909,17 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // N → N+2 cases move A's file directly with one awaited `A.goToEpisode('8')`
 // each, because a pick from the episode list is a jump, not a modelled step.
 //
-// **Re-derived for #501: `episode-change` 14 → 15.** The navigator model gains
+// **Re-derived for #496: `episode-change` 14 → 15.** Its block drives every
+// switch through one awaited site in `startEpisode`, which adds `PlayerView`'s
+// registered `episode-start` play after the swap.
+//
+// **Re-derived for #501: `episode-change` 15 → 16.** The navigator model gains
 // `pick()`, the leader's list pick, whose one awaited `peer.goToEpisode(` call
 // every #501 case drives its jump through.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 15,
+  'episode-change': 16,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

@@ -1141,10 +1141,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // `episode-start` *establishes* the new episode's intent rather than replaying
     // a stale one, so it is not what this is about.
     if (op.kind === 'restore' && op.target === 'play' && intendedPaused === true) return
-    // Both non-echo kinds resume today. The pause direction is spelled out for
-    // symmetry so a future `restore` of a paused source does not have to
-    // rediscover which writes belong together.
-    const paused = op.target === 'pause'
+    // An episode start adopts main's `roomPaused`, never the mirror, while `ready` (#496;
+    // docs/syncplay.md). A paused room takes the coupled pause set and the gate pauses the echo.
+    const roomPaused = syncplayStatus.value.state === 'ready' && !!syncplayStatus.value.roomPaused
+    const paused = op.target === 'pause' || (op.kind === 'episode-start' && roomPaused)
     intendedPaused = paused
     intentRevision++
     syncplayLastRemotePlaying = !paused
@@ -2007,15 +2007,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // Episode/translation switch: re-announce the file to peers but DO NOT
   // reset syncplayLastRemotePlaying. If a peer is currently playing,
   // applySyncplayReadyGate will start the new episode as soon as the buffer
-  // fills — by design, so a remote "next episode" or local prev/next
-  // auto-resumes the binge instead of pausing.
+  // fills — by design, so next/prev in a playing room auto-resumes the binge
+  // instead of pausing; a paused room stays paused at 0 (#496).
   watch([deps.activeEpisodeIndex, deps.activeTranslationId], ([index], [prevIndex]) => {
     // One-shot, consumed here whether or not the push below goes out (#486).
     const episodeChanged = index !== prevIndex
     const episodeSwitch = episodeChanged ? (pendingEpisodeSwitch ?? undefined) : undefined
     pendingEpisodeSwitch = null
     episodeSwitchHold = episodeChanged
-    // A new episode deliberately auto-resumes the binge through the gate (see
+    // A playing room's new episode deliberately auto-resumes through the gate (see
     // above), and a hold surviving the switch would sit on that resume until it
     // expired into a failure toast for a pause the user made an episode ago.
     clearPendingUserPause()

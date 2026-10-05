@@ -1126,5 +1126,20 @@ covers are not redone:
 | P2 (✗ band), P3, M8 | `syncplay-two-peer-interactions.test.ts` | — |
 | P5, M1 | `syncplay-two-peer-adoption.test.ts`, `syncplay-two-peer-playpause.test.ts` | — |
 | P6, P7, P8 | — | `pause.spec.ts` |
+| P7f, P6f: pause, then a quality / translation switch 0 / 20 / 50 / 200 ms later, the gaps recorded per run; `SYNCPLAY_E2E_N` is the per-bucket N, default 10 (#498; P7f was ✗ before its fix) | `syncplay-two-peer-quality-switch.test.ts` | `pause.spec.ts` |
 | P12 | the #350 block of `test/renderer/composables/use-syncplay-client.test.ts` | — |
 | M3 | `syncplay-frozen-snapshot.test.ts` | — |
+
+P7f's Tier 1 half needs an element that can start itself, which
+`HarnessVideo` cannot by default. `autoplay: true` is the opt-in model of the
+`<video>`'s bare `autoplay` attribute (#498): a load arms the can-autoplay
+flag, `play()` and `pause()` clear it (`pause()` even on an already-paused
+element, which fires nothing, the #348 disarm), and a `readyState` write
+reaching HAVE_ENOUGH_DATA with it armed on a paused element starts playback
+and queues `play` with no `play()` call. Off by default, because every older
+fixture assumes an element that never starts itself. `HarnessVideo.delivered`
+logs every event `tick()` hands out, which is what the file's model of
+`PlayerView`'s `awaitingFirstAutostart` latch reads: set at construction (the
+mount), cleared by the first delivered `play` or `pause`. The pre-start cases
+(a switch before the first autostart, solo and in a live room) pin that the
+disarm leaves a solo autostart alone and still disarms inside a session.

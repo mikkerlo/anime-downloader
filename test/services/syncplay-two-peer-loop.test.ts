@@ -908,10 +908,14 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // **Re-derived for #492's review: `episode-change` 12 → 14.** The two room-walk
 // N → N+2 cases move A's file directly with one awaited `A.goToEpisode('8')`
 // each, because a pick from the episode list is a jump, not a modelled step.
+//
+// **Re-derived for #496: `episode-change` 14 → 15.** Its block drives every
+// switch through one awaited site in `startEpisode`, which adds `PlayerView`'s
+// registered `episode-start` play after the swap.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 14,
+  'episode-change': 15,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

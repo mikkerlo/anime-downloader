@@ -36,13 +36,14 @@
 // two populations cannot overlap.
 //
 // This file asserts against the model server. Every room here plays except the
-// paused-room case, whose assertion is the room staying paused at 0, read off
-// this client's own wire.
+// paused-room cases (the one below and the #496 block), whose assertion is the
+// room staying paused at 0, read off the wire.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { Peer, TwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { WireFrame } from '../helpers/syncplay-min-election-server'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { shouldSwallowLocalNext, walkEpisodeSteps } from '../../src/renderer/src/utils'
 import type { EpisodeStepOutcome } from '../../src/renderer/src/utils'
 
@@ -302,6 +303,242 @@ describe('SyncplayClient — both peers across an episode change (#360, #486)', 
     expectConverged(switcher, other)
   })
 })
+
+// ── #496: a paused room that changes episode stays paused at 0 ───────────────
+//
+// `keeps a paused room paused, at 0` above is the ordering that always held:
+// nothing plays the new element, so a paused frame is always there to park. The
+// app does play it. `PlayerView.goToEpisode` registers an `episode-start` and
+// calls `v.play()` right after the source swap, and that echo's consume wrote
+// "playing" unconditionally. A buffered element (canplay) then stayed playing,
+// and a playing element's `timeupdate` pushed a snapshot as soon as metadata
+// released the switch hold. When that push reached main ahead of the room's
+// next paused frame, the room resumed. Nobody pressed Play. On the real server
+// that happened in 2 of 9 E5 runs and 2 of 24 probe runs.
+//
+// `live()` below models the two media events the harness otherwise lacks:
+// `canplay` once an element has metadata, and `timeupdate` while it plays. The
+// switch suspends long enough for the presser's seek echo to land before the
+// swap, so nothing is left to park on the new element. That is run 7 in #496.
+
+describe('SyncplayClient — a paused room that changes episode stays paused (#496)', () => {
+  let room: TwoPeerRoom | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    room = undefined
+    vi.useRealTimers()
+  })
+
+  /** `room.advance`, plus `canplay` at metadata and `timeupdate` while playing. */
+  const live = async (seconds: number): Promise<void> => {
+    for (let i = 0; i < Math.round(seconds * 20); i += 1) {
+      await room!.advance(0.05)
+      for (const p of peers) {
+        if (p.el.readyState === 1) {
+          p.el.readyState = 4
+          p.ui.onLocalCanPlay()
+        }
+        if (!p.el.paused && p.el.readyState >= 1) p.ui.onVideoTimeUpdate()
+      }
+    }
+  }
+  let peers: Peer[] = []
+
+  const seatLive = async (
+    paused: boolean,
+    offsetMs: number
+  ): Promise<{ switcher: Peer; other: Peer }> => {
+    room = await createTwoPeerRoom({ position: 300, paused })
+    const switcher = await room.seat({
+      username: 'hostuser',
+      position: 300,
+      paused,
+      delayMs: DELAY_MS,
+      bindGapMs: 50
+    })
+    const other = await room.seat({
+      username: 'joinuser',
+      position: 300,
+      paused,
+      delayMs: DELAY_MS,
+      bindGapMs: 50
+    })
+    peers = [switcher, other]
+    await live(4 + offsetMs / 1000)
+    return { switcher, other }
+  }
+
+  /** `PlayerView.goToEpisode`: swap the source, then the registered `episode-start` play. */
+  const startEpisode = async (
+    p: Peer,
+    ep: string,
+    origin: 'local' | 'follow',
+    suspendMs: number
+  ): Promise<void> => {
+    await p.goToEpisode(ep, undefined, suspendMs, origin)
+    p.ui.beginProgrammaticPlayback('play', 'episode-start')
+    void p.el.play()
+  }
+
+  const resumesOnWire = (from: number[]): WireFrame[] =>
+    peers.flatMap((p, i) =>
+      room!.server
+        .wireOf(p.username)
+        .slice(from[i])
+        .filter((f) => f.paused === false)
+    )
+
+  // [who reaches metadata first, episode, phase of the switch against the 1 Hz frames, suspend]
+  const CASES: Array<['presser' | 'follower', string, number, number]> = [
+    ['presser', '8', 0, 300],
+    ['presser', '6', 0, 300],
+    ['follower', '8', 250, 600],
+    ['follower', '6', 250, 600]
+  ]
+
+  it.each(CASES)(
+    'stays paused at 0 when the %s’s new element plays before a paused frame lands (episode %s)',
+    async (who, ep, offsetMs, suspendMs) => {
+      const { switcher, other } = await seatLive(true, offsetMs)
+      const wireBefore = peers.map((p) => room!.server.wireOf(p.username).length)
+
+      await startEpisode(switcher, ep, 'local', who === 'presser' ? suspendMs : 0)
+      await live(0.2)
+      await startEpisode(other, ep, 'follow', who === 'follower' ? suspendMs : 0)
+      await live(10)
+
+      // The property that broke: not one playstate after the switch claimed
+      // playing. An end-state check alone would pass a resume-then-repause.
+      expect(resumesOnWire(wireBefore)).toEqual([])
+      expect(room!.server.roomState().paused).toBe(true)
+      expect(switcher.el.paused).toBe(true)
+      expect(other.el.paused).toBe(true)
+      // "At 0" to one harness slice: `HarnessVideo` walks a playing element
+      // even at HAVE_NOTHING, so the 50 ms between the `episode-start` play and
+      // the gate's pause shows up as 0.05. A real element there does not move.
+      for (const at of [
+        room!.server.roomState().position,
+        switcher.el.currentTime,
+        other.el.currentTime
+      ]) {
+        expect(at).toBeLessThanOrEqual(0.05)
+      }
+    }
+  )
+
+  it('a playing room still resumes the binge through the same switch', async () => {
+    const { switcher, other } = await seatLive(false, 0)
+
+    await startEpisode(switcher, '8', 'local', 300)
+    await live(0.2)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, switcher, other)
+  })
+
+  it('a switch inside the pending-pause hold resumes: keyed on roomPaused, not the mirror', async () => {
+    // The user pauses a playing room and presses next before the room reports
+    // paused. The room still plays at the consume, so the documented hold
+    // clause lets the switch resume; the mirror already reads paused from the
+    // user's own prediction, which is why the fix cannot key on it.
+    const { switcher, other } = await seatLive(false, 0)
+
+    switcher.userPause()
+    await live(0.05)
+    expect(switcher.status().roomPaused).toBe(false)
+    await startEpisode(switcher, '8', 'local', 0)
+    await live(0.05)
+    // Consumed as playing: the gate left the new element running.
+    expect(switcher.status().roomPaused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+  })
+
+  it('a peer pressing Play before the consume resumes the room on the new episode', async () => {
+    const { switcher, other } = await seatLive(true, 0)
+    const broadcastsBefore = switcher.broadcasts.length
+
+    // The play lands while the switcher is still inside the stream resolve,
+    // before its swap and so before its `episode-start` consume.
+    const switching = startEpisode(switcher, '8', 'local', 600)
+    other.userPlay()
+    await switching
+    expect(switcher.status().roomPaused).toBe(false)
+    await live(0.2)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+
+    // The IPC ordering the consume depends on. Main emits the `roomPaused`
+    // projection before it forwards the inbound state, so by the time the
+    // renderer has seen the playing frame `roomPaused` is already false and a
+    // consume between the two can never overwrite the fresher playing mirror
+    // with `false`. In Electron those are two IPC messages and a `play` event
+    // can run between them; the harness delivers them synchronously, so the
+    // order is asserted here directly.
+    const after = switcher.broadcasts.slice(broadcastsBefore)
+    const statusAt = after.findIndex(
+      (b) =>
+        b.channel === EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS &&
+        (b.payload as SyncplayStatus).roomPaused === false
+    )
+    const playingAt = after.findIndex(
+      (b) =>
+        b.channel === EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE &&
+        (b.payload as SyncplayRemoteState).paused === false
+    )
+    expect(statusAt).toBeGreaterThanOrEqual(0)
+    expect(playingAt).toBeGreaterThan(statusAt)
+  })
+
+  it('a peer pressing Play after the consume resumes the room on the new episode', async () => {
+    const { switcher, other } = await seatLive(true, 0)
+
+    await startEpisode(switcher, '8', 'local', 300)
+    await live(0.2)
+    // Consumed paused: the element was paused by the gate and the room is paused.
+    expect(switcher.el.paused).toBe(true)
+    expect(switcher.status().roomPaused).toBe(true)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(2)
+
+    other.userPlay()
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, switcher, other)
+  })
+})
+
+/** Both elements inside the apply tolerance of `roomAt`, on the new episode. */
+function expectConvergedOn(roomAt: number, ...peers: Peer[]): void {
+  expect(roomAt).toBeLessThan(STALE_FLOOR)
+  for (const p of peers) {
+    expect(Math.abs(p.el.currentTime - roomAt), `${p.username} vs room`).toBeLessThanOrEqual(
+      APPLY_TOLERANCE_S
+    )
+  }
+}
 
 // ── #487: both peers press next within about a second ─────────────────────────
 //

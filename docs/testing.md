@@ -1119,7 +1119,7 @@ covers are not redone:
 | --- | --- | --- |
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
 | E2 double advance (#487, fixed by #492; Tier 1 pins the swallowed presses) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half) |
-| E5 paused state: `docs/syncplay.md`'s auto-resume rule (#496 ✗: still not resumed after #493, at ~0 rather than stale) | — | `episode.spec.ts` (E5) |
+| E5 paused state: a paused room stays paused at 0 across Next/Prev (#496, fixed; Tier 1 pins the presser and follower orderings where the new element plays before a paused frame lands, the playing-room and pending-pause-hold controls, and a peer's Play before and after the consume, through a `live()` loop that models `canplay` and `timeupdate` and `PlayerView`'s registered `episode-start` play) | `syncplay-two-peer-episode-change.test.ts` (#496 block) | `episode.spec.ts` (E5: every scoreable run paused at ~0) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
 | P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |

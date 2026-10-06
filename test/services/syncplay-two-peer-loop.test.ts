@@ -363,7 +363,7 @@ describe('two-peer syncplay harness', () => {
     // seated on a literal — the tenth is the rejection guard below, which never
     // reaches `reload()` at all — so the
     // fallback at
-    // `test/helpers/syncplay-two-peer.ts:258 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // `test/helpers/syncplay-two-peer.ts:259 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
     // option's doc block spends its longest paragraph calling a trap, left the
     // suite at 1822 passed across 122 files. That figure is **historical and no
@@ -386,7 +386,7 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
     // the adoption file's switch fixture. All of them are inert, for one
     // reason: `bindGapMs` is read in exactly one place,
-    // `test/helpers/syncplay-two-peer.ts:432-433 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
+    // `test/helpers/syncplay-two-peer.ts:433-434 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
     // inside `HarnessVideo.reload()`, and a peer that never reloads never
     // reaches it. So the value they inherit is unobservable rather than
     // pinned, and moving the default cannot red them. #486 added the first
@@ -405,7 +405,7 @@ describe('two-peer syncplay harness', () => {
     // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
     // than one step is invisible here — a reload queues `pause`, and `tick()`
     // holds metadata back while that queue is non-empty
-    // (`test/helpers/syncplay-two-peer.ts:469 ("this.queued.length === 0")`), so
+    // (`test/helpers/syncplay-two-peer.ts:470 ("this.queued.length === 0")`), so
     // 0 and 300 both land in the second batch and read the same. Landing in the
     // *third* of three 200 ms steps is what says the gap outlived a step it was
     // given the chance to beat. The case therefore holds for a gap in (400, 600]
@@ -704,7 +704,7 @@ describe('two-peer syncplay harness', () => {
 //
 // This census is the whole of the first half and stands on its own: how many
 // call sites exist, per file, before anything classifies them. Per
-// `docs/testing.md:372 ("Pin the count, never just loop over the set")` a scan
+// `docs/testing.md:386 ("Pin the count, never just loop over the set")` a scan
 // that only walks the occurrences it finds goes green on an eleventh site it
 // never sees, so the count is the assertion and the prefix check is layered on
 // top of it.
@@ -881,7 +881,7 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 //
 // **Re-derived again on that round's review: `episode-change` 9 → 10.** The
 // 6500/7500 pair that pins
-// `src/main/syncplay.ts:967` ("this.playbackAdopted = false") firing on a
+// `src/main/syncplay.ts:996` ("this.playbackAdopted = false") firing on a
 // clean comb cell drives two more switches from one new local helper
 // (`latchAcrossRelease`), so the sites rose
 // by one where the switches rose by two. The review that asked for the pair

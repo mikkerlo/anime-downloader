@@ -297,7 +297,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // then resumes*. The latch survives the silence only because nothing runs
   // while a client is silent; the first resumed push is what touches it. It
   // lands in `updateSnapshot()` with `hasLivePlayback()` already false, so
-  // `src/main/syncplay.ts:966-972` clears `playbackAdopted` and nulls `seekIntent`
+  // `src/main/syncplay.ts:995-1001` clears `playbackAdopted` and nulls `seekIntent`
   // before seating the snapshot — deliberately, since a push after a stale gap
   // is a fresh element under a byte-identical canonicalName that `setFile()`'s
   // identity check cannot see. So recovery here is de-adopt → spectator mirror
@@ -345,7 +345,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // they pin `canAssertSnapshot()` following the pushed value in both
   // directions, and the paused arm (`if (this.snapshot.paused) return true`)
   // carries no staleness compare of its own. Its clock is `hasLivePlayback()`,
-  // src/main/syncplay.ts:2447 ("Date.now() - this.lastSnapshotAt <=
+  // src/main/syncplay.ts:2491 ("Date.now() - this.lastSnapshotAt <=
   // PLAYBACK_STALE_MS"), so what bounds a paused assert is the 5 s de-adoption
   // horizon and not the 2 s assert one — which is #383's correction to the line
   // that used to stand here
@@ -370,12 +370,14 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
       const beforePush = server.wireOf('switchuser').length
       vi.advanceTimersByTime(1000)
       const stale = server.wireOf('switchuser').slice(beforePush)
-      expect(stale.length).toBeGreaterThanOrEqual(1)
-      // `=== false`, not `!== true`: an explicit key, so this is the assertion
-      // arm and not the keyless spectator mirror — which is what makes it a
-      // claim the server acts on rather than a position it merely elects. A
-      // peer that performed no UI action has just told the room it is playing.
-      expect(stale.every((f) => f.paused === false)).toBe(true)
+      // Until #513 this heartbeat carried an explicit `paused: false` — a peer
+      // that performed no UI action telling the room it was playing, the claim
+      // the server acts on. Main now knows it handed the renderer a pause flip
+      // the snapshot has not caught up with (`applyInFlight`), so the one
+      // heartbeat in the gap claims the position and withholds the pause.
+      // Counted, so a second frame in the gap cannot hide behind `every`.
+      expect(stale).toHaveLength(1)
+      expect(stale[0].paused).toBeUndefined()
 
       // The push. `updateSnapshot()` stamps unconditionally, so the flip is
       // immediate and the next heartbeat carries the room's own intent.
@@ -413,22 +415,25 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
       const beforePush = server.wireOf('switchuser').length
       vi.advanceTimersByTime(1000)
       const stale = server.wireOf('switchuser').slice(beforePush)
-      expect(stale.length).toBeGreaterThanOrEqual(1)
-      // Again an explicit key on the assertion arm: this is the frame that in
-      // run5 pushed peer A back to paused 3 ms after its own Play click landed.
+      // This is the frame that in run5 pushed peer A back to paused 3 ms after
+      // its own Play click landed — an explicit `paused: true` until #513, keyless
+      // since, for the same reason as the case above.
+      expect(stale).toHaveLength(1)
+      expect(stale[0].paused).toBeUndefined()
       //
       // The *room* flag is deliberately not asserted here or in the case above.
       // Both clients heartbeat at 1 Hz and disagree, so `roomPaused` is simply
       // whichever frame the modelled server saw last — a scheduling artefact of
       // the fixture, not the behaviour under test. What each client asserts is
       // the behaviour, and it is what the fix changes.
-      expect(stale.every((f) => f.paused === true)).toBe(true)
 
       // Nor does waiting it out help. Past PLAYBACK_ASSERT_STALE_MS the playing
       // direction would have fallen through to the keyless mirror; this one
       // keeps making the claim, because the paused arm never compares the
       // clock. (Under PLAYBACK_STALE_MS throughout, so `hasLivePlayback()` is
-      // not what is being tested here.)
+      // not what is being tested here.) #513's withholding does not change that:
+      // it is bounded at APPLY_IN_FLIGHT_TTL_MS from the flip, and a snapshot
+      // that never catches up claims its stale value again after it.
       const beforeWait = server.wireOf('switchuser').length
       vi.advanceTimersByTime(PLAYBACK_ASSERT_STALE_MS)
       expect(Date.now() - resumedAt).toBeGreaterThan(PLAYBACK_ASSERT_STALE_MS)
@@ -453,9 +458,9 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // terms that it stays under PLAYBACK_STALE_MS throughout so
   // `hasLivePlayback()` is not what it tests. This one crosses that line.
   //
-  // What it pins: `src/main/syncplay.ts:2473` returns false once
+  // What it pins: `src/main/syncplay.ts:2517` returns false once
   // `hasLivePlayback()` goes false, so the paused arm at
-  // `src/main/syncplay.ts:2474` is never reached, and `buildPlaystate()` falls
+  // `src/main/syncplay.ts:2518` is never reached, and `buildPlaystate()` falls
   // through to the keyless spectator mirror. The paused exemption is therefore
   // bounded — by the de-adoption horizon rather than by nothing.
   //
@@ -506,7 +511,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     switcher.updateSnapshot({ position: frozenAt, paused: true })
     // The horizon's origin and the wire slice's, re-taken here as a pair rather
     // than read off the helper's `lastPushAt`/`sentBefore`.
-    // `src/main/syncplay.ts:974` ("this.lastSnapshotAt = Date.now()") restamps
+    // `src/main/syncplay.ts:1007` ("this.lastSnapshotAt = Date.now()") restamps
     // the snapshot clock on every push with nothing gating it, so the age
     // `canAssertSnapshot()` compares runs from *this* push and not from the
     // helper's stamp. The wire length has to move with it: sliced from the
@@ -538,7 +543,14 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     // claim. Without this the assertion below would also pass on a seat that had
     // stopped asserting for some unrelated reason.
     expect(inside.some((f) => f.at - pausedAt > PLAYBACK_ASSERT_STALE_MS)).toBe(true)
-    expect(inside.every((f) => f.position === frozenAt && f.paused === true)).toBe(true)
+    // Less exactly one frame (#513). The peer's room is playing, so its first
+    // periodic after our paused push is a flip main hands a renderer that, here,
+    // never pushes again; the one heartbeat inside APPLY_IN_FLIGHT_TTL_MS of it
+    // withholds the pause claim. The room's later periodics repeat the same flip
+    // and do not re-stamp the marker, so it is one frame and not the horizon.
+    expect(inside.filter((f) => f.paused === undefined)).toHaveLength(1)
+    expect(inside.every((f) => f.position === frozenAt)).toBe(true)
+    expect(inside.filter((f) => f.paused !== undefined).every((f) => f.paused === true)).toBe(true)
 
     // The bound. Past PLAYBACK_STALE_MS there is no `paused` key at all — the
     // keyless mirror, the same shape the *playing* direction falls to earlier in
@@ -554,7 +566,15 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     // forward — that is the mirror, and only the mirror. Paired exactly as the
     // file's second case ('bounds the frozen claim at PLAYBACK_ASSERT_STALE_MS')
     // pairs its own `f.paused === undefined`.
-    expect(past.every((f) => f.position > frozenAt)).toBe(true)
+    //
+    // `>=`, not `>`, since #513. Our paused claim flips this fixture's playing
+    // room on every heartbeat and the peer's flips it back, so whether the
+    // election just before the horizon lands on our frozen position is a phase
+    // artefact of that flapping; #513's one keyless frame shifts the phase and
+    // the first mirror frame can read exactly `frozenAt`. Still a real number,
+    // which is the half that excludes a ping-only frame, and the forward walk
+    // below is unchanged.
+    expect(past.every((f) => f.position >= frozenAt)).toBe(true)
     expect(past[past.length - 1].position).toBeGreaterThan(past[0].position)
 
     // Precondition rather than a claim — the fourth case owns de-adoption timing.

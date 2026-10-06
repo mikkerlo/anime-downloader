@@ -17,6 +17,11 @@ import { EventEmitter } from 'events'
 // Never add `realversion`: the server prefers it over `version` when present.
 const SYNCPLAY_WIRE_VERSION = '1.7.6'
 const HEARTBEAT_MS = 1000
+// How long `applyInFlight` may withhold our pause claim (#513). One heartbeat:
+// the renderer's own push after an apply normally retires the marker within an
+// IPC hop, so this only bounds the case where the snapshot never catches up
+// (a `play()` refused by autoplay policy, a renderer that died mid-apply).
+const APPLY_IN_FLIGHT_TTL_MS = HEARTBEAT_MS
 // Room-list poll (#221). The `List` reply is the only refresh path we have for
 // membership: `Set: {user}` broadcasts cover changes that happen while we are
 // connected, but a frame lost to a mid-reconnect gap, a peer that died without
@@ -446,6 +451,27 @@ export class SyncplayClient extends EventEmitter {
   // the seek completes — that's the echo, and it's the only reliable way to
   // tell it apart from a user seek.
   private lastAppliedRemotePosition: number | null = null
+  // "We just handed the renderer a pause flip it has not reported back yet" (#513).
+  //
+  // Set where `handleState()` emits a `remote-state` whose `paused` differs from
+  // `snapshot.paused`. Until the renderer applies it and pushes a fresh snapshot,
+  // `snapshot.paused` is the *pre-apply* value, and a heartbeat in that gap
+  // asserts it — the server, no longer ignoring us once `sendAck()` has gone out,
+  // takes it as a pause change and undoes the room's pause (or resume), `setBy`
+  // us. While set, `buildPlaystate()` sends position only, the no-claim shape the
+  // mirror uses.
+  //
+  // Two clear rules, and neither is "any `updateSnapshot()`":
+  //  - `sendLocalState()` clears it unconditionally — a real local press replaces
+  //    whatever the room just told us, and must carry its `paused`.
+  //  - `updateSnapshot()` clears it only when the pushed `paused` equals the
+  //    emitted one. Renderer pushes are unordered relative to `remote-state`, so a
+  //    `timeupdate` or 1 s interval push sent *before* the renderer handled the
+  //    frame carries the old `paused`; clearing on it would re-open the race one
+  //    IPC hop later.
+  // Plus `APPLY_IN_FLIGHT_TTL_MS`, read in `buildPlaystate()` and measured from
+  // the first emit of the flip, not the latest.
+  private applyInFlight: { paused: boolean; at: number } | null = null
   // An unresolved user seek (#252): the user moved the playhead and the room
   // has not come with us yet. Session-scoped, like `playbackAdopted` — a seek
   // is *more* likely to be unresolved after a reconnect, not less, so
@@ -898,6 +924,9 @@ export class SyncplayClient extends EventEmitter {
   }): void {
     this.snapshot = { position: payload.position, paused: payload.paused }
     this.lastSnapshotAt = Date.now()
+    // A real local press replaces whatever the room just told us (#513), so it
+    // carries its `paused` — on this frame and on the heartbeats after it.
+    this.applyInFlight = null
     // These arrive from the <video> element's own play/pause/seeked events,
     // which a freshly opened player fires at ~0 while it loads — before any
     // remote state has been applied, so the renderer has registered no
@@ -970,6 +999,10 @@ export class SyncplayClient extends EventEmitter {
       // byte-identical canonicalName.
       this.seekIntent = null
     }
+    // Only a push that has caught up with the emitted flip retires the marker
+    // (#513): one sent before the renderer handled the frame still carries the
+    // pre-apply `paused`, and must not re-arm the heartbeat with it.
+    if (this.applyInFlight && snap.paused === this.applyInFlight.paused) this.applyInFlight = null
     this.snapshot = snap
     this.lastSnapshotAt = Date.now()
   }
@@ -1095,6 +1128,7 @@ export class SyncplayClient extends EventEmitter {
     this.lastRemoteRoomState = null
     this.playbackAdopted = false
     this.lastAppliedRemotePosition = null
+    this.applyInFlight = null
     // Session-scoped, and here rather than in resetTransportState() (#252): the
     // reconnect path runs that one, and it is exactly the path where the user's
     // seek is *most* likely to be the one that never landed. A new session is a
@@ -2298,6 +2332,16 @@ export class SyncplayClient extends EventEmitter {
     // `tearDown()`, and `handleState()`'s out-of-file de-adoption) nulls the
     // intent beside it. So it is an invariant to assert rather than a value to
     // hardcode, and what carries it is adoption rather than the drop guards.
+    // Arm (or retire) the apply-in-flight marker against the snapshot the renderer
+    // has not yet refreshed (#513). A frame that agrees with `snapshot.paused`
+    // retires an older marker: the renderer is about to land where the snapshot
+    // already says, so the snapshot's claim is the right one again. A frame
+    // repeating the flip already armed keeps the original clock: the room's 1 Hz
+    // periodics repeat it for as long as the renderer has not caught up, and
+    // re-stamping on each would turn the TTL into "forever" for a renderer that
+    // never does.
+    if (paused === this.snapshot.paused) this.applyInFlight = null
+    else if (this.applyInFlight?.paused !== paused) this.applyInFlight = { paused, at: Date.now() }
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -2510,6 +2554,26 @@ export class SyncplayClient extends EventEmitter {
     // through sendLocalState() / the first resumed updateSnapshot(), both of
     // which stamp `lastSnapshotAt` before this gate reads it.
     if (this.canAssertSnapshot() && this.isAdopted()) {
+      // A remote pause flip is on its way to the element and our snapshot still
+      // holds the pre-apply `paused` (#513): claim the position, not the pause.
+      // See `applyInFlight` for the clear rules; the TTL is checked here, at
+      // the only reader. An expired marker is left in place rather than nulled,
+      // so the room's next periodic carrying the same flip cannot re-arm it with
+      // a fresh clock — see the arming site in `handleState()`.
+      //
+      // Position without `paused` is the shape #232 rejected for the ack frame
+      // (`sendAck()`), because the server's `_updatePositionByAge` reads a
+      // missing `paused` as playing and forward-compensates it. It is safe
+      // here, and the two reasons are specific to how the marker arms. It arms
+      // only on a frame `handleState()` emits — foreign, room voice, or a
+      // crossed echo — and each of those needs a peer, so we are never the sole
+      // candidate in `Room.getPosition()`'s min(), the case where a crept value
+      // *is* the room. And in the pause direction the `+ fd` lands our position
+      // above the paused room, so it loses that election; in the resume
+      // direction the room is playing and the compensation is the ordinary one.
+      if (this.applyInFlight && Date.now() - this.applyInFlight.at <= APPLY_IN_FLIGHT_TTL_MS) {
+        return { position: this.snapshot.position, doSeek }
+      }
       return {
         position: this.snapshot.position,
         paused: this.snapshot.paused,

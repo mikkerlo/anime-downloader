@@ -159,7 +159,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
   // to *win*, so they drive the server class where a deficit survives #279:
   // `forwardDelay: 0`, i.e. a server we have not echoed to yet. That is not a
   // hypothetical server — the reference derives `_forwardDelay` from *our* echo
-  // of its `latencyCalculation`, docs/syncplay.md:246 ("which we echo back on
+  // of its `latencyCalculation`, docs/syncplay.md:248 ("which we echo back on
   // our next outbound `State` so it can measure the same round trip in its
   // direction"), which is absent for the first round trips of every session and
   // permanently whenever `consumeServerLatencyEcho()`'s hold guard drops the
@@ -281,7 +281,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // `lastRemoteRoomState` is refreshed *only* below the emit, so on head it
     // freezes at the last pre-election frame and `ROOM_POSITION_MAX_AGE_MS`
     // kills the join-time MKV seed 15 s later — the cap doing exactly the job
-    // that the argument retracted at docs/syncplay.md:332 ("the cap cannot cost
+    // that the argument retracted at docs/syncplay.md:334 ("the cap cannot cost
     // the feature on the path it exists for") said it could never
     // be called on to do.
     const seed = joiner.getRoomPosition(OPEN)
@@ -687,7 +687,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // seeded `paused: false` carries `DEFAULT_PLAYING_SET_BY` on it — a departed
     // watcher, so `isForeignSetBy()` is true, and because the room-voice flag is
     // a conjunction with the negation of that
-    // (src/main/syncplay.ts:2162 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
+    // (src/main/syncplay.ts:2196 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
     // the room-voice predicate is never consulted for this frame at all — quoted as
     // a marked quote so the gate re-checks it if that line moves, which is the
     // point of the branch this commit sits on. It is emitted on the
@@ -698,7 +698,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // frame is emitted, and suppressing only the helper's `Hello`-time `State`
     // takes the array back to empty — so that handshake frame is the whole of the
     // difference. `getRoomPosition()` still answers `null` beside it, because the
-    // read's own alone test (src/main/syncplay.ts:738 ("if (alone) return null"))
+    // read's own alone test (src/main/syncplay.ts:764 ("if (alone) return null"))
     // refuses a solo room whatever was applied.
     run(8, () => null)
 
@@ -1277,8 +1277,8 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     // (`server.py:636`, then `server.py:637`), so the next election returns
     // this same position. Nor can the drop move the room: un-adopted,
     // `buildPlaystate()` never asserts our own snapshot
-    // (`src/main/syncplay.ts:2512`) — it mirrors the room's own last state, or
-    // sends no playstate at all (`src/main/syncplay.ts:2519-2520`).
+    // (`src/main/syncplay.ts:2556`) — it mirrors the room's own last state, or
+    // sends no playstate at all (`src/main/syncplay.ts:2583-2584`).
     tls().emit(
       'data',
       Buffer.from(

@@ -1278,7 +1278,7 @@ describe('SyncplayClient.isRoomVoice conjuncts (#277)', () => {
     // this same position. Nor can the drop move the room: un-adopted,
     // `buildPlaystate()` never asserts our own snapshot
     // (`src/main/syncplay.ts:2556`) — it mirrors the room's own last state, or
-    // sends no playstate at all (`src/main/syncplay.ts:2583-2584`).
+    // sends no playstate at all (`src/main/syncplay.ts:2588-2589`).
     tls().emit(
       'data',
       Buffer.from(

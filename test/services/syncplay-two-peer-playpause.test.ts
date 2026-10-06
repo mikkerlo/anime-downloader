@@ -44,7 +44,7 @@ const DELAY_MS = 50
  *
  *  - Suppressed, the host puts *no* playstate on the wire at t=1000 at all. It
  *    has been told nothing about the room, so `buildPlaystate` stops at
- *    `src/main/syncplay.ts:2584` ("if (!room) return null"). Its first wire frame
+ *    `src/main/syncplay.ts:2589` ("if (!room) return null"). Its first wire frame
  *    is the t=2000 one, by which point it has adopted and sends `paused: true`,
  *    which the server stores raw — so every election reads `ROOM_START` and the
  *    old `[ROOM_START]` literal was right.
@@ -55,8 +55,8 @@ const DELAY_MS = 50
  *    itself rather than from a separate reading: the mirror exit is only
  *    reachable past the null one, and it is the only exit that omits `paused`.
  *    So its t=1000 heartbeat takes the **mirror** exit —
- *    position, and no `paused` key at all (`src/main/syncplay.ts:2657-2660`,
- *    against the adopted exit at `src/main/syncplay.ts:2577-2581`, which does
+ *    position, and no `paused` key at all (`src/main/syncplay.ts:2662-2665`,
+ *    against the adopted exit at `src/main/syncplay.ts:2582-2586`, which does
  *    send `paused`). The server reads a missing `paused` as "not paused" and
  *    compensates it by a forward delay —
  *    `test/helpers/syncplay-min-election-server.ts:945` ("w.position = position +

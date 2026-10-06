@@ -592,7 +592,7 @@ export interface Peer {
    *  mirror frame is evidence of the conjunction and not of either half.
    *
    *  **Sampled, not latched.** `isAdopted()` is a mutator — it writes `true` at
-   *  `src/main/syncplay.ts:2798` and `src/main/syncplay.ts:2808` — and the
+   *  `src/main/syncplay.ts:2803` and `src/main/syncplay.ts:2813` — and the
    *  heartbeat calls it once a second, so a read taken a second late sees the
    *  re-latch rather than the de-adoption that preceded it. Read it in the slice
    *  you mean. */

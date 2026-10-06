@@ -2571,6 +2571,11 @@ export class SyncplayClient extends EventEmitter {
       // *is* the room. And in the pause direction the `+ fd` lands our position
       // above the paused room, so it loses that election; in the resume
       // direction the room is playing and the compensation is the ordinary one.
+      // That min() argument covers the heartbeat only: `maybeReassertSeek()`
+      // also reaches this arm with `doSeek: true`, which the server applies via
+      // `setPosition` with no election, so a reassert inside the gap lands a
+      // paused room one `fd` ahead of us — a single forward delay of creep,
+      // accepted as far smaller than the stale `paused` it replaces.
       if (this.applyInFlight && Date.now() - this.applyInFlight.at <= APPLY_IN_FLIGHT_TTL_MS) {
         return { position: this.snapshot.position, doSeek }
       }

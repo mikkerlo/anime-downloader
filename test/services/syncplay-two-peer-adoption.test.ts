@@ -450,7 +450,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // The switcher's element is placed at the new episode's start — one write,
     // to ~0.1. Before #486 this was #360 verbatim: the element was written to the
     // *previous* episode's 303, because the seat re-latched adoption at
-    // `src/main/syncplay.ts:2808` on the old episode's snapshot and asserted it
+    // `src/main/syncplay.ts:2813` on the old episode's snapshot and asserted it
     // under the new file. `setFile()` now drops that snapshot and forces the room
     // to 0, and the parked frame applied at `loadedmetadata` is the room's 0.
     expect(host.el.seekWrites).toHaveLength(1)

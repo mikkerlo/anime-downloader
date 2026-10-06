@@ -149,7 +149,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // element never moved off the truth, and it announced nothing discrete —
     // the creep is entirely the server's arithmetic over a frame that omits
     // `paused`, which is what `buildPlaystate()`'s mirror exit sends
-    // (`src/main/syncplay.ts:2657-2660`
+    // (`src/main/syncplay.ts:2662-2665`
     // ("position: this.projectedRoomPosition(room)")). `paused` absent on every
     // frame is the observable that says it stayed on that exit —
     // `test/helpers/syncplay-min-election-server.ts:466-471` ("paused?:

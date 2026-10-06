@@ -217,10 +217,10 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // `JOIN_TIME_ROOM_POSITION`; the host's first adopted heartbeat then drops
     // the room back to `ROOM_START`, so every later periodic carries a
     // *different* position, 0.05 s away. The tolerance is what swallows those:
-    // `src/renderer/src/composables/use-syncplay-client.ts:1529` ("const
+    // `src/renderer/src/composables/use-syncplay-client.ts:1569` ("const
     // wouldSeek = state.doSeek || diff > 3.0") leaves `needsSeek` un-armed at a
     // 0.05 s gap, and with the element already paused
-    // `src/renderer/src/composables/use-syncplay-client.ts:1716` ("if (!needsSeek
+    // `src/renderer/src/composables/use-syncplay-client.ts:1751` ("if (!needsSeek
     // && !needsPlayPause) return") returns before the write.
     expect(joiner.el.seekWrites).toEqual([JOIN_TIME_ROOM_POSITION])
     expect(joiner.el.currentTime).toBe(JOIN_TIME_ROOM_POSITION)
@@ -262,7 +262,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     expect(elections[2].at - elections[0].at).toBe(2000)
     // And it holds for the rest of the run rather than oscillating: three more
     // elections, all naming the incumbent at the truth. Counted before it is
-    // quantified over, per docs/testing.md:386 ("Pin the count, never just loop
+    // quantified over, per docs/testing.md:389 ("Pin the count, never just loop
     // over the set").
     const afterRecovery = elections.slice(2)
     expect(afterRecovery).toHaveLength(4)

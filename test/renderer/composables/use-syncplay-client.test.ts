@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2489` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2542` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1944,9 +1944,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1117`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1157`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1152`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1192`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -2892,6 +2892,13 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     // marker is never set and the resume lands. This is what the case above
     // measures the difference against; without the `outOfFile` conjunct in
     // `onLocalPause()` the two would be indistinguishable.
+    //
+    // The resume lands *after* the `roomPaused` edge (#513). Since the pending-
+    // pause hold arms post-adoption too, a resume arriving before our pause has
+    // reached the room is declined by that hold, which is a different mechanism
+    // from this marker and would make this contrast pass for the wrong reason.
+    // After the edge the hold is over, so the only thing that could still refuse
+    // the resume is the marker under test.
     const v = fakeVideo({
       currentTime: 300,
       duration: 1440,
@@ -2905,6 +2912,13 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     })
 
     pausedByUser(v, client)
+    client.syncplayStatus.value = {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true,
+      roomPaused: true
+    }
+    await nextTick()
     emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
 
     expect(v.play).toHaveBeenCalled()
@@ -4826,21 +4840,117 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     expect(client.syncplayToast.value).toBe('')
   })
 
-  // 15c. The other half of decision 5's arming condition: post-adoption the
-  // hold is redundant (main's ack protection is on) and arming would toast a
-  // failure nobody earned.
-  it('never arms once adoption has latched', async () => {
-    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
-    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
-      state: 'ready',
-      username: 'me',
-      playbackAdopted: true
+  // 15c. #513 shape 2, and what used to be "never arms once adoption has
+  // latched". That case sent exactly this input — adopted, press pause, a
+  // foreign `paused: false` — and asserted `v.play` was called, on the premise
+  // that main's ack protection covers the adopted half. It does not cover a
+  // frame main emitted *before* the press's IPC reached it: CI's P6f i=32 trace
+  // has the server periodic and the press both at +4 ms, the apply's `play` at
+  // +5, and A's heartbeat then resuming the whole room. Post-adoption the hold
+  // now arms too: short, and silent.
+  describe('the adopted arm (#513 shape 2)', () => {
+    const adopted = { state: 'ready', username: 'me', playbackAdopted: true } as const
+
+    it('declines a stale resume that lands right after the press', async () => {
+      vi.useFakeTimers()
+      const sendSnapshot = vi.fn()
+      setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+
+      expect(v.play).not.toHaveBeenCalled()
+      expect(v.paused).toBe(true)
+      // And main is told the user's pause, not the room's resume: the push the
+      // apply makes (#324) carries the intent the hold kept.
+      expect(sendSnapshot).toHaveBeenLastCalledWith({ position: 100, paused: true })
     })
 
-    pressPause(client, v)
-    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    // #515's half (2) lands here: a peer's `doSeek` that crossed the press still
+    // moves the element, and only the resume is declined.
+    it('still applies the position of a crossing doSeek, and reports the peer’s seek', async () => {
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
 
-    expect(v.play).toHaveBeenCalled()
+      pressPause(client, v)
+      emitRemoteState({ position: 500, paused: false, doSeek: true, setBy: 'peer' })
+
+      expect(v.currentTime).toBe(500)
+      expect(v.play).not.toHaveBeenCalled()
+      // The pre-adoption arm silences this toast because its element is
+      // deliberately behind; here the element was on the room, and a peer's
+      // `doSeek` is a real move.
+      expect(client.syncplayToast.value).toBe('peer seeked to 8:20')
+    })
+
+    it('is silent: no pending toast while it holds, no failure toast when it expires', async () => {
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+      expect(client.syncplayToast.value).not.toBe(PENDING)
+
+      // Read just past the backstop, not seconds later: a failure toast's own
+      // 3500 ms clear would otherwise erase the evidence before the read.
+      vi.advanceTimersByTime(1600)
+      expect(client.syncplayToast.value).not.toBe(FAILED)
+      expect(client.syncplayToast.value).toBe('')
+      // It did hand the badge back: it held a resume, and the room never went
+      // paused inside the window, so "Paused by you" is no longer true.
+      expect(client.syncplayPausedBy.value).toBeNull()
+    })
+
+    it('is bounded at about one heartbeat plus RTT, not 8 s', async () => {
+      // A pause the server genuinely dropped hands the transport back to the
+      // room inside a second and a half.
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      vi.advanceTimersByTime(1400)
+      emitRemoteState({ position: 101.9, paused: false, doSeek: false, setBy: 'peer' })
+      expect(v.play).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(200)
+      emitRemoteState({ position: 102.1, paused: false, doSeek: false, setBy: 'peer' })
+      expect(v.play).toHaveBeenCalledTimes(1)
+    })
+
+    // The terminator, and the contrast the hold is measured against: once our
+    // own pause has reached the room (the `roomPaused` edge — main drops the
+    // echo itself at its self-`setBy` guard), a resume is a peer's real resume,
+    // ordered after ours by the server, and it lands.
+    it('ends on the roomPaused edge, after which a peer’s resume lands', async () => {
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      client.syncplayStatus.value = { ...adopted, roomPaused: true }
+      await nextTick()
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+
+      expect(v.play).toHaveBeenCalled()
+    })
   })
 
   // 15d. The third term, matching the `syncplayPausedBy` write beside it: with
@@ -5097,7 +5207,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // **This line is the only mutation control that names the tolerance
     // literal's value rather than merely tripping over it, and it has to be
     // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1529` reds seven
+    // `src/renderer/src/composables/use-syncplay-client.ts:1569` reds seven
     // tests across three files (re-measured on #488's tip after its rebase onto
     // #493, full suite); the other six red on drifts and positions a reader
     // cannot invert back into a tolerance — five in

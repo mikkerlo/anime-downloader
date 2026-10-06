@@ -13,7 +13,7 @@
 // split into unambiguous failures plus a heuristic that only warns — and two
 // pinned counts, which are what give the warn teeth and what stop the gate
 // from passing by seeing nothing. A printed-only number is the shape check
-// docs/testing.md:396 ("it is never the assertion that catches set rot")
+// docs/testing.md:399 ("it is never the assertion that catches set rot")
 // warns about: nobody diffs it.
 //
 // The one case where meaning *is* decidable is #366's marked form: a citation
@@ -41,7 +41,7 @@ import { baseRevision } from './check-version-not-lower.mjs'
 
 // --- pins ---------------------------------------------------------------------
 //
-// Exact-match assertions, per docs/testing.md:386 ("Pin the count, never just
+// Exact-match assertions, per docs/testing.md:389 ("Pin the count, never just
 // loop over the set"). Moving one is a deliberate act with a reason in the
 // commit message, not a side effect of an unrelated edit.
 
@@ -129,7 +129,7 @@ export const SUSPICIOUS_LANDING_PIN = 2
 // an anchor the gate cannot see reds this, and the fix is almost always to
 // spell the path out rather than to raise the number.
 //
-// 10 ambiguous basenames + 105 pathless anchors on this tree.
+// 3 ambiguous basenames + 103 pathless anchors on this tree (#513 deleted nine).
 //
 // #392 is the first move in the reducing direction: four anchors that had been
 // leaning on a neighbouring line for their path — one `server.py:877` and three
@@ -137,7 +137,7 @@ export const SUSPICIOUS_LANDING_PIN = 2
 // which are foreign extensions. Spelled out they are unresolvable by
 // construction rather than uncheckable, so they left this class outright and
 // the pin falls with them rather than absorbing them.
-export const UNCHECKABLE_PIN = 115
+export const UNCHECKABLE_PIN = 106
 
 // A FLOOR, not an exact count — the only pin here that is one-sided, because
 // the marked class is asymmetric. It cannot grow silently: marking is opt-in,
@@ -359,7 +359,7 @@ export function extractMarkedQuote(lines, i, rest) {
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
  * interior line is a brace or a comment (src/main/syncplay.ts:995-1001,
  * src/main/syncplay.ts:954-962 and
- * src/renderer/src/composables/use-syncplay-client.ts:1879-1881), so
+ * src/renderer/src/composables/use-syncplay-client.ts:1924-1926), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  *
@@ -389,8 +389,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
   // false positive is demonstrated on the very lines #344 repaired *to*:
-  // docs/syncplay.md:248 ("Both directions of the ping exchange") and
-  // docs/syncplay.md:334 ("Two sentences of the original argument for the cap
+  // docs/syncplay.md:250 ("Both directions of the ping exchange") and
+  // docs/syncplay.md:336 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
   // scripts/check-line-citations.mjs:406 and the `<!--` test at

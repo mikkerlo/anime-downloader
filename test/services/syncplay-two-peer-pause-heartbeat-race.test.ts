@@ -19,6 +19,10 @@
 // Every assertion reads B's *outbound* playstates off the server's wire log,
 // counted, not shaped: "no `paused: false` in the gap" is only evidence if the
 // gap is shown to contain the heartbeat at all.
+//
+// The second describe is shape 2, the same knob used the other way round: the
+// press reaches the renderer *between* main emitting a stale frame and the
+// renderer applying it.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
@@ -197,5 +201,72 @@ describe('SyncplayClient — a heartbeat inside the apply gap (#513 shape 1)', (
     expect(gap).toHaveLength(2)
     expect(gap[0]).not.toHaveProperty('paused')
     expect(gap[1]).toHaveProperty('paused')
+  })
+})
+
+// Shape 2: the presser applies a `paused: false` the server sent before our
+// pause reached it. Main emitted it before the press's `sendLocalState` IPC, so
+// `pendingClientAck` was still 0 and nothing dropped it; the renderer handles the
+// press first and the stale frame second. The cover is the renderer's pending-
+// pause hold, armed post-adoption since #513 — main's marker cannot see this
+// one, because the frame agreed with the snapshot when it was emitted.
+describe('SyncplayClient — a stale resume applied after the press (#513 shape 2)', () => {
+  let room: TwoPeerRoom
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    vi.useRealTimers()
+  })
+
+  it('does not let the presser resume the room on a periodic that crossed its pause', async () => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+    // B seated first and two seconds behind, so it wins every `min()` election
+    // and A's inbound periodics are foreign-`setBy` — the shape in the CI trace,
+    // and the only one that survives main's self-`setBy` guard to be applied.
+    const B = await room.seat({
+      username: 'rigB',
+      position: ROOM_START - 2,
+      paused: false,
+      delayMs: 0
+    })
+    const A = await room.seat({
+      username: 'rigA',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    await room.advance(4)
+    expect(A.adopted() && B.adopted(), 'setup: both peers adopted').toBe(true)
+
+    // Park A's next periodic at the IPC hop: main has emitted it, the renderer
+    // has not applied it.
+    A.holdRemoteState()
+    const from = A.frames.length
+    while (A.frames.length === from) await room.advance(0.05)
+    const stale = A.frames[from].state
+    expect(stale.paused).toBe(false)
+    expect(stale.setBy).toBe('rigB')
+    expect(A.counters().pendingClientAck).toBe(0)
+
+    // The press reaches the renderer first, and main through `sendLocalState`.
+    A.userPause()
+    A.tick()
+    const pressAt = Date.now()
+    expect(A.counters().pendingClientAck).toBe(1)
+    // …and only then the stale frame.
+    expect(A.releaseRemoteState()).toBe(1)
+    await room.advance(4)
+
+    const aWire = room.server.wireOf('rigA').filter((w) => w.at >= pressAt)
+    expect(aWire[0].paused).toBe(true)
+    expect(aWire.filter((w) => w.paused === false)).toHaveLength(0)
+    expect(room.server.roomState().paused).toBe(true)
+    expect(A.el.paused).toBe(true)
+    expect(B.el.paused).toBe(true)
   })
 })

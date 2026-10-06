@@ -277,7 +277,7 @@ describe('two-peer syncplay harness', () => {
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
     // `readyState` 0, which is what `hasAnnounceablePosition()`
-    // (`src/renderer/src/composables/use-syncplay-client.ts:821`) and
+    // (`src/renderer/src/composables/use-syncplay-client.ts:861`) and
     // `onLocalPause`'s own `readyState > 0` conjunct are both reading.
     //
     // Before the fix this read `[['pause', 'loadedmetadata'], []]` with
@@ -437,7 +437,7 @@ describe('two-peer syncplay harness', () => {
    * The log is built **here rather than in the helper**, and by wrapping the
    * *method* rather than replacing the handle: the composable resolves its
    * bridge once, at setup, and never re-reads it
-   * (`src/renderer/src/composables/use-syncplay-client.ts:285` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
+   * (`src/renderer/src/composables/use-syncplay-client.ts:293` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
    * `peer.api = {…}` would hand the wrapper to nobody and leave a green case
    * sampling an empty array. Writing one property on the retained object is
    * seen, because the push site reads `api.syncplaySetFile` at call time.
@@ -493,7 +493,7 @@ describe('two-peer syncplay harness', () => {
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2012`) is a default
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2057`) is a default
     // **pre-flush** `watch`, so Vue's scheduler runs it inside that suspension —
     // against the element still bound to the *old* episode, at HAVE_METADATA.
     // The helper had no suspension, so the watcher only ever ran after
@@ -516,7 +516,7 @@ describe('two-peer syncplay harness', () => {
     // the watcher's other three calls (`clearPendingUserPause()`,
     // `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()`) touch no
     // element at all; the push's own duration read is
-    // `src/renderer/src/composables/use-syncplay-client.ts:741` ("const dur =
+    // `src/renderer/src/composables/use-syncplay-client.ts:781` ("const dur =
     // deps.getVideoEl()?.duration || deps.getDuration() || 0") and `reload()`
     // never writes `duration`, so it is identical in all three; both forms send
     // inside the same 50 ms slice at the same `Date.now()`, so neither the wire
@@ -530,10 +530,10 @@ describe('two-peer syncplay harness', () => {
 
     // The wrapper fired — see `seatSwitchScenario`'s note on why this is not a
     // formality — and it fired once: the transition-into-ready push
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2331`, the
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2380`, the
     // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
     // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2454 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2507 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
     // inside `onMounted`) are both spent by the `advance(4)` above, so this one
     // is the watcher's. Each anchor carries the construct it lands in because
     // the two were paired the wrong way round here until #384, and nothing
@@ -704,7 +704,7 @@ describe('two-peer syncplay harness', () => {
 //
 // This census is the whole of the first half and stands on its own: how many
 // call sites exist, per file, before anything classifies them. Per
-// `docs/testing.md:386 ("Pin the count, never just loop over the set")` a scan
+// `docs/testing.md:389 ("Pin the count, never just loop over the set")` a scan
 // that only walks the occurrences it finds goes green on an eleventh site it
 // never sees, so the count is the assertion and the prefix check is layered on
 // top of it.

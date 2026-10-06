@@ -103,7 +103,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
 
     // A spectator, which here means a peer whose element will never be worth
     // announcing: `readyState: 0` puts `hasAnnounceablePosition()` below its
-    // floor — `src/renderer/src/composables/use-syncplay-client.ts:821-823`
+    // floor — `src/renderer/src/composables/use-syncplay-client.ts:861-863`
     // ("return (v.readyState ?? 0) >= 1") — so no snapshot is ever pushed to
     // main and `lastSnapshotAt` stays 0. That is what keeps this peer on the
     // mirror exit for the whole run, and it is a gate rather than luck: with no
@@ -135,7 +135,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // elections had exactly one candidate, so `min()` handed back the crept
     // value itself: it is not *above* the room, it **is** the room, and the
     // spectator is the peer the server names as having set it. The count is
-    // pinned before it is quantified over, per docs/testing.md:386 ("Pin the
+    // pinned before it is quantified over, per docs/testing.md:389 ("Pin the
     // count, never just loop over the set") — `every()` on an empty array is
     // `true`, and an `elections` array that stopped being filled would leave
     // the two lines below green while asserting nothing.

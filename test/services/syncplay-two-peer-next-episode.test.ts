@@ -30,7 +30,7 @@
 // position until it goes stale, the server's `min()` keeps a room position from
 // the old episode, and both the parked-frame path (an inbound frame parked on
 // a `readyState 0` element and applied at `loadedmetadata`) and the plain
-// `diff > 3.0` apply (`src/renderer/src/composables/use-syncplay-client.ts:1529`)
+// `diff > 3.0` apply (`src/renderer/src/composables/use-syncplay-client.ts:1569`)
 // write it onto the new element.
 //
 // ── What a cell is ───────────────────────────────────────────────────────────

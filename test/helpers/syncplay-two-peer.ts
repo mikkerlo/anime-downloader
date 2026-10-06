@@ -306,7 +306,7 @@ export class HarnessVideo {
   /** True while a write is in flight, the way a real element reports it through
    *  the whole of the capture in #368. Nothing reads it yet: the outbound
    *  announceability door is `readyState` alone
-   *  (`use-syncplay-client.ts:821`), which is exactly why a mid-seek element at
+   *  (`use-syncplay-client.ts:861`), which is exactly why a mid-seek element at
    *  `readyState` 1 gets into the election holding a position it has no data
    *  for. Any fix on that door gates on this, and a harness that could not say
    *  `seeking` could not express the fix.
@@ -399,7 +399,7 @@ export class HarnessVideo {
    *  - a playing element is paused and a `pause` task is queued. Not incidental
    *    either: that pause is delivered while the element still reports
    *    HAVE_NOTHING, where `hasAnnounceablePosition()`
-   *    (`use-syncplay-client.ts:821`) drops it before it can reach the wire and
+   *    (`use-syncplay-client.ts:861`) drops it before it can reach the wire and
    *    `onLocalPause`'s `readyState > 0` conjunct keeps it from arming the
    *    pending user pause. An element that reloaded without queuing one would
    *    leave both guards unobserved.
@@ -644,7 +644,7 @@ export interface Peer {
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
-   * (`src/renderer/src/composables/use-syncplay-client.ts:2012`) runs against
+   * (`src/renderer/src/composables/use-syncplay-client.ts:2057`) runs against
    * the element still bound to the **old** episode. Without the flush the
    * watcher only ever saw an element `reload()` had already dropped to
    * HAVE_NOTHING. A forgotten `await` at a call site is a silent mis-sequence

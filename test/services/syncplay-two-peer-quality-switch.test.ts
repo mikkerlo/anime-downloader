@@ -25,16 +25,28 @@
 // `'after-rebind-unlatched'` cases keep the first cut of the fix, which had no
 // latch, reproducible.
 //
+// **And the latch clears on session entry (#510).** Mounted into a paused room,
+// the apply site's #348 arm disarms the element with a bare `pause()`, which
+// fires no event, so neither `onPlay` nor `onPause` ever cleared the latch. Leave
+// the room without playing, switch quality, and the switch took the element for
+// one still waiting on its first autostart: it skipped the disarm and the
+// element started solo. `PlayerView` now clears the latch from a
+// `watch(syncplaySessionLive, …, { immediate: true })`; the `SessionEntry`
+// variants below keep the shapes without it reproducible.
+//
 // ── What is real and what is modelled ────────────────────────────────────────
 //
 // Real: both main `SyncplayClient`s, their routers, both mounted composables,
-// `MinElectionServer`. Modelled: `PlayerView.selectQuality`, because there is
-// no `PlayerView` mount harness, and the `autoplay` attribute, through
-// `HarnessVideo`'s opt-in `autoplay` option. The source-scan block at the end
-// pins the model's statements against `PlayerView.vue` so the two cannot drift
-// apart without a red here.
+// `MinElectionServer`. Modelled: `PlayerView.selectQuality`, the
+// `awaitingFirstAutostart` latch with the watch that clears it on session
+// entry, because there is no `PlayerView` mount harness, and the `autoplay`
+// attribute, through `HarnessVideo`'s opt-in `autoplay` option. The source-scan
+// block at the end pins the model's statements against `PlayerView.vue` so the
+// two cannot drift apart without a red here.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { nextTick, ref, watch } from 'vue'
+import type { WatchStopHandle } from 'vue'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { createTwoPeerRoom, HarnessVideo } from '../helpers/syncplay-two-peer'
@@ -61,23 +73,73 @@ type Disarm = 'none' | 'after-rebind' | 'after-rebind-unlatched' | 'before-rebin
 /** What `PlayerView.selectQuality` does today; the scan below holds it there. */
 const PLAYER_VIEW_DISARM = 'after-rebind' as Disarm
 
-/** Elements whose latch the disarm has cleared (`awaitingFirstAutostart = false`
- *  in the disarm's own branch). */
-const disarmedLatch = new WeakSet<HarnessVideo>()
-
 /**
- * `PlayerView`'s `awaitingFirstAutostart`, read off the element: a
- * `HarnessVideo` is constructed where `PlayerView` mounts, so the latch starts
- * set, and `onPlay` / `onPause` clear it on the first `play` / `pause` the
- * element delivers. The disarm clears it too.
+ * `PlayerView`'s `awaitingFirstAutostart`, one per element: a `HarnessVideo` is
+ * constructed where `PlayerView` mounts, so the latch starts set. `set` is what
+ * the disarm and the session-entry watch write; `onPlay` / `onPause` clear it on
+ * the first `play` / `pause` the element delivers after `from`, which only the
+ * `'rearming'` mutant ever moves.
  */
-const awaitingFirstAutostart = (el: HarnessVideo): boolean =>
-  !disarmedLatch.has(el) && !el.delivered.some((e) => e === 'play' || e === 'pause')
+const latches = new WeakMap<HarnessVideo, { set: boolean; from: number }>()
+const latchOf = (el: HarnessVideo): { set: boolean; from: number } => {
+  let latch = latches.get(el)
+  if (!latch) latches.set(el, (latch = { set: true, from: 0 }))
+  return latch
+}
+const clearLatch = (el: HarnessVideo): void => {
+  latchOf(el).set = false
+}
+
+const awaitingFirstAutostart = (el: HarnessVideo): boolean => {
+  const latch = latchOf(el)
+  return latch.set && !el.delivered.slice(latch.from).some((e) => e === 'play' || e === 'pause')
+}
+
+type SessionStatus = Pick<Peer['ui'], 'syncplayStatus'>
 
 /** `PlayerView`'s `syncplaySessionLive()`; `ui` is `null` outside any room. */
-const syncplaySessionLive = (ui: Pick<Peer['ui'], 'syncplayStatus'> | null): boolean => {
+const syncplaySessionLive = (ui: SessionStatus | null): boolean => {
   const state = ui?.syncplayStatus.value.state ?? 'idle'
   return state !== 'idle' && state !== 'disconnected'
+}
+
+/**
+ * How the latch hears about a session (#510).
+ *
+ *  - `'watch'`: `watch(syncplaySessionLive, (live) => { if (live) … = false },
+ *    { immediate: true })` — what `PlayerView` does.
+ *  - `'none'`: no session-entry clear, `PlayerView` before #510.
+ *  - `'lazy'`: the same watch without `immediate`, which misses a mount into a
+ *    session that is already live.
+ *  - `'rearming'`: the watch also sets the latch again when the session ends.
+ *    Only here to prove nothing past session entry may re-set it.
+ */
+type SessionEntry = 'watch' | 'none' | 'lazy' | 'rearming'
+
+/** What `PlayerView` does today; the scan below holds it there. */
+const PLAYER_VIEW_SESSION_ENTRY = 'watch' as SessionEntry
+
+const stopSessionWatches: WatchStopHandle[] = []
+
+/** `PlayerView`'s setup, as far as the latch goes: the mount the latch is set
+ *  at, and the watch declared right under it. */
+function mountLatch(
+  el: HarnessVideo,
+  ui: SessionStatus | null,
+  entry: SessionEntry = PLAYER_VIEW_SESSION_ENTRY
+): void {
+  latchOf(el)
+  if (entry === 'none') return
+  stopSessionWatches.push(
+    watch(
+      () => syncplaySessionLive(ui),
+      (live) => {
+        if (live) clearLatch(el)
+        else if (entry === 'rearming') latches.set(el, { set: true, from: el.delivered.length })
+      },
+      { immediate: entry !== 'lazy' }
+    )
+  )
 }
 
 /**
@@ -104,7 +166,7 @@ function selectQuality(
   if (disarm === 'after-rebind') {
     const autostartPending = awaitingFirstAutostart(el) && !syncplaySessionLive(ui)
     if (!wasPlaying && el.paused && !autostartPending) {
-      disarmedLatch.add(el)
+      clearLatch(el)
       el.pause()
     }
   }
@@ -138,6 +200,7 @@ describe('a quality switch right after a pause (#498)', () => {
   })
 
   afterEach(() => {
+    for (const stop of stopSessionWatches.splice(0)) stop()
     room?.dispose()
     vi.useRealTimers()
   })
@@ -258,7 +321,9 @@ describe('a quality switch right after a pause (#498)', () => {
   it('disarms a not-yet-started element in a live session, and the latch stays cleared after leaving', async () => {
     room = await createTwoPeerRoom({ position: ROOM_START, paused: true })
     // Mounted into a paused room mid-load: the element has not started and has
-    // delivered no `play` or `pause`, so the latch is still set.
+    // delivered no `play` or `pause`. Mounted without the session-entry clear,
+    // so the latch is still set and the case shows the disarm's own session
+    // term holding on its own.
     const switcher = await room.seat({
       username: 'switcher',
       position: ROOM_START,
@@ -267,6 +332,7 @@ describe('a quality switch right after a pause (#498)', () => {
       delayMs: DELAY_MS,
       autoplay: true
     })
+    mountLatch(switcher.el, switcher.ui, 'none')
     await room.seat({ username: 'watcher', position: ROOM_START, paused: true, delayMs: DELAY_MS })
     await room.advance(4)
     expect(switcher.el.paused).toBe(true)
@@ -293,6 +359,136 @@ describe('a quality switch right after a pause (#498)', () => {
     switcher.el.readyState = HAVE_ENOUGH_DATA
     expect(switcher.el.paused).toBe(true)
     expect(switcher.el.tick()).not.toContain('play')
+  })
+
+  describe('a switch after leaving a paused room the player mounted into (#510)', () => {
+    /**
+     * #510's repro up to the switch: mounted into a paused room mid-load, the
+     * element reaches HAVE_ENOUGH_DATA held by the apply site's #348 arm — a
+     * bare `pause()` that delivers nothing — so neither `onPlay` nor `onPause`
+     * ever runs. Then the user leaves without having played.
+     */
+    const leavePausedRoom = async (entry?: SessionEntry): Promise<Peer> => {
+      room = await createTwoPeerRoom({ position: ROOM_START, paused: true })
+      const switcher = await room.seat({
+        username: 'switcher',
+        position: ROOM_START,
+        paused: true,
+        readyState: 1,
+        delayMs: DELAY_MS,
+        autoplay: true
+      })
+      // `seat()` mounts the composable after the connect has settled, so the
+      // latch is set at a mount into a session that is already live: no
+      // transition follows, and only `immediate` sees it.
+      expect(switcher.ui.syncplayStatus.value.state).toBe('ready')
+      mountLatch(switcher.el, switcher.ui, entry)
+      await room.seat({
+        username: 'watcher',
+        position: ROOM_START,
+        paused: true,
+        delayMs: DELAY_MS
+      })
+      await room.advance(4)
+      switcher.el.readyState = HAVE_ENOUGH_DATA
+      await room.advance(2)
+      expect(switcher.el.paused).toBe(true)
+      expect(switcher.el.delivered.filter((e) => e === 'play' || e === 'pause')).toEqual([])
+      expect(room.server.roomState().paused).toBe(true)
+
+      switcher.client.disconnect()
+      await room.advance(2)
+      expect(syncplaySessionLive(switcher.ui)).toBe(false)
+      return switcher
+    }
+
+    const switchAfterLeaving = (switcher: Peer): HarnessVideo => {
+      selectQuality(switcher.el, switcher.ui, 'harness://switcher/720p')
+      switcher.el.readyState = HAVE_ENOUGH_DATA
+      return switcher.el
+    }
+
+    it('stays paused: the session cleared the latch at mount', async () => {
+      const switcher = await leavePausedRoom()
+      expect(awaitingFirstAutostart(switcher.el)).toBe(false)
+      const el = switchAfterLeaving(switcher)
+      expect(el.paused).toBe(true)
+      expect(el.tick()).toEqual(['seeked'])
+    })
+
+    it('autostarts solo without the session-entry clear (the pre-#510 shape)', async () => {
+      const el = switchAfterLeaving(await leavePausedRoom('none'))
+      expect(el.paused).toBe(false)
+      expect(el.tick()).toEqual(['play', 'seeked'])
+    })
+
+    it('autostarts solo without `immediate`: the session was live before the watch', async () => {
+      const el = switchAfterLeaving(await leavePausedRoom('lazy'))
+      expect(el.paused).toBe(false)
+      expect(el.tick()).toEqual(['play', 'seeked'])
+    })
+
+    it('autostarts solo if leaving the room sets the latch again', async () => {
+      const el = switchAfterLeaving(await leavePausedRoom('rearming'))
+      expect(el.paused).toBe(false)
+      expect(el.tick()).toEqual(['play', 'seeked'])
+    })
+  })
+
+  describe('the session-entry clear across a session joined from the player (#510)', () => {
+    type State = SyncplayStatus['state']
+
+    /**
+     * Mounted solo mid-load, then joined: the latch sees the transitions rather
+     * than a mount into a live session, so `immediate` is not what clears it
+     * here. At `ready` the apply site's #348 arm disarms the element with a
+     * bare `pause()`, and the session then flaps through `reconnecting` before
+     * it ends. The returned element is the one a switch after leaving acts on.
+     */
+    const joinFlapAndLeave = async (entry?: SessionEntry): Promise<HarnessVideo> => {
+      const el = new HarnessVideo({ position: 0, paused: true, readyState: 1, autoplay: true })
+      const syncplayStatus = ref({
+        state: 'idle' as State
+      }) as unknown as SessionStatus['syncplayStatus']
+      mountLatch(el, { syncplayStatus }, entry)
+      const go = async (state: State): Promise<void> => {
+        syncplayStatus.value = { ...syncplayStatus.value, state }
+        await nextTick()
+      }
+      expect(awaitingFirstAutostart(el)).toBe(true)
+      await go('connecting')
+      await go('ready')
+      el.pause()
+      el.readyState = HAVE_ENOUGH_DATA
+      expect(el.paused).toBe(true)
+      expect(el.tick()).toEqual([])
+      for (const state of ['reconnecting', 'ready', 'reconnecting', 'disconnected'] as State[]) {
+        await go(state)
+        expect(awaitingFirstAutostart(el), `latch at ${state}`).toBe(false)
+      }
+      selectQuality(el, null, 'harness://solo/720p')
+      el.readyState = HAVE_ENOUGH_DATA
+      return el
+    }
+
+    it('clears on joining, stays clear through the flap and past the end, and the switch stays paused', async () => {
+      const el = await joinFlapAndLeave()
+      expect(el.paused).toBe(true)
+      expect(el.tick()).toEqual(['seeked'])
+    })
+
+    it('clears on joining without `immediate` too: it is only the mount into a live session that needs it', async () => {
+      const el = await joinFlapAndLeave('lazy')
+      expect(el.paused).toBe(true)
+    })
+
+    it('reds with no session-entry clear', async () => {
+      await expect(joinFlapAndLeave('none')).rejects.toThrow(/latch at reconnecting/)
+    })
+
+    it('reds if the end of the session sets the latch again', async () => {
+      await expect(joinFlapAndLeave('rearming')).rejects.toThrow(/latch at disconnected/)
+    })
   })
 
   describe('solo, outside any room', () => {
@@ -411,20 +607,31 @@ describe('PlayerView anchors for the #498 selectQuality model', () => {
     expect(flat.slice(0, flat.indexOf('nextTick('))).not.toMatch(/\.pause\(\)/)
   })
 
-  // The latch the model reads off `HarnessVideo.delivered`: set at mount, and
-  // cleared only by the first `play` / `pause` and by the disarm above.
+  // The latch the model keeps per element: set at mount, and cleared only by
+  // the first `play` / `pause`, by the disarm above, and on session entry.
   const strip = (s: string): string => s.replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ')
   const fn = (name: string): string => {
     const start = SRC.indexOf(`function ${name}(`)
     return strip(SRC.slice(start, SRC.indexOf('\n}\n', start) + 2))
   }
 
-  it('sets awaitingFirstAutostart once, at mount, and clears it in onPlay, onPause and the disarm', () => {
+  it('sets awaitingFirstAutostart once, at mount, and clears it in onPlay, onPause, the disarm and on session entry', () => {
     expect(SRC).toContain('let awaitingFirstAutostart = true;')
     expect(SRC.match(/awaitingFirstAutostart = true/g)).toHaveLength(1)
-    expect(SRC.match(/awaitingFirstAutostart = false;/g)).toHaveLength(3)
+    expect(SRC.match(/awaitingFirstAutostart = false;/g)).toHaveLength(4)
     expect(fn('onPlay')).toMatch(/^function onPlay\(\): void \{ awaitingFirstAutostart = false;/)
     expect(fn('onPause')).toMatch(/^function onPause\(\): void \{ awaitingFirstAutostart = false;/)
+  })
+
+  // Directly under the declaration: `immediate` runs the callback during setup,
+  // so anywhere above it a mount into a live session would hit the `let`'s TDZ.
+  // Watched by its own source, and only ever clearing, which the single
+  // `= true` above holds too.
+  it('clears the latch on session entry, from a watch declared right under it', () => {
+    const entry =
+      'let awaitingFirstAutostart = true; watch( syncplaySessionLive, (live) => { ' +
+      'if (live) awaitingFirstAutostart = false; }, { immediate: true } );'
+    expect(strip(SRC).includes(entry)).toBe(PLAYER_VIEW_SESSION_ENTRY === 'watch')
   })
 
   it('reads the same session term as the #347 restore veto', () => {

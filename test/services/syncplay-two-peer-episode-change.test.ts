@@ -36,13 +36,14 @@
 // two populations cannot overlap.
 //
 // This file asserts against the model server. Every room here plays except the
-// paused-room case, whose assertion is the room staying paused at 0, read off
-// this client's own wire.
+// paused-room cases (the one below and the #496 block), whose assertion is the
+// room staying paused at 0, read off the wire.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { Peer, TwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { WireFrame } from '../helpers/syncplay-min-election-server'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import {
   shouldSwallowLocalNext,
   walkEpisodeSteps,
@@ -307,6 +308,242 @@ describe('SyncplayClient — both peers across an episode change (#360, #486)', 
   })
 })
 
+// ── #496: a paused room that changes episode stays paused at 0 ───────────────
+//
+// `keeps a paused room paused, at 0` above is the ordering that always held:
+// nothing plays the new element, so a paused frame is always there to park. The
+// app does play it. `PlayerView.goToEpisode` registers an `episode-start` and
+// calls `v.play()` right after the source swap, and that echo's consume wrote
+// "playing" unconditionally. A buffered element (canplay) then stayed playing,
+// and a playing element's `timeupdate` pushed a snapshot as soon as metadata
+// released the switch hold. When that push reached main ahead of the room's
+// next paused frame, the room resumed. Nobody pressed Play. On the real server
+// that happened in 2 of 9 E5 runs and 2 of 24 probe runs.
+//
+// `live()` below models the two media events the harness otherwise lacks:
+// `canplay` once an element has metadata, and `timeupdate` while it plays. The
+// switch suspends long enough for the presser's seek echo to land before the
+// swap, so nothing is left to park on the new element. That is run 7 in #496.
+
+describe('SyncplayClient — a paused room that changes episode stays paused (#496)', () => {
+  let room: TwoPeerRoom | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    room = undefined
+    vi.useRealTimers()
+  })
+
+  /** `room.advance`, plus `canplay` at metadata and `timeupdate` while playing. */
+  const live = async (seconds: number): Promise<void> => {
+    for (let i = 0; i < Math.round(seconds * 20); i += 1) {
+      await room!.advance(0.05)
+      for (const p of peers) {
+        if (p.el.readyState === 1) {
+          p.el.readyState = 4
+          p.ui.onLocalCanPlay()
+        }
+        if (!p.el.paused && p.el.readyState >= 1) p.ui.onVideoTimeUpdate()
+      }
+    }
+  }
+  let peers: Peer[] = []
+
+  const seatLive = async (
+    paused: boolean,
+    offsetMs: number
+  ): Promise<{ switcher: Peer; other: Peer }> => {
+    room = await createTwoPeerRoom({ position: 300, paused })
+    const switcher = await room.seat({
+      username: 'hostuser',
+      position: 300,
+      paused,
+      delayMs: DELAY_MS,
+      bindGapMs: 50
+    })
+    const other = await room.seat({
+      username: 'joinuser',
+      position: 300,
+      paused,
+      delayMs: DELAY_MS,
+      bindGapMs: 50
+    })
+    peers = [switcher, other]
+    await live(4 + offsetMs / 1000)
+    return { switcher, other }
+  }
+
+  /** `PlayerView.goToEpisode`: swap the source, then the registered `episode-start` play. */
+  const startEpisode = async (
+    p: Peer,
+    ep: string,
+    origin: 'local' | 'follow',
+    suspendMs: number
+  ): Promise<void> => {
+    await p.goToEpisode(ep, undefined, suspendMs, origin)
+    p.ui.beginProgrammaticPlayback('play', 'episode-start')
+    void p.el.play()
+  }
+
+  const resumesOnWire = (from: number[]): WireFrame[] =>
+    peers.flatMap((p, i) =>
+      room!.server
+        .wireOf(p.username)
+        .slice(from[i])
+        .filter((f) => f.paused === false)
+    )
+
+  // [who reaches metadata first, episode, phase of the switch against the 1 Hz frames, suspend]
+  const CASES: Array<['presser' | 'follower', string, number, number]> = [
+    ['presser', '8', 0, 300],
+    ['presser', '6', 0, 300],
+    ['follower', '8', 250, 600],
+    ['follower', '6', 250, 600]
+  ]
+
+  it.each(CASES)(
+    'stays paused at 0 when the %s’s new element plays before a paused frame lands (episode %s)',
+    async (who, ep, offsetMs, suspendMs) => {
+      const { switcher, other } = await seatLive(true, offsetMs)
+      const wireBefore = peers.map((p) => room!.server.wireOf(p.username).length)
+
+      await startEpisode(switcher, ep, 'local', who === 'presser' ? suspendMs : 0)
+      await live(0.2)
+      await startEpisode(other, ep, 'follow', who === 'follower' ? suspendMs : 0)
+      await live(10)
+
+      // The property that broke: not one playstate after the switch claimed
+      // playing. An end-state check alone would pass a resume-then-repause.
+      expect(resumesOnWire(wireBefore)).toEqual([])
+      expect(room!.server.roomState().paused).toBe(true)
+      expect(switcher.el.paused).toBe(true)
+      expect(other.el.paused).toBe(true)
+      // "At 0" to one harness slice: `HarnessVideo` walks a playing element
+      // even at HAVE_NOTHING, so the 50 ms between the `episode-start` play and
+      // the gate's pause shows up as 0.05. A real element there does not move.
+      for (const at of [
+        room!.server.roomState().position,
+        switcher.el.currentTime,
+        other.el.currentTime
+      ]) {
+        expect(at).toBeLessThanOrEqual(0.05)
+      }
+    }
+  )
+
+  it('a playing room still resumes the binge through the same switch', async () => {
+    const { switcher, other } = await seatLive(false, 0)
+
+    await startEpisode(switcher, '8', 'local', 300)
+    await live(0.2)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, switcher, other)
+  })
+
+  it('a switch inside the pending-pause hold resumes: keyed on roomPaused, not the mirror', async () => {
+    // The user pauses a playing room and presses next before the room reports
+    // paused. The room still plays at the consume, so the documented hold
+    // clause lets the switch resume; the mirror already reads paused from the
+    // user's own prediction, which is why the fix cannot key on it.
+    const { switcher, other } = await seatLive(false, 0)
+
+    switcher.userPause()
+    await live(0.05)
+    expect(switcher.status().roomPaused).toBe(false)
+    await startEpisode(switcher, '8', 'local', 0)
+    await live(0.05)
+    // Consumed as playing: the gate left the new element running.
+    expect(switcher.status().roomPaused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+  })
+
+  it('a peer pressing Play before the consume resumes the room on the new episode', async () => {
+    const { switcher, other } = await seatLive(true, 0)
+    const broadcastsBefore = switcher.broadcasts.length
+
+    // The play lands while the switcher is still inside the stream resolve,
+    // before its swap and so before its `episode-start` consume.
+    const switching = startEpisode(switcher, '8', 'local', 600)
+    other.userPlay()
+    await switching
+    expect(switcher.status().roomPaused).toBe(false)
+    await live(0.2)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+
+    // The IPC ordering the consume depends on. Main emits the `roomPaused`
+    // projection before it forwards the inbound state, so by the time the
+    // renderer has seen the playing frame `roomPaused` is already false and a
+    // consume between the two can never overwrite the fresher playing mirror
+    // with `false`. In Electron those are two IPC messages and a `play` event
+    // can run between them; the harness delivers them synchronously, so the
+    // order is asserted here directly.
+    const after = switcher.broadcasts.slice(broadcastsBefore)
+    const statusAt = after.findIndex(
+      (b) =>
+        b.channel === EVENT_CHANNELS.SYNCPLAY_CONNECTION_STATUS &&
+        (b.payload as SyncplayStatus).roomPaused === false
+    )
+    const playingAt = after.findIndex(
+      (b) =>
+        b.channel === EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE &&
+        (b.payload as SyncplayRemoteState).paused === false
+    )
+    expect(statusAt).toBeGreaterThanOrEqual(0)
+    expect(playingAt).toBeGreaterThan(statusAt)
+  })
+
+  it('a peer pressing Play after the consume resumes the room on the new episode', async () => {
+    const { switcher, other } = await seatLive(true, 0)
+
+    await startEpisode(switcher, '8', 'local', 300)
+    await live(0.2)
+    // Consumed paused: the element was paused by the gate and the room is paused.
+    expect(switcher.el.paused).toBe(true)
+    expect(switcher.status().roomPaused).toBe(true)
+    await startEpisode(other, '8', 'follow', 0)
+    await live(2)
+
+    other.userPlay()
+    await live(10)
+
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(switcher.el.paused).toBe(false)
+    expect(other.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, switcher, other)
+  })
+})
+
+/** Both elements inside the apply tolerance of `roomAt`, on the new episode. */
+function expectConvergedOn(roomAt: number, ...peers: Peer[]): void {
+  expect(roomAt).toBeLessThan(STALE_FLOOR)
+  for (const p of peers) {
+    expect(Math.abs(p.el.currentTime - roomAt), `${p.username} vs room`).toBeLessThanOrEqual(
+      APPLY_TOLERANCE_S
+    )
+  }
+}
+
 // ── #487: both peers press next within about a second ─────────────────────────
 //
 // A presses next at t = 0; B presses next at t = d. B's room follow commits N+1
@@ -341,6 +578,10 @@ type Press = 'dispatched' | 'button-disabled' | 'swallowed'
 
 interface Navigator {
   episode(): string
+  /** `handleRemoteEpisodeChange`'s `moved to episode` toasts, in order. */
+  toasts: string[]
+  /** A pick from the episode list: straight to `episodeInt`, one commit. */
+  pick(episodeInt: string): Promise<void>
   pending(): number | null
   /** `onUserNext` — the button and the keyboard. */
   pressNext(): Press
@@ -354,6 +595,8 @@ interface Navigator {
    * to it bumps the epoch and returns before its commit, writing nothing.
    */
   unreachableIndex: number | null
+  /** Commit to source swap for this peer's steps; `RESOLVE_MS` by default. */
+  resolveMs: number
 }
 
 function attachNavigator(peer: Peer, startIdx: number): Navigator {
@@ -400,7 +643,7 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     nav.nextSource = 'loads'
     // The commit is what the composable's watcher announces as `Set file`.
     await peer.goToEpisode(EPISODES[targetIndex], undefined, 0, origin)
-    await new Promise((r) => setTimeout(r, RESOLVE_MS))
+    await new Promise((r) => setTimeout(r, nav.resolveMs))
     if (navigationEpoch !== myNav) return 'moved'
     if (source === 'null-stream') {
       if (navigationEpoch === myNav) navigating = false
@@ -426,28 +669,36 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     return 'moved'
   }
 
-  // `handleRemoteEpisodeChange`: absolute index, then a relative walk.
-  const handleRemote = (episodeInt: string): void => {
-    const target = EPISODES.indexOf(episodeInt)
+  // `handleRemoteEpisodeChange`: absolute index, then a relative walk, held
+  // between the composable's real `beginFollowWalk` / `settleFollowWalk` (#501).
+  const handleRemote = (ep: SyncplayRemoteEpisode): void => {
+    const target = EPISODES.indexOf(ep.episodeInt)
     if (target < 0 || target === idx) return
+    nav.toasts.push(`${ep.fromUser} moved to episode ${ep.episodeInt}`)
     const dir = target > idx ? 'next' : 'prev'
     const walkTranslation = translationEpoch
+    peer.ui.beginFollowWalk()
     void walkEpisodeSteps(
       () => idx !== target && !navigating && translationEpoch === walkTranslation,
       () => step(dir, 'follow')
-    )
+    ).finally(() => peer.ui.settleFollowWalk())
   }
   // `remoteEpisodes` records rather than acts (see the harness); act on each.
   const arr = peer.remoteEpisodes as unknown as { push: (...x: unknown[]) => number }
   const origPush = Array.prototype.push
   arr.push = function (...eps: unknown[]) {
     const n = origPush.apply(this, eps)
-    for (const e of eps as { episodeInt: string }[]) handleRemote(e.episodeInt)
+    for (const e of eps as SyncplayRemoteEpisode[]) handleRemote(e)
     return n
   }
 
   const nav: Navigator = {
     episode: () => EPISODES[idx],
+    toasts: [],
+    pick: async (episodeInt: string) => {
+      idx = EPISODES.indexOf(episodeInt)
+      await peer.goToEpisode(episodeInt, undefined, 0, 'local')
+    },
     pending: () => pendingFollow?.index ?? null,
     pressNext: () => {
       // `if (!canNext.value || navigating.value) return;`
@@ -466,7 +717,8 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
       translationEpoch++
     },
     nextSource: 'loads',
-    unreachableIndex: null
+    unreachableIndex: null,
+    resolveMs: RESOLVE_MS
   }
   return nav
 }
@@ -718,5 +970,197 @@ describe('both peers press next within about a second (#487)', () => {
     expect(b.pressNext()).toBe('dispatched')
     await room!.advance(6)
     expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+  })
+})
+
+// ── #501: a follow walk announces only where it ends up ───────────────────────
+//
+// The leader picks N+k from the list. The follower reaches it through k
+// one-step follows, and every step's commit fires the composable's
+// episode-change watcher. Pushed, the intermediate episode is a new
+// `user|anime|episode` key on the leader, and the leader's own
+// `handleRemoteEpisodeChange` walks it back toward it: measured 6/6 on the real
+// server with the `await` fix alone. The walk now holds every file push until
+// it settles, then announces the reached index once.
+//
+// Both peers carry a navigator here, unlike `seatFollower`, because the
+// subject is what the follower's pushes do to the leader. The hold is the real
+// composable's; the navigator only calls `beginFollowWalk` / `settleFollowWalk`
+// where `PlayerView` does, which the source scans in
+// `test/renderer/components/player-lifecycle-scope.test.ts` pin.
+
+describe('a follow walk announces only where it ends up (#501)', () => {
+  let room: TwoPeerRoom | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    room = undefined
+    vi.useRealTimers()
+  })
+
+  interface Seated {
+    A: Peer
+    B: Peer
+    a: Navigator
+    b: Navigator
+    /** B's `setFile` pushes from the moment of seating, as [episode, switch, ms]. */
+    bPushes: [string, SyncplayEpisodeSwitch | undefined, number][]
+    /** B's snapshot pushes, by `Date.now()`. */
+    bSnapshots: number[]
+    /** B's `loadedmetadata` deliveries, by `Date.now()`. */
+    bMetadata: number[]
+    /** The episodes A's main handed A's renderer from B since seating. */
+    fromB: () => string[]
+  }
+
+  /** Both on episode 6 (index 5), agreed for four seconds. */
+  const seat = async (bindGapMs?: number): Promise<Seated> => {
+    room = await createTwoPeerRoom({ position: 100, paused: false })
+    const A = await room.seat({
+      username: 'rigA',
+      position: 100,
+      paused: false,
+      delayMs: DELAY_MS,
+      episodeInt: '6'
+    })
+    const B = await room.seat({
+      username: 'rigB',
+      position: 100,
+      paused: false,
+      delayMs: DELAY_MS,
+      episodeInt: '6',
+      ...(bindGapMs !== undefined ? { bindGapMs } : {})
+    })
+    await room.advance(4)
+    const bPushes: Seated['bPushes'] = []
+    const bSnapshots: number[] = []
+    const bMetadata: number[] = []
+    const setFile = B.api.syncplaySetFile.bind(B.api)
+    vi.spyOn(B.api, 'syncplaySetFile').mockImplementation((f: SyncplayFilePayload) => {
+      bPushes.push([f.episodeInt, f.episodeSwitch, Date.now()])
+      return setFile(f)
+    })
+    const snapshot = B.api.syncplaySendLocalSnapshot.bind(B.api)
+    vi.spyOn(B.api, 'syncplaySendLocalSnapshot').mockImplementation((s) => {
+      bSnapshots.push(Date.now())
+      return snapshot(s)
+    })
+    const metadata = B.ui.onVideoLoadedMetadata.bind(B.ui)
+    vi.spyOn(B.ui, 'onVideoLoadedMetadata').mockImplementation(() => {
+      bMetadata.push(Date.now())
+      metadata()
+    })
+    // B's seating announced episode 6 to A; only what follows the pick counts.
+    const heardBefore = A.remoteEpisodes.length
+    const fromB = (): string[] =>
+      A.remoteEpisodes
+        .slice(heardBefore)
+        .filter((e) => e.fromUser === 'rigB')
+        .map((e) => e.episodeInt)
+    return {
+      A,
+      B,
+      a: attachNavigator(A, 5),
+      b: attachNavigator(B, 5),
+      bPushes,
+      bSnapshots,
+      bMetadata,
+      fromB
+    }
+  }
+
+  /** Run `seconds` in slices, sampling the leader's episode after each, and
+   *  the room's position into `positions` when given. */
+  const sampleLeader = async (
+    a: Navigator,
+    seconds: number,
+    positions?: number[]
+  ): Promise<string[]> => {
+    const seen: string[] = []
+    for (let t = 0; t < seconds * 1000; t += 50) {
+      await room!.advance(0.05)
+      seen.push(a.episode())
+      positions?.push(room!.server.roomState().position)
+    }
+    return seen
+  }
+
+  it.each([
+    [1, '7'],
+    [2, '8'],
+    [3, '9']
+  ] as const)(
+    'a +%i pick: the leader stays on %s and hears exactly one file from the follower',
+    async (_k, target) => {
+      const { a, b, bPushes, fromB } = await seat()
+      await a.pick(target)
+      const positions: number[] = []
+      const leader = await sampleLeader(a, 8, positions)
+
+      // Main keeps B's episode-6 file and snapshot until the settle; neither
+      // may put episode 6's ~100 s back into the room the pick took to 0.
+      expect(Math.max(...positions)).toBeLessThan(STALE_FLOOR)
+      expect(b.episode()).toBe(target)
+      expect(new Set(leader)).toEqual(new Set([target]))
+      expect(a.toasts).toEqual([])
+      expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([[target, 'follow']])
+      expect(fromB()).toEqual([target])
+    }
+  )
+
+  it('an intermediate source’s durationchange re-push is held', async () => {
+    const { B, a, b, bPushes, fromB } = await seat()
+    await a.pick('8')
+    // Step 1 has committed episode 7 and its source is resolving.
+    while (b.episode() !== '7') await room!.advance(0.05)
+    // `onDurationChange` → `pushSyncplayFile()`, on the intermediate source.
+    B.ui.pushSyncplayFile()
+    expect(bPushes).toEqual([])
+    const leader = await sampleLeader(a, 8)
+
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['8', 'follow']])
+    expect(fromB()).toEqual(['8'])
+  })
+
+  // (b1): the follower can't fetch N+2's page. It announces N+1, where it really
+  // is, once, and the leader is pulled back once. That is the decision's
+  // expected outcome and the follow-up issue's subject, pinned here so a change
+  // to it is deliberate.
+  it('a walk that dies at step 2 announces N+1 exactly once', async () => {
+    const { a, b, bPushes, fromB } = await seat()
+    b.unreachableIndex = 7 // episode 8
+    await a.pick('8')
+    await sampleLeader(a, 8)
+
+    expect(b.episode()).toBe('7')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['7', 'follow']])
+    expect(fromB()).toEqual(['7'])
+    expect(a.toasts).toEqual(['rigB moved to episode 7'])
+  })
+
+  it('holds the follower’s snapshots across an intermediate loadedmetadata', async () => {
+    // A 200 ms bind gap against a 1.5 s resolve: each step's source reaches
+    // metadata, and so drops #486's per-source hold, 1.3 s before the walk
+    // takes its next step, while main still holds episode 6 as B's file.
+    const { a, b, bPushes, bSnapshots, bMetadata } = await seat(200)
+    b.resolveMs = 1500
+    const pickedAt = Date.now()
+    await a.pick('8')
+    await sampleLeader(a, 10)
+
+    expect(b.episode()).toBe('8')
+    expect(bPushes).toHaveLength(1)
+    const settledAt = bPushes[0][2]
+    // Both sources reached metadata inside the walk…
+    expect(bMetadata.filter((t) => t > pickedAt && t < settledAt)).toHaveLength(2)
+    // …and no snapshot went out until the walk had announced where it ended.
+    expect(bSnapshots.filter((t) => t > pickedAt && t < settledAt)).toEqual([])
+    expect(bSnapshots.some((t) => t >= settledAt)).toBe(true)
   })
 })

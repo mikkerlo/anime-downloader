@@ -201,6 +201,29 @@ describe('resumeSplit keeps #486', () => {
     expect(score(d, old)).toEqual({ stale: true, foreignSeek: true, old: false, excused: false })
   })
 
+  it("an unpaired seek just before `lmAt` is outside staleOutcome's window and blocks nothing; at `lmAt` it does", () => {
+    const d = (at: number): Trace =>
+      follower({
+        old,
+        lmAt: 640,
+        phase: 50,
+        seeks: [seek(at, old + 40), ...flash],
+        toasts: toast
+      })
+    expect(score(d(639), old)).toEqual({
+      stale: false,
+      foreignSeek: true,
+      old: false,
+      excused: true
+    })
+    expect(score(d(640), old)).toEqual({
+      stale: true,
+      foreignSeek: true,
+      old: false,
+      excused: false
+    })
+  })
+
   it('`lm.ct > 5`, even with a paired toast seek', () => {
     const d = follower({ old, lmAt: 640, lmCt: 42, phase: 50, seeks: flash, toasts: toast })
     const o = staleOutcome(d, OLD)

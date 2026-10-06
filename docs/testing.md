@@ -1117,7 +1117,7 @@ covers are not redone:
 
 | Rows | Tier 1 | Tier 2 |
 | --- | --- | --- |
-| E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half) |
+| E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half; E1 / E6 split #497's saved-progress flash out with `resumeSplit`, pinned in `test/syncplay-e2e-stale-outcome.test.ts`) |
 | E2 double advance (#487, fixed by #492; window moved to first frame + grace by #500; Tier 1 pins the swallowed presses, the component's grace-timer lifecycle is run from its own source in `player-lifecycle-scope.test.ts`) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half, scored on `loadeddata` + `FOLLOW_GRACE_MS`) |
 | E5 paused state: a paused room stays paused at 0 across Next/Prev (#496, fixed; Tier 1 pins the presser and follower orderings where the new element plays before a paused frame lands, the playing-room and pending-pause-hold controls, and a peer's Play before and after the consume, through a `live()` loop that models `canplay` and `timeupdate` and `PlayerView`'s registered `episode-start` play) | `syncplay-two-peer-episode-change.test.ts` (#496 block) | `episode.spec.ts` (E5: every scoreable run paused at ~0) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
@@ -1129,6 +1129,26 @@ covers are not redone:
 | P7f, P6f: pause, then a quality / translation switch 0 / 20 / 50 / 200 ms later, the gaps recorded per run; `SYNCPLAY_E2E_N` is the per-bucket N, default 10 (#498; P7f was ✗ before its fix) | `syncplay-two-peer-quality-switch.test.ts` | `pause.spec.ts` |
 | P12 | the #350 block of `test/renderer/composables/use-syncplay-client.test.ts` | — |
 | M3 | `syncplay-frozen-snapshot.test.ts` | — |
+
+E1 / E6 score #486 off `staleOutcome` (`e2e-syncplay/helpers/score.ts`),
+whose `maxCtFirst4s > 9` term also catches #497: the follower seeks its new
+element to its saved progress 2–7 ms after `loadedmetadata`, shows "Resumed
+at …", and the room pulls it back 60–300 ms later, so a 200 ms sample can land
+inside the flash (#514, five CI runs). E5 keeps the two apart with disjoint
+press bands (`e5Position` / `e5Split`); E1 / E6 cannot, because E1 run 2k and
+E6 run 2k+1 share a band. `resumeSplit` reads #497's own output instead. A
+seek in E5's set (past 5 s, on the new element, after the press) is #497's
+when a `resume-toast` record names its target (`formatTime` floors, so the
+pairing is `Math.floor(ct)` against the toast's m:ss) within 50 ms on either
+side; the probe's `MutationObserver` fires on Vue's flush, ahead of the queued
+`seeking`. Such a seek excuses only the `maxCtFirst4s > 9` term, only when it
+lands in that term's `[lmAt, lmAt + 4000]` window with no unpaired seek past
+5 s beside it; `lm.ct > 5` and `ct2 > 7` stay #486. Every other seek within
+±15 s of the instance's own pre-press `ct` (measured in `transition()`, not
+the drawn `t`) is recorded as `old`. Each run records `foreignSeek` without
+asserting it, and keeps its trace when it is set; #497's fix asserts it 0.
+`test/syncplay-e2e-stale-outcome.test.ts` replays the five failing B traces
+and pins the row's wiring to the spec source.
 
 P7f's Tier 1 half needs an element that can start itself, which
 `HarnessVideo` cannot by default. `autoplay: true` is the opt-in model of the

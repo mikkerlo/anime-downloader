@@ -1,7 +1,7 @@
 // Episode-change rows of the #489 catalog on the two-instance rig.
 //
-//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493)
-//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493)
+//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493), #497 (recorded)
+//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (recorded)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (recorded)
 //
@@ -22,6 +22,18 @@
 // `test/services/syncplay-two-peer-double-next.test.ts`). Both instances must
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
 // every scoreable run.
+//
+// E1 / E6 also see #497 (below): the follower lands at 0, seeks to its saved
+// progress for the new episode 2–7 ms after `loadedmetadata`, shows "Resumed
+// at …", and the room pulls it back 60–300 ms later. A 200 ms sample inside
+// that flash tripped `maxCtFirst4s > 9` and scored the run #486 (#514). Bands
+// cannot separate them here: E1 run 2k and E6 run 2k+1 share a band, so the
+// saved position usually sits within ±15 s of the old one. `resumeSplit`
+// reads the code path's own output instead: the seek paired with a `Resumed
+// at …` toast (target floors to its m:ss, within 50 ms) is #497's and excuses
+// only the 4 s term, only when no other seek past 5 s shares its window. The
+// old position is each instance's measured `ct` before the press, not `t`.
+// Recorded per run (`foreignSeek`), not asserted; #497's fix asserts it 0.
 //
 // E5's spec is #493's: a paused room stays paused at 0 across a local Next or
 // Prev (`test/services/syncplay-file-change-seek.test.ts`,
@@ -72,9 +84,10 @@ import {
   waitFor,
   epIntOf,
   type Rig,
-  type Instance
+  type Instance,
+  type PlayerState
 } from './helpers/duo'
-import { RowScorer, staleOutcome, e5Position, e5Split } from './helpers/score'
+import { RowScorer, staleOutcome, e5Position, e5Split, resumeSplit } from './helpers/score'
 import { FOLLOW_GRACE_MS } from '../src/renderer/src/utils'
 
 let rig: Rig
@@ -162,6 +175,11 @@ async function transition(
   pressAt: number
   a: ReturnType<typeof staleOutcome>
   b: ReturnType<typeof staleOutcome>
+  /** Each instance's own state just before the press: its measured old position. */
+  sa: PlayerState
+  sb: PlayerState
+  da: Collected
+  db: Collected
   epA: string
   epB: string
   changed: boolean
@@ -177,6 +195,10 @@ async function transition(
     pressAt,
     a: staleOutcome(da, sa.src),
     b: staleOutcome(db, sb.src),
+    sa,
+    sb,
+    da,
+    db,
     epA: epIntOf(ea.label),
     epB: epIntOf(eb.label),
     changed
@@ -202,19 +224,28 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
       const r = await transition(A, B, () => (forward ? A.pressNext(how) : A.pressPrev()))
       const want = forward ? '2' : '1'
       const agree = r.epA === want && r.epB === want
+      // #514: a #497 saved-progress flash is told apart by its own toast, from
+      // each instance's measured position, never `t`.
+      const ka = resumeSplit(r.da, r.sa, r.a)
+      const kb = resumeSplit(r.db, r.sb, r.b)
+      const stale = ka.stale || kb.stale
+      const foreignSeek = ka.foreignSeek || kb.foreignSeek
       row.add(
         {
           setupOk: setupOk && r.changed,
-          bad: r.a.stale || r.b.stale,
+          bad: stale,
           stuck: r.a.stuck || r.b.stuck,
           agree,
+          foreignSeek,
           from,
           t: Math.round(t),
+          oldA: +r.sa.ct.toFixed(2),
+          oldB: +r.sb.ct.toFixed(2),
           how: forward ? how : 'button',
-          A: r.a,
-          B: r.b
+          A: { ...r.a, resume: ka },
+          B: { ...r.b, resume: kb }
         },
-        r.a.stale || r.b.stale || !agree
+        stale || foreignSeek || !agree
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -225,7 +256,8 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
     }
     const s1 = e1.score()
     const s6 = e6.score()
-    // Flipped by #493: no stale start in either direction.
+    // Flipped by #493: no stale start in either direction. #497's flash is
+    // recorded (`foreignSeek`), not asserted — see the header.
     expect(s1.scoreable).toBeGreaterThanOrEqual(1)
     expect(s1.bad).toBe(0)
     expect(s6.scoreable).toBeGreaterThanOrEqual(1)

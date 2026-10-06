@@ -1730,9 +1730,29 @@ function onMouseMove(): void {
 // `play()`), so until the element's first `play` or `pause` event a paused
 // element is not one the user paused. `selectQuality` reads it to keep its
 // #498 disarm off an autostart the user is still waiting for. Cleared on that
-// first event and on the disarm itself; never set again, because every later
-// load either plays programmatically or follows a play/pause the user saw.
+// first event, on the disarm itself, and on session entry; never set again,
+// because every later load either plays programmatically or follows a play/pause
+// the user saw.
+//
+// Session entry (#510): a live session owns the element, and the apply site's
+// #348 arm disarms it with a bare `pause()` that fires no event, so after a mount
+// into a paused room neither handler would ever clear the latch, and a switch
+// after leaving would skip the disarm and autostart solo. `immediate`, because
+// the status lives in the Pinia store and outlives this view: a mount into a
+// session that is already live sees no transition. Declared right here, since
+// `immediate` runs during setup and the `let` above is in its TDZ until now.
+// The term is `syncplaySessionLive()`, the one the disarm reads, so a connect
+// that fails before `ready` clears it too though nothing disarmed — narrow, and
+// the disarm already treats `connecting` as live. The watch only clears, so a
+// flap through `reconnecting` cannot set it again.
 let awaitingFirstAutostart = true;
+watch(
+  syncplaySessionLive,
+  (live) => {
+    if (live) awaitingFirstAutostart = false;
+  },
+  { immediate: true }
+);
 
 // Video event handlers
 function onPlay(): void {

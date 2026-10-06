@@ -6780,3 +6780,233 @@ describe('useSyncplayClient — seekAsUser announces the user’s seek at intent
     })
   })
 })
+
+describe('useSyncplayClient — a follow walk announces only where it ends up (#501)', () => {
+  // `episodeInt` is live, as PlayerView's `currentEpisodeInt` is, so each push
+  // reports the episode the index points at when it goes out.
+  const walkDeps = (video: HTMLVideoElement): { deps: Deps; episode: { value: string } } => {
+    const episode = { value: '29' }
+    const deps = makeDeps({ video, episodeIndex: 28 })
+    deps.getCurrentEpisodeInt = () => episode.value
+    return { deps, episode }
+  }
+
+  const ready = async (
+    deps: Deps
+  ): Promise<{ client: Client; setFile: ReturnType<typeof vi.fn> }> => {
+    const setFile = vi.fn()
+    setApi({ syncplaySetFile: setFile })
+    const { client } = trackedMount(deps)
+    await flushPromises()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    setFile.mockClear()
+    return { client, setFile }
+  }
+
+  const pushes = (setFile: ReturnType<typeof vi.fn>): [string, unknown][] =>
+    setFile.mock.calls.map(([p]) => {
+      const f = p as SyncplayFilePayload
+      return [f.episodeInt, f.episodeSwitch]
+    })
+
+  /** One `goToEpisode(…, 'follow')` commit, as PlayerView writes it. */
+  const followStep = async (
+    client: Client,
+    deps: Deps,
+    episode: { value: string }
+  ): Promise<void> => {
+    client.markEpisodeSwitch('follow')
+    deps.activeEpisodeIndex.value += 1
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+  }
+
+  it('holds the watcher, durationchange and into-ready pushes, then settles once at the reached index', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    // The intermediate source gets a duration: `onDurationChange`'s re-push.
+    client.pushSyncplayFile()
+    // A reconnect mid-walk: the transition-into-ready push.
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    await followStep(client, deps, episode)
+    await followStep(client, deps, episode)
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['32', 'follow']])
+  })
+
+  it('a single-step follow pushes once, as a follow', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    expect(setFile).not.toHaveBeenCalled()
+    client.settleFollowWalk()
+
+    expect(pushes(setFile)).toEqual([['30', 'follow']])
+  })
+
+  it('a walk that stops short announces the episode it reached', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    // N -> N+2, step 2 `unreachable` before its commit.
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+
+    expect(pushes(setFile)).toEqual([['30', 'follow']])
+  })
+
+  it('a walk that never moves pushes nothing, unless it held a push', async () => {
+    const { deps } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    client.settleFollowWalk()
+    expect(setFile).not.toHaveBeenCalled()
+
+    // A reconnect the walk held still owes the room its file, untagged.
+    client.beginFollowWalk()
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['29', undefined]])
+  })
+
+  it('a local commit the walk held is announced as local, not downgraded to a follow', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    // A user Prev admitted during step 2's `saveProgress`, before `navigating`
+    // is set: it supersedes the step and commits as `'local'`.
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    // An auto-advance tick in the same window, so the walk did move.
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value += 2
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['31', 'local']])
+  })
+
+  it('a held local commit back to the start index still forces the room to 0', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = String(deps.activeEpisodeIndex.value + 1)
+    await nextTick()
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['29', 'local']])
+
+    // The latch is per walk: the next walk's settle is a plain follow.
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([
+      ['29', 'local'],
+      ['30', 'follow']
+    ])
+  })
+
+  it('an overlapping walk’s settle does not release the outer walk', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    // A second room move mid-walk: its walk returns 'arrived' at once.
+    client.beginFollowWalk()
+    client.settleFollowWalk()
+    await followStep(client, deps, episode)
+    expect(setFile).not.toHaveBeenCalled()
+
+    client.settleFollowWalk()
+    expect(pushes(setFile)).toEqual([['31', 'follow']])
+    // An unmatched settle is inert.
+    client.settleFollowWalk()
+    expect(setFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('a settle after the player unmounted announces nothing', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    mountedWrappers.splice(0).forEach((w) => w.unmount())
+    client.settleFollowWalk()
+
+    expect(setFile).not.toHaveBeenCalled()
+  })
+
+  it('holds snapshots across an intermediate loadedmetadata, until the settled episode’s', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
+    const { deps, episode } = walkDeps(v)
+    const { client, setFile } = await ready(deps)
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot, syncplaySetFile: setFile })
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    // The intermediate source reaches metadata and plays while step 2 is still
+    // resolving. Main still holds the walk's first file, so this position
+    // would go out under its name.
+    client.onVideoLoadedMetadata()
+    ;(v as { currentTime: number }).currentTime = 4
+    client.onVideoTimeUpdate()
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    // Settled, but the settled episode has no metadata yet.
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).not.toHaveBeenCalled()
+    ;(v as { currentTime: number }).currentTime = 0
+    client.onVideoLoadedMetadata()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+    expect(pushes(setFile)).toEqual([['31', 'follow']])
+  })
+
+  it('a walk stopped short after its last source loaded reopens snapshots at the settle', async () => {
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
+    const { deps, episode } = walkDeps(v)
+    const { client } = await ready(deps)
+
+    client.beginFollowWalk()
+    await followStep(client, deps, episode)
+    client.onVideoLoadedMetadata()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).not.toHaveBeenCalled()
+    client.settleFollowWalk()
+    client.onVideoTimeUpdate()
+    expect(sendSnapshot).toHaveBeenCalledTimes(1)
+  })
+})

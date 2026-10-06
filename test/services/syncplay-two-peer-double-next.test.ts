@@ -10,11 +10,11 @@
 // and a relative walk (`handleRemoteEpisodeChange`,
 // `src/renderer/src/components/views/PlayerView.vue:509`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3306`) — is released in the `nextTick` after
-// `playerGetStreamUrl` resolves (`PlayerView.vue:2591`), not when the followed
+// (`PlayerView.vue:3335`) — is released in the `nextTick` after
+// `playerGetStreamUrl` resolves (`PlayerView.vue:2619`), not when the followed
 // episode has loaded. B's user is still looking at episode N; a Next pressed
 // after that release reads its target relative to the already-committed N+1
-// (`PlayerView.vue:2327`), and before the fix both peers landed on N+2. The
+// (`PlayerView.vue:2348`), and before the fix both peers landed on N+2. The
 // fix leaves the early release alone and adds a pending-follow token: a room
 // follow's Next step arms it at its commit, `FOLLOW_GRACE_MS` after the step's
 // `loadeddata` it clears (#500; it cleared at `loadedmetadata` until then), and
@@ -371,7 +371,7 @@ describe('PlayerView anchors for the #487 navigation model', () => {
 
   it('follows a remote change as a relative walk gated on !navigating', () => {
     expect(SRC.replace(/\s+/g, ' ')).toContain(
-      "() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir, 'follow')"
+      "() => activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation, () => goToEpisode(dir, 'follow', steps++ > 0)"
     )
   })
   it('arms the token at a follow Next commit and clears it FOLLOW_GRACE_MS after that run’s own loadeddata', () => {

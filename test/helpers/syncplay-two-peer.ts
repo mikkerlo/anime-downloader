@@ -639,7 +639,7 @@ export interface Peer {
    * pass one to pin an exact `v.src` an assertion reads back.
    *
    * **Await it.** The index write is flushed before the rebind, because that is
-   * the order the app runs them in: `PlayerView.vue:2492` writes
+   * the order the app runs them in: `PlayerView.vue:2512` writes
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
@@ -975,7 +975,7 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
           ui!.onVideoSeeked()
         } else if (event === 'play') ui!.onLocalPlay()
         else if (event === 'pause') ui!.onLocalPause()
-        // `src/renderer/src/components/views/PlayerView.vue:3196` is the
+        // `src/renderer/src/components/views/PlayerView.vue:3216` is the
         // `@loadedmetadata="syncplay.onVideoLoadedMetadata"` this stands in for.
         else ui!.onVideoLoadedMetadata()
       }

@@ -133,7 +133,7 @@
 //    {left: true}}}}` with **no `file` key** — `sendUserSetting` writes that key
 //    only for a truthy file — which is why `removeWatcher` below sends that
 //    literal rather than standing a fresh `List` in for it the way `applySet`
-//    does: `src/main/syncplay.ts:1455` ("if (data.event.left === true) {") reads
+//    does: `src/main/syncplay.ts:1471` ("if (data.event.left === true) {") reads
 //    this exact shape, and a `List` stand-in would leave that client path
 //    unreachable from any fixture. No `List` is pushed alongside, because
 //    upstream's is gated on a rooms DB the conformance server is not started
@@ -160,9 +160,9 @@
 //    `SyncplayClient`-backed fixture under `test/services/` that opted into
 //    `protocolTimeoutMs` would be handed a link that had gone quiet rather than
 //    one that had been dropped, and would reach neither
-//    `src/main/syncplay.ts:1183` ("sock.on('close', () => this.onSocketClose())")
+//    `src/main/syncplay.ts:1199` ("sock.on('close', () => this.onSocketClose())")
 //    nor its TLS twin
-//    `src/main/syncplay.ts:1363` ("tlsSock.on('close', () => this.onSocketClose())"),
+//    `src/main/syncplay.ts:1379` ("tlsSock.on('close', () => this.onSocketClose())"),
 //    and so not the reconnect `onSocketClose()` leads to — which is what this
 //    client actually does after a real drop. It is written down rather than
 //    half-modelled because the mock sockets cannot yet take a second

@@ -8,7 +8,7 @@
 //
 // The compensated value must stay ONE expression read twice: it is emitted to
 // the renderer *and* stored as `lastAppliedRemotePosition`, the reference the
-// #220 echo guard (src/main/syncplay.ts:911-919) compares the element's echoed
+// #220 echo guard (src/main/syncplay.ts:925-933) compares the element's echoed
 // `seeked` against. Splitting them re-arms the self-seek loop.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -77,7 +77,7 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
 
   // Seeds serverRtt by echoing a *stale* clientLatencyCalculation: the client
   // computes `Date.now() / 1000 - myTs` and accepts it when 0 < rtt < 5
-  // (src/main/syncplay.ts:882-886). `setBy` must be non-null and not our own
+  // (src/main/syncplay.ts:896-900). `setBy` must be non-null and not our own
   // username, with pendingClientAck === 0, or the state is dropped at :862-867
   // before it ever reaches the compensation.
   const serverState = (opts: {

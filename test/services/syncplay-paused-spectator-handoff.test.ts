@@ -108,7 +108,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // main and `lastSnapshotAt` stays 0. That is what keeps this peer on the
     // mirror exit for the whole run, and it is a gate rather than luck: with no
     // snapshot, `canAssertSnapshot()` is the false conjunct at
-    // `src/main/syncplay.ts:2462`
+    // `src/main/syncplay.ts:2512`
     // ("if (this.canAssertSnapshot() && this.isAdopted()) {") and the `&&`
     // short-circuits before `isAdopted()` can latch.
     const spectator = await room.seat({
@@ -149,7 +149,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // element never moved off the truth, and it announced nothing discrete —
     // the creep is entirely the server's arithmetic over a frame that omits
     // `paused`, which is what `buildPlaystate()`'s mirror exit sends
-    // (`src/main/syncplay.ts:2543-2546`
+    // (`src/main/syncplay.ts:2593-2596`
     // ("position: this.projectedRoomPosition(room)")). `paused` absent on every
     // frame is the observable that says it stayed on that exit —
     // `test/helpers/syncplay-min-election-server.ts:466-471` ("paused?:

@@ -2,8 +2,8 @@
 // reports the room one one-way delay low, wins `Room.getPosition()`'s `min()`,
 // and the room is re-derived from that already-lagged value once a second. That
 // once a second is the server's own re-election rate over the inbound stream, and
-// the stamp it feeds is taken *above* `src/main/syncplay.ts:2146` and
-// `src/main/syncplay.ts:2147` — so the walk compounds on frames that die at those
+// the stamp it feeds is taken *above* `src/main/syncplay.ts:2193` and
+// `src/main/syncplay.ts:2194` — so the walk compounds on frames that die at those
 // guards as readily as on ones the renderer ever sees, and #340's drop counts do
 // not bear on it.
 //

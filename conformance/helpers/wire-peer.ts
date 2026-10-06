@@ -74,7 +74,7 @@ export class RealTransport implements Transport {
       sock.on('data', (chunk: string) => this.absorb(chunk))
       this.sock = sock
     })
-    // TLS-only clients probe first (`src/main/syncplay.ts:1179`). The suite runs
+    // TLS-only clients probe first (`src/main/syncplay.ts:1195`). The suite runs
     // plaintext on loopback — the server answers `startTLS: "false"` with no
     // `--tls-dir` — but the probe is still sent, because a server that never saw
     // one is in a different state than one that did.
@@ -187,7 +187,7 @@ export class Peer {
    * ("same effect on `roomUsers`, one code path", its own comment says), where
    * the reference sends a `List` only when a client asks — `sendList(toGUIOnly)`
    * needs both a rooms DB and a `uiMode` key, and this client's feature block
-   * deliberately omits it (`src/main/syncplay.ts:2316-2323`). Reading the roster
+   * deliberately omits it (`src/main/syncplay.ts:2366-2373`). Reading the roster
    * off whatever `List` happened to arrive would compare that cadence and report
    * it as a divergence on every scenario. Reading it off a `List` the scenario
    * asked for compares the render, which is the observable `#307` turns on.
@@ -369,7 +369,7 @@ export class Peer {
   /**
    * A `State` carrying `ping` and the retained counter and **no `playstate`
    * key at all** — the production sender's frame, copied rather than invented:
-   * `sendAck()`'s literal is `src/main/syncplay.ts:2834-2842`, and that object
+   * `sendAck()`'s literal is `src/main/syncplay.ts:2884-2892`, and that object
    * holds the ping, the counter, and nothing else. The absence of a playstate
    * is the thing under test, so an emitter that added one would be testing a
    * different frame.
@@ -392,7 +392,7 @@ export class Peer {
    * later.
    *
    * Does **not** clear `lastServerCounter`, where production `sendAck()` zeroes
-   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2843`), so a second
+   * `pendingServerAck` on the way out (`src/main/syncplay.ts:2893`), so a second
    * `pingOnly` step would re-echo a counter the first one already spent. Benign
    * today rather than harmless in general: with no forced update in between the
    * server's flag is already 0, `protocols.py:775-777` simply does not match,

@@ -17,7 +17,7 @@
 //    reference server broadcasts its forced update to the setter too
 //    (`server.py:187` hands it to `broadcastRoom()`, which has no sender filter,
 //    `server.py:441-445`), so every discrete change a peer makes arrives back at
-//    its own socket a round trip later. `src/main/syncplay.ts:2146` eats it.
+//    its own socket a round trip later. `src/main/syncplay.ts:2193` eats it.
 //
 // The third is the one worth having. The first two would survive a good deal of
 // damage to the echo path; only the third goes red when the drop guard does.
@@ -44,19 +44,19 @@ const DELAY_MS = 50
  *
  *  - Suppressed, the host puts *no* playstate on the wire at t=1000 at all. It
  *    has been told nothing about the room, so `buildPlaystate` stops at
- *    `src/main/syncplay.ts:2470` ("if (!room) return null"). Its first wire frame
+ *    `src/main/syncplay.ts:2520` ("if (!room) return null"). Its first wire frame
  *    is the t=2000 one, by which point it has adopted and sends `paused: true`,
  *    which the server stores raw — so every election reads `ROOM_START` and the
  *    old `[ROOM_START]` literal was right.
  *  - Present, the host's own join-time `State` has already given it a
  *    `lastRoomState` by t=1000, while the adopted-exit gate
- *    `src/main/syncplay.ts:2462` ("if (this.canAssertSnapshot() &&
+ *    `src/main/syncplay.ts:2512` ("if (this.canAssertSnapshot() &&
  *    this.isAdopted()) {") is still false. Both of those follow from the frame
  *    itself rather than from a separate reading: the mirror exit is only
  *    reachable past the null one, and it is the only exit that omits `paused`.
  *    So its t=1000 heartbeat takes the **mirror** exit —
- *    position, and no `paused` key at all (`src/main/syncplay.ts:2543-2546`,
- *    against the adopted exit at `src/main/syncplay.ts:2463-2467`, which does
+ *    position, and no `paused` key at all (`src/main/syncplay.ts:2593-2596`,
+ *    against the adopted exit at `src/main/syncplay.ts:2513-2517`, which does
  *    send `paused`). The server reads a missing `paused` as "not paused" and
  *    compensates it by a forward delay —
  *    `test/helpers/syncplay-min-election-server.ts:945` ("w.position = position +
@@ -290,7 +290,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // The claim: none of it came back. The host's renderer saw nothing at all
     // for the whole 4.6 s — not the forced update at t=4150 and not the four
     // `paused: true` periodics behind it, all of which are `setBy` the host and
-    // die at `src/main/syncplay.ts:2146`.
+    // die at `src/main/syncplay.ts:2193`.
     expect(host.frames).toEqual([])
     // So its element was never written and never re-paused programmatically.
     expect(host.el.seekWrites).toEqual([])

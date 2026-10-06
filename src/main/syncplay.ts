@@ -483,6 +483,19 @@ export class SyncplayClient extends EventEmitter {
   private clientIgnoreCounter = 0
   private pendingClientAck = 0
   private pendingServerAck = 0
+  // What a peer's forced update handed the renderer when it crossed our own
+  // unacked change (#494): set at the remote-state emit for a frame that was
+  // foreign and counter-bearing while `pendingClientAck !== 0`, and spent by the
+  // next counter-bearing *self* frame. That frame is the server's verdict on our
+  // own change, ordered after the peer's, and past the crossing it is no longer
+  // a no-op echo: the element now holds the peer's state, so dropping our echo
+  // leaves us on a state the server has already replaced (the flap of #494).
+  // The pair, not `this.snapshot`, is the comparand: the renderer pushes at most
+  // every SNAPSHOT_MIN_INTERVAL_MS, so in the same slice the snapshot still
+  // reads our own pre-crossing change. Cleared in resetTransportState() and by
+  // every new discrete change (sendLocalState(), sendFileChangeSeek()), so it
+  // can never let the echo of a *later* own `doSeek` through (#220).
+  private crossedByForeign: { position: number; paused: boolean; at: number } | null = null
   private lastAppliedRoomEpisode: string | null = null
 
   private serverRtt = 0
@@ -855,6 +868,7 @@ export class SyncplayClient extends EventEmitter {
     this.lastAppliedRemotePosition = null
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
+    this.crossedByForeign = null
     log('file-change seek', 'counter=', this.clientIgnoreCounter, 'paused=', room.paused)
     this.sendStateMessage({ doSeek: true, override: { position: 0, paused: room.paused } })
   }
@@ -932,6 +946,7 @@ export class SyncplayClient extends EventEmitter {
     if (payload.cause === 'seek') this.seekIntent = { at: Date.now(), attempts: 0 }
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
+    this.crossedByForeign = null
     log(
       'local-state',
       payload.cause,
@@ -1120,6 +1135,7 @@ export class SyncplayClient extends EventEmitter {
     this.clientIgnoreCounter = 0
     this.pendingClientAck = 0
     this.pendingServerAck = 0
+    this.crossedByForeign = null
     this.serverRtt = 0
     this.lastServerLatencyCalculation = null
     this.lastServerLatencyArrivalMs = 0
@@ -1808,6 +1824,15 @@ export class SyncplayClient extends EventEmitter {
     // bottom of this method — that guard returns, so anything placed after it
     // is a no-op for the symptom this exists to fix. The server's forced State
     // carries `ignoringOnTheFly.server` and the playstate in the same frame.
+    //
+    // Read before the zero below overwrites `pendingClientAck` (#494): a peer's
+    // forced update that crossed our unacked change. Only latched at the emit,
+    // on what the renderer was actually handed; see `crossedByForeign`.
+    const crossesOurChange =
+      serverCounter !== null &&
+      this.pendingClientAck !== 0 &&
+      ps !== null &&
+      this.isForeignSetBy(typeof ps.setBy === 'string' ? ps.setBy : null)
     if (serverCounter !== null) {
       this.pendingServerAck = serverCounter
       // Zero our own counter unconditionally, matching the reference client
@@ -2143,7 +2168,29 @@ export class SyncplayClient extends EventEmitter {
     // handed" and a widening of the handed set keeps that true — but it is an
     // implication now, not the identity claimed at the hoist, and a new drop
     // rule between here and the emit still has to narrow *both* sides.
-    if (!isForeignState && !isRoomVoice) return
+    //
+    // The third pass-through (#494): our own forced update, arriving after a
+    // peer's crossed it and was applied. The server ordered it last, so it is the
+    // room's outcome — but only if it disagrees with what the crossing frame
+    // handed the renderer (`paused` differs, or the position is outside
+    // ADOPT_TOLERANCE_S once both are aged by the same `!paused` rule as
+    // `compensated` below); a matching echo stays a no-op. Spent by the next
+    // counter-bearing self frame whether or not it passes, and untouched by a
+    // foreign one in between (a third peer). Like `isRoomVoice`, kept out of
+    // `isForeignState` and so out of `willApplyRemoteState`: our own reflected
+    // seek must not retire a live `seekIntent` through #274's retraction.
+    let isCrossedEcho = false
+    if (!isForeignState && !isRoomVoice && serverCounter !== null && this.crossedByForeign) {
+      const applied = this.crossedByForeign
+      this.crossedByForeign = null
+      const appliedNow = applied.paused
+        ? applied.position
+        : applied.position + (Date.now() - applied.at) / 1000
+      const echoNow = paused ? position : position + this.serverRtt / 2
+      isCrossedEcho =
+        paused !== applied.paused || Math.abs(echoNow - appliedNow) > ADOPT_TOLERANCE_S
+    }
+    if (!isForeignState && !isRoomVoice && !isCrossedEcho) return
     if (!localChangeAcked) {
       log('drop remote state — local change unacked (counter=', this.pendingClientAck, ')')
       return
@@ -2196,6 +2243,9 @@ export class SyncplayClient extends EventEmitter {
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
       this.lastAppliedRemotePosition = Math.max(0, emitted)
     }
+    // `emitted`, not `compensated`: under a live intent the renderer is handed
+    // our snapshot, and the gate must compare against what it actually got.
+    if (crossesOurChange) this.crossedByForeign = { position: emitted, paused, at: Date.now() }
     // Recorded here, on the value we are about to emit, so `getRoomPosition()`
     // answers with exactly what the renderer would have applied — clamped like
     // the echo target above, so a projection can only walk it forward (#262).

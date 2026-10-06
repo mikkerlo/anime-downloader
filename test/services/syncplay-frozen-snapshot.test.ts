@@ -297,7 +297,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // then resumes*. The latch survives the silence only because nothing runs
   // while a client is silent; the first resumed push is what touches it. It
   // lands in `updateSnapshot()` with `hasLivePlayback()` already false, so
-  // `src/main/syncplay.ts:951-957` clears `playbackAdopted` and nulls `seekIntent`
+  // `src/main/syncplay.ts:966-972` clears `playbackAdopted` and nulls `seekIntent`
   // before seating the snapshot — deliberately, since a push after a stale gap
   // is a fresh element under a byte-identical canonicalName that `setFile()`'s
   // identity check cannot see. So recovery here is de-adopt → spectator mirror
@@ -345,7 +345,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // they pin `canAssertSnapshot()` following the pushed value in both
   // directions, and the paused arm (`if (this.snapshot.paused) return true`)
   // carries no staleness compare of its own. Its clock is `hasLivePlayback()`,
-  // src/main/syncplay.ts:2397 ("Date.now() - this.lastSnapshotAt <=
+  // src/main/syncplay.ts:2447 ("Date.now() - this.lastSnapshotAt <=
   // PLAYBACK_STALE_MS"), so what bounds a paused assert is the 5 s de-adoption
   // horizon and not the 2 s assert one — which is #383's correction to the line
   // that used to stand here
@@ -453,9 +453,9 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
   // terms that it stays under PLAYBACK_STALE_MS throughout so
   // `hasLivePlayback()` is not what it tests. This one crosses that line.
   //
-  // What it pins: `src/main/syncplay.ts:2423` returns false once
+  // What it pins: `src/main/syncplay.ts:2473` returns false once
   // `hasLivePlayback()` goes false, so the paused arm at
-  // `src/main/syncplay.ts:2424` is never reached, and `buildPlaystate()` falls
+  // `src/main/syncplay.ts:2474` is never reached, and `buildPlaystate()` falls
   // through to the keyless spectator mirror. The paused exemption is therefore
   // bounded — by the de-adoption horizon rather than by nothing.
   //
@@ -506,7 +506,7 @@ describe('SyncplayClient — an adopted client whose snapshot froze (#284)', () 
     switcher.updateSnapshot({ position: frozenAt, paused: true })
     // The horizon's origin and the wire slice's, re-taken here as a pair rather
     // than read off the helper's `lastPushAt`/`sentBefore`.
-    // `src/main/syncplay.ts:959` ("this.lastSnapshotAt = Date.now()") restamps
+    // `src/main/syncplay.ts:974` ("this.lastSnapshotAt = Date.now()") restamps
     // the snapshot clock on every push with nothing gating it, so the age
     // `canAssertSnapshot()` compares runs from *this* push and not from the
     // helper's stamp. The wire length has to move with it: sliced from the

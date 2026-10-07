@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2489` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2552` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -1944,9 +1944,9 @@ describe('useSyncplayClient — pre-metadata deferral (#240)', () => {
     // The element is playing again with the hold still set. Reachable as
     // documented in `applyConsumedPlaybackIntent`: a superseded
     // `restore`/`episode-start` operation returns at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1117`, *above* the
+    // `src/renderer/src/composables/use-syncplay-client.ts:1157`, *above* the
     // `clearPendingUserPause()` at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1152`, so the element
+    // `src/renderer/src/composables/use-syncplay-client.ts:1192`, so the element
     // is re-played by the op's own `play()` with `pendingUserPause` intact.
     ;(v as { paused: boolean }).paused = false
     // The internal pause steps, modelled: set `paused`, and fire the event only
@@ -2743,12 +2743,12 @@ describe('useSyncplayClient — a room position past the end of our file (#281)'
 })
 
 // #281 slice B, the renderer half. Main de-adopts for the length of the
-// divergence (`src/main/syncplay.ts:2004`), so `sendLocalState()` returns at its
+// divergence (`src/main/syncplay.ts:2038`), so `sendLocalState()` returns at its
 // adoption gate — no assertion, not even an ignore-counter bump — and a local
 // pause can no longer reach the room. That clear is also what lets the room's own
-// periodics survive `src/main/syncplay.ts:2193`, whose gate is `isForeignState ||
+// periodics survive `src/main/syncplay.ts:2227`, whose gate is `isForeignState ||
 // (setBy !== null && !playbackAdopted && rosterReceived && peers > 0)` with
-// `src/main/syncplay.ts:2194`'s unacked-local-change drop below it. De-adoption is
+// `src/main/syncplay.ts:2228`'s unacked-local-change drop below it. De-adoption is
 // necessary and not sufficient: with `List` unkeyable (#223) `rosterReceived` stays
 // false and only a peer's own foreign-`setBy` move arrives — which is what the
 // fixtures below emit. So the room's next 1 Hz *playing* state would then resume the
@@ -2801,7 +2801,7 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     // …and it keeps holding, because the room is going to say the same thing
     // once a second for the whole divergence — and these frames do arrive. They
     // carry `setBy: 'peer'`, so `isForeignState` is true and they are past
-    // `src/main/syncplay.ts:2193` unconditionally, with no adoption reasoning
+    // `src/main/syncplay.ts:2227` unconditionally, with no adoption reasoning
     // needed: this fixture pins the foreign-`setBy` regime, not the de-adopted one.
     emitRemoteState({ position: 3001, paused: false, doSeek: false, setBy: 'peer' })
     emitRemoteState({ position: 3002, paused: false, doSeek: false, setBy: 'peer' })
@@ -2892,6 +2892,13 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     // marker is never set and the resume lands. This is what the case above
     // measures the difference against; without the `outOfFile` conjunct in
     // `onLocalPause()` the two would be indistinguishable.
+    //
+    // The resume lands *after* the `roomPaused` edge (#513). Since the pending-
+    // pause hold arms post-adoption too, a resume arriving before our pause has
+    // reached the room is declined by that hold, which is a different mechanism
+    // from this marker and would make this contrast pass for the wrong reason.
+    // After the edge the hold is over, so the only thing that could still refuse
+    // the resume is the marker under test.
     const v = fakeVideo({
       currentTime: 300,
       duration: 1440,
@@ -2905,6 +2912,13 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
     })
 
     pausedByUser(v, client)
+    client.syncplayStatus.value = {
+      state: 'ready',
+      username: 'me',
+      playbackAdopted: true,
+      roomPaused: true
+    }
+    await nextTick()
     emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
 
     expect(v.play).toHaveBeenCalled()
@@ -3055,9 +3069,9 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 // every other syncplay toast for the whole divergence: the pending-pause pair,
 // the reconnect notice and all `room-event` text. Not a universal — a stream
 // sparser than one per 3500 ms does let the notice clear. It is the room's cadence
-// here because the out-of-file divergence is the window `src/main/syncplay.ts:2004`
+// here because the out-of-file divergence is the window `src/main/syncplay.ts:2038`
 // de-adopts for, so the room's own periodics stop dying at
-// `src/main/syncplay.ts:2193` and arrive as room voice — which needs de-adoption
+// `src/main/syncplay.ts:2227` and arrive as room voice — which needs de-adoption
 // *and* a keyed roster with a peer in it, not de-adoption alone — while a peer's
 // explicit move is foreign-`setBy` and past that guard regardless. The refusal is
 // therefore emitted on the transition *into* the refusal only.
@@ -3180,7 +3194,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
   // the seek rather than on `outOfFile` alone. `state.position >= v.duration` is
   // *also* true at the ordinary end of an episode where every peer holds the
   // same file: main emits `position + serverRtt / 2` for a playing room
-  // (`src/main/syncplay.ts:2211`), so the last state or two before our own end
+  // (`src/main/syncplay.ts:2245`), so the last state or two before our own end
   // already read past `duration`. Nothing is refused that the user can see — the
   // room is well inside the 3 s tolerance, so no seek was suppressed — and the
   // message would land in the middle of the 5 s next-episode countdown, on every
@@ -3215,7 +3229,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     })
 
     // A periodic, not a seek: main's heartbeat sends `doSeek: false`
-    // (`src/main/syncplay.ts:2301`), and only a genuine room seek sets the bit.
+    // (`src/main/syncplay.ts:2345`), and only a genuine room seek sets the bit.
     emitRemoteState({ position: 1440.2, paused: true, doSeek: false })
 
     expect(client.syncplayToast.value).toBe('')
@@ -3678,8 +3692,8 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
   // bumping the revision in `recordRemoteState` instead would supersede a queued
   // operation within a second of registration — but only *pre-adoption*, which is
   // where `episode-start` is registered. The three same-episode `restore`s are not:
-  // `isNewPlayer` is false at `src/main/syncplay.ts:810`, adoption holds, and their
-  // own periodics die at `src/main/syncplay.ts:2193`. What bounds it is asserted
+  // `isNewPlayer` is false at `src/main/syncplay.ts:836`, adoption holds, and their
+  // own periodics die at `src/main/syncplay.ts:2227`. What bounds it is asserted
   // below.
   //
   // #350 note: this case's original badge characterisation — "the badge blinks
@@ -3740,7 +3754,7 @@ describe('useSyncplayClient — restore and episode-start intent kinds (#306)', 
     // left. That is the bound — not "about one heartbeat of blink", which #340
     // falsified: the
     // other repair channel waits on the next inbound state to survive
-    // `src/main/syncplay.ts:2193` and `src/main/syncplay.ts:2194`, and nothing in
+    // `src/main/syncplay.ts:2227` and `src/main/syncplay.ts:2228`, and nothing in
     // the tree schedules that state. Either way, not a room-dragging resume.
     sendSnapshot.mockClear()
     client.onVideoLoadedMetadata()
@@ -4826,21 +4840,209 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     expect(client.syncplayToast.value).toBe('')
   })
 
-  // 15c. The other half of decision 5's arming condition: post-adoption the
-  // hold is redundant (main's ack protection is on) and arming would toast a
-  // failure nobody earned.
-  it('never arms once adoption has latched', async () => {
-    const v = fakeVideo({ currentTime: 0, paused: false } as Partial<HTMLVideoElement>)
-    const { client, emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
-      state: 'ready',
-      username: 'me',
-      playbackAdopted: true
+  // 15c. #513 shape 2, and what used to be "never arms once adoption has
+  // latched". That case sent exactly this input — adopted, press pause, a
+  // foreign `paused: false` — and asserted `v.play` was called, on the premise
+  // that main's ack protection covers the adopted half. It does not cover a
+  // frame main emitted *before* the press's IPC reached it: CI's P6f i=32 trace
+  // has the server periodic and the press both at +4 ms, the apply's `play` at
+  // +5, and A's heartbeat then resuming the whole room. Post-adoption the hold
+  // now arms too: short, and silent.
+  describe('the adopted arm (#513 shape 2)', () => {
+    const adopted = { state: 'ready', username: 'me', playbackAdopted: true } as const
+
+    it('declines a stale resume that lands right after the press', async () => {
+      vi.useFakeTimers()
+      const sendSnapshot = vi.fn()
+      setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+
+      expect(v.play).not.toHaveBeenCalled()
+      expect(v.paused).toBe(true)
+      // And main is told the user's pause, not the room's resume: the push the
+      // apply makes (#324) carries the intent the hold kept.
+      expect(sendSnapshot).toHaveBeenLastCalledWith({ position: 100, paused: true })
     })
 
-    pressPause(client, v)
-    emitRemoteState({ position: 200, paused: false, doSeek: false, setBy: 'peer' })
+    // #515's half (2) lands here: a peer's `doSeek` that crossed the press still
+    // moves the element, and only the resume is declined.
+    it('still applies the position of a crossing doSeek, and reports the peer’s seek', async () => {
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
 
-    expect(v.play).toHaveBeenCalled()
+      pressPause(client, v)
+      emitRemoteState({ position: 500, paused: false, doSeek: true, setBy: 'peer' })
+
+      expect(v.currentTime).toBe(500)
+      expect(v.play).not.toHaveBeenCalled()
+      // The pre-adoption arm silences this toast because its element is
+      // deliberately behind; here the element was on the room, and a peer's
+      // `doSeek` is a real move.
+      expect(client.syncplayToast.value).toBe('peer seeked to 8:20')
+    })
+
+    it('is silent: no pending toast while it holds, no failure toast when it expires', async () => {
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+      expect(client.syncplayToast.value).not.toBe(PENDING)
+
+      // Read just past the backstop, not seconds later: a failure toast's own
+      // 3500 ms clear would otherwise erase the evidence before the read.
+      vi.advanceTimersByTime(1600)
+      expect(client.syncplayToast.value).not.toBe(FAILED)
+      expect(client.syncplayToast.value).toBe('')
+      // It did hand the badge back: it held a resume, and the room never went
+      // paused inside the window, so "Paused by you" is no longer true.
+      expect(client.syncplayPausedBy.value).toBeNull()
+    })
+
+    it('is bounded at about one heartbeat plus RTT, not 8 s', async () => {
+      // A pause the server genuinely dropped hands the transport back to the
+      // room inside a second and a half.
+      vi.useFakeTimers()
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      vi.advanceTimersByTime(1400)
+      emitRemoteState({ position: 101.9, paused: false, doSeek: false, setBy: 'peer' })
+      expect(v.play).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(200)
+      emitRemoteState({ position: 102.1, paused: false, doSeek: false, setBy: 'peer' })
+      expect(v.play).toHaveBeenCalledTimes(1)
+    })
+
+    // The terminator, and the contrast the hold is measured against: once our
+    // own pause has reached the room (the `roomPaused` edge — main drops the
+    // echo itself at its self-`setBy` guard), a resume is a peer's real resume,
+    // ordered after ours by the server, and it lands.
+    it('ends on the roomPaused edge, after which a peer’s resume lands', async () => {
+      const v = fakeVideo({ currentTime: 100, paused: false } as Partial<HTMLVideoElement>)
+      const { client, emitRemoteState } = await mountWithRemoteState(
+        makeDeps({ video: v }),
+        adopted
+      )
+
+      pressPause(client, v)
+      client.syncplayStatus.value = { ...adopted, roomPaused: true }
+      await nextTick()
+      emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
+
+      expect(v.play).toHaveBeenCalled()
+    })
+
+    // The second path, found by CI's P7f 0 ms bucket: park → confirm → unpark.
+    // A quality switch swaps the source in the instant of the press, so the
+    // stale resume that crosses it is parked below HAVE_METADATA instead of
+    // reaching the hold. The `roomPaused` edge then ends the hold, and the
+    // unpark at `loadedmetadata` replayed the parked resume with nothing left
+    // to decline it — A's next heartbeat un-paused the room.
+    describe('a resume parked across a source swap (park → confirm → unpark)', () => {
+      const parkAcrossSwap = async (): Promise<{
+        client: Client
+        v: HTMLVideoElement
+        emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+        sendSnapshot: ReturnType<typeof vi.fn>
+      }> => {
+        vi.useFakeTimers()
+        const sendSnapshot = vi.fn()
+        setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+        const v = fakeVideo({
+          currentTime: 100,
+          paused: false,
+          readyState: 4
+        } as Partial<HTMLVideoElement>)
+        const { client, emitRemoteState } = await mountWithRemoteState(
+          makeDeps({ video: v }),
+          adopted
+        )
+        pressPause(client, v)
+        ;(v as unknown as { readyState: number }).readyState = 0
+        emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'rigB' })
+        // Parked, not applied: nothing has touched the element yet.
+        expect(v.play).not.toHaveBeenCalled()
+        expect(client.hasRemoteStateApplied()).toBe(true)
+        return { client, v, emitRemoteState, sendSnapshot }
+      }
+
+      it('drops the parked resume when the room confirms the pause', async () => {
+        const { client, v, sendSnapshot } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+        sendSnapshot.mockClear()
+        vi.advanceTimersByTime(1000)
+        expect(sendSnapshot).toHaveBeenCalled()
+        expect(sendSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ paused: true }))
+      })
+
+      // Control: no confirmation inside the window, so the hold is still armed
+      // at the unpark and declines the replay itself — green before the fix.
+      it('without the confirmation the still-armed hold declines the replay', async () => {
+        const { client, v, sendSnapshot } = await parkAcrossSwap()
+
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+        expect(sendSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ paused: true }))
+      })
+
+      // A peer's real resume, ordered after our pause by the server, arrives as
+      // a fresh frame after the edge — parked again and replayed, unheld.
+      it('a real resume after the confirmation still plays at loadedmetadata', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'rigB' })
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(1)
+      })
+
+      // …and one that lands on an element that already has metadata applies at once.
+      it('a real resume after the confirmation and the reload plays immediately', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+        expect(v.play).toHaveBeenCalledTimes(0)
+
+        emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'rigB' })
+        expect(v.play).toHaveBeenCalledTimes(1)
+      })
+    })
   })
 
   // 15d. The third term, matching the `syncplayPausedBy` write beside it: with
@@ -5097,7 +5299,7 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
     // **This line is the only mutation control that names the tolerance
     // literal's value rather than merely tripping over it, and it has to be
     // read as one before it is trimmed.** A `3.0` → `4.0` mutation at
-    // `src/renderer/src/composables/use-syncplay-client.ts:1529` reds seven
+    // `src/renderer/src/composables/use-syncplay-client.ts:1569` reds seven
     // tests across three files (re-measured on #488's tip after its rebase onto
     // #493, full suite); the other six red on drifts and positions a reader
     // cannot invert back into a tolerance — five in
@@ -5888,8 +6090,8 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
 // #324 closed the *racing* half of the stale-assert family. This is the half it
 // left open, and the worse-shaped one: the value the 1 Hz interval pushes is
 // itself wrong, so nothing self-corrects on a schedule. The repair waits on an
-// inbound state surviving `src/main/syncplay.ts:2193` and
-// `src/main/syncplay.ts:2194`, and on a same-episode swap, past adoption, that may
+// inbound state surviving `src/main/syncplay.ts:2227` and
+// `src/main/syncplay.ts:2228`, and on a same-episode swap, past adoption, that may
 // be no state at all (#340) — a heartbeat is not the bound.
 //
 // The mechanism. `applyRemoteStateToElement` used to return at
@@ -6116,7 +6318,7 @@ describe('useSyncplayClient — a no-op apply adopts the room’s intent (#331)'
   // supersede a queued `restore` or `episode-start` within a second of registration
   // — but only *pre-adoption*, which is where `episode-start` is registered and
   // where the three same-episode `restore`s are not: their periodics arrive
-  // self-`setBy` and die at `src/main/syncplay.ts:2193`. A superseded operation
+  // self-`setBy` and die at `src/main/syncplay.ts:2227`. A superseded operation
   // writes nothing at all.
   //
   // The probe is `episode-start` since #347, for the reason above: a `restore`

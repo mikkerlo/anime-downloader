@@ -98,7 +98,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // that actually keeps a peer's own position out of the room while the room
     // plays on is readiness, so that is the door this case now comes through,
     // and the outbound gate it exercises is `hasAnnounceablePosition()`'s
-    // `readyState >= 1` (`use-syncplay-client.ts:821`).
+    // `readyState >= 1` (`use-syncplay-client.ts:861`).
     //
     // The slow-seek version of this peer is not harmless — it is *worse*, and
     // it is the subject of `syncplay-two-peer-inflight-seek.test.ts`: under the
@@ -132,7 +132,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // assert `currentTime === 0` as part of the premise. It no longer is one:
     // the join-time frame arrives carrying `paused: false`, `recordRemoteState`
     // writes `syncplayLastRemotePlaying = true` **above** the `readyState < 1`
-    // park (`use-syncplay-client.ts:1902`), and the roster watch's ready-gate
+    // park (`use-syncplay-client.ts:1947`), and the roster watch's ready-gate
     // pass then calls `play()` on a dataless element — the play arm carries no
     // readiness floor. The harness's playhead has no `readyState` term either,
     // so it walks on the wall clock and reads 7.95 with nothing behind it. The
@@ -155,7 +155,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // (#348) while `play()` on a dataless element is only a request the browser
     // honours once data arrives, and its one real cost — announcing `position: 0`
     // — is already contained outbound by `hasAnnounceablePosition()`
-    // (`use-syncplay-client.ts:821`), in whose preceding comment `play()` firing
+    // (`use-syncplay-client.ts:861`), in whose preceding comment `play()` firing
     // at `HAVE_NOTHING` from PlayerView's restore is recorded as deliberately
     // swallowed rather than as a defect.
     //
@@ -450,7 +450,7 @@ describe('SyncplayClient — adoption and the spectator mirror across two peers'
     // The switcher's element is placed at the new episode's start — one write,
     // to ~0.1. Before #486 this was #360 verbatim: the element was written to the
     // *previous* episode's 303, because the seat re-latched adoption at
-    // `src/main/syncplay.ts:2744` on the old episode's snapshot and asserted it
+    // `src/main/syncplay.ts:2813` on the old episode's snapshot and asserted it
     // under the new file. `setFile()` now drops that snapshot and forces the room
     // to 0, and the parked frame applied at `loadedmetadata` is the room's 0.
     expect(host.el.seekWrites).toHaveLength(1)

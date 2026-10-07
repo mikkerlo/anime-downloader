@@ -2,8 +2,8 @@
 // reports the room one one-way delay low, wins `Room.getPosition()`'s `min()`,
 // and the room is re-derived from that already-lagged value once a second. That
 // once a second is the server's own re-election rate over the inbound stream, and
-// the stamp it feeds is taken *above* `src/main/syncplay.ts:2193` and
-// `src/main/syncplay.ts:2194` — so the walk compounds on frames that die at those
+// the stamp it feeds is taken *above* `src/main/syncplay.ts:2227` and
+// `src/main/syncplay.ts:2228` — so the walk compounds on frames that die at those
 // guards as readily as on ones the renderer ever sees, and #340's drop counts do
 // not bear on it.
 //
@@ -307,7 +307,7 @@ describe('SyncplayClient — the room ratcheting backwards through our mirror (#
     })
 
     // The discriminator between the `at` form and the position form, and the
-    // direct regression net for docs/syncplay.md:74 ("`doSeek` is provably
+    // direct regression net for docs/syncplay.md:76 ("`doSeek` is provably
     // `false` on a rewritten tick"). The `at` form is inert in a paused room
     // **by construction**, not by measurement: `projectedRoomPosition()`
     // discards `at` outright when `room.paused` — `elapsed = room.paused ? 0 : …`

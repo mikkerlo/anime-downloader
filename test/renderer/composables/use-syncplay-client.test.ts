@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2542` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2552` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -4950,6 +4950,98 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
       emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'peer' })
 
       expect(v.play).toHaveBeenCalled()
+    })
+
+    // The second path, found by CI's P7f 0 ms bucket: park → confirm → unpark.
+    // A quality switch swaps the source in the instant of the press, so the
+    // stale resume that crosses it is parked below HAVE_METADATA instead of
+    // reaching the hold. The `roomPaused` edge then ends the hold, and the
+    // unpark at `loadedmetadata` replayed the parked resume with nothing left
+    // to decline it — A's next heartbeat un-paused the room.
+    describe('a resume parked across a source swap (park → confirm → unpark)', () => {
+      const parkAcrossSwap = async (): Promise<{
+        client: Client
+        v: HTMLVideoElement
+        emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+        sendSnapshot: ReturnType<typeof vi.fn>
+      }> => {
+        vi.useFakeTimers()
+        const sendSnapshot = vi.fn()
+        setApi({ syncplaySendLocalSnapshot: sendSnapshot })
+        const v = fakeVideo({
+          currentTime: 100,
+          paused: false,
+          readyState: 4
+        } as Partial<HTMLVideoElement>)
+        const { client, emitRemoteState } = await mountWithRemoteState(
+          makeDeps({ video: v }),
+          adopted
+        )
+        pressPause(client, v)
+        ;(v as unknown as { readyState: number }).readyState = 0
+        emitRemoteState({ position: 100.5, paused: false, doSeek: false, setBy: 'rigB' })
+        // Parked, not applied: nothing has touched the element yet.
+        expect(v.play).not.toHaveBeenCalled()
+        expect(client.hasRemoteStateApplied()).toBe(true)
+        return { client, v, emitRemoteState, sendSnapshot }
+      }
+
+      it('drops the parked resume when the room confirms the pause', async () => {
+        const { client, v, sendSnapshot } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+        sendSnapshot.mockClear()
+        vi.advanceTimersByTime(1000)
+        expect(sendSnapshot).toHaveBeenCalled()
+        expect(sendSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ paused: true }))
+      })
+
+      // Control: no confirmation inside the window, so the hold is still armed
+      // at the unpark and declines the replay itself — green before the fix.
+      it('without the confirmation the still-armed hold declines the replay', async () => {
+        const { client, v, sendSnapshot } = await parkAcrossSwap()
+
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+        expect(sendSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ paused: true }))
+      })
+
+      // A peer's real resume, ordered after our pause by the server, arrives as
+      // a fresh frame after the edge — parked again and replayed, unheld.
+      it('a real resume after the confirmation still plays at loadedmetadata', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'rigB' })
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.play).toHaveBeenCalledTimes(1)
+      })
+
+      // …and one that lands on an element that already has metadata applies at once.
+      it('a real resume after the confirmation and the reload plays immediately', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+        expect(v.play).toHaveBeenCalledTimes(0)
+
+        emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'rigB' })
+        expect(v.play).toHaveBeenCalledTimes(1)
+      })
     })
   })
 

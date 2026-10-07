@@ -961,9 +961,9 @@ export class SyncplayClient extends EventEmitter {
       return
     }
     // Asserting makes our position the room's, which retires any in-flight
-    // target: leaving it armed would silently drop a later, genuine seek that
-    // happened to land on a peer's old position.
-    this.lastAppliedRemotePosition = null
+    // target, unless this is a pause that crossed it (#515), which asserts at it
+    // instead: see `retireAppliedTarget()`.
+    this.retireAppliedTarget(payload)
     // Below both silent exits above on purpose (#252): a seek the adoption gate
     // or the echo guard dropped was never asserted at the room, so it carries
     // no intent to re-assert. A second seek simply re-arms — last write wins,
@@ -2275,7 +2275,7 @@ export class SyncplayClient extends EventEmitter {
     // to be re-derived.
     const emitted = seekIntentWasLive ? this.snapshot.position : compensated
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
-      this.lastAppliedRemotePosition = Math.max(0, emitted)
+      this.armAppliedTarget(Math.max(0, emitted))
     }
     // `emitted`, not `compensated`: under a live intent the renderer is handed
     // our snapshot, and the gate must compare against what it actually got.
@@ -3289,6 +3289,69 @@ export class SyncplayClient extends EventEmitter {
     const projection = this.statusProjection()
     this.lastEmittedProjection = projection
     this.emit('connection-status', { ...this.status, ...projection } satisfies SyncplayStatus)
+  }
+
+  // ── The pause that crosses an applied remote seek (#515) ──────────────────
+  //
+  // Kept together at the end of the class so the members it adds do not move
+  // every `src/main/syncplay.ts:NNN` anchor below `lastAppliedRemotePosition`.
+
+  // How long after `lastAppliedRemotePosition` was armed a local pause is still
+  // taken to have crossed it, on top of one measured round trip. The gap it has
+  // to cover is main receiving the frame, the renderer handling the user's press
+  // first, and the press's IPC reaching main: 10 ms in the real-server trace.
+  // A pause past it is the user's own, at the element's position.
+  private static readonly PAUSE_CROSSING_SLACK_MS = 300
+  // When `lastAppliedRemotePosition` was last armed. Read only by
+  // `retireAppliedTarget()`'s substitution, which must not fire on a target
+  // armed long ago: the renderer consumes the ordinary echo itself and never
+  // reaches main's echo guard, so nothing but our next assertion, a file change
+  // or a session reset retires the target.
+  private lastAppliedRemoteAt = 0
+
+  private armAppliedTarget(position: number): void {
+    this.lastAppliedRemotePosition = position
+    this.lastAppliedRemoteAt = Date.now()
+  }
+
+  // Called by `sendLocalState()` once it has decided to assert.
+  //
+  // Ordinarily that retires the in-flight target: leaving it armed would
+  // silently drop a later, genuine seek that happened to land on a peer's old
+  // position.
+  //
+  // The exception is a pause pressed between our receiving a peer's seek and
+  // the renderer applying it. The renderer reports the playhead it had *before*
+  // the seek, but the server took the seek first, so the room's outcome is
+  // "paused at the seek's target", and asserting the pre-seek position would
+  // yank every peer back to it. Server order wins: the pause goes out at the
+  // target we handed the renderer, and the target stays armed, so the element's
+  // `seeked` there is still an echo rather than a seek of ours.
+  //
+  // Bounded both ways. Only within one RTT plus `PAUSE_CROSSING_SLACK_MS` of the
+  // arm, or the first pause after any peer seek, however much later, would
+  // assert at that seek. And not within ECHO_SEEK_EPSILON_S of the target, where
+  // the element is already there and the substitution would change nothing but
+  // leave the target armed.
+  private retireAppliedTarget(payload: { paused: boolean; position: number; cause: string }): void {
+    const target = this.lastAppliedRemotePosition
+    if (
+      payload.cause === 'pause' &&
+      target !== null &&
+      Date.now() - this.lastAppliedRemoteAt <=
+        this.serverRtt * 1000 + SyncplayClient.PAUSE_CROSSING_SLACK_MS &&
+      Math.abs(payload.position - target) >= ECHO_SEEK_EPSILON_S
+    ) {
+      log(
+        'local-state pause crossed an applied remote seek, asserting at',
+        target,
+        'not',
+        payload.position
+      )
+      this.snapshot = { position: target, paused: payload.paused }
+      return
+    }
+    this.lastAppliedRemotePosition = null
   }
 }
 

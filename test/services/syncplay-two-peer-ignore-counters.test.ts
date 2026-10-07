@@ -640,3 +640,191 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
     expect(Math.abs(host.el.currentTime - joiner.el.currentTime)).toBeLessThan(1)
   })
 })
+
+// #515: the same-slice crossing above, with the pauser's renderer one step
+// behind its main. On the real server (run 3) B's main had already received A's
+// `doSeek` to 500 when the user pressed Pause, but B's renderer handled the press
+// before it applied that frame, so the press reported B's *pre-seek* position.
+// The server had taken A's seek first, so the room's outcome is "paused at 500";
+// asserting the pre-seek position yanked A back to it, and B's later adoption of
+// the seek went out as `setBy rigB` and toasted A's own seek as B's.
+//
+// The harness's renderer-delivery knob (`Peer.holdRemoteState()`) parks the seek
+// at B's IPC hop, so the press lands in exactly that gap.
+describe('SyncplayClient — a pause pressed inside the apply gap of a peer’s seek (#515)', () => {
+  let room: TwoPeerRoom
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    vi.useRealTimers()
+  })
+
+  const FROM = 1100
+  const TO = 500
+
+  const seatPlaying = async (): Promise<[Peer, Peer]> => {
+    room = await createTwoPeerRoom({ position: FROM, paused: false })
+    const A = await room.seat({
+      username: 'rigA',
+      position: FROM,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    const B = await room.seat({
+      username: 'rigB',
+      position: FROM,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    await room.advance(4)
+    expect(A.adopted() && B.adopted(), 'setup: both peers adopted').toBe(true)
+    return [A, B]
+  }
+
+  /** Advance until `to`'s main has been handed `from`'s forced seek. */
+  const untilSeekReaches = async (to: Peer, from: Peer): Promise<void> => {
+    const n = to.frames.length
+    const hit = (): boolean =>
+      to.frames.slice(n).some((f) => f.state.doSeek && f.state.setBy === from.username)
+    while (!hit()) await room.advance(0.05)
+  }
+
+  /** Main's echo target: the position it last handed the renderer to seek to. */
+  const target = (p: Peer): number | null => p.client['lastAppliedRemotePosition']
+
+  /** The scrub, the seek parked at the pauser's IPC hop, the press, the release. */
+  const crossInGap = async (
+    scrubber: Peer,
+    pauser: Peer
+  ): Promise<{ pressAt: number; armed: number; deliveredAtPress: number }> => {
+    pauser.holdRemoteState()
+    scrubber.userSeek(TO)
+    await untilSeekReaches(pauser, scrubber)
+    const armed = target(pauser)
+    expect(armed).not.toBeNull()
+    // Main knows the room is at the target; the element is still pre-seek.
+    expect(pauser.el.currentTime).toBeGreaterThan(FROM)
+    const pressAt = Date.now()
+    pauser.userPause()
+    pauser.tick()
+    return { pressAt, armed: armed!, deliveredAtPress: pauser.el.delivered.length }
+  }
+
+  it.each([
+    ['rigA scrubs and rigB pauses (run 3)', 0, 1],
+    ['rigB scrubs and rigA pauses (run 4, the mirror)', 1, 0]
+  ])(
+    '%s: the pause lands at the scrub’s target, the scrubber never moves and is not toasted',
+    async (_label, s, p) => {
+      const peers = await seatPlaying()
+      const scrubber = peers[s]
+      const pauser = peers[p]
+      const scrubberToasts = toastLog(scrubber)
+
+      const { pressAt, armed, deliveredAtPress } = await crossInGap(scrubber, pauser)
+      expect(armed).toBeCloseTo(TO, 0)
+      expect(pauser.releaseRemoteState()).toBeGreaterThanOrEqual(1)
+      await room.advance(10)
+
+      // The press itself goes out at the target, not at the pre-seek ~1104, and
+      // nothing the pauser sends afterwards goes back there either.
+      const pauserWire = room.server.wireOf(pauser.username).filter((w) => w.at >= pressAt)
+      expect(pauserWire[0].paused).toBe(true)
+      expect(pauserWire[0].doSeek).toBe(false)
+      expect(pauserWire[0].position).toBe(armed)
+      expect(pauserWire.filter((w) => w.position > TO + 10)).toHaveLength(0)
+      // …and no resume: every claim after the press is a pause (#513 shape 2's
+      // hold, which this crossing relies on).
+      expect(pauserWire.filter((w) => w.paused === false)).toHaveLength(0)
+
+      expect(room.server.roomState().paused).toBe(true)
+      expect(room.server.roomState().setBy).toBe(pauser.username)
+      expect(room.server.roomState().position).toBeCloseTo(TO, 0)
+      for (const peer of peers) {
+        expect(peer.el.paused).toBe(true)
+        expect(peer.el.currentTime).toBeCloseTo(TO, 0)
+      }
+      // (a) The scrubber never leaves ~500: its own scrub is its only write.
+      expect(scrubber.el.seekWrites.map((w) => Math.round(w))).toEqual([TO])
+      // The pauser: the scrub, applied once, after the press.
+      expect(pauser.el.seekWrites.map((w) => Math.round(w))).toEqual([TO])
+      // (b) No seek toast naming the pauser on the scrubber.
+      expect(scrubberToasts.filter((t) => t.startsWith(`${pauser.username} seeked`))).toEqual([])
+      // (c) The pauser's element never plays after the press.
+      expect(pauser.el.delivered.slice(deliveredAtPress)).not.toContain('play')
+    }
+  )
+
+  it('keeps the target armed on that path, so the element’s seeked there is still an echo', async () => {
+    // The renderer's own seek op normally absorbs that `seeked` before it reaches
+    // main; this is main's belt for when the op expired or missed. Delivered by
+    // hand, as the late `seeked` would be, before the parked frame is released.
+    const [A, B] = await seatPlaying()
+    const { pressAt, armed } = await crossInGap(A, B)
+    expect(target(B)).toBe(armed)
+
+    B.client.sendLocalState({ paused: true, position: armed, cause: 'seek' })
+    expect(room.server.wireOf('rigB').filter((w) => w.at >= pressAt && w.doSeek)).toHaveLength(0)
+    expect(target(B)).toBeNull()
+  })
+
+  it('a pause made seconds after an applied peer seek goes out at the element’s own position', async () => {
+    // The ordinary path, and the one the TTL exists for. B applies A's seek, the
+    // renderer's seek op consumes the `seeked`, so main's echo guard never runs
+    // and the target stays armed — nothing else retires it until B asserts.
+    const [A, B] = await seatPlaying()
+    A.userSeek(TO)
+    await untilSeekReaches(B, A)
+    await room.advance(0.1)
+    expect(B.el.seekWrites.map((w) => Math.round(w))).toEqual([TO])
+    const armed = target(B)
+    expect(armed).not.toBeNull()
+
+    await room.advance(5)
+    expect(target(B)).toBe(armed)
+    const pressAt = Date.now()
+    B.userPause()
+    B.tick()
+    const own = B.el.currentTime
+    expect(own - armed!).toBeGreaterThan(4)
+
+    const press = room.server.wireOf('rigB').filter((w) => w.at >= pressAt)
+    expect(press).toHaveLength(1)
+    expect(press[0].paused).toBe(true)
+    expect(press[0].position).toBeCloseTo(own, 3)
+    expect(target(B)).toBeNull()
+    await room.advance(3)
+    expect(room.server.roomState().paused).toBe(true)
+    expect(room.server.roomState().position).toBeCloseTo(own, 1)
+    // A was never pulled back to the old target.
+    expect(A.el.seekWrites.map((w) => Math.round(w))).toEqual([TO])
+    expect(A.el.currentTime).toBeCloseTo(own, 0)
+  })
+
+  it('a pause already at the target retires it, so a small genuine seek right after still goes out', async () => {
+    // Inside the window but within ECHO_SEEK_EPSILON_S of the target, the
+    // substitution would change nothing; it must not keep the target armed
+    // either, or main's echo guard would swallow the user's next nudge.
+    const [A, B] = await seatPlaying()
+    A.userSeek(TO)
+    await untilSeekReaches(B, A)
+    const armed = target(B)
+    expect(armed).not.toBeNull()
+    expect(Math.abs(B.el.currentTime - armed!)).toBeLessThan(0.5)
+
+    B.userPause()
+    B.tick()
+    expect(target(B)).toBeNull()
+
+    const nudgeAt = Date.now()
+    B.userSeek(armed! + 0.3)
+    const nudge = room.server.wireOf('rigB').filter((w) => w.at >= nudgeAt && w.doSeek)
+    expect(nudge).toHaveLength(1)
+    expect(nudge[0].position).toBeCloseTo(armed! + 0.3, 3)
+  })
+})

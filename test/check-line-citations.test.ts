@@ -39,7 +39,7 @@ type Result = {
   unresolvableByExtension: number
   unmarkedPy: number
   markedPy: number
-  failures: { at: string; cited: string; why: string }[]
+  failures: { at: string; cited: string; why: string; candidates?: string[] }[]
   suspicious: { at: string; cited: string; target: string; start: number; why: string }[]
   marked: { at: string; cited: string; target: string; quote: string }[]
   quoteFailures: {
@@ -62,7 +62,6 @@ type Result = {
   driftExemptNewFile: { at: string; cited: string; target: string }[]
   driftBase: string | null
   driftEnabled: boolean
-  ambiguous: { at: string; cited: string; candidates: string[] }[]
   pathless: { at: string; anchor: string }[]
   uncheckable: number
 }
@@ -362,23 +361,178 @@ describe('check-line-citations', () => {
     })
   })
 
-  it('counts a basename two tracked files carry instead of guessing', () => {
-    const r = run({
+  // #517: a bare basename two tracked files carry. It used to be counted into
+  // the uncheckable pin and never looked at again, which is how all ten bare
+  // `syncplay.ts:NNN` anchors on the censused tree went stale with the gate
+  // green. It is a failure now, and the failure names both candidates.
+  it('fails a basename two tracked files carry, naming both candidates (#517)', () => {
+    const corpus = {
       'src/main/dup.ts': TARGET,
       'src/renderer/dup.ts': TARGET,
       'src/caller.ts': '// see dup.ts:3'
+    }
+    const r = run(corpus)
+
+    expect(r.resolved).toEqual([])
+    expect(r.uncheckable).toBe(0)
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toEqual({
+      at: 'src/caller.ts:1',
+      cited: 'dup.ts:3',
+      candidates: ['src/main/dup.ts', 'src/renderer/dup.ts'],
+      why:
+        'ambiguous — 2 tracked files end in `dup.ts` ' +
+        '(src/main/dup.ts, src/renderer/dup.ts); spell the path out'
     })
 
-    // Neither resolved nor failed: resolving it would be a coin flip, and
-    // failing it would red the gate on a citation that is probably fine.
-    expect(r.failures).toEqual([])
-    expect(r.resolved).toEqual([])
-    expect(r.ambiguous).toHaveLength(1)
-    expect(r.ambiguous[0]).toMatchObject({
-      cited: 'dup.ts:3',
-      candidates: ['src/main/dup.ts', 'src/renderer/dup.ts']
+    // The message is the point of the change: the report has to carry both
+    // candidates, not a count, or the author goes looking for them.
+    const { ok, err } = report(r, pinsAtZero)
+    expect(ok).toBe(false)
+    expect(err).toContain('1 citation(s) do not resolve:')
+    expect(err).toContain(
+      '  src/caller.ts:1: cites `dup.ts:3` — ambiguous — 2 tracked files end in ' +
+        '`dup.ts` (src/main/dup.ts, src/renderer/dup.ts); spell the path out'
+    )
+  })
+
+  it('fails an ambiguous basename whatever its number says (#517)', () => {
+    // A right number, a wrong one and one past the end of both files: each is
+    // exactly one ambiguity failure, never a range failure and never a pass, so
+    // the verdict cannot depend on whether the number happens to be correct.
+    for (const n of [3, 5, 999]) {
+      const r = run({
+        'src/main/dup.ts': TARGET,
+        'src/renderer/dup.ts': TARGET,
+        'src/caller.ts': `// see dup.ts:${n}`
+      })
+      expect(r.failures, `dup.ts:${n}`).toHaveLength(1)
+      expect(r.failures[0].cited).toBe(`dup.ts:${n}`)
+      expect(r.failures[0].candidates).toEqual(['src/main/dup.ts', 'src/renderer/dup.ts'])
+      expect(r.failures[0].why).toMatch(/^ambiguous — 2 tracked files/)
+      expect(r.resolved).toEqual([])
+    }
+  })
+
+  it('fails a bare `syncplay.ts:NNN` and resolves the suffixes that disambiguate it (#517)', () => {
+    // The real collision, by its real paths: `src/main/syncplay.ts` and the
+    // Pinia store. The suffix `main/syncplay.ts` is what self-citing comments
+    // in the main process write to keep lines short, so it has to resolve to
+    // exactly one file — and so does the store's.
+    const r = run({
+      'src/main/syncplay.ts': TARGET,
+      'src/renderer/src/stores/syncplay.ts': TARGET,
+      'docs/syncplay.md': [
+        'the guard at `syncplay.ts:3`,',
+        'the same guard at `main/syncplay.ts:3`,',
+        'and the store at `stores/syncplay.ts:5`.'
+      ].join('\n')
     })
+
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({
+      at: 'docs/syncplay.md:1',
+      cited: 'syncplay.ts:3',
+      candidates: ['src/main/syncplay.ts', 'src/renderer/src/stores/syncplay.ts']
+    })
+    expect(r.resolved.map((x) => [x.at, x.cited, x.target])).toEqual([
+      ['docs/syncplay.md:2', 'main/syncplay.ts:3', 'src/main/syncplay.ts'],
+      ['docs/syncplay.md:3', 'stores/syncplay.ts:5', 'src/renderer/src/stores/syncplay.ts']
+    ])
+    expect(r.resolvedUniqueBasename).toBe(2)
+    expect(r.uncheckable).toBe(0)
+  })
+
+  // #517's other two forms are not resolved by the gate, by design: inferring a
+  // shorthand's path from the nearest anchor on its line was measured wrong on
+  // two of fifty-two, both stale. They are spelled out in the tree instead and
+  // stay counted against an exact pin; what changed is that a pin overrun now
+  // NAMES each pathless anchor, so a new one can be found and spelled.
+  it('keeps a shorthand `:NNN` after a full anchor pathless, and names it when the pin overruns (#517)', () => {
+    const r = run(base({ 'src/caller.ts': '// see `src/target.ts:3`/`:5`' }))
+
+    expect(r.resolved.map((x) => x.cited)).toEqual(['src/target.ts:3'])
+    expect(r.failures).toEqual([])
+    expect(r.pathless).toEqual([{ at: 'src/caller.ts:1', anchor: ':5' }])
     expect(r.uncheckable).toBe(1)
+
+    const { ok, err } = report(r, pinsAtZero)
+    expect(ok).toBe(false)
+    expect(err).toContain('Uncheckable-anchor count rose: 1, pinned at 0.')
+    expect(err.slice(err.indexOf('Pathless anchors:'))).toEqual([
+      'Pathless anchors:',
+      '  src/caller.ts:1: `:5`'
+    ])
+  })
+
+  it('keeps a `(:NNN)` self-reference pathless rather than resolving it against its own file (#517)', () => {
+    const self = ['export const a = 1', '// the constant above (:1) and the guard (:2)', ''].join(
+      '\n'
+    )
+    const r = run(base({ 'src/self.ts': self }))
+
+    expect(r.resolved).toEqual([])
+    expect(r.failures).toEqual([])
+    expect(r.pathless).toEqual([
+      { at: 'src/self.ts:2', anchor: ':1' },
+      { at: 'src/self.ts:2', anchor: ':2' }
+    ])
+
+    const { err } = report(r, { ...pinsAtZero, uncheckable: 1 })
+    expect(err).toContain('Uncheckable-anchor count rose: 2, pinned at 1.')
+    expect(err.slice(err.indexOf('Pathless anchors:'))).toEqual([
+      'Pathless anchors:',
+      '  src/self.ts:2: `:1`',
+      '  src/self.ts:2: `:2`'
+    ])
+
+    // A fall prints no list: there is nothing to find, only a pin to lower.
+    const fell = report(r, { ...pinsAtZero, uncheckable: 3 })
+    expect(fell.err).not.toContain('Pathless anchors:')
+  })
+
+  it('drift-checks the spelled-out anchor and is blind to the same target written as shorthand (#517)', () => {
+    // The pair that says why #517 spells paths out instead of counting them:
+    // one line inserted above the target moves both anchors' landing, and only
+    // the spelled one is compared against the base.
+    const target = (lead: string[]): string =>
+      [...lead, 'export const guard = 1', 'export const other = 2', ''].join('\n')
+    const citer = '// the guard (src/main/x.ts:1), the other (src/main/x.ts:2) and again (:1)'
+    const selfCiter = [
+      'export const guard = 1',
+      '// the guard above (:1), spelled: src/main/self.ts:1',
+      ''
+    ].join('\n')
+    const baseCorpus: Corpus = {
+      'src/main/x.ts': target([]),
+      'src/main/self.ts': selfCiter,
+      'src/caller.ts': citer
+    }
+    const head: Corpus = {
+      'src/main/x.ts': target(['export const inserted = 0']),
+      'src/main/self.ts': ['export const inserted = 0', selfCiter].join('\n'),
+      'src/caller.ts': citer
+    }
+    const r = analyze({
+      files: Object.keys(head),
+      readLines: (p: string) => head[p].split('\n'),
+      readBaseLines: (p: string) => (p in baseCorpus ? baseCorpus[p].split('\n') : null),
+      baseLabel: 'base',
+      scanRoots: ['src'],
+      excludedPaths: []
+    }) as Result
+
+    // Scanned in `files` order, which is the head corpus's key order.
+    expect(r.drift.map((d) => [d.at, d.cited, d.elsewhere])).toEqual([
+      ['src/main/self.ts:3', 'src/main/self.ts:1', [2]],
+      ['src/caller.ts:1', 'src/main/x.ts:1', [2]],
+      ['src/caller.ts:1', 'src/main/x.ts:2', [3]]
+    ])
+    expect(r.driftChecked).toBe(3)
+    expect(r.pathless).toEqual([
+      { at: 'src/main/self.ts:3', anchor: ':1' },
+      { at: 'src/caller.ts:1', anchor: ':1' }
+    ])
   })
 
   it('counts a pathless anchor rather than silently ignoring it', () => {
@@ -2454,7 +2608,7 @@ const docFixture = (over: Partial<Record<PinName, string>> = {}): string =>
     // issues are in the hundreds — would false-red without it. Drop `#` from
     // `(?<![#:\d])` and every case using this default bullet reds.
     over.uncheckable ??
-      '- **Uncheckable anchors.** Bare basenames more than one tracked file carries,\n  plus pathless anchors that inherit their path from a neighbour. #116 took\n  four of them the other way.',
+      '- **Uncheckable anchors.** Pathless anchors that inherit their path from a\n  neighbour, all of them upstream shorthand. #116 took\n  four of them the other way.',
     over.marked ??
       '- **Marked citations, floored at 75.** One of the two one-sided counts here,\n  because the marked class can only shrink silently.',
     over.unmarkedPy ??
@@ -2491,6 +2645,23 @@ describe('the pin figures docs/testing.md restates', () => {
     for (const { heading } of FIGURELESS_PINS) {
       expect(countLiteral(doc, heading)).toBe(1)
     }
+  })
+
+  it('describes the uncheckable pin as upstream shorthand, with ambiguous basenames failing (#517)', () => {
+    // The guard above checks the bullet does not restate the pin's value; it
+    // cannot see the bullet describing the wrong population. Before #517 the
+    // bullet opened on "Bare basenames more than one tracked file carries" — the
+    // class that now fails outright — so a reader sizing the pin would count
+    // something it no longer contains. Bounded the same way the guard bounds it.
+    const doc = readFileSync(TESTING_DOC, 'utf8')
+    const heading = '**Uncheckable anchors.**'
+    const from = doc.indexOf(heading)
+    expect(from).toBeGreaterThan(-1)
+    const body = doc.slice(from, doc.indexOf('\n- **', from))
+
+    expect(body.startsWith(`${heading} Pathless`)).toBe(true)
+    expect(body).toContain('upstream Syncplay')
+    expect(body).toMatch(/no\s+longer\s+counted\s+here:\s+it\s+fails\s+outright/)
   })
 
   it('reds when a documented figure drifts from its constant', () => {
@@ -2669,7 +2840,7 @@ describe('the pin figures docs/testing.md restates', () => {
     // too: two of its paragraph lines open with a non-heading `#` today.
     const continued = docFixture({
       uncheckable:
-        '- **Uncheckable anchors.** Bare basenames more than one tracked file carries,\n' +
+        '- **Uncheckable anchors.** Pathless anchors, all of them upstream shorthand,\n' +
         '#368 took the mid-seek model the other way, and nothing on this line is a\n' +
         '  heading. The pin is 116 on this tree.'
     })

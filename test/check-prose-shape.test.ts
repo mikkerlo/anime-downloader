@@ -1070,7 +1070,7 @@ describe('check-prose-shape', () => {
 // --- #464: the `RAGGED_PIN` restatement in `docs/testing.md` -------------------
 //
 // `scripts/check-prose-shape.mjs:100` ("export const RAGGED_PIN = 8") is
-// restated in prose at `docs/testing.md:952` ("The count is **pinned exactly**"),
+// restated in prose at `docs/testing.md:964` ("The count is **pinned exactly**"),
 // and until this block nothing compared the restatement with the constant. The
 // restatement states NO figure, which is the only reason it has not rotted yet:
 // there is nothing there to go stale. The exposure is the next edit that adds
@@ -1121,7 +1121,7 @@ describe('check-prose-shape', () => {
 // MEASURED ON THE PAGE AS IT STANDS: from the anchor to the blank line that ends
 // its paragraph is 17 lines and 1216 characters, and that span contains no bare
 // integer at all. The issue's first draft claimed this guard fires today on
-// `docs/testing.md:944` ("8 of the 14 were short only because") as "a certainty,
+// `docs/testing.md:956` ("8 of the 14 were short only because") as "a certainty,
 // not a risk". It does not: that sentence is in the PRECEDING paragraph, and the
 // span runs forward from the anchor, so it never reaches back to it. That is
 // case (b) below, and it is the case this guard exists for — a guard that

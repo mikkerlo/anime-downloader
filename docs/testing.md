@@ -573,19 +573,23 @@ tests* above — two exact, one a floor and one a ceiling:
   stale too and ride in underneath a failure about their neighbours. A reviewer
   who repairs what the gate named has repaired half the drift. `resolved` counts
   anchors that resolve, not anchors that are checked.
-- **Uncheckable anchors.** Bare basenames more than one tracked file carries
-  (`syncplay.ts` is both `src/main/syncplay.ts` and
-  `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that
-  inherit their path from a neighbouring line. Neither can be resolved, so the
-  pin bounds how much the gate is blind to. Adding one reds the build; the fix
-  is almost always to give the anchor a resolvable path rather than raise the
-  number.
-- **Marked citations, floored at 75.** One of the two one-sided counts here,
+- **Uncheckable anchors.** Pathless `:NNN` anchors — shorthand that inherits
+  its path from an earlier anchor, or a bare `(:NNN)` meaning "this file". None
+  can be resolved, so the pin bounds how much the gate is blind to, and since
+  #517 every one left is upstream Syncplay shorthand: that change spelled out
+  each one naming a file in this repo, because an exact count cannot see an
+  anchor whose target moved and nearly half of them had. Adding one reds the
+  build, the report lists them all so the new one can be found, and the fix is
+  almost always to give the anchor a resolvable path rather than raise the
+  number. A bare basename more than one tracked file carries (`syncplay.ts` is
+  both `src/main/syncplay.ts` and `src/renderer/src/stores/syncplay.ts`) is no
+  longer counted here: it fails outright, naming every candidate.
+- **Marked citations, floored at 90.** One of the two one-sided counts here,
   because the marked class can only shrink silently — see *The marked form*
   below. Falling below the floor reds; rising above it is free. #395 raised it
   from the 12 #372 set, where 52 anchors of slack let the verified population
-  lose 81% of its members with the gate green; #459 took it 64 to 75 with its
-  retrofit, since slack is exactly what stops a floor from binding.
+  lose 81% of its members with the gate green; #459 took it 64 to 75 and #517
+  to 90 with their retrofits, since slack is what stops a floor from binding.
 - **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:
@@ -647,8 +651,16 @@ as a missing file rather than falling back to the basename. The full
 repo-relative path is always correct and is what a repair should reach for when
 the line has room; when it does not, a leading directory or two keeps the anchor
 inside its paragraph instead of pushing a comment past 130 columns, and if that
-suffix ever stops being unique the anchor lands in the uncheckable pin and reds
-— it does not go quiet.
+suffix ever stops being unique the anchor fails as ambiguous, with every file
+it could mean in the message — it does not go quiet.
+
+**Spell the path even for the same file.** A `(:NNN)` pointing back into the
+file it sits in, and a `:NNN` leaning on the anchor before it, are counted and
+never checked — #517 found 41 of 82 stale, every self-reference in
+`src/main/syncplay.ts` among them. In a file that cites itself, write a short
+unique suffix (`main/syncplay.ts:NNN`), and write the numbers last: any rewrap
+of the comment around them moves every target below it, the ones just written
+included.
 
 A quote or a closing brace before a `:NNN` is not an anchor: the Syncplay wire
 transcripts in `docs/syncplay.md` quote JSON whose values parse as pathless

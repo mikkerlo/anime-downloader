@@ -121,15 +121,28 @@ import { baseRevision } from './check-version-not-lower.mjs'
 // anchor and #384's one, so the pin drops to two. A third reds.
 export const SUSPICIOUS_LANDING_PIN = 2
 
-// Anchors that name something in this repo and still cannot be checked:
-// basenames carried by more than one tracked file, plus pathless `:NNN`
-// anchors that inherit their path from a neighbouring line. Bounding the
-// blindness is the point — a gate that silently resolves nothing and a gate
-// that resolves everything and passes are otherwise indistinguishable. Adding
-// an anchor the gate cannot see reds this, and the fix is almost always to
-// spell the path out rather than to raise the number.
+// Pathless `:NNN` anchors — shorthand inheriting its path from an earlier
+// anchor, or a bare `(:NNN)` meaning "this file" — which nothing can check.
+// Bounding the blindness is the point — a gate that silently resolves nothing
+// and a gate that resolves everything and passes are otherwise
+// indistinguishable. Adding an anchor the gate cannot see reds this, and the
+// fix is almost always to spell the path out rather than to raise the number.
 //
-// 3 ambiguous basenames + 103 pathless anchors on this tree (#513 deleted nine).
+// WHAT IS LEFT IS UPSTREAM SHORTHAND, and nothing else. #517 spelled out every
+// pathless anchor that names a file in this repo, and found the class rotting
+// the way an exact pin cannot see: the count is all it bounds, and a count does
+// not move when a target does — 41 of the 82 in-repo anchors the issue
+// censused were stale, and 30 of the 73 still there when the fix landed. What
+// remains are 33 shorthands into the pinned upstream Syncplay
+// sources, which `check:upstream-citations` cannot see either (it reads
+// `analyze()`'s spelled-out tokens) and which #511 owns. Spelling one of those
+// out lands it under `UNMARKED_PY_PIN`, which is flush, so it has to take the
+// marked form.
+//
+// Basenames two tracked files carry used to be counted here as well. Since
+// #517 they are failures in their own right — see the resolver in `analyze()`
+// — so this pin has nothing ambiguous left in it and keeps its name only so
+// the guard on `docs/testing.md` and #511's rebase do not churn.
 //
 // #392 is the first move in the reducing direction: four anchors that had been
 // leaning on a neighbouring line for their path — one `server.py:877` and three
@@ -137,7 +150,7 @@ export const SUSPICIOUS_LANDING_PIN = 2
 // which are foreign extensions. Spelled out they are unresolvable by
 // construction rather than uncheckable, so they left this class outright and
 // the pin falls with them rather than absorbing them.
-export const UNCHECKABLE_PIN = 106
+export const UNCHECKABLE_PIN = 33
 
 // A FLOOR, not an exact count — the only pin here that is one-sided, because
 // the marked class is asymmetric. It cannot grow silently: marking is opt-in,
@@ -152,13 +165,13 @@ export const UNCHECKABLE_PIN = 106
 // `MARKED_OPEN` its zero false-positive rate is exactly what makes them quiet.
 // Growth must not cost a bump on every retrofit, so only the fall reds.
 //
-// 75 marked citations on this tree, raised from 64 in the change that retrofitted
-// every plain anchor into `test/helpers/syncplay-min-election-server.ts` — nine in
-// other files, two self-anchors in its own header — under #395's standing
-// instruction to move this floor with every retrofit. It had just reached 64
-// against 64 — slack 0, the state that makes it bind — so leaving it there would
-// have handed the eleven back as slack and made the floor decoration again.
-export const MARKED_PIN = 75
+// 90 marked citations on this tree. #459's retrofit of the election-server fixture
+// took it 64 to 75; #517 took it to 90, re-measured rather than bumped: one marked
+// anchor had arrived since as slack, and #517 marked the 14 retargets it wrote onto
+// plain statements, because a retargeted anchor is drift-exempt in its own PR and
+// the quote is the only check it gets there. Slack is what stops a floor binding,
+// so under #395's standing instruction the floor follows the count.
+export const MARKED_PIN = 90
 
 // A CEILING, compared with `>`, and the only pin here that is. Upstream
 // Syncplay anchors are the one population where GROWTH is the dangerous
@@ -258,8 +271,17 @@ const CITATION = /\b([A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z][A-Za-z0-9]{0,4}):(\d
 // neighbouring line. `<path>:<n>` cannot see these at all, so without their own
 // pattern they fall out of the accounting entirely and a file scores clean
 // while carrying a stale citation — three of this PR's own repair rows were
-// written this way. Resolving them as "same file as the last anchor" is out of
-// scope; counting them is not. Anchored on a preceding non-path character so
+// written this way. Counting them is all this does, and since #517 that is a
+// decision rather than a deferral: every one naming a file in this repo is
+// spelled out, and what is left is upstream shorthand (see `UNCHECKABLE_PIN`).
+// Inferring the path was measured and rejected. Resolving each against the
+// nearest full anchor on its own line reached 52 of the 105 then on the tree and
+// got two wrong — a shorthand after a `src/main/` anchor that meant the
+// renderer's own block, and one after an upstream anchor that meant this repo —
+// and both were stale, so the guess would have checked them against the wrong
+// file and passed. The other 53 had no anchor on their line to inherit from.
+// Spelling the path out removes the wrong-file case; a heuristic adds it.
+// Anchored on a preceding non-path character so
 // `localhost:3000` and `12:30` do not match — and not a quote or a closing
 // brace either, because `"position":20.99` inside a wire transcript is not an
 // anchor and nothing can be spelled out to fix it. On this tree the looser
@@ -382,9 +404,9 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // narrowing caught were landing on exactly that.
   if (text === '') return 'blank line'
   // The three predicates below cannot tell prose from prose the way the blank
-  // test at scripts/check-line-citations.mjs:383 can, and they are not exempt
+  // test at scripts/check-line-citations.mjs:405 can, and they are not exempt
   // for the same reason — saying they are attributes one's evidence to the
-  // others. The comment-line test at scripts/check-line-citations.mjs:407 is a
+  // others. The comment-line test at scripts/check-line-citations.mjs:429 is a
   // *measured* syntax collision with Markdown emphasis: of the 135 lines it
   // matches across the tracked `.md`, 102 are `**bold**` openers and 25 open
   // with a single `*` (17 emphasis, 8 bullets), leaving 8 comment-shaped — the
@@ -393,8 +415,8 @@ function suspiciousLanding(lines, targetPath, startLine) {
   // docs/syncplay.md:336 ("Two sentences of the original argument for the cap
   // were wrong") are both `**` openers, so hoisting this return past it would
   // red the gate on the repair itself. The bare-brace test at
-  // scripts/check-line-citations.mjs:406 and the `<!--` test at
-  // scripts/check-line-citations.mjs:424 have no measured false positive in
+  // scripts/check-line-citations.mjs:428 and the `<!--` test at
+  // scripts/check-line-citations.mjs:446 have no measured false positive in
   // either direction — all 16 brace matches across the tracked `.md` sit
   // inside fenced code blocks and nothing starts a line with `<!--` — so they
   // stay exempt on an *argument*: a fenced `}` carries code semantics, and
@@ -655,7 +677,6 @@ export function analyze({
 
   const failures = []
   const suspicious = []
-  const ambiguous = []
   const pathless = []
   const resolved = []
   const marked = []
@@ -721,7 +742,17 @@ export function analyze({
           // exactly one tracked file carries it. `use-syncplay-client.ts` is
           // unique and resolves; `syncplay.ts` is carried by both
           // src/main/syncplay.ts and src/renderer/src/stores/syncplay.ts, so it
-          // is counted as uncheckable instead of resolved against a coin flip.
+          // FAILS rather than resolving against a coin flip (#517).
+          //
+          // It used to be counted into the uncheckable pin instead, and that is
+          // the shape #517 measured rotting: the pin is exact, so a NEW bare
+          // anchor redded, but an existing one's count never moves when its
+          // target does, so it skipped the range guard, `suspiciousLanding()`,
+          // quote verification and the drift check for good. All ten on the
+          // tree #517 censused were stale, the seven #505's review found among
+          // them. Failing here is not a guess either way: the remedy is always
+          // to write a suffix only one file matches, and the candidates are in
+          // the message so the author does not have to go and find them.
           const candidates = (byBasename.get(basename(raw)) || []).filter(
             (c) => c === raw || c.endsWith('/' + raw)
           )
@@ -729,7 +760,14 @@ export function analyze({
             target = candidates[0]
             resolvedUniqueBasename++
           } else if (candidates.length > 1) {
-            ambiguous.push({ at, cited, candidates })
+            failures.push({
+              at,
+              cited,
+              candidates,
+              why:
+                `ambiguous — ${candidates.length} tracked files end in \`${raw}\` ` +
+                `(${candidates.join(', ')}); spell the path out`
+            })
             continue
           } else {
             failures.push({ at, cited, why: 'no such file in this repo' })
@@ -876,9 +914,8 @@ export function analyze({
     driftExemptNewFile,
     driftBase: readBaseLines === null ? null : baseLabel,
     driftEnabled: readBaseLines !== null,
-    ambiguous,
     pathless,
-    uncheckable: ambiguous.length + pathless.length
+    uncheckable: pathless.length
   }
 }
 
@@ -899,10 +936,7 @@ export function report(r, pins = {}) {
       `${r.resolvedUniqueBasename} by unique basename)`
   )
   out.push(`  unresolvable by construction: ${r.unresolvableByExtension} (foreign extension)`)
-  out.push(
-    `  uncheckable, names this repo: ${r.uncheckable} ` +
-      `(${r.ambiguous.length} ambiguous basename, ${r.pathless.length} pathless) — pin ${uncheckablePin}`
-  )
+  out.push(`  uncheckable, pathless shorthand: ${r.uncheckable} — pin ${uncheckablePin}`)
   out.push(`  suspicious landings: ${r.suspicious.length} — pin ${landingPin}`)
   out.push(
     `  marked quotes: ${r.marked.length} verified against their target ` +
@@ -1107,7 +1141,9 @@ export function report(r, pins = {}) {
     err.push(
       '',
       'Fix the path or the line number. A citation to a file outside this repo must',
-      'use an extension this repo does not contain (e.g. upstream `.py`).'
+      'use an extension this repo does not contain (e.g. upstream `.py`). An',
+      'ambiguous one names every file it could mean: write the full repo-relative',
+      'path, or the shortest suffix of it only one tracked file matches.'
     )
   }
 
@@ -1137,8 +1173,7 @@ export function report(r, pins = {}) {
       '',
       `Uncheckable-anchor count ${r.uncheckable > uncheckablePin ? 'rose' : 'fell'}: ` +
         `${r.uncheckable}, pinned at ${uncheckablePin}.`,
-      'These name something in this repo but cannot be resolved, so the gate cannot',
-      'vouch for them.'
+      'These carry no path, so the gate cannot resolve them or vouch for them.'
     )
     if (r.uncheckable > uncheckablePin) {
       err.push(
@@ -1146,15 +1181,14 @@ export function report(r, pins = {}) {
         'If you added an anchor: give it a path the gate can resolve, so it is',
         'checked rather than counted — the full repo-relative path, or the shortest',
         'suffix of it only one tracked file matches (a leading directory or two is',
-        'usually enough). A bare basename two files carry is what lands here. Raise',
-        'the pin only if you cannot.'
+        'usually enough). A pathless `:NNN` or `(:NNN)` is what lands here, and the',
+        'pinned ones are all shorthand into upstream Syncplay. Raise the pin only if',
+        'you cannot.'
       )
-      if (r.ambiguous.length > 0) {
-        err.push('', 'Ambiguous basenames:')
-        for (const a of r.ambiguous) {
-          err.push(`  ${a.at}: \`${a.cited}\` → ${a.candidates.join(', ')}`)
-        }
-      }
+      // Listed because the count alone sends the author hunting: the new anchor
+      // is somewhere among the pinned ones, and nothing else says where.
+      err.push('', 'Pathless anchors:')
+      for (const p of r.pathless) err.push(`  ${p.at}: \`${p.anchor}\``)
     } else {
       err.push('', 'If you spelled an anchor out or removed one: lower the pin to match.')
     }

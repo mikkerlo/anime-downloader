@@ -78,8 +78,8 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   // Seeds serverRtt by echoing a *stale* clientLatencyCalculation: the client
   // computes `Date.now() / 1000 - myTs` and accepts it when 0 < rtt < 5
   // (src/main/syncplay.ts:922-926). `setBy` must be non-null and not our own
-  // username, with pendingClientAck === 0, or the state is dropped at :862-867
-  // before it ever reaches the compensation.
+  // username, with pendingClientAck === 0, or the state is dropped at
+  // src/main/syncplay.ts:2227-2230 before it ever reaches the compensation.
   const serverState = (opts: {
     position: number
     paused: boolean
@@ -184,7 +184,8 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   })
 
   // Case 6 in the issue — the control for case 4. Without it, "no doSeek frame"
-  // could be true because of the pre-adoption gate (:337-339) or the hardcoded
+  // could be true because of the pre-adoption gate
+  // (src/main/syncplay.ts:940-942 ("if (!this.isAdopted()) {")) or the hardcoded
   // doSeek: false in buildPlaystate()'s spectator fallback, rather than the
   // echo guard.
   // The offset sits inside ADOPT_TOLERANCE_S (so this call adopts on its own)

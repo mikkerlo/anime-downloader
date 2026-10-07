@@ -329,6 +329,9 @@ let watchedReported = false;
 // playhead on the room's position, and "Resumed at …" would name a position we
 // are not at — exactly what #240 suppressed the toast for.
 let mkvSpawnFromRoom = false;
+// #497: this open is an episode change committed in a `ready` session. Set by
+// `goToEpisode`'s commit, cleared with the open; read through `roomOwnsOpen()`.
+let openedIntoRoom = false;
 let episodeOpenedAt = Date.now();
 let pendingPrevEpisodeInt = '';
 const resumeToast = ref('');
@@ -895,6 +898,7 @@ function resetEpisodeTracking(): void {
   // so this is belt rather than braces — but an episode switch is exactly the
   // boundary the flag must not cross.
   mkvSpawnFromRoom = false;
+  openedIntoRoom = false;
   episodeOpenedAt = Date.now();
 }
 
@@ -1071,8 +1075,31 @@ function startPrefetchPolling(): void {
 // `hasRemoteStateApplied()` and not `state === 'ready'` alone: main only emits
 // `remote-state` for a non-null, non-self `setBy`, so a user alone in a room
 // never receives one and must keep their saved position.
+// The second term is #497's, scoped to one open: an in-room episode change
+// clears `remoteStateApplied` with the index, and the room's position for the
+// new episode reaches a follower ~300 ms after `loadedmetadata`, so without it
+// all three resume paths went to the saved position for that gap.
 function roomOwnsPlayhead(): boolean {
-  return syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied();
+  return (
+    (syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied()) || roomOwnsOpen()
+  );
+}
+
+// #497: the room owns this open's playhead because it is an episode change
+// committed in the room, until its first `remote-state` lands. The peer gate is
+// read live, not latched at the commit: a room that empties, or a reconnect
+// that rejoins alone, before `loadedmetadata` gets no `remote-state` and keeps
+// the saved position, as a solo room always has.
+function roomOwnsOpen(): boolean {
+  return syncplayStatus.value.state === 'ready' && openedIntoRoom && syncplayHasPeer();
+}
+
+// Anyone on the roster but us. The roster carries our own entry, so a solo
+// room is a roster of one — the same test as main's `alone` in
+// `src/main/syncplay.ts`'s `getRoomPosition()`.
+function syncplayHasPeer(): boolean {
+  const me = syncplayStatus.value.username;
+  return syncplayRoomUsers.value.some((u) => u.username !== me);
 }
 
 // #262: this open's MSE session was spawned at the room's position, so its
@@ -1245,7 +1272,14 @@ async function prepareMkvForPlayback(
         // position, which is what a shared `catch` around both would do.
         window.api.syncplayGetRoomPosition(syncplay.buildCanonicalName()).catch(() => null)
       ]);
-      const target = resolveMkvSpawnTarget(saved, roomPosition);
+      // #497: an open the room owns spawns at the room's position even before
+      // main has one for the new file (the null case is a follow's first
+      // ~300 ms); the room's position for a new episode is 0. A real position
+      // still goes through the helper's #275 end bound.
+      const target = resolveMkvSpawnTarget(
+        saved,
+        roomOwnsOpen() ? (roomPosition ?? 0) : roomPosition
+      );
       initialSeek = target.initialSeek;
       resumeTarget = target.resumeTarget;
       mkvSpawnFromRoom = target.fromRoom;
@@ -2172,6 +2206,10 @@ async function selectTranslation(tr: {
         activeSubtitleContent.value = localResult.subtitleContent || '';
 
         if (localResult.filePath.toLowerCase().endsWith('.mkv')) {
+          // #497: a translation switch is not an episode change, so the
+          // episode open's flag must not pick this spawn's target.
+          // `resetEpisodeTracking()` is only reached from `goToEpisode`.
+          openedIntoRoom = false;
           const prep = await prepareMkvForPlayback(localResult.filePath);
           // The callee's `shouldBail(myPrepare)` ladder says nothing about the
           // CALLER's continuation (#317), and the gap is not theoretical: only
@@ -2515,6 +2553,9 @@ async function goToEpisode(
     activeDownloadedTrIds.value = targetEp.downloadedTrIds;
     activeTranslationId.value = resolvedTr.id;
     resetEpisodeTracking();
+    // #497, after the reset above, which clears it. Every step of a walk
+    // commits here, so a superseded step's listener reads the winner's value.
+    openedIntoRoom = syncplayStatus.value.state === 'ready';
     if (!continuesWalk) pendingPrevEpisodeInt = direction === 'next' ? prevEpisodeInt : '';
     cancelFollowGrace();
     pendingFollow =

@@ -1162,8 +1162,10 @@ side; the probe's `MutationObserver` fires on Vue's flush, ahead of the queued
 lands in that term's `[lmAt, lmAt + 4000]` window with no unpaired seek past
 5 s beside it; `lm.ct > 5` and `ct2 > 7` stay #486. Every other seek within
 ±15 s of the instance's own pre-press `ct` (measured in `transition()`, not
-the drawn `t`) is recorded as `old`. Each run records `foreignSeek` without
-asserting it, and keeps its trace when it is set; #497's fix asserts it 0.
+the drawn `t`) is recorded as `old`. #497 is fixed, so every scoreable run
+asserts `foreignSeek == 0` and no `Resumed at …` toast on either instance
+(`resumeToast`), and keeps its trace when either is set. The split stays so a
+#497 regression reads as `foreignSeek`, not as #486.
 `test/syncplay-e2e-stale-outcome.test.ts` replays the five failing B traces
 and pins the row's wiring to the spec source.
 

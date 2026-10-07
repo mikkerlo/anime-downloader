@@ -2001,10 +2001,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // A remote episode change swaps the <video> source, and a state parked for the
   // previous episode must never be applied at the new one's `loadedmetadata`. The applied flag is
   // reset with it — it must not latch for the session: main stops emitting `remote-state` once we
-  // are alone, so it would eat the user's saved position on every later open. Resetting in a live
-  // room costs at most a sub-second flash before the next 1 Hz state seeks us to the room — where
-  // adoption cleared at `src/main/syncplay.ts:836` and the roster (`src/main/syncplay.ts:2708`)
-  // is keyed with a peer; an in-player switch leaves adoption set, so only a peer's move does.
+  // are alone, so it would eat the user's saved position on every later open. The gap it leaves
+  // in a live room, until a peer's state for the new file seeks us (`src/main/syncplay.ts:836`,
+  // roster at `src/main/syncplay.ts:2708`; an in-player switch leaves adoption set), is covered by
+  // PlayerView's open-scoped `roomOwnsOpen()` (#497) instead of a flash at the saved position.
   // `refusedToastShown` is cleared here too, by default and deliberately: every
   // caller of this function is a point where the file, the room or the socket
   // has changed under the flag, and a stale receipt makes the *next* refusal

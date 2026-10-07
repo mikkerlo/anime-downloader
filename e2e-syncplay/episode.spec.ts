@@ -1,9 +1,9 @@
 // Episode-change rows of the #489 catalog on the two-instance rig.
 //
-//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493), #497 (recorded)
-//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (recorded)
+//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493), #497 (fixed)
+//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (fixed)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
-//   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (recorded)
+//   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (fixed)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -23,7 +23,7 @@
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
 // every scoreable run.
 //
-// E1 / E6 also see #497 (below): the follower lands at 0, seeks to its saved
+// E1 / E6 also saw #497 (below): the follower lands at 0, seeks to its saved
 // progress for the new episode 2–7 ms after `loadedmetadata`, shows "Resumed
 // at …", and the room pulls it back 60–300 ms later. A 200 ms sample inside
 // that flash tripped `maxCtFirst4s > 9` and scored the run #486 (#514). Bands
@@ -33,7 +33,9 @@
 // at …` toast (target floors to its m:ss, within 50 ms) is #497's and excuses
 // only the 4 s term, only when no other seek past 5 s shares its window. The
 // old position is each instance's measured `ct` before the press, not `t`.
-// Recorded per run (`foreignSeek`), not asserted; #497's fix asserts it 0.
+// #497 is fixed, so every scoreable run asserts `foreignSeek == 0` and no
+// `Resumed at …` toast on either instance (`resumeToast`). The split stays: a
+// #497 regression reads as `foreignSeek`, not as a #486 stale start.
 //
 // E5's spec is #493's: a paused room stays paused at 0 across a local Next or
 // Prev (`test/services/syncplay-file-change-seek.test.ts`,
@@ -57,12 +59,15 @@
 //    keeps its trace. At 3 runs a night a 10–20 % regression usually goes
 //    green here; Tier 1 (`syncplay-two-peer-episode-change.test.ts`, #496
 //    block) is the deterministic guard.
-//  - #497, a follower seeking its new element to its *saved watch progress*
-//    at `loadedmetadata` (591 s against a room at ~324 s, back to 0 ~300 ms
-//    later): a seek past 5 s whose target is neither 0 nor the old position.
-//    Seen in 1 of those 9 runs, so it is recorded per run (`foreignSeek`) but
-//    not asserted: at E5's 3 runs a night `≥ 1` would itself be red on most
-//    nights. #497's fix asserts it `== 0`. Its saved position is wherever the
+//  - #497, fixed: a follower seeking its new element to its *saved watch
+//    progress* at `loadedmetadata` (591 s against a room at ~324 s, back to 0
+//    ~300 ms later), a seek past 5 s whose target is neither 0 nor the old
+//    position. Seen in 1 of those 9 runs. The room now owns an in-room
+//    episode change's open from its commit, so every scoreable run asserts
+//    `foreignSeek == 0` and no `Resumed at …` toast on either instance
+//    (`resumeToast`). At 3 runs a night that is a weak guard; Tier 1
+//    (`test/renderer/components/player-syncplay-resume.test.ts`, #497 block)
+//    is the deterministic one. The saved position is wherever the
 //    previous run left the episode it lands on (runs alternate next/prev), so
 //    E5 positions even runs in 300–420 s and odd runs in 480–600 s
 //    (`e5Position`). Consecutive positions are ≥ 60 s apart and a #497 seek
@@ -205,7 +210,7 @@ async function transition(
   }
 }
 
-test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486, fixed by #493)', async () => {
+test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486, fixed by #493), with no seek to saved progress (#497 fixed)', async () => {
   const { A, B } = await seatDuo(rig)
   const e1 = new RowScorer('E1')
   const e6 = new RowScorer('E6')
@@ -230,6 +235,9 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
       const kb = resumeSplit(r.db, r.sb, r.b)
       const stale = ka.stale || kb.stale
       const foreignSeek = ka.foreignSeek || kb.foreignSeek
+      const resumeToast = [r.da, r.db].some((d) =>
+        d.toasts.some((t) => t.txt.trim().startsWith('Resumed at'))
+      )
       row.add(
         {
           setupOk: setupOk && r.changed,
@@ -237,6 +245,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
           stuck: r.a.stuck || r.b.stuck,
           agree,
           foreignSeek,
+          resumeToast,
           from,
           t: Math.round(t),
           oldA: +r.sa.ct.toFixed(2),
@@ -245,7 +254,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
           A: { ...r.a, resume: ka },
           B: { ...r.b, resume: kb }
         },
-        stale || foreignSeek || !agree
+        stale || foreignSeek || resumeToast || !agree
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -256,12 +265,24 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
     }
     const s1 = e1.score()
     const s6 = e6.score()
-    // Flipped by #493: no stale start in either direction. #497's flash is
-    // recorded (`foreignSeek`), not asserted — see the header.
+    // Flipped by #493: no stale start in either direction.
     expect(s1.scoreable).toBeGreaterThanOrEqual(1)
     expect(s1.bad).toBe(0)
     expect(s6.scoreable).toBeGreaterThanOrEqual(1)
     expect(s6.bad).toBe(0)
+    // #497, fixed: no seek to saved progress and no `Resumed at …` toast on
+    // either instance — see the header.
+    for (const [name, s] of [
+      ['E1', s1],
+      ['E6', s6]
+    ] as const) {
+      const scoreable = s.records.filter((r) => r.setupOk)
+      expect(
+        scoreable.filter((r) => r.foreignSeek).length,
+        `${name} #497 saved-progress seek`
+      ).toBe(0)
+      expect(scoreable.filter((r) => r.resumeToast).length, `${name} #497 Resumed at toast`).toBe(0)
+    }
   } finally {
     await closeDuo(A, B)
   }
@@ -348,7 +369,7 @@ test("E2 — both press next 0–1.5 s apart: no N+2 from a press inside #487's 
   }
 })
 
-test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and stay paused there (#496 fixed); the saved-progress seek recorded (#497)', async () => {
+test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and stay paused there (#496 fixed), with no seek to saved progress (#497 fixed)', async () => {
   const { A, B } = await seatDuo(rig)
   const row = new RowScorer('E5')
   try {
@@ -382,6 +403,9 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
       const sb = e5Split(db, pb, r.b)
       const stale = sa.old || sb.old
       const foreignSeek = sa.foreign || sb.foreign
+      const resumeToast = [da, db].some((d) =>
+        d.toasts.some((t) => t.txt.trim().startsWith('Resumed at'))
+      )
       const wrongEp = r.epA !== want || r.epB !== want
       const bad = wrongEp || stale
       row.add(
@@ -392,6 +416,7 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
           atZero,
           stale,
           foreignSeek,
+          resumeToast,
           wrongEp,
           epA: r.epA,
           epB: r.epB,
@@ -399,7 +424,7 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
           firstOutPausedA: firstOutPausedAfterMetadata(da, pa.src),
           firstOutPausedB: firstOutPausedAfterMetadata(db, pb.src)
         },
-        bad || resumed || !atZero || foreignSeek
+        bad || resumed || !atZero || foreignSeek || resumeToast
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -412,14 +437,13 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
     const scoreable = s.records.filter((r) => r.setupOk)
-    // #497: recorded in the JSONL (`foreignSeek`), not asserted — see the header.
-    // #496, fixed: every scoreable run stayed paused, at ~0. A #497 run is
-    // excluded from the position half only: its seek is recorded, not asserted.
+    // #497, fixed: no seek to saved progress and no `Resumed at …` toast on
+    // either instance — see the header.
+    expect(scoreable.filter((r) => r.foreignSeek).length, '#497 saved-progress seek').toBe(0)
+    expect(scoreable.filter((r) => r.resumeToast).length, '#497 Resumed at toast').toBe(0)
+    // #496, fixed: every scoreable run stayed paused, at ~0.
     expect(scoreable.filter((r) => r.resumed).length, '#496 paused room resumed').toBe(0)
-    expect(
-      scoreable.filter((r) => !r.foreignSeek && !r.atZero).length,
-      '#496 paused room left 0'
-    ).toBe(0)
+    expect(scoreable.filter((r) => !r.atZero).length, '#496 paused room left 0').toBe(0)
   } finally {
     await closeDuo(A, B)
   }

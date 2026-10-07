@@ -489,7 +489,7 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2512` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2550` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
@@ -718,9 +718,9 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1907`,
-// `src/renderer/src/components/views/PlayerView.vue:2735` and
-// `src/renderer/src/components/views/PlayerView.vue:2758` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:1941`,
+// `src/renderer/src/components/views/PlayerView.vue:2776` and
+// `src/renderer/src/components/views/PlayerView.vue:2799` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local

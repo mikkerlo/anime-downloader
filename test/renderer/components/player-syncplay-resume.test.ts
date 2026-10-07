@@ -7,6 +7,7 @@ import { ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
 import { useSyncplayClient } from '../../../src/renderer/src/composables/use-syncplay-client'
+import { resolveMkvSpawnTarget } from '../../../src/renderer/src/utils'
 
 // The resume-vs-room precedence rule (#240). `resumeFromSavedPosition` is an
 // unexported `<script setup>` internal of a ~2.9k-line SFC wired to dozens of
@@ -46,10 +47,11 @@ describe('PlayerView — remote state outranks the saved position (#240)', () =>
     // Both halves matter: `state === 'ready'` alone would eat the saved position
     // of a user alone in a room (main emits no `remote-state` for a self/absent
     // `setBy`), and `hasRemoteStateApplied()` alone would honor a room we are no
-    // longer connected to.
+    // longer connected to. The `roomOwnsOpen()` term is #497's, and its own
+    // `ready` half is pinned by the counter-pins in the #497 block below.
     expect(resumeBody().replace(/\s+/g, ' ')).toContain(GUARD)
     expect(FLAT).toContain(
-      "function roomOwnsPlayhead(): boolean { return syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied(); }"
+      "function roomOwnsPlayhead(): boolean { return ( (syncplayStatus.value.state === 'ready' && syncplay.hasRemoteStateApplied()) || roomOwnsOpen() ); }"
     )
   })
 
@@ -139,7 +141,10 @@ describe('PlayerView — the MKV spawn is seeded from the room (#262)', () => {
     // `prepareHevcTranscode`; seeding only `initialSeek` from the room would
     // leave the land pulling the playhead back to the saved position.
     const body = prepareBody()
-    expect(body).toContain('const target = resolveMkvSpawnTarget(saved, roomPosition);')
+    // The room position is substituted only for an open the room owns (#497).
+    expect(body).toContain(
+      'const target = resolveMkvSpawnTarget( saved, roomOwnsOpen() ? (roomPosition ?? 0) : roomPosition );'
+    )
     expect(body).toContain('initialSeek = target.initialSeek;')
     expect(body).toContain('resumeTarget = target.resumeTarget;')
     expect(body).toContain('mkvSpawnFromRoom = target.fromRoom;')
@@ -670,5 +675,374 @@ describe('PlayerView — the restore veto is narrow (#347)', () => {
     rig.play(rig.v, 'episode-start')
 
     expect(rig.v.play).toHaveBeenCalled()
+  })
+})
+
+// ── #497: an in-room episode change belongs to the room from the commit ──────
+//
+// The room's position for the new episode (0) reaches a follower about 300 ms
+// after its new element's `loadedmetadata`, and `remoteStateApplied` was cleared
+// by the index change, so the #240 predicate read false in that gap and all
+// three resume paths went to the saved position: the direct-file seek and its
+// "Resumed at …" toast, the MSE land, and the MKV spawn target. These cases run
+// the real `goToEpisode` commit block, the real predicate, the real
+// `resumeFromSavedPosition` and the real spawn-target read, lifted out of the
+// SFC the way the #347 cases lift `playProgrammatically`, against the real
+// composable. Each open is made with no `remote-state` delivered, which is the
+// gap itself.
+
+const SAVED = { position: 591, duration: 1440, watched: false }
+
+/** A top-level function of the SFC, by name; '' when the source has none. */
+function liftFn(name: string): string {
+  const m = new RegExp(`^(async )?function ${name}\\(`, 'm').exec(SOURCE)
+  if (!m) return ''
+  const end = SOURCE.indexOf('\n}\n', m.index)
+  expect(end).toBeGreaterThan(m.index)
+  return SOURCE.slice(m.index, end + 3)
+}
+
+function sliceFrom(start: string, end: string, after = 0): string {
+  const s = SOURCE.indexOf(start, after)
+  expect(s).toBeGreaterThan(-1)
+  const e = SOURCE.indexOf(end, s)
+  expect(e).toBeGreaterThan(s)
+  return SOURCE.slice(s, e)
+}
+
+/** `goToEpisode`'s commit: the index write and the per-open state around it. */
+function commitBlock(): string {
+  const fn = SOURCE.indexOf('async function goToEpisode(\n')
+  return sliceFrom('committed = true;', '// Try local file first if downloaded', fn)
+}
+
+/** `prepareMkvForPlayback`'s spawn-target read, up to the spawn. */
+function spawnBlock(): string {
+  const fn = SOURCE.indexOf('async function prepareMkvForPlayback(')
+  return sliceFrom('let initialSeek = 0;', '// Nothing has been spawned yet', fn)
+}
+
+/** Every write `selectTranslation` makes to the open-scoped flag. */
+function translationFlagWrites(): string {
+  return [...selectTranslationBody().matchAll(/^\s*openedIntoRoom = [^;]+;$/gm)]
+    .map((m) => m[0])
+    .join('\n')
+}
+
+type OpenRig = {
+  v: HTMLVideoElement
+  writes: number[]
+  client: ReturnType<typeof useSyncplayClient>
+  roomPosition: ReturnType<typeof vi.fn>
+  commit(index: number, origin: 'local' | 'follow'): void
+  /** `onTargetMetadata` / the mount listener: what `loadedmetadata` runs. */
+  resume(): Promise<void>
+  /** The `hasRemoteStateApplied` dep the MSE composable's initial land reads. */
+  mseLandCancelled(): boolean
+  spawnTarget(): Promise<{ initialSeek: number; resumeTarget: number; fromRoom: boolean }>
+  switchTranslation(): void
+  toast(): string
+}
+
+async function makeOpenRig(opts: {
+  state: SyncplayStatus['state']
+  peers: boolean
+  stream?: boolean
+}): Promise<OpenRig> {
+  const roomPosition = vi.fn().mockResolvedValue(null)
+  stubApi({
+    watchProgressGet: vi.fn().mockResolvedValue({ ...SAVED }),
+    syncplayGetRoomPosition: roomPosition
+  })
+  const writes: number[] = []
+  let ct = 0
+  const v = {
+    get currentTime() {
+      return ct
+    },
+    set currentTime(t: number) {
+      ct = t
+      writes.push(t)
+    },
+    duration: 1440,
+    paused: true,
+    readyState: 1,
+    play: vi.fn(() => Promise.resolve()),
+    pause: vi.fn()
+  } as unknown as HTMLVideoElement
+  const activeEpisodeIndex = ref(0)
+  const activeTranslationId = ref(1)
+  const client = useSyncplayClient({
+    getVideoEl: () => v,
+    getDuration: () => 1440,
+    getAnimeId: () => 1,
+    getMalId: () => null,
+    getAnimeName: () => 'Test Anime',
+    getCurrentEpisodeInt: () => String(activeEpisodeIndex.value + 1),
+    getActiveEpisodeLabel: () => String(activeEpisodeIndex.value + 1),
+    activeTranslationId,
+    activeEpisodeIndex,
+    formatTime: (s: number) => `${s}`,
+    onRemoteEpisodeChange: () => {}
+  })
+  await flushPromises()
+  client.syncplayStatus.value = { state: opts.state, username: 'me' }
+  // Our own entry is always on the roster (main pushes it), so a solo room is
+  // a roster of one, never an empty one.
+  client.syncplayRoomUsers.value = [
+    { username: 'me', file: null },
+    ...(opts.peers ? [{ username: 'peer', file: null }] : [])
+  ]
+
+  const decls = sliceFrom('let cumulativePlayTime = 0;', 'let resumeToastTimer')
+  const fns = [
+    'resetEpisodeTracking',
+    'syncplayHasPeer',
+    'roomOwnsOpen',
+    'roomOwnsPlayhead',
+    'mkvSessionSeededFromRoom',
+    'resumeFromSavedPosition',
+    'seekProgrammatically',
+    'formatTime'
+  ]
+    .map(liftFn)
+    .join('\n')
+  const ts = `
+    ${decls}
+    let resumeToastTimer = null;
+    let pendingFollow = null;
+    function cancelFollowGrace() {}
+    ${fns}
+    function commit(targetIndex, origin) {
+      const direction = targetIndex > activeEpisodeIndex.value ? 'next' : 'prev';
+      const continuesWalk = false;
+      const targetEp = { episodeInt: String(targetIndex + 1), downloadedTrIds: [] };
+      const targetTranslations = [];
+      const resolvedTr = { id: activeTranslationId.value };
+      const prevEpisodeInt = String(activeEpisodeIndex.value + 1);
+      const myNav = 1;
+      let committed = false;
+      ${commitBlock()}
+    }
+    async function spawnTarget() {
+      ${spawnBlock()}
+      return { initialSeek, resumeTarget, fromRoom: mkvSpawnFromRoom };
+    }
+    function switchTranslation() {
+      ${translationFlagWrites()}
+    }
+    return {
+      commit,
+      spawnTarget,
+      switchTranslation,
+      resume: resumeFromSavedPosition,
+      mseLandCancelled: () => roomOwnsPlayhead(),
+      toast: () => resumeToast.value
+    };
+  `
+  const js = transformSync(ts, { loader: 'ts' }).code
+  const lifted = new Function(
+    'ref',
+    'syncplay',
+    'syncplayStatus',
+    'syncplayRoomUsers',
+    'videoRef',
+    'props',
+    'currentEpisodeInt',
+    'streamSessionId',
+    'mseInitialSeek',
+    'currentTime',
+    'activeEpisodeIndex',
+    'activeEpisodeLabel',
+    'activeTranslations',
+    'activeDownloadedTrIds',
+    'activeTranslationId',
+    'resolveMkvSpawnTarget',
+    js
+  )(
+    ref,
+    client,
+    client.syncplayStatus,
+    client.syncplayRoomUsers,
+    ref(v),
+    { animeId: 1 },
+    {
+      get value() {
+        return String(activeEpisodeIndex.value + 1)
+      }
+    },
+    ref(opts.stream ? 'session-1' : ''),
+    ref(0),
+    ref(0),
+    activeEpisodeIndex,
+    ref('1'),
+    ref([]),
+    ref([]),
+    activeTranslationId,
+    resolveMkvSpawnTarget
+  )
+  return { v, writes, client, roomPosition, ...lifted }
+}
+
+/** An in-room Next/Prev up to the new element's `loadedmetadata`, with the
+ *  room's 0 still in flight: the gap #497 is about. */
+async function openNext(rig: OpenRig, origin: 'local' | 'follow', index = 1): Promise<void> {
+  rig.commit(index, origin)
+  // The composable's index watcher (pre-flush) resets the remote tracking.
+  await flushPromises()
+  expect(rig.client.hasRemoteStateApplied()).toBe(false)
+}
+
+describe('PlayerView — an in-room episode change belongs to the room (#497)', () => {
+  it.each([['follow' as const], ['local' as const]])(
+    '(a) %s: no seek to the saved position and no "Resumed at" toast on a direct file',
+    async (origin) => {
+      const rig = await makeOpenRig({ state: 'ready', peers: true })
+      await openNext(rig, origin)
+      await rig.resume()
+      expect(rig.writes.filter((t) => t > 5)).toEqual([])
+      expect(rig.v.currentTime).toBe(0)
+      expect(rig.toast()).toBe('')
+    }
+  )
+
+  it('(b) cancels the MSE initial land: its dep reads the room as owning the playhead', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true, stream: true })
+    await openNext(rig, 'follow')
+    expect(rig.mseLandCancelled()).toBe(true)
+  })
+
+  it('(c) spawns the MKV session at the room’s 0 while main has no room position yet', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    expect(await rig.spawnTarget()).toEqual({ initialSeek: 0, resumeTarget: 0, fromRoom: true })
+    expect(rig.roomPosition).toHaveBeenCalledTimes(1)
+  })
+
+  it('(c) keeps a real room position, and #275’s end bound on it', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    rig.roomPosition.mockResolvedValueOnce(120)
+    expect(await rig.spawnTarget()).toEqual({ initialSeek: 119, resumeTarget: 120, fromRoom: true })
+    // Past the end of our file: the bound refuses it and the saved record wins.
+    rig.roomPosition.mockResolvedValueOnce(5000)
+    expect(await rig.spawnTarget()).toEqual({
+      initialSeek: 590,
+      resumeTarget: 591,
+      fromRoom: false
+    })
+  })
+
+  describe.each([
+    ['with no session', { state: 'idle' as const, peers: false }],
+    ['alone in a ready room (own roster entry only)', { state: 'ready' as const, peers: false }],
+    ['across a reconnect', { state: 'reconnecting' as const, peers: true }]
+  ])('counter-pin: %s', (_label, opts) => {
+    it('still resumes the direct file to the saved position, with the toast', async () => {
+      const rig = await makeOpenRig(opts)
+      await openNext(rig, 'local')
+      await rig.resume()
+      expect(rig.writes).toEqual([591])
+      expect(rig.toast()).toBe('Resumed at 9:51')
+    })
+
+    it('still spawns the MKV session from the saved position', async () => {
+      const rig = await makeOpenRig(opts)
+      await openNext(rig, 'local')
+      expect(await rig.spawnTarget()).toEqual({
+        initialSeek: 590,
+        resumeTarget: 591,
+        fromRoom: false
+      })
+    })
+  })
+
+  it('reads the peer gate live: a room emptied before the first frame keeps the saved position', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    rig.client.syncplayRoomUsers.value = [{ username: 'me', file: null }]
+    await rig.resume()
+    expect(rig.writes).toEqual([591])
+    expect(rig.toast()).toBe('Resumed at 9:51')
+  })
+
+  it('a session that drops mid-open falls back to the saved resume', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    // The roster is left as it was: only the session state says we are out.
+    rig.client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await rig.resume()
+    expect(rig.writes).toEqual([591])
+    expect(rig.toast()).toBe('Resumed at 9:51')
+  })
+
+  it('a reconnect mid-open that rejoins alone keeps the saved position', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    rig.client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    rig.client.syncplayRoomUsers.value = [{ username: 'me', file: null }]
+    rig.client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await rig.resume()
+    expect(rig.writes).toEqual([591])
+  })
+
+  it('is scoped to one open: the next episode change re-decides it', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    rig.client.syncplayStatus.value = { state: 'idle', username: 'me' }
+    rig.client.syncplayRoomUsers.value = []
+    await openNext(rig, 'local', 2)
+    rig.client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    rig.client.syncplayRoomUsers.value = [
+      { username: 'me', file: null },
+      { username: 'peer', file: null }
+    ]
+    await rig.resume()
+    expect(rig.writes).toEqual([591])
+  })
+
+  describe('a multi-step follow walk', () => {
+    it('a superseded step’s listener reads the winning step’s open (owned)', async () => {
+      const rig = await makeOpenRig({ state: 'reconnecting', peers: true })
+      // Step 1 commits outside `ready` and registers its `{ once: true }`
+      // `loadedmetadata` listener, i.e. `resume`.
+      await openNext(rig, 'follow', 1)
+      const step1Listener = rig.resume
+      rig.client.syncplayStatus.value = { state: 'ready', username: 'me' }
+      await openNext(rig, 'follow', 2)
+      // Step 1's listener fires on step 2's source.
+      await step1Listener()
+      expect(rig.writes.filter((t) => t > 5)).toEqual([])
+      expect(rig.toast()).toBe('')
+    })
+
+    it('a superseded step’s listener reads the winning step’s open (not owned)', async () => {
+      const rig = await makeOpenRig({ state: 'ready', peers: true })
+      await openNext(rig, 'follow', 1)
+      const step1Listener = rig.resume
+      rig.client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+      await openNext(rig, 'follow', 2)
+      rig.client.syncplayStatus.value = { state: 'ready', username: 'me' }
+      await step1Listener()
+      expect(rig.writes).toEqual([591])
+    })
+  })
+
+  it('a translation switch after an owned open seeds its MKV spawn from the saved position', async () => {
+    const rig = await makeOpenRig({ state: 'ready', peers: true })
+    await openNext(rig, 'follow')
+    rig.switchTranslation()
+    expect(await rig.spawnTarget()).toEqual({
+      initialSeek: 590,
+      resumeTarget: 591,
+      fromRoom: false
+    })
+  })
+
+  it('clears the flag in selectTranslation before its MKV re-open', () => {
+    const body = selectTranslationBody()
+    const clear = body.indexOf('openedIntoRoom = false;')
+    expect(clear).toBeGreaterThan(-1)
+    expect(clear).toBeLessThan(body.indexOf('await prepareMkvForPlayback(localResult.filePath)'))
   })
 })

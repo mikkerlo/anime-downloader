@@ -357,9 +357,9 @@ export function extractMarkedQuote(lines, i, rest) {
 /**
  * Classify the line a citation lands on. A range is classified by its START
  * LINE ONLY: three of this PR's repair targets are ranges whose last or
- * interior line is a brace or a comment (src/main/syncplay.ts:995-1001,
- * src/main/syncplay.ts:954-962 and
- * src/renderer/src/composables/use-syncplay-client.ts:1924-1926), so
+ * interior line is a brace or a comment (src/main/syncplay.ts:1005-1011,
+ * src/main/syncplay.ts:964-972 and
+ * src/renderer/src/composables/use-syncplay-client.ts:1938-1940), so
  * classifying by any line inside the range would put the repaired tree straight
  * back into the warn class and the repair could never go green.
  *

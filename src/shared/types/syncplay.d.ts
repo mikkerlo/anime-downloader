@@ -40,14 +40,16 @@ interface SyncplayFilePayload {
   playerSessionId?: string
   /** Which side started an in-player episode change (#486), on the one push
    *  that follows it and no other. `'local'`: this user moved (next/prev
-   *  buttons, keys, auto-advance) and main forces the room to 0. `'follow'`:
-   *  the player is walking to a peer's episode, and main only drops its stale
-   *  snapshot. Absent on a first open, a reopen, a translation/quality switch
-   *  and every re-push. Renderer→main only. */
+   *  buttons, keys) and main forces the room to 0, keeping the room's
+   *  `paused`. `'auto-advance'`: the end-of-episode countdown moved (#512), and
+   *  main forces the room to 0 *playing*: the room is paused only because the
+   *  episode ended. `'follow'`: the player is walking to a peer's episode, and
+   *  main only drops its stale snapshot. Absent on a first open, a reopen, a
+   *  translation/quality switch and every re-push. Renderer→main only. */
   episodeSwitch?: SyncplayEpisodeSwitch
 }
 
-type SyncplayEpisodeSwitch = 'local' | 'follow'
+type SyncplayEpisodeSwitch = 'local' | 'auto-advance' | 'follow'
 
 interface SyncplayStatus {
   state:

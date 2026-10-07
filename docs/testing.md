@@ -135,7 +135,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1569` could drift from it
+  `src/renderer/src/composables/use-syncplay-client.ts:1583` could drift from it
   and nothing would notice. Both peers now run the shipped rule. The file no
   longer pins that literal: #488 rewrote it to pin the yank's absence in both
   roles, and the window `[3.0, 4.0)` it held the literal in is now named only
@@ -1137,6 +1137,7 @@ covers are not redone:
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half; E1 / E6 split #497's saved-progress flash out with `resumeSplit`, pinned in `test/syncplay-e2e-stale-outcome.test.ts`) |
 | E2 double advance (#487, fixed by #492; window moved to first frame + grace by #500; Tier 1 pins the swallowed presses, the component's grace-timer lifecycle is run from its own source in `player-lifecycle-scope.test.ts`) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half, scored on `loadeddata` + `FOLLOW_GRACE_MS`) |
 | E5 paused state: a paused room stays paused at 0 across Next/Prev (#496, fixed; Tier 1 pins the presser and follower orderings where the new element plays before a paused frame lands, the playing-room and pending-pause-hold controls, and a peer's Play before and after the consume, through a `live()` loop that models `canplay` and `timeupdate` and `PlayerView`'s registered `episode-start` play) | `syncplay-two-peer-episode-change.test.ts` (#496 block) | `episode.spec.ts` (E5: every scoreable run paused at ~0) |
+| E7 end-of-episode auto-advance: both peers resume N+1 from 0 (#512, fixed; Tier 1 pins the one-sided end, the follower's resume hold, Cancel-is-local and both countdowns firing 0 / 500 ms apart through an `AutoAdvancer` that models `PlayerView`'s countdown, `goToEpisode` and the follow walk; the gap frame between a switch and the new element's first push is pinned per origin in `syncplay-file-change-seek.test.ts`) | `syncplay-two-peer-episode-change.test.ts` (#512 block) | `episode.spec.ts` (E7: even runs both countdowns fire, odd runs B cancels and follows; `bad == 0` over the episode, resumed from ~0, one `{0, paused: false}` seek from A and none from a cancelling B, no outbound `paused: true` after the first seek, and a cancelling B's outgoing element never playing from 0) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
 | P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |

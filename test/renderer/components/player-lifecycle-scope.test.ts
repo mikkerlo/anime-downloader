@@ -950,7 +950,7 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     expect(SRC).toContain("if (canPrev.value) goToEpisode('prev', 'local');")
     expect(SOURCE).toContain(`@nav="goToEpisode('prev', 'local')"`)
     const ended = stripComments(slice('function onVideoEnded(', '\nfunction onUserNext('))
-    expect(ended).toContain("goToEpisode('next', 'local');")
+    expect(ended).toContain("goToEpisode('next', 'auto-advance');")
     expect(ended).not.toContain('onUserNext')
     // The token's index is READ nowhere but the wrapper; every other read is a
     // clear's owner compare on `.nav`.
@@ -2483,12 +2483,14 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
 })
 
 describe('#486 — who started an episode change, and the hold every failure arm releases', () => {
-  // Main forces the room to 0 only for `'local'`, so a user-driven caller that
-  // passed `'follow'` would leave the room on the old episode's number, and a
-  // walk step that passed `'local'` would rewind the presser who is already
-  // playing the new episode from 0. Read over the whole SFC because the nav
-  // buttons call from the template.
-  it("passes 'follow' from the remote walk alone, and 'local' from every other caller", () => {
+  // Main forces the room to 0 only for `'local'` and `'auto-advance'`, so a
+  // user-driven caller that passed `'follow'` would leave the room on the old
+  // episode's number, and a walk step that passed `'local'` would rewind the
+  // presser who is already playing the new episode from 0. `'auto-advance'`
+  // (#512) is the countdown's alone: anywhere else it would resume a room a
+  // user paused. Read over the whole SFC because the nav buttons call from the
+  // template.
+  it("passes 'follow' from the remote walk alone, 'auto-advance' from the countdown alone, and 'local' from every other caller", () => {
     // `[^)\n]` keeps the multi-line declaration out of the census.
     // Both user-facing Nexts reach `goToEpisode` through `onUserNext` (#487),
     // so the keyboard case and the template's Next button are one site.
@@ -2496,7 +2498,7 @@ describe('#486 — who started an episode change, and the hold every failure arm
     expect(calls).toEqual([
       "dir, 'follow', steps++ > 0",
       "'prev', 'local'",
-      "'next', 'local'",
+      "'next', 'auto-advance'",
       "'next', 'local'",
       "'prev', 'local'"
     ])

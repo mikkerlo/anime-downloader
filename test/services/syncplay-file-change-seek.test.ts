@@ -2,7 +2,8 @@
 //
 // A Syncplay room state carries no file identity, so after an in-player episode
 // change every position the room holds is still the previous episode's number.
-// `setFile()` answers an `episodeSwitch: 'local'` push the way the reference
+// `setFile()` answers an `episodeSwitch: 'local'` (or, since #512,
+// `'auto-advance'`) push the way the reference
 // client answers a playlist change: it sends one forced seek to 0, and the
 // server's `forcePositionUpdate` overwrites every watcher's stored position with
 // it. These cases pin the frame itself and every path that must *not* send it.
@@ -87,7 +88,7 @@ describe('SyncplayClient — the file-change seek (#486)', () => {
 
   const file = (
     canonicalName: string,
-    extra: { newPlayer?: boolean; episodeSwitch?: 'local' | 'follow' } = {}
+    extra: { newPlayer?: boolean; episodeSwitch?: SyncplayEpisodeSwitch } = {}
   ): void => {
     client.setFile({
       animeId: 1,
@@ -183,6 +184,84 @@ describe('SyncplayClient — the file-change seek (#486)', () => {
       .filter((p) => p?.paused !== undefined)
     expect(asserted).toEqual([])
   })
+
+  // #512. The end-of-episode countdown is the one origin that knows why the
+  // room is paused: every peer's `ended` reported paused, and the seek resumes
+  // it. A `'local'` press in the same paused room keeps it paused (above).
+  it('an auto-advance forces the room to 0 playing, even when the room is paused', () => {
+    seatAdopted(true)
+
+    file(EP8, { episodeSwitch: 'auto-advance' })
+
+    expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+    expect(states()).toHaveLength(1)
+    expect(client['clientIgnoreCounter']).toBe(1)
+    expect(client['pendingClientAck']).toBe(1)
+    expect(client['lastSnapshotAt']).toBe(0)
+  })
+
+  it('an auto-advance in a playing room forces it to 0 playing too', () => {
+    seatAdopted(false)
+
+    file(EP8, { episodeSwitch: 'auto-advance' })
+
+    expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+  })
+
+  it('a follow sends no seek in a paused room either', () => {
+    // The origin test that #512 widened: a follow must stay seek-free whatever
+    // the room's state, or it rewinds the presser.
+    seatAdopted(true)
+
+    file(EP8, { episodeSwitch: 'follow' })
+    vi.advanceTimersByTime(1000)
+
+    expect(seeks()).toEqual([])
+    expect(client['clientIgnoreCounter']).toBe(0)
+  })
+
+  // #512's Critical item: the "stray `paused:false` then `paused:true`" pair
+  // the manual matrix saw around an auto-advance. The first frame is not a
+  // `paused: false` at all: it is the mirror arm of `buildPlaystate()`, a
+  // position with no `paused` key, sent by any heartbeat that ticks between the
+  // switch (which drops the snapshot) and the new element's first push. The
+  // second is just the next heartbeat asserting what that push said. So the
+  // pair belongs to every origin, and only the push decides the second frame.
+  it.each<SyncplayEpisodeSwitch>(['local', 'auto-advance', 'follow'])(
+    'a heartbeat between a %s switch and the first push claims no pause; the next asserts the push (#512)',
+    (origin) => {
+      seatAdopted(true)
+      const resumes = origin === 'auto-advance'
+
+      file(EP8, { episodeSwitch: origin })
+      if (origin !== 'follow') {
+        // The server's answer to our forced seek.
+        emit({
+          State: {
+            playstate: { position: 0, paused: !resumes, doSeek: true, setBy: 'me' },
+            ignoringOnTheFly: { client: 1 }
+          }
+        })
+      } else {
+        roomState(0, true)
+      }
+      lastTlsSocket!.write.mockClear()
+      vi.advanceTimersByTime(1000)
+
+      const gap = states().flatMap((s) => (s.playstate ? [s.playstate] : []))
+      expect(gap).toHaveLength(1)
+      expect(gap[0]).not.toHaveProperty('paused')
+      // The room's 0, advanced by wall time once the room plays.
+      expect(gap[0].position).toBeCloseTo(resumes ? 1 : 0, 1)
+
+      lastTlsSocket!.write.mockClear()
+      client.updateSnapshot({ position: 0, paused: !resumes })
+      vi.advanceTimersByTime(1000)
+
+      const next = states().flatMap((s) => (s.playstate ? [s.playstate] : []))
+      expect(next.map((p) => p.paused)).toEqual([!resumes])
+    }
+  )
 
   it('a follow drops the snapshot and sends no seek', () => {
     seatAdopted()

@@ -691,7 +691,10 @@ describe('SyncplayClient — a pause pressed inside the apply gap of a peer’s 
     const n = to.frames.length
     const hit = (): boolean =>
       to.frames.slice(n).some((f) => f.state.doSeek && f.state.setBy === from.username)
-    while (!hit()) await room.advance(0.05)
+    for (let i = 0; !hit(); i++) {
+      expect(i, `${from.username}'s seek never reached ${to.username}`).toBeLessThan(200)
+      await room.advance(0.05)
+    }
   }
 
   /** Main's echo target: the position it last handed the renderer to seek to. */

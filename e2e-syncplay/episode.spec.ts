@@ -1,7 +1,7 @@
 // Episode-change rows of the #489 catalog on the two-instance rig.
 //
-//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493), #497 (recorded)
-//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (recorded)
+//   E1  A presses next at ~30 s / ~10 min / ~20 min, B follows       #486 (fixed by #493), #497 (fixed)
+//   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (fixed)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (fixed)
 //
@@ -23,7 +23,7 @@
 // also agree on the episode in E1 / E6 (a follow is absolute and deduped) on
 // every scoreable run.
 //
-// E1 / E6 also see #497 (below): the follower lands at 0, seeks to its saved
+// E1 / E6 also saw #497 (below): the follower lands at 0, seeks to its saved
 // progress for the new episode 2–7 ms after `loadedmetadata`, shows "Resumed
 // at …", and the room pulls it back 60–300 ms later. A 200 ms sample inside
 // that flash tripped `maxCtFirst4s > 9` and scored the run #486 (#514). Bands
@@ -33,7 +33,9 @@
 // at …` toast (target floors to its m:ss, within 50 ms) is #497's and excuses
 // only the 4 s term, only when no other seek past 5 s shares its window. The
 // old position is each instance's measured `ct` before the press, not `t`.
-// Recorded per run (`foreignSeek`), not asserted; #497's fix asserts it 0.
+// #497 is fixed, so every scoreable run asserts `foreignSeek == 0` and no
+// `Resumed at …` toast on either instance (`resumeToast`). The split stays: a
+// #497 regression reads as `foreignSeek`, not as a #486 stale start.
 //
 // E5's spec is #493's: a paused room stays paused at 0 across a local Next or
 // Prev (`test/services/syncplay-file-change-seek.test.ts`,
@@ -208,7 +210,7 @@ async function transition(
   }
 }
 
-test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486, fixed by #493)', async () => {
+test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486, fixed by #493), with no seek to saved progress (#497 fixed)', async () => {
   const { A, B } = await seatDuo(rig)
   const e1 = new RowScorer('E1')
   const e6 = new RowScorer('E6')
@@ -233,6 +235,9 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
       const kb = resumeSplit(r.db, r.sb, r.b)
       const stale = ka.stale || kb.stale
       const foreignSeek = ka.foreignSeek || kb.foreignSeek
+      const resumeToast = [r.da, r.db].some((d) =>
+        d.toasts.some((t) => t.txt.trim().startsWith('Resumed at'))
+      )
       row.add(
         {
           setupOk: setupOk && r.changed,
@@ -240,6 +245,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
           stuck: r.a.stuck || r.b.stuck,
           agree,
           foreignSeek,
+          resumeToast,
           from,
           t: Math.round(t),
           oldA: +r.sa.ct.toFixed(2),
@@ -248,7 +254,7 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
           A: { ...r.a, resume: ka },
           B: { ...r.b, resume: kb }
         },
-        stale || foreignSeek || !agree
+        stale || foreignSeek || resumeToast || !agree
           ? { A: await A.collect(r.pressAt - 3000), B: await B.collect(r.pressAt - 3000) }
           : undefined
       )
@@ -259,12 +265,24 @@ test('E1 / E6 — A presses next (then prev), B follows: both land near 0 (#486,
     }
     const s1 = e1.score()
     const s6 = e6.score()
-    // Flipped by #493: no stale start in either direction. #497's flash is
-    // recorded (`foreignSeek`), not asserted — see the header.
+    // Flipped by #493: no stale start in either direction.
     expect(s1.scoreable).toBeGreaterThanOrEqual(1)
     expect(s1.bad).toBe(0)
     expect(s6.scoreable).toBeGreaterThanOrEqual(1)
     expect(s6.bad).toBe(0)
+    // #497, fixed: no seek to saved progress and no `Resumed at …` toast on
+    // either instance — see the header.
+    for (const [name, s] of [
+      ['E1', s1],
+      ['E6', s6]
+    ] as const) {
+      const scoreable = s.records.filter((r) => r.setupOk)
+      expect(
+        scoreable.filter((r) => r.foreignSeek).length,
+        `${name} #497 saved-progress seek`
+      ).toBe(0)
+      expect(scoreable.filter((r) => r.resumeToast).length, `${name} #497 Resumed at toast`).toBe(0)
+    }
   } finally {
     await closeDuo(A, B)
   }

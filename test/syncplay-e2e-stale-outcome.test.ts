@@ -339,7 +339,7 @@ describe('the E1 / E6 row', () => {
     expect(transition).toMatch(/\n {4}sa,\n {4}sb,\n {4}da,\n {4}db,\n/)
   })
 
-  it('scores both instances with resumeSplit on the measured position and records foreignSeek', () => {
+  it('scores both instances with resumeSplit on the measured position and asserts foreignSeek and resumeToast 0 (#497 fixed)', () => {
     expect(e1).toContain('resumeSplit(r.da, r.sa, r.a)')
     expect(e1).toContain('resumeSplit(r.db, r.sb, r.b)')
     expect(e1).toContain('bad: stale,')
@@ -348,6 +348,13 @@ describe('the E1 / E6 row', () => {
     expect(e1).not.toMatch(/ct: t\b/)
     expect(e1).toContain('expect(s1.bad).toBe(0)')
     expect(e1).toContain('expect(s6.bad).toBe(0)')
-    expect(e1).not.toMatch(/expect\([^)]*foreignSeek/)
+    expect(e1).toContain('resumeToast,')
+    expect(e1).toMatch(/\[\s*\['E1', s1\],\s*\['E6', s6\]\s*\] as const\)/)
+    expect(e1).toMatch(
+      /expect\(\s*scoreable\.filter\(\(r\) => r\.foreignSeek\)\.length,[^)]*\)\.toBe\(0\)/
+    )
+    expect(e1).toMatch(
+      /expect\(\s*scoreable\.filter\(\(r\) => r\.resumeToast\)\.length,[^)]*\)\.toBe\(0\)/
+    )
   })
 })

@@ -103,12 +103,12 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
 
     // A spectator, which here means a peer whose element will never be worth
     // announcing: `readyState: 0` puts `hasAnnounceablePosition()` below its
-    // floor — `src/renderer/src/composables/use-syncplay-client.ts:821-823`
+    // floor — `src/renderer/src/composables/use-syncplay-client.ts:861-863`
     // ("return (v.readyState ?? 0) >= 1") — so no snapshot is ever pushed to
     // main and `lastSnapshotAt` stays 0. That is what keeps this peer on the
     // mirror exit for the whole run, and it is a gate rather than luck: with no
     // snapshot, `canAssertSnapshot()` is the false conjunct at
-    // `src/main/syncplay.ts:2512`
+    // `src/main/syncplay.ts:2556`
     // ("if (this.canAssertSnapshot() && this.isAdopted()) {") and the `&&`
     // short-circuits before `isAdopted()` can latch.
     const spectator = await room.seat({
@@ -135,7 +135,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // elections had exactly one candidate, so `min()` handed back the crept
     // value itself: it is not *above* the room, it **is** the room, and the
     // spectator is the peer the server names as having set it. The count is
-    // pinned before it is quantified over, per docs/testing.md:372 ("Pin the
+    // pinned before it is quantified over, per docs/testing.md:389 ("Pin the
     // count, never just loop over the set") — `every()` on an empty array is
     // `true`, and an `elections` array that stopped being filled would leave
     // the two lines below green while asserting nothing.
@@ -149,7 +149,7 @@ describe('SyncplayClient — a paused room crept alone, then handed to a joiner'
     // element never moved off the truth, and it announced nothing discrete —
     // the creep is entirely the server's arithmetic over a frame that omits
     // `paused`, which is what `buildPlaystate()`'s mirror exit sends
-    // (`src/main/syncplay.ts:2593-2596`
+    // (`src/main/syncplay.ts:2662-2665`
     // ("position: this.projectedRoomPosition(room)")). `paused` absent on every
     // frame is the observable that says it stayed on that exit —
     // `test/helpers/syncplay-min-election-server.ts:466-471` ("paused?:

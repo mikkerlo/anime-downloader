@@ -101,7 +101,7 @@ export const IGNORED_FIELDS: readonly IgnoreEntry[] = [
   },
   {
     path: 'Set.playlistChange.*',
-    seam: 'Shared playlists, which this client declares `sharedPlaylists: false` for (`src/main/syncplay.ts:2367`) and the model does not implement at all.'
+    seam: 'Shared playlists, which this client declares `sharedPlaylists: false` for (`src/main/syncplay.ts:2411`) and the model does not implement at all.'
   },
   {
     path: 'Set.playlistIndex.*',
@@ -109,7 +109,7 @@ export const IGNORED_FIELDS: readonly IgnoreEntry[] = [
   },
   {
     path: 'Set.user.[].event.*',
-    seam: 'Two notices, and the entry named only the first until #384 item 4: `sendJoinMessage` (`server.py:168-173`) and `sendLeftMessage` (`server.py:163-165` ("def sendLeftMessage(self, watcher):")), which is the frame a `PROTOCOL_TIMEOUT` drop announces itself with. Neither is a file relay. For the join the model stands a fresh `List` in, as the comment on `applySet` says; the leave notice it now sends literally, because `src/main/syncplay.ts:1471` ("if (data.event.left === true) {") reads that exact shape. The suite compares the relay (`Set.user.[].file`) and the roster instead, which is how a drop is observed here at all.'
+    seam: 'Two notices, and the entry named only the first until #384 item 4: `sendJoinMessage` (`server.py:168-173`) and `sendLeftMessage` (`server.py:163-165` ("def sendLeftMessage(self, watcher):")), which is the frame a `PROTOCOL_TIMEOUT` drop announces itself with. Neither is a file relay. For the join the model stands a fresh `List` in, as the comment on `applySet` says; the leave notice it now sends literally, because `src/main/syncplay.ts:1505` ("if (data.event.left === true) {") reads that exact shape. The suite compares the relay (`Set.user.[].file`) and the roster instead, which is how a drop is observed here at all.'
   },
   {
     path: 'Set.user.[].room.name',

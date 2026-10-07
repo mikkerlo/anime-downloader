@@ -135,7 +135,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1529` could drift from it
+  `src/renderer/src/composables/use-syncplay-client.ts:1569` could drift from it
   and nothing would notice. Both peers now run the shipped rule. The file no
   longer pins that literal: #488 rewrote it to pin the yank's absence in both
   roles, and the window `[3.0, 4.0)` it held the literal in is now named only
@@ -274,6 +274,23 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   the identical term and is never applied) and leaves the room-anchor axis of
   the same `serverRtt` to the single-client files, where the election it
   otherwise feeds back into can be held still.
+
+  **The renderer-delivery knob (#513).** By default the whole renderer leg of a
+  frame runs synchronously inside main's `emit`, so the gap between main
+  handing a `remote-state` on and the renderer applying it is zero on the
+  harness, and in the app it is an IPC hop. `Peer.holdRemoteState()` queues
+  that peer's `remote-state` broadcasts at the hop (main still emits, `frames`
+  and `broadcasts` still record them) until `releaseRemoteState()` delivers
+  them in order. Whatever main does in the gap becomes reachable: its
+  heartbeat, its ack, or a local event the renderer handles first.
+  `syncplay-two-peer-pause-heartbeat-race.test.ts` uses it with a phase lock
+  (press just after B's heartbeat, hold across B's next one) to make #513's
+  shape 1, a heartbeat asserting the pre-apply `paused`, deterministic rather
+  than ~1.7 % per press. Both directions are red on the pre-fix tree, and four
+  more cases pin the marker's two clear rules and its TTL. The same file's
+  shape-2 case uses the knob the other way round: it holds a foreign periodic,
+  delivers the press, then releases the stale frame, which is red until the
+  pending-pause hold arms post-adoption.
 - **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
   smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence
@@ -1126,7 +1143,7 @@ covers are not redone:
 | P2 (✗ band), P3, M8 | `syncplay-two-peer-interactions.test.ts` | — |
 | P5, M1 | `syncplay-two-peer-adoption.test.ts`, `syncplay-two-peer-playpause.test.ts` | — |
 | P6, P7, P8 | — | `pause.spec.ts` |
-| P7f, P6f: pause, then a quality / translation switch 0 / 20 / 50 / 200 ms later, the gaps recorded per run; `SYNCPLAY_E2E_N` is the per-bucket N, default 10 (#498; P7f was ✗ before its fix) | `syncplay-two-peer-quality-switch.test.ts` | `pause.spec.ts` |
+| P7f, P6f: pause, then a quality / translation switch 0 / 20 / 50 / 200 ms later, the gaps recorded per run; `SYNCPLAY_E2E_N` is the per-bucket N, default 10 (#498; P7f was ✗ before its fix). The intermittent reds after #509 were #513, not the switch: a stale `paused: false` crossing the pause 4–36 ms after the press, in any bucket, so the switch is incidental and the 80 presses per job are what find it | `syncplay-two-peer-quality-switch.test.ts`; #513's two shapes in `syncplay-two-peer-pause-heartbeat-race.test.ts` and the adopted-arm block of `use-syncplay-client.test.ts` | `pause.spec.ts` |
 | P12 | the #350 block of `test/renderer/composables/use-syncplay-client.test.ts` | — |
 | M3 | `syncplay-frozen-snapshot.test.ts` | — |
 

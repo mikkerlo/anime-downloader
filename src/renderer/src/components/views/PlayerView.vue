@@ -2005,7 +2005,7 @@ function selectQuality(stream: { height: number; url: string }): void {
     // paused player is disarmed here or a fast reload autostarts it and
     // `onLocalPlay` announces a play nobody pressed (#498). A bare pause on an
     // already-paused element that registers nothing, under the #348 contract
-    // written above use-syncplay-client.ts:1714 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
+    // written above use-syncplay-client.ts:1749 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
     // Except while the mount's first autostart is still pending outside a
     // session: that element is paused because it has not started yet, not
     // because anyone paused it, and the re-armed `autoplay` is what starts it.

@@ -11,7 +11,7 @@
 //     to its own
 //     socket one round trip later;
 //  3. a drag the room did **not** take is re-asserted, and `seekIntent` is the
-//     record of that. `src/main/syncplay.ts:2931` retires the intent the moment
+//     record of that. `src/main/syncplay.ts:3000` retires the intent the moment
 //     the room agrees, so a fixture can pin the exact instant it is spent.
 //
 // (2) and (3) are the ones with teeth, and they are two sides of one predicate:
@@ -25,7 +25,7 @@
 // `consumeSeekOp` guard in `onVideoSeeked`. That echo is caught twice — once
 // there and once by `ECHO_SEEK_EPSILON_S` in `sendLocalState` — so no assertion
 // available from outside can tell which one did it. The observable below is the
-// *inbound* half instead (`host.frames`), where `src/main/syncplay.ts:2193` is
+// *inbound* half instead (`host.frames`), where `src/main/syncplay.ts:2227` is
 // the only guard standing.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -77,12 +77,12 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     await room.advance(4)
     // Exactly one frame, and which one it is matters for the `host.frames` claim
     // below: the reference's join-time `State` at t=50, whose `setBy` is the room's
-    // constructor seed rather than ours, so `src/main/syncplay.ts:2193` admits it.
+    // constructor seed rather than ours, so `src/main/syncplay.ts:2227` admits it.
     // It is also what hands this peer a `lastRoomState` a second before the first
     // periodic would, lifting `isAdopted()`'s `if (!room) return false` and moving
     // the latch from t=2000 to t=1000 — which is what gets the t=1050 periodic
     // dropped here rather than emitted with `setBy` nulled at
-    // `src/main/syncplay.ts:2286`. So the window below starts empty because of the
+    // `src/main/syncplay.ts:2320`. So the window below starts empty because of the
     // drop guard *and* this line, which is why the claim there is scoped to the
     // frames that follow it rather than to the path.
     host.frames.length = 0
@@ -121,7 +121,7 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     expect(host.el.seekWrites).toEqual([FIRST_SEEK])
 
     // And the reason: none of the frames naming the host ever reached the host's
-    // renderer — `src/main/syncplay.ts:2193` returns above the emit for them, the
+    // renderer — `src/main/syncplay.ts:2227` returns above the emit for them, the
     // single guard on this path, which is why this assertion is the one worth
     // making rather than a claim about the element.
     //
@@ -142,7 +142,7 @@ describe('SyncplayClient — a seek, its echo and its re-assert', () => {
     expect(seekFrames(host)).toBe(1)
     expect(seekFrames(joiner)).toBe(0)
     // The set is counted before it is quantified over, per
-    // docs/testing.md:372 ("Pin the count, never just loop over the set"):
+    // docs/testing.md:389 ("Pin the count, never just loop over the set"):
     // `every()` on an empty array is `true`, so without the pin a harness change
     // that stopped handing the joiner frames at all — a widened drop guard, a
     // rewired observer — would leave the line below green while asserting

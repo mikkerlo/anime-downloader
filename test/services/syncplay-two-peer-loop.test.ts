@@ -277,7 +277,7 @@ describe('two-peer syncplay harness', () => {
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
     // `readyState` 0, which is what `hasAnnounceablePosition()`
-    // (`src/renderer/src/composables/use-syncplay-client.ts:821`) and
+    // (`src/renderer/src/composables/use-syncplay-client.ts:861`) and
     // `onLocalPause`'s own `readyState > 0` conjunct are both reading.
     //
     // Before the fix this read `[['pause', 'loadedmetadata'], []]` with
@@ -363,7 +363,7 @@ describe('two-peer syncplay harness', () => {
     // seated on a literal — the tenth is the rejection guard below, which never
     // reaches `reload()` at all — so the
     // fallback at
-    // `test/helpers/syncplay-two-peer.ts:258 ("this.bindGapMs = opts.bindGapMs ?? 500")`
+    // `test/helpers/syncplay-two-peer.ts:259 ("this.bindGapMs = opts.bindGapMs ?? 500")`
     // was free to be any number at all: editing it to 3000, the exact value that
     // option's doc block spends its longest paragraph calling a trap, left the
     // suite at 1822 passed across 122 files. That figure is **historical and no
@@ -386,7 +386,7 @@ describe('two-peer syncplay harness', () => {
     // `syncplay-two-peer-episode-change.test.ts`'s `seatPair` nor the joiner in
     // the adoption file's switch fixture. All of them are inert, for one
     // reason: `bindGapMs` is read in exactly one place,
-    // `test/helpers/syncplay-two-peer.ts:432-433 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
+    // `test/helpers/syncplay-two-peer.ts:433-434 ("this.metadataDueAt = Date.now() + this.bindGapMs")`
     // inside `HarnessVideo.reload()`, and a peer that never reloads never
     // reaches it. So the value they inherit is unobservable rather than
     // pinned, and moving the default cannot red them. #486 added the first
@@ -405,7 +405,7 @@ describe('two-peer syncplay harness', () => {
     // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
     // than one step is invisible here — a reload queues `pause`, and `tick()`
     // holds metadata back while that queue is non-empty
-    // (`test/helpers/syncplay-two-peer.ts:469 ("this.queued.length === 0")`), so
+    // (`test/helpers/syncplay-two-peer.ts:470 ("this.queued.length === 0")`), so
     // 0 and 300 both land in the second batch and read the same. Landing in the
     // *third* of three 200 ms steps is what says the gap outlived a step it was
     // given the chance to beat. The case therefore holds for a gap in (400, 600]
@@ -437,7 +437,7 @@ describe('two-peer syncplay harness', () => {
    * The log is built **here rather than in the helper**, and by wrapping the
    * *method* rather than replacing the handle: the composable resolves its
    * bridge once, at setup, and never re-reads it
-   * (`src/renderer/src/composables/use-syncplay-client.ts:285` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
+   * (`src/renderer/src/composables/use-syncplay-client.ts:293` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
    * `peer.api = {…}` would hand the wrapper to nobody and leave a green case
    * sampling an empty array. Writing one property on the retained object is
    * seen, because the push site reads `api.syncplaySetFile` at call time.
@@ -493,7 +493,7 @@ describe('two-peer syncplay harness', () => {
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2012`) is a default
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2057`) is a default
     // **pre-flush** `watch`, so Vue's scheduler runs it inside that suspension —
     // against the element still bound to the *old* episode, at HAVE_METADATA.
     // The helper had no suspension, so the watcher only ever ran after
@@ -516,7 +516,7 @@ describe('two-peer syncplay harness', () => {
     // the watcher's other three calls (`clearPendingUserPause()`,
     // `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()`) touch no
     // element at all; the push's own duration read is
-    // `src/renderer/src/composables/use-syncplay-client.ts:741` ("const dur =
+    // `src/renderer/src/composables/use-syncplay-client.ts:781` ("const dur =
     // deps.getVideoEl()?.duration || deps.getDuration() || 0") and `reload()`
     // never writes `duration`, so it is identical in all three; both forms send
     // inside the same 50 ms slice at the same `Date.now()`, so neither the wire
@@ -530,10 +530,10 @@ describe('two-peer syncplay harness', () => {
 
     // The wrapper fired — see `seatSwitchScenario`'s note on why this is not a
     // formality — and it fired once: the transition-into-ready push
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2331`, the
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2380`, the
     // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
     // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2454 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2517 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
     // inside `onMounted`) are both spent by the `advance(4)` above, so this one
     // is the watcher's. Each anchor carries the construct it lands in because
     // the two were paired the wrong way round here until #384, and nothing
@@ -704,7 +704,7 @@ describe('two-peer syncplay harness', () => {
 //
 // This census is the whole of the first half and stands on its own: how many
 // call sites exist, per file, before anything classifies them. Per
-// `docs/testing.md:372 ("Pin the count, never just loop over the set")` a scan
+// `docs/testing.md:389 ("Pin the count, never just loop over the set")` a scan
 // that only walks the occurrences it finds goes green on an eleventh site it
 // never sees, so the count is the assertion and the prefix check is layered on
 // top of it.
@@ -881,7 +881,7 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 //
 // **Re-derived again on that round's review: `episode-change` 9 → 10.** The
 // 6500/7500 pair that pins
-// `src/main/syncplay.ts:967` ("this.playbackAdopted = false") firing on a
+// `src/main/syncplay.ts:996` ("this.playbackAdopted = false") firing on a
 // clean comb cell drives two more switches from one new local helper
 // (`latchAcrossRelease`), so the sites rose
 // by one where the switches rose by two. The review that asked for the pair

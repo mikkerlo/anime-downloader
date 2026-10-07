@@ -88,6 +88,7 @@ import { EventEmitter } from 'events'
 import { useSyncplayClient } from '../../src/renderer/src/composables/use-syncplay-client'
 import { MinElectionServer } from './syncplay-min-election-server'
 import { InMemoryStorage } from './in-memory-storage'
+import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import type { MinElectionServerOptions } from './syncplay-min-election-server'
 // `SyncplayStatus` below is the ambient one, as wide as `getStatus()` really returns.
 import type {
@@ -305,7 +306,7 @@ export class HarnessVideo {
   /** True while a write is in flight, the way a real element reports it through
    *  the whole of the capture in #368. Nothing reads it yet: the outbound
    *  announceability door is `readyState` alone
-   *  (`use-syncplay-client.ts:821`), which is exactly why a mid-seek element at
+   *  (`use-syncplay-client.ts:861`), which is exactly why a mid-seek element at
    *  `readyState` 1 gets into the election holding a position it has no data
    *  for. Any fix on that door gates on this, and a harness that could not say
    *  `seeking` could not express the fix.
@@ -398,7 +399,7 @@ export class HarnessVideo {
    *  - a playing element is paused and a `pause` task is queued. Not incidental
    *    either: that pause is delivered while the element still reports
    *    HAVE_NOTHING, where `hasAnnounceablePosition()`
-   *    (`use-syncplay-client.ts:821`) drops it before it can reach the wire and
+   *    (`use-syncplay-client.ts:861`) drops it before it can reach the wire and
    *    `onLocalPause`'s `readyState > 0` conjunct keeps it from arming the
    *    pending user pause. An element that reloaded without queuing one would
    *    leave both guards unobserved.
@@ -409,7 +410,7 @@ export class HarnessVideo {
    *
    * What this is deliberately *not* is a new element. A real episode change
    * rebinds the same `<video>`, which is why `newPlayer` exists on the file push
-   * at all (`src/main/syncplay.ts:764`) and why the harness keeps one object
+   * at all (`src/main/syncplay.ts:790`) and why the harness keeps one object
    * here: a fixture that swapped the element out would be testing a mount, and
    * the mount is the case main can already see.
    */
@@ -533,7 +534,7 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
 export interface IgnoreCounters {
   /** Bumped once per *discrete* change the client originates, and by nothing
    *  else. Monotonic within a connection: `resetTransportState()` zeroes it
-   *  with the other two (`src/main/syncplay.ts:1135-1137`). */
+   *  with the other two (`src/main/syncplay.ts:1169-1171`). */
   clientIgnoreCounter: number
   /** The counter of our newest outstanding change, or 0. */
   pendingClientAck: number
@@ -581,17 +582,17 @@ export interface Peer {
    *
    *  Read here for the same reason as `seekIntent()` and `counters()`: it is
    *  private, it is projected onto nothing — `SyncplayStatus` carries
-   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:617`)
+   *  `outOfFile`, which is a *conjunction* over it (`src/main/syncplay.ts:643`)
    *  and so cannot separate "not adopted" from the other two terms — and the
    *  seven writers are what #360's gap axis turns on. A fixture that inferred it
    *  from the wire would be asserting against its own reading of
    *  `buildPlaystate()` rather than against the latch: the mirror/assert
    *  distinction a wire frame carries is
-   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2512`), so a
+   *  `canAssertSnapshot() && isAdopted()` (`src/main/syncplay.ts:2556`), so a
    *  mirror frame is evidence of the conjunction and not of either half.
    *
    *  **Sampled, not latched.** `isAdopted()` is a mutator — it writes `true` at
-   *  `src/main/syncplay.ts:2734` and `src/main/syncplay.ts:2744` — and the
+   *  `src/main/syncplay.ts:2803` and `src/main/syncplay.ts:2813` — and the
    *  heartbeat calls it once a second, so a read taken a second late sees the
    *  re-latch rather than the de-adoption that preceded it. Read it in the slice
    *  you mean. */
@@ -643,7 +644,7 @@ export interface Peer {
    * `activeEpisodeIndex` and every source write below it sits behind an `await`
    * on `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`, so the
    * pre-flush episode-change watcher
-   * (`src/renderer/src/composables/use-syncplay-client.ts:2012`) runs against
+   * (`src/renderer/src/composables/use-syncplay-client.ts:2057`) runs against
    * the element still bound to the **old** episode. Without the flush the
    * watcher only ever saw an element `reload()` had already dropped to
    * HAVE_NOTHING. A forgotten `await` at a call site is a silent mis-sequence
@@ -683,6 +684,26 @@ export interface Peer {
    *  composable's — the order `PlayerView`'s `onVideoSeekedAll` runs them in,
    *  where `useSkipMarkers` is the other consumer (#238). */
   onSeeked(listener: () => void): void
+  /**
+   * The renderer-delivery knob (#513): from now on, `remote-state` broadcasts
+   * main emits are queued at the IPC hop instead of reaching this peer's
+   * renderer, until `releaseRemoteState()`.
+   *
+   * Without it the whole renderer leg of a frame is synchronous inside main's
+   * `emit` (see `buildPeerGraph`), so the gap between main handing a frame on and
+   * the renderer applying it is zero here, and in the app it is not: it is an IPC
+   * hop plus whatever the renderer was doing. Everything main does in that gap —
+   * its heartbeat, its ack, a local event the renderer handles first — is
+   * unreachable without this knob.
+   *
+   * Main's side is untouched: the frame is still emitted, `frames` still records
+   * it (the observer sits on the client, ahead of the IPC hop), and `broadcasts`
+   * still lists it at emit time. Only the renderer listeners wait.
+   */
+  holdRemoteState(): void
+  /** Deliver every held `remote-state` to the renderer in emit order, stop
+   *  holding, and return how many were delivered. */
+  releaseRemoteState(): number
   unmount(): void
 }
 
@@ -693,6 +714,8 @@ interface PeerGraph {
   tls: HarnessSocket[]
   emit: (channel: string, ...args: unknown[]) => void
   broadcasts: { channel: string; payload: unknown }[]
+  holdRemoteState: () => void
+  releaseRemoteState: () => number
 }
 
 /**
@@ -807,11 +830,28 @@ async function buildPeerGraph(observe: (client: MainSyncplayClient) => void): Pr
   // rather than a stub, so that stays true if the key it reads ever moves.
   const settingsMod = await import('../../src/main/ipc/settings.ipc')
 
-  const emit = (channel: string, ...args: unknown[]): void => {
-    broadcasts.push({ channel, payload: args[0] })
+  const deliver = (channel: string, args: unknown[]): void => {
     const bucket = rendererListeners.get(channel)
     if (!bucket) return
     for (const listener of [...bucket]) listener({}, ...args)
+  }
+  let heldRemoteStates: unknown[][] | null = null
+  const emit = (channel: string, ...args: unknown[]): void => {
+    broadcasts.push({ channel, payload: args[0] })
+    if (heldRemoteStates && channel === EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE) {
+      heldRemoteStates.push(args)
+      return
+    }
+    deliver(channel, args)
+  }
+  const holdRemoteState = (): void => {
+    heldRemoteStates ??= []
+  }
+  const releaseRemoteState = (): number => {
+    const held = heldRemoteStates ?? []
+    heldRemoteStates = null
+    for (const args of held) deliver(EVENT_CHANNELS.SYNCPLAY_REMOTE_STATE, args)
+    return held.length
   }
 
   const client = syncplayMod.syncplay
@@ -832,7 +872,7 @@ async function buildPeerGraph(observe: (client: MainSyncplayClient) => void): Pr
   await import('../../src/preload/index')
   const api = (globalThis as unknown as { window: { api: Api } }).window.api
 
-  return { client, api, plain, tls, emit, broadcasts }
+  return { client, api, plain, tls, emit, broadcasts, holdRemoteState, releaseRemoteState }
 }
 
 // ── The room ──────────────────────────────────────────────────────────────────
@@ -1061,6 +1101,8 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
       onSeeked: (listener) => {
         seekedListeners.push(listener)
       },
+      holdRemoteState: graph.holdRemoteState,
+      releaseRemoteState: graph.releaseRemoteState,
       unmount: () => wrapper.unmount()
     }
     peers.push(peer)

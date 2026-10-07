@@ -979,7 +979,7 @@ describe('SyncplayClient room presence on join (#220)', () => {
     // position and swallowed any genuine user seek landing within
     // ECHO_SEEK_EPSILON_S of it. That refresh is per frame off `setBy`, not a
     // property of the room: a periodic the server elected to another peer is
-    // foreign-`setBy` and past `src/main/syncplay.ts:2193` unconditionally, a
+    // foreign-`setBy` and past `src/main/syncplay.ts:2227` unconditionally, a
     // pre-adoption one with a peer in a keyed roster is past it as room voice, and
     // at the elected peer past adoption it is self-`setBy` and dies there. So
     // "refreshed once a second in a paused room" is that predicate's consequence

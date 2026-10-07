@@ -269,12 +269,13 @@ export interface SyncplayFileInfo {
    *  field by field. */
   playerSessionId?: string
   /** Set only on the push that follows an in-player episode change (#486):
-   *  `'local'` when this user pressed next/prev (or auto-advance), `'follow'`
-   *  when the player is walking to a peer's episode. One-shot: the renderer
-   *  consumes it on the watcher push, so a later re-push of the same file never
-   *  carries it. `setFile()` acts on it only when `canonicalName` changed, drops
-   *  the snapshot for both values, and sends the file-change seek for `'local'`.
-   *  Never stored in `currentFile` and never on the wire. */
+   *  `'local'` when this user pressed next/prev, `'auto-advance'` when the
+   *  end-of-episode countdown fired (#512), `'follow'` when the player is
+   *  walking to a peer's episode. One-shot: the renderer consumes it on the
+   *  watcher push, so a later re-push of the same file never carries it.
+   *  `setFile()` acts on it only when `canonicalName` changed, drops the
+   *  snapshot for every value, and sends the file-change seek for `'local'`
+   *  and `'auto-advance'`. Never stored in `currentFile` and never on the wire. */
   episodeSwitch?: SyncplayEpisodeSwitch
 }
 
@@ -867,7 +868,9 @@ export class SyncplayClient extends EventEmitter {
     // ready gate.
     if (isNewPlayer && !this.ownIsReady) this.setReady(true)
     if (this.status.state === 'ready') this.sendSetFile(stored)
-    if (episodeSwitch === 'local') this.sendFileChangeSeek()
+    if (episodeSwitch === 'local' || episodeSwitch === 'auto-advance') {
+      this.sendFileChangeSeek(episodeSwitch)
+    }
   }
 
   // Force the room to 0 after our own in-player episode change (#486), as the
@@ -884,19 +887,26 @@ export class SyncplayClient extends EventEmitter {
   // `lastRoomState.position` (the old episode's number) with a forced seek on
   // top, which the server writes into every watcher.
   //
-  // Only for `episodeSwitch: 'local'`. A follower navigates after the presser
-  // has started playing from 0, so a second seek would rewind the presser.
-  // Skipped while the room has told us nothing: nothing in it is stale yet.
-  private sendFileChangeSeek(): void {
+  // Only for `'local'` and `'auto-advance'`. A follower navigates after the
+  // presser has started playing from 0, so a second seek would rewind the
+  // presser. Skipped while the room has told us nothing: nothing in it is stale
+  // yet.
+  //
+  // `'local'` keeps the room's `paused` (#496). `'auto-advance'` sends playing
+  // (#512): by the time the countdown fires the room is paused only because the
+  // episode ended, every peer's `ended` reported paused, and nothing else
+  // remembers why. The countdown is the one origin that knows.
+  private sendFileChangeSeek(origin: 'local' | 'auto-advance'): void {
     if (this.status.state !== 'ready') return
     const room = this.lastRoomState
     if (!room) return
+    const paused = origin === 'auto-advance' ? false : room.paused
     this.lastAppliedRemotePosition = null
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     this.crossedByForeign = null
-    log('file-change seek', 'counter=', this.clientIgnoreCounter, 'paused=', room.paused)
-    this.sendStateMessage({ doSeek: true, override: { position: 0, paused: room.paused } })
+    log('file-change seek', origin, 'counter=', this.clientIgnoreCounter, 'paused=', paused)
+    this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
   }
 
   setReady(isReady: boolean): void {
@@ -2144,7 +2154,7 @@ export class SyncplayClient extends EventEmitter {
     // "the intent was retired ⇒ the renderer was handed that frame" — is
     // untouched on both sides. It is also what keeps #228: recordRemoteState()
     // runs unconditionally at the top of applyRemoteState()
-    // (src/renderer/src/composables/use-syncplay-client.ts:1944-1945) and owns the pending-pause release and
+    // (src/renderer/src/composables/use-syncplay-client.ts:1958-1959) and owns the pending-pause release and
     // the "Paused by …" badge, so dropping the frame would lose the pause half
     // to save the position half. Rewrite, never drop.
     const seekIntentWasLive = this.seekIntent !== null
@@ -2233,7 +2243,7 @@ export class SyncplayClient extends EventEmitter {
     // Only a *playing* room has aged since the state left the peer; a paused
     // position doesn't advance with wall time, so shifting it forward is pure
     // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
-    // (src/renderer/src/composables/use-syncplay-client.ts:1569), so a paused scrub lands every peer up to
+    // (src/renderer/src/composables/use-syncplay-client.ts:1583), so a paused scrub lands every peer up to
     // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
     // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
     // mirrored server-side in _updatePositionByAge, server.py:871-872).
@@ -2270,8 +2280,8 @@ export class SyncplayClient extends EventEmitter {
     // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
     // tolerance: the element only advances while it is firing `timeupdate`, so
     // a reading that is seconds old is still an accurate reading of a *stopped*
-    // element (src/renderer/src/composables/use-syncplay-client.ts:937-939, SNAPSHOT_MIN_INTERVAL_MS at
-    // src/renderer/src/composables/use-syncplay-client.ts:464). If the renderer ever gains a playback-rate control this bound has
+    // element (src/renderer/src/composables/use-syncplay-client.ts:941-943, SNAPSHOT_MIN_INTERVAL_MS at
+    // src/renderer/src/composables/use-syncplay-client.ts:468). If the renderer ever gains a playback-rate control this bound has
     // to be re-derived.
     const emitted = seekIntentWasLive ? this.snapshot.position : compensated
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
@@ -2312,8 +2322,8 @@ export class SyncplayClient extends EventEmitter {
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two
     // statements that would both be false: a "<me> seeked to 10:06" toast for a
-    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1924-1926) and a "Paused by me"
-    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1509-1510). `null`
+    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1938-1940) and a "Paused by me"
+    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1523-1524). `null`
     // is the existing "the room moved, nobody in particular" value — the type
     // already allows it and both renderer reads are already null-guarded — so
     // no flag and no renderer change is needed to say it.

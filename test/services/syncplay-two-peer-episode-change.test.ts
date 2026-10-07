@@ -544,6 +544,286 @@ function expectConvergedOn(roomAt: number, ...peers: Peer[]): void {
   }
 }
 
+// ── #512: end-of-episode auto-advance resumes the room ───────────────────────
+//
+// `ended` pauses each element that reaches the end, and Chromium fires `pause`
+// ahead of `ended`, so the room hears an ordinary user pause at the duration.
+// Five seconds later the countdown starts N+1. Before #512 that start was a
+// `'local'` switch: the file-change seek carried the room's `paused` (true),
+// the `episode-start` consume adopted `roomPaused`, and N+1 landed paused at 0
+// on both sides. The countdown now marks `'auto-advance'`: the seek resumes the
+// room, the consume skips the `roomPaused` arm, and a follower holds the
+// resume off its outgoing element until its walk binds N+1.
+//
+// `AutoAdvancer` models the four `PlayerView` pieces this needs and nothing
+// else: `onVideoEnded`'s countdown and its Cancel, `goToEpisode`'s
+// `saveProgress` await before the commit and its `episode-start` play after the
+// swap, and `handleRemoteEpisodeChange`'s walk between the composable's real
+// `beginFollowWalk` / `settleFollowWalk`. Elements end at the default 1440 s.
+
+/** `goToEpisode`'s awaits before its index commit (`saveProgress`, resolution). */
+const PRE_COMMIT_MS = 200
+const COUNTDOWN_MS = 5000
+
+interface AutoAdvancer {
+  episode(): string
+  /** The countdown's Cancel button. */
+  cancel(): void
+  countingDown(): boolean
+  /** Every slice's sample while the element was still on the source it ended on. */
+  oldSourceSamples: { paused: boolean; ct: number; at: number }[]
+}
+
+function attachAutoAdvancer(peer: Peer, opts: { countdownMs?: number } = {}): AutoAdvancer {
+  let ep = Number(peer.episode())
+  let navigating = false
+  let countdown: ReturnType<typeof setTimeout> | null = null
+  const startSrc = peer.el.src
+
+  const cancel = (): void => {
+    if (countdown) clearTimeout(countdown)
+    countdown = null
+  }
+
+  // `goToEpisode(direction, origin)`, one step forward.
+  const step = async (origin: SyncplayEpisodeSwitch): Promise<EpisodeStepOutcome> => {
+    if (navigating) return 'superseded'
+    navigating = true
+    await new Promise((r) => setTimeout(r, PRE_COMMIT_MS))
+    cancel()
+    ep += 1
+    await peer.goToEpisode(String(ep), undefined, 0, origin)
+    // The source arm's `nextTick`: rewind (a no-op at HAVE_NOTHING) and play.
+    peer.ui.beginProgrammaticPlayback('play', 'episode-start', origin)
+    void peer.el.play()
+    navigating = false
+    return 'moved'
+  }
+
+  const arr = peer.remoteEpisodes as unknown as { push: (...x: unknown[]) => number }
+  const origPush = Array.prototype.push
+  arr.push = function (...eps: unknown[]) {
+    const n = origPush.apply(this, eps)
+    for (const e of eps as SyncplayRemoteEpisode[]) {
+      const target = Number(e.episodeInt)
+      if (target === ep) continue
+      peer.ui.beginFollowWalk()
+      void walkEpisodeSteps(
+        () => ep !== target && !navigating,
+        () => step('follow')
+      ).finally(() => peer.ui.settleFollowWalk())
+    }
+    return n
+  }
+
+  const adv: AutoAdvancer = {
+    episode: () => String(ep),
+    cancel,
+    countingDown: () => countdown !== null,
+    oldSourceSamples: []
+  }
+  // Polled once per slice by `liveEnded` below: `pause` then `ended`, then the
+  // countdown, which `onVideoEnded` starts once.
+  ;(peer as unknown as { onEndedTick: () => void }).onEndedTick = () => {
+    if (peer.el.src === startSrc) {
+      adv.oldSourceSamples.push({ paused: peer.el.paused, ct: peer.el.currentTime, at: Date.now() })
+    }
+    if (!peer.el.paused && peer.el.currentTime >= peer.el.duration) {
+      peer.el.pause()
+      if (!countdown) {
+        countdown = setTimeout(() => {
+          countdown = null
+          void step('auto-advance')
+        }, opts.countdownMs ?? COUNTDOWN_MS)
+      }
+    }
+  }
+  return adv
+}
+
+describe('SyncplayClient — end-of-episode auto-advance resumes the room (#512)', () => {
+  let room: TwoPeerRoom | undefined
+  let peers: Peer[] = []
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    room = undefined
+    peers = []
+    vi.useRealTimers()
+  })
+
+  /** `room.advance`, plus `canplay` at metadata, `timeupdate` while playing, and `ended`. */
+  const live = async (seconds: number): Promise<void> => {
+    for (let i = 0; i < Math.round(seconds * 20); i += 1) {
+      await room!.advance(0.05)
+      for (const p of peers) {
+        if (p.el.readyState === 1) {
+          p.el.readyState = 4
+          p.ui.onLocalCanPlay()
+        }
+        if (!p.el.paused && p.el.readyState >= 1) p.ui.onVideoTimeUpdate()
+        ;(p as unknown as { onEndedTick: () => void }).onEndedTick()
+      }
+    }
+  }
+
+  /** Both playing episode 7 near its end. `B` is `lagS` behind `A`. */
+  const seatNearEnd = async (
+    lagS: number,
+    opts: { delayMs?: number; countdownMsB?: number } = {}
+  ): Promise<{ A: Peer; B: Peer; a: AutoAdvancer; b: AutoAdvancer }> => {
+    const delayMs = opts.delayMs ?? DELAY_MS
+    room = await createTwoPeerRoom({ position: 1432, paused: false })
+    const A = await room.seat({
+      username: 'hostuser',
+      position: 1432,
+      paused: false,
+      readyState: 4,
+      delayMs,
+      bindGapMs: 300
+    })
+    const B = await room.seat({
+      username: 'joinuser',
+      position: 1432 - lagS,
+      paused: false,
+      readyState: 4,
+      delayMs,
+      bindGapMs: 300
+    })
+    peers = [A, B]
+    const a = attachAutoAdvancer(A)
+    const b = attachAutoAdvancer(B, { countdownMs: opts.countdownMsB })
+    await live(2)
+    expect(room.server.roomState().paused).toBe(false)
+    return { A, B, a, b }
+  }
+
+  /** Every playstate `who` sent from `from` on, from its own wire slice. */
+  const sent = (who: Peer, from: number): WireFrame[] =>
+    room!.server.wireOf(who.username).slice(from)
+
+  it('lands both peers playing N+1 at the start when one peer ends first', async () => {
+    // B is paused by A's `ended` a second short of its own end and never fires
+    // `ended`: the usual one-sided shape.
+    const { A, B, a, b } = await seatNearEnd(1)
+    const wireBefore = [A, B].map((p) => room!.server.wireOf(p.username).length)
+
+    await live(12)
+    expect(a.countingDown()).toBe(false)
+    expect(b.countingDown()).toBe(false)
+    await live(15)
+
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+    // The presser's file-change seek resumes the room, and it is the only seek.
+    const seeksA = seeksOf(sent(A, wireBefore[0]))
+    expect(seeksA).toHaveLength(1)
+    expect(seeksA[0]).toMatchObject({ position: 0, paused: false, doSeek: true })
+    expect(seeksOf(sent(B, wireBefore[1]))).toEqual([])
+    // The Critical item: no `paused: true` follows it, from either peer.
+    const seekAt = seeksA[0].at
+    for (const p of [A, B]) {
+      const after = room!.server.wireOf(p.username).filter((f) => f.at > seekAt)
+      expect(
+        after.filter((f) => f.paused === true),
+        `${p.username} re-paused`
+      ).toEqual([])
+      // And the heartbeats after it do claim playing: not a vacuous pass.
+      expect(after.filter((f) => f.paused === false).length).toBeGreaterThanOrEqual(5)
+      // Every other frame is the mirror (no `paused` key), and only ahead of
+      // this peer's first playing claim: the gap before its new element's
+      // first push, the source of the manual matrix's "stray" frame.
+      const firstClaim = after.findIndex((f) => f.paused === false)
+      expect(
+        after.slice(firstClaim).filter((f) => f.paused !== false),
+        `${p.username} frames after its first claim`
+      ).toEqual([])
+    }
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(A.el.paused).toBe(false)
+    expect(B.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, A, B)
+  })
+
+  it('the follower never plays its outgoing episode from 0', async () => {
+    // B's walk is pending, still bound to episode 7, when A's `{0, playing,
+    // doSeek}` lands. Applied there, it would seek 7 to 0 and play it until the
+    // walk swapped the source.
+    const { B, b } = await seatNearEnd(1)
+
+    await live(25)
+
+    expect(b.episode()).toBe('8')
+    // The room's pause at A's end, then the follow.
+    const pausedAt = b.oldSourceSamples.find((s) => s.paused)?.at
+    expect(pausedAt).toBeDefined()
+    const afterPause = b.oldSourceSamples.filter((s) => s.at > pausedAt!)
+    // A's seek did reach the outgoing element, so the window is real…
+    expect(afterPause.some((s) => s.ct < 1)).toBe(true)
+    // …and nothing played it there.
+    expect(afterPause.filter((s) => !s.paused)).toEqual([])
+    // The walk then landed N+1 through the playing-room path.
+    expect(B.el.paused).toBe(false)
+  })
+
+  it('a Cancel on one countdown stays local: the other peer’s auto-advance resumes both', async () => {
+    // Both end; A cancels. The room was already paused at the end, so A sends
+    // nothing, and B's countdown still fires. A is pulled to N+1 and resumed.
+    const { A, B, a, b } = await seatNearEnd(0)
+    await live(9)
+    expect(a.countingDown()).toBe(true)
+    expect(b.countingDown()).toBe(true)
+    a.cancel()
+    const wireBeforeA = room!.server.wireOf(A.username).length
+
+    await live(20)
+
+    expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+    expect(seeksOf(sent(A, wireBeforeA))).toEqual([])
+    expect(seeksOf(room!.server.wireOf(B.username))).toHaveLength(1)
+    expect(room!.server.roomState().paused).toBe(false)
+    expect(A.el.paused).toBe(false)
+    expect(B.el.paused).toBe(false)
+    expectConvergedOn(room!.server.roomState().position, A, B)
+  })
+
+  it.each([0, 500])(
+    'both countdowns firing before either Set lands: both seek to 0 playing, %i ms apart, and it stays bounded',
+    async (gapMs) => {
+      // A one-way delay longer than the gap plus the pre-commit await, so each
+      // peer commits its own auto-advance before the other's `Set{file}` lands.
+      const { A, B, a, b } = await seatNearEnd(0, {
+        delayMs: 400,
+        countdownMsB: COUNTDOWN_MS + gapMs
+      })
+      const wireBefore = [A, B].map((p) => room!.server.wireOf(p.username).length)
+
+      await live(30)
+
+      expect([a.episode(), b.episode()]).toEqual(['8', '8'])
+      for (const [i, p] of [A, B].entries()) {
+        const seeks = seeksOf(sent(p, wireBefore[i]))
+        expect(seeks, `${p.username} seeks`).toHaveLength(1)
+        expect(seeks[0]).toMatchObject({ position: 0, paused: false })
+      }
+      expect(room!.server.roomState().paused).toBe(false)
+      expect(A.el.paused).toBe(false)
+      expect(B.el.paused).toBe(false)
+      expectConvergedOn(room!.server.roomState().position, A, B)
+      // Bounded: the second seek rewinds the first presser once, by no more
+      // than the gap plus a round trip, and ten more seconds move nobody.
+      const writes = [A.el.seekWrites.length, B.el.seekWrites.length]
+      await live(10)
+      expect([A.el.seekWrites.length, B.el.seekWrites.length]).toEqual(writes)
+      expect(room!.server.roomState().paused).toBe(false)
+    }
+  )
+})
+
 // ── #487: both peers press next within about a second ─────────────────────────
 //
 // A presses next at t = 0; B presses next at t = d. B's room follow commits N+1

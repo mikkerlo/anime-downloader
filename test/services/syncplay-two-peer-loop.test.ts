@@ -533,7 +533,7 @@ describe('two-peer syncplay harness', () => {
     // (`src/renderer/src/composables/use-syncplay-client.ts:2380`, the
     // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
     // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2517 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2519 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
     // inside `onMounted`) are both spent by the `advance(4)` above, so this one
     // is the watcher's. Each anchor carries the construct it lands in because
     // the two were paired the wrong way round here until #384, and nothing

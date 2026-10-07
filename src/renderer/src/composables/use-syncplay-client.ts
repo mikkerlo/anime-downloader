@@ -1895,7 +1895,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // hold is waiting for"), and a gate here contradicted it.
     //
     // The gate never withheld a payload in any case, only delayed one: the 1 s
-    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2552) is
+    // interval (`setInterval(pushSyncplaySnapshot, 1000)`, :2554) is
     // unconditional and `pushSyncplaySnapshot` has no `holding` term of its
     // own, so the identical snapshot reached main within a second regardless.
     // Dropping it is a latency change, not a semantic one.
@@ -2401,16 +2401,18 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       // periodics behind this projection are not edges and may not paint (#350).
       badgeEdgePaused = true
       clearPendingUserPause()
-      // And a parked playing state with it (#513): a frame that crossed the press
-      // while the element sat below HAVE_METADATA (a quality switch's source swap)
-      // is older than the pause this edge confirms, and once the hold is gone
-      // `onVideoLoadedMetadata` would replay it unheld and `play()` a paused room.
-      // A paused park is consistent with the edge and stays; a real resume after
-      // the edge arrives as a fresh frame and parks or applies as usual.
-      if (pendingRemoteState && !pendingRemoteState.paused) {
-        pendingRemoteState = null
-        pendingRemoteStatePausedBy = null
-      }
+      // And the parked state's resume with it (#513, #521): a frame that crossed
+      // the press while the element sat below HAVE_METADATA (a quality switch's
+      // source swap) is older than the pause this edge confirms, and once the
+      // hold is gone `onVideoLoadedMetadata` would replay it unheld and `play()` a
+      // paused room. Only the resume is declined — the position, `doSeek` and its
+      // toast still apply at the unpark, as the adopted arm applies a crossing
+      // seek. Unconditional because the park is always playing here: a paused
+      // frame ends the hold at arrival (`recordRemoteState`), and arming needs
+      // metadata, which unparks. `pendingRemoteStatePausedBy` stays: it is the
+      // press's own badge, which the unpark restates once the frame says paused.
+      // A real resume after the edge arrives as a fresh frame, as usual.
+      if (pendingRemoteState) pendingRemoteState = { ...pendingRemoteState, paused: true }
     }
     if (status.state === 'idle' || status.state === 'disconnected') {
       // Session-scoped, cleared with the session — the renderer half of main's

@@ -120,7 +120,7 @@ type Client = ReturnType<typeof useSyncplayClient>
 
 // The single mount site. Every mount registers for teardown here, so a new one
 // cannot forget — an untracked mount leaks the snapshot interval installed at
-// `src/renderer/src/composables/use-syncplay-client.ts:2552` into whatever runs next. The wrapper is
+// `src/renderer/src/composables/use-syncplay-client.ts:2554` into whatever runs next. The wrapper is
 // deliberately not returned: nothing needs to unmount mid-body, and a caller
 // that did would then be unmounted a second time by the hook.
 function trackedMount(deps: Deps): { client: Client } {
@@ -4986,11 +4986,13 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
         return { client, v, emitRemoteState, sendSnapshot }
       }
 
-      it('drops the parked resume when the room confirms the pause', async () => {
+      it('declines the parked resume when the room confirms the pause', async () => {
         const { client, v, sendSnapshot } = await parkAcrossSwap()
 
         client.syncplayStatus.value = { ...adopted, roomPaused: true }
         await nextTick()
+        // The park was this socket's first frame, and it is still held (#521).
+        expect(client.hasRemoteStateApplied()).toBe(true)
         ;(v as unknown as { readyState: number }).readyState = 1
         client.onVideoLoadedMetadata()
 
@@ -5040,6 +5042,96 @@ describe('useSyncplayClient — a pending user pause outranks the room (#228)', 
         expect(v.play).toHaveBeenCalledTimes(0)
 
         emitRemoteState({ position: 101, paused: false, doSeek: false, setBy: 'rigB' })
+        expect(v.play).toHaveBeenCalledTimes(1)
+      })
+
+      // #521: the edge declines only the resume. A peer's seek that crossed the
+      // press in the same frame keeps its move and its toast — the same split
+      // the adopted arm makes for a crossing `doSeek` it applies live.
+      it('keeps the seek half of a parked doSeek resume (adopted arm)', async () => {
+        const { client, v, emitRemoteState, sendSnapshot } = await parkAcrossSwap()
+        emitRemoteState({ position: 600, paused: false, doSeek: true, setBy: 'rigB' })
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        expect(client.hasRemoteStateApplied()).toBe(true)
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.currentTime).toBe(600)
+        expect(client.syncplayToast.value).toBe('rigB seeked to 10:00')
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+        // The unpark restates the press's own badge, not the frame's `setBy`
+        // and not the `null` a playing frame would have written.
+        expect(client.syncplayPausedBy.value).toBe('me')
+        expect(client.hasRemoteStateApplied()).toBe(true)
+        sendSnapshot.mockClear()
+        vi.advanceTimersByTime(1000)
+        expect(sendSnapshot).toHaveBeenLastCalledWith({ position: 600, paused: true })
+      })
+
+      // The pre-adoption arm toasts too: after the edge the hold is gone, so the
+      // unpark is a deferred apply with `holding` false, and a `doSeek` is a move.
+      it('keeps the seek half of a parked doSeek resume (pre-adoption arm)', async () => {
+        vi.useFakeTimers()
+        const preAdoption = { state: 'ready', username: 'me' } as const
+        const v = fakeVideo({
+          currentTime: 100,
+          paused: false,
+          readyState: 4
+        } as Partial<HTMLVideoElement>)
+        const { client, emitRemoteState } = await mountWithRemoteState(
+          makeDeps({ video: v }),
+          preAdoption
+        )
+        pressPause(client, v)
+        ;(v as unknown as { readyState: number }).readyState = 0
+        emitRemoteState({ position: 600, paused: false, doSeek: true, setBy: 'rigB' })
+
+        client.syncplayStatus.value = { ...preAdoption, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.currentTime).toBe(600)
+        expect(client.syncplayToast.value).toBe('rigB seeked to 10:00')
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(client.syncplayPausedBy.value).toBe('me')
+      })
+
+      // Without `doSeek` a far park still moves the element — the inferred seek
+      // the live hold would have applied — but silently: it describes no move.
+      it('applies a far non-doSeek parked resume as a silent seek', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+        emitRemoteState({ position: 600, paused: false, doSeek: false, setBy: 'rigB' })
+
+        client.syncplayStatus.value = { ...adopted, roomPaused: true }
+        await nextTick()
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+
+        expect(v.currentTime).toBe(600)
+        expect(client.syncplayToast.value).toBe('')
+        expect(v.play).toHaveBeenCalledTimes(0)
+        expect(v.paused).toBe(true)
+      })
+
+      // Why the edge needs no `!paused` guard: a paused frame ends the hold at
+      // arrival (`recordRemoteState`), even while it parks, so no paused park
+      // ever coexists with an armed hold at the edge. No edge here, so nothing
+      // else can end the hold: the resume after the unpark lands only because
+      // the paused park already ended it — a live hold would decline it.
+      it('a paused park ends the armed hold at arrival', async () => {
+        const { client, v, emitRemoteState } = await parkAcrossSwap()
+        emitRemoteState({ position: 600, paused: true, doSeek: true, setBy: 'rigB' })
+        expect(client.syncplayPausedBy.value).toBe('rigB')
+        ;(v as unknown as { readyState: number }).readyState = 1
+        client.onVideoLoadedMetadata()
+        expect(v.currentTime).toBe(600)
+        expect(v.play).toHaveBeenCalledTimes(0)
+
+        emitRemoteState({ position: 600.5, paused: false, doSeek: false, setBy: 'rigB' })
         expect(v.play).toHaveBeenCalledTimes(1)
       })
     })

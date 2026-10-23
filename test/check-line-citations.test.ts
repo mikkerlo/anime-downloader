@@ -414,6 +414,47 @@ describe('check-line-citations', () => {
     }
   })
 
+  it('lets an exact root-level path name its file when a nested file shares the basename (#517)', () => {
+    // `README.md` already is the full repo-relative path of the root file, and
+    // the regex takes no `./` prefix, so if it counted as ambiguous with
+    // `x/README.md` nothing could ever cite the root one.
+    const ROOT = ['# root', 'second', 'third'].join('\n')
+    const r = run({
+      'README.md': ROOT,
+      'x/README.md': TARGET,
+      'src/caller.ts': ['// see README.md:2', '// see README.md:5', '// see x/README.md:5'].join(
+        '\n'
+      )
+    })
+
+    expect(r.resolved.map((x) => [x.at, x.cited, x.target])).toEqual([
+      ['src/caller.ts:1', 'README.md:2', 'README.md'],
+      ['src/caller.ts:3', 'x/README.md:5', 'x/README.md']
+    ])
+    // Checked against the root file's three lines, not the nested file's nine.
+    expect(r.failures).toHaveLength(1)
+    expect(r.failures[0]).toMatchObject({
+      at: 'src/caller.ts:2',
+      cited: 'README.md:5',
+      target: 'README.md',
+      why: 'README.md has 3 lines'
+    })
+
+    // With no root file, the same bare basename is still ambiguous.
+    const nested = run({
+      'x/README.md': TARGET,
+      'y/README.md': TARGET,
+      'src/caller.ts': '// see README.md:2'
+    })
+    expect(nested.resolved).toEqual([])
+    expect(nested.failures).toHaveLength(1)
+    expect(nested.failures[0]).toMatchObject({
+      cited: 'README.md:2',
+      candidates: ['x/README.md', 'y/README.md']
+    })
+    expect(nested.failures[0].why).toMatch(/^ambiguous — 2 tracked files/)
+  })
+
   it('fails a bare `syncplay.ts:NNN` and resolves the suffixes that disambiguate it (#517)', () => {
     // The real collision, by its real paths: `src/main/syncplay.ts` and the
     // Pinia store. The suffix `main/syncplay.ts` is what self-citing comments

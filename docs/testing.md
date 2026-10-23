@@ -583,7 +583,8 @@ tests* above — two exact, one a floor and one a ceiling:
   almost always to give the anchor a resolvable path rather than raise the
   number. A bare basename more than one tracked file carries (`syncplay.ts` is
   both `src/main/syncplay.ts` and `src/renderer/src/stores/syncplay.ts`) is no
-  longer counted here: it fails outright, naming every candidate.
+  longer counted here: it fails outright, naming every candidate, unless it is
+  itself a root-level path (`README.md` names the root file).
 - **Marked citations, floored at 90.** One of the two one-sided counts here,
   because the marked class can only shrink silently — see *The marked form*
   below. Falling below the floor reds; rising above it is free. #395 raised it

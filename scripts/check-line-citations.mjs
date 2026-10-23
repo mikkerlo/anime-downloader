@@ -753,9 +753,12 @@ export function analyze({
           // them. Failing here is not a guess either way: the remedy is always
           // to write a suffix only one file matches, and the candidates are in
           // the message so the author does not have to go and find them.
-          const candidates = (byBasename.get(basename(raw)) || []).filter(
+          const suffixed = (byBasename.get(basename(raw)) || []).filter(
             (c) => c === raw || c.endsWith('/' + raw)
           )
+          // A root-level file is already spelled in full: `README.md` names
+          // the root one, or nothing could ever name it.
+          const candidates = suffixed.includes(raw) ? [raw] : suffixed
           if (candidates.length === 1) {
             target = candidates[0]
             resolvedUniqueBasename++

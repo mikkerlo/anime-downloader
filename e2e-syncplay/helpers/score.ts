@@ -265,22 +265,6 @@ export function pauseInFlight(s: { wire: Frame[]; ev: MediaEv[] }): boolean {
   return seekedAt !== undefined && pauseInAt !== undefined && pauseInAt < seekedAt
 }
 
-/** S10c's carve-out (#537): a drifted run whose scrub crossed the pause and
- *  was dropped by the server's ignore gate (`seekCrossed`), was never
- *  re-asserted because it is shorter than SEEK_REASSERT_TOLERANCE_S
- *  (`reasserts == 0`), and met the pause while the scrubber's own seek was
- *  still loading (`pauseInFlight`). There the #278 substitution and the #488
- *  hold both keep the scrubber on its target, by #524's design, and the room
- *  stays on the pauser's frame. Every other drifted run is still bad. */
-export function isScrubPauseResidual537(r: {
-  bad: boolean
-  seekCrossed: boolean
-  pauseInFlight: boolean
-  reasserts: number
-}): boolean {
-  return r.bad && r.seekCrossed && r.pauseInFlight && r.reasserts === 0
-}
-
 export interface RunRecord {
   row: string
   i: number

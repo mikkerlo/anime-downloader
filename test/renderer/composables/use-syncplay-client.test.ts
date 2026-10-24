@@ -7817,18 +7817,89 @@ describe('useSyncplayClient — a pause edge snaps to the room (#524)', () => {
     expect(far.client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
   })
 
+  // Narrowed by #537. A pause edge 0.5–3 s from the target of the user's seek
+  // still in flight means the server dropped that seek: inside
+  // SEEK_REASSERT_TOLERANCE_S nothing re-asserts it, and main hands the frame
+  // over unrewritten on that tick, so the hold lets the snap through and we end
+  // on the pauser's frame, as upstream does. Past 3 s main re-asserts the seek,
+  // and the hold still covers the snap there.
   describe('the #488 hold covers the snap', () => {
-    it('moves nothing but paused while the user’s own seek is in flight', async () => {
+    // [pause − in-flight target, snaps]. 0.4 never snaps (the pause edge's own
+    // tolerance); 3.2 and 5 are held.
+    it.each([
+      [0.4, false],
+      [-0.6, true],
+      [1.5, true],
+      [-2.9, true],
+      [3, true],
+      [3.2, false],
+      [-5, false]
+    ])('a pause %s s from the in-flight target: snaps = %s (#537)', async (offset, snaps) => {
+      vi.useFakeTimers()
+      const { v, client, emitRemoteState, sendLocalState } = await playingAt(100)
+      client.seekAsUser(ROOM)
+      emitRemoteState({ position: ROOM + offset, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual(snaps ? [ROOM, ROOM + offset] : [ROOM])
+      expect(v.pause).toHaveBeenCalledTimes(1)
+      expect(client.syncplayPausedBy.value).toBe('peer')
+      // Whichever seek lands, its `seeked` is accounted for: the snap's by the
+      // apply's operation, the user's by its own. Nothing goes out but the
+      // user's seek, announced once at intent.
+      client.onVideoSeeked()
+      expect(sendLocalState).toHaveBeenCalledTimes(1)
+    })
+
+    // The band is measured from the seek's own target. On the MSE/respawn path
+    // the element need not report that target while the seek loads; modelled
+    // here by an element still standing at its pre-seek playhead.
+    const standingAt = (v: FakeVideo, at: number): void => {
+      const raw = rawCurrentTimeWrites.get(v)!
+      let position = at
+      Object.defineProperty(v, 'currentTime', {
+        configurable: true,
+        get: () => position,
+        set: (t: number) => {
+          raw.push(t)
+          position = t
+        }
+      })
+    }
+
+    it('reads the in-flight target, not currentTime', async () => {
       vi.useFakeTimers()
       const { v, client, emitRemoteState } = await playingAt(100)
       client.seekAsUser(ROOM)
-      // The pauser's frame, 1.5 s from the target the element already reports.
-      // Snapping to it would abort the user's seek: #488's regression.
+      standingAt(v, 100)
+      // 1.5 s from the target, ~500 s from where the element stands.
       emitRemoteState({ position: ROOM + 1.5, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM, ROOM + 1.5])
+    })
+
+    // The coupling the release rests on, from the renderer's side: while main
+    // still substitutes (a seek past SEEK_REASSERT_TOLERANCE_S, re-asserted),
+    // the pause edge carries our own position, about the target. Even with the
+    // element standing elsewhere, that moves nothing but `paused`.
+    it('holds a pause edge about the in-flight target, the frame main substitutes', async () => {
+      vi.useFakeTimers()
+      const { v, client, emitRemoteState } = await playingAt(100)
+      client.seekAsUser(ROOM)
+      standingAt(v, 100)
+      emitRemoteState({ position: ROOM + 0.2, paused: true, setBy: 'peer' })
       expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM])
-      expect(v.currentTime).toBe(ROOM)
       expect(v.pause).toHaveBeenCalledTimes(1)
-      expect(client.syncplayPausedBy.value).toBe('peer')
+    })
+
+    it('holds a heartbeat 2 s from the in-flight target: only a pause edge is let through', async () => {
+      vi.useFakeTimers()
+      // A paused element and a paused frame: no edge. The element still stands
+      // at its pre-seek playhead, so the 3 s rule would write the frame.
+      const { v, client, emitRemoteState } = await playingAt(100, {
+        paused: true
+      } as Partial<HTMLVideoElement>)
+      client.seekAsUser(ROOM)
+      standingAt(v, 100)
+      emitRemoteState({ position: ROOM + 2, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM])
     })
 
     it('snaps on the same frame once that seek has landed', async () => {

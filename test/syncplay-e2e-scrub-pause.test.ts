@@ -7,7 +7,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   SCRUB_PAUSE_SPREAD_S,
-  isScrubPauseResidual537,
   pauseInFlight,
   scrubPauseVerdict
 } from '../e2e-syncplay/helpers/score'
@@ -457,13 +456,14 @@ describe('scrubPauseVerdict (#524)', () => {
   })
 })
 
-// S10c's carve-out (#537), replayed on the run that showed it: S10c run 8 on
-// #524's tip, rigB scrubbing 2 s while rigA pauses 1 ms before. The scrub
-// crossed the forced pause (no server ack, the pause carries no client echo),
-// the pause reached rigB 5 ms before its own seek landed, and no re-assert
-// followed. Both settled paused 2.01 s apart. The carve-out takes exactly that
-// shape; one field off it and the run is bad again.
-describe('isScrubPauseResidual537 (#524 → #537)', () => {
+// The #537 shape, replayed on the run that showed it: S10c run 8 on #524's
+// tip, rigB scrubbing 2 s while rigA pauses 1 ms before. The scrub crossed the
+// forced pause (no server ack, the pause carries no client echo), the pause
+// reached rigB 5 ms before its own seek landed, and no re-assert followed. Both
+// settled paused 2.01 s apart. #524 carved exactly this shape out of S10c's
+// `bad == 0`; #537 lands the scrubber on the pauser's frame and removes the
+// carve-out, so S10c fails on any run scored like the recorded one.
+describe('the #537 shape is scored as drift, with no carve-out (S10c)', () => {
   const scrubberWire = wire([
     [51, 'out', { position: 36.4, paused: false, doSeek: true }, { client: 9 }],
     [51, 'in', { position: 34.390382, paused: true, doSeek: false, setBy: 'rigA' }, { server: 1 }],
@@ -479,9 +479,9 @@ describe('isScrubPauseResidual537 (#524 → #537)', () => {
     { at: 52, t: 'pause', ct: 36.4, src: 'ep1' },
     { at: seekedAt, t: 'seeked', ct: 36.4, src: 'ep1' }
   ]
-  const outcome = (s: { wire: typeof scrubberWire; seekedAt: number }) => {
+  const outcome = (s: { wire: typeof scrubberWire; seekedAt: number; ct?: number }) => {
     const v = scrubPauseVerdict({
-      scrubber: { name: 'rigB', wire: s.wire, ct: 36.4, paused: true },
+      scrubber: { name: 'rigB', wire: s.wire, ct: s.ct ?? 36.4, paused: true },
       pauser: { name: 'rigA', wire: pauserWire, ct: 34.39, paused: true }
     })
     return {
@@ -492,39 +492,18 @@ describe('isScrubPauseResidual537 (#524 → #537)', () => {
     }
   }
 
-  it('excludes the recorded run: drifted, crossed, in flight, never re-asserted', () => {
+  it('scores the recorded run bad: drifted, crossed, in flight, never re-asserted', () => {
     const r = outcome({ wire: scrubberWire, seekedAt: 56 })
     expect(r).toEqual({ bad: true, seekCrossed: true, reasserts: 0, pauseInFlight: true })
-    expect(isScrubPauseResidual537(r)).toBe(true)
   })
 
-  it('still counts it bad with a re-assert sent', () => {
-    const withReassert = [
-      ...scrubberWire,
-      ...wire([[52, 'out', { position: 36.4, paused: false, doSeek: true }, null]])
-    ].sort((a, b) => a.at - b.at)
-    const r = outcome({ wire: withReassert, seekedAt: 56 })
-    expect(r).toMatchObject({ bad: true, seekCrossed: true, reasserts: 1, pauseInFlight: true })
-    expect(isScrubPauseResidual537(r)).toBe(false)
-  })
-
-  it('still counts it bad when the seek had landed before the pause arrived', () => {
-    // Landed in the same ms the pause arrived: the pause is not before it.
-    const r = outcome({ wire: scrubberWire, seekedAt: 51 })
-    expect(r).toMatchObject({ bad: true, seekCrossed: true, reasserts: 0, pauseInFlight: false })
-    expect(isScrubPauseResidual537(r)).toBe(false)
-  })
-
-  it('still counts it bad when the scrub was not crossed', () => {
-    const acked = scrubberWire.map((f, i) => (i === 0 ? { ...f, iotf: { server: 1 } } : f))
-    const r = outcome({ wire: acked, seekedAt: 56 })
-    expect(r.seekCrossed).toBe(false)
-    expect(isScrubPauseResidual537(r)).toBe(false)
-  })
-
-  it('never excludes a run that is not bad', () => {
-    expect(
-      isScrubPauseResidual537({ bad: false, seekCrossed: true, pauseInFlight: true, reasserts: 0 })
-    ).toBe(false)
+  it('scores the same crossing with the scrubber on the pauser’s frame as no drift', () => {
+    // The #537 outcome: the scrub is still lost, and the scrubber snapped to the
+    // pause, so its heartbeat carries the pauser's position.
+    const landed = scrubberWire.map((f) =>
+      f.at === 882 ? { ...f, ps: { position: 34.390382, paused: true, doSeek: false } } : f
+    )
+    const r = outcome({ wire: landed, seekedAt: 56, ct: 34.39 })
+    expect(r).toEqual({ bad: false, seekCrossed: true, reasserts: 0, pauseInFlight: true })
   })
 })

@@ -687,7 +687,7 @@ describe('SyncplayClient — the room speaking back through our own mirror (#277
     // seeded `paused: false` carries `DEFAULT_PLAYING_SET_BY` on it — a departed
     // watcher, so `isForeignSetBy()` is true, and because the room-voice flag is
     // a conjunction with the negation of that
-    // (src/main/syncplay.ts:2206 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
+    // (src/main/syncplay.ts:2208 ("const isRoomVoice = !isForeignState && this.isRoomVoice(setBy)")),
     // the room-voice predicate is never consulted for this frame at all — quoted as
     // a marked quote so the gate re-checks it if that line moves, which is the
     // point of the branch this commit sits on. It is emitted on the

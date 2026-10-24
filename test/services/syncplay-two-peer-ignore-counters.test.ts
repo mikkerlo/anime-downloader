@@ -14,7 +14,7 @@
 //    originate. Heartbeats, acks and seek re-asserts do not touch it.
 //  - `pendingClientAck` — the counter of our newest outstanding change, or 0.
 //    While it is non-zero `handleState` drops every inbound state
-//    (`src/main/syncplay.ts:2238`).
+//    (`src/main/syncplay.ts:2240`).
 //  - `pendingServerAck` — the server counter we owe an answer for.
 //
 // ── Two things this harness cannot show, stated rather than worked around ────
@@ -46,7 +46,9 @@ import { watch } from 'vue'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom, Peer, IgnoreCounters } from '../helpers/syncplay-two-peer'
 import { DEFAULT_PLAYING_SET_BY } from '../helpers/syncplay-min-election-server'
+import type { WireFrame } from '../helpers/syncplay-min-election-server'
 import { ECHO_SEEK_EPSILON_S } from '../../src/shared/syncplay-apply-rule'
+import { SEEK_REASSERT_TOLERANCE_S } from '../../src/main/syncplay'
 
 /** Every non-empty value the peer's toast takes, in order, from here on. */
 const toastLog = (p: Peer): string[] => {
@@ -249,7 +251,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // a slice *before* our press is classified, so the window is not open yet
     // and it is foreign — #384's join-time State moved the 4000 election from us
     // (`hostuser` by 49 ms) to the joiner (by 951 ms), so this periodic no longer
-    // dies at `src/main/syncplay.ts:2237`. It moves nothing: |102.049 − 103.95|
+    // dies at `src/main/syncplay.ts:2239`. It moves nothing: |102.049 − 103.95|
     // < 3, so the renderer applies no seek.
     expect(host.frames).toHaveLength(2)
     expect(host.frames[0].at).toBe(4050)
@@ -336,7 +338,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // watcher onto one position, and a tied election falls back to the
     // first-inserted watcher. That keeps the host's inbound periodics
     // *foreign*-`setBy` on both sides of the window, which is what makes the gap
-    // below attributable to the ack rather than to `src/main/syncplay.ts:2237`.
+    // below attributable to the ack rather than to `src/main/syncplay.ts:2239`.
     const joiner = await room.seat({
       username: 'joinuser',
       position: ROOM_START - 2,
@@ -370,8 +372,8 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // broadcast onward — visible as the frame that would land at 7500 going
     // missing, dropped as self-`setBy`. A press at t=8000 gives a window over the
     // broadcasts at 7000, 8000 and 9000, all past that flip, so all three die at
-    // `src/main/syncplay.ts:2237` before the ack guard at
-    // `src/main/syncplay.ts:2238` is ever reached — and the case then passes with
+    // `src/main/syncplay.ts:2239` before the ack guard at
+    // `src/main/syncplay.ts:2240` is ever reached — and the case then passes with
     // the ack guard deleted, which is the one thing it exists to hold. Pressing
     // at t=4000 puts the window over the broadcasts at 3000, 4000 and 5000
     // instead, all still the joiner's, so the ack guard is what drops them.
@@ -842,5 +844,90 @@ describe('SyncplayClient — a pause pressed inside the apply gap of a peer’s 
     const nudge = room.server.wireOf('rigB').filter((w) => w.at >= nudgeAt && w.doSeek)
     expect(nudge).toHaveLength(1)
     expect(nudge[0].position).toBeCloseTo(armed! + 0.3, 3)
+  })
+})
+
+// A pause (or resume) pressed a few ms before a peer's far scrub (#535, S11).
+// The scrubber's main has *received* the flip and its renderer has not applied
+// it yet, so the snapshot still holds the pre-flip `paused`. In the crossed
+// shape (2a) the scrub crosses the forced flip and the server's ignore window
+// drops it; on the forced frame's tick main acks, then `maybeReassertSeek()`
+// re-sends the scrub, and the server applies that. Before #535 the re-assert
+// claimed the stale `paused` and undid the flip at the scrub's target; the
+// marker is now armed above it, so it goes out position-only. Both directions:
+// a resume crossing a paused peer's scrub has the same shape. The uncrossed
+// shape (2b, the seek itself carrying the stale `paused`) is #544.
+describe('SyncplayClient — a pause or resume a few ms before a peer’s far scrub (#535)', () => {
+  let room: TwoPeerRoom
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    vi.useRealTimers()
+  })
+
+  // S11's 30 s, well past SEEK_REASSERT_TOLERANCE_S: the 2a hop exists.
+  const FAR = 10 * SEEK_REASSERT_TOLERANCE_S
+
+  const seat = async (paused: boolean, ignoreWindow: boolean): Promise<[Peer, Peer]> => {
+    room = await createTwoPeerRoom({ position: ROOM_START, paused, server: { ignoreWindow } })
+    const A = await room.seat({ username: 'rigA', position: ROOM_START, paused, delayMs: DELAY_MS })
+    const B = await room.seat({ username: 'rigB', position: ROOM_START, paused, delayMs: DELAY_MS })
+    await room.advance(4)
+    expect(A.adopted() && B.adopted(), 'setup: both peers adopted').toBe(true)
+    return [A, B]
+  }
+
+  const press = (A: Peer, to: boolean): void => (to ? A.userPause() : A.userPlay())
+
+  const bWireSince = (at: number): WireFrame[] =>
+    room.server.wireOf('rigB').filter((w) => w.at >= at)
+
+  /** The settled room: both elements on the flip A pressed, together, at the
+   *  scrub's target (aged by wall time when playing). */
+  const expectSettled = (A: Peer, B: Peer, to: boolean, target: number): void => {
+    expect(room.server.roomState().paused, 'the room kept A’s flip').toBe(to)
+    for (const p of [A, B]) expect(p.el.paused, `${p.username} on A’s flip`).toBe(to)
+    expect(Math.abs(A.el.currentTime - B.el.currentTime)).toBeLessThan(ECHO_SEEK_EPSILON_S)
+    if (to) expect(room.server.roomState().position).toBeCloseTo(target, 0)
+    else expect(room.server.roomState().position).toBeGreaterThan(target)
+  }
+
+  describe.each([
+    ['pause', true],
+    ['resume', false]
+  ])('A’s %s', (_label, to) => {
+    it('2a, crossed: B’s re-assert carries no stale `paused`, and the room keeps the flip at B’s target', async () => {
+      const [A, B] = await seat(!to, true)
+      const pressAt = Date.now()
+      press(A, to)
+      const flipFrame = (): WireFrame | undefined =>
+        room.server.wireOf('rigA').find((f) => f.at >= pressAt && f.paused === to)
+      while (flipFrame() === undefined) await room.advance(0.01, 10)
+      // The server applies it one delay after it left and forces it back out;
+      // B scrubs inside the second delay, so the scrub crosses the forced frame.
+      while (Date.now() < flipFrame()!.at + DELAY_MS + 30) await room.advance(0.01, 10)
+      const target = B.el.currentTime + FAR
+      const scrubAt = Date.now()
+      B.userSeek(target)
+      await room.advance(6)
+
+      // The crossing: the scrub carried the pre-flip `paused` and was dropped.
+      const ignored = room.server.ignored.filter((f) => f.username === 'rigB' && f.doSeek)
+      expect(ignored.map((f) => [f.position, f.paused])).toEqual([[target, !to]])
+      // The frame the server applied instead is the re-assert, and it claims
+      // only the position. Red before #535, where it claimed `paused: !to`.
+      const reasserts = bWireSince(scrubAt)
+        .filter((w) => w.doSeek)
+        .slice(1)
+      expect(reasserts.length).toBeGreaterThanOrEqual(1)
+      for (const r of reasserts) expect(r).not.toHaveProperty('paused')
+      expect(bWireSince(scrubAt + 1).filter((w) => w.paused === !to)).toEqual([])
+      expectSettled(A, B, to, target)
+    })
   })
 })

@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   SCRUB_PAUSE_SPREAD_S,
+  lostPauseTally,
   pauseInFlight,
   scrubPauseVerdict
 } from '../e2e-syncplay/helpers/score'
@@ -505,5 +506,57 @@ describe('the #537 shape is scored as drift, with no carve-out (S10c)', () => {
     )
     const r = outcome({ wire: landed, seekedAt: 56, ct: 34.39 })
     expect(r).toEqual({ bad: false, seekCrossed: true, reasserts: 0, pauseInFlight: true })
+  })
+})
+
+// S11 / S11c / S12l since #535 (2a only): a lost pause fails the row only when
+// the #252 re-assert resumed the room. The seek-resumed one is 2b, #544's, and
+// is counted without failing; so are heartbeat and unread resumes.
+describe('lostPauseTally: what S11 fails on (#535)', () => {
+  type Rec = { setupOk: boolean; lost: boolean; resumedBy: string | null }
+  const run = (resumedBy: Rec['resumedBy'], over: Partial<Rec> = {}): Rec => ({
+    setupOk: true,
+    lost: true,
+    resumedBy,
+    ...over
+  })
+
+  it('a lost pause the re-assert resumed fails the row', () => {
+    const t = lostPauseTally([run('reassert'), run(null, { lost: false })])
+    expect(t).toEqual({ reassert: 1, seek: 0, heartbeat: 0, unread: 0, failed: 1 })
+  })
+
+  it('a lost pause the scrubber’s own seek resumed is counted, not failed (#544)', () => {
+    const t = lostPauseTally([run('seek'), run(null, { lost: false })])
+    expect(t).toEqual({ reassert: 0, seek: 1, heartbeat: 0, unread: 0, failed: 0 })
+  })
+
+  it('counts heartbeat and unread resumes without failing, and skips unscoreable runs', () => {
+    const t = lostPauseTally([
+      run('heartbeat'),
+      run(null),
+      run('reassert', { setupOk: false }),
+      run('seek'),
+      run('seek')
+    ])
+    expect(t).toEqual({ reassert: 0, seek: 2, heartbeat: 1, unread: 1, failed: 0 })
+  })
+
+  it('reads a record shaped as the sweep writes it: `setupOk` plus the verdict', () => {
+    // Shaped exactly as `scrubPauseSweep` writes a record: `setupOk` plus the
+    // verdict spread in.
+    const rec = (resumedBy: 'reassert' | 'seek'): Record<string, unknown> => ({
+      setupOk: true,
+      ...({
+        lost: true,
+        drift: false,
+        spread: 0,
+        seekCrossed: resumedBy === 'reassert',
+        reasserts: resumedBy === 'reassert' ? 1 : 0,
+        resumedBy
+      } satisfies ReturnType<typeof scrubPauseVerdict>)
+    })
+    expect(lostPauseTally([rec('reassert')]).failed).toBe(1)
+    expect(lostPauseTally([rec('seek')]).failed).toBe(0)
   })
 })

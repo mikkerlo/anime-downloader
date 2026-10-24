@@ -17,7 +17,7 @@
 //    reference server broadcasts its forced update to the setter too
 //    (`server.py:187` hands it to `broadcastRoom()`, which has no sender filter,
 //    `server.py:441-445`), so every discrete change a peer makes arrives back at
-//    its own socket a round trip later. `src/main/syncplay.ts:2237` eats it.
+//    its own socket a round trip later. `src/main/syncplay.ts:2239` eats it.
 //
 // The third is the one worth having. The first two would survive a good deal of
 // damage to the echo path; only the third goes red when the drop guard does.
@@ -291,7 +291,7 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // The claim: none of it came back. The host's renderer saw nothing at all
     // for the whole 4.6 s — not the forced update at t=4150 and not the four
     // `paused: true` periodics behind it, all of which are `setBy` the host and
-    // die at `src/main/syncplay.ts:2237`.
+    // die at `src/main/syncplay.ts:2239`.
     expect(host.frames).toEqual([])
     // So its element was never written and never re-paused programmatically.
     expect(host.el.seekWrites).toEqual([])

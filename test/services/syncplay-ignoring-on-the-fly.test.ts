@@ -1750,7 +1750,7 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(gate.room).toEqual({ position: P0, paused: true, setBy: 'peer' })
       })
 
-      it('the frame the server applies is the #252 re-assert behind the ack, and it resumes the room at the target', () => {
+      it('the frame the server applies is the #252 re-assert behind the ack, and it keeps the pause at the target (#535)', () => {
         const gate = scrubCrossedByPause(TARGET)
 
         // No timer has advanced: the ack and the re-assert are written in the
@@ -1761,9 +1761,13 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(states).toHaveLength(3)
         expect(states[1]).toEqual(expect.objectContaining({ ignoringOnTheFly: { server: 1 } }))
         expect(states[1]).not.toHaveProperty('playstate')
+        // The re-assert claims the target and no `paused`: the marker is armed
+        // above it (#535). Before, it carried the snapshot's stale `paused:
+        // false`, and the server resumed the room at the target.
+        expect(states[2].playstate).toEqual({ position: TARGET, doSeek: true })
         expect(gate.dropped).toEqual([0])
-        expect(gate.applied).toEqual([{ frame: 2, position: TARGET, paused: false, doSeek: true }])
-        expect(gate.room).toEqual({ position: TARGET, paused: false, setBy: 'me' })
+        expect(gate.applied).toEqual([{ frame: 2, position: TARGET, paused: true, doSeek: true }])
+        expect(gate.room).toEqual({ position: TARGET, paused: true, setBy: 'me' })
         // The resume is forced to every watcher, us included, so our own echo
         // of it is in flight with the next counter.
         expect(gate.serverIgnoringOnTheFly).toBe(1)
@@ -1788,6 +1792,47 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(gate.room.paused).toBe(true)
         expect(gate.applied).toEqual([])
         expect(fed).toBe(3)
+      })
+
+      // The TTL bound (#535). The marker is armed above the re-assert with its
+      // first clock, and the room's repeats keep that clock, so a re-assert sent
+      // past APPLY_IN_FLIGHT_TTL_MS (one heartbeat) after the flip claims the
+      // snapshot's stale `paused` again: the bound #513 accepts for the
+      // heartbeat. Reached only when the renderer never applies the pause, so
+      // every push here keeps `paused: false`. Pinned on every re-assert attempt
+      // (SEEK_REASSERT_MAX_ATTEMPTS is 3).
+      it('a re-assert past APPLY_IN_FLIGHT_TTL_MS carries the stale paused again, on every attempt (#535)', () => {
+        const doSeekFrames = (): StateFrame['playstate'][] =>
+          outboundStates(lastTlsSocket)
+            .filter((s) => s.playstate?.doSeek === true)
+            .map((s) => s.playstate)
+        // The room never takes the scrub: its periodic, still the peer's pause
+        // at P0, keeps the drift past the tolerance, and each one is a tick
+        // `maybeReassertSeek()` re-asserts on.
+        const roomPeriodic = (): void => {
+          client.updateSnapshot({ position: TARGET, paused: false })
+          forcedState({ setBy: 'peer', position: P0, paused: true, doSeek: false })
+        }
+        scrubCrossedByPause(TARGET)
+
+        // Attempt 1, on the forced pause's own tick: inside the TTL, no `paused`.
+        expect(doSeekFrames()).toEqual([
+          { position: TARGET, paused: false, doSeek: true },
+          { position: TARGET, doSeek: true }
+        ])
+
+        vi.advanceTimersByTime(HEARTBEAT_MS + 1)
+        roomPeriodic()
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        roomPeriodic()
+        // Attempts 2 and 3, past the TTL: the stale `paused: false` again.
+        expect(doSeekFrames().slice(2)).toEqual([
+          { position: TARGET, paused: false, doSeek: true },
+          { position: TARGET, paused: false, doSeek: true }
+        ])
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        roomPeriodic()
+        expect(doSeekFrames(), 'the attempt ceiling').toHaveLength(4)
       })
     })
 
@@ -1883,12 +1928,71 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
           'and main armed for it'
         ).toBe(TARGET)
 
+        const marker = (): { paused: boolean } | null =>
+          (client as unknown as { applyInFlight: { paused: boolean } | null }).applyInFlight
+        expect(marker(), 'the pause armed #513’s marker').toMatchObject({ paused: true })
+
         // The snap lands, and its `seeked` reaches main as a seek of ours (the
         // renderer's own operation having let go of it).
         clearWrites()
         client.sendLocalState({ paused: true, position: TARGET, cause: 'seek' })
         expect(outboundStates(lastTlsSocket).filter((s) => s.playstate?.doSeek)).toEqual([])
+        // And it clears the marker, as every local state does. A seek that keeps
+        // the marker is #544's to design, and this snap, whose `paused` agrees
+        // with the marker, is a seek it must still clear on.
+        expect(marker()).toBeNull()
       })
+    })
+  })
+
+  // #535 arms #513's marker above `maybeReassertSeek()`, ahead of the drop
+  // guards, so it is gated on `willApplyRemoteState` to keep "armed ⇒ the
+  // renderer was handed this flip". A frame those guards then drop must not
+  // arm it: an expired marker is left in place, and a later genuine flip in
+  // the same direction finds it already armed with that `paused` and gets no
+  // fresh clock, so its heartbeat claims the stale `paused` and undoes it.
+  describe('the hoisted apply-in-flight arm, on a frame the guards then drop (#535)', () => {
+    const marker = (): { paused: boolean } | null =>
+      (client as unknown as { applyInFlight: { paused: boolean } | null }).applyInFlight
+
+    // The next genuine foreign pause, past the TTL of anything a dropped frame
+    // could have armed: its first heartbeat must still go out position-only.
+    const genuinePauseStillWithheld = (): void => {
+      vi.advanceTimersByTime(3 * HEARTBEAT_MS)
+      client.updateSnapshot({ position: 100, paused: false })
+      const n = remoteStates.length
+      forcedState({ server: 9, setBy: 'peer', position: 100, paused: true, doSeek: false })
+      expect(remoteStates).toHaveLength(n + 1)
+      expect(marker()).toMatchObject({ paused: true })
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      const beats = outboundStates(lastTlsSocket).filter((s) => s.playstate)
+      expect(beats).toHaveLength(1)
+      expect(beats[0].playstate).not.toHaveProperty('paused')
+    }
+
+    it('a self-`setBy` frame dropped at the guard does not arm it', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      const n = remoteStates.length
+      forcedState({ setBy: 'me', position: 100, paused: true, doSeek: false })
+      expect(remoteStates, 'dropped as self-`setBy`').toHaveLength(n)
+      expect(marker()).toBeNull()
+
+      genuinePauseStillWithheld()
+    })
+
+    it('a foreign frame dropped as unacked does not arm it', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: false, position: 100, cause: 'play' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      const n = remoteStates.length
+      forcedState({ setBy: 'peer', position: 100, paused: true, doSeek: false })
+      expect(remoteStates, 'dropped as unacked').toHaveLength(n)
+      expect(marker()).toBeNull()
+
+      genuinePauseStillWithheld()
     })
   })
 })

@@ -230,6 +230,9 @@ const canPrev = computed(() => activeEpisodeIndex.value > 0);
 const canNext = computed(() => activeEpisodeIndex.value < props.allEpisodes.length - 1);
 const autoAdvanceCountdown = ref(0);
 let autoAdvanceTimer: ReturnType<typeof setInterval> | null = null;
+// #528: the pause-arming path has fired on this episode. Its own latch, not the
+// `ended` path's: cleared by an episode change and a seek away from the end.
+let autoAdvancePauseArmed = false;
 const DEFAULT_PLAYER_SHORTCUTS: Record<string, string> = {
   playerPrevEpisode: 'Shift+ArrowLeft',
   playerNextEpisode: 'Shift+ArrowRight',
@@ -504,6 +507,7 @@ const {
 function onVideoSeekedAll(): void {
   skipMarkers.onVideoSeeked();
   onVideoSeeked();
+  onAutoAdvanceSeeked();
 }
 
 function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
@@ -890,6 +894,7 @@ function resetEpisodeTracking(): void {
   lastTimeUpdateAt = 0;
   lastSaveAt = 0;
   watchedReported = false;
+  autoAdvancePauseArmed = false;
   // Belongs to one open (#262). `prepareMkvForPlayback` re-decides it on every
   // MKV open and `mkvSessionSeededFromRoom()` pairs it with the live session id,
   // so this is belt rather than braces — but an episode switch is exactly the
@@ -1775,6 +1780,7 @@ function onPause(): void {
   lastTimeUpdateAt = 0;
   saveProgress(true);
   syncplay.onLocalPause();
+  maybeArmAutoAdvanceOnPause();
 }
 
 function onTimeUpdate(): void {
@@ -2730,7 +2736,9 @@ function cancelAutoAdvance(): void {
   autoAdvanceCountdown.value = 0;
 }
 
-function onVideoEnded(): void {
+// The one guard against a double countdown is the timer check: an `ended` after
+// a pause-armed countdown, or a second pause, returns there.
+function armAutoAdvance(): void {
   if (!canNext.value) return;
   if (autoAdvanceTimer) return;
   autoAdvanceCountdown.value = 5;
@@ -2744,6 +2752,39 @@ function onVideoEnded(): void {
       goToEpisode('next', 'auto-advance');
     }
   }, 1000);
+}
+
+function onVideoEnded(): void {
+  armAutoAdvance();
+}
+
+// About one frame. The room's pause at the end position lands ~1 ms short of
+// `duration` (#528), so the element never fires `ended`; a frame covers that
+// with room to spare and stays far from a deliberate pause, which a window in
+// whole seconds would turn into a countdown.
+const AUTO_ADVANCE_PAUSE_EPS_S = 0.05;
+
+// #528: in a room, a pause that leaves the element within a frame of the end is
+// this peer's `ended`. Hooked on the element's `pause`, so every route the
+// composable pauses by (the apply, the ready gate) reaches it. Not while
+// `goToEpisode` runs: a pause on the old source then would arm N+2. A walk that
+// pulls us to N+1 first clears a running countdown with its own
+// `cancelAutoAdvance()`.
+function maybeArmAutoAdvanceOnPause(): void {
+  const v = videoRef.value;
+  if (!v || autoAdvancePauseArmed || navigating.value) return;
+  if (syncplayStatus.value.state !== 'ready') return;
+  if (v.ended || !Number.isFinite(v.duration)) return;
+  if (v.duration - v.currentTime > AUTO_ADVANCE_PAUSE_EPS_S) return;
+  autoAdvancePauseArmed = true;
+  armAutoAdvance();
+}
+
+// A seek away from the end re-opens the pause-arming path for this episode.
+function onAutoAdvanceSeeked(): void {
+  const v = videoRef.value;
+  if (!v || !Number.isFinite(v.duration)) return;
+  if (v.duration - v.currentTime > AUTO_ADVANCE_PAUSE_EPS_S) autoAdvancePauseArmed = false;
 }
 
 // The user's Next — the button and the keyboard shortcut, and nothing else

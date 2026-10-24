@@ -633,8 +633,8 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `let prepareEpoch = 0;` and the `indexOf` below still finds it, still
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
-    // (`PlayerView.vue:645` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1206` ("const myPrepare = ++prepareEpoch")) and fail
+    // (`PlayerView.vue:649` ("myPrepare !== prepareEpoch"),
+    // `PlayerView.vue:1211` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
@@ -951,9 +951,13 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     expect(SRC.split('shouldSwallowLocalNext(').length - 1).toBe(1)
     expect(SRC).toContain("if (canPrev.value) goToEpisode('prev', 'local');")
     expect(SOURCE).toContain(`@nav="goToEpisode('prev', 'local')"`)
-    const ended = stripComments(slice('function onVideoEnded(', '\nfunction onUserNext('))
-    expect(ended).toContain("goToEpisode('next', 'auto-advance');")
-    expect(ended).not.toContain('onUserNext')
+    // The countdown's step lives in `armAutoAdvance()` since #528, shared by
+    // `ended` and the near-end pause; `onVideoEnded` is its one-line caller.
+    const arm = stripComments(slice('function armAutoAdvance(', '\nfunction onVideoEnded('))
+    expect(arm).toContain("goToEpisode('next', 'auto-advance');")
+    expect(arm).not.toContain('onUserNext')
+    const ended = stripComments(slice('function onVideoEnded(', '\nconst AUTO_ADVANCE_PAUSE_EPS_S'))
+    expect(ended.trim()).toBe('function onVideoEnded(): void {\n  armAutoAdvance();\n}')
     // The token's index is READ nowhere but the wrapper; every other read is a
     // clear's owner compare on `.nav`.
     const reads = [...SRC.matchAll(/pendingFollow\??\.index/g)].map((m) => m.index!)

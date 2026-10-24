@@ -2647,10 +2647,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     followWalkDepth += 1
   }
 
-  // Only the `moved` arm can mark (#506). A held own commit outranks the walk:
-  // the user (or the countdown) moved, and the room should follow that, so it
-  // goes out unmarked. A walk that never moved pushes no new key, so a marker
-  // there would reach no peer as a `remote-episode-change` anyway.
+  // Only the `moved` arm can create a mark (#506); a walk that never moved only
+  // re-targets one already there, which reaches peers through later pushes. A
+  // held own commit outranks the walk: the user (or the countdown) moved, and
+  // the room should follow that, so it goes out unmarked.
   function settleFollowWalk(): void {
     if (followWalkDepth === 0) return
     followWalkDepth -= 1

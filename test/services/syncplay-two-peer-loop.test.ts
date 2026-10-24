@@ -402,7 +402,7 @@ describe('two-peer syncplay harness', () => {
     // Pins a band around the default rather than the whole clean cell, and the
     // band is what the batching can actually resolve: a positive gap is clean iff
     // `k = ceil(bindGapMs / HEARTBEAT_MS) === 1`, `HEARTBEAT_MS` being 1000
-    // (`src/main/syncplay.ts:19 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
+    // (`src/main/syncplay.ts:20 ("const HEARTBEAT_MS = 1000")`), but a gap shorter
     // than one step is invisible here — a reload queues `pause`, and `tick()`
     // holds metadata back while that queue is non-empty
     // (`test/helpers/syncplay-two-peer.ts:470 ("this.queued.length === 0")`), so

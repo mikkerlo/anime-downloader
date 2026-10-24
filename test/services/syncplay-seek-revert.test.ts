@@ -17,7 +17,7 @@
 //
 // The mechanism, as #488 traces it: a user seek is a bare `currentTime` write
 // and reaches the room only when its own `seeked` fires
-// (`onVideoSeeked`, `src/renderer/src/composables/use-syncplay-client.ts:2167`).
+// (`onVideoSeeked`, `src/renderer/src/composables/use-syncplay-client.ts:2165`).
 // While it is in flight the 1 Hz push carries the target with `doSeek: false`
 // and loses the server's `min()` election, and the next foreign frame reaches
 // the apply with `diff > 3.0` (`use-syncplay-client.ts:1583`), which writes the

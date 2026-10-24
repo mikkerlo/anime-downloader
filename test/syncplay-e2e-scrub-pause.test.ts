@@ -5,7 +5,12 @@
 // scheduled scrub; `null` playstate is a ping-only ack.
 
 import { describe, expect, it } from 'vitest'
-import { SCRUB_PAUSE_SPREAD_S, scrubPauseVerdict } from '../e2e-syncplay/helpers/score'
+import {
+  SCRUB_PAUSE_SPREAD_S,
+  isScrubPauseResidual537,
+  pauseInFlight,
+  scrubPauseVerdict
+} from '../e2e-syncplay/helpers/score'
 import { ECHO_SEEK_EPSILON_S } from '../src/main/syncplay'
 
 type Ps = { position: number; paused?: boolean; doSeek: boolean; setBy?: string }
@@ -449,5 +454,77 @@ describe('scrubPauseVerdict (#524)', () => {
       }
     })
     expect(unread).toMatchObject({ lost: true, seekCrossed: true, resumedBy: null })
+  })
+})
+
+// S10c's carve-out (#537), replayed on the run that showed it: S10c run 8 on
+// #524's tip, rigB scrubbing 2 s while rigA pauses 1 ms before. The scrub
+// crossed the forced pause (no server ack, the pause carries no client echo),
+// the pause reached rigB 5 ms before its own seek landed, and no re-assert
+// followed. Both settled paused 2.01 s apart. The carve-out takes exactly that
+// shape; one field off it and the run is bad again.
+describe('isScrubPauseResidual537 (#524 → #537)', () => {
+  const scrubberWire = wire([
+    [51, 'out', { position: 36.4, paused: false, doSeek: true }, { client: 9 }],
+    [51, 'in', { position: 34.390382, paused: true, doSeek: false, setBy: 'rigA' }, { server: 1 }],
+    [51, 'out', null, { server: 1 }],
+    [882, 'out', { position: 36.4, paused: true, doSeek: false }, null],
+    [950, 'in', { position: 34.390382, paused: true, doSeek: false, setBy: 'rigA' }, { client: 9 }]
+  ])
+  const pauserWire = wire([
+    [50, 'out', { position: 34.390382, paused: true, doSeek: false }, { client: 4 }]
+  ])
+  const ev = (seekedAt: number): { at: number; t: string; ct: number; src: string }[] => [
+    { at: 51, t: 'seeking', ct: 36.4, src: 'ep1' },
+    { at: 52, t: 'pause', ct: 36.4, src: 'ep1' },
+    { at: seekedAt, t: 'seeked', ct: 36.4, src: 'ep1' }
+  ]
+  const outcome = (s: { wire: typeof scrubberWire; seekedAt: number }) => {
+    const v = scrubPauseVerdict({
+      scrubber: { name: 'rigB', wire: s.wire, ct: 36.4, paused: true },
+      pauser: { name: 'rigA', wire: pauserWire, ct: 34.39, paused: true }
+    })
+    return {
+      bad: v.drift,
+      seekCrossed: v.seekCrossed,
+      reasserts: v.reasserts,
+      pauseInFlight: pauseInFlight({ wire: s.wire, ev: ev(s.seekedAt) })
+    }
+  }
+
+  it('excludes the recorded run: drifted, crossed, in flight, never re-asserted', () => {
+    const r = outcome({ wire: scrubberWire, seekedAt: 56 })
+    expect(r).toEqual({ bad: true, seekCrossed: true, reasserts: 0, pauseInFlight: true })
+    expect(isScrubPauseResidual537(r)).toBe(true)
+  })
+
+  it('still counts it bad with a re-assert sent', () => {
+    const withReassert = [
+      ...scrubberWire,
+      ...wire([[52, 'out', { position: 36.4, paused: false, doSeek: true }, null]])
+    ].sort((a, b) => a.at - b.at)
+    const r = outcome({ wire: withReassert, seekedAt: 56 })
+    expect(r).toMatchObject({ bad: true, seekCrossed: true, reasserts: 1, pauseInFlight: true })
+    expect(isScrubPauseResidual537(r)).toBe(false)
+  })
+
+  it('still counts it bad when the seek had landed before the pause arrived', () => {
+    // Landed in the same ms the pause arrived: the pause is not before it.
+    const r = outcome({ wire: scrubberWire, seekedAt: 51 })
+    expect(r).toMatchObject({ bad: true, seekCrossed: true, reasserts: 0, pauseInFlight: false })
+    expect(isScrubPauseResidual537(r)).toBe(false)
+  })
+
+  it('still counts it bad when the scrub was not crossed', () => {
+    const acked = scrubberWire.map((f, i) => (i === 0 ? { ...f, iotf: { server: 1 } } : f))
+    const r = outcome({ wire: acked, seekedAt: 56 })
+    expect(r.seekCrossed).toBe(false)
+    expect(isScrubPauseResidual537(r)).toBe(false)
+  })
+
+  it('never excludes a run that is not bad', () => {
+    expect(
+      isScrubPauseResidual537({ bad: false, seekCrossed: true, pauseInFlight: true, reasserts: 0 })
+    ).toBe(false)
   })
 })

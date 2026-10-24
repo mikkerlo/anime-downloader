@@ -1,5 +1,4 @@
-// Syncplay (Watch Together) client for PlayerView (Phase 5 slice 5d.2.d,
-// #118).
+// Syncplay (Watch Together) client for PlayerView (Phase 5 slice 5d.2.d, #118).
 //
 // Owns the player-scoped syncplay surface — the IPC subscriptions for
 // remote-state, room-event, trace, and remote-episode-change, the 1s
@@ -24,6 +23,7 @@
 import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSyncplayStore } from '../stores/syncplay'
+import { wouldSeekOnApply } from '@shared/syncplay-apply-rule'
 
 const WAITING_DEBOUNCE_MS = 600
 
@@ -1573,37 +1573,37 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // purpose.
     const outOfFile = Number.isFinite(v.duration) && v.duration > 0 && state.position >= v.duration
     const diff = Math.abs(v.currentTime - state.position)
-    // Folded into `needsSeek` rather than applied below it, so all four
-    // seek-keyed effects fall away together: the no-op early-out, the seek
-    // operation that guards the echo, the write itself and the "X seeked to …"
-    // toast — which would otherwise announce a seek to a timestamp that does
-    // not exist in our file.
-    // `needsPlayPause` is computed independently, so a room *pause* carried on
-    // an out-of-file state is still honored.
-    const wouldSeek = state.doSeek || diff > 3.0
+    // The apply rule, one predicate shared with main's echo-target arming
+    // (src/shared/syncplay-apply-rule.ts, #524). Folded into `needsSeek`, so an
+    // out-of-file refusal drops all four seek-keyed effects together: the
+    // early-out, the echo's operation, the write and the "X seeked to …" toast.
+    // `needsPlayPause` is independent: a room *pause* out of file still holds.
+    const pauseEdge = state.paused && !v.paused
+    const wouldSeekOffEdge = wouldSeekOnApply({ doSeek: state.doSeek, diff, pauseEdge: false })
+    const wouldSeek = wouldSeekOnApply({ doSeek: state.doSeek, diff, pauseEdge })
     if (!outOfFile) {
       remoteStateApplied = true
       refusedToastShown = false
       outOfFileUserPause = false
-    } else if (wouldSeek && !refusedToastShown) {
+    } else if (wouldSeekOffEdge && !refusedToastShown) {
       // Ahead of the no-op early-out below: a refused position whose paused flag
       // already matches moves nothing, but the user still has to be told why the
-      // room and their playhead have parted company. Gated on `wouldSeek` and
-      // not on `outOfFile` alone, because a position inside the 3 s tolerance
-      // suppressed no seek — which is the ordinary end of the file, where the
-      // room's own position crosses our duration on identical files.
+      // room and their playhead have parted company. Gated on the 3 s rule and
+      // not on `outOfFile` or the pause edge's tighter one, because a position
+      // inside 3 s is the ordinary end of the file, where the room's own position
+      // crosses our duration on identical files and the room pauses there.
       refusedToastShown = true
       showSyncplayToast(OUT_OF_FILE_TOAST)
     }
     // The belt to `seekAsUser`'s announcement (#488). Our `doSeek` bump only
-    // protects the flight until the server acks it, and a peer heartbeat sent
-    // before that peer received our seek can still re-elect the old position
-    // and arrive here as an inferred `diff > 3.0` correction — `diff` measured
-    // against our in-flight target. Writing it would abort the seek. So while
-    // the user's announced seek is in flight, only the heartbeat-shaped arm is
-    // held; a `doSeek` frame is a peer's deliberate seek and still wins (last
-    // writer wins). The hold moves nothing else: the paused half below is
-    // computed independently.
+    // protects the flight until the server acks it, and a peer frame sent before
+    // that peer received our seek can still carry the old position and arrive
+    // here as an inferred correction (`diff > 3`, or a pause edge past 0.5 s),
+    // `diff` measured against our in-flight target. Writing it would abort the
+    // seek. So while it is in flight every non-`doSeek` arm is held, the pause
+    // edge's snap included (#524); a `doSeek` frame is a peer's deliberate seek
+    // and still wins (last writer wins). The paused half below is computed
+    // independently, so a room pause still pauses us at the in-flight target.
     const heldForUserSeek = !state.doSeek && isUserSeekInFlight()
     const needsSeek = !outOfFile && wouldSeek && !heldForUserSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
@@ -1922,12 +1922,12 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // false for every paused state by construction, so a room resume is the only shape
     // that reaches it at all.
     //
-    // It resets `lastSnapshotPushAt`, so the first `timeupdate` after an apply
-    // can be held off for up to SNAPSHOT_MIN_INTERVAL_MS. Harmless rather than
-    // a regression: the 1 s interval covers that gap, and the position such a
-    // `timeupdate` would have carried is the one just pushed.
+    // It resets `lastSnapshotPushAt`, holding the next `timeupdate` off for up to
+    // SNAPSHOT_MIN_INTERVAL_MS; the 1 s interval covers that, with this position.
     pushSyncplaySnapshot()
-    const describesAMove = (!deferred && !firstApply) || state.doSeek
+    // A snap the pause edge alone asked for (#524) is the room's pause, not a
+    // peer's seek: the badge names the pauser, and no "seeked to" toast is shown.
+    const describesAMove = ((!deferred && !firstApply) || state.doSeek) && wouldSeekOffEdge
     // The adopted arm of the hold (#513) does not silence the toast: the
     // pre-adoption arm does because there the element is deliberately behind
     // and `needsSeek` is true on every apply, while after adoption the element
@@ -2154,20 +2154,20 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // to some other write and consuming it there is what let the real echo escape
   // (#224); and a `seeked` matching nothing outstanding is the user's.
   //
-  // Since #488 the user's own seek is announced at intent (`seekAsUser`) and
-  // its `seeked` is consumed here like any other operation's. The send below
-  // stays as the fallback for the seeks `seekAsUser` could not announce — no
-  // session yet, or an element below HAVE_METADATA — and for a landing the
-  // element clamped away from the announced target.
-  //
-  // Whatever this `seeked` is, the user's pending seek is over: a later write
-  // aborts an earlier seek, so the first `seeked` after the user's write is the
-  // survivor's — the user's own landing, or a peer's `doSeek` that superseded
-  // it. Its operation is retracted so the apply's hold ends with it.
+  // Since #488 the user's seek is announced at intent (`seekAsUser`) and its
+  // `seeked` consumed here; the send below is the fallback for a seek it could
+  // not announce (no session, an element below HAVE_METADATA) or a landing
+  // clamped off the target. Its landing re-anchors main's snapshot (#524), which
+  // was stamped at the intent and walked on while the element stood loading.
+  // Whatever this `seeked` is, the user's pending seek is over: the first one
+  // after the user's write is the survivor's (their landing, or a peer's `doSeek`
+  // that superseded it). Retracted, so the apply's hold ends with it.
   function onVideoSeeked(): void {
     const consumed = consumeSeekOp(deps.getVideoEl())
+    const userSeekLanded = consumed !== null && consumed.id === userSeekOp.id
     userSeekOp.retract()
     userSeekOp = NO_SEEK_OP
+    if (userSeekLanded) pushSyncplaySnapshot()
     if (consumed) return
     sendSyncplayLocalState('seek')
   }

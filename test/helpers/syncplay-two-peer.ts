@@ -154,7 +154,7 @@ export interface HarnessVideoOptions {
    *  Defaults to **500**, the gap the shipped app actually runs. The value is
    *  chosen by a criterion rather than by a distance from a measured onset:
    *  a positive gap is clean iff `k = ceil(bindGapMs / HEARTBEAT_MS) === 1`,
-   *  where `HEARTBEAT_MS` is 1000 (`src/main/syncplay.ts:19`). That is checkable
+   *  where `HEARTBEAT_MS` is 1000 (`src/main/syncplay.ts:20`). That is checkable
    *  against a constant in the tree, which a band map of measured millisecond
    *  cells would not be. #360's 1 ms sweep indexes the whole drag axis on that
    *  `k`: `k = 1` is clean, `k = 2` through `k = 5` drag the non-switching peer
@@ -504,6 +504,17 @@ export class HarnessVideo {
     const events = this.queued.splice(0)
     this.delivered.push(...events)
     return events
+  }
+
+  /** Move the playhead by `by` seconds with no `currentTime` write: no
+   *  `seekWrites` entry, no `seeked`. A peer that has drifted (a decoder that
+   *  fell behind, a stall the readiness gate never saw) rather than one that
+   *  seeked, which is how two peers come to be a second or two apart with
+   *  nobody having moved them (#524). Last in the class so the members above
+   *  keep their `test/helpers/syncplay-two-peer.ts:NNN` anchors. */
+  drift(by: number): void {
+    this.reanchor()
+    this.anchor = Math.min(Math.max(0, this.anchor + by), this.duration)
   }
 }
 

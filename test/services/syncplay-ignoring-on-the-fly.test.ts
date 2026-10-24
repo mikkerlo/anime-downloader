@@ -56,6 +56,7 @@ import {
   ECHO_SEEK_EPSILON_S,
   SEEK_REASSERT_TOLERANCE_S
 } from '../../src/main/syncplay'
+import { wouldSeekOnApply } from '../../src/shared/syncplay-apply-rule'
 
 const HEARTBEAT_MS = 1000
 
@@ -1095,7 +1096,13 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       // The element only advances while it is firing `timeupdate`, so that is
       // also the widest the reading can be wrong by — comfortably inside the
       // renderer's 3 s apply tolerance.
-      it('keeps the substituted value inside the renderer’s tolerance as the snapshot ages', () => {
+      // Tightened on purpose by #524. The substituted value was the flat
+      // snapshot, up to one push (≈1.15 s) behind a playing element: inside the
+      // 3 s rule this pin used to bound it by, but past the pause edge's
+      // ECHO_SEEK_EPSILON_S, where handing it over would rewind us by the
+      // snapshot's age. It is now the snapshot walked forward by its age, the
+      // quantity main's echo-target arming compares against too.
+      it('keeps the substituted value on the element as the snapshot ages', () => {
         handshake()
         armForwardSeek()
         // One push interval of playback with no push landing.
@@ -1106,9 +1113,36 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
 
         const whereTheElementActuallyIs = SEEK_TARGET + 1.15
         expect(remoteStates).toHaveLength(1)
+        expect(Math.abs(remoteStates[0].position - whereTheElementActuallyIs)).toBeLessThan(1e-9)
         expect(Math.abs(remoteStates[0].position - whereTheElementActuallyIs)).toBeLessThan(
-          ADOPT_TOLERANCE_S
+          ECHO_SEEK_EPSILON_S
         )
+      })
+
+      // The same on a pause edge, where the rule's tolerance is the tight one:
+      // the substituted pause hands over where we are, so it pauses us in place
+      // and arms nothing (#524).
+      it('hands a substituted pause edge our projected position, which moves nothing', () => {
+        handshake()
+        armForwardSeek()
+        vi.advanceTimersByTime(900)
+        clearWrites()
+
+        forcedState({
+          server: 7,
+          setBy: 'peer',
+          position: ROOM_POSITION,
+          paused: true,
+          doSeek: false
+        })
+
+        expect(remoteStates).toHaveLength(1)
+        expect(remoteStates[0].paused).toBe(true)
+        expect(Math.abs(remoteStates[0].position - (SEEK_TARGET + 0.9))).toBeLessThan(1e-9)
+        expect(
+          (client as unknown as { lastAppliedRemotePosition: number | null })
+            .lastAppliedRemotePosition
+        ).toBeNull()
       })
 
       // The escape hatch, and it costs no branch: the #274 retraction runs above
@@ -1764,6 +1798,44 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(gate.applied).toEqual([{ frame: 3, position: TARGET, paused: true, doSeek: false }])
         expect(gate.room).toEqual({ position: TARGET, paused: true, setBy: 'me' })
         expect(gate.serverIgnoringOnTheFly).toBe(1)
+      })
+
+      // The other connection, and the fix (#524). The pause the server applied
+      // above is forced to the scrubber 1–2 s after the press, and the scrubber
+      // has played on from TARGET for that long. Under the old 3 s rule it
+      // paused where it was, that far from the room: S10's drift. It is a pause
+      // edge, so now the scrubber snaps to TARGET and main arms its echo target
+      // for that snap, in lockstep with the renderer, so the snap's own `seeked`
+      // is swallowed rather than asserted back. Both peers end on TARGET.
+      it('the scrubber, played on past the target when that pause lands, snaps to it and sends nothing back', () => {
+        handshake()
+        clearWrites()
+        // Our seek was applied and acked long ago; we play on from TARGET,
+        // pushing at the renderer's cadence.
+        client.updateSnapshot({ position: TARGET, paused: false })
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        client.updateSnapshot({ position: TARGET + 1, paused: false })
+        vi.advanceTimersByTime(800)
+        const element = TARGET + 1.8
+
+        forcedState({ server: 1, setBy: 'peer', position: TARGET, paused: true, doSeek: false })
+
+        expect(remoteStates.at(-1)).toMatchObject({ position: TARGET, paused: true, doSeek: false })
+        expect(
+          wouldSeekOnApply({ doSeek: false, diff: element - TARGET, pauseEdge: true }),
+          'the renderer snaps'
+        ).toBe(true)
+        expect(
+          (client as unknown as { lastAppliedRemotePosition: number | null })
+            .lastAppliedRemotePosition,
+          'and main armed for it'
+        ).toBe(TARGET)
+
+        // The snap lands, and its `seeked` reaches main as a seek of ours (the
+        // renderer's own operation having let go of it).
+        clearWrites()
+        client.sendLocalState({ paused: true, position: TARGET, cause: 'seek' })
+        expect(outboundStates(lastTlsSocket).filter((s) => s.playstate?.doSeek)).toEqual([])
       })
     })
   })

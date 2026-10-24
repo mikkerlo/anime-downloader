@@ -3,13 +3,15 @@
 //   S1  Far seek by the non-`setBy` peer, load delay swept 100–3000 ms    #488 (fixed by #491)
 //   S9  No false "<peer> seeked to …" toast during S1                      #488 (fixed by #491)
 //   S6  Seek while paused: the peer moves, the room stays paused            —
-//   S10 A scrub and a peer's pause ms apart: both paused, apart (drift)   #524 ✗
-//   S11 The same: the pause is lost                                         #524 ✗
+//   S10 A scrub and a peer's pause ms apart: both paused, apart (drift)   #524 (fixed by #524)
+//   S11 The same: the pause is lost                                         #535 ✗
 //   S10c / S11c  The same with a 2 s scrub: the control, no re-assert      #524
+//   S12 S10's race with the scrubber's seek in flight 1–2 s: no drift      #524
 //
 // S1 / S9 were ✗ rows (`bad ≥ 1` at N) until #491 fixed #488; they now assert
 // `bad == 0`, as S6 always has. The exact role × landing × phase pins are
-// `test/services/syncplay-seek-revert.test.ts`.
+// `test/services/syncplay-seek-revert.test.ts`. S10 and S10c's drift went the
+// same way when #524 made a pause edge snap to the room (upstream parity).
 //
 // The seek goes through the seek bar (`Instance.seek`), so it takes
 // `PlayerView.seek()` → `seekAsUser`, which since #491 announces at intent.
@@ -31,7 +33,12 @@ import {
   type Rig,
   type Instance
 } from './helpers/duo'
-import { RowScorer, scrubPauseVerdict } from './helpers/score'
+import {
+  RowScorer,
+  scrubPauseVerdict,
+  pauseInFlight,
+  isScrubPauseResidual537
+} from './helpers/score'
 import { SEEK_REASSERT_TOLERANCE_S } from '../src/main/syncplay'
 
 let rig: Rig
@@ -175,10 +182,12 @@ test('S6 — a seek while paused moves the peer and leaves the room paused', asy
 // (`Instance.actAt`), the press `offsetMs` after the scrub (negative: before),
 // in both role directions. The settle read decides the run:
 //
-//   S10 (✗, drift)  both paused, more than ECHO_SEEK_EPSILON_S apart. The
-//       pause reached a playing peer late, inside the renderer's 3 s apply
-//       rule, so that peer paused where it was rather than where the room is.
-//   S11 (✗, pause lost)  either element still playing. The pause reached the
+//   S10 (drift)  both paused, more than ECHO_SEEK_EPSILON_S apart. The pause
+//       reached a playing peer late, inside the renderer's 3 s apply rule, so
+//       that peer paused where it was rather than where the room is. A ✗ row
+//       (`bad ≥ 1`, 9 and 11 of 64 in #534's two runs) until #524 made the
+//       pause edge snap past ECHO_SEEK_EPSILON_S; now `bad == 0`.
+//   S11 (✗, pause lost, #535)  either element still playing. The pause reached the
 //       server first. Mostly the scrub, sent before the scrubber heard it,
 //       crossed it and was dropped by the server's ignore gate, and the #252
 //       re-assert behind the scrubber's ack resumed the room at the target.
@@ -211,13 +220,19 @@ const SCRUB_PAUSE_SETTLE_MS = 3500
 async function scrubPauseSweep(
   rows: { drift: RowScorer; lost: RowScorer },
   scrubS: number,
-  offsets: readonly number[]
+  offsets: readonly number[],
+  opts: { loadDelayMs?: [number, number] } = {}
 ): Promise<void> {
   rig.fixtures.setRate(0)
   rig.fixtures.setDelay(0)
   const { A, B } = await seatDuo(rig)
+  // S12's load delay keeps every seek in flight; it starts once both play, so
+  // seating is not slowed by it.
+  const [delayMin, delayMax] = opts.loadDelayMs ?? [0, 0]
+  const settleMs = SCRUB_PAUSE_SETTLE_MS + delayMax
   try {
     expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    rig.fixtures.setDelay(delayMin, delayMax)
     for (const [scrubber, pauser] of [
       [B, A],
       [A, B]
@@ -240,7 +255,7 @@ async function scrubPauseSweep(
             scrubber.actAt(at, { seek: target }),
             pauser.actAt(at + offsetMs, 'toggle')
           ])
-          await sleep(SCRUB_PAUSE_SETTLE_MS)
+          await sleep(settleMs)
           const [ss, ps] = await Promise.all([scrubber.state(), pauser.state()])
           const [ds, dp] = await Promise.all([scrubber.collect(at - 50), pauser.collect(at - 50)])
           const v = scrubPauseVerdict({
@@ -249,9 +264,23 @@ async function scrubPauseSweep(
           })
           const scrubbed = ds.wire.some((w) => w.dir === 'out' && w.ps?.doSeek === true)
           const pressed = dp.wire.some((w) => w.dir === 'out' && w.ps?.paused === true)
+          // When the scrubber's own seek landed, and when the room's pause first
+          // reached it, both relative to `at - 50`: S12's "in flight" is the
+          // pause arriving first.
+          const scrubIdx = ds.wire.findIndex((w) => w.dir === 'out' && w.ps?.doSeek === true)
+          const scrubOutAt = scrubIdx < 0 ? null : ds.wire[scrubIdx].at
+          const seekedAt =
+            scrubOutAt === null
+              ? null
+              : (ds.ev.find((e) => e.t === 'seeked' && e.at >= scrubOutAt)?.at ?? null)
+          const pauseInAt =
+            scrubIdx < 0
+              ? null
+              : (ds.wire.slice(scrubIdx + 1).find((w) => w.dir === 'in' && w.ps?.paused === true)
+                  ?.at ?? null)
           const log = (x: Instance): { at: number; line: string }[] =>
             x.mainLog
-              .filter((l) => l.at >= at - 50 && l.at <= at + SCRUB_PAUSE_SETTLE_MS)
+              .filter((l) => l.at >= at - 50 && l.at <= at + settleMs)
               .filter((l) => !/ (>>|<<) /.test(l.line))
               .map((l) => ({ at: l.at - at, line: l.line }))
           const rec = {
@@ -267,6 +296,13 @@ async function scrubPauseSweep(
             target: +target.toFixed(2),
             scrubberCt: +ss.ct.toFixed(2),
             pauserCt: +ps.ct.toFixed(2),
+            seekedAt,
+            pauseInAt,
+            pauseInFlight: pauseInFlight({ wire: ds.wire, ev: ds.ev }),
+            // `seeking` events on each element after the scrub: the scrubber's
+            // own seek is one, a pause-edge snap another.
+            scrubberSeeks: ds.ev.filter((e) => e.t === 'seeking').length,
+            pauserSeeks: dp.ev.filter((e) => e.t === 'seeking').length,
             ...v,
             spread: +v.spread.toFixed(2)
           }
@@ -315,6 +351,19 @@ function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): 
   )
 }
 
+/** How many settled-paused runs ended with a second `seeking` on either peer
+ *  (#524): the scrubber's own seek and the pauser's following it are one each,
+ *  so a second is the pause-edge snap, or a re-assert the pauser followed. */
+function snapLine(s: { row: string; records: Record<string, unknown>[] }): void {
+  const held = s.records.filter((r) => r.setupOk && !r.lost)
+  const snapped = held.filter(
+    (r) => (r.scrubberSeeks as number) >= 2 || (r.pauserSeeks as number) >= 2
+  )
+  process.stdout.write(
+    `[syncplay-e2e] ${s.row} runs with a second seeking: ${snapped.length}/${held.length}\n`
+  )
+}
+
 /** `actAt`'s accuracy over a sweep, so a CI log shows it without the traces:
  *  the real offset minus the asked one, and each action's own lateness. */
 function offsetLine(rows: string, s: { records: Record<string, unknown>[] }): void {
@@ -338,9 +387,10 @@ test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after i
   bucketLines(l, SCRUB_PAUSE_OFFSETS_MS)
   resumedByLine(l)
   offsetLine('S10 / S11', l)
-  // ✗ rows (#524): proof the rig sees both shapes on main. The fix PRs flip
-  // them to `bad == 0`.
-  expect(d.bad, 'S10 (✗): no drift seen').toBeGreaterThanOrEqual(1)
+  snapLine(d)
+  // S10 was a ✗ row until #524's pause-edge snap; S11 still is, and #535 flips
+  // it to `bad == 0`.
+  expect(d.bad, 'S10: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
   expect(l.bad, 'S11 (✗): no lost pause seen').toBeGreaterThanOrEqual(1)
 })
 
@@ -355,6 +405,7 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
   bucketLines(l, SCRUB_PAUSE_CONTROL_OFFSETS_MS)
   resumedByLine(l)
   offsetLine('S10c / S11c', l)
+  snapLine(d)
   const runs = l.records.filter((r) => r.setupOk)
   // The control's claim: below the tolerance the hop S11 resumes on does not
   // exist, so no run sends a re-assert and no pause is lost to one.
@@ -362,4 +413,60 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
     0
   )
   expect(runs.filter((r) => r.resumedBy === 'reassert').length).toBe(0)
+  // The drift showed here too (21 of 40 in #534's run), and the snap closes it
+  // but for one shape, #537's: a scrub this short that crossed the pause is
+  // dropped and never re-asserted, and when the pause meets it still loading
+  // the #278 substitution and the #488 hold keep the scrubber on its target.
+  // That shape is counted on its own line and carved out; any other drifted
+  // run still fails the row.
+  const scored = d.records.filter((r) => r.setupOk)
+  const residual = scored.filter((r) =>
+    isScrubPauseResidual537({
+      bad: r.bad,
+      seekCrossed: r.seekCrossed === true,
+      pauseInFlight: r.pauseInFlight === true,
+      reasserts: r.reasserts as number
+    })
+  )
+  process.stdout.write(
+    `[syncplay-e2e] S10c residual (#537): n=${residual.length} of bad=${d.bad}, other bad=${d.bad - residual.length}\n`
+  )
+  expect(
+    d.bad - residual.length,
+    'S10c: both paused, more than ECHO_SEEK_EPSILON_S apart, outside #537'
+  ).toBe(0)
+})
+
+// S12 — S10's race with the scrubber's seek kept in flight 1–2 s by the fixture
+// server's per-request delay (#524). The pause-edge snap is a non-`doSeek` arm,
+// so the #488 hold declines it while the scrubber's own seek is loading: the
+// frame's position may be the pauser's pre-seek one, and snapping there would
+// abort the user's seek. The element is not playing on while it loads, so the
+// hold costs only what it plays between the landing and a pause that arrives
+// after it, which the snap then takes. The row asserts no drift once the seek
+// has landed and settled, and that the pause really did reach the scrubber
+// inside the in-flight window in some runs, or the row says nothing about the
+// hold.
+const S12_OFFSETS_MS = [-1, 0, 1] as const
+
+test('S12 — the scrub-vs-pause race with the scrubber’s seek in flight 1–2 s (#524)', async () => {
+  test.setTimeout(15 * 60_000)
+  const drift = new RowScorer('S12')
+  const lost = new RowScorer('S12l')
+  await scrubPauseSweep({ drift, lost }, FAR_SCRUB_S, S12_OFFSETS_MS, {
+    loadDelayMs: [1000, 2000]
+  })
+  const d = drift.score()
+  lost.score()
+  bucketLines(d, S12_OFFSETS_MS)
+  snapLine(d)
+  const runs = d.records.filter((r) => r.setupOk)
+  const inFlight = runs.filter((r) => r.pauseInFlight === true)
+  process.stdout.write(
+    `[syncplay-e2e] S12 pause reached the scrubber in flight: ${inFlight.length}/${runs.length}, bad among them=${inFlight.filter((r) => r.bad).length}\n`
+  )
+  expect(inFlight.length, 'S12: no run put the pause inside the in-flight window').toBeGreaterThan(
+    0
+  )
+  expect(d.bad, 'S12: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
 })

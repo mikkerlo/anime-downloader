@@ -924,11 +924,16 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // **Re-derived for #506: `episode-change` 17 → 18.** The navigator's `step()`
 // gains `ownCommitInSave`, a user commit admitted during a later walk step's
 // `saveProgress`, which commits through one awaited `peer.goToEpisode(` call.
+//
+// **Re-derived for #502: `ignore-counters` 4 → 9.** The ordering-A and ordering-B
+// sweeps each drive the host's switch and the joiner's follow through one
+// awaited site apiece (four), and the slow-link row adds the host's switch
+// (one). Every new site is awaited.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
   'episode-change': 18,
-  'ignore-counters': 4,
+  'ignore-counters': 9,
   loop: 4,
   'next-episode': 1
 }

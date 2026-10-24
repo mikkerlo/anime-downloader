@@ -487,28 +487,36 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
       expect(room.server.roomState().position).toBeLessThan(1)
       expect(host.el.paused).toBe(true)
       expect(joiner.el.paused).toBe(true)
+      // #502: the joiner's pause comes from a peer the host's roster still
+      // lists on episode 7, but it is already at the new episode's start, so it
+      // stays on #494's path and the host sends nothing beyond its own seek.
+      expect(room.server.wireOf('hostuser').filter((f) => f.doSeek)).toHaveLength(1)
+      expect(counters(host).clientIgnoreCounter).toBe(1)
     }
   )
 
-  it('a peer’s pause at the old position in the same slice settles both peers on the pause in one round trip (#494)', async () => {
+  it('a peer’s pause at the old position in the same slice lands the room paused at 0 on the new episode; the same-episode control keeps the pause (#494, #502)', async () => {
     // Symmetric 50 ms links, and the joiner pauses at ~304 in the slice the
     // host presses next. The server takes the host's seek first and the
-    // joiner's pause second, so the room's outcome is paused at ~304. The
-    // joiner applies the host's seek (it crossed the joiner's unacked pause, so
-    // #232 lets it through), and its own pause's echo then disagrees with what
-    // that seek handed the element: since #494 the echo is delivered instead of
-    // dying at the self-`setBy` guard, and both peers settle on it.
+    // joiner's pause second (ordering A), so under #494's server order the
+    // room's outcome is the pause. The joiner applies the host's seek (it
+    // crossed the joiner's unacked pause, so #232 lets it through), and its own
+    // pause's echo then disagrees with what that seek handed the element: since
+    // #494 the echo is delivered instead of dying at the self-`setBy` guard.
     //
     // Before #494 this pinned a flap: each peer asserted the state the other
     // one handed it and the room swapped between ~0 and ~304 every heartbeat,
     // 10 writes per element over the window, half of them at ~304.
     //
     // The control is the same crossing with a same-episode user seek in place
-    // of the episode change; it behaves the same, write for write, apart from
-    // the user's own scrub to 0. Under server order the episode run lands
-    // paused at ~304 *on episode 8* — accepted here; stripping an old-file
-    // position from the crossing is #502.
-    const settle = async (press: (host: Peer) => Promise<void>): Promise<[number[], number[]]> => {
+    // of the episode change, and it keeps #494's outcome: paused at ~304. Until
+    // #502 the episode run did the same and landed paused at ~304 *on episode
+    // 8*, `[[304], [0, 304]]`. Now the host's roster still lists the joiner on
+    // episode 7 when the pause arrives (it paused before it navigated), so the
+    // host keeps the pause, hands its renderer 0, and sends one corrective seek.
+    const settle = async (
+      press: (host: Peer) => Promise<void>
+    ): Promise<{ writes: [number[], number[]]; room: number; hostSeeks: number }> => {
       const { host, joiner } = await seatSwitch(DELAY_MS)
       const joinerToasts = toastLog(joiner)
       await press(host)
@@ -518,17 +526,20 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
       // that is the joiner's pause, not a seek, and never "joinuser seeked to".
       expect(joinerToasts.filter((t) => t.includes('joinuser'))).toEqual([])
       expect(room.server.roomState().paused).toBe(true)
-      expect(room.server.roomState().position).toBeCloseTo(303.95, 1)
       for (const p of [host, joiner]) {
         expect(p.el.paused).toBe(true)
-        expect(p.el.currentTime).toBeCloseTo(303.95, 1)
+        expect(p.el.currentTime).toBeCloseTo(room.server.roomState().position, 1)
       }
-      const writes: [number[], number[]] = [
-        host.el.seekWrites.map((w) => Math.round(w)),
-        joiner.el.seekWrites.map((w) => Math.round(w))
-      ]
+      const out = {
+        writes: [
+          host.el.seekWrites.map((w) => Math.round(w)),
+          joiner.el.seekWrites.map((w) => Math.round(w))
+        ] as [number[], number[]],
+        room: Math.round(room.server.roomState().position),
+        hostSeeks: room.server.wireOf('hostuser').filter((f) => f.doSeek).length
+      }
       room.dispose()
-      return writes
+      return out
     }
 
     const episode = await settle(async (host) => {
@@ -536,14 +547,172 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
     })
     const control = await settle(async (host) => host.userSeek(0))
 
-    // The host: the joiner's pause, once. The joiner: the host's seek, then
-    // its own pause handed back by the server.
-    expect(episode).toEqual([[304], [0, 304]])
+    // The host: one write, at 0 — never the joiner's ~304. The joiner (not
+    // driven to follow here, so all three land on its episode-7 element): the
+    // host's seek, its own pause handed back by the server, and the corrective
+    // seek to 0. The host's two seeks are the file-change seek and the
+    // corrective one.
+    expect(episode).toEqual({ writes: [[0], [0, 304, 0]], room: 0, hostSeeks: 2 })
     // The control's host carries one more write: the user's own scrub to 0.
-    expect(control).toEqual([
-      [0, 304],
-      [0, 304]
-    ])
+    expect(control).toEqual({
+      writes: [
+        [0, 304],
+        [0, 304]
+      ],
+      room: 304,
+      hostSeeks: 1
+    })
+  })
+
+  // #502, ordering A with the follow driven: the harness does not navigate a
+  // peer on its own (the helper header's "What is not modelled"), so the joiner's
+  // follow is called the way `PlayerView` would, half a second after it is told.
+  // Both origins: an auto-advance's playing seek loses to a pause the server
+  // took after it just as a press does, and the strip is origin-blind.
+  // In a paused room the crossing frame is the joiner's *play* at ~300, and it
+  // stands the same way — except under an auto-advance, whose seek already set
+  // the room playing, so the joiner's play changes nothing on the server and no
+  // forced frame (and no corrective seek) exists.
+  it.each<[SyncplayEpisodeSwitch, 'playing' | 'paused', boolean, number]>([
+    ['local', 'playing', true, 2],
+    ['auto-advance', 'playing', true, 2],
+    ['local', 'paused', false, 2],
+    ['auto-advance', 'paused', false, 1]
+  ])(
+    'ordering A, %s from a %s room: the old-file frame’s `paused` stands at 0 on episode 8 (#502)',
+    async (origin, roomWas, endsPaused, hostSeeks) => {
+      const roomPaused = roomWas === 'paused'
+      const { host, joiner } = await seatSwitch(DELAY_MS, roomPaused)
+      await host.goToEpisode('8', undefined, 0, origin)
+      if (roomPaused) joiner.userPlay()
+      else joiner.userPause()
+
+      // t=4150: the joiner's frame reaches the host with nothing of ours
+      // unacked: the host's own echo closed the window at 4100.
+      await room.advance(0.15)
+      expect(counters(host).pendingClientAck).toBe(hostSeeks === 2 ? 2 : 0)
+      // Rewritten above the `lastRoomState` write, not just at the emit: the
+      // de-adopted heartbeat mirrors this record.
+      expect(host.client['lastRoomState']!.position).toBeLessThan(1)
+      expect(host.frames.every((f) => f.state.position < STALE_FLOOR)).toBe(true)
+
+      let switchedAt = -1
+      for (let t = 0; t < 10_000; t += 50) {
+        if (switchedAt < 0 && joiner.remoteEpisodes.length > 0 && room.elapsed() >= 4550) {
+          switchedAt = joiner.el.seekWrites.length
+          await joiner.goToEpisode('8', undefined, 0, 'follow')
+        }
+        await room.advance(0.05)
+      }
+      expect(switchedAt).toBeGreaterThanOrEqual(0)
+
+      expect(room.server.roomState().paused).toBe(endsPaused)
+      expect(room.server.roomState().position).toBeLessThan(STALE_FLOOR)
+      expect(room.server.wireOf('hostuser').filter((f) => f.doSeek)).toHaveLength(hostSeeks)
+      // The host's renderer is never handed an old-episode position, and its
+      // element never writes one.
+      expect(host.frames.filter((f) => f.state.position >= STALE_FLOOR)).toEqual([])
+      expect(host.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+      // The joiner's own crossed echo lands on its episode-7 element, before
+      // the follow (the trace's answer); after its switch nothing stale is
+      // written.
+      expect(joiner.el.seekWrites.slice(switchedAt).filter((w) => w >= STALE_FLOOR)).toEqual([])
+      for (const p of [host, joiner]) {
+        expect(p.el.paused).toBe(endsPaused)
+        expect(p.el.currentTime).toBeLessThan(STALE_FLOOR)
+      }
+      expect(Math.abs(host.el.currentTime - joiner.el.currentTime)).toBeLessThan(1)
+      // Settled: the joiner's follow announce disarmed the host's marker.
+      expect(host.client['fileChangeInFlight']).toBeNull()
+    }
+  )
+
+  // #502, ordering B with an episode change — the pin main did not have; the
+  // two cases below keep `host.userSeek(0)` and are the same-episode control.
+  // The joiner's frame reaches the server first, our file-change seek second,
+  // so our seek is the room's last word. The host drops the old-file frame
+  // whole: nothing is emitted, no corrective seek goes out, and the
+  // `crossedByForeign` latch stays empty, so our own echo is handled as on an
+  // uncrossed episode change. The room ends on our seek's state at 0: playing
+  // for an auto-advance, the room's `paused` at send time for a press.
+  it.each<[SyncplayEpisodeSwitch, 'playing' | 'paused', boolean]>([
+    ['local', 'playing', false],
+    ['auto-advance', 'playing', false],
+    ['local', 'paused', true],
+    ['auto-advance', 'paused', false]
+  ])(
+    'ordering B, %s from a %s room: the old-file frame is dropped and our seek’s state stands at 0 (#502)',
+    async (origin, roomWas, endsPaused) => {
+      const roomPaused = roomWas === 'paused'
+      const { host, joiner } = await seatSwitch(DELAY_MS, roomPaused)
+      if (roomPaused) joiner.userPlay()
+      else joiner.userPause()
+      await room.advance(0.1)
+      await host.goToEpisode('8', undefined, 0, origin)
+      expect(counters(host).pendingClientAck).toBe(1)
+
+      // t=4150: the joiner's frame crosses the host's unacked seek.
+      const roomBefore = host.client['lastRoomState']
+      await room.advance(0.05)
+      expect(host.frames).toEqual([])
+      expect(host.client['crossedByForeign']).toBeNull()
+      expect(host.client['lastRoomState']).toBe(roomBefore)
+      expect(counters(host).clientIgnoreCounter).toBe(1)
+
+      // t=4200: our own echo, uncrossed.
+      await room.advance(0.05)
+      expect(host.frames).toHaveLength(1)
+      expect(host.frames[0].state.paused).toBe(endsPaused)
+      expect(host.frames[0].state.position).toBeLessThan(1)
+
+      let switchedAt = -1
+      for (let t = 0; t < 10_000; t += 50) {
+        if (switchedAt < 0 && joiner.remoteEpisodes.length > 0 && room.elapsed() >= 4650) {
+          switchedAt = joiner.el.seekWrites.length
+          await joiner.goToEpisode('8', undefined, 0, 'follow')
+        }
+        await room.advance(0.05)
+      }
+      expect(switchedAt).toBeGreaterThanOrEqual(0)
+
+      expect(room.server.roomState().paused).toBe(endsPaused)
+      expect(room.server.roomState().position).toBeLessThan(STALE_FLOOR)
+      expect(room.server.wireOf('hostuser').filter((f) => f.doSeek)).toHaveLength(1)
+      expect(host.frames.filter((f) => f.state.position >= STALE_FLOOR)).toEqual([])
+      expect(joiner.el.seekWrites.slice(switchedAt).filter((w) => w >= STALE_FLOOR)).toEqual([])
+      for (const p of [host, joiner]) {
+        expect(p.el.paused).toBe(endsPaused)
+        expect(p.el.currentTime).toBeLessThan(STALE_FLOOR)
+        expect(p.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+      }
+      expect(Math.abs(host.el.currentTime - joiner.el.currentTime)).toBeLessThan(1)
+    }
+  )
+
+  // #502's slow-link row (the plan review's): the joiner's link is slower than
+  // the host's bind gap, so the new element is up before the old-file pause
+  // arrives. The marker's `sendLocalState()` clear would disarm the strip if
+  // the new element's first post-bind push were asserted ahead of the pause.
+  // It is not: the host's startup events stay unasserted until it re-adopts,
+  // and the pause still lands while the marker is armed.
+  it('ordering A over a joiner link slower than the host’s bind gap still lands paused at 0 (#502)', async () => {
+    const { host, joiner } = await seatSwitch(500)
+    await host.goToEpisode('8')
+    joiner.userPause()
+    await room.advance(0.55)
+    // The host's new element has already loaded by now.
+    expect(host.el.seekWrites).toHaveLength(1)
+    expect(host.el.seekWrites[0]).toBeLessThan(1)
+    expect(host.client['fileChangeInFlight']).not.toBeNull()
+    await room.advance(10)
+
+    expect(room.server.roomState().paused).toBe(true)
+    expect(room.server.roomState().position).toBeLessThan(1)
+    expect(room.server.wireOf('hostuser').filter((f) => f.doSeek)).toHaveLength(2)
+    expect(host.frames.filter((f) => f.state.position >= STALE_FLOOR)).toEqual([])
+    expect(host.el.seekWrites.filter((w) => w >= STALE_FLOOR)).toEqual([])
+    expect(host.el.paused).toBe(true)
+    expect(joiner.el.paused).toBe(true)
   })
 
   it('a seek crossing a peer’s pause the server took first settles both peers on the seek (#494)', async () => {

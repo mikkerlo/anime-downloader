@@ -258,9 +258,10 @@ export interface LostPauseTally {
   heartbeat: number
   unread: number
   /** What the row fails on: a pause the #252 re-assert resumed, the 2a shape
-   *  #535 fixed by arming the apply-in-flight marker above the re-assert. A
-   *  pause the scrubber's own seek resumed is 2b, deferred to #544, and is
-   *  counted but not failed; so are heartbeat and unread resumes. */
+   *  #535 fixed by arming the apply-in-flight marker above the re-assert, or a
+   *  heartbeat resumed, #513's marker failing to withhold. A pause the
+   *  scrubber's own seek resumed is 2b, deferred to #544, and is counted but
+   *  not failed; so is an unread resume, which can't be attributed. */
   failed: number
 }
 
@@ -274,7 +275,7 @@ export function lostPauseTally(records: readonly Record<string, unknown>[]): Los
     seek: by('seek'),
     heartbeat: by('heartbeat'),
     unread: by(null),
-    failed: reassert
+    failed: reassert + by('heartbeat')
   }
 }
 

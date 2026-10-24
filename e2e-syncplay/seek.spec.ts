@@ -14,7 +14,8 @@
 // same way when #524 made a pause edge snap to the room (upstream parity). S11's
 // dominant lost pause, the one the scrubber's #252 re-assert resumes, went when
 // #535 armed the apply-in-flight marker above the re-assert; S11 now fails on
-// that alone. The residual the scrubber's own seek resumes is #544's.
+// that or a heartbeat resume. The residual the scrubber's own seek resumes is
+// #544's.
 //
 // The seek goes through the seek bar (`Instance.seek`), so it takes
 // `PlayerView.seek()` → `seekAsUser`, which since #491 announces at intent.
@@ -401,12 +402,13 @@ test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after i
   const t = resumedByLine(l)
   offsetLine('S10 / S11', l)
   snapLine(d)
-  // S10 was a ✗ row until #524's pause-edge snap. S11 fails only on what #535
-  // fixed: a pause the #252 re-assert behind the ack resumed (2a). A pause the
+  // S10 was a ✗ row until #524's pause-edge snap. S11 fails on what #535
+  // fixed, a pause the #252 re-assert behind the ack resumed (2a), and on a
+  // heartbeat resume (#513's marker failing to withhold). A pause the
   // scrubber's own seek resumed (2b) is #544's; it is about 1 in 64 here, so a
   // plain `bad == 0` would flake, and it is counted on its own line instead.
   expect(d.bad, 'S10: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
-  expect(t.failed, 'S11: a lost pause the #252 re-assert resumed').toBe(0)
+  expect(t.failed, 'S11: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
 })
 
 test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_S: no #252 re-assert (#524 control)', async () => {
@@ -429,8 +431,9 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
   )
   // Its lost pauses are 2b, the scrubber's own seek (#534's one, and main's
   // one in #535's control run), so S11c is scored as S11 is: counted, failed
-  // only on a re-assert, which this row's claim above already rules out.
-  expect(t.failed, 'S11c: a lost pause the #252 re-assert resumed').toBe(0)
+  // only on a re-assert (which this row's claim above already rules out) or a
+  // heartbeat resume.
+  expect(t.failed, 'S11c: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
   // The drift showed here too (21 of 40 in #534's run). #524's snap closed it
   // but for #537's shape: a scrub this short that crossed the pause is dropped
   // and never re-asserted, and the pause met it still loading. Since #537 main
@@ -480,5 +483,5 @@ test('S12 — the scrub-vs-pause race with the scrubber’s seek in flight 1–2
   )
   expect(d.bad, 'S12: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
   // A far scrub, so S11's 2a hop exists here too: scored as S11 is (#535).
-  expect(t.failed, 'S12l: a lost pause the #252 re-assert resumed').toBe(0)
+  expect(t.failed, 'S12l: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
 })

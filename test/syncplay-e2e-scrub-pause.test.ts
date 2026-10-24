@@ -509,9 +509,10 @@ describe('the #537 shape is scored as drift, with no carve-out (S10c)', () => {
   })
 })
 
-// S11 / S11c / S12l since #535 (2a only): a lost pause fails the row only when
-// the #252 re-assert resumed the room. The seek-resumed one is 2b, #544's, and
-// is counted without failing; so are heartbeat and unread resumes.
+// S11 / S11c / S12l since #535: a lost pause fails the row when the #252
+// re-assert (2a) or a heartbeat (#513's marker failing to withhold) resumed the
+// room. The seek-resumed one is 2b, #544's, and is counted without failing; so
+// is an unread resume, which can't be attributed.
 describe('lostPauseTally: what S11 fails on (#535)', () => {
   type Rec = { setupOk: boolean; lost: boolean; resumedBy: string | null }
   const run = (resumedBy: Rec['resumedBy'], over: Partial<Rec> = {}): Rec => ({
@@ -531,15 +532,20 @@ describe('lostPauseTally: what S11 fails on (#535)', () => {
     expect(t).toEqual({ reassert: 0, seek: 1, heartbeat: 0, unread: 0, failed: 0 })
   })
 
-  it('counts heartbeat and unread resumes without failing, and skips unscoreable runs', () => {
+  it('a lost pause a heartbeat resumed fails the row (#513’s marker did not withhold)', () => {
+    const t = lostPauseTally([run('heartbeat'), run(null, { lost: false })])
+    expect(t).toEqual({ reassert: 0, seek: 0, heartbeat: 1, unread: 0, failed: 1 })
+  })
+
+  it('counts an unread resume without failing, and skips unscoreable runs', () => {
     const t = lostPauseTally([
-      run('heartbeat'),
       run(null),
       run('reassert', { setupOk: false }),
+      run('heartbeat', { setupOk: false }),
       run('seek'),
       run('seek')
     ])
-    expect(t).toEqual({ reassert: 0, seek: 2, heartbeat: 1, unread: 1, failed: 0 })
+    expect(t).toEqual({ reassert: 0, seek: 2, heartbeat: 0, unread: 1, failed: 0 })
   })
 
   it('reads a record shaped as the sweep writes it: `setupOk` plus the verdict', () => {

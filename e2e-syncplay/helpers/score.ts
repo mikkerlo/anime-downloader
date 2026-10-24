@@ -331,3 +331,28 @@ export class RowScorer {
     return s
   }
 }
+
+export interface E7SeekVerdict {
+  /** The seek-count term holds. */
+  ok: boolean
+  /** Who sent a resume seek: `'both'` on a double seek, `null` when nobody did. */
+  winner: 'A' | 'B' | 'both' | null
+}
+
+/** E7's seek-count term (#532), from each peer's count of outbound
+ *  `{0, doSeek}` frames. On an even run nobody cancels and both countdowns
+ *  fire, so either may win the race: the run passes with at most one seek per
+ *  peer and at least one in total. Both sending is the both-press shape
+ *  `docs/syncplay.md` accepts and Tier 1 pins (`both countdowns firing before
+ *  either Set lands`). On a Cancel run B's Cancel stays local, so A sends the
+ *  one seek and B none. Whether the seeks resume is a separate term. */
+export function e7SeekVerdict(d: {
+  cancelB: boolean
+  seeksA: number
+  seeksB: number
+}): E7SeekVerdict {
+  const { cancelB, seeksA: a, seeksB: b } = d
+  const ok = cancelB ? a === 1 && b === 0 : a <= 1 && b <= 1 && a + b >= 1
+  const winner = a > 0 && b > 0 ? 'both' : a > 0 ? 'A' : b > 0 ? 'B' : null
+  return { ok, winner }
+}

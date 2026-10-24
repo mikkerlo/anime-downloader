@@ -83,12 +83,15 @@
 // and landed paused at 0 (4/4 red with the countdown passing `'local'`). Even
 // runs let both countdowns fire; odd runs click B's Cancel, so A advances alone
 // and B follows. Both runs are `bad == 0` over: right episode, both playing
-// from ~0, one `{0, paused: false}` seek from A, none from a cancelling B (a
-// Cancel stays local), no outbound `paused: true` from either after the first
-// seek (the review's Critical item), and a following B's outgoing element never
-// playing from 0. When both advance, B's outgoing element can play from 0 for
-// the few hundred ms before its own swap — the both-press shape — so that is
-// recorded (`oldPlayedB`), not asserted.
+// from ~0, every seek `{0, paused: false}`, no outbound `paused: true` from
+// either after the first seek (the review's Critical item), and a following B's
+// outgoing element never playing from 0. The seek count is `e7SeekVerdict`'s
+// (#532): on even runs either countdown can win the race, so at most one seek
+// per peer and at least one in total (both seeking is the both-press shape);
+// on Cancel runs one from A and none from B (a Cancel stays local). When both
+// advance, the loser's outgoing element can play from 0 for the few hundred ms
+// before its own swap — the both-press shape — so that is recorded
+// (`oldPlayedA`, `oldPlayedB`, with `seekWinner`), not asserted.
 //
 // E7s is #528, E7's Cancel run with the roles the Windows matrix lost runs to:
 // the room's pause at A's end reaches B ~1 ms short of B's own end, so B never
@@ -127,7 +130,14 @@ import {
   type WireRec
 } from './helpers/duo'
 import { durationOf } from './helpers/fixtures'
-import { RowScorer, staleOutcome, e5Position, e5Split, resumeSplit } from './helpers/score'
+import {
+  RowScorer,
+  staleOutcome,
+  e5Position,
+  e5Split,
+  resumeSplit,
+  e7SeekVerdict
+} from './helpers/score'
 import { FOLLOW_GRACE_MS } from '../src/renderer/src/utils'
 
 let rig: Rig
@@ -537,23 +547,28 @@ test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), n
         d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
       ).length
       // A follower's outgoing element playing from the start of N: asserted on
-      // the Cancel runs, where B is a pure follower. When both advance, B has
-      // already committed its own switch when A's seek lands, and its outgoing
-      // element can play from 0 until its own source swap (~300 ms) — the
-      // both-press shape `docs/syncplay.md` accepts — so it is only recorded.
+      // the Cancel runs, where B is a pure follower. When both advance, the
+      // race's loser has already committed its own switch when the winner's
+      // seek lands, and its outgoing element can play from 0 until its own
+      // source swap (~300 ms) — the both-press shape `docs/syncplay.md`
+      // accepts — so it is only recorded, for either peer.
+      const oldPlayedA = playedOldFromZero(da, sa.src, firstSeekAt)
       const oldPlayedB = playedOldFromZero(db, sb.src, firstSeekAt)
       const followerPlayedN = cancelB && oldPlayedB
       const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
       const resumed = !a.paused && !b.paused
       const fromZero = a.ct > 3 && a.ct < 25 && b.ct > 3 && b.ct < 25 && Math.abs(a.ct - b.ct) < 2
       const seeksResume = [...seeksA, ...seeksB].every((w) => w.ps.paused === false)
+      // Even runs: either countdown may win, at most one seek per peer and at
+      // least one in total. Cancel runs: one from A, none from B (#532).
+      const seeks = e7SeekVerdict({ cancelB, seeksA: seeksA.length, seeksB: seeksB.length })
       // A Cancel stays local: the cancelling peer sends no seek of its own.
       const cancelLocal = !cancelB || seeksB.length === 0
       const bad =
         wrongEp ||
         !resumed ||
         !fromZero ||
-        seeksA.length !== 1 ||
+        !seeks.ok ||
         !seeksResume ||
         !cancelLocal ||
         rePauses > 0 ||
@@ -570,10 +585,12 @@ test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), n
           ctB: b.ct,
           seeksA: seeksA.length,
           seeksB: seeksB.length,
+          seekWinner: seeks.winner,
           seeksResume,
           cancelLocal,
           rePauses,
           followerPlayedN,
+          oldPlayedA,
           oldPlayedB
         },
         bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined

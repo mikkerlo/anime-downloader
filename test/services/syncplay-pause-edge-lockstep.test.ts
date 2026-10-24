@@ -45,8 +45,12 @@ vi.mock('tls', () => ({
   })
 }))
 
-import { SyncplayClient, ECHO_SEEK_EPSILON_S } from '../../src/main/syncplay'
-import { wouldSeekOnApply } from '../../src/shared/syncplay-apply-rule'
+import {
+  SyncplayClient,
+  ECHO_SEEK_EPSILON_S,
+  SEEK_REASSERT_TOLERANCE_S
+} from '../../src/main/syncplay'
+import { APPLY_TOLERANCE_S, wouldSeekOnApply } from '../../src/shared/syncplay-apply-rule'
 
 type StateFrame = {
   playstate?: { position: number; paused?: boolean; doSeek?: boolean }
@@ -165,6 +169,74 @@ describe('SyncplayClient — the echo target arms in lockstep with the pause-edg
       const c = pauseEdge({ ageS: 1.1, offset: -1.5 })
       expect(c.renderer).toBe(true)
       expect(armed()).toBe(c.room)
+    })
+  })
+
+  // The converged-tick cell (#537). A user seek to TARGET is announced and
+  // still loading when a peer's pause, forced over it, lands `offset` from
+  // TARGET. Inside SEEK_REASSERT_TOLERANCE_S main's converged exit retires the
+  // intent and the frame goes out unrewritten, at the room's pause; past it main
+  // re-asserts and substitutes our own projection. The renderer's element reads
+  // TARGET while it loads, and its #488 hold lets a pause edge through only
+  // 0.5–3 s from that target (`userSeekLostToPause()`, pinned in the
+  // composable's "the #488 hold covers the snap" block), so the snap's `seeked`
+  // has main's #220 belt exactly when main arms.
+  describe('the converged tick of a crossed user seek, still loading', () => {
+    const TARGET = 300
+    const OFFSETS = [-5, -2, -0.8, -0.3, 0.3, 0.8, 2, 5]
+
+    const crossedSeek = (o: {
+      offset: number
+      ageS?: number
+    }): { renderer: boolean; main: boolean; room: number; handed: EmittedState } => {
+      handshake()
+      client.updateSnapshot({ position: SNAP, paused: false })
+      client.sendLocalState({ paused: false, position: TARGET, cause: 'seek' })
+      vi.advanceTimersByTime(Math.round((o.ageS ?? 0) * 1000))
+      const room = TARGET + o.offset
+      forced(room, true)
+      const handed = remoteStates.at(-1)!
+      const d = Math.abs(handed.position - TARGET)
+      const held = !(d > ECHO_SEEK_EPSILON_S && d <= APPLY_TOLERANCE_S)
+      const renderer = !held && wouldSeekOnApply({ doSeek: false, diff: d, pauseEdge: true })
+      return { renderer, main: armed() !== null, room, handed }
+    }
+
+    it('main arms exactly when the renderer snaps', () => {
+      const cells = OFFSETS.map((offset) => {
+        client.disconnect()
+        client = new SyncplayClient()
+        remoteStates = []
+        client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
+        const c = crossedSeek({ offset })
+        // Unrewritten inside the tolerance, ours past it.
+        expect(c.handed.position, JSON.stringify(c)).toBe(
+          Math.abs(offset) <= SEEK_REASSERT_TOLERANCE_S ? c.room : TARGET
+        )
+        return { offset, ...c }
+      })
+      for (const c of cells) expect(c.main, JSON.stringify(c)).toBe(c.renderer)
+      expect(cells.filter((c) => c.renderer).map((c) => c.offset)).toEqual([-2, -0.8, 0.8, 2])
+      // And at the position the renderer snaps to.
+      for (const c of cells.filter((x) => x.renderer)) {
+        client.disconnect()
+        client = new SyncplayClient()
+        remoteStates = []
+        client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
+        crossedSeek({ offset: c.offset })
+        expect(armed()).toBe(c.room)
+      }
+    })
+
+    // Where the two still part, pinned like the stalled element above. Main's
+    // projection walks on from the click while the element stands at TARGET, so
+    // a pause landing later in the flight is measured from two different places.
+    // The crossing frame itself arrives a round trip after the click.
+    it('300 ms into the flight, a pause 0.7 s ahead: the renderer snaps where main does not arm (the belt is lost)', () => {
+      const c = crossedSeek({ offset: 0.7, ageS: 0.3 })
+      expect(c.handed.position).toBe(c.room)
+      expect(c.renderer).toBe(true)
+      expect(c.main).toBe(false)
     })
   })
 

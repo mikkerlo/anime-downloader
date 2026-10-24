@@ -563,6 +563,35 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(outboundStates(lastTlsSocket)).toHaveLength(1)
     })
 
+    // The same tick when a peer's frame carries it, so it reaches the renderer.
+    // Since #537 the converged tick is not rewritten: what goes out is the
+    // room's own position, and the room came to us, so it is about ours and
+    // moves nothing. (Above, our own reflected update dies at the self-`setBy`
+    // guard, which is how this tick usually ends in the two-press shape.)
+    it('hands the renderer the room’s own position on the tick the room comes to us', () => {
+      handshake()
+      armForwardSeek()
+      clearWrites()
+
+      roomStillAt(SEEK_TARGET, { setBy: 'peer' })
+
+      expect(seekIntent()).toBeNull()
+      expect(doSeekFrames()).toHaveLength(0)
+      expect(remoteStates).toHaveLength(1)
+      expect(remoteStates[0].position).toBeCloseTo(SEEK_TARGET, 6)
+      expect(
+        wouldSeekOnApply({
+          doSeek: false,
+          diff: remoteStates[0].position - SEEK_TARGET,
+          pauseEdge: false
+        })
+      ).toBe(false)
+      expect(
+        (client as unknown as { lastAppliedRemotePosition: number | null })
+          .lastAppliedRemotePosition
+      ).toBeNull()
+    })
+
     // The other side of the tolerance, and the second half of what makes
     // importing the constant worth anything: a room that stopped *within* it has
     // converged as far as the rest of the system is concerned (`isAdopted()`
@@ -1573,15 +1602,17 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       client.updateSnapshot({ position: OURS, paused: false })
       armLocalSeek(OURS + 16)
       expect(pendingClientAck()).toBeGreaterThan(0)
-      // Two seconds of playback past the seek target.
-      client.updateSnapshot({ position: OURS + 18, paused: false })
+      // Playback past the seek target, past SEEK_REASSERT_TOLERANCE_S of it, so
+      // the echo below is not the intent's converged tick (#537).
+      const played = OURS + 16 + SEEK_REASSERT_TOLERANCE_S + 2
+      client.updateSnapshot({ position: played, paused: false })
 
       // The peer's pause crosses our seek. The intent is live, so the renderer
       // is handed our own snapshot (#278), and that is what is latched — not
       // the frame's OURS.
       forcedState({ server: 7, setBy: 'peer', position: OURS, paused: true, doSeek: false })
-      expect(remoteStates[0].position).toBe(OURS + 18)
-      expect(latch()?.position).toBe(OURS + 18)
+      expect(remoteStates[0].position).toBe(played)
+      expect(latch()?.position).toBe(played)
       expect(latch()?.paused).toBe(true)
 
       // Our own seek, ordered after the pause: playing vs paused, so it passes.
@@ -1591,11 +1622,29 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       forcedState({ server: 8, setBy: 'me', position: OURS + 16, paused: false, doSeek: true })
       expect(remoteStates).toHaveLength(2)
       expect(remoteStates[1]).toEqual({
-        position: OURS + 18,
+        position: played,
         paused: false,
         setBy: 'me',
         doSeek: true
       })
+    })
+
+    // The same echo inside SEEK_REASSERT_TOLERANCE_S of us is the intent's
+    // converged tick, and since #537 that tick is handed over unrewritten: the
+    // echo's own position, which is the room's word and about ours.
+    it('hands over the echo itself on the intent’s converged tick (#537)', () => {
+      handshake()
+      client.updateSnapshot({ position: OURS, paused: false })
+      armLocalSeek(OURS + 16)
+      client.updateSnapshot({ position: OURS + 18, paused: false })
+      forcedState({ server: 7, setBy: 'peer', position: OURS, paused: true, doSeek: false })
+      expect(remoteStates[0].position).toBe(OURS + 18)
+
+      forcedState({ server: 8, setBy: 'me', position: OURS + 16, paused: false, doSeek: true })
+      expect(remoteStates).toHaveLength(2)
+      expect(remoteStates[1]).toMatchObject({ paused: false, setBy: 'me', doSeek: true })
+      expect(remoteStates[1].position).toBeCloseTo(OURS + 16, 6)
+      expect((client as unknown as { seekIntent: unknown }).seekIntent).toBeNull()
     })
   })
 
@@ -1726,9 +1775,12 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         let fed = feed(gate, 0)
         expect(outboundStates(lastTlsSocket)).toHaveLength(2)
         expect(gate.applied).toEqual([])
+        // The converged tick hands the renderer the pauser's frame, unrewritten
+        // (#537), not our dropped target …
+        expect(remoteStates.at(-1)).toMatchObject({ position: P0, paused: true, doSeek: false })
 
-        // The renderer applies the room's pause in place, inside its 3 s rule.
-        client.updateSnapshot({ position: near, paused: true })
+        // … and the renderer's pause edge snaps to it.
+        client.updateSnapshot({ position: P0, paused: true })
         vi.advanceTimersByTime(HEARTBEAT_MS)
         fed = feed(gate, fed)
 

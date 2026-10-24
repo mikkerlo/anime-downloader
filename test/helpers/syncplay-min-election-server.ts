@@ -170,10 +170,10 @@
 //    the likely next user of `protocolTimeoutMs` is a fixture for #360's (h),
 //    and that is exactly the kind of test that would care.
 //
-// Deliberately **not** modelled: the `ignoringOnTheFly` ignore window (the
-// server discarding playstates while its flag is up). `syncplay-ignoring-on-the-
-// fly.test.ts` owns that seam frame by frame and does it better; a second,
-// vaguer model of it here would only disagree with that one.
+// **Off by default**: the `ignoringOnTheFly` ignore window (the server discarding
+// playstates while its flag is up). `syncplay-ignoring-on-the-fly.test.ts` owns
+// that seam frame by frame; `ignoreWindow` (end of file) opts one room into it,
+// for a two-peer fixture whose subject is a change the server throws away (#537).
 //
 // Also deliberately **not** modelled, and stated rather than quietly assumed
 // (#307): the **unknown-position** arm of `__lt__` and `Room.getPosition()`.
@@ -528,7 +528,7 @@ export class MinElectionServer {
   private serverCounter = 0
   private timer: ReturnType<typeof setInterval> | null = null
 
-  constructor(opts: MinElectionServerOptions = {}) {
+  constructor(private readonly opts: MinElectionServerOptions = {}) {
     this.room = opts.room ?? 'cinema'
     this.roomPosition = opts.position ?? 0
     this.roomPaused = opts.paused ?? false
@@ -733,7 +733,7 @@ export class MinElectionServer {
       setBy: this.roomSetBy
     }
     for (const other of seated) {
-      this.sendState(other, playstate, this.serverCounter)
+      this.sendState(other, playstate, this.forcedCounter(other))
     }
   }
 
@@ -844,7 +844,7 @@ export class MinElectionServer {
         }
         // Inbound frames pay the link delay: the number inside was computed at
         // the client's send, and the server stamps it at arrival.
-        setTimeout(() => this.applyState(username, state), w.delayMs)
+        setTimeout(() => this.arriveState(username, state), w.delayMs)
         continue
       }
     }
@@ -984,7 +984,7 @@ export class MinElectionServer {
     }
     const frame: JsonRecord = { ping, playstate }
     if (serverCounter !== undefined) frame.ignoringOnTheFly = { server: serverCounter }
-    this.send(w.username, { State: frame }, w.delayMs)
+    if (!this.withheld(w, serverCounter)) this.send(w.username, { State: frame }, w.delayMs)
     // After the send, never before: upstream puts the frame on the wire at
     // `server.py:860 ("self._connector.sendState(position, paused, doSeek, setBy, forcedUpdate)")`
     // and only then tests the clock at
@@ -1046,4 +1046,95 @@ export class MinElectionServer {
     if (delayMs <= 0) deliver()
     else setTimeout(deliver, delayMs)
   }
+
+  // --- the ignore window (`ignoreWindow`, #537) ----------------------------
+  //
+  // Declared down here, with the option and the watcher field merged in below
+  // the class, so the insertion shifts none of the anchors into this file.
+
+  /** Every playstate the ignore window discarded, in order. Empty unless the
+   *  room was built with `ignoreWindow`. */
+  readonly ignored: IgnoredFrame[] = []
+
+  private get ignoreWindow(): boolean {
+    return this.opts.ignoreWindow === true
+  }
+
+  /** The counter a forced send to `w` carries. Off, the room-wide one; on, the
+   *  watcher's own, bumped by this send. */
+  private forcedCounter(w: Watcher): number {
+    if (!this.ignoreWindow) return this.serverCounter
+    w.ignoring = (w.ignoring ?? 0) + 1
+    return w.ignoring
+  }
+
+  /** The send gate: an unforced `State` is withheld while `w`'s counter is up.
+   *  The caller's clock test still runs, as upstream's does. */
+  private withheld(w: Watcher, serverCounter: number | undefined): boolean {
+    return this.ignoreWindow && serverCounter === undefined && (w.ignoring ?? 0) !== 0
+  }
+
+  /** A `State` arriving at the server, after its link delay. Under the window,
+   *  in the reference's order: an echo of the counter clears it, the ping is
+   *  taken either way, and a frame that still finds it up never reaches
+   *  `updateState` — `applyState` here, `lastUpdatedOn` stamp included. */
+  private arriveState(username: string, state: JsonRecord): void {
+    const w = this.watchers.get(username)
+    if (w && this.ignoreWindow) {
+      const ack = isRecord(state.ignoringOnTheFly) ? state.ignoringOnTheFly.server : undefined
+      if (ack === w.ignoring) w.ignoring = 0
+      if ((w.ignoring ?? 0) !== 0) {
+        if (isRecord(state.ping) && typeof state.ping.clientLatencyCalculation === 'number') {
+          w.latencyEcho = state.ping.clientLatencyCalculation
+          w.latencyEchoArrivedAt = Date.now()
+        }
+        const ps = isRecord(state.playstate) ? state.playstate : null
+        if (ps) {
+          this.ignored.push({
+            at: Date.now(),
+            username,
+            position: typeof ps.position === 'number' ? ps.position : 0,
+            ...(typeof ps.paused === 'boolean' ? { paused: ps.paused } : {}),
+            ...(typeof ps.doSeek === 'boolean' ? { doSeek: ps.doSeek } : {})
+          })
+        }
+        return
+      }
+    }
+    this.applyState(username, state)
+  }
+}
+
+export interface MinElectionServerOptions {
+  /**
+   * The per-watcher ignore window, for one room (#537). Off — **the default** —
+   * every forced update carries one room-wide counter and nothing is ever
+   * discarded, which is what every fixture written before #537 assumes. On, the
+   * four clauses of the reference's own window, per watcher:
+   *  - each forced send bumps that watcher's counter and carries it,
+   *    `protocols.py:753 ("self.serverIgnoringOnTheFly += 1")`;
+   *  - an echo of that exact value clears it,
+   *    `protocols.py:777 ("self.serverIgnoringOnTheFly = 0")`;
+   *  - while it is up the watcher's playstates never reach the room,
+   *    `protocols.py:788 ("if self.serverIgnoringOnTheFly == 0:")`, which skips
+   *    the `lastUpdatedOn` stamp with them;
+   *  - and its periodic `State`s are withheld,
+   *    `protocols.py:761 ("if self.serverIgnoringOnTheFly == 0 or forced:")`.
+   * Each discarded playstate is recorded in `ignored`.
+   */
+  ignoreWindow?: boolean
+}
+
+interface Watcher {
+  /** `serverIgnoringOnTheFly`, under `ignoreWindow` only; absent reads as 0. */
+  ignoring?: number
+}
+
+/** One playstate the ignore window discarded, stamped at arrival. */
+export interface IgnoredFrame {
+  at: number
+  username: string
+  position: number
+  paused?: boolean
+  doSeek?: boolean
 }

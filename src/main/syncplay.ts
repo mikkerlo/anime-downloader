@@ -161,10 +161,10 @@ const ROOM_POSITION_MAX_AGE_MS = 15000
 // a room that *has* adopted us still reads up to ~1 s of divergence — at 1 s we
 // would re-assert forever against a room that already agrees. ADOPT_TOLERANCE_S
 // is the number the rest of the system already calls "converged": under it
-// `isAdopted()` latches and the renderer's apply rule declines to move anyone,
-// so a difference the re-assert could recover is a difference nobody would act
-// on. Cost of the choice: a user seek shorter than 3 s that crosses a forced
-// update is not recovered.
+// `isAdopted()` latches and, off a pause edge, the apply rule moves nobody. A
+// user seek shorter than that which a forced update crossed is lost, as upstream
+// loses it: handleState() hands that frame over unrewritten, and on a pause the
+// renderer snaps to it, so both peers end on the pauser's frame (#537).
 export const SEEK_REASSERT_TOLERANCE_S = ADOPT_TOLERANCE_S
 // Bounds on a pending seek intent (#252). Recovery normally lands on the first
 // attempt — the frame right behind the ack that lifts the server's ignore flag
@@ -2138,25 +2138,24 @@ export class SyncplayClient extends EventEmitter {
     //    protects. maybeReassertSeek() has four terminal exits that null the
     //    intent and return without asserting; three — the spectator/de-adopted
     //    branch, the TTL and the attempt ceiling — fall straight through to the
-    //    emit below, so reading after the call would ship a yank on each. The
-    //    fourth, the drift-converged exit, is benign: see below.
+    //    emit below, so reading after the call would ship a yank on each.
+    //  - but never on the fourth, the drift-converged exit (#537): `substitute`
+    //    takes it back out. Converged on a frame that crossed our seek means the
+    //    server dropped the seek and the room sits within 3 s of it, so that
+    //    frame goes out unrewritten and a pause edge snaps us to the pauser. When
+    //    the room came to us instead, the unrewritten frame is about ours anyway.
     //
-    // The protection is exactly one tick wide at the ceiling, and no wider
-    // (#278 review): the tick after the give-up has no intent to read, so it is
-    // an ordinary frame and the room's position goes out unrewritten. In
-    // symptom 1's real shape that never bites — the re-assert is accepted once
-    // the ignore window closes and the drift-converged exit retires the intent with
-    // the room already where we are — but in the exhausted-ceiling shape the fix turns
-    // four excursions into one rather than none. Pinned as a characterisation.
+    // The protection is one tick wide at the ceiling and no wider (#278
+    // review): the tick after the give-up has no intent to read, so the room's
+    // position goes out unrewritten. In the exhausted-ceiling shape the fix
+    // turns four excursions into one rather than none; pinned as such.
     //
-    // Nothing is *dropped*. This substitutes a value on a frame that is emitted
-    // either way, so the implication the comment at the hoist above rests on —
-    // "the intent was retired ⇒ the renderer was handed that frame" — is
-    // untouched on both sides. It is also what keeps #228: recordRemoteState()
-    // runs unconditionally at the top of applyRemoteState()
-    // (src/renderer/src/composables/use-syncplay-client.ts:1958-1959) and owns the pending-pause release and
-    // the "Paused by …" badge, so dropping the frame would lose the pause half
-    // to save the position half. Rewrite, never drop.
+    // Nothing is *dropped*: a value is substituted on a frame emitted either way,
+    // so "retired ⇒ handed" (the hoist above) is untouched on both sides, and #228
+    // keeps its pause half: recordRemoteState() runs unconditionally at the top of
+    // applyRemoteState() (src/renderer/src/composables/use-syncplay-client.ts:1958-1959)
+    // and owns the pending-pause release and the "Paused by …" badge. Rewrite,
+    // never drop.
     const seekIntentWasLive = this.seekIntent !== null
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
@@ -2164,7 +2163,8 @@ export class SyncplayClient extends EventEmitter {
     // to the setter too (server.py:187, server.py:441-445, no sender filter), so the scrubbing
     // user's own connection is the deaf one — and a call placed under that
     // guard would be dead code for the whole bug.
-    this.maybeReassertSeek()
+    const reassertExit = this.maybeReassertSeek()
+    const substitute = seekIntentWasLive && reassertExit !== 'converged'
     // Announce a change to the room's pause flag from *here*, above the guards
     // below (#228): the frame that tells us our own pending pause reached the
     // room is normally one the self-`setBy` guard drops, so a detector further
@@ -2269,8 +2269,8 @@ export class SyncplayClient extends EventEmitter {
     // #240, which defers the write to `loadedmetadata`, the renderer's own value-keyed guard is
     // the layer that holds.
     //
-    // While a seek of ours is unresolved the room does not get to move our playhead (#278), so
-    // what goes out is our own position rather than the room's: the same projection the arming
+    // While a seek of ours is unresolved (`substitute`) the room does not move our playhead (#278),
+    // so what goes out is our own position rather than the room's: the same projection the arming
     // compares against, so the renderer's `diff` is ≈0 and a substituted frame moves nothing,
     // on a pause edge too. Flat before #524, and a flat reading is up to one snapshot push old
     // (≈1.15 s, SNAPSHOT_MIN_INTERVAL_MS at
@@ -2283,7 +2283,7 @@ export class SyncplayClient extends EventEmitter {
     //
     // The projection walks on while our own seek is still loading, and the renderer re-anchors
     // it by pushing a snapshot on that seek's `seeked`, so it restarts from the landing (#524).
-    const emitted = seekIntentWasLive ? this.projectedSnapshotPosition() : compensated
+    const emitted = substitute ? this.projectedSnapshotPosition() : compensated
     if (this.rendererWouldSeek(doSeek, paused, emitted)) {
       this.armAppliedTarget(Math.max(0, emitted))
     }
@@ -2311,7 +2311,7 @@ export class SyncplayClient extends EventEmitter {
     // no player has announced one, which is a state describing the room rather
     // than any file of ours; `setFile()` adopts that one on the next announce.
     // A rewritten tick stamps no key at all, because it does not write.
-    if (!seekIntentWasLive) {
+    if (!substitute) {
       this.lastRemoteRoomState = {
         canonicalName: this.currentFile?.canonicalName ?? null,
         position: Math.max(0, compensated),
@@ -3007,10 +3007,14 @@ export class SyncplayClient extends EventEmitter {
   // deliberately (on the tick the counter lands the renderer has not applied
   // the forced state, so an ack carrying a playstate would assert the *stale*
   // pre-seek position and min() over watchers would drag the room back).
-  private maybeReassertSeek(): void {
+  private maybeReassertSeek(): SeekReassertExit {
+    // Which exit this took (#537). `handleState()` reads one of them, the
+    // drift-converged one, as "stop substituting on this tick": the room is
+    // within SEEK_REASSERT_TOLERANCE_S of our seek, so the frame describes a
+    // room close enough to be followed rather than one to be argued with.
     const intent = this.seekIntent
-    if (!intent) return
-    if (this.status.state !== 'ready') return
+    if (!intent) return 'none'
+    if (this.status.state !== 'ready') return 'held'
     // A spectator must never re-assert (#220): with no live playback or before
     // adoption, buildPlaystate() returns the room's own mirror, and stamping
     // doSeek on that hands the room its own position back as a seek. There is
@@ -3044,11 +3048,11 @@ export class SyncplayClient extends EventEmitter {
     // as an observable in the spectator case rather than as this branch.)
     if (!this.hasLivePlayback() || !this.isAdopted()) {
       this.seekIntent = null
-      return
+      return 'spectator'
     }
     if (Date.now() - intent.at > SEEK_REASSERT_TTL_MS) {
       this.seekIntent = null
-      return
+      return 'ttl'
     }
     // Our own assertion is still in flight, so this frame left the server
     // before it could have processed it — the divergence below would be an
@@ -3059,23 +3063,26 @@ export class SyncplayClient extends EventEmitter {
     // that window it costs at most one frame of delay, because the server
     // echoes our `client` counter on its very next State (protocols.py:
     // 758-760, :779).
-    if (this.pendingClientAck !== 0) return
+    if (this.pendingClientAck !== 0) return 'held'
     const room = this.lastRoomState
-    if (!room) return
+    if (!room) return 'held'
     // The reference's own condition, in the only form available to us: not
     // "the server is ignoring me" — which no local variable can express, since
     // the lost seek is issued *before* the forced State that would tell us —
     // but the divergence that outlives it.
     const drift = Math.abs(this.snapshot.position - this.projectedRoomPosition(room))
     if (drift <= SEEK_REASSERT_TOLERANCE_S) {
-      // The room came to us. Nothing left to recover, and holding the intent
-      // any longer is how a sticky doSeek becomes a fight with the renderer.
+      // Nothing left to recover, and holding the intent any longer is how a
+      // sticky doSeek becomes a fight with the renderer. Either the room came
+      // to us, or — on a forced frame that crossed our seek — the server
+      // dropped a seek shorter than the tolerance, and the room is where the
+      // other peer put it (#537). Upstream loses that seek too.
       this.seekIntent = null
-      return
+      return 'converged'
     }
     if (intent.attempts >= SEEK_REASSERT_MAX_ATTEMPTS) {
       this.seekIntent = null
-      return
+      return 'ceiling'
     }
     intent.attempts += 1
     log('re-asserting unresolved seek', 'attempt=', intent.attempts, 'drift=', drift)
@@ -3084,6 +3091,7 @@ export class SyncplayClient extends EventEmitter {
     // new intent, and re-arming the drop guard here would starve exactly the
     // inbound convergence #232 opened this window to preserve.
     this.sendStateMessage({ doSeek: true })
+    return 'reasserted'
   }
 
   private sendStateMessage(opts: { doSeek: boolean; override?: SyncplaySnapshot }): void {
@@ -3383,8 +3391,12 @@ export class SyncplayClient extends EventEmitter {
   //    lands while this walks on. The renderer pushes a snapshot on that
   //    seek's `seeked`, which restarts the walk from the landing. Before the
   //    landing the renderer's #488 hold declines every non-`doSeek` seek, and
-  //    under a live seek intent `handleState()` emits this same value, so
-  //    neither side moves.
+  //    while `handleState()` substitutes it emits this same value, so neither
+  //    side moves. The exception is the converged tick of a seek a pause
+  //    crossed (#537): the frame goes out unrewritten, the hold lets a pause
+  //    edge 0.5–3 s from the target through, and the two measure that pause
+  //    from different places once the flight is older than the crossing frame
+  //    usually is. Room ahead of the target then loses main's belt, as below.
   //  - A stalled element (buffering, before the readiness gate pauses it). The
   //    walk runs ahead of a playhead that is not moving, by up to one push, and
   //    which way the two sides then disagree depends on where the room is.
@@ -3464,3 +3476,19 @@ function withFollowShort<T extends object>(
     ? { ...target, followShortOf: source.followShortOf }
     : target
 }
+
+/** The exit `maybeReassertSeek()` took (#537). `none`: no intent. `held`: kept
+ *  without asserting (not ready, our own change unacked, no room state yet).
+ *  `spectator`, `ttl`, `ceiling`: retired on a give-up tick, which
+ *  `handleState()` still substitutes on (#278). `converged`: retired because
+ *  the room sits within SEEK_REASSERT_TOLERANCE_S of us, the one tick it does
+ *  not substitute on. `reasserted`: the #252 re-assert went out. Declared down
+ *  here, like the two above, so the insertion shifts no line anchor. */
+type SeekReassertExit =
+  | 'none'
+  | 'held'
+  | 'spectator'
+  | 'ttl'
+  | 'ceiling'
+  | 'converged'
+  | 'reasserted'

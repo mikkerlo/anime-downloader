@@ -33,12 +33,7 @@ import {
   type Rig,
   type Instance
 } from './helpers/duo'
-import {
-  RowScorer,
-  scrubPauseVerdict,
-  pauseInFlight,
-  isScrubPauseResidual537
-} from './helpers/score'
+import { RowScorer, scrubPauseVerdict, pauseInFlight } from './helpers/score'
 import { SEEK_REASSERT_TOLERANCE_S } from '../src/main/syncplay'
 
 let rig: Rig
@@ -413,28 +408,19 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
     0
   )
   expect(runs.filter((r) => r.resumedBy === 'reassert').length).toBe(0)
-  // The drift showed here too (21 of 40 in #534's run), and the snap closes it
-  // but for one shape, #537's: a scrub this short that crossed the pause is
-  // dropped and never re-asserted, and when the pause meets it still loading
-  // the #278 substitution and the #488 hold keep the scrubber on its target.
-  // That shape is counted on its own line and carved out; any other drifted
-  // run still fails the row.
-  const scored = d.records.filter((r) => r.setupOk)
-  const residual = scored.filter((r) =>
-    isScrubPauseResidual537({
-      bad: r.bad,
-      seekCrossed: r.seekCrossed === true,
-      pauseInFlight: r.pauseInFlight === true,
-      reasserts: r.reasserts as number
-    })
+  // The drift showed here too (21 of 40 in #534's run). #524's snap closed it
+  // but for #537's shape: a scrub this short that crossed the pause is dropped
+  // and never re-asserted, and the pause met it still loading. Since #537 main
+  // hands that pause over unrewritten and the #488 hold lets its snap through,
+  // so the scrubber lands on the pauser's frame. The shape is still counted on
+  // its own line, so a run shows whether it occurred; it is not carved out.
+  const shape537 = d.records.filter(
+    (r) => r.setupOk && r.seekCrossed === true && r.pauseInFlight === true && r.reasserts === 0
   )
   process.stdout.write(
-    `[syncplay-e2e] S10c residual (#537): n=${residual.length} of bad=${d.bad}, other bad=${d.bad - residual.length}\n`
+    `[syncplay-e2e] S10c crossed, in flight, never re-asserted (#537): n=${shape537.length} bad=${shape537.filter((r) => r.bad).length}\n`
   )
-  expect(
-    d.bad - residual.length,
-    'S10c: both paused, more than ECHO_SEEK_EPSILON_S apart, outside #537'
-  ).toBe(0)
+  expect(d.bad, 'S10c: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
 })
 
 // S12 — S10's race with the scrubber's seek kept in flight 1–2 s by the fixture

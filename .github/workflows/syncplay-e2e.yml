@@ -10,6 +10,16 @@ name: Syncplay e2e
 # (#489 Testing Strategy): the job is `continue-on-error`, so a red run here is
 # news on the PR's checks list, not a merge gate. Runs nightly, on dispatch,
 # and on PRs that touch the Syncplay client, the player view or the rig.
+#
+# SHARDED across three runners, one worker each (#530): `--shard=N/3` with the
+# config's `fullyParallel: true` cuts the ordered test list into contiguous
+# slices, not round-robin; `docs/testing.md` (Tier 2 Syncplay) has today's split,
+# and `--shard=N/3 --list` prints the current one. Every shard gets a
+# whole runner because the timing rows score races measured in milliseconds; a
+# second worker on the same cores would skew them. Each shard uploads a blob
+# report on every outcome, and `merge-reports` folds the three into one
+# `playwright-report-syncplay` artifact. A row's `[syncplay-e2e] … bad=…` line
+# is in the log of the shard that ran it.
 
 on:
   schedule:
@@ -38,6 +48,11 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 60
+    strategy:
+      # One red shard must not cancel the other two's evidence.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v5
 
@@ -83,12 +98,26 @@ jobs:
 
       - name: Run the two-instance suite
         # `shell: bash` for `pipefail`: a bare `run:` is `bash -e`, and the
-        # pipeline would exit with `tee`'s 0 and land red rows as green.
+        # pipeline would exit with `tee`'s 0 and land red rows as green. The
+        # shard flag goes through the npm script, not a bare `npx playwright`:
+        # the script is what wraps the run in `xvfb-run -a`, and Electron has
+        # no display here without it.
         shell: bash
         env:
           SYNCPLAY_SERVER_BIN: ${{ runner.temp }}/sp176/bin/syncplay-server
           PYTHONUNBUFFERED: '1'
-        run: npm run test:e2e:syncplay 2>&1 | tee syncplay-e2e.log
+        run: npm run test:e2e:syncplay -- --shard=${{ matrix.shard }}/3 2>&1 | tee syncplay-e2e-${{ matrix.shard }}.log
+
+      - name: Upload the blob report
+        # On every outcome, not only on failure: the merge job builds the
+        # report from whatever blobs exist, and a green shard's rows belong in
+        # it too.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: blob-report-${{ matrix.shard }}
+          path: blob-report-syncplay/
+          retention-days: 1
 
       - name: Upload the per-row JSONL traces
         # Per-transition summaries plus bounded trace slices, sized for `jq`;
@@ -96,10 +125,59 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: syncplay-e2e-traces
+          name: syncplay-e2e-traces-${{ matrix.shard }}
           path: |
-            syncplay-e2e.log
+            syncplay-e2e-${{ matrix.shard }}.log
             test-results/syncplay-traces/
-            playwright-report-syncplay/
           if-no-files-found: ignore
+          retention-days: 14
+
+  merge-reports:
+    # Folds the shards' blob reports into one HTML report. It runs after a red
+    # shard too (the shards are `continue-on-error`), but not on a cancelled
+    # run, which would spend a runner merging nothing. `npm ci` and no build:
+    # the blob format is tied to the `@playwright/test` version, so the merge
+    # runs the same one the shards did.
+    needs: syncplay-e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+
+      - name: Merge the blob reports
+        # `list` replays every shard's stdout in test order, so the job
+        # summary gets each row's `[syncplay-e2e] … bad=…` line in one place.
+        shell: bash
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-syncplay
+          PLAYWRIGHT_HTML_OPEN: never
+        run: |
+          npx playwright merge-reports --reporter html,list blob-reports 2>&1 | tee merge-reports.log
+          {
+            echo '### Syncplay e2e rows, all shards'
+            echo '```'
+            grep -F '[syncplay-e2e]' merge-reports.log || echo '(no row summary lines)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the merged report
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-syncplay
+          path: playwright-report-syncplay/
           retention-days: 14

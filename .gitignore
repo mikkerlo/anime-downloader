@@ -18,3 +18,4 @@ scripts/browse.js
 e2e-syncplay/.fixtures/
 e2e-syncplay/.run/
 playwright-report-syncplay/
+blob-report-syncplay/

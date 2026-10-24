@@ -956,7 +956,9 @@ describe('#487 — the pending-follow token: armed by a remote Next, read only b
     const arm = stripComments(slice('function armAutoAdvance(', '\nfunction onVideoEnded('))
     expect(arm).toContain("goToEpisode('next', 'auto-advance');")
     expect(arm).not.toContain('onUserNext')
-    const ended = stripComments(slice('function onVideoEnded(', '\nconst AUTO_ADVANCE_PAUSE_EPS_S'))
+    const ended = stripComments(
+      slice('function onVideoEnded(', '\nfunction maybeArmAutoAdvanceOnPause(')
+    )
     expect(ended.trim()).toBe('function onVideoEnded(): void {\n  armAutoAdvance();\n}')
     // The token's index is READ nowhere but the wrapper; every other read is a
     // clear's owner compare on `.nav`.

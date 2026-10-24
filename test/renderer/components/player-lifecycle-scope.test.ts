@@ -1329,7 +1329,8 @@ describe('#501 — the follow walk announces only where it ends up', () => {
   )
 
   it('begins the hold before the walk and settles it in the walk’s finally', () => {
-    const begin = handler.indexOf('syncplay.beginFollowWalk();')
+    // With the walk's own target, which the settle's #506 mark compares against.
+    const begin = handler.indexOf('syncplay.beginFollowWalk(idx, ep.episodeInt);')
     const walk = handler.indexOf('void walkEpisodeSteps(')
     expect(begin).toBeGreaterThan(-1)
     expect(begin).toBeLessThan(walk)
@@ -1352,6 +1353,30 @@ describe('#501 — the follow walk announces only where it ends up', () => {
     expect(stripComments(slice('function onDurationChange(', '\n}'))).toContain(
       'pushSyncplayFile();'
     )
+  })
+})
+
+describe('#506 — a peer that stopped short of a pick is declined, not followed', () => {
+  // The decision is the composable's `declineFollowShort`, which toasts and
+  // answers `true` for a marked announce. The navigator in
+  // `test/services/syncplay-two-peer-episode-change.test.ts` calls it where
+  // these scans say `PlayerView` does: on the same-episode return's line, so it
+  // returns before the `moved to episode` toast and the walk.
+  const handler = stripComments(
+    slice('function handleRemoteEpisodeChange(', '\n// Disposers for the non-syncplay')
+  )
+
+  it('returns on a declined announce, above the move toast and the begin', () => {
+    const decline = handler.indexOf(
+      'if (idx === activeEpisodeIndex.value || syncplay.declineFollowShort(ep)) return;'
+    )
+    const moved = handler.indexOf(
+      'showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt}`);'
+    )
+    expect(decline).toBeGreaterThan(-1)
+    expect(moved).toBeGreaterThan(decline)
+    expect(handler.indexOf('syncplay.beginFollowWalk(')).toBeGreaterThan(moved)
+    expect(SRC.split('declineFollowShort(').length - 1).toBe(1)
   })
 })
 

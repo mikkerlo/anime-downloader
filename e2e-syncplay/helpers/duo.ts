@@ -46,11 +46,14 @@ import {
   ANIME_NAME,
   EPISODE_INTS,
   HEIGHTS,
+  LONGER_CUT,
+  LONGER_CUT_TR_ID,
   TRANSLATION_SLOTS,
   allEpisodes,
   ensureFixtures,
   episodeOfTranslation,
   fixtureFile,
+  longerCutFile,
   streamPath,
   translationId,
   type Manifest
@@ -169,9 +172,10 @@ export interface Instance {
   readonly pid: number | undefined
   readonly mainLog: { at: number; line: string }[]
   connect(port: number, room: string): Promise<void>
+  /** `longerCut` opens episode 1 on `LONGER_CUT` (#541), with it in that episode's list. */
   open(
     episodeInt: string,
-    opts?: { slot?: number; height?: number; local?: boolean }
+    opts?: { slot?: number; height?: number; local?: boolean; longerCut?: boolean }
   ): Promise<void>
   state(): Promise<PlayerState>
   pressNext(how?: 'button' | 'key'): Promise<void>
@@ -258,10 +262,15 @@ export async function swapPlayerHandlers(
   for (const id of Object.keys(trMap).map(Number)) {
     streams[id] = HEIGHTS.map((h) => ({ height: h, url: cfg.base + streamPath(id, h) }))
   }
+  // #541's longer cut has the one height it was generated at.
+  streams[LONGER_CUT_TR_ID] = [
+    { height: LONGER_CUT.height, url: cfg.base + streamPath(LONGER_CUT_TR_ID, LONGER_CUT.height) }
+  ]
   const localFiles: Record<number, string> = {}
   for (const id of cfg.local) {
     const ep = episodeOfTranslation(id)
-    if (ep) localFiles[id] = fixtureFile(ep, HEIGHTS[0])
+    if (id === LONGER_CUT_TR_ID) localFiles[id] = longerCutFile()
+    else if (ep) localFiles[id] = fixtureFile(ep, HEIGHTS[0])
   }
   await app.evaluate(
     ({ ipcMain }, a) => {
@@ -456,10 +465,13 @@ export async function launchInstance(
       throw new Error(`${name}: syncplay never reached ready`)
     },
     open: async (episodeInt, o = {}) => {
+      if (o.longerCut && episodeInt !== LONGER_CUT.episodeInt) {
+        throw new Error(`${name}: the longer cut is episode ${LONGER_CUT.episodeInt}'s`)
+      }
       const slot = o.slot ?? 1
-      const height = o.height ?? HEIGHTS[0]
-      const trId = translationId(episodeInt, slot)
-      const eps = allEpisodes(o.local ? [trId] : [])
+      const height = o.longerCut ? LONGER_CUT.height : (o.height ?? HEIGHTS[0])
+      const trId = o.longerCut ? LONGER_CUT_TR_ID : translationId(episodeInt, slot)
+      const eps = allEpisodes(o.local ? [trId] : [], { longerCut: o.longerCut })
       const idx = EPISODE_INTS.indexOf(episodeInt as (typeof EPISODE_INTS)[number])
       await page.evaluate(
         async ({ trId, height, eps, idx, animeName, animeId, local }) => {
@@ -749,6 +761,8 @@ export async function seatDuo(
     b?: LaunchOpts & { local?: number[] }
     openLocalA?: boolean
     openLocalB?: boolean
+    /** B opens `LONGER_CUT` (#541); `startEp` must be its episode. */
+    longerCutB?: boolean
     /** Skip the opening Play press; the room stays as Syncplay created it. */
     leavePaused?: boolean
   } = {}
@@ -762,7 +776,7 @@ export async function seatDuo(
   await setupRetry('B connect', () => B.connect(relay ? relay.port : rig.server.port, room))
   await A.open(startEp, { local: opts.openLocalA })
   await sleep(3000)
-  await B.open(startEp, { local: opts.openLocalB })
+  await B.open(startEp, { local: opts.openLocalB, longerCut: opts.longerCutB })
   if (!opts.leavePaused) {
     // A fresh Syncplay room starts paused, and both players open into it
     // paused. Start the session the way a user would: press Play on A.

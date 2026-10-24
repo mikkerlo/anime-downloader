@@ -195,8 +195,9 @@ export interface Instance {
   /** Run a seek-bar seek (`{ seek }`) or a Play/Pause press (`'toggle'`) at
    *  wall-clock `at` (`Date.now()` ms, which every process on the host shares),
    *  so two instances can be raced at millisecond offsets (#524). The page
-   *  sleeps to within 20 ms of `at` and spins out the rest; a Playwright round
-   *  trip per action would be far wider than the gaps this sweeps. Returns the
+   *  sleeps to within 4 ms of `at` and yields task by task through the rest,
+   *  so it is never deaf to IPC; a Playwright round trip per action would be
+   *  far wider than the gaps this sweeps. Returns the
    *  in-page `Date.now()` the action ran at. */
   actAt(at: number, action: { seek: number } | 'toggle'): Promise<number>
   /** Everything recorded since `from` (Date.now() ms), relative to `from`. */
@@ -621,11 +622,16 @@ export async function launchInstance(
     actAt: async (at, action) =>
       page.evaluate(
         async ({ at, action }) => {
-          const early = at - Date.now() - 20
+          const early = at - Date.now() - 4
           if (early > 0) await new Promise((r) => setTimeout(r, early))
-          while (Date.now() < at) {
-            /* spin out the last few ms */
-          }
+          // Runs every queued task (IPC, media) up to `at`; late only behind one straddling it.
+          const ch = new MessageChannel()
+          while (Date.now() < at)
+            await new Promise((r) => {
+              ch.port1.onmessage = r
+              ch.port2.postMessage(0)
+            })
+          ch.port1.close()
           const ranAt = Date.now()
           if (action === 'toggle') {
             ;(document.querySelector('button.ctrl-btn.big') as HTMLButtonElement).click()

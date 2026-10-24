@@ -312,7 +312,7 @@ function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): 
   )
 }
 
-test('S10 / S11 — a far scrub and a peer’s pause 2 ms before to 5 ms after it (#524)', async () => {
+test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after it (#524)', async () => {
   test.setTimeout(20 * 60_000)
   const drift = new RowScorer('S10')
   const lost = new RowScorer('S11')

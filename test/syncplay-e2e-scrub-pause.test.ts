@@ -86,6 +86,66 @@ describe('scrubPauseVerdict (#524)', () => {
     })
   })
 
+  // The crossed wire, but the forced pause echoes the seek's `client: 12`: the
+  // server had the seek before it sent the pause, so this is a seek dropped
+  // behind an older forced update, not a crossing. The room still resumes on
+  // the re-assert, and that must not read as the seek.
+  it('a seek the server had but dropped: not crossed, still resumed by the re-assert', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [51, 'out', { position: 394.8, paused: false, doSeek: true }, { client: 12 }],
+          [
+            51,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1, client: 12 }
+          ],
+          [51, 'out', null, { server: 1 }],
+          [52, 'out', { position: 394.8, paused: false, doSeek: true }, null],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1, client: 12 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [50, 'out', { position: 363.169, paused: true, doSeek: false }, { client: 22 }],
+          [
+            52,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1, client: 22 }
+          ],
+          [53, 'out', null, { server: 1 }],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({
+      lost: true,
+      seekCrossed: false,
+      reasserts: 1,
+      resumedBy: 'reassert'
+    })
+  })
+
   // A scrubs, B pauses 2 ms earlier, and A hears (and acks) the pause before
   // its seek leaves. No crossing, so the gate is down: the seek itself, still
   // carrying the renderer's `paused: false`, resumes the room.

@@ -192,10 +192,10 @@ export interface ScrubPauseVerdict {
    *  off the forced resume the pauser received (setBy the scrubber, `paused:
    *  false`). The server forwards the applied frame's `doSeek`, server.py:185
    *  ("w.sendState(position, paused, doSeek, setBy, True)"), so `doSeek: true`
-   *  behind a crossed seek is the #252
-   *  re-assert, `doSeek: true` with no crossing is the seek itself, and
-   *  `doSeek: false` is a heartbeat. `null` when the pause held or no forced
-   *  resume was recorded. */
+   *  is the #252 re-assert when the scrubber had sent one by the time the
+   *  resume reached the pauser (its seek was dropped, crossed or behind an
+   *  older forced update), and the seek itself otherwise; `doSeek: false` is a
+   *  heartbeat. `null` when the pause held or no forced resume was recorded. */
   resumedBy: 'reassert' | 'seek' | 'heartbeat' | null
 }
 
@@ -238,8 +238,12 @@ export function scrubPauseVerdict(d: {
           f.ps.paused === false &&
           f.iotf?.server !== undefined
       )
+    // Both traces are relative to the same instant on the shared host clock.
+    const reassertedBy = (at: number): boolean =>
+      seekIdx >= 0 &&
+      s.wire.slice(seekIdx + 1).some((f) => f.dir === 'out' && f.ps?.doSeek === true && f.at <= at)
     if (pressIdx >= 0 && resume)
-      resumedBy = resume.ps!.doSeek ? (seekCrossed ? 'reassert' : 'seek') : 'heartbeat'
+      resumedBy = resume.ps!.doSeek ? (reassertedBy(resume.at) ? 'reassert' : 'seek') : 'heartbeat'
   }
   return { lost, drift, spread, seekCrossed, reasserts, resumedBy }
 }

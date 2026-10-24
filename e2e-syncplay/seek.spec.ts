@@ -258,6 +258,9 @@ async function scrubPauseSweep(
             setupOk: playing && scrubbed && pressed,
             offsetMs,
             realOffsetMs: pressAt - scrubAt,
+            // Each action's in-page Date.now() minus its scheduled one.
+            scrubLateMs: scrubAt - at,
+            pressLateMs: pressAt - (at + offsetMs),
             scrubber: scrubber.name,
             // Scrubber minus pauser before the run: what an earlier run left.
             preSpread: +(s0.ct - p0.ct).toFixed(2),
@@ -312,6 +315,18 @@ function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): 
   )
 }
 
+/** `actAt`'s accuracy over a sweep, so a CI log shows it without the traces:
+ *  the real offset minus the asked one, and each action's own lateness. */
+function offsetLine(rows: string, s: { records: Record<string, unknown>[] }): void {
+  const runs = s.records.filter((r) => r.setupOk)
+  const stat = (xs: number[]): string =>
+    `min=${Math.min(...xs)} max=${Math.max(...xs)} nonzero=${xs.filter((x) => x !== 0).length}/${xs.length}`
+  const num = (k: string): number[] => runs.map((r) => r[k] as number)
+  process.stdout.write(
+    `[syncplay-e2e] ${rows} offset: real−asked ${stat(runs.map((r) => (r.realOffsetMs as number) - (r.offsetMs as number)))}; scrub late ${stat(num('scrubLateMs'))}; press late ${stat(num('pressLateMs'))}\n`
+  )
+}
+
 test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after it (#524)', async () => {
   test.setTimeout(20 * 60_000)
   const drift = new RowScorer('S10')
@@ -322,6 +337,7 @@ test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after i
   bucketLines(d, SCRUB_PAUSE_OFFSETS_MS)
   bucketLines(l, SCRUB_PAUSE_OFFSETS_MS)
   resumedByLine(l)
+  offsetLine('S10 / S11', l)
   // ✗ rows (#524): proof the rig sees both shapes on main. The fix PRs flip
   // them to `bad == 0`.
   expect(d.bad, 'S10 (✗): no drift seen').toBeGreaterThanOrEqual(1)
@@ -338,6 +354,7 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
   bucketLines(d, SCRUB_PAUSE_CONTROL_OFFSETS_MS)
   bucketLines(l, SCRUB_PAUSE_CONTROL_OFFSETS_MS)
   resumedByLine(l)
+  offsetLine('S10c / S11c', l)
   const runs = l.records.filter((r) => r.setupOk)
   // The control's claim: below the tolerance the hop S11 resumes on does not
   // exist, so no run sends a re-assert and no pause is lost to one.

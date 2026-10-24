@@ -183,7 +183,9 @@ export interface ScrubPauseVerdict {
    *  the server sent that pause before it had the seek: the pause is the first
    *  forced update the scrubber receives after the seek, it carries no
    *  `client` echo of the seek's counter, and the seek carries no `server`
-   *  ack. The protocol gate then drops the seek, protocols.py:788
+   *  ack equal to the pause's (the server clears its counter only on an exact
+   *  match, and the pause's forced send had already bumped it past any older
+   *  ack). The protocol gate then drops the seek, protocols.py:788
    *  ("if self.serverIgnoringOnTheFly == 0:"). */
   seekCrossed: boolean
   /** `doSeek: true` frames the scrubber sent after its seek: #252 re-asserts. */
@@ -221,7 +223,7 @@ export function scrubPauseVerdict(d: {
     firstForced.ps?.setBy === p.name &&
     firstForced.ps.paused === true &&
     firstForced.iotf?.client === undefined &&
-    s.wire[seekIdx].iotf?.server === undefined
+    s.wire[seekIdx].iotf?.server !== firstForced.iotf?.server
   const reasserts =
     seekIdx < 0
       ? 0

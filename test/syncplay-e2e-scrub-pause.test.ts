@@ -146,6 +146,67 @@ describe('scrubPauseVerdict (#524)', () => {
     })
   })
 
+  // The crossed wire again, with a `server` ack on the seek. The server clears
+  // its counter only when an ack equals it (protocols.py's handleState), and
+  // the forced pause carries the counter as it stood when the seek arrived.
+  const crossedWithSeekAck = (seekAck: number, pauseServer: number): boolean => {
+    const prior: [number, 'in', Ps, Io][] =
+      pauseServer > seekAck
+        ? [
+            [
+              40,
+              'in',
+              { position: 390, paused: false, doSeek: false, setBy: 'rigA' },
+              { server: seekAck }
+            ]
+          ]
+        : []
+    return scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          ...prior,
+          [
+            51,
+            'out',
+            { position: 394.8, paused: false, doSeek: true },
+            { server: seekAck, client: 12 }
+          ],
+          [
+            51,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: pauseServer }
+          ],
+          [51, 'out', null, { server: pauseServer }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [50, 'out', { position: 363.169, paused: true, doSeek: false }, { client: 22 }]
+        ])
+      }
+    }).seekCrossed
+  }
+
+  // An ack equal to the counter the pause carries clears the gate, so the
+  // seek applies behind the pause: not crossed.
+  it('a seek acking the counter the pause carries: not crossed', () => {
+    expect(crossedWithSeekAck(1, 1)).toBe(false)
+  })
+
+  // The scrubber acks the forced update it heard before seeking (counter 1),
+  // but the pause's forced send has bumped the counter to 2: the ack does not
+  // clear it, the gate drops the seek, and this is still a crossing.
+  it('a seek acking an older forced update: still crossed', () => {
+    expect(crossedWithSeekAck(1, 2)).toBe(true)
+  })
+
   // A scrubs, B pauses 2 ms earlier, and A hears (and acks) the pause before
   // its seek leaves. No crossing, so the gate is down: the seek itself, still
   // carrying the renderer's `paused: false`, resumes the room.
@@ -197,6 +258,60 @@ describe('scrubPauseVerdict (#524)', () => {
       }
     })
     expect(v).toMatchObject({ lost: true, seekCrossed: false, reasserts: 0, resumedBy: 'seek' })
+  })
+
+  // The uncrossed wire plus a `doSeek: true` the scrubber sends at 60 ms, after
+  // the room had already resumed on the seek at 52: a later re-assert does not
+  // make it the frame the room resumed on.
+  it('a re-assert sent after the resume: still resumed by the seek', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigA',
+        ct: 583.36,
+        paused: false,
+        wire: wire([
+          [
+            51,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [52, 'out', { position: 579.3, paused: false, doSeek: true }, { client: 82 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1, client: 82 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [60, 'out', { position: 579.3, paused: false, doSeek: true }, null]
+        ])
+      },
+      pauser: {
+        name: 'rigB',
+        ct: 584.25,
+        paused: false,
+        wire: wire([
+          [49, 'out', { position: 609.962, paused: true, doSeek: false }, { client: 52 }],
+          [
+            50,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1, client: 52 }
+          ],
+          [50, 'out', null, { server: 1 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({ lost: true, seekCrossed: false, reasserts: 1, resumedBy: 'seek' })
   })
 
   // B scrubs, A pauses in the same ms. The scrub reaches the server first and

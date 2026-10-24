@@ -2786,7 +2786,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function roomPausedAtEnd(duration: number): boolean {
     const s = lastRecordedRemoteState
     if (!s || !s.paused || s.doSeek || !Number.isFinite(duration) || duration <= 0) return false
-    return s.position >= duration - AUTO_ADVANCE_PAUSE_EPS_S
+    if (s.position >= duration - AUTO_ADVANCE_PAUSE_EPS_S) return true
+    // #541: the end is ours or the pauser's. A peer on a longer cut of the episode is not out of
+    // file when a shorter-cut peer ends, so the room pauses at that peer's `duration` and leaves
+    // us seconds short of ours; the pauser's roster row says where its end is. A peer pausing
+    // deliberately within a frame of its own end arms us too, the trade #528 took for our element.
+    const pausers = pausersEpisodeDuration(s.setBy)
+    return pausers !== null && s.position >= pausers - AUTO_ADVANCE_PAUSE_EPS_S
+  }
+
+  // The `duration` the pauser's roster row reports for the episode we are on, or `null` (#541).
+  // Every miss fails closed, back to our own end: no `setBy`, a pauser no longer in the roster, a
+  // row whose file is another episode's (the canonical name has no translation part, so another
+  // cut of this episode matches and a row left from the previous one does not), or no duration.
+  // Case-insensitive, like `namesUs`.
+  function pausersEpisodeDuration(setBy: string | null): number | null {
+    if (!setBy) return null
+    const who = setBy.toLowerCase()
+    const row = syncplayRoomUsers.value.find((u) => u.username.toLowerCase() === who)
+    if (!row?.file || row.file.name !== buildCanonicalName()) return null
+    const d = row.file.duration
+    return Number.isFinite(d) && d > 0 ? d : null
   }
 
   return {
@@ -2835,7 +2855,8 @@ type SyncplayClientTail = SyncplayFollowWalkHold & SyncplayRoomEndPause
 /** The room's end pause, as PlayerView's auto-advance needs it (#533). */
 type SyncplayRoomEndPause = {
   /** `true` when the last room state we were told is paused at or past
-   *  `duration - AUTO_ADVANCE_PAUSE_EPS_S`. */
+   *  `duration - AUTO_ADVANCE_PAUSE_EPS_S`, or at or past the same frame short of the
+   *  pauser's own `duration` for this episode, per its roster row (#541). */
   roomPausedAtEnd: (duration: number) => boolean
 }
 

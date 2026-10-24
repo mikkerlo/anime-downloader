@@ -7,6 +7,10 @@
 // server resolves a request through `fixtureFor()`, and the handler swap in
 // `duo.ts` builds `availableStreams` from the same ids, so the two cannot
 // disagree about which file a translation plays.
+//
+// One more file sits outside that grid (#541): a longer cut of episode 1,
+// `LONGER_CUT` below, for the row where two peers play different-length files
+// of one episode.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,8 +44,26 @@ export interface FixtureEpisode {
 export const translationId = (episodeInt: string, slot: number): number =>
   1000 + Number(episodeInt) * 10 + slot
 
+/** #541: a longer cut of episode 1 — the same episode with `extraS` more seconds, one 720p file
+ *  (`ep1-720-longer.mp4`, generated alongside the rest). It has a translation id of its own,
+ *  outside `TRANSLATION_SLOTS`, so no translation menu lists it and no other row's switch can
+ *  land on it: only an instance `open()`ed with `longerCut` gets it, in episode 1's list. There it
+ *  is listed at `listedHeight`, above the slots, so the resolution chain's best-of-the-same-type
+ *  arm walks that instance back onto it on every Prev to episode 1. The 360p variants keep the
+ *  episode's length: the quality-switch rows depend on both heights matching. */
+export const LONGER_CUT = {
+  episodeInt: '1',
+  slot: 9,
+  label: 'Fixture Long',
+  height: 720,
+  listedHeight: 1080,
+  extraS: 5
+} as const
+export const LONGER_CUT_TR_ID = translationId(LONGER_CUT.episodeInt, LONGER_CUT.slot)
+
 /** Which episode a translation id plays, or `null` for an id no fixture has. */
 export function episodeOfTranslation(trId: number): string | null {
+  if (trId === LONGER_CUT_TR_ID) return LONGER_CUT.episodeInt
   for (const ep of EPISODE_INTS) {
     for (const t of TRANSLATION_SLOTS) if (translationId(ep, t.slot) === trId) return ep
   }
@@ -58,6 +80,9 @@ export function fixtureFile(
     : path.join(FIXTURE_DIR, `ep${episodeInt}-${height}.mp4`)
 }
 
+export const longerCutFile = (): string =>
+  path.join(FIXTURE_DIR, `ep${LONGER_CUT.episodeInt}-${LONGER_CUT.height}-longer.mp4`)
+
 /** The request path the fixture server answers for one translation/quality. */
 export const streamPath = (trId: number, height: number): string => `/tr/${trId}/${height}.mp4`
 
@@ -65,31 +90,56 @@ export const streamPath = (trId: number, height: number): string => `/tr/${trId}
 export function fixtureFor(urlPath: string): string | null {
   const m = /^\/tr\/(\d+)\/(\d+)\.mp4$/.exec(urlPath)
   if (!m) return null
-  const ep = episodeOfTranslation(Number(m[1]))
   const height = Number(m[2])
+  if (Number(m[1]) === LONGER_CUT_TR_ID)
+    return height === LONGER_CUT.height ? longerCutFile() : null
+  const ep = episodeOfTranslation(Number(m[1]))
   if (!ep || !(HEIGHTS as readonly number[]).includes(height)) return null
   return fixtureFile(ep, height)
 }
 
 /** The `allEpisodes` payload PlayerView is opened with, so `getAnime` /
- *  `getEpisodesBatch` never reach the network (#489 review). */
-export function allEpisodes(downloaded: number[] = []): FixtureEpisode[] {
+ *  `getEpisodesBatch` never reach the network (#489 review). `longerCut` adds
+ *  `LONGER_CUT` to its episode's list (#541). */
+export function allEpisodes(
+  downloaded: number[] = [],
+  opts: { longerCut?: boolean } = {}
+): FixtureEpisode[] {
   return EPISODE_INTS.map((ep, i) => ({
     id: 489_100 + i,
     episodeInt: ep,
     episodeFull: ep,
-    translations: TRANSLATION_SLOTS.map((t) => ({
-      id: translationId(ep, t.slot),
-      label: t.label,
-      type: 'subRu',
-      height: HEIGHTS[0]
-    })),
+    translations: [
+      ...TRANSLATION_SLOTS.map((t) => ({
+        id: translationId(ep, t.slot),
+        label: t.label,
+        type: 'subRu',
+        height: HEIGHTS[0]
+      })),
+      ...(opts.longerCut && ep === LONGER_CUT.episodeInt
+        ? [
+            {
+              id: LONGER_CUT_TR_ID,
+              label: LONGER_CUT.label,
+              type: 'subRu',
+              height: LONGER_CUT.listedHeight
+            }
+          ]
+        : [])
+    ],
     downloadedTrIds: downloaded.filter((id) => episodeOfTranslation(id) === ep)
   }))
 }
 
 export interface Manifest {
-  files: { name: string; episodeInt: string; height: number; durationS: number }[]
+  files: {
+    name: string
+    episodeInt: string
+    height: number
+    durationS: number
+    /** `'longer'` on the #541 file; absent on the grid. */
+    cut?: 'longer'
+  }[]
 }
 
 /** Generate the fixtures if they are missing (idempotent), then read the
@@ -104,7 +154,13 @@ export function ensureFixtures(): Manifest {
 }
 
 export function durationOf(m: Manifest, episodeInt: string): number {
-  const f = m.files.find((x) => x.episodeInt === episodeInt)
+  const f = m.files.find((x) => x.episodeInt === episodeInt && !x.cut)
   if (!f) throw new Error(`no fixture for episode ${episodeInt}`)
+  return f.durationS
+}
+
+export function longerCutDurationOf(m: Manifest): number {
+  const f = m.files.find((x) => x.cut === 'longer')
+  if (!f) throw new Error('no longer-cut fixture')
   return f.durationS
 }

@@ -1564,4 +1564,207 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       })
     })
   })
+
+  // The server half of #524's scrub-vs-pause race, as it is on main (✗: the fix
+  // PR rewrites the "which frame is applied" pins, not the gate pins). Option B
+  // of the plan review: `MinElectionServer` deliberately does not model the
+  // ignore window (its header says why), so the window is modelled here, for
+  // one watcher's connection, and fed this client's real outbound frames in
+  // wire order. Only the clauses the two shapes turn on:
+  //  - every forced send bumps the watcher's counter,
+  //    protocols.py:752-753 ("self.serverIgnoringOnTheFly += 1");
+  //  - an echo of the matching value clears it, above the gate,
+  //    protocols.py:776-777 ("self.serverIgnoringOnTheFly = 0");
+  //  - the playstate reaches `updateState` only while the counter is 0,
+  //    protocols.py:788-789 ("if self.serverIgnoringOnTheFly == 0:");
+  //  - `updateState` forces a room update on a pause change or a `doSeek`,
+  //    server.py:883-884 ("if doSeek or pauseChanged:"), and the forced
+  //    broadcast has no sender filter, server.py:441-445 ("for receiver in
+  //    room.getWatchers():"), so the setter's own counter is bumped too.
+  // The room's position is what the applied frame says; the message-age
+  // compensation and the min() election are not modelled (both shapes are
+  // decided by *which* frame lands, not by where the room then projects).
+  describe('the server half of the scrub-vs-pause race (#524)', () => {
+    type Applied = { frame: number; position: number; paused: boolean; doSeek: boolean }
+
+    class ReferenceWatcherGate {
+      serverIgnoringOnTheFly = 0
+      room: { position: number; paused: boolean; setBy: string | null }
+      readonly applied: Applied[] = []
+      readonly dropped: number[] = []
+      constructor(
+        private readonly name: string,
+        room: { position: number; paused: boolean; setBy: string | null }
+      ) {
+        this.room = { ...room }
+      }
+      /** A forced send to this watcher: the frame it carries `server: n`. */
+      forced(): number {
+        this.serverIgnoringOnTheFly += 1
+        return this.serverIgnoringOnTheFly
+      }
+      /** One of this client's outbound State frames, `frame` its wire index. */
+      receive(state: StateFrame, frame: number): void {
+        const ack = state.ignoringOnTheFly?.server
+        if (ack !== undefined && this.serverIgnoringOnTheFly === ack)
+          this.serverIgnoringOnTheFly = 0
+        if (!state.playstate) return
+        if (this.serverIgnoringOnTheFly !== 0) {
+          this.dropped.push(frame)
+          return
+        }
+        const { position, paused, doSeek } = state.playstate
+        const pauseChanged = paused !== undefined && paused !== this.room.paused
+        if (pauseChanged) this.room.paused = paused
+        this.room.position = position
+        if (doSeek || pauseChanged) {
+          this.room.setBy = this.name
+          this.applied.push({ frame, position, paused: this.room.paused, doSeek: doSeek === true })
+          // The forced broadcast reaches the setter's connection as well.
+          this.forced()
+        }
+      }
+    }
+
+    // Every frame this client has written so far, from `from` on, fed in wire
+    // order. Returns the index past the last one fed.
+    const feed = (gate: ReferenceWatcherGate, from: number): number => {
+      const states = outboundStates(lastTlsSocket)
+      for (let i = from; i < states.length; i++) gate.receive(states[i], i)
+      return states.length
+    }
+
+    const P0 = 100
+    // Past SEEK_REASSERT_TOLERANCE_S, as the plan review requires: below it the
+    // #252 re-assert hop does not exist (the control case at the end).
+    const TARGET = P0 + 10 * SEEK_REASSERT_TOLERANCE_S
+
+    describe('shape 2, pause lost: the peer’s pause reaches the server first and our scrub crosses it', () => {
+      const scrubCrossedByPause = (target: number): ReferenceWatcherGate => {
+        handshake()
+        clearWrites()
+        client.updateSnapshot({ position: P0, paused: false })
+        armLocalSeek(target)
+        expect(pendingClientAck()).toBeGreaterThan(0)
+        // The peer's pause is already applied: the room is paused at the
+        // peer's position and its forced update is in flight to us.
+        const gate = new ReferenceWatcherGate('me', { position: P0, paused: true, setBy: 'peer' })
+        const n = gate.forced()
+        forcedState({ server: n, setBy: 'peer', position: P0, paused: true, doSeek: false })
+        return gate
+      }
+
+      it('the forced pause raises our gate, so the seek we sent before hearing it is dropped', () => {
+        const gate = scrubCrossedByPause(TARGET)
+        const states = outboundStates(lastTlsSocket)
+        expect(states[0].playstate).toMatchObject({ position: TARGET, paused: false, doSeek: true })
+        expect(states[0].ignoringOnTheFly?.server).toBeUndefined()
+
+        gate.receive(states[0], 0)
+
+        expect(gate.dropped).toEqual([0])
+        expect(gate.applied).toEqual([])
+        expect(gate.room).toEqual({ position: P0, paused: true, setBy: 'peer' })
+      })
+
+      it('the frame the server applies is the #252 re-assert behind the ack, and it resumes the room at the target', () => {
+        const gate = scrubCrossedByPause(TARGET)
+
+        // No timer has advanced: the ack and the re-assert are written in the
+        // tick the forced pause arrives in.
+        feed(gate, 0)
+
+        const states = outboundStates(lastTlsSocket)
+        expect(states).toHaveLength(3)
+        expect(states[1]).toEqual(expect.objectContaining({ ignoringOnTheFly: { server: 1 } }))
+        expect(states[1]).not.toHaveProperty('playstate')
+        expect(gate.dropped).toEqual([0])
+        expect(gate.applied).toEqual([{ frame: 2, position: TARGET, paused: false, doSeek: true }])
+        expect(gate.room).toEqual({ position: TARGET, paused: false, setBy: 'me' })
+        // The resume is forced to every watcher, us included, so our own echo
+        // of it is in flight with the next counter.
+        expect(gate.serverIgnoringOnTheFly).toBe(1)
+      })
+
+      it('control: a scrub inside SEEK_REASSERT_TOLERANCE_S has no re-assert hop, and the next heartbeat carries the renderer’s pause', () => {
+        const near = P0 + SEEK_REASSERT_TOLERANCE_S - 1
+        const gate = scrubCrossedByPause(near)
+        let fed = feed(gate, 0)
+        expect(outboundStates(lastTlsSocket)).toHaveLength(2)
+        expect(gate.applied).toEqual([])
+
+        // The renderer applies the room's pause in place, inside its 3 s rule.
+        client.updateSnapshot({ position: near, paused: true })
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        fed = feed(gate, fed)
+
+        expect(gate.dropped).toEqual([0])
+        expect(gate.room.paused).toBe(true)
+        expect(gate.applied).toEqual([])
+        expect(fed).toBe(3)
+      })
+    })
+
+    describe('shape 1, drift: the peer’s scrub reaches the server first and our pause crosses it', () => {
+      const pauseCrossedByScrub = (): ReferenceWatcherGate => {
+        handshake()
+        clearWrites()
+        client.updateSnapshot({ position: P0, paused: false })
+        // The peer's seek is already applied and its forced update is in
+        // flight to us when our pause leaves, at the pre-seek position.
+        const gate = new ReferenceWatcherGate('me', {
+          position: TARGET,
+          paused: false,
+          setBy: 'peer'
+        })
+        const n = gate.forced()
+        client.sendLocalState({ paused: true, position: P0, cause: 'pause' })
+        expect(pendingClientAck()).toBeGreaterThan(0)
+        forcedState({ server: n, setBy: 'peer', position: TARGET, paused: false, doSeek: true })
+        return gate
+      }
+
+      it('the forced seek raises our gate, so the pause we sent before hearing it is dropped', () => {
+        const gate = pauseCrossedByScrub()
+        const states = outboundStates(lastTlsSocket)
+        expect(states[0].playstate).toMatchObject({ position: P0, paused: true, doSeek: false })
+
+        feed(gate, 0)
+
+        expect(gate.dropped).toEqual([0])
+        expect(gate.applied).toEqual([])
+        expect(gate.room).toEqual({ position: TARGET, paused: false, setBy: 'peer' })
+      })
+
+      it('the frame the server applies is the first heartbeat past the #513 apply-in-flight window, not the one inside it', () => {
+        const gate = pauseCrossedByScrub()
+        let fed = feed(gate, 0)
+        expect(fed).toBe(2)
+
+        // The renderer took the seek and kept the user's pause (the trace's
+        // shape): it pushes the target, paused, while the room plays on.
+        client.updateSnapshot({ position: TARGET, paused: true })
+
+        // The forced seek's `paused: false` armed #513's marker against our
+        // paused snapshot, so a heartbeat inside APPLY_IN_FLIGHT_TTL_MS
+        // (= HEARTBEAT_MS) claims the position and no `paused`: the server sees
+        // no pause change and forces nothing.
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        fed = feed(gate, fed)
+        const states = outboundStates(lastTlsSocket)
+        expect(fed).toBe(3)
+        expect(states[2].playstate).toEqual({ position: TARGET, doSeek: false })
+        expect(gate.applied).toEqual([])
+        expect(gate.room.paused).toBe(false)
+
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        fed = feed(gate, fed)
+
+        expect(fed).toBe(4)
+        expect(gate.applied).toEqual([{ frame: 3, position: TARGET, paused: true, doSeek: false }])
+        expect(gate.room).toEqual({ position: TARGET, paused: true, setBy: 'me' })
+        expect(gate.serverIgnoringOnTheFly).toBe(1)
+      })
+    })
+  })
 })

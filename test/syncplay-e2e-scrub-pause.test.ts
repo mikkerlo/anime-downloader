@@ -1,0 +1,453 @@
+// `scrubPauseVerdict` (`e2e-syncplay/helpers/score.ts`), the S10 / S11 scorer
+// of #524, replayed on wire slices captured from the local sweep on the real
+// Syncplay 1.7.6 server (one slice per outcome the sweep produced). Each frame
+// is `[at, dir, playstate | null, ignoringOnTheFly | null]`, relative to the
+// scheduled scrub; `null` playstate is a ping-only ack.
+
+import { describe, expect, it } from 'vitest'
+import { SCRUB_PAUSE_SPREAD_S, scrubPauseVerdict } from '../e2e-syncplay/helpers/score'
+import { ECHO_SEEK_EPSILON_S } from '../src/main/syncplay'
+
+type Ps = { position: number; paused?: boolean; doSeek: boolean; setBy?: string }
+type Io = { server?: number; client?: number }
+const wire = (
+  frames: [number, 'in' | 'out', Ps | null, Io | null][]
+): { at: number; dir: string; ps?: Ps; iotf?: Io }[] =>
+  frames.map(([at, dir, ps, iotf]) => ({
+    at,
+    dir,
+    ...(ps ? { ps } : {}),
+    ...(iotf ? { iotf } : {})
+  }))
+
+describe('scrubPauseVerdict (#524)', () => {
+  it('the spread threshold is ECHO_SEEK_EPSILON_S, the predicate the drift fix snaps at', () => {
+    expect(SCRUB_PAUSE_SPREAD_S).toBe(ECHO_SEEK_EPSILON_S)
+  })
+
+  // B scrubs, A pauses 1 ms earlier. A's pause reaches the server first; B's
+  // seek left before B heard it, so the forced pause carries no `client` echo
+  // and the seek no `server` ack. B acks and re-asserts in the same ms; the
+  // room resumes on the re-assert, and both peers play on from the target.
+  it('a crossed scrub: the pause is lost, resumed by the #252 re-assert', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [51, 'out', { position: 394.8, paused: false, doSeek: true }, { client: 12 }],
+          [
+            51,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [51, 'out', null, { server: 1 }],
+          [52, 'out', { position: 394.8, paused: false, doSeek: true }, null],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1, client: 12 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [50, 'out', { position: 363.169, paused: true, doSeek: false }, { client: 22 }],
+          [
+            52,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1, client: 22 }
+          ],
+          [53, 'out', null, { server: 1 }],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({
+      lost: true,
+      drift: false,
+      seekCrossed: true,
+      reasserts: 1,
+      resumedBy: 'reassert'
+    })
+  })
+
+  // The crossed wire, but the forced pause echoes the seek's `client: 12`: the
+  // server had the seek before it sent the pause, so this is a seek dropped
+  // behind an older forced update, not a crossing. The room still resumes on
+  // the re-assert, and that must not read as the seek.
+  it('a seek the server had but dropped: not crossed, still resumed by the re-assert', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [51, 'out', { position: 394.8, paused: false, doSeek: true }, { client: 12 }],
+          [
+            51,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1, client: 12 }
+          ],
+          [51, 'out', null, { server: 1 }],
+          [52, 'out', { position: 394.8, paused: false, doSeek: true }, null],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1, client: 12 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [50, 'out', { position: 363.169, paused: true, doSeek: false }, { client: 22 }],
+          [
+            52,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1, client: 22 }
+          ],
+          [53, 'out', null, { server: 1 }],
+          [
+            94,
+            'in',
+            { position: 394.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [94, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({
+      lost: true,
+      seekCrossed: false,
+      reasserts: 1,
+      resumedBy: 'reassert'
+    })
+  })
+
+  // The crossed wire again, with a `server` ack on the seek. The server clears
+  // its counter only when an ack equals it (protocols.py's handleState), and
+  // the forced pause carries the counter as it stood when the seek arrived.
+  const crossedWithSeekAck = (seekAck: number, pauseServer: number): boolean => {
+    const prior: [number, 'in', Ps, Io][] =
+      pauseServer > seekAck
+        ? [
+            [
+              40,
+              'in',
+              { position: 390, paused: false, doSeek: false, setBy: 'rigA' },
+              { server: seekAck }
+            ]
+          ]
+        : []
+    return scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          ...prior,
+          [
+            51,
+            'out',
+            { position: 394.8, paused: false, doSeek: true },
+            { server: seekAck, client: 12 }
+          ],
+          [
+            51,
+            'in',
+            { position: 363.169, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: pauseServer }
+          ],
+          [51, 'out', null, { server: pauseServer }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 399.71,
+        paused: false,
+        wire: wire([
+          [50, 'out', { position: 363.169, paused: true, doSeek: false }, { client: 22 }]
+        ])
+      }
+    }).seekCrossed
+  }
+
+  // An ack equal to the counter the pause carries clears the gate, so the
+  // seek applies behind the pause: not crossed.
+  it('a seek acking the counter the pause carries: not crossed', () => {
+    expect(crossedWithSeekAck(1, 1)).toBe(false)
+  })
+
+  // The scrubber acks the forced update it heard before seeking (counter 1),
+  // but the pause's forced send has bumped the counter to 2: the ack does not
+  // clear it, the gate drops the seek, and this is still a crossing.
+  it('a seek acking an older forced update: still crossed', () => {
+    expect(crossedWithSeekAck(1, 2)).toBe(true)
+  })
+
+  // A scrubs, B pauses 2 ms earlier, and A hears (and acks) the pause before
+  // its seek leaves. No crossing, so the gate is down: the seek itself, still
+  // carrying the renderer's `paused: false`, resumes the room.
+  it('an uncrossed scrub: the pause is lost, resumed by the seek itself', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigA',
+        ct: 583.36,
+        paused: false,
+        wire: wire([
+          [
+            51,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [52, 'out', { position: 579.3, paused: false, doSeek: true }, { client: 82 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1, client: 82 }
+          ],
+          [52, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigB',
+        ct: 584.25,
+        paused: false,
+        wire: wire([
+          [49, 'out', { position: 609.962, paused: true, doSeek: false }, { client: 52 }],
+          [
+            50,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1, client: 52 }
+          ],
+          [50, 'out', null, { server: 1 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({ lost: true, seekCrossed: false, reasserts: 0, resumedBy: 'seek' })
+  })
+
+  // The uncrossed wire plus a `doSeek: true` the scrubber sends at 60 ms, after
+  // the room had already resumed on the seek at 52: a later re-assert does not
+  // make it the frame the room resumed on.
+  it('a re-assert sent after the resume: still resumed by the seek', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigA',
+        ct: 583.36,
+        paused: false,
+        wire: wire([
+          [
+            51,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [52, 'out', { position: 579.3, paused: false, doSeek: true }, { client: 82 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1, client: 82 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [60, 'out', { position: 579.3, paused: false, doSeek: true }, null]
+        ])
+      },
+      pauser: {
+        name: 'rigB',
+        ct: 584.25,
+        paused: false,
+        wire: wire([
+          [49, 'out', { position: 609.962, paused: true, doSeek: false }, { client: 52 }],
+          [
+            50,
+            'in',
+            { position: 609.962, paused: true, doSeek: false, setBy: 'rigB' },
+            { server: 1, client: 52 }
+          ],
+          [50, 'out', null, { server: 1 }],
+          [
+            52,
+            'in',
+            { position: 579.301, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }]
+        ])
+      }
+    })
+    expect(v).toMatchObject({ lost: true, seekCrossed: false, reasserts: 1, resumedBy: 'seek' })
+  })
+
+  // B scrubs, A pauses in the same ms. The scrub reaches the server first and
+  // A's pause, sent at the pre-seek position, crosses it and is dropped. A's
+  // first heartbeat is position-only (#513's marker), the next one re-pauses
+  // the room at the target, and B has played on 1.25 s by then.
+  it('the pauser’s pause crossed by the scrub: drift, the scrubber ahead', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 543.05,
+        paused: true,
+        wire: wire([
+          [51, 'out', { position: 541.8, paused: false, doSeek: true }, { client: 16 }],
+          [
+            52,
+            'in',
+            { position: 541.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1, client: 16 }
+          ],
+          [52, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 541.8,
+        paused: true,
+        wire: wire([
+          [52, 'out', { position: 512.145, paused: true, doSeek: false }, { client: 26 }],
+          [
+            52,
+            'in',
+            { position: 541.801, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [354, 'out', { position: 541.802, doSeek: false }, null]
+        ])
+      }
+    })
+    expect(v).toMatchObject({ lost: false, drift: true, seekCrossed: false, resumedBy: null })
+    expect(v.spread).toBeCloseTo(1.25, 2)
+  })
+
+  // B scrubs, A pauses 3 ms later: the scrub lands, A acks it, then pauses at
+  // the target. Both end paused together.
+  it('a clean run: neither', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigB',
+        ct: 605.3,
+        paused: true,
+        wire: wire([
+          [51, 'out', { position: 605.3, paused: false, doSeek: true }, { client: 31 }],
+          [
+            51,
+            'in',
+            { position: 605.301, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1, client: 31 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [
+            56,
+            'in',
+            { position: 605.301, paused: true, doSeek: false, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [56, 'out', null, { server: 1 }]
+        ])
+      },
+      pauser: {
+        name: 'rigA',
+        ct: 605.3,
+        paused: true,
+        wire: wire([
+          [
+            53,
+            'in',
+            { position: 605.301, paused: false, doSeek: true, setBy: 'rigB' },
+            { server: 1 }
+          ],
+          [54, 'out', null, { server: 1 }],
+          [55, 'out', { position: 605.301, paused: true, doSeek: false }, { client: 56 }]
+        ])
+      }
+    })
+    expect(v).toEqual({
+      lost: false,
+      drift: false,
+      spread: 0,
+      seekCrossed: false,
+      reasserts: 0,
+      resumedBy: null
+    })
+  })
+
+  it('reads a heartbeat resume as one, and a pause with no recorded resume as unread', () => {
+    const scrubber = {
+      name: 'rigB',
+      ct: 10,
+      paused: false,
+      wire: wire([
+        [1, 'out', { position: 40, paused: false, doSeek: true }, { client: 1 }],
+        [2, 'in', { position: 5, paused: true, doSeek: false, setBy: 'rigA' }, { server: 1 }],
+        [2, 'out', null, { server: 1 }]
+      ])
+    }
+    const press: [number, 'out', Ps, Io][] = [
+      [0, 'out', { position: 5, paused: true, doSeek: false }, { client: 1 }]
+    ]
+    const heartbeat = scrubPauseVerdict({
+      scrubber,
+      pauser: {
+        name: 'rigA',
+        ct: 10,
+        paused: false,
+        wire: wire([
+          ...press,
+          [900, 'in', { position: 41, paused: false, doSeek: false, setBy: 'rigB' }, { server: 2 }]
+        ])
+      }
+    })
+    expect(heartbeat.resumedBy).toBe('heartbeat')
+    // A periodic (no `server` counter) is not a forced resume.
+    const unread = scrubPauseVerdict({
+      scrubber,
+      pauser: {
+        name: 'rigA',
+        ct: 10,
+        paused: false,
+        wire: wire([
+          ...press,
+          [900, 'in', { position: 41, paused: false, doSeek: false, setBy: 'rigB' }, null]
+        ])
+      }
+    })
+    expect(unread).toMatchObject({ lost: true, seekCrossed: true, resumedBy: null })
+  })
+})

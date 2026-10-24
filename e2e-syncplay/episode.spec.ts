@@ -6,6 +6,7 @@
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (fixed)
 //   E7  End-of-episode auto-advance, both or one countdown fires     #512 (fixed)
 //   E7s The room pauses B a frame short of its end, A cancels        #528 (fixed)
+//   E7b The room pauses B 1.5 s or 10 s short of its end, A cancels  #533 (fixed)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -99,6 +100,16 @@
 // `{0, paused: false}` seek, A sends none (its Cancel stays local), both play
 // episode 2 from ~0, nothing re-pauses the room, and A's outgoing element never
 // plays N from 0. On main B shows no countdown and the room stays on episode 1.
+//
+// E7b is #533, E7s with B held well short of its end when the room's end pause
+// lands: `stageBehind` puts it 2 s or 10.5 s behind 0.3 s before its end, so
+// the pause reaches it ~1.7 s or ~10.2 s short. That pause sits at A's end,
+// `>= duration`, so the apply refuses it as out of file at any drift and B is
+// paused where it stands; B arms on the room's end pause instead of its own
+// gap. `bad == 0` over E7s's terms plus no out-of-file toast on B and no B seek
+// between the end pause and its advance. With the predicate and the toast
+// suppression reverted, both lags went 2/2 bad (no countdown, the room stuck on
+// episode 1, and the toast at 10 s).
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -716,6 +727,181 @@ test('E7s — the room pauses B a frame short of its end and A cancels its count
     }
     const s = row.score()
     expect(s.scoreable).toBeGreaterThanOrEqual(1)
+    expect(s.bad).toBe(0)
+  } finally {
+    await closeDuo(A, B)
+  }
+})
+
+/** #533 staging, installed on B: B is played 0.3 s ahead of A at 1.3× for 1 s,
+ *  and when B is 0.3 s from its end it is silently put `lagS` behind, with that
+ *  one `seeked` swallowed so neither the composable nor PlayerView hears a seek
+ *  and nothing is announced. A then ends first and the room's pause lands on B
+ *  `lagS` short. A lag past 3 s is reachable only like this, a stall shorter
+ *  than one correction: B's next report becomes the room's `min()` and A's 3 s
+ *  rule pulls A back to it, so a run whose correction beats A's `ended` records
+ *  a small gap and is not scoreable. The gap is recorded as E7s records it,
+ *  `duration - currentTime` at B's first `pause` before `ended`, read in window
+ *  capture ahead of PlayerView's own `@pause`. */
+async function stageBehind(B: Instance, lagS: number): Promise<void> {
+  await B.page.evaluate((lag) => {
+    const w = window as unknown as {
+      __e7b?: { gap: number | null; rewound: boolean; off: () => void }
+    }
+    w.__e7b?.off()
+    const st = { gap: null as number | null, rewound: false, off: (): void => {} }
+    const v = document.querySelector('video.player-video') as HTMLVideoElement
+    const swallow = (s: Event): void => s.stopImmediatePropagation()
+    const tick = setInterval(() => {
+      if (st.rewound || st.gap !== null || v.paused || v.ended) return
+      if (!(v.duration - v.currentTime < 0.3)) return
+      st.rewound = true
+      window.addEventListener('seeked', swallow, { capture: true, once: true })
+      v.currentTime = v.currentTime - lag
+    }, 5)
+    const onPause = (e: Event): void => {
+      const el = e.target
+      if (!(el instanceof HTMLVideoElement) || st.gap !== null || el.ended) return
+      st.gap = el.duration - el.currentTime
+    }
+    st.off = () => {
+      clearInterval(tick)
+      window.removeEventListener('pause', onPause, true)
+    }
+    w.__e7b = st
+    window.addEventListener('pause', onPause, true)
+    v.playbackRate = 1.3
+    setTimeout(() => (v.playbackRate = 1), 1000)
+  }, lagS)
+}
+
+const behindGap = (B: Instance): Promise<{ gap: number | null; rewound: boolean }> =>
+  B.page.evaluate(() => {
+    const st = (window as unknown as { __e7b?: { gap: number | null; rewound: boolean } }).__e7b
+    return { gap: st?.gap ?? null, rewound: st?.rewound ?? false }
+  })
+
+const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
+// [asked-for lag, the recorded gap's scoreable band]: the 1–2 s band the issue
+// names, and a lag well past the apply's 3 s tolerance (#533's no-cap answer).
+// The rewind lands ~0.3–0.6 s before A's `ended`, so the gap at the pause is
+// about that much under the lag.
+const E7B_LAGS: [number, [number, number]][] = [
+  [2, [1, 2.5]],
+  [10.5, [8.5, 11.5]]
+]
+
+test('E7b — the room pauses B 1.5 s or 10 s short of its end and A cancels its countdown: B still counts down with no out-of-file toast and advances, A follows (#533)', async () => {
+  const { A, B } = await seatDuo(rig)
+  const row = new RowScorer('E7b')
+  try {
+    expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    for (let i = 0; i < N; i++) {
+      const [lag, [lo, hi]] = E7B_LAGS[i % E7B_LAGS.length]
+      if ((await A.state()).paused) await A.togglePlayButton()
+      const dur = durationOf(rig.manifest, '1')
+      const setupOk = (await resetTo(A, B, '1')) && (await positionBoth(A, B, dur - 9))
+      await stageBehind(B, lag)
+      const [sa, sb] = await Promise.all([A.state(), B.state()])
+      const from = Date.now()
+      const cancelledA = await waitFor(
+        'A countdown cancelled',
+        () =>
+          A.page.evaluate(() => {
+            const b = document.querySelector('.auto-advance-cancel') as HTMLButtonElement | null
+            b?.click()
+            return !!b
+          }),
+        30_000,
+        50
+      )
+      const { gap, rewound } = await behindGap(B)
+      const bCountdown = await waitFor('B countdown', () => countdownShown(B), 3000, 50)
+      const changed = await waitBothSrcChanged(A, B, sa.src, sb.src, 20_000)
+      await sleep(12_500)
+      const [a, b] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(from), B.collect(from)])
+      // The room's end pause as B received it: at or past B's duration, so the
+      // apply refused it as out of file and left B where it stood.
+      const endPause = db.wire.find((w) => w.dir === 'in' && w.ps?.paused === true)
+      const endPauseOver = endPause?.ps ? +(endPause.ps.position - sb.dur).toFixed(3) : null
+      const toastsB = db.toasts.filter((t) => t.txt.includes(OUT_OF_FILE_TOAST)).length
+      const seeksA = ownSeeks(da)
+      const seeksB = ownSeeks(db)
+      const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
+      // Nothing moves B between the room's end pause and its own advance.
+      const bMoved = endPause
+        ? db.ev.filter((e) => e.t === 'seeking' && e.at > endPause.at && e.at < firstSeekAt).length
+        : 0
+      const rePauses = [da, db].flatMap((d) =>
+        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
+      ).length
+      const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
+      const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
+      const resumed = !a.paused && !b.paused
+      const fromZero = a.ct > 3 && a.ct < 25 && b.ct > 3 && b.ct < 25 && Math.abs(a.ct - b.ct) < 2
+      const seeksResume = seeksB.every((w) => w.ps.paused === false)
+      const cancelLocal = seeksA.length === 0
+      const reasons = [
+        !bCountdown && 'B showed no countdown',
+        toastsB > 0 && `B showed the out-of-file toast ${toastsB}×`,
+        bMoved > 0 && `B seeked ${bMoved}× between the end pause and its advance`,
+        wrongEp && `episodes ${epIntOf(a.label)} / ${epIntOf(b.label)}, not 2 / 2`,
+        !resumed && 'not both playing',
+        !fromZero && `ct ${a.ct.toFixed(1)} / ${b.ct.toFixed(1)} not both from ~0`,
+        seeksB.length !== 1 && `B sent ${seeksB.length} {0} seeks, not 1`,
+        !seeksResume && 'a B seek was paused',
+        !cancelLocal && `A sent ${seeksA.length} {0} seek(s) after its Cancel`,
+        rePauses > 0 && `${rePauses} re-pause(s) after the advance`,
+        followerPlayedN && "A's outgoing element played N from 0"
+      ].filter((r): r is string => typeof r === 'string')
+      const bad = reasons.length > 0
+      // Scoreable only when the staging held: B was rewound, the room's pause
+      // reached it inside the lag's band and before B's own `ended`, and that
+      // pause sat at or past B's end.
+      const scoreable =
+        setupOk &&
+        cancelledA &&
+        rewound &&
+        gap !== null &&
+        gap >= lo &&
+        gap <= hi &&
+        endPauseOver !== null &&
+        endPauseOver >= 0
+      if (scoreable && bad) {
+        process.stdout.write(`[syncplay-e2e] E7b run ${i} lag ${lag} bad: ${reasons.join('; ')}\n`)
+      }
+      row.add(
+        {
+          setupOk: scoreable,
+          bad,
+          reasons,
+          lag,
+          gap: gap === null ? null : +gap.toFixed(3),
+          rewound,
+          endPauseOver,
+          toastsB,
+          bMoved,
+          bCountdown,
+          changed,
+          ctA: a.ct,
+          ctB: b.ct,
+          seeksA: seeksA.length,
+          seeksB: seeksB.length,
+          rePauses,
+          followerPlayedN
+        },
+        bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
+      )
+      await B.page.evaluate(() =>
+        (window as unknown as { __e7b?: { off: () => void } }).__e7b?.off()
+      )
+    }
+    const s = row.score()
+    for (const [lag] of E7B_LAGS) {
+      const n = s.records.filter((r) => r.setupOk && r.lag === lag).length
+      expect(n, `E7b: no scoreable run at a ${lag} s lag`).toBeGreaterThanOrEqual(1)
+    }
     expect(s.bad).toBe(0)
   } finally {
     await closeDuo(A, B)

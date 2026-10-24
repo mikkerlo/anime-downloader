@@ -187,7 +187,7 @@ export type SyncplayDeps = {
   onRemoteEpisodeChange: (ep: SyncplayRemoteEpisode) => void
 }
 
-export type SyncplayClient = SyncplayFollowWalkHold & {
+export type SyncplayClient = SyncplayClientTail & {
   syncplayStatus: Ref<SyncplayStatus>
   syncplayRoomUsers: Ref<SyncplayRoomUser[]>
   syncplayRoomInput: Ref<string>
@@ -1503,13 +1503,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // unpark — the element half's early-outs can swallow a state entirely.
     if (state.paused) clearPendingUserPause()
     syncplayLastRemotePlaying = !state.paused
-    // The one place a *report about the room* moves the badge, and the only
-    // reader of the edge flag (#350). `state.setBy` is spent here and nowhere
-    // else, because only a frame that flips the room's paused-ness is a frame the
-    // reference server attributes to an actor: `forcePositionUpdate` broadcasts
-    // the pauser on the transition, while every periodic behind it carries a
-    // `setBy` re-elected to `min(watchers)` by `Room.getPosition()`. A badge that
-    // can be repainted from a periodic names the laggard.
+    lastRecordedRemoteState = state
+    // The one place a *report about the room* moves the badge, and the only reader of the edge
+    // flag (#350). `state.setBy` is spent here and nowhere else, because only a frame that flips
+    // the room's paused-ness is a frame the reference server attributes to an actor:
+    // `forcePositionUpdate` broadcasts the pauser on the transition, while every periodic behind
+    // it carries a `setBy` re-elected to `min(watchers)` by `Room.getPosition()`. A badge that can
+    // be repainted from a periodic names the laggard.
     const pausedChanged = badgeEdgePaused !== state.paused
     badgeEdgePaused = state.paused
     // The badge body is held while a pause is pending — the mirror writes above
@@ -1585,13 +1585,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       remoteStateApplied = true
       refusedToastShown = false
       outOfFileUserPause = false
-    } else if (wouldSeekOffEdge && !refusedToastShown) {
-      // Ahead of the no-op early-out below: a refused position whose paused flag
-      // already matches moves nothing, but the user still has to be told why the
-      // room and their playhead have parted company. Gated on the 3 s rule and
-      // not on `outOfFile` or the pause edge's tighter one, because a position
-      // inside 3 s is the ordinary end of the file, where the room's own position
-      // crosses our duration on identical files and the room pauses there.
+    } else if (wouldSeekOffEdge && !refusedToastShown && !roomPausedAtEnd(v.duration)) {
+      // Ahead of the no-op early-out below: a refused position whose paused flag already matches
+      // moves nothing, but the user still has to be told why the room and their playhead have
+      // parted company. Gated on the 3 s rule and not on `outOfFile` or the pause edge's tighter
+      // one, because a position inside 3 s is the ordinary end of the file, where the room's own
+      // position crosses our duration on identical files and the room pauses there. Off a room
+      // paused at our end at any drift (#533): that peer is behind, and its countdown is armed.
       refusedToastShown = true
       showSyncplayToast(OUT_OF_FILE_TOAST)
     }
@@ -2029,15 +2029,15 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // documented exception (#281); see the reconnect branch for why it opts out.
   function resetRemoteStateTracking(opts: { keepRefusalNotice?: boolean } = {}): void {
     pendingRemoteState = null
-    // With the park, always (#350). The two are one slot: `applyRemoteState`
-    // writes the author at the only site that parks a state, so a survivor here
-    // is never actually read — the next park overwrites it before the next
-    // unpark can restate it, and no test can tell this line from its absence.
-    // It stays because the pairing is the invariant, not because a behaviour
-    // rests on it: a later park site that set `pendingRemoteState` without the
-    // author would otherwise restate whoever paused the room an episode ago.
+    // With the park, always (#350). The two are one slot: `applyRemoteState` writes the author at
+    // the only site that parks a state, so a survivor here is never actually read — the next park
+    // overwrites it before the next unpark can restate it, and no test can tell this line from its
+    // absence. It stays because the pairing is the invariant, not because a behaviour rests on it:
+    // a later park site that set `pendingRemoteState` without the author would otherwise restate
+    // whoever paused the room an episode ago.
     pendingRemoteStatePausedBy = null
     remoteStateApplied = false
+    lastRecordedRemoteState = null
     // Under the same opt-out (#281, slice B), and for the same reason the
     // reconnect branch takes it: same room, same file, same divergence, and the
     // user's pause is still on the element. Every other caller — episode
@@ -2181,6 +2181,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   function onLocalPlay(): void {
+    lastRecordedRemoteState = null
     const op = consumePlaybackOp('play')
     if (op) {
       // The element realizing a play *this app* made. What that establishes is
@@ -2193,11 +2194,10 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       applySyncplayReadyGate()
       return
     }
-    // A genuine echo is already caught by the registry above; anything reaching
-    // here is the user. The wall-clock window that once gated this write is
-    // gone entirely (#304), but the reason it had to stop gating *intent* first
-    // (#228) is still worth keeping: a pause inside the window left intent at
-    // "playing" while the element sat paused — the heartbeat then asserted play
+    // A genuine echo is already caught by the registry above; anything reaching here is the user.
+    // The wall-clock window that once gated this write is gone entirely (#304), but the reason it
+    // had to stop gating *intent* first (#228) is still worth keeping: a pause inside the window
+    // left intent at "playing" while the element sat paused — the heartbeat then asserted play
     // and the next remote apply resumed it, so the pause "didn't work".
     //
     // `intentRevision++` is load-bearing rather than bookkeeping, and its
@@ -2767,6 +2767,28 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     return !!me && setBy.toLowerCase() === me.toLowerCase()
   }
 
+  // The last state `recordRemoteState` was handed, for `roomPausedAtEnd` (#533). Forgotten on
+  // every `resetRemoteStateTracking()` (file, session and socket changes) and on every element
+  // `play`: a pause event always follows a play, so what the predicate reads at a pause is a room
+  // report that arrived while we were playing, never one left over from before the user resumed.
+  // Declared down here, like `namesUs`, so the insertion shifts no line anchor above it.
+  let lastRecordedRemoteState: SyncplayRemoteState | null = null
+
+  // "The room is paused at or past the end of a file `duration` long" (#533). PlayerView arms
+  // the auto-advance countdown on it however far short of the end our own element was left: once
+  // the room's position is `>= v.duration`, the apply's `outOfFile` refusal blocks the seek at any
+  // drift, so a trailing peer is paused where it stands and never reaches `ended`. The refusal
+  // toast is suppressed on the same predicate — that peer is behind, not on a shorter file, and
+  // the toast would land on its countdown. `refusedToastShown` stays unset, so a later playing
+  // divergence still gets its toast once. A `doSeek` frame is a peer's seek, not the room's end
+  // pause, and a refused seek is what the toast exists to explain (#281), so it does not count.
+  // The paused term and the frame tolerance live here and nowhere else.
+  function roomPausedAtEnd(duration: number): boolean {
+    const s = lastRecordedRemoteState
+    if (!s || !s.paused || s.doSeek || !Number.isFinite(duration) || duration <= 0) return false
+    return s.position >= duration - AUTO_ADVANCE_PAUSE_EPS_S
+  }
+
   return {
     syncplayStatus,
     syncplayRoomUsers,
@@ -2802,9 +2824,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     hasRemoteStateApplied,
     onLocalPlay,
     onLocalPause,
-    onLocalCanPlay
+    onLocalCanPlay,
+    roomPausedAtEnd
   }
 }
+
+/** The client members declared down here, below every line anchor into this file. */
+type SyncplayClientTail = SyncplayFollowWalkHold & SyncplayRoomEndPause
+
+/** The room's end pause, as PlayerView's auto-advance needs it (#533). */
+type SyncplayRoomEndPause = {
+  /** `true` when the last room state we were told is paused at or past
+   *  `duration - AUTO_ADVANCE_PAUSE_EPS_S`. */
+  roomPausedAtEnd: (duration: number) => boolean
+}
+
+// About one frame. The room's pause at the end position lands ~1 ms short of `duration` (#528),
+// so the element never fires `ended`; a frame covers that and stays far from a deliberate pause,
+// which a window in whole seconds would turn into a countdown. It bounds two gaps: ours, in
+// PlayerView's `maybeArmAutoAdvanceOnPause`, and the room's, in `roomPausedAtEnd` (#533), which
+// is what covers a peer the room's pause leaves more than a frame short of its end.
+export const AUTO_ADVANCE_PAUSE_EPS_S = 0.05
 
 /** The room-driven follow walk's hold on announcements (#501), and its
  *  stopped-short marker on both ends (#506). */

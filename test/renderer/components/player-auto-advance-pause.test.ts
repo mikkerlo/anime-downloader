@@ -3,8 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { transformSync } from 'esbuild'
-import { ref } from 'vue'
+import { defineComponent, ref, watch } from 'vue'
 import type { Ref } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
+import {
+  AUTO_ADVANCE_PAUSE_EPS_S,
+  useSyncplayClient
+} from '../../../src/renderer/src/composables/use-syncplay-client'
 
 // #528: the room's pause at the end position can land ~1 ms before the element
 // reaches `duration`, so that peer never fires `ended` and never shows the
@@ -51,7 +57,15 @@ interface Rig {
 
 const DURATION = 1420
 
-function makeRig(state = 'ready'): Rig {
+/** The room half, for #533: the composable's `roomPausedAtEnd`. The #528 cases below stub it
+ *  `false`; the #533 block passes the real composable. */
+type RoomEndPause = { roomPausedAtEnd: (duration: number) => boolean }
+
+function makeRig(
+  state: string | Ref<{ state: string }> = 'ready',
+  v: FakeVideo = { ended: false, duration: DURATION, currentTime: 0 },
+  syncplay: RoomEndPause = { roomPausedAtEnd: () => false }
+): Rig {
   const block = slice('function cancelAutoAdvance(', "\n// The user's Next")
   const reset = slice('function resetEpisodeTracking(', '\nconst ')
   const walk =
@@ -60,14 +74,15 @@ function makeRig(state = 'ready'): Rig {
       'async function walkStep('
     ) + "navigating.value = true;\n  return 'committed';\n}\n"
   const js = transformSync(`${block}\n${reset}\n${walk}`, { loader: 'ts' }).code
-  const v: FakeVideo = { ended: false, duration: DURATION, currentTime: 0 }
-  const status = ref({ state })
+  const status = typeof state === 'string' ? ref({ state }) : state
   const navigating = ref(false)
   const countdown = ref(0)
   const goToEpisode = vi.fn()
   const ctx = {
     videoRef: ref(v),
     syncplayStatus: status,
+    syncplay,
+    AUTO_ADVANCE_PAUSE_EPS_S,
     navigating,
     autoAdvanceCountdown: countdown,
     canNext: ref(true),
@@ -79,8 +94,9 @@ function makeRig(state = 'ready'): Rig {
   }
   const fns = new Function(
     'ctx',
-    `const { videoRef, syncplayStatus, navigating, autoAdvanceCountdown, canNext, goToEpisode,
-            activeEpisodeIndex, currentEpisodeInt, props, saveProgress } = ctx;
+    `const { videoRef, syncplayStatus, syncplay, AUTO_ADVANCE_PAUSE_EPS_S, navigating,
+            autoAdvanceCountdown, canNext, goToEpisode, activeEpisodeIndex, currentEpisodeInt,
+            props, saveProgress } = ctx;
      let autoAdvanceTimer = null;
      let autoAdvancePauseArmed = false;
      let unmounted = false;
@@ -249,5 +265,256 @@ describe('PlayerView — a room pause within a frame of the end arms the countdo
     roomPauseAt(rig, 0.001)
     runOut()
     expect(rig.goToEpisode).not.toHaveBeenCalled()
+  })
+})
+
+// #533: a peer behind the room when the room pauses at the end. The room's position is then
+// `>= v.duration`, which the apply refuses as out of file at any drift, so the peer is paused
+// where it stands, never fires `ended`, and before this fix was never offered the countdown —
+// the other peer's Cancel stranded it. Here the real composable applies the room's frames to a
+// fake element and the lifted `maybeArmAutoAdvanceOnPause` runs on that element's `pause`, the
+// way PlayerView's `onPause` calls `syncplay.onLocalPause()` and then it (wiring pinned above).
+// Each case asserts both the arm count and whether the out-of-file toast fired.
+const OUT_OF_FILE_TOAST = "Can't follow — the room is past the end of your file"
+
+type RoomVideo = FakeVideo & {
+  paused: boolean
+  readyState: number
+  play: ReturnType<typeof vi.fn>
+  pause: ReturnType<typeof vi.fn>
+}
+
+interface RoomRig {
+  rig: Rig
+  v: RoomVideo
+  client: ReturnType<typeof useSyncplayClient>
+  /** Every element-position write the composable made. */
+  writes: number[]
+  /** Every toast the composable showed, in order. */
+  toasts: string[]
+  emit: (s: Partial<SyncplayRemoteState>) => void
+  /** Fires the element events the last calls queued: the apply returns first, as in Chromium. */
+  dispatch: () => void
+}
+
+const unmounts: (() => void)[] = []
+afterEach(() => {
+  unmounts.splice(0).forEach((u) => u())
+})
+
+async function mountRoom(elementAt: number): Promise<RoomRig> {
+  vi.useRealTimers()
+  setActivePinia(createPinia())
+  const queue: (() => void)[] = []
+  let position = elementAt
+  const writes: number[] = []
+  const v = {
+    ended: false,
+    duration: DURATION,
+    paused: false,
+    readyState: 4,
+    play: vi.fn(),
+    pause: vi.fn()
+  } as unknown as RoomVideo
+  Object.defineProperty(v, 'currentTime', {
+    get: () => position,
+    set: (t: number) => {
+      writes.push(t)
+      position = Math.min(Math.max(0, t), DURATION)
+    }
+  })
+  let cb: ((s: SyncplayRemoteState) => void) | null = null
+  const noop = (): (() => void) => () => {}
+  ;(globalThis as { window?: unknown }).window = {
+    api: {
+      syncplayGetStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
+      syncplayGetRoomUsers: vi.fn().mockResolvedValue([]),
+      syncplaySetFile: vi.fn(),
+      syncplaySendLocalState: vi.fn(),
+      syncplaySendLocalSnapshot: vi.fn(),
+      syncplayPlayerClosed: vi.fn(),
+      syncplaySetReady: vi.fn().mockResolvedValue(undefined),
+      shikimoriGetUser: vi.fn().mockResolvedValue({ nickname: '' }),
+      getSetting: vi.fn().mockResolvedValue(null),
+      setSetting: vi.fn().mockResolvedValue(undefined),
+      onSyncplayConnectionStatus: noop,
+      onSyncplayRemoteState: (fn: (s: SyncplayRemoteState) => void) => {
+        cb = fn
+        return () => {}
+      },
+      onSyncplayRoomUsers: noop,
+      onSyncplayRoomEvent: noop,
+      onSyncplayTrace: noop,
+      onSyncplayRemoteEpisodeChange: noop
+    }
+  }
+  let client: ReturnType<typeof useSyncplayClient> | null = null
+  const Host = defineComponent({
+    setup() {
+      client = useSyncplayClient({
+        getVideoEl: () => v as unknown as HTMLVideoElement,
+        getDuration: () => DURATION,
+        getAnimeId: () => 1,
+        getMalId: () => null,
+        getAnimeName: () => 'Test Anime',
+        getCurrentEpisodeInt: () => '4',
+        getActiveEpisodeLabel: () => '4',
+        activeTranslationId: ref(1),
+        activeEpisodeIndex: ref(3),
+        formatTime: (s) => `${s}`,
+        onRemoteEpisodeChange: () => {}
+      })
+      return () => null
+    }
+  })
+  const wrapper = mount(Host)
+  unmounts.push(() => wrapper.unmount())
+  await flushPromises()
+  const c = client!
+  const rig = makeRig(c.syncplayStatus as unknown as Ref<{ state: string }>, v, c)
+  v.play.mockImplementation(() => {
+    if (v.paused) {
+      v.paused = false
+      queue.push(() => c.onLocalPlay())
+    }
+    return Promise.resolve()
+  })
+  v.pause.mockImplementation(() => {
+    if (v.paused) return
+    v.paused = true
+    queue.push(() => {
+      c.onLocalPause()
+      rig.onPause()
+    })
+  })
+  const toasts: string[] = []
+  const emit = (s: Partial<SyncplayRemoteState>): void =>
+    cb?.({ position: 0, paused: true, doSeek: false, setBy: null, ...s })
+  const dispatch = (): void => {
+    while (queue.length) queue.shift()!()
+  }
+  c.syncplayStatus.value = { state: 'ready', username: 'me' }
+  await flushPromises()
+  // The room playing in step with us, so what follows starts from an ordinary playing peer.
+  emit({ position: elementAt, paused: false, setBy: 'peer' })
+  dispatch()
+  v.paused = false
+  v.pause.mockClear()
+  writes.length = 0
+  const stop = watchToasts(c, toasts)
+  unmounts.push(stop)
+  vi.useFakeTimers()
+  return { rig, v, client: c, writes, toasts, emit, dispatch }
+}
+
+function watchToasts(c: ReturnType<typeof useSyncplayClient>, into: string[]): () => void {
+  return watch(
+    c.syncplayToast,
+    (now) => {
+      if (now) into.push(now)
+    },
+    { flush: 'sync' }
+  )
+}
+
+const outOfFileToasts = (r: RoomRig): number =>
+  r.toasts.filter((t) => t === OUT_OF_FILE_TOAST).length
+
+describe('PlayerView — a room pause at the end arms a peer that was behind (#533)', () => {
+  it('arms once with no toast when the room pauses at duration and we are 10 s short', async () => {
+    const r = await mountRoom(DURATION - 10)
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    // Paused where it stands: nothing moves the element.
+    expect(r.writes).toEqual([])
+    expect(r.v.currentTime).toBe(DURATION - 10)
+    expect(r.rig.countdown.value).toBe(5)
+    expect(outOfFileToasts(r)).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(1)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  // At `duration` the room is out of file and nothing moves us. A frame inside it is in file, so
+  // #524's pause-edge snap takes us to the room's position; the arm does not depend on that.
+  it.each([
+    ['== duration', DURATION, []],
+    ['duration - 0.001', DURATION - 0.001, [DURATION - 0.001]]
+  ])('arms once with no toast on a room paused at %s, us 1.5 s short', async (_, pos, moved) => {
+    const r = await mountRoom(DURATION - 1.5)
+    r.emit({ position: pos, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    expect(r.writes).toEqual(moved)
+    expect(r.rig.countdown.value).toBe(5)
+    runOut()
+    expect(advances(r.rig)).toBe(1)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  it('does not arm when the room plays at its end and the ready gate pauses us', async () => {
+    const r = await mountRoom(DURATION - 1.5)
+    r.emit({ position: DURATION, paused: false, setBy: 'peer' })
+    r.dispatch()
+    r.client.syncplayRoomUsers.value = [
+      { username: 'me', file: null, isReady: true },
+      { username: 'peer', file: null, isReady: false }
+    ]
+    await vi.waitFor(() => expect(r.v.pause).toHaveBeenCalledTimes(1))
+    r.dispatch()
+    expect(r.client.roomPausedAtEnd(DURATION)).toBe(false)
+    expect(r.rig.countdown.value).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(0)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  it('does not arm when the room pauses mid-episode, us 1.5 s short', async () => {
+    const r = await mountRoom(DURATION - 1.5)
+    r.emit({ position: 600, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    expect(r.rig.countdown.value).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(0)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  it('does not re-arm on a second pause after a Cancel', async () => {
+    const r = await mountRoom(DURATION - 10)
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.rig.countdown.value).toBe(5)
+    r.rig.cancelAutoAdvance()
+    // The user plays on; the room's end pause reaches us again.
+    void r.v.play()
+    r.dispatch()
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(2)
+    // The room half alone would arm: only the latch holds it.
+    expect(r.client.roomPausedAtEnd(DURATION)).toBe(true)
+    expect(r.rig.countdown.value).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(0)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  it('does not arm a mid-episode pause from a room report that predates our play', async () => {
+    const r = await mountRoom(DURATION - 10)
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    r.rig.cancelAutoAdvance()
+    // Seek back (the latch reopens), play, and pause by hand with no room frame between.
+    r.v.currentTime = 600
+    r.rig.onSeeked()
+    void r.v.play()
+    r.dispatch()
+    r.v.pause()
+    r.dispatch()
+    expect(r.rig.countdown.value).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(0)
   })
 })

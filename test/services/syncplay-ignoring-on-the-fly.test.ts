@@ -1794,14 +1794,15 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(fed).toBe(3)
       })
 
-      // The TTL bound (#535). The marker is armed above the re-assert with its
-      // first clock, and the room's repeats keep that clock, so a re-assert sent
-      // past APPLY_IN_FLIGHT_TTL_MS (one heartbeat) after the flip claims the
-      // snapshot's stale `paused` again: the bound #513 accepts for the
-      // heartbeat. Reached only when the renderer never applies the pause, so
+      // The TTL bound (#535, #544). The marker is armed above the re-assert with
+      // its first clock, the room's repeats keep that clock, and since #544 a
+      // user seek keeps the marker without re-stamping it, so a re-assert or a
+      // user seek sent past APPLY_IN_FLIGHT_TTL_MS (one heartbeat) after the flip
+      // claims the snapshot's stale `paused` again: the bound #513 accepts for
+      // the heartbeat. Reached only when the renderer never applies the pause, so
       // every push here keeps `paused: false`. Pinned on every re-assert attempt
-      // (SEEK_REASSERT_MAX_ATTEMPTS is 3).
-      it('a re-assert past APPLY_IN_FLIGHT_TTL_MS carries the stale paused again, on every attempt (#535)', () => {
+      // (SEEK_REASSERT_MAX_ATTEMPTS is 3) and on a user seek.
+      it('a re-assert or a user seek past APPLY_IN_FLIGHT_TTL_MS carries the stale paused again, on every attempt (#535, #544)', () => {
         const doSeekFrames = (): StateFrame['playstate'][] =>
           outboundStates(lastTlsSocket)
             .filter((s) => s.playstate?.doSeek === true)
@@ -1833,6 +1834,21 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         vi.advanceTimersByTime(HEARTBEAT_MS)
         roomPeriodic()
         expect(doSeekFrames(), 'the attempt ceiling').toHaveLength(4)
+
+        // A user seek past the TTL: the marker is kept (its `paused` still
+        // contradicts the seek's) but not re-stamped, so the seek claims the
+        // stale `paused` too. Red if the keep refreshed `at`.
+        const marker = (): { paused: boolean; at: number } | null =>
+          (client as unknown as { applyInFlight: { paused: boolean; at: number } | null })
+            .applyInFlight
+        const armedAt = marker()!.at
+        client.sendLocalState({ paused: false, position: TARGET + 20, cause: 'seek' })
+        expect(doSeekFrames().at(-1)).toEqual({
+          position: TARGET + 20,
+          paused: false,
+          doSeek: true
+        })
+        expect(marker()).toEqual({ paused: true, at: armedAt })
       })
     })
 
@@ -1937,9 +1953,9 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         clearWrites()
         client.sendLocalState({ paused: true, position: TARGET, cause: 'seek' })
         expect(outboundStates(lastTlsSocket).filter((s) => s.playstate?.doSeek)).toEqual([])
-        // And it clears the marker, as every local state does. A seek that keeps
-        // the marker is #544's to design, and this snap, whose `paused` agrees
-        // with the marker, is a seek it must still clear on.
+        // And it clears the marker. Since #544 a seek keeps it only when its
+        // `paused` contradicts the marker's, and this snap, whose `paused` agrees,
+        // is the flip applied: a seek it must still clear on.
         expect(marker()).toBeNull()
       })
     })

@@ -268,14 +268,13 @@ export interface SyncplayFileInfo extends FollowShortMarker {
    *  reaches the wire, because `sendSetFile()` builds the `Set: {file}` object
    *  field by field. */
   playerSessionId?: string
-  /** Set only on the push that follows an in-player episode change (#486):
-   *  `'local'` when this user pressed next/prev, `'auto-advance'` when the
-   *  end-of-episode countdown fired (#512), `'follow'` when the player is
-   *  walking to a peer's episode. One-shot: the renderer consumes it on the
-   *  watcher push, so a later re-push of the same file never carries it.
-   *  `setFile()` acts on it only when `canonicalName` changed, drops the
-   *  snapshot for every value, and sends the file-change seek for `'local'`
-   *  and `'auto-advance'`. Never stored in `currentFile` and never on the wire. */
+  /** Set only on the push that follows an in-player episode change (#486): `'local'` when this
+   *  user pressed next/prev, `'auto-advance'` when the end-of-episode countdown fired (#512),
+   *  `'follow'` when the player is walking to a peer's episode. One-shot: the renderer consumes it
+   *  on the watcher push, so a later re-push of the same file never carries it. `setFile()` acts
+   *  on it only when `canonicalName` changed, drops the snapshot for every value, and sends the
+   *  file-change seek for `'local'` and `'auto-advance'`. Never stored in `currentFile` and never
+   *  on the wire. */
   episodeSwitch?: SyncplayEpisodeSwitch
 }
 
@@ -284,6 +283,7 @@ export interface SyncplayRemoteState {
   position: number
   setBy: string | null
   doSeek: boolean
+  crossedOurChange?: boolean // #544: only ever `true`; see src/shared/types/syncplay.d.ts
 }
 
 export interface SyncplayRoomUser {
@@ -463,8 +463,8 @@ export class SyncplayClient extends EventEmitter {
   // no-claim shape the mirror uses.
   //
   // Two clear rules, and neither is "any `updateSnapshot()`":
-  //  - `sendLocalState()` clears it unconditionally — a real local press replaces
-  //    whatever the room just told us, and must carry its `paused`.
+  //  - `sendLocalState()` clears it — a real local press replaces whatever the room
+  //    told us and carries its `paused` — except through a contradicting seek (#544).
   //  - `updateSnapshot()` clears it only when the pushed `paused` equals the
   //    emitted one. Renderer pushes are unordered relative to `remote-state`, so a
   //    `timeupdate` or 1 s interval push sent *before* the renderer handled the
@@ -934,9 +934,9 @@ export class SyncplayClient extends EventEmitter {
   }): void {
     this.snapshot = { position: payload.position, paused: payload.paused }
     this.lastSnapshotAt = Date.now()
-    // A real local press replaces whatever the room just told us (#513), so it
-    // carries its `paused` — on this frame and on the heartbeats after it.
-    this.applyInFlight = null
+    // A real local press replaces whatever the room just told us (#513), so it carries its
+    // `paused`, on this frame and the heartbeats after it; but see `seekKeepsApplyInFlight()`.
+    if (!this.seekKeepsApplyInFlight(payload)) this.applyInFlight = null
     // These arrive from the <video> element's own play/pause/seeked events,
     // which a freshly opened player fires at ~0 while it loads — before any
     // remote state has been applied, so the renderer has registered no
@@ -2286,7 +2286,7 @@ export class SyncplayClient extends EventEmitter {
     // The projection walks on while our own seek is still loading, and the renderer re-anchors
     // it by pushing a snapshot on that seek's `seeked`, so it restarts from the landing (#524).
     const emitted = substitute ? this.projectedSnapshotPosition() : compensated
-    if (this.rendererWouldSeek(doSeek, paused, emitted)) {
+    if (this.rendererMovesPastHold(doSeek, paused, emitted, seekIntentWasLive, crossesOurChange)) {
       this.armAppliedTarget(Math.max(0, emitted))
     }
     // `emitted`, not `compensated`: under a live intent the renderer is handed
@@ -2352,13 +2352,13 @@ export class SyncplayClient extends EventEmitter {
     // voice and crossed echoes. See `armApplyInFlight()` for the clock.
     if (paused === this.snapshot.paused) this.applyInFlight = null
     else this.armApplyInFlight(paused)
-    log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
-    this.emit('remote-state', {
-      paused,
-      position: emitted,
-      setBy: emittedSetBy,
-      doSeek
-    })
+    const handed: SyncplayRemoteState = { paused, position: emitted, setBy: emittedSetBy, doSeek }
+    // Flagged only when it crossed our unacked change (#544): the one frame the renderer's #488
+    // hold may let a pause edge through on. Per frame, not latched: on the real server the
+    // crossing forced pause itself is what carries the edge (see `SyncplayRemoteState`).
+    if (crossesOurChange) handed.crossedOurChange = true
+    log('remote-state', handed)
+    this.emit('remote-state', handed)
   }
 
   private handleChat(payload: unknown): void {
@@ -2581,10 +2581,10 @@ export class SyncplayClient extends EventEmitter {
       // *is* the room. And in the pause direction the `+ fd` lands our position
       // above the paused room, so it loses that election; in the resume
       // direction the room is playing and the compensation is the ordinary one.
-      // That min() argument covers the heartbeat only: `maybeReassertSeek()` also reaches this
-      // arm with `doSeek: true` (armed in time for it since #535), which the server applies via
-      // `setPosition` with no election, so a re-assert inside the gap lands a paused room one
-      // `fd` ahead of us — a single forward delay of creep, accepted as far smaller than the
+      // That min() argument covers the heartbeat only: a re-assert (armed in time since #535) and
+      // a user seek (kept through since #544) reach this arm with `doSeek: true`, which the server
+      // applies via `setPosition` with no election, so either inside the gap lands a paused room
+      // one `fd` ahead of us — a single forward delay of creep, accepted as far smaller than the
       // stale `paused` it replaces. Past the TTL it claims that `paused` again.
       if (this.applyInFlight && Date.now() - this.applyInFlight.at <= APPLY_IN_FLIGHT_TTL_MS) {
         return { position: this.snapshot.position, doSeek }
@@ -3128,12 +3128,12 @@ export class SyncplayClient extends EventEmitter {
   // applies the flip (a `play()` refused by autoplay policy, a renderer that
   // died mid-apply).
   //
-  // Not covered: a user seek the renderer built before it applied the flip
-  // (S11's 2b shape). `sendLocalState()` still clears the marker on it, so the
-  // seek carries the pre-flip `paused`. Keeping the marker through it trades
-  // that for a drift on a sub-3 s scrub, where #537's band-limited hold release
-  // snaps the scrubber back to the flip's pre-scrub position while the room
-  // took the scrub (S10c). Deferred to #544.
+  // A user seek the renderer built before it applied the flip (S11's 2b shape)
+  // is the third frame that could undo it, and since #544 `sendLocalState()`
+  // keeps the marker through it rather than clearing it (see
+  // `seekKeepsApplyInFlight()`), so that seek goes out position-only too. The
+  // hold release that once made this drift S10c's sub-3 s scrub now fires only
+  // on a crossed frame (`crossedOurChange`).
   private armApplyInFlight(paused: boolean): void {
     if (this.applyInFlight?.paused !== paused) this.applyInFlight = { paused, at: Date.now() }
   }
@@ -3489,6 +3489,66 @@ export class SyncplayClient extends EventEmitter {
     episode: SyncplayRemoteEpisode
   ): void {
     this.emit('remote-episode-change', withFollowShort(meta, episode))
+  }
+
+  // ── A user seek against a flip still in flight (#544) ─────────────────────
+  //
+  // Kept at the end of the class, like the blocks above, so the members it adds
+  // shift no line anchor.
+
+  // Whether `sendLocalState()` keeps `applyInFlight` through this local state
+  // instead of clearing it (#544, the 2b of #535's plan): a user seek whose
+  // `paused` contradicts a flip main has handed the renderer and the renderer
+  // has not applied. `seekAsUser` reads the element, so the seek carries the
+  // pre-flip `paused`, and the server, which took our ack before the seek,
+  // would apply it as a pause change and undo the room's flip at our target
+  // (S11's 2b shape). Kept, the seek goes out as
+  // `{ position, doSeek }` from `buildPlaystate()`, the room keeps the flip at
+  // the target, and the heartbeats after it withhold `paused` until the
+  // renderer's push catches up, as for any flip. Both directions.
+  //
+  // Not kept: a seek that agrees with the marker (the flip applied, e.g. a
+  // pause-edge snap's own `seeked`) and every play or pause, which is the
+  // user's own `paused`. `at` is never touched, so APPLY_IN_FLIGHT_TTL_MS still
+  // counts from the flip's first emit and a seek past it claims the stale
+  // `paused` again, the bound #513 accepts. Read before the adoption gate and
+  // the echo guard, like the clear it gates, so a seek they drop leaves the
+  // marker as it found it.
+  //
+  // Safe on S10c's sub-3 s scrub because #537's hold release fires only on a
+  // frame that crossed our change (`crossedOurChange`): this seek left after
+  // our ack, so the server takes it and the renderer must not snap back to the
+  // pre-scrub position the room has just left.
+  private seekKeepsApplyInFlight(payload: { paused: boolean; cause: string }): boolean {
+    return (
+      payload.cause === 'seek' &&
+      this.applyInFlight !== null &&
+      this.applyInFlight.paused !== payload.paused
+    )
+  }
+
+  // `rendererWouldSeek()` behind the renderer's #488 hold, for the echo-target arm in
+  // `handleState()`: a frame the hold declines moves nothing, so main must not arm for it
+  // (#544). While a user seek is in flight the hold declines every non-`doSeek` seek, and lets
+  // a pause edge 0.5–3 s from the seek's target through only on a frame flagged
+  // `crossedOurChange` (#537). Main's stand-in for "in flight" is a seek intent live on this
+  // frame (`seekIntentWasLive`): where it substitutes our own projection nothing moves anyway,
+  // so what this adds is the converged tick of an uncrossed frame, where the frame goes out
+  // unrewritten and a pause edge in that band would arm a target the renderer never seeks to,
+  // swallowing a later user seek within ECHO_SEEK_EPSILON_S of it. A crossed frame keeps #537's
+  // arm, in lockstep with the release. Where main's intent and the renderer's flight part (the
+  // intent retired by the converged echo of our own seek while the element still loads, or a
+  // seek the IPC has not delivered yet), this falls back to the predicate as it was. Pinned in
+  // test/services/syncplay-pause-edge-lockstep.test.ts.
+  private rendererMovesPastHold(
+    doSeek: boolean,
+    paused: boolean,
+    emitted: number,
+    ownSeekLive: boolean,
+    crossed: boolean
+  ): boolean {
+    if (ownSeekLive && !doSeek && !crossed) return false
+    return this.rendererWouldSeek(doSeek, paused, emitted)
   }
 }
 

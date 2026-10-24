@@ -188,6 +188,15 @@ export interface ScrubPauseVerdict {
    *  ack). The protocol gate then drops the seek, protocols.py:788
    *  ("if self.serverIgnoringOnTheFly == 0:"). */
   seekCrossed: boolean
+  /** The mirror image, on the pauser (#544): its press left before the
+   *  scrubber's forced seek reached it, and the server sent that seek before it
+   *  had the press. The seek is the first forced update the pauser receives
+   *  after the press, it carries no `client` echo of the press's counter, and
+   *  the press carries no `server` ack equal to the seek's. The same gate then
+   *  drops the *press*, so the room never pauses: a lost pause no scrubber
+   *  frame resumed, whatever `resumedBy` reads (the seek that crossed it is
+   *  the first forced `paused: false` the pauser sees). */
+  pauseCrossed: boolean
   /** `doSeek: true` frames the scrubber sent after its seek: #252 re-asserts. */
   reasserts: number
   /** For a lost pause, the scrubber frame the server resumed the room on, read
@@ -228,9 +237,19 @@ export function scrubPauseVerdict(d: {
     seekIdx < 0
       ? 0
       : s.wire.slice(seekIdx + 1).filter((f) => f.dir === 'out' && f.ps?.doSeek === true).length
+  const pressIdx = p.wire.findIndex((f) => f.dir === 'out' && f.ps?.paused === true)
+  const pauserForced =
+    pressIdx < 0
+      ? undefined
+      : p.wire.slice(pressIdx + 1).find((f) => f.dir === 'in' && f.iotf?.server !== undefined)
+  const pauseCrossed =
+    pauserForced !== undefined &&
+    pauserForced.ps?.setBy === s.name &&
+    pauserForced.ps.doSeek === true &&
+    pauserForced.iotf?.client === undefined &&
+    p.wire[pressIdx].iotf?.server !== pauserForced.iotf?.server
   let resumedBy: ScrubPauseVerdict['resumedBy'] = null
   if (lost) {
-    const pressIdx = p.wire.findIndex((f) => f.dir === 'out' && f.ps?.paused === true)
     const resume = p.wire
       .slice(Math.max(0, pressIdx))
       .find(
@@ -247,35 +266,49 @@ export function scrubPauseVerdict(d: {
     if (pressIdx >= 0 && resume)
       resumedBy = resume.ps!.doSeek ? (reassertedBy(resume.at) ? 'reassert' : 'seek') : 'heartbeat'
   }
-  return { lost, drift, spread, seekCrossed, reasserts, resumedBy }
+  return { lost, drift, spread, seekCrossed, pauseCrossed, reasserts, resumedBy }
 }
 
 /** The lost pauses of a scrub-vs-pause row, by the scrubber frame that resumed
- *  the room (`ScrubPauseVerdict.resumedBy`), over its scoreable runs. */
+ *  the room (`ScrubPauseVerdict.resumedBy`), over its scoreable runs. A pause
+ *  the server dropped (`pauseCrossed`) is in `dropped` and in no other bucket. */
 export interface LostPauseTally {
   reassert: number
   seek: number
   heartbeat: number
   unread: number
+  /** The pauser's press crossed the scrub's forced seek and the server's gate
+   *  dropped it (`ScrubPauseVerdict.pauseCrossed`), so no scrubber frame
+   *  resumed anything: the room never paused. Its loss is decided on the
+   *  pauser's side, by whether its renderer's pending-pause hold outlasts
+   *  #513's withheld heartbeat (the drift shape S10 snaps when it does), and is
+   *  outside what #535 and #544 fix. Counted, not failed. */
+  dropped: number
   /** What the row fails on: a pause the #252 re-assert resumed, the 2a shape
-   *  #535 fixed by arming the apply-in-flight marker above the re-assert, or a
-   *  heartbeat resumed, #513's marker failing to withhold. A pause the
-   *  scrubber's own seek resumed is 2b, deferred to #544, and is counted but
-   *  not failed; so is an unread resume, which can't be attributed. */
+   *  #535 fixed by arming the apply-in-flight marker above the re-assert; a
+   *  heartbeat resumed, #513's marker failing to withhold; or the scrubber's own
+   *  seek resumed, the 2b shape #544 fixed by keeping the marker through it.
+   *  An unread resume, which can't be attributed, and a dropped press are
+   *  counted but not failed. */
   failed: number
 }
 
 export function lostPauseTally(records: readonly Record<string, unknown>[]): LostPauseTally {
-  const lost = records.filter((r) => r.setupOk === true && r.lost === true)
+  const lostRuns = records.filter((r) => r.setupOk === true && r.lost === true)
+  const lost = lostRuns.filter((r) => r.pauseCrossed !== true)
   const by = (k: ScrubPauseVerdict['resumedBy']): number =>
     lost.filter((r) => (r.resumedBy ?? null) === k).length
   const reassert = by('reassert')
+  const seek = by('seek')
+  const heartbeat = by('heartbeat')
+  const dropped = lostRuns.length - lost.length
   return {
     reassert,
-    seek: by('seek'),
-    heartbeat: by('heartbeat'),
+    seek,
+    heartbeat,
     unread: by(null),
-    failed: reassert + by('heartbeat')
+    dropped,
+    failed: reassert + heartbeat + seek
   }
 }
 

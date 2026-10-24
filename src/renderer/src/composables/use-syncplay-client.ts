@@ -2663,7 +2663,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
         followShort = { index: reached, target: followWalkTarget.episodeInt }
       }
       pushSyncplayFile('follow')
-    } else if (followWalkHeldPush) pushSyncplayFile()
+    } else {
+      // Still stuck where an earlier walk left us: name the latest pick (#506).
+      if (followWalkTarget && followShort?.index === reached) {
+        followShort = { index: reached, target: followWalkTarget.episodeInt }
+      }
+      if (followWalkHeldPush) pushSyncplayFile()
+    }
     followWalkHeldPush = false
     followWalkHeldOwn = null
     followWalkTarget = null

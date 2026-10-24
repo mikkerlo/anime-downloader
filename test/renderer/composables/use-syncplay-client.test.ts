@@ -7401,6 +7401,29 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(shorts(setFile)).toEqual([undefined])
   })
 
+  // …and a later pick this peer can't reach either: the walk fails at step 1,
+  // so the settle pushes nothing, but the marker it leaves names that pick.
+  it('a walk that never moves refreshes a stale marker to the latest pick', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    expect(shorts(setFile)).toEqual(['31'])
+
+    begin(client, 32)
+    client.settleFollowWalk()
+    expect(setFile).toHaveBeenCalledTimes(1)
+
+    client.pushSyncplayFile()
+    expect(pushes(setFile)).toEqual([
+      ['30', 'follow'],
+      ['30', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['31', '33'])
+  })
+
   // #506: the marker is a state. Every push from the reached episode carries
   // it, whichever caller sends it, so no re-push leaks without it.
   it('every later push from the reached episode carries the marker', async () => {

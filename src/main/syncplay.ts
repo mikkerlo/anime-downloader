@@ -2,6 +2,7 @@ import * as net from 'net'
 import * as tls from 'tls'
 import { createHash } from 'crypto'
 import { EventEmitter } from 'events'
+import * as applyRule from '../shared/syncplay-apply-rule'
 
 // The version we claim on the outbound Hello (#233) — a wire-protocol claim,
 // not our app version. Three constraints bind it, and `docs/syncplay.md`
@@ -101,21 +102,20 @@ const PLAYBACK_STALE_MS = 5000
 // is #284's side of the boundary, deliberately.
 export const PLAYBACK_ASSERT_STALE_MS = 2000
 // How close to the room our local position must be before we start asserting
-// it. Same 3 s the renderer's apply rule uses to decide a seek is needed: at or
-// under it the renderer wouldn't move us anyway, so we have converged. A
+// it. The same 3 s the renderer's apply rule seeks past on an ordinary state: at
+// or under it the renderer wouldn't move us anyway, so we have converged. A
 // freshly mounted <video> starts at {0, paused} and the renderer pushes that
 // snapshot before the first remote State has seeked it, so without this the
 // player path re-creates the very bug the spectator rule fixes.
-export const ADOPT_TOLERANCE_S = 3
-// A "seek" this close to where the room already is didn't come from the user —
-// it's the element finishing the seek we applied from the room, arriving after
-// the renderer's own seek operation stopped waiting for it (TTL expiry, or an
-// eviction from the operation registry). Tight on purpose: a real user seek
-// lands somewhere else, and a real seek to within half a second of the room's
-// own position is a no-op for everyone anyway. This is the backstop for the
-// renderer's value-keyed registry, not for any wall-clock window — the renderer
-// has had none since #304.
-export const ECHO_SEEK_EPSILON_S = 0.5
+export const ADOPT_TOLERANCE_S = applyRule.APPLY_TOLERANCE_S
+// The tolerance of the echo guard in sendLocalState(): a local "seek" this close
+// to the position we last handed the renderer is the element finishing that
+// apply, not the user. Since #524 it is also the pause edge's tolerance in the
+// apply rule itself. Both values live in src/shared/syncplay-apply-rule.ts,
+// beside the rule both processes call, so main's echo-target arming and the
+// renderer's apply cannot drift apart; re-exported here so main's importers
+// keep their path. The reasoning for each value is written there.
+export const ECHO_SEEK_EPSILON_S = applyRule.ECHO_SEEK_EPSILON_S
 // Ceiling on the one-way delay `handleState()` will back-date the room's
 // arrival stamp by (#279). `serverRtt / 2` is the only clock-offset-free
 // estimate of that delay we have, and it is a *measurement*: the rig produces
@@ -2254,37 +2254,37 @@ export class SyncplayClient extends EventEmitter {
     // sendLocalState() on any link with serverRtt > 2 * ECHO_SEEK_EPSILON_S.
     const compensated = paused ? position : position + this.serverRtt / 2
     // Arm the echo target only for a state that will actually move the element (#236), under the
-    // rule the renderer applies with (`state.doSeek || |currentTime - position| > 3`,
-    // use-syncplay-client.ts). Armed unconditionally it sat on the room's resting position after
-    // no-op states, and sendLocalState() swallowed genuine user seeks within ECHO_SEEK_EPSILON_S.
-    // That refresh is per frame off `setBy`, not per window: the arming rests on a periodic elected
-    // to another peer, foreign-`setBy` and past `main/syncplay.ts:2237-2238` unconditionally —
-    // #340 measured that arm here in a *playing* room — and on a pre-adoption one with a peer in a
-    // keyed roster, past them as room voice. At the elected peer past adoption it is self-`setBy`
-    // and dies at `main/syncplay.ts:2237`, so the paused-room rate is that predicate's
-    // consequence, not a measurement. A state that moves nothing fires no `seeked`, so it has no
-    // echo to suppress; a previously-armed target is left in place, since that one is still owed
-    // its event. The predictor is main's snapshot, not the element's currentTime, so near the 3 s
-    // boundary the two can disagree by a snapshot cadence and main can decline to arm for a state
-    // the renderer does apply — wider still under #240, which defers the write to
-    // `loadedmetadata`. The renderer's own value-keyed guard still suppresses that echo, so the
-    // loss is main's belt, not both layers.
+    // renderer's own rule: `rendererWouldSeek()` calls the `wouldSeekOnApply()` the renderer's
+    // apply calls, with the same inputs (#524). Armed unconditionally it sat on the room's resting
+    // position after no-op states, and sendLocalState() swallowed genuine user seeks within
+    // ECHO_SEEK_EPSILON_S. That refresh is per frame off `setBy`, not per window: the arming rests
+    // on a periodic elected to another peer, foreign-`setBy` and past `main/syncplay.ts:2237-2238`
+    // unconditionally — #340 measured that arm here in a *playing* room — and on a pre-adoption
+    // one with a peer in a keyed roster, past them as room voice. At the elected peer past
+    // adoption it is self-`setBy` and dies at `main/syncplay.ts:2237`, so the paused-room rate is
+    // that predicate's consequence, not a measurement. A state that moves nothing fires no
+    // `seeked`, so it has no echo to suppress; a previously-armed target is left in place, since
+    // that one is still owed its event. Where main's estimate of the element and the element
+    // itself can still part, and which way the belt errs there, is written at the helper; under
+    // #240, which defers the write to `loadedmetadata`, the renderer's own value-keyed guard is
+    // the layer that holds.
     //
-    // While a seek of ours is unresolved the room does not get to move our
-    // playhead (#278), so what goes out is our own snapshot rather than the
-    // room's projection. Flat, not projected: `compensated` shifts the *room's*
-    // reading forward by half an RTT because that reading aged in flight, and
-    // our snapshot did not travel anywhere. It is also what buildPlaystate()
-    // already puts on the wire, so main asserts one value rather than two.
+    // While a seek of ours is unresolved the room does not get to move our playhead (#278), so
+    // what goes out is our own position rather than the room's: the same projection the arming
+    // compares against, so the renderer's `diff` is ≈0 and a substituted frame moves nothing,
+    // on a pause edge too. Flat before #524, and a flat reading is up to one snapshot push old
+    // (≈1.15 s, SNAPSHOT_MIN_INTERVAL_MS at
+    // src/renderer/src/composables/use-syncplay-client.ts:468): inside the 3 s rule, but past the
+    // pause edge's ECHO_SEEK_EPSILON_S, where handing it over would rewind us by the snapshot's
+    // age. Not `compensated`'s half-RTT shift: that is the *room's* reading aging in flight, and
+    // our snapshot did not travel anywhere. buildPlaystate() still puts the flat value on the
+    // wire, as it did: that is a claim about where we were when the snapshot was taken, which
+    // the renderer never compares against.
     //
-    // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
-    // tolerance: the element only advances while it is firing `timeupdate`, so
-    // a reading that is seconds old is still an accurate reading of a *stopped*
-    // element (src/renderer/src/composables/use-syncplay-client.ts:941-943, SNAPSHOT_MIN_INTERVAL_MS at
-    // src/renderer/src/composables/use-syncplay-client.ts:468). If the renderer ever gains a playback-rate control this bound has
-    // to be re-derived.
-    const emitted = seekIntentWasLive ? this.snapshot.position : compensated
-    if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
+    // The projection walks on while our own seek is still loading, and the renderer re-anchors
+    // it by pushing a snapshot on that seek's `seeked`, so it restarts from the landing (#524).
+    const emitted = seekIntentWasLive ? this.projectedSnapshotPosition() : compensated
+    if (this.rendererWouldSeek(doSeek, paused, emitted)) {
       this.armAppliedTarget(Math.max(0, emitted))
     }
     // `emitted`, not `compensated`: under a live intent the renderer is handed
@@ -3362,6 +3362,66 @@ export class SyncplayClient extends EventEmitter {
       return
     }
     this.lastAppliedRemotePosition = null
+  }
+
+  // ── The apply rule, from main's side (#524) ──────────────────────────────
+  //
+  // Kept at the end of the class for the same reason as the block above.
+
+  // Where main estimates our element is right now: the last snapshot, walked
+  // forward by its age while it says playing and a player is still pushing.
+  // That is what a playing element did since the push, and it is the quantity
+  // the renderer's apply measures `diff` from (`currentTime`), so the two sides
+  // call one predicate on one quantity. Before #524 main compared the flat
+  // snapshot, up to one push (≈1.15 s) behind a playing element: noise against
+  // the 3 s rule, but at the pause edge's 0.5 s it would disagree on most snaps.
+  //
+  // Two places it still parts from the element:
+  //
+  //  - Our own seek in flight. `sendLocalState()` stamps the snapshot at the
+  //    user's intent, and the element stands at the target until the seek
+  //    lands while this walks on. The renderer pushes a snapshot on that
+  //    seek's `seeked`, which restarts the walk from the landing. Before the
+  //    landing the renderer's #488 hold declines every non-`doSeek` seek, and
+  //    under a live seek intent `handleState()` emits this same value, so
+  //    neither side moves.
+  //  - A stalled element (buffering, before the readiness gate pauses it). The
+  //    walk runs ahead of a playhead that is not moving, by up to one push, and
+  //    which way the two sides then disagree depends on where the room is.
+  //    Room behind the element: main can arm for a pause edge the renderer
+  //    does not snap on. That is the harmless direction, a target that waits
+  //    for our next assertion (`retireAppliedTarget()`). Room ahead of it: the
+  //    renderer can snap where main does not arm, and that snap's `seeked` has
+  //    only the renderer's value-keyed operation against #220. Both directions
+  //    are pinned in test/services/syncplay-pause-edge-lockstep.test.ts.
+  private projectedSnapshotPosition(): number {
+    if (this.snapshot.paused || !this.hasLivePlayback()) return this.snapshot.position
+    return this.snapshot.position + (Date.now() - this.lastSnapshotAt) / 1000
+  }
+
+  // `applyRule.wouldSeekOnApply()` (src/shared/syncplay-apply-rule.ts) on the
+  // inputs the renderer's apply will see, as main can know them: `doSeek` as
+  // is, `diff` from the projection above, and the pause edge from our
+  // snapshot's paused-ness where the renderer reads the element's
+  // (`state.paused && !v.paused`).
+  //
+  // The two edges part where intent and element part. A main-only edge is a
+  // room pause reaching an element the readiness gate or an MSE refill has
+  // paused while `intentOr(v)` still reports playing: main arms at the pause
+  // edge's tolerance, and the renderer, testing a paused element, applies its
+  // 3 s one and does not seek. That target waits for our next assertion, and
+  // after a room pause that is almost always the user's Play, which retires it
+  // in `retireAppliedTarget()`. Until then it swallows a user seek landing
+  // within ECHO_SEEK_EPSILON_S of the room's own pause position, a seek that
+  // moves nobody. The opposite, a renderer-only edge, needs an element playing
+  // under a paused intent, which only #228's hold produces (an MSE refill
+  // re-playing over a pending user pause).
+  private rendererWouldSeek(doSeek: boolean, paused: boolean, emitted: number): boolean {
+    return applyRule.wouldSeekOnApply({
+      doSeek,
+      diff: Math.abs(this.projectedSnapshotPosition() - emitted),
+      pauseEdge: paused && !this.snapshot.paused
+    })
   }
 }
 

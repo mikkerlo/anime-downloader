@@ -1,6 +1,7 @@
 // Pause / unpause rows of the #489 catalog on the two-instance rig.
 //
-//   P1  A pauses, B follows; A unpauses, B follows.
+//   P1  A pauses, B follows; A unpauses, B follows. B seeks at most once.
+//   P1b The same pause with B 0.5–3 s behind A: B snaps once (#524).
 //   P6  Pause, then a translation switch: the room stays paused (#347).
 //   P7  Pause, then a quality switch: the room stays paused (#306).
 //   P8  Readiness: B drops not-ready (`syncplaySetReady(false)`, the app's own
@@ -10,7 +11,7 @@
 //   P7f Pause, then a quality switch 0 / 20 / 50 / 200 ms later (#498).
 //   P6f The same for a translation switch.
 //
-// All six are non-✗ rows: `bad == 0` over the scoreable runs.
+// All seven are non-✗ rows: `bad == 0` over the scoreable runs.
 
 import { test, expect } from '@playwright/test'
 import {
@@ -25,6 +26,7 @@ import {
   type Instance
 } from './helpers/duo'
 import { RowScorer } from './helpers/score'
+import { ECHO_SEEK_EPSILON_S } from '../src/main/syncplay'
 
 let rig: Rig
 test.beforeAll(async () => {
@@ -59,6 +61,12 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
       const paused = await bothPaused(A, B, 3000)
       await sleep(1000)
       const [ap, bp] = await Promise.all([A.state(), B.state()])
+      // B's side of the pause, before the resume adds its own events: since
+      // #524 a pause edge may snap B to A's frame, but at most once, and never
+      // as a seek of B's own back to the room.
+      const bPause = await B.collect(at)
+      const bSeeks = bPause.ev.filter((e) => e.t === 'seeking').length
+      const bDoSeeks = bPause.wire.filter((w) => w.dir === 'out' && w.ps?.doSeek === true).length
       await A.togglePlayButton()
       const resumed = await bothPlaying(A, B, 4000)
       const [ar, br] = await Promise.all([A.state(), B.state()])
@@ -67,6 +75,8 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
       const reasons = [
         !paused && `not both paused within 3 s (1 s later: A ${ap.paused}, B ${bp.paused})`,
         Math.abs(ap.ct - bp.ct) > 1 && `paused spread ${(ap.ct - bp.ct).toFixed(2)} s > 1`,
+        bSeeks > 1 && `B seeked ${bSeeks}× on the pause`,
+        bDoSeeks > 0 && `B sent ${bDoSeeks} doSeek frame(s) on the pause`,
         !resumed && `not both playing within 4 s (A ${!ar.paused}, B ${!br.paused})`,
         Math.abs(ar.ct - br.ct) > 1.5 && `playing spread ${(ar.ct - br.ct).toFixed(2)} s > 1.5`
       ].filter((r): r is string => typeof r === 'string')
@@ -79,6 +89,8 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
           reasons,
           paused,
           resumed,
+          bSeeks,
+          bDoSeeks,
           pausedSpread: ap.ct - bp.ct,
           playingSpread: ar.ct - br.ct
         },
@@ -87,6 +99,82 @@ test('P1 — a pause and an unpause on A reach B within a tick, positions within
     }
     const s = row.score()
     expect(s.scoreable).toBe(N)
+    expect(s.bad).toBe(0)
+  } finally {
+    await closeDuo(A, B)
+  }
+})
+
+// P1b — P1's pause with B 0.5–3 s behind A when it lands (#524), the band the
+// pause-edge snap newly seeks in. B is set back by playing it at half rate for
+// twice the lag and restoring 1×: the element falls behind with no seek and no
+// `seeking`, so nothing on the wire announces it, as a peer that drifted does.
+// The room's min() then sits on B, inside A's 3 s rule. When A pauses, B has to
+// end on A's frame with exactly one `seeking` (the snap) and send no `doSeek`
+// back: the snap is the room's move, not B's.
+const P1B_LAGS_S = [0.8, 1.5, 2.5] as const
+
+test('P1b — the pause reaches B 0.5–3 s behind A: one seek on B, nothing back (#524)', async () => {
+  const { A, B } = await seatDuo(rig)
+  const row = new RowScorer('P1b')
+  const setRate = (rate: number): Promise<void> =>
+    B.page.evaluate((r) => {
+      ;(document.querySelector('video.player-video') as HTMLVideoElement).playbackRate = r
+    }, rate)
+  try {
+    expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    for (let i = 0; i < N; i++) {
+      const lag = P1B_LAGS_S[i % P1B_LAGS_S.length]
+      const playing = await bothPlaying(A, B, 20_000)
+      await sleep(1500 + Math.random() * 1000)
+      await setRate(0.5)
+      await sleep(lag * 2 * 1000)
+      await setRate(1)
+      // A room tick or two, so A's 3 s rule has seen the lag and left it.
+      await sleep(1500)
+      const [a0, b0] = await Promise.all([A.state(), B.state()])
+      const preLag = a0.ct - b0.ct
+      const at = Date.now()
+      await A.togglePlayButton()
+      const paused = await bothPaused(A, B, 3000)
+      await sleep(1000)
+      const [ap, bp] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(at), B.collect(at)])
+      const bSeeks = db.ev.filter((e) => e.t === 'seeking').length
+      const bDoSeeks = db.wire.filter((w) => w.dir === 'out' && w.ps?.doSeek === true).length
+      const aSeeks = da.ev.filter((e) => e.t === 'seeking').length
+      // Scoreable only if the lag really sat in the band at the press: past
+      // 0.5 s so the snap is owed, under 3 s so the room left it alone.
+      const setupOk = playing && preLag > 0.6 && preLag < 2.9
+      const reasons = [
+        !paused && `not both paused within 3 s (1 s later: A ${ap.paused}, B ${bp.paused})`,
+        Math.abs(ap.ct - bp.ct) > ECHO_SEEK_EPSILON_S &&
+          `paused spread ${(ap.ct - bp.ct).toFixed(2)} s > ${ECHO_SEEK_EPSILON_S}`,
+        bSeeks !== 1 && `B seeked ${bSeeks}× on the pause, not once`,
+        bDoSeeks > 0 && `B sent ${bDoSeeks} doSeek frame(s)`,
+        aSeeks > 0 && `A seeked ${aSeeks}× on its own pause`
+      ].filter((r): r is string => typeof r === 'string')
+      const bad = reasons.length > 0
+      if (bad) process.stdout.write(`[syncplay-e2e] P1b run ${i} bad: ${reasons.join('; ')}\n`)
+      row.add(
+        {
+          setupOk,
+          bad,
+          reasons,
+          lag,
+          preLag: +preLag.toFixed(2),
+          bSeeks,
+          bDoSeeks,
+          aSeeks,
+          pausedSpread: +(ap.ct - bp.ct).toFixed(2)
+        },
+        bad ? { A: da, B: db } : undefined
+      )
+      await A.togglePlayButton()
+      await bothPlaying(A, B, 4000)
+    }
+    const s = row.score()
+    expect(s.scoreable, 'P1b: a lag never landed in the band').toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
   } finally {
     await closeDuo(A, B)

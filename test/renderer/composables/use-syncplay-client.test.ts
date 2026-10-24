@@ -5971,8 +5971,11 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
     const sendSnapshot = vi.fn()
     setApi({ syncplaySendLocalSnapshot: sendSnapshot })
     // pause-run2: B's element was at 14.179569 and the room's pause carried
-    // 12.840873 — 1.34 s apart, inside the 3 s tolerance, so the apply pauses
-    // without seeking and the pushed position is the element's own.
+    // 12.840873 — 1.34 s apart. Inside the 3 s tolerance, so at the time the
+    // apply paused without seeking and pushed the element's own position. That
+    // spread is #524's drift: since #524 a pause edge snaps past
+    // ECHO_SEEK_EPSILON_S, so the element is written to the room's position
+    // first and the push carries that.
     const v = fakeVideo({ currentTime: 14.179569, paused: false } as Partial<HTMLVideoElement>)
     const { emitRemoteState } = await mountWithRemoteState(makeDeps({ video: v }), {
       state: 'ready',
@@ -5983,9 +5986,10 @@ describe('useSyncplayClient — applying a remote state announces it (#324)', ()
     emitRemoteState({ position: 12.840873, paused: true, doSeek: false, setBy: 'peerA' })
 
     expect(v.pause).toHaveBeenCalled()
+    expect(rawCurrentTimeWrites.get(v)).toEqual([12.840873])
     // On `main` this is the run's stale `{position: 13.898323, paused: false}`,
     // asserted by main's heartbeat 146 ms later.
-    expect(sendSnapshot).toHaveBeenCalledWith({ position: 14.179569, paused: true })
+    expect(sendSnapshot).toHaveBeenCalledWith({ position: 12.840873, paused: true })
   })
 
   it('pushes a snapshot carrying paused: false when it applies a room resume', async () => {
@@ -7497,5 +7501,202 @@ describe('useSyncplayClient — a follow walk holds a resume off the outgoing el
     client.applySyncplayReadyGate()
 
     expect(v.play).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #524. A pause that reached a playing element 0.5–3 s from the room's position
+// used to leave it there: the apply rule's 3 s tolerance swallowed the
+// difference, so two peers ended the pause that far apart and nothing pulled
+// them together again. Upstream seeks to the room's position on every foreign
+// pause. These pin the renderer half; main's echo target, armed by the same
+// predicate on its projection of our snapshot, is
+// `test/services/syncplay-pause-edge-lockstep.test.ts`.
+describe('useSyncplayClient — a pause edge snaps to the room (#524)', () => {
+  const ROOM = 600
+
+  async function playingAt(
+    position: number,
+    extra: Partial<HTMLVideoElement> = {}
+  ): Promise<{
+    v: FakeVideo
+    client: Client
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+    sendLocalState: ReturnType<typeof vi.fn>
+    sendSnapshot: ReturnType<typeof vi.fn>
+  }> {
+    const v = fakeVideo({
+      currentTime: position,
+      paused: false,
+      ...extra
+    } as Partial<HTMLVideoElement>)
+    const sendLocalState = vi.fn()
+    const sendSnapshot = vi.fn()
+    setApi({ syncplaySendLocalState: sendLocalState, syncplaySendLocalSnapshot: sendSnapshot })
+    const mounted = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+    return { v, sendLocalState, sendSnapshot, ...mounted }
+  }
+
+  // [element − room, snaps]. The 0.6 / 1.5 / 2.9 rows are the band this
+  // changes; on the old rule none of them wrote anything.
+  it.each([
+    [-0.4, false],
+    [-0.6, true],
+    [-1.5, true],
+    [-2.9, true],
+    [0.4, false],
+    [0.6, true],
+    [2.9, true]
+  ])('a playing element %s s from the room’s pause: snaps = %s', async (offset, snaps) => {
+    const { v, client, emitRemoteState, sendLocalState } = await playingAt(ROOM + offset)
+
+    emitRemoteState({ position: ROOM, paused: true, doSeek: false, setBy: 'peer' })
+
+    expect(rawCurrentTimeWrites.get(v)).toEqual(snaps ? [ROOM] : [])
+    expect(v.pause).toHaveBeenCalledTimes(1)
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    // The snap's own `seeked` is consumed by the operation the apply registered,
+    // so nothing goes back to the room: the room's move, not ours.
+    if (snaps) client.onVideoSeeked()
+    expect(sendLocalState).not.toHaveBeenCalled()
+  })
+
+  it('keeps the 3 s rule off the edge: an element already paused, or a playing frame', async () => {
+    const paused = await playingAt(ROOM - 1.5, { paused: true } as Partial<HTMLVideoElement>)
+    paused.emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
+    expect(rawCurrentTimeWrites.get(paused.v)).toEqual([])
+
+    const playing = await playingAt(ROOM - 1.5)
+    playing.emitRemoteState({ position: ROOM, paused: false, setBy: 'peer' })
+    expect(rawCurrentTimeWrites.get(playing.v)).toEqual([])
+
+    // And past it, both still seek, as they always did.
+    paused.emitRemoteState({ position: ROOM + 2, paused: true, setBy: 'peer' })
+    expect(rawCurrentTimeWrites.get(paused.v)).toEqual([ROOM + 2])
+  })
+
+  it('names no seek for a snap only the pause edge asked for', async () => {
+    const { v, client, emitRemoteState } = await playingAt(ROOM - 1.5)
+    // A first apply that moves nothing, so the next is not a placement (#289).
+    emitRemoteState({ position: ROOM - 1.5, paused: false, setBy: 'peer' })
+
+    emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
+
+    expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM])
+    expect(client.syncplayPausedBy.value).toBe('peer')
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  it('still names the inferred correction the 3 s rule makes on a pause', async () => {
+    const { v, client, emitRemoteState } = await playingAt(ROOM - 5)
+    emitRemoteState({ position: ROOM - 5, paused: false, setBy: 'peer' })
+
+    emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
+
+    expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM])
+    expect(client.syncplayToast.value).toBe('peer seeked to 10:00')
+  })
+
+  it('does not call a pause at the end of the file out of file inside 3 s', async () => {
+    // Identical files: the room pauses at the end, past our duration, while we
+    // still play the last second. The ordinary end of the file, not a room we
+    // cannot follow, so the refusal stays silent on the pause edge too.
+    const near = await playingAt(ROOM - 1, { duration: ROOM } as Partial<HTMLVideoElement>)
+    near.emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
+    expect(rawCurrentTimeWrites.get(near.v)).toEqual([])
+    expect(near.v.pause).toHaveBeenCalledTimes(1)
+    expect(near.client.syncplayToast.value).toBe('')
+
+    const far = await playingAt(ROOM - 4, { duration: ROOM } as Partial<HTMLVideoElement>)
+    far.emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
+    expect(rawCurrentTimeWrites.get(far.v)).toEqual([])
+    expect(far.client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+
+  describe('the #488 hold covers the snap', () => {
+    it('moves nothing but paused while the user’s own seek is in flight', async () => {
+      vi.useFakeTimers()
+      const { v, client, emitRemoteState } = await playingAt(100)
+      client.seekAsUser(ROOM)
+      // The pauser's frame, 1.5 s from the target the element already reports.
+      // Snapping to it would abort the user's seek: #488's regression.
+      emitRemoteState({ position: ROOM + 1.5, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM])
+      expect(v.currentTime).toBe(ROOM)
+      expect(v.pause).toHaveBeenCalledTimes(1)
+      expect(client.syncplayPausedBy.value).toBe('peer')
+    })
+
+    it('snaps on the same frame once that seek has landed', async () => {
+      vi.useFakeTimers()
+      const { v, client, emitRemoteState } = await playingAt(100)
+      client.seekAsUser(ROOM)
+      client.onVideoSeeked()
+      emitRemoteState({ position: ROOM + 1.5, paused: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM, ROOM + 1.5])
+    })
+
+    it('still lets a doSeek through', async () => {
+      vi.useFakeTimers()
+      const { v, client, emitRemoteState } = await playingAt(100)
+      client.seekAsUser(ROOM)
+      emitRemoteState({ position: ROOM + 1.5, paused: true, doSeek: true, setBy: 'peer' })
+      expect(rawCurrentTimeWrites.get(v)).toEqual([ROOM, ROOM + 1.5])
+    })
+  })
+
+  // The plan review's first point. `seekAsUser` announces at intent, so main's
+  // snapshot is stamped at the click; main walks it forward while the element
+  // stands loading, and under a live seek intent hands that walked value back as
+  // the room's position (#278). Without a fresh push at the landing it is ahead
+  // of the element by however long the seek took, and a pause edge then snaps
+  // the user *forward* by that much. Main's half of the pair is in
+  // `test/services/syncplay-pause-edge-lockstep.test.ts`.
+  describe('re-anchoring main’s snapshot when the user’s seek lands', () => {
+    it('pushes a snapshot on the user’s own seeked, at the landing', async () => {
+      vi.useFakeTimers()
+      const { v, client, sendLocalState, sendSnapshot } = await playingAt(100)
+      sendSnapshot.mockClear()
+      client.seekAsUser(ROOM)
+      expect(sendLocalState).toHaveBeenCalledTimes(1)
+      expect(sendSnapshot).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(200)
+      expect(sendSnapshot).not.toHaveBeenCalled()
+      client.onVideoSeeked()
+
+      expect(sendSnapshot).toHaveBeenCalledTimes(1)
+      expect(sendSnapshot).toHaveBeenCalledWith({ position: ROOM, paused: false })
+      // Still announced once: the push is a reading, not a second seek.
+      expect(sendLocalState).toHaveBeenCalledTimes(1)
+      expect(v.currentTime).toBe(ROOM)
+    })
+
+    it('does not push for a seeked that is not the user’s', async () => {
+      vi.useFakeTimers()
+      const { client, emitRemoteState, sendSnapshot } = await playingAt(100)
+      // A peer's seek: the apply pushes once at the write (#324) and its own
+      // `seeked` adds nothing.
+      emitRemoteState({ position: ROOM, paused: false, doSeek: true, setBy: 'peer' })
+      sendSnapshot.mockClear()
+      client.onVideoSeeked()
+      expect(sendSnapshot).not.toHaveBeenCalled()
+    })
+
+    it('leaves the fallback seeked to the seek it sends', async () => {
+      vi.useFakeTimers()
+      const { v, client, sendLocalState, sendSnapshot } = await playingAt(100, {
+        readyState: 0
+      } as Partial<HTMLVideoElement>)
+      sendSnapshot.mockClear()
+      client.seekAsUser(ROOM)
+      ;(v as unknown as { readyState: number }).readyState = 1
+      client.onVideoSeeked()
+      // Announced at the landing, which stamps main's snapshot there itself.
+      expect(sendLocalState).toHaveBeenCalledTimes(1)
+      expect(sendSnapshot).not.toHaveBeenCalled()
+    })
   })
 })

@@ -25,6 +25,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom, Peer } from '../helpers/syncplay-two-peer'
+import { ECHO_SEEK_EPSILON_S } from '../../src/shared/syncplay-apply-rule'
 
 const ROOM_START = 100
 const DELAY_MS = 50
@@ -218,8 +219,8 @@ describe('SyncplayClient — play/pause across two peers', () => {
     // the room back to `ROOM_START`, so every later periodic carries a
     // *different* position, 0.05 s away. The tolerance is what swallows those:
     // `src/renderer/src/composables/use-syncplay-client.ts:1583` ("const
-    // wouldSeek = state.doSeek || diff > 3.0") leaves `needsSeek` un-armed at a
-    // 0.05 s gap, and with the element already paused
+    // wouldSeek = wouldSeekOnApply({ doSeek: state.doSeek, diff, pauseEdge })")
+    // leaves `needsSeek` un-armed at a 0.05 s gap, and with the element already paused
     // `src/renderer/src/composables/use-syncplay-client.ts:1765` ("if (!needsSeek
     // && !needsPlayPause) return") returns before the write.
     expect(joiner.el.seekWrites).toEqual([JOIN_TIME_ROOM_POSITION])
@@ -302,5 +303,109 @@ describe('SyncplayClient — play/pause across two peers', () => {
     const pauseFrames = room.server.wireOf('hostuser').filter((f) => f.paused === true)
     expect(pauseFrames.length).toBeGreaterThan(1)
     expect(pauseFrames.every((f) => f.doSeek !== true)).toBe(true)
+  })
+
+  // #524. A pause reaching a follower that is 0.5–3 s off the pauser used to
+  // leave the two paused that far apart: the apply rule's 3 s tolerance
+  // swallowed it. Upstream seeks to the room's position on every foreign pause,
+  // and so do we now, past ECHO_SEEK_EPSILON_S. What has to hold besides the snap
+  // is that it stays the room's move: one `seeked` on the follower and nothing
+  // of its own on the wire — no `doSeek`, no discrete change — or the follower
+  // would drag the room to wherever its snap's echo said.
+  //
+  // The follower is the host and is set back with `drift()`, which moves the
+  // playhead without a write, so it is behind with nobody having seeked. The
+  // offset is measured where it matters, between the pause frame's position and
+  // the follower's element when that frame is handed over (`ObservedFrame`),
+  // and asserted as a fixture check before anything else.
+  describe('a pause that reaches a follower 0.4–2.9 s off the pauser (#524)', () => {
+    // A zero-delay link: the follower plays on between the press and the
+    // frame's arrival, and over 50 ms hops the 2.9 s cell would be a 3.05 s gap
+    // in real time, past the 3 s rule, so the room would correct the *pauser*
+    // before the press. What remains is the one tick the press waits for its
+    // `pause` event.
+    const PRESS_TO_ARRIVAL_S = 0.05
+    const appliedTarget = (p: Peer): number | null =>
+      (p.client as unknown as { lastAppliedRemotePosition: number | null })
+        .lastAppliedRemotePosition
+
+    const pauseWithFollowerOff = async (
+      behind: number
+    ): Promise<{ follower: Peer; pauser: Peer; at: number; armedBefore: number | null }> => {
+      room = await createTwoPeerRoom({ position: ROOM_START, paused: false })
+      const follower = await room.seat({
+        username: 'hostuser',
+        position: ROOM_START,
+        paused: false
+      })
+      const pauser = await room.seat({ username: 'joinuser', position: ROOM_START, paused: false })
+      await room.advance(4)
+      follower.frames.length = 0
+      follower.el.seekWrites.length = 0
+      follower.el.delivered.length = 0
+      const armedBefore = appliedTarget(follower)
+      const apart = pauser.el.currentTime - follower.el.currentTime
+      follower.el.drift(apart - behind - PRESS_TO_ARRIVAL_S)
+      // The press waits for the follower's next snapshot push, so main has
+      // seen the drift and its projection reads the element: a playing element,
+      // the case the agreement table calls exact. Not longer: the push after it
+      // puts the room's min() on the follower a snapshot behind its element,
+      // which at 2.9 s is past the 3 s rule for the pauser.
+      const lastSnapshotAt = (): number =>
+        (follower.client as unknown as { lastSnapshotAt: number }).lastSnapshotAt
+      const drifted = Date.now()
+      while (lastSnapshotAt() <= drifted) await room.advance(0.05)
+      expect(Date.now() - drifted).toBeLessThanOrEqual(1000)
+
+      pauser.userPause()
+      await room.advance(3)
+      expect(pauser.el.seekWrites, 'the pauser was moved').toEqual([])
+
+      const carrier = follower.frames.find((f) => f.state.paused && f.state.setBy === 'joinuser')
+      expect(carrier, 'the follower never saw the pause').toBeDefined()
+      expect(carrier!.state.position - carrier!.element).toBeCloseTo(behind, 6)
+      return { follower, pauser, at: carrier!.state.position, armedBefore }
+    }
+
+    it.each([
+      [0.4, false],
+      [0.6, true],
+      [1.5, true],
+      [2.9, true]
+    ])(
+      '%s s behind: snaps = %s, with one seeked and nothing back to the room',
+      async (behind, snaps) => {
+        const { follower, pauser, at, armedBefore } = await pauseWithFollowerOff(behind)
+
+        expect(follower.el.paused).toBe(true)
+        expect(pauser.el.paused).toBe(true)
+        expect(follower.el.seekWrites).toEqual(snaps ? [at] : [])
+        expect(follower.el.delivered.filter((e) => e === 'seeked')).toHaveLength(snaps ? 1 : 0)
+        // Main armed its echo target for exactly the snap the renderer made, and
+        // for nothing else (a target from the join-time placement may still sit
+        // there, waiting for the follower's first assertion).
+        expect(appliedTarget(follower)).toBe(snaps ? at : armedBefore)
+        expect(armedBefore).not.toBe(at)
+        // Nothing of the follower's own reached the room: no discrete change and
+        // no `doSeek`, for the whole run.
+        expect(discreteSends(follower)).toBe(0)
+        expect(room.server.wireOf('hostuser').filter((f) => f.doSeek === true)).toEqual([])
+        // Both end on the room's pause, within the tolerance the snap seeks past.
+        expect(room.server.roomState().paused).toBe(true)
+        expect(Math.abs(follower.el.currentTime - pauser.el.currentTime)).toBeLessThan(
+          ECHO_SEEK_EPSILON_S
+        )
+        expect(Math.abs(room.server.roomState().position - at)).toBeLessThan(ECHO_SEEK_EPSILON_S)
+      }
+    )
+
+    it('pulls a follower 1.5 s ahead back to the pauser', async () => {
+      const { follower, pauser, at } = await pauseWithFollowerOff(-1.5)
+      expect(follower.el.seekWrites).toEqual([at])
+      expect(discreteSends(follower)).toBe(0)
+      expect(Math.abs(follower.el.currentTime - pauser.el.currentTime)).toBeLessThan(
+        ECHO_SEEK_EPSILON_S
+      )
+    })
   })
 })

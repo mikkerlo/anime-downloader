@@ -1137,10 +1137,11 @@ holds the layout, the pin, the `pipefail` step and the sharding below from
 The workflow shards the suite across three runners, one worker each (#530).
 The config sets `fullyParallel: true`, so `--shard=N/3` splits by test rather
 than by file. Playwright cuts the ordered test list into contiguous slices; it
-does not deal tests round-robin. With today's fifteen tests the slices fall on
-the file boundaries: shard 1 runs all of `episode.spec.ts` (E1 / E6, E2, E5,
-E7, E7s), shard 2 all of `pause.spec.ts` (P1, P6, P7, P7f, P6f, P8), and
-shard 3 all of `seek.spec.ts` (S1 / S9, S6, S10 / S11, S10c / S11c). This is
+does not deal tests round-robin. With today's seventeen tests the slices no
+longer fall on the file boundaries: shard 1 runs all of `episode.spec.ts` (E1 /
+E6, E2, E5, E7, E7s) and the head of `pause.spec.ts` (P1, P1b, P6), shard 2
+the rest of `pause.spec.ts` (P7, P7f, P6f, P8), and shard 3 all of
+`seek.spec.ts` (S1 / S9, S6, S10 / S11, S10c / S11c, S12). This is
 the only place the split is written out; the workflow points here, so update
 it whenever a row is added or reordered. A shard's slice prints without
 running anything:
@@ -1157,7 +1158,7 @@ against a switch 0–200 ms later and E7 times the countdown, and a second rig
 on the same four vCPUs would turn their `bad` counts into a measure of CPU
 contention. Do not raise `workers` without re-measuring those rows. Each
 file's `beforeAll` boots one rig on every shard that runs a test from the file
-(three in all while no file spans two shards), and again after a failed test
+(four in all while `pause.spec.ts` spans two shards), and again after a failed test
 restarts the worker. `seatDuo` gives every test its own instances,
 profiles and room on that rig, so no row depends on another having run first.
 
@@ -1191,8 +1192,9 @@ covers are not redone:
 | E7s a peer the room pauses within a frame of its end, with no `ended`, still counts down after the other peer's Cancel (#528, fixed; the countdown is `PlayerView` state, so Tier 1 is a component test that runs the auto-advance block, `resetEpisodeTracking` and `goToEpisode`'s head from the SFC source: arms once at `duration - 0.001`, not at `duration - 5` or 0.2 s, not outside `ready`, one countdown with a late `ended`, a second after Cancel and a seek back, and a pull to N+1 clears it) | `test/renderer/components/player-auto-advance-pause.test.ts` | `episode.spec.ts` (E7s: B trails into the end and its room pause is moved to `duration - 0.001`, A cancels; `bad == 0` over B's countdown, the episode, resumed from ~0, one `{0, paused: false}` seek from B and none from A, no outbound `paused: true` after it, and A's outgoing element never playing from 0) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
-| S10, S11 (both ✗), S10c, S11c: a seek-bar scrub on one peer and a Play/Pause press on the other, 3 ms before to 5 ms after it, in both directions (#524). `SYNCPLAY_E2E_N` is the per-bucket, per-direction N, default 4. S10 is drift (both paused, more than `ECHO_SEEK_EPSILON_S` apart) and S11 a lost pause, both read by `scrubPauseVerdict` in `e2e-syncplay/helpers/score.ts`, which also names the scrubber frame the server resumed the room on (replayed in `test/syncplay-e2e-scrub-pause.test.ts`). S10 / S11 scrub 30 s, past `SEEK_REASSERT_TOLERANCE_S`; S10c / S11c are the control, a 2 s scrub with no #252 re-assert hop, and assert that no run sends one | `syncplay-ignoring-on-the-fly.test.ts` (#524 block: the server half of both shapes, a reference model of the ignore gate fed this client's own frames) | `seek.spec.ts` |
-| P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |
+| S10, S11 (✗, #535), S10c, S11c: a seek-bar scrub on one peer and a Play/Pause press on the other, 3 ms before to 5 ms after it, in both directions (#524). `SYNCPLAY_E2E_N` is the per-bucket, per-direction N, default 4. S10 is drift (both paused, more than `ECHO_SEEK_EPSILON_S` apart) and S11 a lost pause, both read by `scrubPauseVerdict` in `e2e-syncplay/helpers/score.ts`, which also names the scrubber frame the server resumed the room on (replayed in `test/syncplay-e2e-scrub-pause.test.ts`). S10 / S11 scrub 30 s, past `SEEK_REASSERT_TOLERANCE_S`; S10c / S11c are the control, a 2 s scrub with no #252 re-assert hop, and assert that no run sends one. S10 and S10c were ✗ until #524's pause-edge snap and now assert `bad == 0`, S10c outside one carved-out shape: a drifted run whose scrub crossed the pause (`seekCrossed`), was never re-asserted (`reasserts == 0`) and met the pause while still loading (`pauseInFlight`), where the #278 substitution and the #488 hold keep the scrubber on its target ([#537](https://github.com/mikkerlo/anime-downloader/issues/537); `isScrubPauseResidual537` in `e2e-syncplay/helpers/score.ts`, pinned in `test/syncplay-e2e-scrub-pause.test.ts`). That shape is printed on its own `S10c residual (#537)` line; any other drifted S10c run fails the row. S11 stays ✗ for #535, and S11c asserts no re-assert only | `syncplay-ignoring-on-the-fly.test.ts` (#524 block: the server half of both shapes, a reference model of the ignore gate fed this client's own frames, and the scrubber's side of shape 1 snapping to the room); the snap itself in `syncplay-pause-edge-lockstep.test.ts` and the composable's "a pause edge snaps to the room" block | `seek.spec.ts` |
+| S12: S10's race at −1 / 0 / +1 ms with every load delayed 1–2 s by the fixture server, so the scrubber's seek is still in flight when the pause reaches it (#524). `bad == 0` on drift once the seek has landed, and at least one run must record the pause arriving before the scrubber's `seeked` (`pauseInFlight`) | the composable's "#488 hold covers the snap" cases | `seek.spec.ts` |
+| P1 (B seeks at most once on the pause and sends no `doSeek`), P1b: the pause reaching B 0.8 / 1.5 / 2.5 s behind A, set back by half-rate playback, so B snaps exactly once and sends nothing back (#524) | `syncplay-two-peer-playpause.test.ts` (#524 block: 0.4 / 0.6 / 1.5 / 2.9 s behind and 1.5 s ahead) | `pause.spec.ts` |
 | P2 (✗ band), P3, M8 | `syncplay-two-peer-interactions.test.ts` | — |
 | P5, M1 | `syncplay-two-peer-adoption.test.ts`, `syncplay-two-peer-playpause.test.ts` | — |
 | P6, P7, P8 | — | `pause.spec.ts` |

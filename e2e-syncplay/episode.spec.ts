@@ -5,6 +5,7 @@
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (fixed)
 //   E7  End-of-episode auto-advance, both or one countdown fires     #512 (fixed)
+//   E7s The room pauses B a frame short of its end, A cancels        #528 (fixed)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -87,6 +88,14 @@
 // playing from 0. When both advance, B's outgoing element can play from 0 for
 // the few hundred ms before its own swap — the both-press shape — so that is
 // recorded (`oldPlayedB`), not asserted.
+//
+// E7s is #528, E7's Cancel run with the roles the Windows matrix lost runs to:
+// the room's pause at A's end reaches B ~1 ms short of B's own end, so B never
+// fires `ended`, and A is the one that cancels. `stageStranded` makes that gap
+// deterministic. `bad == 0` over: B shows a countdown, B's is the one
+// `{0, paused: false}` seek, A sends none (its Cancel stays local), both play
+// episode 2 from ~0, nothing re-pauses the room, and A's outgoing element never
+// plays N from 0. On main B shows no countdown and the room stays on episode 1.
 //
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
@@ -557,6 +566,135 @@ test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), n
           oldPlayedB
         },
         bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
+      )
+    }
+    const s = row.score()
+    expect(s.scoreable).toBeGreaterThanOrEqual(1)
+    expect(s.bad).toBe(0)
+  } finally {
+    await closeDuo(A, B)
+  }
+})
+
+/** #528 staging, installed on B: B's element runs at 0.8× for 2.5 s so it
+ *  trails A by ~0.5 s into the end, and the first room pause that lands on it
+ *  short of its end is moved to `duration - 0.001`, the gap the Windows matrix
+ *  saw, with that one `seeked` swallowed so neither the composable nor
+ *  PlayerView hears a seek. Window capture runs ahead of the element's own
+ *  `@pause`, so PlayerView reads the moved playhead. */
+async function stageStranded(B: Instance): Promise<void> {
+  await B.page.evaluate(() => {
+    const w = window as unknown as { __e7s?: { gap: number | null; off: () => void } }
+    w.__e7s?.off()
+    const st = { gap: null as number | null, off: (): void => {} }
+    const onPause = (e: Event): void => {
+      const v = e.target
+      if (!(v instanceof HTMLVideoElement) || st.gap !== null || v.ended) return
+      const gap = v.duration - v.currentTime
+      if (!(gap > 0 && gap < 3)) return
+      st.gap = gap
+      const swallow = (s: Event): void => s.stopImmediatePropagation()
+      window.addEventListener('seeked', swallow, { capture: true, once: true })
+      v.currentTime = v.duration - 0.001
+    }
+    st.off = () => window.removeEventListener('pause', onPause, true)
+    w.__e7s = st
+    window.addEventListener('pause', onPause, true)
+    const v = document.querySelector('video')
+    if (v) {
+      v.playbackRate = 0.8
+      setTimeout(() => (v.playbackRate = 1), 2500)
+    }
+  })
+}
+
+const strandedGap = (B: Instance): Promise<number | null> =>
+  B.page.evaluate(
+    () => (window as unknown as { __e7s?: { gap: number | null } }).__e7s?.gap ?? null
+  )
+
+const countdownShown = (I: Instance): Promise<boolean> =>
+  I.page.evaluate(() => !!document.querySelector('.auto-advance-overlay'))
+
+test('E7s — the room pauses B a frame short of its end and A cancels its countdown: B still counts down and advances, A follows (#528)', async () => {
+  const { A, B } = await seatDuo(rig)
+  const row = new RowScorer('E7s')
+  try {
+    expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    for (let i = 0; i < N; i++) {
+      // A stranded run (main) leaves the room paused at the end of episode 1.
+      if ((await A.state()).paused) await A.togglePlayButton()
+      const setupOk =
+        (await resetTo(A, B, '1')) && (await positionBoth(A, B, durationOf(rig.manifest, '1') - 9))
+      await stageStranded(B)
+      const [sa, sb] = await Promise.all([A.state(), B.state()])
+      const from = Date.now()
+      const cancelledA = await waitFor(
+        'A countdown cancelled',
+        () =>
+          A.page.evaluate(() => {
+            const b = document.querySelector('.auto-advance-cancel') as HTMLButtonElement | null
+            b?.click()
+            return !!b
+          }),
+        30_000,
+        50
+      )
+      const gap = await strandedGap(B)
+      const bCountdown = await waitFor('B countdown', () => countdownShown(B), 3000, 50)
+      const changed = await waitBothSrcChanged(A, B, sa.src, sb.src, 20_000)
+      await sleep(12_500)
+      const [a, b] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(from), B.collect(from)])
+      const seeksA = ownSeeks(da)
+      const seeksB = ownSeeks(db)
+      const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
+      const rePauses = [da, db].flatMap((d) =>
+        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
+      ).length
+      // A is the pure follower here, so its outgoing element playing N from 0 counts.
+      const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
+      const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
+      const resumed = !a.paused && !b.paused
+      const fromZero = a.ct > 3 && a.ct < 25 && b.ct > 3 && b.ct < 25 && Math.abs(a.ct - b.ct) < 2
+      const seeksResume = seeksB.every((w) => w.ps.paused === false)
+      // A's Cancel stays local, and B's own countdown is the one advance.
+      const cancelLocal = seeksA.length === 0
+      const bad =
+        !bCountdown ||
+        wrongEp ||
+        !resumed ||
+        !fromZero ||
+        seeksB.length !== 1 ||
+        !seeksResume ||
+        !cancelLocal ||
+        rePauses > 0 ||
+        followerPlayedN
+      row.add(
+        {
+          // Scoreable only when the staging fired: a room pause reached B short
+          // of its end, before B's own `ended`.
+          setupOk: setupOk && cancelledA && gap !== null,
+          bad,
+          gap,
+          bCountdown,
+          changed,
+          wrongEp,
+          resumed,
+          fromZero,
+          ctA: a.ct,
+          ctB: b.ct,
+          seeksA: seeksA.length,
+          seeksB: seeksB.length,
+          seeksResume,
+          cancelLocal,
+          rePauses,
+          followerPlayedN
+        },
+        bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
+      )
+      await B.page.evaluate(() =>
+        (window as unknown as { __e7s?: { off: () => void } }).__e7s?.off()
       )
     }
     const s = row.score()

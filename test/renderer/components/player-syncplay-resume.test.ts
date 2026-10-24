@@ -245,7 +245,9 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     // One inside `playProgrammatically`, one inside `togglePlay`. The other five
     // go through the helper.
     expect(plays).toHaveLength(2)
-    const helpers = FLAT_NO_COMMENTS.match(/playProgrammatically\(v, '(restore|episode-start)'\)/g)
+    const helpers = FLAT_NO_COMMENTS.match(
+      /playProgrammatically\(v, '(restore|episode-start)'(, origin)?\)/g
+    )
     expect(helpers).toHaveLength(5)
   })
 
@@ -258,8 +260,8 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     expect(restores).toHaveLength(3)
   })
 
-  it('gives both goToEpisode plays episode-start semantics', () => {
-    const starts = FLAT_NO_COMMENTS.match(/playProgrammatically\(v, 'episode-start'\);/g)
+  it('gives both goToEpisode plays episode-start semantics, with the move’s origin (#512)', () => {
+    const starts = FLAT_NO_COMMENTS.match(/playProgrammatically\(v, 'episode-start', origin\);/g)
     expect(starts).toHaveLength(2)
   })
 
@@ -278,7 +280,7 @@ describe('PlayerView — programmatic plays carry an operation kind (#306)', () 
     // residual #306 removes. `op.retract()` can only ever remove the operation
     // this call registered.
     expect(FLAT_NO_COMMENTS).toContain(
-      "const op = syncplay.beginProgrammaticPlayback('play', kind); " +
+      "const op = syncplay.beginProgrammaticPlayback('play', kind, origin); " +
         'void Promise.resolve(v.play()).catch(() => op.retract());'
     )
   })

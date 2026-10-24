@@ -277,7 +277,7 @@ describe('two-peer syncplay harness', () => {
     // queued tasks run before the task that reaches HAVE_METADATA, and it is
     // the ordering this seam exists to model: the pause has to arrive at
     // `readyState` 0, which is what `hasAnnounceablePosition()`
-    // (`src/renderer/src/composables/use-syncplay-client.ts:861`) and
+    // (`src/renderer/src/composables/use-syncplay-client.ts:865`) and
     // `onLocalPause`'s own `readyState > 0` conjunct are both reading.
     //
     // Before the fix this read `[['pause', 'loadedmetadata'], []]` with
@@ -437,7 +437,7 @@ describe('two-peer syncplay harness', () => {
    * The log is built **here rather than in the helper**, and by wrapping the
    * *method* rather than replacing the handle: the composable resolves its
    * bridge once, at setup, and never re-reads it
-   * (`src/renderer/src/composables/use-syncplay-client.ts:293` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
+   * (`src/renderer/src/composables/use-syncplay-client.ts:297` ("const api: SyncplayBridgeApi = deps.api ?? window.api")), so
    * `peer.api = {…}` would hand the wrapper to nobody and leave a green case
    * sampling an empty array. Writing one property on the retained object is
    * seen, because the push site reads `api.syncplaySetFile` at call time.
@@ -489,11 +489,11 @@ describe('two-peer syncplay harness', () => {
     // The seventh harness guard, and the only one whose subject is an *ordering*
     // the helper used to be unable to express at all.
     //
-    // In the app, `PlayerView.vue:2512` writes `activeEpisodeIndex.value =
+    // In the app, `PlayerView.vue:2518` writes `activeEpisodeIndex.value =
     // targetIndex` and every source write below it sits behind an `await` on
     // `window.api.playerFindLocalFile(…)` / `playerGetStreamUrl(…)`. The
     // episode-change watcher
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2057`) is a default
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2071`) is a default
     // **pre-flush** `watch`, so Vue's scheduler runs it inside that suspension —
     // against the element still bound to the *old* episode, at HAVE_METADATA.
     // The helper had no suspension, so the watcher only ever ran after
@@ -516,7 +516,7 @@ describe('two-peer syncplay harness', () => {
     // the watcher's other three calls (`clearPendingUserPause()`,
     // `bumpPlaybackSourceGeneration()`, `resetRemoteStateTracking()`) touch no
     // element at all; the push's own duration read is
-    // `src/renderer/src/composables/use-syncplay-client.ts:781` ("const dur =
+    // `src/renderer/src/composables/use-syncplay-client.ts:785` ("const dur =
     // deps.getVideoEl()?.duration || deps.getDuration() || 0") and `reload()`
     // never writes `duration`, so it is identical in all three; both forms send
     // inside the same 50 ms slice at the same `Date.now()`, so neither the wire
@@ -530,10 +530,10 @@ describe('two-peer syncplay harness', () => {
 
     // The wrapper fired — see `seatSwitchScenario`'s note on why this is not a
     // formality — and it fired once: the transition-into-ready push
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2380`, the
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2394`, the
     // `pushSyncplayFile()` inside `watch(syncplayStatus, …)` under
     // `if (status.state === 'ready' && !wasReady)`) and the mount-time one
-    // (`src/renderer/src/composables/use-syncplay-client.ts:2519 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
+    // (`src/renderer/src/composables/use-syncplay-client.ts:2533 ("if (syncplayStatus.value.state === 'ready') pushSyncplayFile()")`,
     // inside `onMounted`) are both spent by the `advance(4)` above, so this one
     // is the watcher's. Each anchor carries the construct it lands in because
     // the two were paired the wrong way round here until #384, and nothing
@@ -718,9 +718,9 @@ describe('two-peer syncplay harness', () => {
 // Unrelated, and named here because the issue title says "every call site":
 // `src/renderer/src/components/views/PlayerView.vue` has its own `goToEpisode()`
 // — a different function, called un-awaited on purpose at
-// `src/renderer/src/components/views/PlayerView.vue:1907`,
+// `src/renderer/src/components/views/PlayerView.vue:1911`,
 // `src/renderer/src/components/views/PlayerView.vue:2735` and
-// `src/renderer/src/components/views/PlayerView.vue:2758` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:2767` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local
@@ -881,7 +881,7 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 //
 // **Re-derived again on that round's review: `episode-change` 9 → 10.** The
 // 6500/7500 pair that pins
-// `src/main/syncplay.ts:996` ("this.playbackAdopted = false") firing on a
+// `src/main/syncplay.ts:1006` ("this.playbackAdopted = false") firing on a
 // clean comb cell drives two more switches from one new local helper
 // (`latchAcrossRelease`), so the sites rose
 // by one where the switches rose by two. The review that asked for the pair
@@ -916,10 +916,14 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // **Re-derived for #501: `episode-change` 15 → 16.** The navigator model gains
 // `pick()`, the leader's list pick, whose one awaited `peer.goToEpisode(` call
 // every #501 case drives its jump through.
+//
+// **Re-derived for #512: `episode-change` 16 → 17.** `attachAutoAdvancer`'s
+// `step()` models `goToEpisode` for the countdown and the follow walk alike,
+// through one awaited `peer.goToEpisode(` call.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 16,
+  'episode-change': 17,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

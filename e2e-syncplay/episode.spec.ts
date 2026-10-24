@@ -4,6 +4,7 @@
 //   E6  A presses prev — the mirror of E1, run on the way back       #486 (fixed by #493), #497 (recorded)
 //   E2  Both press next, B 0–1.5 s after A                           #486 (fixed), #487 (fixed)
 //   E5  Next pressed while the room is paused                        #486 (fixed), #496 (fixed), #497 (recorded)
+//   E7  End-of-episode auto-advance, both or one countdown fires     #512 (fixed)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -70,6 +71,18 @@
 //    counts as #486 (#499). A timing rule (a snap-back to 0 means #497) would
 //    not do: #486's stale seek can snap back too.
 //
+// E7 is #512: both instances play episode 1 into its end and the countdown
+// starts episode 2. Before the fix the start saw the room `ended` had paused
+// and landed paused at 0 (4/4 red with the countdown passing `'local'`). Even
+// runs let both countdowns fire; odd runs click B's Cancel, so A advances alone
+// and B follows. Both runs are `bad == 0` over: right episode, both playing
+// from ~0, one `{0, paused: false}` seek from A, none from a cancelling B (a
+// Cancel stays local), no outbound `paused: true` from either after the first
+// seek (the review's Critical item), and a following B's outgoing element never
+// playing from 0. When both advance, B's outgoing element can play from 0 for
+// the few hundred ms before its own swap — the both-press shape — so that is
+// recorded (`oldPlayedB`), not asserted.
+//
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
 
@@ -85,8 +98,10 @@ import {
   epIntOf,
   type Rig,
   type Instance,
-  type PlayerState
+  type PlayerState,
+  type WireRec
 } from './helpers/duo'
+import { durationOf } from './helpers/fixtures'
 import { RowScorer, staleOutcome, e5Position, e5Split, resumeSplit } from './helpers/score'
 import { FOLLOW_GRACE_MS } from '../src/renderer/src/utils'
 
@@ -420,6 +435,109 @@ test('E5 — next in a paused room: both move to N+1 near 0 (#486 fixed) and sta
       scoreable.filter((r) => !r.foreignSeek && !r.atZero).length,
       '#496 paused room left 0'
     ).toBe(0)
+  } finally {
+    await closeDuo(A, B)
+  }
+})
+
+/** #512: `d`'s own file-change seeks — outbound `doSeek` frames at 0. The
+ *  position filter keeps out a late `positionBoth()` setup seek. */
+function ownSeeks(d: Collected): (WireRec & { ps: NonNullable<WireRec['ps']> })[] {
+  return d.wire.filter(
+    (w): w is WireRec & { ps: NonNullable<WireRec['ps']> } =>
+      w.dir === 'out' && !!w.ps?.doSeek && w.ps.position < 1
+  )
+}
+
+/** #512: `d`'s element starting to play `src` (its outgoing episode) near 0 after `at`. */
+function playedOldFromZero(d: Collected, src: string, at: number): boolean {
+  return d.ev.some((e) => e.at > at && e.t === 'playing' && e.src === src.slice(-40) && e.ct < 5)
+}
+
+test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), nothing re-pauses the room after the resume, and a follower never plays N from 0', async () => {
+  const { A, B } = await seatDuo(rig)
+  const row = new RowScorer('E7')
+  try {
+    expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    for (let i = 0; i < N; i++) {
+      // Even runs: both countdowns fire (both reach `ended` together). Odd
+      // runs: B cancels its countdown, so only A advances and B follows.
+      const cancelB = i % 2 === 1
+      const setupOk =
+        (await resetTo(A, B, '1')) && (await positionBoth(A, B, durationOf(rig.manifest, '1') - 9))
+      const [sa, sb] = await Promise.all([A.state(), B.state()])
+      const from = Date.now()
+      const cancelled =
+        !cancelB ||
+        (await waitFor(
+          'B countdown cancelled',
+          () =>
+            B.page.evaluate(() => {
+              const b = document.querySelector('.auto-advance-cancel') as HTMLButtonElement | null
+              b?.click()
+              return !!b
+            }),
+          30_000,
+          50
+        ))
+      const changed = await waitBothSrcChanged(A, B, sa.src, sb.src, 45_000)
+      await sleep(12_500)
+      const [a, b] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(from), B.collect(from)])
+      const seeksA = ownSeeks(da)
+      const seeksB = ownSeeks(db)
+      const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
+      // The Critical item of the #512 review: no `paused: true` from either
+      // instance once the first auto-advance seek resumed the room.
+      const rePauses = [da, db].flatMap((d) =>
+        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
+      ).length
+      // A follower's outgoing element playing from the start of N: asserted on
+      // the Cancel runs, where B is a pure follower. When both advance, B has
+      // already committed its own switch when A's seek lands, and its outgoing
+      // element can play from 0 until its own source swap (~300 ms) — the
+      // both-press shape `docs/syncplay.md` accepts — so it is only recorded.
+      const oldPlayedB = playedOldFromZero(db, sb.src, firstSeekAt)
+      const followerPlayedN = cancelB && oldPlayedB
+      const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
+      const resumed = !a.paused && !b.paused
+      const fromZero = a.ct > 3 && a.ct < 25 && b.ct > 3 && b.ct < 25 && Math.abs(a.ct - b.ct) < 2
+      const seeksResume = [...seeksA, ...seeksB].every((w) => w.ps.paused === false)
+      // A Cancel stays local: the cancelling peer sends no seek of its own.
+      const cancelLocal = !cancelB || seeksB.length === 0
+      const bad =
+        wrongEp ||
+        !resumed ||
+        !fromZero ||
+        seeksA.length !== 1 ||
+        !seeksResume ||
+        !cancelLocal ||
+        rePauses > 0 ||
+        followerPlayedN
+      row.add(
+        {
+          setupOk: setupOk && cancelled && changed,
+          bad,
+          cancelB,
+          wrongEp,
+          resumed,
+          fromZero,
+          ctA: a.ct,
+          ctB: b.ct,
+          seeksA: seeksA.length,
+          seeksB: seeksB.length,
+          seeksResume,
+          cancelLocal,
+          rePauses,
+          followerPlayedN,
+          oldPlayedB
+        },
+        bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
+      )
+    }
+    const s = row.score()
+    expect(s.scoreable).toBeGreaterThanOrEqual(1)
+    expect(s.bad).toBe(0)
   } finally {
     await closeDuo(A, B)
   }

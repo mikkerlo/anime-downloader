@@ -575,7 +575,7 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // otherwise push the intermediate episode, a new key on the leader, whose own
   // walk then pulls it back toward that episode. `beginFollowWalk` holds every
   // file and snapshot push until `settleFollowWalk`, which pushes the reached
-  // index once as a `'follow'` (`'local'` if it held a user's own commit). In
+  // index once as a `'follow'` (or as a user's own commit it held). In
   // `finally`, so arrival, `unreachable`, a translation pick and a throw all
   // announce where this peer really is. A one-step follow takes the same path.
   let steps = 0;
@@ -1570,7 +1570,11 @@ function togglePlay(): void {
 // `Promise.resolve` because `HTMLMediaElement.play()` returns a promise in
 // Chromium but `undefined` in older/DOM-shim environments, and a rejection that
 // escaped here would leave the operation registered until its TTL.
-function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): void {
+function playProgrammatically(
+  v: HTMLVideoElement,
+  kind: SyncplayPlaybackKind,
+  origin?: SyncplayEpisodeSwitch
+): void {
   // A `restore` replays a `wasPlaying` latched *before* an await — the remux
   // prepare in `selectTranslation`'s local-file arm, or the `playerGetStreamUrl`
   // round trip in its stream arm (622 ms in #343's capture) — so by the time it
@@ -1607,7 +1611,7 @@ function playProgrammatically(v: HTMLVideoElement, kind: SyncplayPlaybackKind): 
   // across an episode switch taken during a divergence the projection still says
   // `outOfFile` and the ready gate declines the resume.
   if (kind === 'restore' && syncplaySessionLive() && !syncplay.shouldElementPlay()) return;
-  const op = syncplay.beginProgrammaticPlayback('play', kind);
+  const op = syncplay.beginProgrammaticPlayback('play', kind, origin);
   void Promise.resolve(v.play()).catch(() => op.retract());
 }
 
@@ -2005,7 +2009,7 @@ function selectQuality(stream: { height: number; url: string }): void {
     // paused player is disarmed here or a fast reload autostarts it and
     // `onLocalPlay` announces a play nobody pressed (#498). A bare pause on an
     // already-paused element that registers nothing, under the #348 contract
-    // written above use-syncplay-client.ts:1749 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
+    // written above use-syncplay-client.ts:1763 ("if (effectivePaused && v.paused && v.readyState < HAVE_FUTURE_DATA) v.pause()").
     // Except while the mount's first autostart is still pending outside a
     // session: that element is paused because it has not started yet, not
     // because anyone paused it, and the re-armed `autoplay` is what starts it.
@@ -2356,10 +2360,12 @@ async function fetchEpisodeWindowTranslations(
 }
 
 // `origin` says who started the move (#486): `'follow'` only from
-// `handleRemoteEpisodeChange`'s walk, `'local'` from every user-driven caller.
-// It rides the file push this step's index commit triggers, and main forces
-// the room to 0 for `'local'` only. A `'follow'` Next step also arms the
-// pending-follow token (#487) at the commit.
+// `handleRemoteEpisodeChange`'s walk, `'auto-advance'` only from the end-of-episode
+// countdown (#512), `'local'` from every other user-driven caller. It rides the
+// file push this step's index commit triggers and the step's `episode-start`,
+// and main forces the room to 0 for the two that are not `'follow'`, playing
+// for `'auto-advance'`. A `'follow'` Next step also arms the pending-follow
+// token (#487) at the commit.
 //
 // `continuesWalk` is true for the second and later steps of one room walk
 // (#501). Such a step keeps the `pendingPrevEpisodeInt` the walk's first step
@@ -2627,7 +2633,7 @@ async function goToEpisode(
             seekProgrammatically(v, 0);
             v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
             v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });
-            playProgrammatically(v, 'episode-start');
+            playProgrammatically(v, 'episode-start', origin);
           }
           navigating.value = false;
         });
@@ -2688,7 +2694,7 @@ async function goToEpisode(
         seekProgrammatically(v, 0);
         v.addEventListener('loadedmetadata', onTargetMetadata, { once: true });
         v.addEventListener('loadeddata', onTargetFirstFrame, { once: true });
-        playProgrammatically(v, 'episode-start');
+        playProgrammatically(v, 'episode-start', origin);
       }
       navigating.value = false;
     });
@@ -2732,7 +2738,10 @@ function onVideoEnded(): void {
     autoAdvanceCountdown.value--;
     if (autoAdvanceCountdown.value <= 0) {
       cancelAutoAdvance();
-      goToEpisode('next', 'local');
+      // Its own origin, not `'local'` (#512): in a room `ended` paused the room,
+      // and this start must resume it. Passed here because `goToEpisode`'s own
+      // `markEpisodeSwitch(origin)` would overwrite an earlier mark.
+      goToEpisode('next', 'auto-advance');
     }
   }, 1000);
 }

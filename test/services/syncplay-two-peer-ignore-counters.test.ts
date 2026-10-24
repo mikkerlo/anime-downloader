@@ -8,13 +8,13 @@
 // and 50 ms hops, so the window in which a change of ours is outstanding is a
 // real interval with real frames arriving inside it.
 //
-// The three private fields (`src/main/syncplay.ts:509-511`):
+// The three private fields (`src/main/syncplay.ts:510-512`):
 //
 //  - `clientIgnoreCounter` — monotonic, bumped once per *discrete* change we
 //    originate. Heartbeats, acks and seek re-asserts do not touch it.
 //  - `pendingClientAck` — the counter of our newest outstanding change, or 0.
 //    While it is non-zero `handleState` drops every inbound state
-//    (`src/main/syncplay.ts:2228`).
+//    (`src/main/syncplay.ts:2238`).
 //  - `pendingServerAck` — the server counter we owe an answer for.
 //
 // ── Two things this harness cannot show, stated rather than worked around ────
@@ -28,16 +28,16 @@
 //    they are not evidence the counter was ever set. They are not inert either,
 //    and the distinction matters to anyone tempted to drop the field from the
 //    triple: stub out the `this.pendingServerAck = 0` in `sendAck()`
-//    (`src/main/syncplay.ts:2962`) so the counter latches instead of being spent,
+//    (`src/main/syncplay.ts:2972`) so the counter latches instead of being spent,
 //    and two cases below go red on the triple — the clean round trip and the
 //    crossing case, each reading `pendingServerAck: 1`. What the zeros pin is
 //    "cleared before every boundary", i.e. the counter never latches, which is a
 //    different regression class from "it was set at some point".
-//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1901`)
+//  - **The `clientEcho === pendingClientAck` arm (`src/main/syncplay.ts:1911`)
 //    is unreachable here.** `MinElectionServer` never writes a `client` key —
 //    the reference only writes one when its own counter is truthy
 //    (`protocols.py:758-760`) — so on this link `pendingClientAck` is only ever
-//    cleared by the unconditional zero at `src/main/syncplay.ts:1890`. That is
+//    cleared by the unconditional zero at `src/main/syncplay.ts:1900`. That is
 //    the path the comment there calls the "~1 RTT of lost echo protection", and
 //    the third case below is what it costs.
 
@@ -180,7 +180,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     })
 
     // t=4100. The forced update for the *first* drag arrives — counter 1, not 2
-    // — and closes the window anyway: `src/main/syncplay.ts:1890` zeroes
+    // — and closes the window anyway: `src/main/syncplay.ts:1900` zeroes
     // `pendingClientAck` unconditionally rather than comparing it. The second
     // drag is still in flight at this instant.
     await room.advance(0.05)
@@ -235,7 +235,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // t=4100. The joiner's `doSeek` forced update reaches the host. Our pause is
     // still on the wire — its own echo is 50 ms away — yet the window is closed
     // and the frame is delivered rather than dropped. That is the trade-off the
-    // comment above `src/main/syncplay.ts:1890` names: without that zero the
+    // comment above `src/main/syncplay.ts:1900` names: without that zero the
     // peer's seek would die at the drop guard, and a forced State is one-shot,
     // so the room would silently revert it.
     await room.advance(0.05)
@@ -248,7 +248,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // a slice *before* our press is classified, so the window is not open yet
     // and it is foreign — #384's join-time State moved the 4000 election from us
     // (`hostuser` by 49 ms) to the joiner (by 951 ms), so this periodic no longer
-    // dies at `src/main/syncplay.ts:2227`. It moves nothing: |102.049 − 103.95|
+    // dies at `src/main/syncplay.ts:2237`. It moves nothing: |102.049 − 103.95|
     // < 3, so the renderer applies no seek.
     expect(host.frames).toHaveLength(2)
     expect(host.frames[0].at).toBe(4050)
@@ -335,7 +335,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // watcher onto one position, and a tied election falls back to the
     // first-inserted watcher. That keeps the host's inbound periodics
     // *foreign*-`setBy` on both sides of the window, which is what makes the gap
-    // below attributable to the ack rather than to `src/main/syncplay.ts:2227`.
+    // below attributable to the ack rather than to `src/main/syncplay.ts:2237`.
     const joiner = await room.seat({
       username: 'joinuser',
       position: ROOM_START - 2,
@@ -369,8 +369,8 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
     // broadcast onward — visible as the frame that would land at 7500 going
     // missing, dropped as self-`setBy`. A press at t=8000 gives a window over the
     // broadcasts at 7000, 8000 and 9000, all past that flip, so all three die at
-    // `src/main/syncplay.ts:2227` before the ack guard at
-    // `src/main/syncplay.ts:2228` is ever reached — and the case then passes with
+    // `src/main/syncplay.ts:2237` before the ack guard at
+    // `src/main/syncplay.ts:2238` is ever reached — and the case then passes with
     // the ack guard deleted, which is the one thing it exists to hold. Pressing
     // at t=4000 puts the window over the broadcasts at 3000, 4000 and 5000
     // instead, all still the joiner's, so the ack guard is what drops them.
@@ -403,7 +403,7 @@ describe('SyncplayClient — ignoringOnTheFly over a two-peer link', () => {
 })
 
 // #486's file-change seek opens the same window as any local seek, and the
-// unconditional zero at `src/main/syncplay.ts:1890` closes it early on any
+// unconditional zero at `src/main/syncplay.ts:1900` closes it early on any
 // frame carrying `ignoringOnTheFly.server`. So the in-flight drop guard is not
 // what keeps the old episode's position out of the new one; these cases are.
 describe('SyncplayClient — a forced update crossing the file-change seek (#486)', () => {

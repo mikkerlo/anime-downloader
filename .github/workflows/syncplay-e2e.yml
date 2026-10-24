@@ -13,9 +13,8 @@ name: Syncplay e2e
 #
 # SHARDED across three runners, one worker each (#530): `--shard=N/3` with the
 # config's `fullyParallel: true` cuts the ordered test list into contiguous
-# slices, not round-robin. With today's twelve tests that is all of
-# `episode.spec.ts` on shard 1, P1 / P6 / P7 / P7f on shard 2 and
-# P6f / P8 / S1 / S9 / S6 on shard 3 (`--shard=N/3 --list`). Every shard gets a
+# slices, not round-robin; `docs/testing.md` (Tier 2 Syncplay) has today's split,
+# and `--shard=N/3 --list` prints the current one. Every shard gets a
 # whole runner because the timing rows score races measured in milliseconds; a
 # second worker on the same cores would skew them. Each shard uploads a blob
 # report on every outcome, and `merge-reports` folds the three into one

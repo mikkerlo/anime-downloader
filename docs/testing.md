@@ -1137,10 +1137,11 @@ holds the layout, the pin, the `pipefail` step and the sharding below from
 The workflow shards the suite across three runners, one worker each (#530).
 The config sets `fullyParallel: true`, so `--shard=N/3` splits by test rather
 than by file. Playwright cuts the ordered test list into contiguous slices; it
-does not deal tests round-robin. With today's twelve tests, shard 1 runs all of
-`episode.spec.ts` (E1 / E6, E2, E5, E7, about 9.5 min), shard 2 runs P1, P6, P7
-and P7f, and shard 3 runs P6f, P8, S1 / S9 and S6. A shard's slice prints
-without running anything:
+does not deal tests round-robin. With today's thirteen tests, shard 1 runs all
+of `episode.spec.ts` (E1 / E6, E2, E5, E7, E7s), shard 2 runs P1, P6, P7 and
+P7f, and shard 3 runs P6f, P8, S1 / S9 and S6. This is the only place the split
+is written out; the workflow points here, so update it whenever a row is added
+or reordered. A shard's slice prints without running anything:
 
 ```bash
 npx playwright test --config playwright.syncplay.config.ts --shard=1/3 --list

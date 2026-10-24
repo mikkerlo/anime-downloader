@@ -553,7 +553,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // the 3500 ms clear timer on every call, so a refusal emitted per inbound state at 1 Hz would
   // never expire, and last-writer-wins would swallow every other syncplay toast for the whole
   // divergence. Not a universal: a stream sparser than one per 3500 ms does clear. Here it is the
-  // room's cadence, because what reaches us survives `src/main/syncplay.ts:2237-2228` —
+  // room's cadence, because what reaches us survives `src/main/syncplay.ts:2237-2238` —
   // foreign-`setBy`, or room voice, which needs de-adoption *and* a keyed roster with a peer
   // (`main/syncplay.ts:2715-2719`), not de-adoption alone. And what fires this toast is what
   // de-adopted main: `wouldSeek` needs `diff > 3.0` (use-syncplay-client.ts:1583) on the two
@@ -1139,7 +1139,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     //
     // Bumping in `recordRemoteState` would close that and cost more than it buys — but the ~1 Hz
     // it is priced at is a *pre-adoption* rate. It runs for every inbound state that survives
-    // `src/main/syncplay.ts:2237-2228`, parked or not, and the three `restore` registrations
+    // `src/main/syncplay.ts:2237-2238`, parked or not, and the three `restore` registrations
     // are same-episode: `isNewPlayer` is false at `src/main/syncplay.ts:837`, adoption holds, and
     // their own periodics die at that guard. Only `episode-start` clears adoption there, so only
     // it is registered where ~1 Hz holds. A superseded non-echo operation writes nothing, so
@@ -1151,7 +1151,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // still moves in the meantime — the room mirror: `syncplayLastRemotePlaying` goes true
     // against a paused room, so a `canplay` or roster change landing inside the window takes the
     // gate's resume arm rather than its pause arm. `recordRemoteState` runs parked or not, so
-    // it is back at the next inbound state surviving `src/main/syncplay.ts:2237-2228` — and
+    // it is back at the next inbound state surviving `src/main/syncplay.ts:2237-2238` — and
     // *that*, not a heartbeat, is the bound: all five writers of `playbackAdopted = false`
     // (`src/main/syncplay.ts:837`, `main/syncplay.ts:1006`, `main/syncplay.ts:1103`,
     // `main/syncplay.ts:1139`, `main/syncplay.ts:2048`) are events, not schedules, so no timer in
@@ -1649,7 +1649,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // just paused. Not repaired on a schedule: main's `canAssertSnapshot()` asserts it, the
     // server un-pauses the room, and the next inbound state's `syncplayLastRemotePlaying =
     // !state.paused` (use-syncplay-client.ts:1505) flips the mirror the divergence relied on —
-    // but only a state surviving `src/main/syncplay.ts:2237-2228` gets there, past adoption
+    // but only a state surviving `src/main/syncplay.ts:2237-2238` gets there, past adoption
     // maybe none. From there the room is playing, and nothing restores the pause. #324's lost
     // play, in the pause direction.
     //
@@ -1661,7 +1661,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // after a source swap lives inside the parked window precisely because the
     // park is there. What carries the omission is a bound of its own, and it is structural, not a
     // rate: a surviving `restore`'s clobber of `intendedPaused` stands until the next inbound
-    // state surviving `src/main/syncplay.ts:2237-2228` — the room mirror repairs on that same
+    // state surviving `src/main/syncplay.ts:2237-2238` — the room mirror repairs on that same
     // gated state, `use-syncplay-client.ts:1505` — and no timer, ack, re-adoption or roster event
     // caps that run: uncapped by any schedule in the tree. Reachability is #343. Bumping here
     // would instead supersede queued operations within a second of registration — but only

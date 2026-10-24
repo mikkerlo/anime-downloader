@@ -10,7 +10,7 @@
 // and a relative walk (`handleRemoteEpisodeChange`,
 // `src/renderer/src/components/views/PlayerView.vue:516`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3446`) — is released in the `nextTick` after
+// (`PlayerView.vue:3447`) — is released in the `nextTick` after
 // `playerGetStreamUrl` resolves (`PlayerView.vue:2692`), not when the followed
 // episode has loaded. B's user is still looking at episode N; a Next pressed
 // after that release reads its target relative to the already-committed N+1

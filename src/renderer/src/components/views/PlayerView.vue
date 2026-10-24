@@ -2801,8 +2801,9 @@ function onVideoEnded(): void {
 
 // About one frame. The room's pause at the end position lands ~1 ms short of
 // `duration` (#528), so the element never fires `ended`; a frame covers that
-// with room to spare and stays far from a deliberate pause, which a window in
-// whole seconds would turn into a countdown.
+// and stays far from a deliberate pause, which a window in whole seconds would
+// turn into a countdown. It misses a room pause that leaves us more than a
+// frame short: with no `doSeek` that pause seeks us only on drift over 3 s.
 const AUTO_ADVANCE_PAUSE_EPS_S = 0.05;
 
 // #528: in a room, a pause that leaves the element within a frame of the end is

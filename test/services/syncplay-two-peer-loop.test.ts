@@ -720,7 +720,7 @@ describe('two-peer syncplay harness', () => {
 // — a different function, called un-awaited on purpose at
 // `src/renderer/src/components/views/PlayerView.vue:1951`,
 // `src/renderer/src/components/views/PlayerView.vue:2793` and
-// `src/renderer/src/components/views/PlayerView.vue:2849` (`onUserNext`, which
+// `src/renderer/src/components/views/PlayerView.vue:2850` (`onUserNext`, which
 // the keyboard Next reaches since #487).
 // Nothing in this glob reaches it and nothing here should grow to cover it.
 // The #487 block in the episode-change sibling MODELS that function as a local

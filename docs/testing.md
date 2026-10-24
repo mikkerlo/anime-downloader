@@ -1131,7 +1131,41 @@ aggregate them with `jq`, never read them raw. The workflow
 (`.github/workflows/syncplay-e2e.yml`) runs nightly, on dispatch and on PRs
 touching the Syncplay client, and is `continue-on-error` until the non-✗ rows
 have five green nightlies in a row. `test/syncplay-e2e-workflow.test.ts`
-holds the layout, the pin and the `pipefail` step from `quality`.
+holds the layout, the pin, the `pipefail` step and the sharding below from
+`quality`.
+
+The workflow shards the suite across three runners, one worker each (#530).
+The config sets `fullyParallel: true`, so `--shard=N/3` splits by test rather
+than by file. Playwright cuts the ordered test list into contiguous slices; it
+does not deal tests round-robin. With today's twelve tests, shard 1 runs all of
+`episode.spec.ts` (E1 / E6, E2, E5, E7, about 9.5 min), shard 2 runs P1, P6, P7
+and P7f, and shard 3 runs P6f, P8, S1 / S9 and S6. A shard's slice prints
+without running anything:
+
+```bash
+npx playwright test --config playwright.syncplay.config.ts --shard=1/3 --list
+```
+
+The run step still goes through `npm run test:e2e:syncplay -- --shard=…`,
+because the npm script is what adds `xvfb-run -a` around the run. The matrix
+sets `fail-fast: false`, so one red shard does not cancel the others'
+evidence. The speed-up comes from runners, not workers: P6f / P7f race a pause
+against a switch 0–200 ms later and E7 times the countdown, and a second rig
+on the same four vCPUs would turn their `bad` counts into a measure of CPU
+contention. Do not raise `workers` without re-measuring those rows. Each
+file's `beforeAll` boots one rig on every shard that runs a test from the file
+(four in all, since `pause.spec.ts` spans shards 2 and 3), and again after a
+failed test restarts the worker. `seatDuo` gives every test its own instances,
+profiles and room on that rig, so no row depends on another having run first.
+
+To read a run, start with the `merge-reports` job. Its job summary lists every
+row's `[syncplay-e2e] … bad=…` line from all three shards in test order, and
+its `playwright-report-syncplay` artifact is the merged HTML report, built by
+`playwright merge-reports` from the `blob-report-N` artifact each shard uploads
+on every outcome. A row's full output, including the per-run `bad:` reasons,
+is in the log of the shard that ran it (`gh run view --log --job <id>`). A red
+shard also uploads `syncplay-e2e-traces-N`, which holds `syncplay-e2e-N.log` and
+its rows' JSONL traces.
 
 Running Tier 2 locally needs a build, `ffmpeg` on `PATH`, `xvfb-run`, and the
 server from the conformance provisioning line above:

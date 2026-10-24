@@ -127,6 +127,9 @@ export interface WireRec {
   at: number
   dir: string
   ps?: { position: number; paused: boolean; doSeek?: boolean; setBy?: string | null }
+  /** The frame's `ignoringOnTheFly`, inbound or outbound: which forced update
+   *  a frame acks, and whether the server's gate was up when it was sent. */
+  iotf?: { server?: number; client?: number }
   file?: string | null
   ready?: unknown
 }
@@ -189,6 +192,13 @@ export interface Instance {
     what: 'quality' | 'translation',
     delayMs: number
   ): Promise<{ pressAt: number; firstClickAt: number; secondClickAt: number }>
+  /** Run a seek-bar seek (`{ seek }`) or a Play/Pause press (`'toggle'`) at
+   *  wall-clock `at` (`Date.now()` ms, which every process on the host shares),
+   *  so two instances can be raced at millisecond offsets (#524). The page
+   *  sleeps to within 20 ms of `at` and spins out the rest; a Playwright round
+   *  trip per action would be far wider than the gaps this sweeps. Returns the
+   *  in-page `Date.now()` the action ran at. */
+  actAt(at: number, action: { seek: number } | 'toggle'): Promise<number>
   /** Everything recorded since `from` (Date.now() ms), relative to `from`. */
   collect(from: number): Promise<{ ev: MediaEv[]; smp: Sample[]; wire: WireRec[]; toasts: Toast[] }>
   close(): Promise<void>
@@ -345,11 +355,12 @@ export async function launchInstance(
     w.__rig = { wire, toasts, ev: [], smp: [] }
     window.api.onSyncplayTrace((e) => {
       const m = (e.msg ?? {}) as {
-        State?: { playstate?: Record<string, unknown> }
+        State?: { playstate?: Record<string, unknown>; ignoringOnTheFly?: unknown }
         Set?: { file?: { name?: string } | null; ready?: unknown }
       }
       const rec: Record<string, unknown> = { at: Date.now(), dir: e.dir }
       if (m.State?.playstate) rec.ps = m.State.playstate
+      if (m.State?.ignoringOnTheFly) rec.iotf = m.State.ignoringOnTheFly
       if (m.Set && m.Set.file !== undefined) rec.file = m.Set.file ? m.Set.file.name : null
       if (m.Set?.ready) rec.ready = m.Set.ready
       if (m.State || m.Set) wire.push(rec)
@@ -606,6 +617,28 @@ export async function launchInstance(
           return { pressAt, firstClickAt, secondClickAt }
         },
         { what, delayMs }
+      ),
+    actAt: async (at, action) =>
+      page.evaluate(
+        async ({ at, action }) => {
+          const early = at - Date.now() - 20
+          if (early > 0) await new Promise((r) => setTimeout(r, early))
+          while (Date.now() < at) {
+            /* spin out the last few ms */
+          }
+          const ranAt = Date.now()
+          if (action === 'toggle') {
+            ;(document.querySelector('button.ctrl-btn.big') as HTMLButtonElement).click()
+          } else {
+            const bar = document.querySelector('input.seek-input') as HTMLInputElement
+            bar.dispatchEvent(new MouseEvent('mousedown'))
+            bar.value = String(action.seek)
+            bar.dispatchEvent(new Event('input'))
+            bar.dispatchEvent(new Event('change'))
+          }
+          return ranAt
+        },
+        { at, action }
       ),
     collect: async (from) => {
       const d = await page.evaluate((from) => {

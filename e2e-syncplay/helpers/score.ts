@@ -16,6 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { TRACE_DIR } from './paths'
+import { ECHO_SEEK_EPSILON_S } from '../../src/main/syncplay'
 
 /** What one instance did across an episode change, read off its media events
  *  and 200 ms samples (both relative to the press). The thresholds are #486's:
@@ -156,6 +157,91 @@ export function e5Split(
   // `staleOutcome` also reads positions; a stale reading the foreign seek
   // explains is #497's, not #486's.
   return { old: old || (outcome.stale && !foreign), foreign }
+}
+
+/** One wire frame as the rig records it (`WireRec` in `duo.ts`). */
+type Frame = {
+  at: number
+  dir: string
+  ps?: { position: number; paused?: boolean; doSeek?: boolean; setBy?: string | null }
+  iotf?: { server?: number; client?: number }
+}
+
+/** Both peers paused further apart than this is #524's drift. It is
+ *  `ECHO_SEEK_EPSILON_S`, the threshold the upstream-parity snap seeks past,
+ *  so the fix PR can flip the row to `bad == 0` on the predicate it ships. */
+export const SCRUB_PAUSE_SPREAD_S = ECHO_SEEK_EPSILON_S
+
+export interface ScrubPauseVerdict {
+  /** Either element still playing at the settle read: the pause did not hold. */
+  lost: boolean
+  /** Both paused, more than `SCRUB_PAUSE_SPREAD_S` apart. */
+  drift: boolean
+  /** Scrubber minus pauser, at the settle read. */
+  spread: number
+  /** The scrubber's seek left before the server's forced pause reached it, and
+   *  the server sent that pause before it had the seek: the pause is the first
+   *  forced update the scrubber receives after the seek, it carries no
+   *  `client` echo of the seek's counter, and the seek carries no `server`
+   *  ack. The protocol gate then drops the seek, protocols.py:788
+   *  ("if self.serverIgnoringOnTheFly == 0:"). */
+  seekCrossed: boolean
+  /** `doSeek: true` frames the scrubber sent after its seek: #252 re-asserts. */
+  reasserts: number
+  /** For a lost pause, the scrubber frame the server resumed the room on, read
+   *  off the forced resume the pauser received (setBy the scrubber, `paused:
+   *  false`). The server forwards the applied frame's `doSeek`, server.py:185
+   *  ("w.sendState(position, paused, doSeek, setBy, True)"), so `doSeek: true`
+   *  behind a crossed seek is the #252
+   *  re-assert, `doSeek: true` with no crossing is the seek itself, and
+   *  `doSeek: false` is a heartbeat. `null` when the pause held or no forced
+   *  resume was recorded. */
+  resumedBy: 'reassert' | 'seek' | 'heartbeat' | null
+}
+
+/** #524's verdict on one scrub-vs-pause run, from both peers' wire traces
+ *  (relative to the same instant) and their settle-time element states. */
+export function scrubPauseVerdict(d: {
+  scrubber: { name: string; wire: Frame[]; ct: number; paused: boolean }
+  pauser: { name: string; wire: Frame[]; ct: number; paused: boolean }
+}): ScrubPauseVerdict {
+  const { scrubber: s, pauser: p } = d
+  const lost = !s.paused || !p.paused
+  const spread = s.ct - p.ct
+  const drift = !lost && Math.abs(spread) > SCRUB_PAUSE_SPREAD_S
+  const seekIdx = s.wire.findIndex((f) => f.dir === 'out' && f.ps?.doSeek === true)
+  // The first forced update the scrubber received after its seek left: the
+  // pause when the server applied that first, its own seek's echo otherwise.
+  const firstForced =
+    seekIdx < 0
+      ? undefined
+      : s.wire.slice(seekIdx + 1).find((f) => f.dir === 'in' && f.iotf?.server !== undefined)
+  const seekCrossed =
+    firstForced !== undefined &&
+    firstForced.ps?.setBy === p.name &&
+    firstForced.ps.paused === true &&
+    firstForced.iotf?.client === undefined &&
+    s.wire[seekIdx].iotf?.server === undefined
+  const reasserts =
+    seekIdx < 0
+      ? 0
+      : s.wire.slice(seekIdx + 1).filter((f) => f.dir === 'out' && f.ps?.doSeek === true).length
+  let resumedBy: ScrubPauseVerdict['resumedBy'] = null
+  if (lost) {
+    const pressIdx = p.wire.findIndex((f) => f.dir === 'out' && f.ps?.paused === true)
+    const resume = p.wire
+      .slice(Math.max(0, pressIdx))
+      .find(
+        (f) =>
+          f.dir === 'in' &&
+          f.ps?.setBy === s.name &&
+          f.ps.paused === false &&
+          f.iotf?.server !== undefined
+      )
+    if (pressIdx >= 0 && resume)
+      resumedBy = resume.ps!.doSeek ? (seekCrossed ? 'reassert' : 'seek') : 'heartbeat'
+  }
+  return { lost, drift, spread, seekCrossed, reasserts, resumedBy }
 }
 
 export interface RunRecord {

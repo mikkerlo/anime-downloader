@@ -269,12 +269,13 @@ export interface SyncplayFileInfo {
    *  field by field. */
   playerSessionId?: string
   /** Set only on the push that follows an in-player episode change (#486):
-   *  `'local'` when this user pressed next/prev (or auto-advance), `'follow'`
-   *  when the player is walking to a peer's episode. One-shot: the renderer
-   *  consumes it on the watcher push, so a later re-push of the same file never
-   *  carries it. `setFile()` acts on it only when `canonicalName` changed, drops
-   *  the snapshot for both values, and sends the file-change seek for `'local'`.
-   *  Never stored in `currentFile` and never on the wire. */
+   *  `'local'` when this user pressed next/prev, `'auto-advance'` when the
+   *  end-of-episode countdown fired (#512), `'follow'` when the player is
+   *  walking to a peer's episode. One-shot: the renderer consumes it on the
+   *  watcher push, so a later re-push of the same file never carries it.
+   *  `setFile()` acts on it only when `canonicalName` changed, drops the
+   *  snapshot for every value, and sends the file-change seek for `'local'`
+   *  and `'auto-advance'`. Never stored in `currentFile` and never on the wire. */
   episodeSwitch?: SyncplayEpisodeSwitch
 }
 
@@ -867,7 +868,9 @@ export class SyncplayClient extends EventEmitter {
     // ready gate.
     if (isNewPlayer && !this.ownIsReady) this.setReady(true)
     if (this.status.state === 'ready') this.sendSetFile(stored)
-    if (episodeSwitch === 'local') this.sendFileChangeSeek()
+    if (episodeSwitch === 'local' || episodeSwitch === 'auto-advance') {
+      this.sendFileChangeSeek(episodeSwitch)
+    }
   }
 
   // Force the room to 0 after our own in-player episode change (#486), as the
@@ -884,19 +887,26 @@ export class SyncplayClient extends EventEmitter {
   // `lastRoomState.position` (the old episode's number) with a forced seek on
   // top, which the server writes into every watcher.
   //
-  // Only for `episodeSwitch: 'local'`. A follower navigates after the presser
-  // has started playing from 0, so a second seek would rewind the presser.
-  // Skipped while the room has told us nothing: nothing in it is stale yet.
-  private sendFileChangeSeek(): void {
+  // Only for `'local'` and `'auto-advance'`. A follower navigates after the
+  // presser has started playing from 0, so a second seek would rewind the
+  // presser. Skipped while the room has told us nothing: nothing in it is stale
+  // yet.
+  //
+  // `'local'` keeps the room's `paused` (#496). `'auto-advance'` sends playing
+  // (#512): by the time the countdown fires the room is paused only because the
+  // episode ended, every peer's `ended` reported paused, and nothing else
+  // remembers why. The countdown is the one origin that knows.
+  private sendFileChangeSeek(origin: 'local' | 'auto-advance'): void {
     if (this.status.state !== 'ready') return
     const room = this.lastRoomState
     if (!room) return
+    const paused = origin === 'auto-advance' ? false : room.paused
     this.lastAppliedRemotePosition = null
     this.clientIgnoreCounter += 1
     this.pendingClientAck = this.clientIgnoreCounter
     this.crossedByForeign = null
-    log('file-change seek', 'counter=', this.clientIgnoreCounter, 'paused=', room.paused)
-    this.sendStateMessage({ doSeek: true, override: { position: 0, paused: room.paused } })
+    log('file-change seek', origin, 'counter=', this.clientIgnoreCounter, 'paused=', paused)
+    this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
   }
 
   setReady(isReady: boolean): void {
@@ -1915,7 +1925,7 @@ export class SyncplayClient extends EventEmitter {
     // the room state is over a second old, so a periodic frame can arrive setBy *us* and return
     // at the self-guard below. Recording above the guards is what keeps it fresh regardless — and
     // it is also why the once-a-second premise here is the *inbound* stream and not the surviving
-    // set: the claim sits above `:2097` and `:2098`, so what those drop does not enter it.
+    // set: the claim sits above `main/syncplay.ts:2237-2238`, so what those drop does not enter it.
     // Back-dated to the server's *send*, not this frame's arrival (#279). The number inside
     // `position` was computed one one-way delay ago, so stamping arrival makes
     // `projectedRoomPosition()` read the room `d` low forever — and `buildPlaystate()`'s
@@ -1925,7 +1935,7 @@ export class SyncplayClient extends EventEmitter {
     // `_lastUpdatedOn` at receipt (`server.py:875-884`), so per election the room loses `2d − fd`
     // — measured at 0.05 s/election on a 50 ms/direction link, which crosses the renderer's 3 s
     // apply rule in about a minute. That election rate is the server's own and the stamp is above
-    // the guards, so it compounds on frames that die at `:2097`/`:2098` too.
+    // the guards, so it compounds on frames that die at `main/syncplay.ts:2237-2238` too.
     //
     // The time axis rather than the position axis, and they are not the same
     // thing: `projectedRoomPosition()` discards `at` outright when the room is
@@ -2021,10 +2031,10 @@ export class SyncplayClient extends EventEmitter {
     // reasoned: `announces no projection change to a client alone in a room parked past the end
     // of its file` is red without this conjunct. That once a second is the inbound stream at this
     // peer, not the emitted one: a lone client's frames are its own echo, self-`setBy`, and every
-    // one dies at `:2097` — this write and the projection emit both sit above that guard, which
-    // is what made the flip-flop observable. It is deliberately "the roster *says* alone" rather
-    // than "no peers known": on a server whose `List` we cannot key to our room (#223) the roster
-    // never arrives, and there the de-adoption is the conservative answer.
+    // one dies at `main/syncplay.ts:2237` — this write and the projection emit both sit above that
+    // guard, which is what made the flip-flop observable. It is deliberately "the roster *says*
+    // alone" rather than "no peers known": on a server whose `List` we cannot key to our room
+    // (#223) the roster never arrives, and there the de-adoption is the conservative answer.
     const roomPastEnd = this.roomPastEndOfOwnFile(this.lastRoomState)
     if (
       roomPastEnd !== null &&
@@ -2144,7 +2154,7 @@ export class SyncplayClient extends EventEmitter {
     // "the intent was retired ⇒ the renderer was handed that frame" — is
     // untouched on both sides. It is also what keeps #228: recordRemoteState()
     // runs unconditionally at the top of applyRemoteState()
-    // (src/renderer/src/composables/use-syncplay-client.ts:1944-1945) and owns the pending-pause release and
+    // (src/renderer/src/composables/use-syncplay-client.ts:1958-1959) and owns the pending-pause release and
     // the "Paused by …" badge, so dropping the frame would lose the pause half
     // to save the position half. Rewrite, never drop.
     const seekIntentWasLive = this.seekIntent !== null
@@ -2233,7 +2243,7 @@ export class SyncplayClient extends EventEmitter {
     // Only a *playing* room has aged since the state left the peer; a paused
     // position doesn't advance with wall time, so shifting it forward is pure
     // error — and `doSeek` bypasses the renderer's 3 s tolerance entirely
-    // (src/renderer/src/composables/use-syncplay-client.ts:1569), so a paused scrub lands every peer up to
+    // (src/renderer/src/composables/use-syncplay-client.ts:1583), so a paused scrub lands every peer up to
     // 2.5 s ahead of the seeker. Upstream gates the same shift on the same
     // flag: `if not paused: position += messageAge` (syncplay client.py:459-460,
     // mirrored server-side in _updatePositionByAge, server.py:871-872).
@@ -2247,18 +2257,18 @@ export class SyncplayClient extends EventEmitter {
     // rule the renderer applies with (`state.doSeek || |currentTime - position| > 3`,
     // use-syncplay-client.ts). Armed unconditionally it sat on the room's resting position after
     // no-op states, and sendLocalState() swallowed genuine user seeks within ECHO_SEEK_EPSILON_S.
-    // That refresh is per frame off `setBy`, not per window: the arming rests on a periodic
-    // elected to another peer, foreign-`setBy` and past `:2097`/`:2098` unconditionally — #340
-    // measured that arm here in a *playing* room — and on a pre-adoption one with a peer in a
+    // That refresh is per frame off `setBy`, not per window: the arming rests on a periodic elected
+    // to another peer, foreign-`setBy` and past `main/syncplay.ts:2237-2238` unconditionally —
+    // #340 measured that arm here in a *playing* room — and on a pre-adoption one with a peer in a
     // keyed roster, past them as room voice. At the elected peer past adoption it is self-`setBy`
-    // and dies at `:2097`, so the paused-room rate is that predicate's consequence, not a
-    // measurement. A state that moves nothing fires no `seeked`, so it has no echo to suppress; a
-    // previously-armed target is left in place, since that one is still owed its event. The
-    // predictor is main's snapshot, not the element's currentTime, so near the 3 s boundary the
-    // two can disagree by a snapshot cadence and main can decline to arm for a state the renderer
-    // does apply — wider still under #240, which defers the write to `loadedmetadata`. The
-    // renderer's own value-keyed guard still suppresses that echo, so the loss is main's belt,
-    // not both layers.
+    // and dies at `main/syncplay.ts:2237`, so the paused-room rate is that predicate's
+    // consequence, not a measurement. A state that moves nothing fires no `seeked`, so it has no
+    // echo to suppress; a previously-armed target is left in place, since that one is still owed
+    // its event. The predictor is main's snapshot, not the element's currentTime, so near the 3 s
+    // boundary the two can disagree by a snapshot cadence and main can decline to arm for a state
+    // the renderer does apply — wider still under #240, which defers the write to
+    // `loadedmetadata`. The renderer's own value-keyed guard still suppresses that echo, so the
+    // loss is main's belt, not both layers.
     //
     // While a seek of ours is unresolved the room does not get to move our
     // playhead (#278), so what goes out is our own snapshot rather than the
@@ -2270,8 +2280,8 @@ export class SyncplayClient extends EventEmitter {
     // The residual is one snapshot push, ≈1.15 s against the renderer's 3 s
     // tolerance: the element only advances while it is firing `timeupdate`, so
     // a reading that is seconds old is still an accurate reading of a *stopped*
-    // element (src/renderer/src/composables/use-syncplay-client.ts:937-939, SNAPSHOT_MIN_INTERVAL_MS at
-    // src/renderer/src/composables/use-syncplay-client.ts:464). If the renderer ever gains a playback-rate control this bound has
+    // element (src/renderer/src/composables/use-syncplay-client.ts:941-943, SNAPSHOT_MIN_INTERVAL_MS at
+    // src/renderer/src/composables/use-syncplay-client.ts:468). If the renderer ever gains a playback-rate control this bound has
     // to be re-derived.
     const emitted = seekIntentWasLive ? this.snapshot.position : compensated
     if (doSeek || Math.abs(this.snapshot.position - emitted) > ADOPT_TOLERANCE_S) {
@@ -2288,13 +2298,13 @@ export class SyncplayClient extends EventEmitter {
     // `emitted`: that value is *ours*, and `getRoomPosition()` answering our own
     // position is the regression class syncplay-room-position.test.ts pins
     // ("returns null when the only states seen were set by us"). The previous
-    // value is left standing to age out under ROOM_POSITION_MAX_AGE_MS (:84),
-    // and if there is no previous value — the session's first foreign frame
-    // arriving inside the window — `getRoomPosition()` keeps answering `null`
-    // for the life of the intent. `lastRoomState` (:1498) is deliberately not
-    // part of this: it is written above the guards and unfiltered, so the
-    // mirror, `isAdopted()` and maybeReassertSeek()'s own drift test keep a
-    // fresh anchor on the room's real claim.
+    // value is left standing to age out under ROOM_POSITION_MAX_AGE_MS
+    // (main/syncplay.ts:156), and if there is no previous value — the session's
+    // first foreign frame arriving inside the window — `getRoomPosition()` keeps
+    // answering `null` for the life of the intent. `lastRoomState`
+    // (main/syncplay.ts:1960) is deliberately not part of this: it is written
+    // above the guards and unfiltered, so the mirror, `isAdopted()` and
+    // maybeReassertSeek()'s own drift test keep a fresh anchor on the room's real claim.
     //
     // Keyed to the file we were playing when the state arrived (#276) — the
     // single stamp site, and the only place the key is ever derived. `null` when
@@ -2312,8 +2322,8 @@ export class SyncplayClient extends EventEmitter {
     // Attribution is stripped for the mirror-sourced class (#277). The `setBy`
     // on the wire is our own username, and the renderer would spend it on two
     // statements that would both be false: a "<me> seeked to 10:06" toast for a
-    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1924-1926) and a "Paused by me"
-    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1509-1510). `null`
+    // move nobody made (src/renderer/src/composables/use-syncplay-client.ts:1938-1940) and a "Paused by me"
+    // badge for a pause we did not press (`syncplayPausedBy`, src/renderer/src/composables/use-syncplay-client.ts:1523-1524). `null`
     // is the existing "the room moved, nobody in particular" value — the type
     // already allows it and both renderer reads are already null-guarded — so
     // no flag and no renderer change is needed to say it.
@@ -2940,8 +2950,8 @@ export class SyncplayClient extends EventEmitter {
     // first heartbeat once ready, which is why that drain is not dead code
     // after this change. It does *not* run during teardown, contrary to what
     // this comment first claimed: tearDown() calls socket.removeAllListeners()
-    // (:418) and resetTransportState() empties rxBuffer, so no further frame
-    // reaches the parser.
+    // (main/syncplay.ts:1121) and resetTransportState() empties rxBuffer, so no
+    // further frame reaches the parser.
     if (this.status.state !== 'ready') return
     if (this.pendingServerAck === 0) return
     // Through the shared consume-once helper, like every other sender: two emit

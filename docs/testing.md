@@ -135,7 +135,7 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   `test/services/syncplay-seek-crossfire.test.ts` used to carry a `LaggyElement`
   whose `apply()` was commented "the renderer's apply rule, verbatim" and was a
   hand-copied `Math.abs(…) <= 3`, so the shipped literal at
-  `src/renderer/src/composables/use-syncplay-client.ts:1569` could drift from it
+  `src/renderer/src/composables/use-syncplay-client.ts:1583` could drift from it
   and nothing would notice. Both peers now run the shipped rule. The file no
   longer pins that literal: #488 rewrote it to pin the yank's absence in both
   roles, and the window `[3.0, 4.0)` it held the literal in is now named only
@@ -573,19 +573,24 @@ tests* above — two exact, one a floor and one a ceiling:
   stale too and ride in underneath a failure about their neighbours. A reviewer
   who repairs what the gate named has repaired half the drift. `resolved` counts
   anchors that resolve, not anchors that are checked.
-- **Uncheckable anchors.** Bare basenames more than one tracked file carries
-  (`syncplay.ts` is both `src/main/syncplay.ts` and
-  `src/renderer/src/stores/syncplay.ts`) and pathless `:NNN` anchors that
-  inherit their path from a neighbouring line. Neither can be resolved, so the
-  pin bounds how much the gate is blind to. Adding one reds the build; the fix
-  is almost always to give the anchor a resolvable path rather than raise the
-  number.
-- **Marked citations, floored at 75.** One of the two one-sided counts here,
+- **Uncheckable anchors.** Pathless `:NNN` anchors — shorthand that inherits
+  its path from an earlier anchor, or a bare `(:NNN)` meaning "this file". None
+  can be resolved, so the pin bounds how much the gate is blind to, and since
+  #517 every one left is upstream Syncplay shorthand: that change spelled out
+  each one naming a file in this repo, because an exact count cannot see an
+  anchor whose target moved and nearly half of them had. Adding one reds the
+  build, the report lists them all so the new one can be found, and the fix is
+  almost always to give the anchor a resolvable path rather than raise the
+  number. A bare basename more than one tracked file carries (`syncplay.ts` is
+  both `src/main/syncplay.ts` and `src/renderer/src/stores/syncplay.ts`) is no
+  longer counted here: it fails outright, naming every candidate, unless it is
+  itself a root-level path (`README.md` names the root file).
+- **Marked citations, floored at 90.** One of the two one-sided counts here,
   because the marked class can only shrink silently — see *The marked form*
   below. Falling below the floor reds; rising above it is free. #395 raised it
   from the 12 #372 set, where 52 anchors of slack let the verified population
-  lose 81% of its members with the gate green; #459 took it 64 to 75 with its
-  retrofit, since slack is exactly what stops a floor from binding.
+  lose 81% of its members with the gate green; #459 took it 64 to 75 and #517
+  to 90 with their retrofits, since slack is what stops a floor from binding.
 - **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:
@@ -647,8 +652,16 @@ as a missing file rather than falling back to the basename. The full
 repo-relative path is always correct and is what a repair should reach for when
 the line has room; when it does not, a leading directory or two keeps the anchor
 inside its paragraph instead of pushing a comment past 130 columns, and if that
-suffix ever stops being unique the anchor lands in the uncheckable pin and reds
-— it does not go quiet.
+suffix ever stops being unique the anchor fails as ambiguous, with every file
+it could mean in the message — it does not go quiet.
+
+**Spell the path even for the same file.** A `(:NNN)` pointing back into the
+file it sits in, and a `:NNN` leaning on the anchor before it, are counted and
+never checked — #517 found 41 of 82 stale, every self-reference in
+`src/main/syncplay.ts` among them. In a file that cites itself, write a short
+unique suffix (`main/syncplay.ts:NNN`), and write the numbers last: any rewrap
+of the comment around them moves every target below it, the ones just written
+included.
 
 A quote or a closing brace before a `:NNN` is not an anchor: the Syncplay wire
 transcripts in `docs/syncplay.md` quote JSON whose values parse as pathless
@@ -1137,6 +1150,7 @@ covers are not redone:
 | E1, E2, E3, E5 position (#486, fixed by #493; Tier 1 pins one 900 ms-phase follow residual) | `syncplay-two-peer-next-episode.test.ts` | `episode.spec.ts` (E1, E6, E2's stale half; E1 / E6 split #497's saved-progress flash out with `resumeSplit`, pinned in `test/syncplay-e2e-stale-outcome.test.ts`) |
 | E2 double advance (#487, fixed by #492; window moved to first frame + grace by #500; Tier 1 pins the swallowed presses, the component's grace-timer lifecycle is run from its own source in `player-lifecycle-scope.test.ts`) | `syncplay-two-peer-double-next.test.ts` | `episode.spec.ts` (E2's skip half, scored on `loadeddata` + `FOLLOW_GRACE_MS`) |
 | E5 paused state: a paused room stays paused at 0 across Next/Prev (#496, fixed; Tier 1 pins the presser and follower orderings where the new element plays before a paused frame lands, the playing-room and pending-pause-hold controls, and a peer's Play before and after the consume, through a `live()` loop that models `canplay` and `timeupdate` and `PlayerView`'s registered `episode-start` play) | `syncplay-two-peer-episode-change.test.ts` (#496 block) | `episode.spec.ts` (E5: every scoreable run paused at ~0) |
+| E7 end-of-episode auto-advance: both peers resume N+1 from 0 (#512, fixed; Tier 1 pins the one-sided end, the follower's resume hold, Cancel-is-local and both countdowns firing 0 / 500 ms apart through an `AutoAdvancer` that models `PlayerView`'s countdown, `goToEpisode` and the follow walk; the gap frame between a switch and the new element's first push is pinned per origin in `syncplay-file-change-seek.test.ts`) | `syncplay-two-peer-episode-change.test.ts` (#512 block) | `episode.spec.ts` (E7: even runs both countdowns fire, odd runs B cancels and follows; `bad == 0` over the episode, resumed from ~0, one `{0, paused: false}` seek from A and none from a cancelling B, no outbound `paused: true` after the first seek, and a cancelling B's outgoing element never playing from 0) |
 | S1, S2, S9 (#488, fixed by #491; Tier 1 pins #491's 900 ms crossing cell) | `syncplay-seek-revert.test.ts` | `seek.spec.ts` (S1, S9) |
 | S6 | — | `seek.spec.ts` |
 | P1 | `syncplay-two-peer-playpause.test.ts` | `pause.spec.ts` |

@@ -302,7 +302,7 @@ afterEach(() => {
   unmounts.splice(0).forEach((u) => u())
 })
 
-async function mountRoom(elementAt: number): Promise<RoomRig> {
+async function mountRoom(elementAt: number, duration = DURATION): Promise<RoomRig> {
   vi.useRealTimers()
   setActivePinia(createPinia())
   const queue: (() => void)[] = []
@@ -310,7 +310,7 @@ async function mountRoom(elementAt: number): Promise<RoomRig> {
   const writes: number[] = []
   const v = {
     ended: false,
-    duration: DURATION,
+    duration,
     paused: false,
     readyState: 4,
     play: vi.fn(),
@@ -320,7 +320,7 @@ async function mountRoom(elementAt: number): Promise<RoomRig> {
     get: () => position,
     set: (t: number) => {
       writes.push(t)
-      position = Math.min(Math.max(0, t), DURATION)
+      position = Math.min(Math.max(0, t), duration)
     }
   })
   let cb: ((s: SyncplayRemoteState) => void) | null = null
@@ -353,7 +353,7 @@ async function mountRoom(elementAt: number): Promise<RoomRig> {
     setup() {
       client = useSyncplayClient({
         getVideoEl: () => v as unknown as HTMLVideoElement,
-        getDuration: () => DURATION,
+        getDuration: () => duration,
         getAnimeId: () => 1,
         getMalId: () => null,
         getAnimeName: () => 'Test Anime',
@@ -516,5 +516,74 @@ describe('PlayerView — a room pause at the end arms a peer that was behind (#5
     expect(r.rig.countdown.value).toBe(0)
     runOut()
     expect(advances(r.rig)).toBe(0)
+  })
+})
+
+// #541: two peers on different cuts of one episode. When the shorter-cut peer ends, the room
+// pauses at that peer's `duration`, which is inside our longer file: nothing is refused, we pause
+// seconds short of our own end, and before this fix nothing armed. The ended peer's Cancel stays
+// local, so we were stranded paused mid-credits. The pauser's roster row now counts as the end.
+describe('PlayerView — a room pause at the pauser’s end arms a peer on a longer cut (#541)', () => {
+  const LONGER = DURATION + 5
+  const EP = 'Test Anime - 4'
+
+  async function onLongerCut(elementAt: number): Promise<RoomRig> {
+    const r = await mountRoom(elementAt, LONGER)
+    r.client.syncplayRoomUsers.value = [
+      { username: 'me', file: { name: EP, duration: LONGER } },
+      { username: 'peer', file: { name: EP, duration: DURATION } }
+    ]
+    return r
+  }
+
+  it('arms once with no toast when the shorter peer ends and its Cancel stays local', async () => {
+    const r = await onLongerCut(DURATION - 0.1)
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    expect(r.v.currentTime).toBeLessThan(LONGER - 4)
+    expect(r.rig.countdown.value).toBe(5)
+    // The ended peer cancels its own countdown; nothing of that reaches us, so ours runs out.
+    runOut()
+    expect(advances(r.rig)).toBe(1)
+    expect(outOfFileToasts(r)).toBe(0)
+  })
+
+  it('does not arm on a mid-episode peer pause', async () => {
+    const r = await onLongerCut(600)
+    r.emit({ position: 600, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    expect(r.rig.countdown.value).toBe(0)
+    runOut()
+    expect(advances(r.rig)).toBe(0)
+  })
+
+  it('does not arm when the pauser’s row is the previous episode', async () => {
+    const r = await onLongerCut(DURATION - 0.1)
+    r.client.syncplayRoomUsers.value = [
+      { username: 'me', file: { name: EP, duration: LONGER } },
+      { username: 'peer', file: { name: 'Test Anime - 3', duration: DURATION } }
+    ]
+    r.emit({ position: DURATION, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.v.pause).toHaveBeenCalledTimes(1)
+    expect(r.rig.countdown.value).toBe(0)
+  })
+
+  // The reverse is #540's own-end arm: the longer-cut peer ends past our shorter file while we trail.
+  it('still arms the shorter peer when the longer-cut peer ends', async () => {
+    const r = await mountRoom(DURATION - 10)
+    r.client.syncplayRoomUsers.value = [
+      { username: 'me', file: { name: EP, duration: DURATION } },
+      { username: 'peer', file: { name: EP, duration: LONGER } }
+    ]
+    r.emit({ position: LONGER, paused: true, setBy: 'peer' })
+    r.dispatch()
+    expect(r.writes).toEqual([])
+    expect(r.rig.countdown.value).toBe(5)
+    runOut()
+    expect(advances(r.rig)).toBe(1)
+    expect(outOfFileToasts(r)).toBe(0)
   })
 })

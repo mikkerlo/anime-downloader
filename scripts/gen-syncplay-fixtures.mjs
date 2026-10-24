@@ -17,6 +17,10 @@
 //  - Durations 23:40 / 24:00 / 24:20 / 24:40, so the duration-based
 //    out-of-file check and the auto-advance edges see different files.
 //  - ep1.mkv, the same still image in Matroska, for the MSE / ffmpeg path.
+//  - ep1-720-longer.mp4, a longer cut of episode 1 (5 s more), for #541's
+//    row where two peers play different-length files of one episode. The
+//    360p variants are not lengthened: the quality-switch rows need both
+//    heights of an episode to match.
 //  - manifest.json, which the fixture server and the specs read.
 
 import { spawnSync } from 'node:child_process'
@@ -35,6 +39,8 @@ export const EPISODES = [
   { episodeInt: '4', durationS: 24 * 60 + 40, color: '0xa0a030' }
 ]
 export const HEIGHTS = [720, 360]
+// `e2e-syncplay/helpers/fixtures.ts`'s `LONGER_CUT` serves it.
+export const LONGER_CUTS = [{ episodeInt: '1', height: 720, extraS: 5 }]
 const KEYFRAME_EVERY_S = 2
 const VERSION = 1
 
@@ -90,7 +96,8 @@ function main() {
     version: VERSION,
     keyframeEveryS: KEYFRAME_EVERY_S,
     episodes: EPISODES,
-    heights: HEIGHTS
+    heights: HEIGHTS,
+    longerCuts: LONGER_CUTS
   }
   let have = null
   try {
@@ -105,6 +112,16 @@ function main() {
     }
   }
   files.push({ ep: EPISODES[0], height: 720, name: 'ep1.mkv', container: 'mkv' })
+  for (const c of LONGER_CUTS) {
+    const base = EPISODES.find((e) => e.episodeInt === c.episodeInt)
+    files.push({
+      ep: { ...base, durationS: base.durationS + c.extraS },
+      height: c.height,
+      name: `ep${c.episodeInt}-${c.height}-longer.mp4`,
+      container: 'mp4',
+      cut: 'longer'
+    })
+  }
   const fresh =
     have &&
     JSON.stringify(have.params) === JSON.stringify(want) &&
@@ -125,6 +142,7 @@ function main() {
       height: f.height,
       durationS: f.ep.durationS,
       container: f.container,
+      ...(f.cut ? { cut: f.cut } : {}),
       bytes: fs.statSync(path.join(OUT, f.name)).size
     }))
   }

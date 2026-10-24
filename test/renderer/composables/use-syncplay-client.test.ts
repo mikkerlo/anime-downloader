@@ -8087,3 +8087,96 @@ describe('useSyncplayClient — the out-of-file toast stays off a room paused at
     expect(client.roomPausedAtEnd(D)).toBe(false)
   })
 })
+
+// #541: the end is ours or the pauser's. A shorter-cut peer that ends pauses the room at its own
+// `duration`, which on our longer cut is seconds inside the file, so our own-end term is false.
+// The pauser's roster row (`setBy`, matched case-insensitively) carries its `duration`; the row
+// counts only when its file is the episode we are on, and every miss falls back to our end.
+describe('useSyncplayClient — a room paused at the pauser’s end on a longer cut (#541)', () => {
+  const PEER_D = 1440
+  const OUR_D = PEER_D + 5
+  const EP = 'Test Anime - 1'
+
+  async function longerCut(
+    roster: SyncplayRoomUser[],
+    ourDuration = OUR_D
+  ): Promise<{
+    client: Client
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+  }> {
+    const v = fakeVideo({
+      currentTime: PEER_D - 0.1,
+      duration: ourDuration,
+      paused: false
+    } as Partial<HTMLVideoElement>)
+    const mounted = await mountWithRemoteState(makeDeps({ video: v }), {
+      state: 'ready',
+      username: 'me'
+    })
+    mounted.client.syncplayRoomUsers.value = roster
+    await flushPromises()
+    return mounted
+  }
+
+  const me: SyncplayRoomUser = { username: 'me', file: { name: EP, duration: OUR_D } }
+  const peerOn = (name: string, duration: number, username = 'peer'): SyncplayRoomUser => ({
+    username,
+    file: { name, duration }
+  })
+
+  it.each([
+    ['at the peer’s duration', PEER_D, 'peer'],
+    ['a millisecond short of it', PEER_D - 0.001, 'peer'],
+    ['with setBy in another case', PEER_D, 'PEER']
+  ])('is true for a room paused %s, us 5 s short of ours', async (_, pos, setBy) => {
+    const { client, emitRemoteState } = await longerCut([me, peerOn(EP, PEER_D)])
+    emitRemoteState({ position: pos, paused: true, setBy })
+    expect(client.roomPausedAtEnd(OUR_D)).toBe(true)
+  })
+
+  it.each<[string, SyncplayRoomUser[], Partial<SyncplayRemoteState>]>([
+    [
+      'a peer pause 5 s before the peer’s end',
+      [me, peerOn(EP, PEER_D)],
+      { position: PEER_D - 5, setBy: 'peer' }
+    ],
+    [
+      'a peer row named for the previous episode',
+      [me, peerOn('Test Anime - 0', PEER_D)],
+      { position: PEER_D, setBy: 'peer' }
+    ],
+    ['setBy not in the roster', [me, peerOn(EP, PEER_D)], { position: PEER_D, setBy: 'gone' }],
+    ['setBy null', [me, peerOn(EP, PEER_D)], { position: PEER_D, setBy: null }],
+    ['a peer duration of 0', [me, peerOn(EP, 0)], { position: 0, setBy: 'peer' }],
+    [
+      'a peer row with no file',
+      [me, { username: 'peer', file: null }],
+      { position: PEER_D, setBy: 'peer' }
+    ],
+    [
+      'doSeek at the peer’s end',
+      [me, peerOn(EP, PEER_D)],
+      { position: PEER_D, setBy: 'peer', doSeek: true }
+    ],
+    [
+      'a room playing at the peer’s end',
+      [me, peerOn(EP, PEER_D)],
+      { position: PEER_D, setBy: 'peer', paused: false }
+    ]
+  ])('is false on %s', async (_, roster, frame) => {
+    const { client, emitRemoteState } = await longerCut(roster)
+    emitRemoteState({ paused: true, ...frame })
+    expect(client.roomPausedAtEnd(OUR_D)).toBe(false)
+  })
+
+  // The other direction is #540's own-end term: the longer-cut peer ends and the room pauses past
+  // our shorter file. The roster lookup must not stand in the way of it.
+  it('is still true on our own end when the longer-cut peer is the one that ended', async () => {
+    const { client, emitRemoteState } = await longerCut(
+      [{ username: 'me', file: { name: EP, duration: PEER_D } }, peerOn(EP, OUR_D)],
+      PEER_D
+    )
+    emitRemoteState({ position: OUR_D, paused: true, setBy: 'peer' })
+    expect(client.roomPausedAtEnd(PEER_D)).toBe(true)
+  })
+})

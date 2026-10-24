@@ -7,6 +7,7 @@
 //   E7  End-of-episode auto-advance, both or one countdown fires     #512 (fixed)
 //   E7s The room pauses B a frame short of its end, A cancels        #528 (fixed)
 //   E7b The room pauses B 1.5 s or 10 s short of its end, A cancels  #533 (fixed)
+//   E7c B is on a 5 s longer cut; A ends and cancels                 #541 (fixed)
 //
 // The ✗ rule (#489 review): a ✗ row asserts only `bad ≥ 1` at its N on current
 // main — proof this rig sees the bug — and the fix PR flips it to `bad == 0`.
@@ -111,6 +112,15 @@
 // suppression reverted, both lags went 2/2 bad (no countdown, the room stuck on
 // episode 1, and the toast at 10 s).
 //
+// E7c is #541, E7s's roles with B on a longer cut of episode 1 (`LONGER_CUT`,
+// 5 s more) and A on the ordinary file, both in step. A ends, the room pauses
+// at A's `duration`, which is inside B's file, so nothing is refused and B is
+// paused ~5 s short of its own end: neither B's own frame nor #540's room-at-
+// our-end term holds. B arms on the pauser's end, read from A's roster row.
+// `bad == 0` over E7s's terms plus no out-of-file toast on B. Scoreable only
+// when B really was on the longer cut and the room's pause reached it 4–6 s
+// short of its end.
+//
 // Fixture loads are slowed to 300–800 ms per request: #486's stale position
 // and #487's early lock release exist only while a load is in flight.
 
@@ -129,7 +139,7 @@ import {
   type PlayerState,
   type WireRec
 } from './helpers/duo'
-import { durationOf } from './helpers/fixtures'
+import { LONGER_CUT_TR_ID, durationOf, longerCutDurationOf } from './helpers/fixtures'
 import {
   RowScorer,
   staleOutcome,
@@ -902,6 +912,144 @@ test('E7b — the room pauses B 1.5 s or 10 s short of its end and A cancels its
       const n = s.records.filter((r) => r.setupOk && r.lag === lag).length
       expect(n, `E7b: no scoreable run at a ${lag} s lag`).toBeGreaterThanOrEqual(1)
     }
+    expect(s.bad).toBe(0)
+  } finally {
+    await closeDuo(A, B)
+  }
+})
+
+/** #541 recorder, installed on B: `duration - currentTime` at B's first `pause`
+ *  before `ended`, read in window capture ahead of PlayerView's own `@pause`, as
+ *  E7s and E7b record it. Nothing is staged: the 5 s is the two files' lengths. */
+async function recordEndGap(B: Instance): Promise<void> {
+  await B.page.evaluate(() => {
+    const w = window as unknown as { __e7c?: { gap: number | null; off: () => void } }
+    w.__e7c?.off()
+    const st = { gap: null as number | null, off: (): void => {} }
+    const onPause = (e: Event): void => {
+      const el = e.target
+      if (!(el instanceof HTMLVideoElement) || st.gap !== null || el.ended) return
+      st.gap = el.duration - el.currentTime
+    }
+    st.off = () => window.removeEventListener('pause', onPause, true)
+    w.__e7c = st
+    window.addEventListener('pause', onPause, true)
+  })
+}
+
+const endGap = (B: Instance): Promise<number | null> =>
+  B.page.evaluate(
+    () => (window as unknown as { __e7c?: { gap: number | null } }).__e7c?.gap ?? null
+  )
+
+test('E7c — B is on a 5 s longer cut of the episode, A ends and cancels its countdown: B still counts down at the pauser’s end and advances, A follows (#541)', async () => {
+  const { A, B } = await seatDuo(rig, { longerCutB: true })
+  const row = new RowScorer('E7c')
+  const durA = durationOf(rig.manifest, '1')
+  const durB = longerCutDurationOf(rig.manifest)
+  try {
+    expect(await bothPlaying(A, B), 'setup: both instances never played').toBe(true)
+    for (let i = 0; i < N; i++) {
+      // A stranded run (main) leaves the room paused at the end of episode 1.
+      if ((await A.state()).paused) await A.togglePlayButton()
+      const setupOk = (await resetTo(A, B, '1')) && (await positionBoth(A, B, durA - 9))
+      await recordEndGap(B)
+      const [sa, sb] = await Promise.all([A.state(), B.state()])
+      // Prev back onto episode 1 resolves B to the longer cut again (`LONGER_CUT`).
+      const onLongerCut =
+        sb.src.includes(`/tr/${LONGER_CUT_TR_ID}/`) &&
+        Math.abs(sb.dur - durB) < 1 &&
+        Math.abs(sa.dur - durA) < 1
+      const from = Date.now()
+      const cancelledA = await waitFor(
+        'A countdown cancelled',
+        () =>
+          A.page.evaluate(() => {
+            const b = document.querySelector('.auto-advance-cancel') as HTMLButtonElement | null
+            b?.click()
+            return !!b
+          }),
+        30_000,
+        50
+      )
+      const gap = await endGap(B)
+      const bCountdown = await waitFor('B countdown', () => countdownShown(B), 3000, 50)
+      const changed = await waitBothSrcChanged(A, B, sa.src, sb.src, 20_000)
+      await sleep(12_500)
+      const [a, b] = await Promise.all([A.state(), B.state()])
+      const [da, db] = await Promise.all([A.collect(from), B.collect(from)])
+      // The room's end pause as B received it: A's end, inside B's file.
+      const endPause = db.wire.find((w) => w.dir === 'in' && w.ps?.paused === true)
+      const endPauseShort = endPause?.ps ? +(sb.dur - endPause.ps.position).toFixed(3) : null
+      const toastsB = db.toasts.filter((t) => t.txt.includes(OUT_OF_FILE_TOAST)).length
+      const seeksA = ownSeeks(da)
+      const seeksB = ownSeeks(db)
+      const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
+      const rePauses = [da, db].flatMap((d) =>
+        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
+      ).length
+      const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
+      const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
+      const resumed = !a.paused && !b.paused
+      const fromZero = a.ct > 3 && a.ct < 25 && b.ct > 3 && b.ct < 25 && Math.abs(a.ct - b.ct) < 2
+      const seeksResume = seeksB.every((w) => w.ps.paused === false)
+      const cancelLocal = seeksA.length === 0
+      const reasons = [
+        !bCountdown && 'B showed no countdown',
+        toastsB > 0 && `B showed the out-of-file toast ${toastsB}×`,
+        wrongEp && `episodes ${epIntOf(a.label)} / ${epIntOf(b.label)}, not 2 / 2`,
+        !resumed && 'not both playing',
+        !fromZero && `ct ${a.ct.toFixed(1)} / ${b.ct.toFixed(1)} not both from ~0`,
+        seeksB.length !== 1 && `B sent ${seeksB.length} {0} seeks, not 1`,
+        !seeksResume && 'a B seek was paused',
+        !cancelLocal && `A sent ${seeksA.length} {0} seek(s) after its Cancel`,
+        rePauses > 0 && `${rePauses} re-pause(s) after the advance`,
+        followerPlayedN && "A's outgoing element played N from 0"
+      ].filter((r): r is string => typeof r === 'string')
+      const bad = reasons.length > 0
+      // Scoreable only when B was on the longer cut and the room's end pause
+      // reached it seconds short of its own end, inside its file.
+      const scoreable =
+        setupOk &&
+        cancelledA &&
+        onLongerCut &&
+        gap !== null &&
+        gap >= 4 &&
+        gap <= 6 &&
+        endPauseShort !== null &&
+        endPauseShort >= 4 &&
+        endPauseShort <= 6
+      if (scoreable && bad) {
+        process.stdout.write(`[syncplay-e2e] E7c run ${i} bad: ${reasons.join('; ')}\n`)
+      }
+      row.add(
+        {
+          setupOk: scoreable,
+          bad,
+          reasons,
+          onLongerCut,
+          durA: +sa.dur.toFixed(3),
+          durB: +sb.dur.toFixed(3),
+          gap: gap === null ? null : +gap.toFixed(3),
+          endPauseShort,
+          toastsB,
+          bCountdown,
+          changed,
+          ctA: a.ct,
+          ctB: b.ct,
+          seeksA: seeksA.length,
+          seeksB: seeksB.length,
+          rePauses,
+          followerPlayedN
+        },
+        bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
+      )
+      await B.page.evaluate(() =>
+        (window as unknown as { __e7c?: { off: () => void } }).__e7c?.off()
+      )
+    }
+    const s = row.score()
+    expect(s.scoreable).toBeGreaterThanOrEqual(1)
     expect(s.bad).toBe(0)
   } finally {
     await closeDuo(A, B)

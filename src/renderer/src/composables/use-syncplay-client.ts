@@ -794,7 +794,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       duration: dur,
       newPlayer,
       playerSessionId,
-      ...(episodeSwitch ? { episodeSwitch } : {})
+      ...announceMarks(episodeSwitch)
     })
   }
 
@@ -2607,39 +2607,98 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // episode through the playing-room path. A seek, a pause and the intent and
   // mirror writes are not held, and an element already playing is not paused.
   let followWalkLanded = false
+  // Where the room asked the walk to go (#506). Written by every begin, so a
+  // second room move mid-walk replaces it and the settle compares against the
+  // latest pick, not the one the outer walk started for.
+  let followWalkTarget: { index: number; episodeInt: string } | null = null
+  // "I am on `index` because a walk to `target` stopped short" (#506). A state,
+  // not an event: every push from `index` carries it as `followShortOf`
+  // (`announceMarks`), so no re-push leaks without it, and the next commit to
+  // another episode drops it (`holdForFollowWalk`). Peers read it and decline
+  // to walk back here (`declineFollowShort`).
+  let followShort: { index: number; target: string } | null = null
   let disposed = false
 
   function followWalkHoldsResume(): boolean {
     return followWalkDepth > 0 && !followWalkLanded
   }
 
+  // Every push passes through here first, held or not, ready or not. The
+  // watcher's push for an index commit carries the commit's origin (every
+  // commit `goToEpisode` makes is marked), so one that lands on another episode
+  // ends the stopped-short marker (#506), and a later move back to it is an
+  // ordinary move the room follows.
   function holdForFollowWalk(episodeSwitch?: SyncplayEpisodeSwitch): boolean {
+    if (episodeSwitch && followShort?.index !== deps.activeEpisodeIndex.value) followShort = null
     if (followWalkDepth === 0) return false
     followWalkHeldPush = true
     if (episodeSwitch && episodeSwitch !== 'follow') followWalkHeldOwn = episodeSwitch
     return true
   }
 
-  function beginFollowWalk(): void {
+  function beginFollowWalk(index: number, episodeInt: string): void {
     if (followWalkDepth === 0) {
       followWalkStartIndex = deps.activeEpisodeIndex.value
       followWalkHeldPush = false
       followWalkHeldOwn = null
       followWalkLanded = false
     }
+    followWalkTarget = { index, episodeInt }
     followWalkDepth += 1
   }
 
+  // Only the `moved` arm can create a mark (#506); a walk that never moved only
+  // re-targets one already there, which reaches peers through later pushes. A
+  // held own commit outranks the walk: the user (or the countdown) moved, and
+  // the room should follow that, so it goes out unmarked.
   function settleFollowWalk(): void {
     if (followWalkDepth === 0) return
     followWalkDepth -= 1
     if (followWalkDepth > 0 || disposed) return
-    const moved = deps.activeEpisodeIndex.value !== followWalkStartIndex
+    const reached = deps.activeEpisodeIndex.value
+    const moved = reached !== followWalkStartIndex
     if (followWalkHeldOwn) pushSyncplayFile(followWalkHeldOwn)
-    else if (moved) pushSyncplayFile('follow')
-    else if (followWalkHeldPush) pushSyncplayFile()
+    else if (moved) {
+      if (followWalkTarget && reached !== followWalkTarget.index) {
+        followShort = { index: reached, target: followWalkTarget.episodeInt }
+      }
+      pushSyncplayFile('follow')
+    } else {
+      // Still stuck where an earlier walk left us: name the latest pick (#506).
+      if (followWalkTarget && followShort?.index === reached) {
+        followShort = { index: reached, target: followWalkTarget.episodeInt }
+      }
+      if (followWalkHeldPush) pushSyncplayFile()
+    }
     followWalkHeldPush = false
     followWalkHeldOwn = null
+    followWalkTarget = null
+  }
+
+  // The push's two optional marks: `episodeSwitch` only on the push its caller
+  // hands it to (#486), `followShortOf` on every push from the marked episode,
+  // whichever caller sends it (#506). Spread into `pushSyncplayFile`'s payload.
+  function announceMarks(
+    episodeSwitch?: SyncplayEpisodeSwitch
+  ): Pick<SyncplayFilePayload, 'episodeSwitch' | 'followShortOf'> {
+    const short = followShort?.index === deps.activeEpisodeIndex.value ? followShort : null
+    return {
+      ...(episodeSwitch ? { episodeSwitch } : {}),
+      ...(short ? { followShortOf: short.target } : {})
+    }
+  }
+
+  // The receiver's half (#506). `handleRemoteEpisodeChange` asks this on its
+  // same-episode return's line, behind `||` (an announce for the episode it is
+  // already on toasts nothing), before it toasts a move or walks. A peer's
+  // announce marked `followShortOf` is where that peer got stuck on its way to
+  // the room's pick, not a move to follow, so this toasts why the peer is
+  // behind and the walk is declined. Every receiver decides, which also keeps a
+  // third peer that did reach the pick from being walked back.
+  function declineFollowShort(ep: SyncplayRemoteEpisode): boolean {
+    if (ep.followShortOf === undefined) return false
+    showSyncplayToast(`${ep.fromUser} couldn't open episode ${ep.followShortOf}`)
+    return true
   }
 
   onBeforeUnmount(() => {
@@ -2727,6 +2786,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     endEpisodeSwitchHold,
     beginFollowWalk,
     settleFollowWalk,
+    declineFollowShort,
     setSyncplayLocalReady,
     beginProgrammaticPlayback,
     bumpPlaybackSourceGeneration,
@@ -2746,13 +2806,19 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 }
 
-/** The room-driven follow walk's hold on announcements (#501). */
+/** The room-driven follow walk's hold on announcements (#501), and its
+ *  stopped-short marker on both ends (#506). */
 type SyncplayFollowWalkHold = {
-  /** A room-driven follow walk is starting. Until the matching
-   *  `settleFollowWalk`, every file push and snapshot push is held, so the
-   *  walk's intermediate episodes never reach the room. */
-  beginFollowWalk: () => void
+  /** A room-driven follow walk to `index` (`episodeInt` on the wire) is
+   *  starting. Until the matching `settleFollowWalk`, every file push and
+   *  snapshot push is held, so the walk's intermediate episodes never reach the
+   *  room. The latest begin's target is the one the settle compares against. */
+  beginFollowWalk: (index: number, episodeInt: string) => void
   /** The walk has stopped, for any reason: call it from a `finally`. The
-   *  outermost settle announces the reached episode once, as a `'follow'`. */
+   *  outermost settle announces the reached episode once, as a `'follow'`,
+   *  marked `followShortOf` the target when it is not the target (#506). */
   settleFollowWalk: () => void
+  /** The receiver's walk decision (#506): `true`, after a toast, when `ep`
+   *  is a peer that stopped short of a pick, which the caller must not walk to. */
+  declineFollowShort: (ep: SyncplayRemoteEpisode) => boolean
 }

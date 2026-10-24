@@ -607,7 +607,7 @@ function attachAutoAdvancer(peer: Peer, opts: { countdownMs?: number } = {}): Au
     for (const e of eps as SyncplayRemoteEpisode[]) {
       const target = Number(e.episodeInt)
       if (target === ep) continue
-      peer.ui.beginFollowWalk()
+      peer.ui.beginFollowWalk(target - 1, e.episodeInt)
       void walkEpisodeSteps(
         () => ep !== target && !navigating,
         () => step('follow')
@@ -685,7 +685,8 @@ describe('SyncplayClient — end-of-episode auto-advance resumes the room (#512)
       paused: false,
       readyState: 4,
       delayMs,
-      bindGapMs: 300
+      bindGapMs: 300,
+      indexOfEpisode: (e) => Number(e) - 1
     })
     const B = await room.seat({
       username: 'joinuser',
@@ -693,7 +694,8 @@ describe('SyncplayClient — end-of-episode auto-advance resumes the room (#512)
       paused: false,
       readyState: 4,
       delayMs,
-      bindGapMs: 300
+      bindGapMs: 300,
+      indexOfEpisode: (e) => Number(e) - 1
     })
     peers = [A, B]
     const a = attachAutoAdvancer(A)
@@ -845,6 +847,8 @@ describe('SyncplayClient — end-of-episode auto-advance resumes the room (#512)
 // nothing (#492 review).
 
 const EPISODES = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+/** Seats a navigator's peer on real indices, which the follow marker compares (#506). */
+const indexOfEpisode = (e: string): number => EPISODES.indexOf(e)
 /** `playerGetStreamUrl`, commit to source swap — where `navigating` is released. */
 const RESOLVE_MS = 400
 /** Source swap to `loadedmetadata` — the resume, no longer the token (#500). */
@@ -858,7 +862,8 @@ type Press = 'dispatched' | 'button-disabled' | 'swallowed'
 
 interface Navigator {
   episode(): string
-  /** `handleRemoteEpisodeChange`'s `moved to episode` toasts, in order. */
+  /** `handleRemoteEpisodeChange`'s `moved to episode` and `couldn't open
+   *  episode` toasts, in order. */
   toasts: string[]
   /** A pick from the episode list: straight to `episodeInt`, one commit. */
   pick(episodeInt: string): Promise<void>
@@ -877,10 +882,18 @@ interface Navigator {
   unreachableIndex: number | null
   /** Commit to source swap for this peer's steps; `RESOLVE_MS` by default. */
   resolveMs: number
+  /**
+   * A user commit admitted during the next room-walk step after the first one,
+   * in its `saveProgress` before it sets `navigating` (#526, #512). It
+   * supersedes that step and commits with its own origin. Used once.
+   */
+  ownCommitInSave: { episodeInt: string; origin: SyncplayEpisodeSwitch } | null
 }
 
 function attachNavigator(peer: Peer, startIdx: number): Navigator {
   let idx = startIdx
+  // Where the current room walk started, so `ownCommitInSave` skips step 1.
+  let walkStart = startIdx
   let navigating = false
   let navigationEpoch = 0
   let translationEpoch = 0
@@ -902,6 +915,14 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     if (targetIndex < 0 || targetIndex >= EPISODES.length) return 'unreachable'
     if (navigating) return 'superseded'
     await Promise.resolve() // saveProgress(true)
+    const own = origin === 'follow' && idx !== walkStart ? nav.ownCommitInSave : null
+    if (own) {
+      nav.ownCommitInSave = null
+      navigationEpoch++
+      idx = EPISODES.indexOf(own.episodeInt)
+      await peer.goToEpisode(own.episodeInt, undefined, 0, own.origin)
+      return 'superseded'
+    }
     navigating = true
     const myNav = ++navigationEpoch
     await Promise.resolve() // resolveEpisodeTranslation
@@ -951,13 +972,20 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
 
   // `handleRemoteEpisodeChange`: absolute index, then a relative walk, held
   // between the composable's real `beginFollowWalk` / `settleFollowWalk` (#501).
+  // A peer that stopped short of a pick is declined by the composable's real
+  // `declineFollowShort` (#506), whose toast is recorded as it showed it.
   const handleRemote = (ep: SyncplayRemoteEpisode): void => {
     const target = EPISODES.indexOf(ep.episodeInt)
     if (target < 0 || target === idx) return
+    if (peer.ui.declineFollowShort(ep)) {
+      nav.toasts.push(peer.ui.syncplayToast.value)
+      return
+    }
     nav.toasts.push(`${ep.fromUser} moved to episode ${ep.episodeInt}`)
     const dir = target > idx ? 'next' : 'prev'
     const walkTranslation = translationEpoch
-    peer.ui.beginFollowWalk()
+    walkStart = idx
+    peer.ui.beginFollowWalk(target, ep.episodeInt)
     void walkEpisodeSteps(
       () => idx !== target && !navigating && translationEpoch === walkTranslation,
       () => step(dir, 'follow')
@@ -998,7 +1026,8 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     },
     nextSource: 'loads',
     unreachableIndex: null,
-    resolveMs: RESOLVE_MS
+    resolveMs: RESOLVE_MS,
+    ownCommitInSave: null
   }
   return nav
 }
@@ -1040,14 +1069,16 @@ describe('both peers press next within about a second (#487)', () => {
       position: 100,
       paused,
       delayMs: DELAY_MS,
-      episodeInt: '6'
+      episodeInt: '6',
+      indexOfEpisode
     })
     const B = await room.seat({
       username: 'rigB',
       position: 100,
       paused,
       delayMs: DELAY_MS,
-      episodeInt: '6'
+      episodeInt: '6',
+      indexOfEpisode
     })
     await room.advance(4)
     return { A, B }
@@ -1290,12 +1321,16 @@ describe('a follow walk announces only where it ends up (#501)', () => {
     b: Navigator
     /** B's `setFile` pushes from the moment of seating, as [episode, switch, ms]. */
     bPushes: [string, SyncplayEpisodeSwitch | undefined, number][]
+    /** Each of those pushes' `followShortOf` (#506). */
+    bShorts: (string | undefined)[]
     /** B's snapshot pushes, by `Date.now()`. */
     bSnapshots: number[]
     /** B's `loadedmetadata` deliveries, by `Date.now()`. */
     bMetadata: number[]
     /** The episodes A's main handed A's renderer from B since seating. */
     fromB: () => string[]
+    /** Their `followShortOf`, as A's main passed it through (#506). */
+    fromBShort: () => (string | undefined)[]
   }
 
   /** Both on episode 6 (index 5), agreed for four seconds. */
@@ -1306,7 +1341,8 @@ describe('a follow walk announces only where it ends up (#501)', () => {
       position: 100,
       paused: false,
       delayMs: DELAY_MS,
-      episodeInt: '6'
+      episodeInt: '6',
+      indexOfEpisode
     })
     const B = await room.seat({
       username: 'rigB',
@@ -1314,15 +1350,18 @@ describe('a follow walk announces only where it ends up (#501)', () => {
       paused: false,
       delayMs: DELAY_MS,
       episodeInt: '6',
+      indexOfEpisode,
       ...(bindGapMs !== undefined ? { bindGapMs } : {})
     })
     await room.advance(4)
     const bPushes: Seated['bPushes'] = []
+    const bShorts: Seated['bShorts'] = []
     const bSnapshots: number[] = []
     const bMetadata: number[] = []
     const setFile = B.api.syncplaySetFile.bind(B.api)
     vi.spyOn(B.api, 'syncplaySetFile').mockImplementation((f: SyncplayFilePayload) => {
       bPushes.push([f.episodeInt, f.episodeSwitch, Date.now()])
+      bShorts.push(f.followShortOf)
       return setFile(f)
     })
     const snapshot = B.api.syncplaySendLocalSnapshot.bind(B.api)
@@ -1337,20 +1376,19 @@ describe('a follow walk announces only where it ends up (#501)', () => {
     })
     // B's seating announced episode 6 to A; only what follows the pick counts.
     const heardBefore = A.remoteEpisodes.length
-    const fromB = (): string[] =>
-      A.remoteEpisodes
-        .slice(heardBefore)
-        .filter((e) => e.fromUser === 'rigB')
-        .map((e) => e.episodeInt)
+    const heardFromB = (): SyncplayRemoteEpisode[] =>
+      A.remoteEpisodes.slice(heardBefore).filter((e) => e.fromUser === 'rigB')
     return {
       A,
       B,
       a: attachNavigator(A, 5),
       b: attachNavigator(B, 5),
       bPushes,
+      bShorts,
       bSnapshots,
       bMetadata,
-      fromB
+      fromB: () => heardFromB().map((e) => e.episodeInt),
+      fromBShort: () => heardFromB().map((e) => e.followShortOf)
     }
   }
 
@@ -1409,19 +1447,147 @@ describe('a follow walk announces only where it ends up (#501)', () => {
   })
 
   // (b1): the follower can't fetch N+2's page. It announces N+1, where it really
-  // is, once, and the leader is pulled back once. That is the decision's
-  // expected outcome and the follow-up issue's subject, pinned here so a change
-  // to it is deliberate.
-  it('a walk that dies at step 2 announces N+1 exactly once', async () => {
-    const { a, b, bPushes, fromB } = await seat()
+  // is, once, marked short of N+2 (#506). Until #506 the leader was pulled back
+  // to N+1 here (`['rigB moved to episode 7']`); now it keeps its pick and is
+  // told why the follower is behind.
+  it('a walk that dies at step 2 announces N+1 exactly once, and the leader keeps N+2', async () => {
+    const { a, b, bPushes, bShorts, fromB, fromBShort } = await seat()
     b.unreachableIndex = 7 // episode 8
+    await a.pick('8')
+    const leader = await sampleLeader(a, 8)
+
+    // The behaviour difference first: on #501 alone both of these fail.
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8"])
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(b.episode()).toBe('7')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['7', 'follow']])
+    expect(bShorts).toEqual(['8'])
+    expect(fromB()).toEqual(['7'])
+    expect(fromBShort()).toEqual(['8'])
+  })
+
+  // The marker is state, not a one-shot: B's re-pushes carry it. The first is
+  // the same key on A and emits nothing. A's `connect()` clears main's episode
+  // key, so after it B's next push is a new key on A again, and is declined.
+  it('a stopped-short follower’s re-pushes carry the marker, and are declined after a leader reconnect', async () => {
+    const { A, B, a, b, bShorts, fromB, fromBShort } = await seat()
+    b.unreachableIndex = 7
     await a.pick('8')
     await sampleLeader(a, 8)
 
-    expect(b.episode()).toBe('7')
-    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['7', 'follow']])
+    B.ui.pushSyncplayFile()
+    await room!.advance(1)
     expect(fromB()).toEqual(['7'])
-    expect(a.toasts).toEqual(['rigB moved to episode 7'])
+    A.client['lastAppliedRoomEpisode'] = null
+    B.ui.pushSyncplayFile()
+    const leader = await sampleLeader(a, 4)
+
+    expect(bShorts).toEqual(['8', '8', '8'])
+    expect(fromB()).toEqual(['7', '7'])
+    expect(fromBShort()).toEqual(['8', '8'])
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8", "rigB couldn't open episode 8"])
+  })
+
+  // The regression the issue names: a follower that really moves back after the
+  // walk still pulls the leader. The marker ends at B's next commit.
+  it('the follower’s own Prev after a short walk still pulls the leader', async () => {
+    const { a, b, bPushes, bShorts } = await seat()
+    b.unreachableIndex = 7
+    await a.pick('8')
+    await sampleLeader(a, 8)
+
+    b.pressPrev()
+    const leader = await sampleLeader(a, 8)
+
+    expect(b.episode()).toBe('6')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([
+      ['7', 'follow'],
+      ['6', 'local']
+    ])
+    expect(bShorts).toEqual(['8', undefined])
+    expect(leader.at(-1)).toBe('6')
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8", 'rigB moved to episode 6'])
+  })
+
+  // mikkerlo's plan review: B's catch-up Next to N+2 is `'local'`, so main
+  // forces the room to 0 and the leader, already watching N+2, rewinds. That is
+  // #486's stated consequence for the peer that did not switch, recorded here.
+  it('the follower’s catch-up Next to the pick rewinds the leader to 0 (#486)', async () => {
+    const { A, a, b, bPushes, bShorts } = await seat()
+    b.unreachableIndex = 7
+    await a.pick('8')
+    await sampleLeader(a, 8)
+    await room!.advance(10)
+    expect(A.el.currentTime).toBeGreaterThan(STALE_FLOOR / 5)
+
+    b.unreachableIndex = null
+    expect(b.pressNext()).toBe('dispatched')
+    const leader = await sampleLeader(a, 4)
+
+    expect(b.episode()).toBe('8')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([
+      ['7', 'follow'],
+      ['8', 'local']
+    ])
+    expect(bShorts).toEqual(['8', undefined])
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(A.el.currentTime).toBeLessThan(5)
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8"])
+  })
+
+  // #526 / #512: a user commit the walk held settles as its own origin, and the
+  // settle's `followShortOf` arm is never reached, so the leader follows it even
+  // though the follower stopped short of the pick.
+  // A user Next, and the countdown, each land on 8 while the walk heads for 9.
+  it.each([
+    ['local', '9', '8'],
+    ['auto-advance', '9', '8']
+  ] as const)(
+    'a mid-walk %s commit short of the pick goes out unmarked, and the leader walks to it',
+    async (origin, pick, own) => {
+      const { a, b, bPushes, bShorts } = await seat()
+      // Admitted during step 2's `saveProgress`, before it sets `navigating`.
+      b.ownCommitInSave = { episodeInt: own, origin }
+      await a.pick(pick)
+      const leader = await sampleLeader(a, 10)
+
+      expect(b.episode()).toBe(own)
+      expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([[own, origin]])
+      expect(bShorts).toEqual([undefined])
+      expect(leader.at(-1)).toBe(own)
+      expect(a.toasts).toEqual([`rigB moved to episode ${own}`])
+    }
+  )
+
+  // mikkerlo's three-peer case: A picks N+2, C follows it, B stops at N+1. The
+  // decline is every receiver's, so neither A nor C walks back to B.
+  it('three peers: the one that stops short drags neither the leader nor the other follower', async () => {
+    room = await createTwoPeerRoom({ position: 100, paused: false })
+    const peers: Peer[] = []
+    for (const username of ['rigA', 'rigB', 'rigC']) {
+      peers.push(
+        await room.seat({
+          username,
+          position: 100,
+          paused: false,
+          delayMs: DELAY_MS,
+          episodeInt: '6',
+          indexOfEpisode
+        })
+      )
+    }
+    await room.advance(4)
+    const [a, b, c] = peers.map((p) => attachNavigator(p, 5))
+    b.unreachableIndex = 7
+    await a.pick('8')
+    const leader = await sampleLeader(a, 10)
+
+    expect(new Set(leader)).toEqual(new Set(['8']))
+    expect(c.episode()).toBe('8')
+    expect(b.episode()).toBe('7')
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8"])
+    expect(c.toasts).toEqual(['rigA moved to episode 8', "rigB couldn't open episode 8"])
   })
 
   it('holds the follower’s snapshots across an intermediate loadedmetadata', async () => {

@@ -7169,6 +7169,14 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
       return [f.episodeInt, f.episodeSwitch]
     })
 
+  /** Each push's `followShortOf` (#506). */
+  const shorts = (setFile: ReturnType<typeof vi.fn>): (string | undefined)[] =>
+    setFile.mock.calls.map(([p]) => (p as SyncplayFilePayload).followShortOf)
+
+  /** `handleRemoteEpisodeChange`'s begin for a room pick of 0-based `index`. */
+  const begin = (client: Client, index: number): void =>
+    client.beginFollowWalk(index, String(index + 1))
+
   /** One `goToEpisode(…, 'follow')` commit, as PlayerView writes it. */
   const followStep = async (
     client: Client,
@@ -7185,7 +7193,7 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 31)
     await followStep(client, deps, episode)
     // The intermediate source gets a duration: `onDurationChange`'s re-push.
     client.pushSyncplayFile()
@@ -7200,42 +7208,47 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
 
     client.settleFollowWalk()
     expect(pushes(setFile)).toEqual([['32', 'follow']])
+    // Arrived: nothing to mark (#506).
+    expect(shorts(setFile)).toEqual([undefined])
   })
 
   it('a single-step follow pushes once, as a follow', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 29)
     await followStep(client, deps, episode)
     expect(setFile).not.toHaveBeenCalled()
     client.settleFollowWalk()
 
     expect(pushes(setFile)).toEqual([['30', 'follow']])
+    expect(shorts(setFile)).toEqual([undefined])
   })
 
-  it('a walk that stops short announces the episode it reached', async () => {
+  it('a walk that stops short announces the episode it reached, marked short of the pick (#506)', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
     // N -> N+2, step 2 `unreachable` before its commit.
-    client.beginFollowWalk()
+    begin(client, 30)
     await followStep(client, deps, episode)
     client.settleFollowWalk()
 
     expect(pushes(setFile)).toEqual([['30', 'follow']])
+    expect(shorts(setFile)).toEqual(['31'])
   })
 
   it('a walk that never moves pushes nothing, unless it held a push', async () => {
     const { deps } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 29)
     client.settleFollowWalk()
     expect(setFile).not.toHaveBeenCalled()
 
-    // A reconnect the walk held still owes the room its file, untagged.
-    client.beginFollowWalk()
+    // A reconnect the walk held still owes the room its file, untagged — and
+    // unmarked (#506): step 1 failing leaves no new key for a peer to decline.
+    begin(client, 29)
     client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
     await nextTick()
     client.syncplayStatus.value = { state: 'ready', username: 'me' }
@@ -7243,13 +7256,14 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(setFile).not.toHaveBeenCalled()
     client.settleFollowWalk()
     expect(pushes(setFile)).toEqual([['29', undefined]])
+    expect(shorts(setFile)).toEqual([undefined])
   })
 
   it('a local commit the walk held is announced as local, not downgraded to a follow', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 30)
     await followStep(client, deps, episode)
     // A user Prev admitted during step 2's `saveProgress`, before `navigating`
     // is set: it supersedes the step and commits as `'local'`.
@@ -7272,7 +7286,8 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    // N -> N+3: the countdown's commit leaves the walk short of the pick.
+    begin(client, 31)
     await followStep(client, deps, episode)
     // The countdown fires during step 2's `saveProgress`, before `navigating`.
     client.markEpisodeSwitch('auto-advance')
@@ -7283,13 +7298,15 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
 
     client.settleFollowWalk()
     expect(pushes(setFile)).toEqual([['31', 'auto-advance']])
+    // This peer's own move, which the room should follow: unmarked (#506).
+    expect(shorts(setFile)).toEqual([undefined])
   })
 
   it('the latest held own commit decides the settle’s origin (#512)', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 30)
     client.markEpisodeSwitch('auto-advance')
     deps.activeEpisodeIndex.value += 1
     episode.value = String(deps.activeEpisodeIndex.value + 1)
@@ -7307,7 +7324,8 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    // N -> N+2, and the user's Prev lands short of it.
+    begin(client, 30)
     await followStep(client, deps, episode)
     client.markEpisodeSwitch('local')
     deps.activeEpisodeIndex.value -= 1
@@ -7317,9 +7335,11 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
 
     client.settleFollowWalk()
     expect(pushes(setFile)).toEqual([['29', 'local']])
+    // The user moved, and the room should follow that: unmarked (#506).
+    expect(shorts(setFile)).toEqual([undefined])
 
     // The latch is per walk: the next walk's settle is a plain follow.
-    client.beginFollowWalk()
+    begin(client, 29)
     await followStep(client, deps, episode)
     client.settleFollowWalk()
     expect(pushes(setFile)).toEqual([
@@ -7332,10 +7352,10 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 30)
     await followStep(client, deps, episode)
     // A second room move mid-walk: its walk returns 'arrived' at once.
-    client.beginFollowWalk()
+    begin(client, 30)
     client.settleFollowWalk()
     await followStep(client, deps, episode)
     expect(setFile).not.toHaveBeenCalled()
@@ -7347,11 +7367,193 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(setFile).toHaveBeenCalledTimes(1)
   })
 
+  // #506: every begin writes the target, so the settle compares against the
+  // room's latest pick. The outer walk, heading for N+2, stops there; the room
+  // moved on to N+3 mid-walk, so this peer is short of it.
+  it('the latest begin’s target decides the mark, not the outer walk’s', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    begin(client, 31)
+    client.settleFollowWalk()
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+
+    expect(pushes(setFile)).toEqual([['31', 'follow']])
+    expect(shorts(setFile)).toEqual(['32'])
+  })
+
+  // …and the other way round: an inner begin for the episode the outer walk
+  // reaches makes an arrival of it, whatever the outer walk was heading for.
+  it('a later begin for the reached episode leaves the settle unmarked', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 31)
+    await followStep(client, deps, episode)
+    begin(client, 29)
+    client.settleFollowWalk()
+    client.settleFollowWalk()
+
+    expect(pushes(setFile)).toEqual([['30', 'follow']])
+    expect(shorts(setFile)).toEqual([undefined])
+  })
+
+  // …and a later pick this peer can't reach either: the walk fails at step 1,
+  // so the settle pushes nothing, but the marker it leaves names that pick.
+  it('a walk that never moves refreshes a stale marker to the latest pick', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    expect(shorts(setFile)).toEqual(['31'])
+
+    begin(client, 32)
+    client.settleFollowWalk()
+    expect(setFile).toHaveBeenCalledTimes(1)
+
+    client.pushSyncplayFile()
+    expect(pushes(setFile)).toEqual([
+      ['30', 'follow'],
+      ['30', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['31', '33'])
+  })
+
+  // #506: the marker is a state. Every push from the reached episode carries
+  // it, whichever caller sends it, so no re-push leaks without it.
+  it('every later push from the reached episode carries the marker', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    // `onDurationChange`'s re-push.
+    client.pushSyncplayFile()
+    // A translation pick on the reached episode: the watcher's push.
+    deps.activeTranslationId.value = 77
+    await nextTick()
+    // A reconnect: the transition-into-ready push.
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+
+    expect(pushes(setFile)).toEqual([
+      ['30', 'follow'],
+      ['30', undefined],
+      ['30', undefined],
+      ['30', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['31', '31', '31', '31'])
+  })
+
+  it('a marker set while not ready reaches the transition-into-ready push', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    await followStep(client, deps, episode)
+    // The settle's push hits the readiness guard and goes nowhere…
+    client.settleFollowWalk()
+    expect(setFile).not.toHaveBeenCalled()
+    // …but the marker is state, so the re-announce carries it.
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+
+    expect(pushes(setFile)).toEqual([['30', undefined]])
+    expect(shorts(setFile)).toEqual(['31'])
+  })
+
+  // The next commit to another episode ends it, so a move back to the marked
+  // episode is a real move the room follows.
+  it('a commit to another episode drops the marker, and a move back stays unmarked', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    // The user's own catch-up Next to the pick, then Prev back.
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value += 1
+    episode.value = '31'
+    await nextTick()
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = '30'
+    await nextTick()
+
+    expect(pushes(setFile)).toEqual([
+      ['30', 'follow'],
+      ['31', 'local'],
+      ['30', 'local']
+    ])
+    expect(shorts(setFile)).toEqual(['31', undefined, undefined])
+  })
+
+  // The drop does not wait for a push to go out: commits made while the
+  // session is down still end the marker, so the reconnect's re-announce of
+  // the episode this peer moved back to is unmarked.
+  it('commits made while not ready drop the marker before the re-announce', async () => {
+    const { deps, episode } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 30)
+    await followStep(client, deps, episode)
+    client.settleFollowWalk()
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value += 1
+    episode.value = '31'
+    await nextTick()
+    client.markEpisodeSwitch('local')
+    deps.activeEpisodeIndex.value -= 1
+    episode.value = '30'
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+
+    expect(pushes(setFile)).toEqual([
+      ['30', 'follow'],
+      ['30', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['31', undefined])
+  })
+
+  // The receiver's half: a marked announce is declined with a toast naming the
+  // episode the peer could not open; an unmarked one is left to the walk.
+  it('declines a peer’s marked announce with a toast, and passes an unmarked one', async () => {
+    const { deps } = walkDeps(fakeVideo())
+    const { client } = await ready(deps)
+    const ep: SyncplayRemoteEpisode = {
+      animeId: 1,
+      malId: null,
+      episodeInt: '7',
+      translationId: 3,
+      canonicalName: 'Test Anime - 7',
+      fromUser: 'rigB'
+    }
+
+    expect(client.declineFollowShort(ep)).toBe(false)
+    expect(client.syncplayToast.value).toBe('')
+    expect(client.declineFollowShort({ ...ep, followShortOf: '8' })).toBe(true)
+    expect(client.syncplayToast.value).toBe("rigB couldn't open episode 8")
+  })
+
   it('a settle after the player unmounted announces nothing', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 29)
     await followStep(client, deps, episode)
     mountedWrappers.splice(0).forEach((w) => w.unmount())
     client.settleFollowWalk()
@@ -7367,7 +7569,7 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { client, setFile } = await ready(deps)
     setApi({ syncplaySendLocalSnapshot: sendSnapshot, syncplaySetFile: setFile })
 
-    client.beginFollowWalk()
+    begin(client, 30)
     await followStep(client, deps, episode)
     // The intermediate source reaches metadata and plays while step 2 is still
     // resolving. Main still holds the walk's first file, so this position
@@ -7394,7 +7596,7 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     const { deps, episode } = walkDeps(v)
     const { client } = await ready(deps)
 
-    client.beginFollowWalk()
+    begin(client, 30)
     await followStep(client, deps, episode)
     client.onVideoLoadedMetadata()
     client.onVideoTimeUpdate()
@@ -7451,7 +7653,7 @@ describe('useSyncplayClient — a follow walk holds a resume off the outgoing el
   it('mid-walk the apply seeks the outgoing element to 0 and does not play it', async () => {
     const { client, v, resume } = await mountEnded()
 
-    client.beginFollowWalk()
+    client.beginFollowWalk(1, '2')
     resume()
 
     expect(v.currentTime).toBe(0)
@@ -7463,7 +7665,7 @@ describe('useSyncplayClient — a follow walk holds a resume off the outgoing el
   it('mid-walk the gate does not play it either', async () => {
     const { client, v, resume } = await mountEnded()
 
-    client.beginFollowWalk()
+    client.beginFollowWalk(1, '2')
     resume()
     // A roster change or a `canplay` reaches the gate with the mirror playing.
     client.applySyncplayReadyGate()
@@ -7475,7 +7677,7 @@ describe('useSyncplayClient — a follow walk holds a resume off the outgoing el
   it('the walk’s episode-start ends the hold, and the new source plays', async () => {
     const { client, v, resume } = await mountEnded()
 
-    client.beginFollowWalk()
+    client.beginFollowWalk(1, '2')
     resume()
     // The walk's step swaps the source and plays it as an `episode-start`.
     client.beginProgrammaticPlayback('play', 'episode-start', 'follow')
@@ -7491,7 +7693,7 @@ describe('useSyncplayClient — a follow walk holds a resume off the outgoing el
   it('a walk that settles without landing releases the hold', async () => {
     const { client, v, resume } = await mountEnded()
 
-    client.beginFollowWalk()
+    client.beginFollowWalk(1, '2')
     resume()
     client.settleFollowWalk()
     client.applySyncplayReadyGate()

@@ -481,13 +481,15 @@ describe('SyncplayClient room list polling (#221)', () => {
       expect(userNamed('zoe')?.animeDlAppMeta).toEqual(meta)
     })
 
-    // One case per term: a fixture that moved all four at once would leave each
-    // individual comparison maskable by the other three.
+    // One case per term: a fixture that moved all five at once would leave each
+    // individual comparison maskable by the other four. `followShortOf` (#506)
+    // is optional, so absent → present is its change.
     it.each([
       ['animeId', { animeId: 2 }],
       ['malId', { malId: 7 }],
       ['episodeInt', { episodeInt: '4' }],
-      ['translationId', { translationId: 9 }]
+      ['translationId', { translationId: 9 }],
+      ['followShortOf', { followShortOf: '5' }]
     ])('emits when only animeDlAppMeta.%s changes', (_k, patch) => {
       handshake()
       deliverList({ cinema: { zoe: { isReady: true, file: fileWithMeta }, me: selfEntry } })
@@ -504,6 +506,25 @@ describe('SyncplayClient room list polling (#221)', () => {
       })
 
       expect(roomUsers).toHaveLength(emitted + 1)
+    })
+
+    // #506: a marked file read back through the other assembler is still equal,
+    // so the marker costs no emit per poll, and dropping it is a change.
+    it('emits nothing for an unchanged followShortOf, and emits when it is dropped', () => {
+      const marked = { ...meta, followShortOf: '5' }
+      const markedFile = { ...fileWithMeta, features: { animeDlAppMeta: marked } }
+      handshake()
+      deliver({ Set: { user: { zoe: { room: { name: 'cinema' }, file: markedFile } } } })
+      expect(userNamed('zoe')?.animeDlAppMeta).toEqual(marked)
+      const emitted = roomUsers.length
+
+      deliverList({ cinema: { zoe: { file: markedFile }, me: selfEntry } })
+      deliverList({ cinema: { zoe: { file: markedFile }, me: selfEntry } })
+      expect(roomUsers).toHaveLength(emitted)
+
+      deliverList(equalPoll)
+      expect(roomUsers).toHaveLength(emitted + 1)
+      expect(userNamed('zoe')?.animeDlAppMeta).toEqual(meta)
     })
 
     // "Keep the previous array on equality" is observable as *order*, never as

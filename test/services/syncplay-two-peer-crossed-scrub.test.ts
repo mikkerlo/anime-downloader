@@ -152,7 +152,8 @@ describe('SyncplayClient — a short scrub crossed by a peer’s pause (#537)', 
   // re-assert tolerance main still substitutes on the crossing frame, so the
   // renderer is handed our own position and the pause edge moves nothing but
   // `paused`; the #252 re-assert carries the scrub. What that re-assert then
-  // does to the pause is #535's (S11), not this file's.
+  // does to the pause is #535's (S11), pinned in
+  // `syncplay-two-peer-ignore-counters.test.ts`, not this file's.
   it('past SEEK_REASSERT_TOLERANCE_S: the crossing frame is ours and moves nothing but paused', async () => {
     const { scrubber, carrier, target, pausedAt } = await crossedScrub(
       SEEK_REASSERT_TOLERANCE_S + 7

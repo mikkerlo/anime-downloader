@@ -454,13 +454,13 @@ export class SyncplayClient extends EventEmitter {
   private lastAppliedRemotePosition: number | null = null
   // "We just handed the renderer a pause flip it has not reported back yet" (#513).
   //
-  // Set where `handleState()` emits a `remote-state` whose `paused` differs from
+  // Set by `armApplyInFlight()` for a `remote-state` whose `paused` differs from
   // `snapshot.paused`. Until the renderer applies it and pushes a fresh snapshot,
-  // `snapshot.paused` is the *pre-apply* value, and a heartbeat in that gap
-  // asserts it — the server, no longer ignoring us once `sendAck()` has gone out,
-  // takes it as a pause change and undoes the room's pause (or resume), `setBy`
-  // us. While set, `buildPlaystate()` sends position only, the no-claim shape the
-  // mirror uses.
+  // `snapshot.paused` is the *pre-apply* value, and a heartbeat or re-assert in
+  // that gap asserts it — the server, no longer ignoring us once `sendAck()` has
+  // gone out, takes it as a pause change and undoes the room's pause (or
+  // resume), `setBy` us. While set, `buildPlaystate()` sends position only, the
+  // no-claim shape the mirror uses.
   //
   // Two clear rules, and neither is "any `updateSnapshot()`":
   //  - `sendLocalState()` clears it unconditionally — a real local press replaces
@@ -1925,7 +1925,7 @@ export class SyncplayClient extends EventEmitter {
     // the room state is over a second old, so a periodic frame can arrive setBy *us* and return
     // at the self-guard below. Recording above the guards is what keeps it fresh regardless — and
     // it is also why the once-a-second premise here is the *inbound* stream and not the surviving
-    // set: the claim sits above `main/syncplay.ts:2237-2238`, so what those drop does not enter it.
+    // set: the claim sits above `main/syncplay.ts:2239-2240`, so what those drop does not enter it.
     // Back-dated to the server's *send*, not this frame's arrival (#279). The number inside
     // `position` was computed one one-way delay ago, so stamping arrival makes
     // `projectedRoomPosition()` read the room `d` low forever — and `buildPlaystate()`'s
@@ -1935,7 +1935,7 @@ export class SyncplayClient extends EventEmitter {
     // `_lastUpdatedOn` at receipt (`server.py:875-884`), so per election the room loses `2d − fd`
     // — measured at 0.05 s/election on a 50 ms/direction link, which crosses the renderer's 3 s
     // apply rule in about a minute. That election rate is the server's own and the stamp is above
-    // the guards, so it compounds on frames that die at `main/syncplay.ts:2237-2238` too.
+    // the guards, so it compounds on frames that die at `main/syncplay.ts:2239-2240` too.
     //
     // The time axis rather than the position axis, and they are not the same
     // thing: `projectedRoomPosition()` discards `at` outright when the room is
@@ -2031,7 +2031,7 @@ export class SyncplayClient extends EventEmitter {
     // reasoned: `announces no projection change to a client alone in a room parked past the end
     // of its file` is red without this conjunct. That once a second is the inbound stream at this
     // peer, not the emitted one: a lone client's frames are its own echo, self-`setBy`, and every
-    // one dies at `main/syncplay.ts:2237` — this write and the projection emit both sit above that
+    // one dies at `main/syncplay.ts:2239` — this write and the projection emit both sit above that
     // guard, which is what made the flip-flop observable. It is deliberately "the roster *says*
     // alone" rather than "no peers known": on a server whose `List` we cannot key to our room
     // (#223) the roster never arrives, and there the de-adoption is the conservative answer.
@@ -2157,6 +2157,8 @@ export class SyncplayClient extends EventEmitter {
     // and owns the pending-pause release and the "Paused by …" badge. Rewrite,
     // never drop.
     const seekIntentWasLive = this.seekIntent !== null
+    // A flip the re-assert below must not undo, gated as `armApplyInFlight()` says (#535).
+    if (willApplyRemoteState && paused !== this.snapshot.paused) this.armApplyInFlight(paused)
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
@@ -2258,10 +2260,10 @@ export class SyncplayClient extends EventEmitter {
     // apply calls, with the same inputs (#524). Armed unconditionally it sat on the room's resting
     // position after no-op states, and sendLocalState() swallowed genuine user seeks within
     // ECHO_SEEK_EPSILON_S. That refresh is per frame off `setBy`, not per window: the arming rests
-    // on a periodic elected to another peer, foreign-`setBy` and past `main/syncplay.ts:2237-2238`
+    // on a periodic elected to another peer, foreign-`setBy` and past `main/syncplay.ts:2239-2240`
     // unconditionally — #340 measured that arm here in a *playing* room — and on a pre-adoption
     // one with a peer in a keyed roster, past them as room voice. At the elected peer past
-    // adoption it is self-`setBy` and dies at `main/syncplay.ts:2237`, so the paused-room rate is
+    // adoption it is self-`setBy` and dies at `main/syncplay.ts:2239`, so the paused-room rate is
     // that predicate's consequence, not a measurement. A state that moves nothing fires no
     // `seeked`, so it has no echo to suppress; a previously-armed target is left in place, since
     // that one is still owed its event. Where main's estimate of the element and the element
@@ -2345,13 +2347,11 @@ export class SyncplayClient extends EventEmitter {
     // Arm (or retire) the apply-in-flight marker against the snapshot the renderer
     // has not yet refreshed (#513). A frame that agrees with `snapshot.paused`
     // retires an older marker: the renderer is about to land where the snapshot
-    // already says, so the snapshot's claim is the right one again. A frame
-    // repeating the flip already armed keeps the original clock: the room's 1 Hz
-    // periodics repeat it for as long as the renderer has not caught up, and
-    // re-stamping on each would turn the TTL into "forever" for a renderer that
-    // never does.
+    // already says, so the snapshot's claim is the right one again. A foreign,
+    // acked flip is already armed above the re-assert (#535); this arm adds room
+    // voice and crossed echoes. See `armApplyInFlight()` for the clock.
     if (paused === this.snapshot.paused) this.applyInFlight = null
-    else if (this.applyInFlight?.paused !== paused) this.applyInFlight = { paused, at: Date.now() }
+    else this.armApplyInFlight(paused)
     log('remote-state', { paused, position: emitted, setBy: emittedSetBy, doSeek })
     this.emit('remote-state', {
       paused,
@@ -2569,23 +2569,23 @@ export class SyncplayClient extends EventEmitter {
       // See `applyInFlight` for the clear rules; the TTL is checked here, at
       // the only reader. An expired marker is left in place rather than nulled,
       // so the room's next periodic carrying the same flip cannot re-arm it with
-      // a fresh clock — see the arming site in `handleState()`.
+      // a fresh clock — see `armApplyInFlight()`.
       //
       // Position without `paused` is the shape #232 rejected for the ack frame
       // (`sendAck()`), because the server's `_updatePositionByAge` reads a
       // missing `paused` as playing and forward-compensates it. It is safe
       // here, and the two reasons are specific to how the marker arms. It arms
-      // only on a frame `handleState()` emits — foreign, room voice, or a
-      // crossed echo — and each of those needs a peer, so we are never the sole
+      // only on a frame `handleState()` emits or (#535) is about to — foreign,
+      // room voice, or a crossed echo — and each needs a peer, so we are never the sole
       // candidate in `Room.getPosition()`'s min(), the case where a crept value
       // *is* the room. And in the pause direction the `+ fd` lands our position
       // above the paused room, so it loses that election; in the resume
       // direction the room is playing and the compensation is the ordinary one.
-      // That min() argument covers the heartbeat only: `maybeReassertSeek()`
-      // also reaches this arm with `doSeek: true`, which the server applies via
-      // `setPosition` with no election, so a reassert inside the gap lands a
-      // paused room one `fd` ahead of us — a single forward delay of creep,
-      // accepted as far smaller than the stale `paused` it replaces.
+      // That min() argument covers the heartbeat only: `maybeReassertSeek()` also reaches this
+      // arm with `doSeek: true` (armed in time for it since #535), which the server applies via
+      // `setPosition` with no election, so a re-assert inside the gap lands a paused room one
+      // `fd` ahead of us — a single forward delay of creep, accepted as far smaller than the
+      // stale `paused` it replaces. Past the TTL it claims that `paused` again.
       if (this.applyInFlight && Date.now() - this.applyInFlight.at <= APPLY_IN_FLIGHT_TTL_MS) {
         return { position: this.snapshot.position, doSeek }
       }
@@ -3092,6 +3092,50 @@ export class SyncplayClient extends EventEmitter {
     // inbound convergence #232 opened this window to preserve.
     this.sendStateMessage({ doSeek: true })
     return 'reasserted'
+  }
+
+  // Arm `applyInFlight` for a `remote-state` flip to `paused` the renderer has
+  // not applied yet (#513, #535). A flip already armed keeps its original
+  // clock: the room's 1 Hz periodics repeat it for as long as the renderer has
+  // not caught up, and re-stamping on each would turn the TTL into "forever"
+  // for a renderer that never does.
+  //
+  // `handleState()` calls this twice on a frame, and the two calls are why a
+  // flip is armed in time for every frame of ours that could undo it (#535):
+  //  - **Above `maybeReassertSeek()`**, for a foreign, acked flip
+  //    (`willApplyRemoteState`). The forced pause (or resume) that crossed our
+  //    far scrub is that frame, and the #252 re-assert re-sends the scrub on the
+  //    same tick from a snapshot that still holds the pre-flip `paused`. Armed
+  //    only at the emit, the re-assert claimed it and the server undid the flip
+  //    at our target (S11, 2a); armed here, it goes out as `{ position, doSeek }`
+  //    and the server keeps the room's `paused`. Gated on `willApplyRemoteState`,
+  //    a subset of what reaches the emit, so "armed ⇒ the renderer was handed
+  //    this flip" still holds. Not on the emit's own gate: `isRoomVoice` reads
+  //    after the re-assert's adoption latch and `isCrossedEcho` spends
+  //    `crossedByForeign`, both on purpose. And not ungated: a frame the
+  //    self-`setBy` or unacked guard then drops would arm a marker nothing
+  //    retires, and once it expired the next genuine flip in the same direction
+  //    would find it armed, get no fresh clock, and lose #513 entirely. Once
+  //    `willApplyRemoteState` holds nothing between the two calls returns or
+  //    rewrites `paused`, so the second finds the first and leaves its clock.
+  //  - **At the emit**, below the guards, for every handed frame that disagrees
+  //    with `snapshot.paused`: what it adds is room voice and crossed echoes.
+  //
+  // Direction-agnostic: a resume the renderer has not applied is withheld the
+  // same way. Since `at` is never re-stamped, a re-assert attempt sent more than
+  // APPLY_IN_FLIGHT_TTL_MS after the flip claims the stale `paused` again — the
+  // bound #513 accepts for the heartbeat, reached only when the renderer never
+  // applies the flip (a `play()` refused by autoplay policy, a renderer that
+  // died mid-apply).
+  //
+  // Not covered: a user seek the renderer built before it applied the flip
+  // (S11's 2b shape). `sendLocalState()` still clears the marker on it, so the
+  // seek carries the pre-flip `paused`. Keeping the marker through it trades
+  // that for a drift on a sub-3 s scrub, where #537's band-limited hold release
+  // snaps the scrubber back to the flip's pre-scrub position while the room
+  // took the scrub (S10c). Deferred to #544.
+  private armApplyInFlight(paused: boolean): void {
+    if (this.applyInFlight?.paused !== paused) this.applyInFlight = { paused, at: Date.now() }
   }
 
   private sendStateMessage(opts: { doSeek: boolean; override?: SyncplaySnapshot }): void {

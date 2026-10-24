@@ -250,6 +250,35 @@ export function scrubPauseVerdict(d: {
   return { lost, drift, spread, seekCrossed, reasserts, resumedBy }
 }
 
+/** The lost pauses of a scrub-vs-pause row, by the scrubber frame that resumed
+ *  the room (`ScrubPauseVerdict.resumedBy`), over its scoreable runs. */
+export interface LostPauseTally {
+  reassert: number
+  seek: number
+  heartbeat: number
+  unread: number
+  /** What the row fails on: a pause the #252 re-assert resumed, the 2a shape
+   *  #535 fixed by arming the apply-in-flight marker above the re-assert, or a
+   *  heartbeat resumed, #513's marker failing to withhold. A pause the
+   *  scrubber's own seek resumed is 2b, deferred to #544, and is counted but
+   *  not failed; so is an unread resume, which can't be attributed. */
+  failed: number
+}
+
+export function lostPauseTally(records: readonly Record<string, unknown>[]): LostPauseTally {
+  const lost = records.filter((r) => r.setupOk === true && r.lost === true)
+  const by = (k: ScrubPauseVerdict['resumedBy']): number =>
+    lost.filter((r) => (r.resumedBy ?? null) === k).length
+  const reassert = by('reassert')
+  return {
+    reassert,
+    seek: by('seek'),
+    heartbeat: by('heartbeat'),
+    unread: by(null),
+    failed: reassert + by('heartbeat')
+  }
+}
+
 /** Whether the room's pause reached the scrubber while its own seek was still
  *  loading: the first inbound `paused: true` after the scrubber's `doSeek` went
  *  out arrived before the first `seeked` after it. Both lists relative to the

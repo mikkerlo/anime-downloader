@@ -4,14 +4,18 @@
 //   S9  No false "<peer> seeked to …" toast during S1                      #488 (fixed by #491)
 //   S6  Seek while paused: the peer moves, the room stays paused            —
 //   S10 A scrub and a peer's pause ms apart: both paused, apart (drift)   #524 (fixed by #524)
-//   S11 The same: the pause is lost                                         #535 ✗
+//   S11 The same: the pause is lost                                 #535 (2a) / #544 (2b)
 //   S10c / S11c  The same with a 2 s scrub: the control, no re-assert      #524
 //   S12 S10's race with the scrubber's seek in flight 1–2 s: no drift      #524
 //
 // S1 / S9 were ✗ rows (`bad ≥ 1` at N) until #491 fixed #488; they now assert
 // `bad == 0`, as S6 always has. The exact role × landing × phase pins are
 // `test/services/syncplay-seek-revert.test.ts`. S10 and S10c's drift went the
-// same way when #524 made a pause edge snap to the room (upstream parity).
+// same way when #524 made a pause edge snap to the room (upstream parity). S11's
+// dominant lost pause, the one the scrubber's #252 re-assert resumes, went when
+// #535 armed the apply-in-flight marker above the re-assert; S11 now fails on
+// that or a heartbeat resume. The residual the scrubber's own seek resumes is
+// #544's.
 //
 // The seek goes through the seek bar (`Instance.seek`), so it takes
 // `PlayerView.seek()` → `seekAsUser`, which since #491 announces at intent.
@@ -33,7 +37,13 @@ import {
   type Rig,
   type Instance
 } from './helpers/duo'
-import { RowScorer, scrubPauseVerdict, pauseInFlight } from './helpers/score'
+import {
+  RowScorer,
+  scrubPauseVerdict,
+  pauseInFlight,
+  lostPauseTally,
+  type LostPauseTally
+} from './helpers/score'
 import { SEEK_REASSERT_TOLERANCE_S } from '../src/main/syncplay'
 
 let rig: Rig
@@ -182,12 +192,16 @@ test('S6 — a seek while paused moves the peer and leaves the room paused', asy
 //       that peer paused where it was rather than where the room is. A ✗ row
 //       (`bad ≥ 1`, 9 and 11 of 64 in #534's two runs) until #524 made the
 //       pause edge snap past ECHO_SEEK_EPSILON_S; now `bad == 0`.
-//   S11 (✗, pause lost, #535)  either element still playing. The pause reached the
+//   S11 (pause lost, #535)  either element still playing. The pause reached the
 //       server first. Mostly the scrub, sent before the scrubber heard it,
 //       crossed it and was dropped by the server's ignore gate, and the #252
 //       re-assert behind the scrubber's ack resumed the room at the target.
 //       Otherwise the scrubber heard the pause first and its seek, still
-//       carrying the renderer's `paused: false`, resumed the room itself.
+//       carrying the renderer's `paused: false`, resumed the room itself. A ✗
+//       row (40 lost in #534's three sweeps) until #535 sent the re-assert
+//       position-only while the pause is in flight; it now asserts that no lost
+//       pause was resumed by a re-assert, and counts the seek-resumed ones
+//       (#544) without failing on them.
 //
 // `scrubPauseVerdict` reads which scrubber frame the server resumed on, and
 // `test/services/syncplay-ignoring-on-the-fly.test.ts` pins the server half of
@@ -338,12 +352,17 @@ function bucketLines(
   }
 }
 
-function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): void {
-  const lost = s.records.filter((r) => r.setupOk && r.lost)
-  const by = (k: string): number => lost.filter((r) => r.resumedBy === k).length
+/** Prints a lost-pause row's resumes by frame, and the seek-borne ones (2b,
+ *  #544) on their own line; returns the tally the row asserts on. */
+function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): LostPauseTally {
+  const t = lostPauseTally(s.records)
   process.stdout.write(
-    `[syncplay-e2e] ${s.row} resumed by: reassert=${by('reassert')} heartbeat=${by('heartbeat')} seek=${by('seek')} unread=${lost.filter((r) => r.resumedBy === null).length}\n`
+    `[syncplay-e2e] ${s.row} resumed by: reassert=${t.reassert} heartbeat=${t.heartbeat} seek=${t.seek} unread=${t.unread}\n`
   )
+  process.stdout.write(
+    `[syncplay-e2e] ${s.row} lost to the scrubber's own seek (2b, counted, not failed, #544): n=${t.seek}\n`
+  )
+  return t
 }
 
 /** How many settled-paused runs ended with a second `seeking` on either peer
@@ -380,13 +399,16 @@ test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after i
   const l = lost.score()
   bucketLines(d, SCRUB_PAUSE_OFFSETS_MS)
   bucketLines(l, SCRUB_PAUSE_OFFSETS_MS)
-  resumedByLine(l)
+  const t = resumedByLine(l)
   offsetLine('S10 / S11', l)
   snapLine(d)
-  // S10 was a ✗ row until #524's pause-edge snap; S11 still is, and #535 flips
-  // it to `bad == 0`.
+  // S10 was a ✗ row until #524's pause-edge snap. S11 fails on what #535
+  // fixed, a pause the #252 re-assert behind the ack resumed (2a), and on a
+  // heartbeat resume (#513's marker failing to withhold). A pause the
+  // scrubber's own seek resumed (2b) is #544's; it is about 1 in 64 here, so a
+  // plain `bad == 0` would flake, and it is counted on its own line instead.
   expect(d.bad, 'S10: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
-  expect(l.bad, 'S11 (✗): no lost pause seen').toBeGreaterThanOrEqual(1)
+  expect(t.failed, 'S11: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
 })
 
 test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_S: no #252 re-assert (#524 control)', async () => {
@@ -398,7 +420,7 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
   const l = lost.score()
   bucketLines(d, SCRUB_PAUSE_CONTROL_OFFSETS_MS)
   bucketLines(l, SCRUB_PAUSE_CONTROL_OFFSETS_MS)
-  resumedByLine(l)
+  const t = resumedByLine(l)
   offsetLine('S10c / S11c', l)
   snapLine(d)
   const runs = l.records.filter((r) => r.setupOk)
@@ -407,7 +429,11 @@ test('S10c / S11c — the same race with a scrub inside SEEK_REASSERT_TOLERANCE_
   expect(runs.filter((r) => (r.reasserts as number) > 0).length, 'S11c: a re-assert was sent').toBe(
     0
   )
-  expect(runs.filter((r) => r.resumedBy === 'reassert').length).toBe(0)
+  // Its lost pauses are 2b, the scrubber's own seek (#534's one, and main's
+  // one in #535's control run), so S11c is scored as S11 is: counted, failed
+  // only on a re-assert (which this row's claim above already rules out) or a
+  // heartbeat resume.
+  expect(t.failed, 'S11c: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
   // The drift showed here too (21 of 40 in #534's run). #524's snap closed it
   // but for #537's shape: a scrub this short that crossed the pause is dropped
   // and never re-asserted, and the pause met it still loading. Since #537 main
@@ -443,8 +469,9 @@ test('S12 — the scrub-vs-pause race with the scrubber’s seek in flight 1–2
     loadDelayMs: [1000, 2000]
   })
   const d = drift.score()
-  lost.score()
+  const l = lost.score()
   bucketLines(d, S12_OFFSETS_MS)
+  const t = resumedByLine(l)
   snapLine(d)
   const runs = d.records.filter((r) => r.setupOk)
   const inFlight = runs.filter((r) => r.pauseInFlight === true)
@@ -455,4 +482,6 @@ test('S12 — the scrub-vs-pause race with the scrubber’s seek in flight 1–2
     0
   )
   expect(d.bad, 'S12: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
+  // A far scrub, so S11's 2a hop exists here too: scored as S11 is (#535).
+  expect(t.failed, 'S12l: a lost pause the #252 re-assert or a heartbeat resumed').toBe(0)
 })

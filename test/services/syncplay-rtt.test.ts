@@ -79,7 +79,7 @@ describe('SyncplayClient inbound RTT compensation (#235)', () => {
   // computes `Date.now() / 1000 - myTs` and accepts it when 0 < rtt < 5
   // (src/main/syncplay.ts:1844-1848). `setBy` must be non-null and not our own
   // username, with pendingClientAck === 0, or the state is dropped at
-  // src/main/syncplay.ts:2237-2240 before it ever reaches the compensation.
+  // src/main/syncplay.ts:2239-2242 before it ever reaches the compensation.
   const serverState = (opts: {
     position: number
     paused: boolean

@@ -23,7 +23,7 @@
 import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSyncplayStore } from '../stores/syncplay'
-import { wouldSeekOnApply } from '@shared/syncplay-apply-rule'
+import { pauseSaysSeekDropped, wouldSeekOnApply } from '@shared/syncplay-apply-rule'
 
 const WAITING_DEBOUNCE_MS = 600
 
@@ -1595,16 +1595,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       refusedToastShown = true
       showSyncplayToast(OUT_OF_FILE_TOAST)
     }
-    // The belt to `seekAsUser`'s announcement (#488). Our `doSeek` bump only
-    // protects the flight until the server acks it, and a peer frame sent before
-    // that peer received our seek can still carry the old position and arrive
-    // here as an inferred correction (`diff > 3`, or a pause edge past 0.5 s),
-    // `diff` measured against our in-flight target. Writing it would abort the
-    // seek. So while it is in flight every non-`doSeek` arm is held, the pause
-    // edge's snap included (#524); a `doSeek` frame is a peer's deliberate seek
-    // and still wins (last writer wins). The paused half below is computed
-    // independently, so a room pause still pauses us at the in-flight target.
-    const heldForUserSeek = !state.doSeek && isUserSeekInFlight()
+    // The belt to `seekAsUser`'s announcement (#488). Our `doSeek` bump only protects the flight
+    // until the server acks it, and a peer frame sent before that peer received our seek can still
+    // carry the old position (`diff > 3`, or a pause edge past 0.5 s, against our in-flight
+    // target); writing it would abort the seek. So while `isUserSeekInFlight()` every non-`doSeek`
+    // arm is held, and a `doSeek` frame, a peer's deliberate seek, still wins (last writer wins).
+    // The one exception is a pause edge that says the server dropped the seek (#537,
+    // `userSeekLostToPause()`): we follow it onto the pauser's frame, as upstream does. The paused
+    // half below is computed independently either way.
+    const heldForUserSeek =
+      !state.doSeek && isUserSeekInFlight() && !userSeekLostToPause(state.position, pauseEdge)
     const needsSeek = !outOfFile && wouldSeek && !heldForUserSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     // The resume half of the same refusal (#281, slice B). A room *pause* is
@@ -2765,6 +2765,27 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   function namesUs(setBy: string): boolean {
     const me = syncplayStatus.value.username
     return !!me && setBy.toLowerCase() === me.toLowerCase()
+  }
+
+  // The pause edge the #488 hold lets through (#537): a room pause landing
+  // 0.5–3 s from the target of the user's seek still in flight
+  // (`pauseSaysSeekDropped()`). Main's SEEK_REASSERT_TOLERANCE_S is that same
+  // 3 s, so a pause there means the server dropped a seek main will not
+  // re-assert, and main hands the frame over unrewritten (its converged exit):
+  // following it lands us on the pauser's frame, where upstream lands. Past 3 s
+  // the hold stands, because main re-asserts that seek (S10). While main still
+  // substitutes, the frame carries our own projection, which walks on from the
+  // click (#524), so it stays inside ECHO_SEEK_EPSILON_S of the target only for
+  // the first half second of the flight; the crossing frame arrives inside that,
+  // and a later substituted pause edge needs a second crossing on top of the
+  // first. Measured from the operation's own `target`, never `currentTime`,
+  // which on the MSE/respawn path need not equal the target while the seek is in
+  // flight. Called only while `isUserSeekInFlight()`. Declared down here so the
+  // insertion shifts no line anchor above it.
+  function userSeekLostToPause(position: number, pauseEdge: boolean): boolean {
+    if (!pauseEdge) return false
+    const target = seekOps.find((o) => o.id === userSeekOp.id)?.target
+    return target !== undefined && pauseSaysSeekDropped(Math.abs(position - target))
   }
 
   // The last state `recordRemoteState` was handed, for `roomPausedAtEnd` (#533). Forgotten on

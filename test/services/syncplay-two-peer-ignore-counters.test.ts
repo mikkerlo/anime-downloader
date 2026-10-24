@@ -46,6 +46,7 @@ import { watch } from 'vue'
 import { createTwoPeerRoom } from '../helpers/syncplay-two-peer'
 import type { TwoPeerRoom, Peer, IgnoreCounters } from '../helpers/syncplay-two-peer'
 import { DEFAULT_PLAYING_SET_BY } from '../helpers/syncplay-min-election-server'
+import { ECHO_SEEK_EPSILON_S } from '../../src/shared/syncplay-apply-rule'
 
 /** Every non-empty value the peer's toast takes, in order, from here on. */
 const toastLog = (p: Peer): string[] => {
@@ -577,11 +578,23 @@ describe('SyncplayClient — a forced update crossing the file-change seek (#486
     expect(host.frames[1].state.setBy).toBe('hostuser')
     expect(host.frames[1].state.paused).toBe(false)
     expect(host.el.paused).toBe(false)
+    // That echo is also the seek intent's converged tick: the room came to us.
+    // Since #537 the converged tick is handed over unrewritten, at the room's
+    // compensated position rather than our projection, and it is about ours.
+    expect(host.seekIntent()).toBeNull()
+    expect(host.frames[1].state.position).toBeCloseTo(0.1, 6)
+    expect(Math.abs(host.frames[1].state.position - host.frames[1].element)).toBeLessThan(
+      ECHO_SEEK_EPSILON_S
+    )
 
     await room.advance(10)
     expect(room.server.roomState().paused).toBe(false)
     expect(room.server.roomState().position).toBeLessThan(STALE_FLOOR)
-    expect(room.server.roomState().setBy).toBe('hostuser')
+    // Not `setBy`: after ten seconds of elections it names the `min()`, and the
+    // two peers sit one forward delay apart either way. The projection the
+    // echo carried before #537 left the host 0.05 s behind the room, so the
+    // host was the `min()`; the room's own position puts the joiner there.
+    expect(room.server.roomState().setBy).toBe('joinuser')
     for (const p of [host, joiner]) {
       expect(p.el.paused).toBe(false)
       expect(p.el.currentTime).toBeLessThan(STALE_FLOOR)

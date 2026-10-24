@@ -55,3 +55,15 @@ export interface ApplyRuleInput {
 export function wouldSeekOnApply({ doSeek, diff, pauseEdge }: ApplyRuleInput): boolean {
   return doSeek || diff > (pauseEdge ? ECHO_SEEK_EPSILON_S : APPLY_TOLERANCE_S)
 }
+
+/** Whether a room pause landing `distance` seconds from the target of our own
+ *  seek, still in flight, says the server dropped that seek (#537): more than
+ *  `ECHO_SEEK_EPSILON_S`, so it is not a frame about our own position (what main
+ *  hands over while it still substitutes), and at most
+ *  `APPLY_TOLERANCE_S`, the same 3 s main's `SEEK_REASSERT_TOLERANCE_S` is, so
+ *  main will not re-assert the seek and hands that pause over unrewritten. The
+ *  renderer's #488 hold lets such a pause edge snap, as upstream lands on the
+ *  pauser's frame; past 3 s main re-asserts the seek and the hold stands. */
+export function pauseSaysSeekDropped(distance: number): boolean {
+  return distance > ECHO_SEEK_EPSILON_S && distance <= APPLY_TOLERANCE_S
+}

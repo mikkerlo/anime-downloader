@@ -2362,7 +2362,7 @@ describe('useSyncplayClient — placement is not a peer’s move (#289)', () => 
     // nothing is pinned by #281's "does not count a refused state as the room
     // having told us where it is" — asserted there, not restated here, so the
     // toast claim below is what carries this case.)
-    emitRemoteState({ position: 3000, paused: true, doSeek: false, setBy: 'peer' })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false, setBy: 'peer' })
     expect(v.currentTime).toBe(500)
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
     client.syncplayToast.value = ''
@@ -3075,6 +3075,10 @@ describe('useSyncplayClient — a user pause while the room is out of our file (
 // *and* a keyed roster with a peer in it, not de-adoption alone — while a peer's
 // explicit move is foreign-`setBy` and past that guard regardless. The refusal is
 // therefore emitted on the transition *into* the refusal only.
+//
+// The refused rooms below and in the next block are *playing* past our end, the room running on
+// past a shorter file. A room *paused* there is #533's end pause, which is silent by design; see
+// "the out-of-file toast stays off a room paused at our end (#533)" below.
 describe('useSyncplayClient — the refusal toast fires on the transition only (#281)', () => {
   it('emits once across a 1 Hz stream of refused states', async () => {
     vi.useFakeTimers()
@@ -3088,7 +3092,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
       state: 'ready'
     })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
 
     // Four more seconds of the room's periodic. Under a re-armed timer the
@@ -3096,12 +3100,12 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     // transition-only emit it expires on schedule and stays gone.
     for (let i = 0; i < 4; i++) {
       vi.advanceTimersByTime(1000)
-      emitRemoteState({ position: 3000 + i, paused: true, doSeek: false })
+      emitRemoteState({ position: 3000 + i, paused: false, doSeek: false })
     }
     expect(client.syncplayToast.value).toBe('')
 
     vi.advanceTimersByTime(4000)
-    emitRemoteState({ position: 3010, paused: true, doSeek: false })
+    emitRemoteState({ position: 3010, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe('')
   })
 
@@ -3116,7 +3120,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
       state: 'ready'
     })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
 
     client.syncplayStatus.value = { state: 'reconnecting' }
@@ -3128,8 +3132,8 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     // is cleared in `resetRemoteStateTracking()`, which the reconnect path runs.
     client.syncplayStatus.value = { state: 'ready' }
     await flushPromises()
-    emitRemoteState({ position: 3001, paused: true, doSeek: false })
-    emitRemoteState({ position: 3002, paused: true, doSeek: false })
+    emitRemoteState({ position: 3001, paused: false, doSeek: false })
+    emitRemoteState({ position: 3002, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe('Reconnecting to Syncplay server…')
   })
 
@@ -3151,7 +3155,7 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
       state: 'ready'
     })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
     ;(emitRoomEvent as unknown as (e: SyncplayRoomEvent) => void)({
       level: 'info',
@@ -3159,8 +3163,8 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
     })
     expect(client.syncplayToast.value).toBe('peer joined')
 
-    emitRemoteState({ position: 3001, paused: true, doSeek: false })
-    emitRemoteState({ position: 3002, paused: true, doSeek: false })
+    emitRemoteState({ position: 3001, paused: false, doSeek: false })
+    emitRemoteState({ position: 3002, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe('peer joined')
   })
 
@@ -3179,14 +3183,14 @@ describe('useSyncplayClient — the refusal toast fires on the transition only (
       state: 'ready'
     })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
 
     emitRemoteState({ position: 600, paused: true, doSeek: true })
     expect(v.currentTime).toBe(600)
 
     client.syncplayToast.value = ''
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
   })
 
@@ -3278,7 +3282,7 @@ describe('useSyncplayClient — the refusal toast re-arms on a new file or sessi
     const deps = makeDeps({ video: v })
     const { emitRemoteState, client } = await mountWithRemoteState(deps, { state: 'ready' })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
 
     deps.activeEpisodeIndex.value = 1
@@ -3286,7 +3290,7 @@ describe('useSyncplayClient — the refusal toast re-arms on a new file or sessi
     client.syncplayToast.value = ''
 
     // The same refusal, but about a file the user has only just opened.
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
   })
 
@@ -3301,7 +3305,7 @@ describe('useSyncplayClient — the refusal toast re-arms on a new file or sessi
       state: 'ready'
     })
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
 
     // Room A ends, room B begins. Room B must not inherit room A's explanation.
@@ -3311,7 +3315,7 @@ describe('useSyncplayClient — the refusal toast re-arms on a new file or sessi
     await flushPromises()
     client.syncplayToast.value = ''
 
-    emitRemoteState({ position: 3000, paused: true, doSeek: false })
+    emitRemoteState({ position: 3000, paused: false, doSeek: false })
     expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
   })
 })
@@ -7801,7 +7805,7 @@ describe('useSyncplayClient — a pause edge snaps to the room (#524)', () => {
     expect(client.syncplayToast.value).toBe('peer seeked to 10:00')
   })
 
-  it('does not call a pause at the end of the file out of file inside 3 s', async () => {
+  it('does not call a pause at the end of the file out of file, inside 3 s or past it', async () => {
     // Identical files: the room pauses at the end, past our duration, while we
     // still play the last second. The ordinary end of the file, not a room we
     // cannot follow, so the refusal stays silent on the pause edge too.
@@ -7811,10 +7815,12 @@ describe('useSyncplayClient — a pause edge snaps to the room (#524)', () => {
     expect(near.v.pause).toHaveBeenCalledTimes(1)
     expect(near.client.syncplayToast.value).toBe('')
 
+    // Past the 3 s tolerance too, since #533: the trailing peer is behind on an identical file,
+    // not on a shorter one, and the toast would land on the countdown that pause now arms.
     const far = await playingAt(ROOM - 4, { duration: ROOM } as Partial<HTMLVideoElement>)
     far.emitRemoteState({ position: ROOM, paused: true, setBy: 'peer' })
     expect(rawCurrentTimeWrites.get(far.v)).toEqual([])
-    expect(far.client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+    expect(far.client.syncplayToast.value).toBe('')
   })
 
   // Narrowed by #537. A pause edge 0.5–3 s from the target of the user's seek
@@ -7971,5 +7977,113 @@ describe('useSyncplayClient — a pause edge snaps to the room (#524)', () => {
       expect(sendLocalState).toHaveBeenCalledTimes(1)
       expect(sendSnapshot).not.toHaveBeenCalled()
     })
+  })
+})
+
+// #533: a peer behind the room when the room pauses at the end is paused where it stands, because
+// a room position `>= v.duration` is refused as out of file at any drift. PlayerView arms the
+// countdown on `roomPausedAtEnd`, and the refusal toast stays off that frame: the peer is behind
+// on an identical file, not on a shorter one, and the toast would land on its countdown. The
+// arming half is pinned in `test/renderer/components/player-auto-advance-pause.test.ts`.
+describe('useSyncplayClient — the out-of-file toast stays off a room paused at our end (#533)', () => {
+  const D = 1440
+
+  async function playingAt(position: number): Promise<{
+    v: FakeVideo
+    client: Client
+    deps: Deps
+    emitRemoteState: (s: Partial<SyncplayRemoteState>) => void
+  }> {
+    const v = fakeVideo({
+      currentTime: position,
+      duration: D,
+      paused: false
+    } as Partial<HTMLVideoElement>)
+    const deps = makeDeps({ video: v })
+    const mounted = await mountWithRemoteState(deps, { state: 'ready', username: 'me' })
+    return { v, deps, ...mounted }
+  }
+
+  it.each([1.5, 10, 120])(
+    'a room paused at duration with us %s s short: paused in place, no toast',
+    async (gap) => {
+      const { v, client, emitRemoteState } = await playingAt(D - gap)
+      emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+      expect(v.pause).toHaveBeenCalledTimes(1)
+      expect(rawCurrentTimeWrites.get(v)).toEqual([])
+      expect(client.syncplayToast.value).toBe('')
+      expect(client.roomPausedAtEnd(D)).toBe(true)
+    }
+  )
+
+  it('leaves the receipt unset, so a later playing divergence still toasts once', async () => {
+    const { client, emitRemoteState } = await playingAt(D - 10)
+    emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+    emitRemoteState({ position: D + 60, paused: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+    client.syncplayToast.value = ''
+    emitRemoteState({ position: D + 61, paused: false, setBy: 'peer' })
+    expect(client.syncplayToast.value).toBe('')
+  })
+
+  it('still toasts the same frame from a room that is playing, not paused', async () => {
+    const { client, emitRemoteState } = await playingAt(D - 10)
+    emitRemoteState({ position: D, paused: false, setBy: 'peer' })
+    expect(client.roomPausedAtEnd(D)).toBe(false)
+    expect(client.syncplayToast.value).toBe(OUT_OF_FILE_TOAST)
+  })
+
+  // [room position, paused, doSeek, expected]. The paused term and the frame live in one place.
+  it.each([
+    [D, true, false, true],
+    [D - 0.001, true, false, true],
+    [D - 0.049, true, false, true],
+    [D - 0.06, true, false, false],
+    [D - 1.5, true, false, false],
+    [600, true, false, false],
+    [D, false, false, false],
+    [D + 300, true, false, true],
+    // A peer's seek is a refusal the toast exists to explain (#281), not an end pause.
+    [D, true, true, false]
+  ])(
+    'roomPausedAtEnd: room at %s, paused %s, doSeek %s -> %s',
+    async (pos, paused, doSeek, want) => {
+      const { client, emitRemoteState } = await playingAt(600)
+      emitRemoteState({ position: pos, paused, doSeek, setBy: 'peer' })
+      expect(client.roomPausedAtEnd(D)).toBe(want)
+    }
+  )
+
+  it('is false before any room state, and on a duration we do not have', async () => {
+    const { client, emitRemoteState } = await playingAt(D - 10)
+    expect(client.roomPausedAtEnd(D)).toBe(false)
+    emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+    expect(client.roomPausedAtEnd(NaN)).toBe(false)
+    expect(client.roomPausedAtEnd(0)).toBe(false)
+  })
+
+  // A pause event always follows a play, so forgetting the report at every play means the
+  // predicate a pause reads is a report that arrived while we played — never one from before
+  // the user resumed and paused again mid-episode.
+  it('is forgotten on our element’s next play', async () => {
+    const { client, emitRemoteState } = await playingAt(D - 10)
+    emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+    expect(client.roomPausedAtEnd(D)).toBe(true)
+    client.onLocalPlay()
+    expect(client.roomPausedAtEnd(D)).toBe(false)
+  })
+
+  it('is forgotten on an episode change and a session end', async () => {
+    const { client, deps, emitRemoteState } = await playingAt(D - 10)
+    emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+    deps.activeEpisodeIndex.value = 1
+    await flushPromises()
+    expect(client.roomPausedAtEnd(D)).toBe(false)
+
+    emitRemoteState({ position: D, paused: true, setBy: 'peer' })
+    client.syncplayStatus.value = { state: 'idle' }
+    await flushPromises()
+    expect(client.roomPausedAtEnd(D)).toBe(false)
   })
 })

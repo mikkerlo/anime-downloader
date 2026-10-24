@@ -9,6 +9,7 @@ import { useSkipMarkers } from '../../composables/use-skip-markers';
 import { usePlayingEpisode } from '../../composables/use-playing-episode';
 import {
   useSyncplayClient,
+  AUTO_ADVANCE_PAUSE_EPS_S,
   type SyncplayPlaybackKind
 } from '../../composables/use-syncplay-client';
 import PlayerTitleBar from '../player/PlayerTitleBar.vue';
@@ -470,13 +471,12 @@ function scheduleResumePrefetchAfterSeek(): void {
   }, PREFETCH_SEEK_RESUME_DEBOUNCE_MS);
 }
 
-// Syncplay (Watch Together) — useSyncplayClient owns the connection state,
-// all 6 IPC subscriptions, the 1s snapshot timer, the local-ready gate,
-// the remote-state apply pipeline, the file-push helper, and the toast +
-// pausedBy UI hooks. Lifecycle is managed inside the composable. The
-// remote-episode-change handler still touches PlayerView's navigator
-// (goToEpisode + activeEpisodeIndex), so the composable hands those events
-// back via `onRemoteEpisodeChange`.
+// Syncplay (Watch Together) — useSyncplayClient owns the connection state, all 6 IPC
+// subscriptions, the 1s snapshot timer, the local-ready gate, the remote-state apply pipeline,
+// the file-push helper, and the toast + pausedBy UI hooks. Lifecycle is managed inside the
+// composable. The remote-episode-change handler still touches PlayerView's navigator
+// (goToEpisode + activeEpisodeIndex), so the composable hands those events back via
+// `onRemoteEpisodeChange`.
 const syncplay = useSyncplayClient({
   getVideoEl: () => videoRef.value,
   getDuration: () => duration.value,
@@ -2799,25 +2799,25 @@ function onVideoEnded(): void {
   armAutoAdvance();
 }
 
-// About one frame. The room's pause at the end position lands ~1 ms short of
-// `duration` (#528), so the element never fires `ended`; a frame covers that
-// and stays far from a deliberate pause, which a window in whole seconds would
-// turn into a countdown. It misses a room pause that leaves us more than a
-// frame short: with no `doSeek` that pause seeks us only on drift over 3 s.
-const AUTO_ADVANCE_PAUSE_EPS_S = 0.05;
-
 // #528: in a room, a pause that leaves the element within a frame of the end is
 // this peer's `ended`. Hooked on the element's `pause`, so every route the
 // composable pauses by (the apply, the ready gate) reaches it. Not while
 // `goToEpisode` runs: a pause on the old source then would arm N+2. A walk that
 // pulls us to N+1 first clears a running countdown with its own
 // `cancelAutoAdvance()`.
+//
+// #533: so is a pause while the room sits paused at our end, however far short the element is:
+// a room position `>= v.duration` is refused as out of file at any drift, so a trailing peer is
+// paused where it stands. `roomPausedAtEnd` keys on the room being paused too, as the ready
+// gate's down-arm reaches here and a room still playing at its end must not arm. Nothing moves
+// the element, and both paths take the one latch, so a second pause after a Cancel arms neither.
 function maybeArmAutoAdvanceOnPause(): void {
   const v = videoRef.value;
   if (!v || autoAdvancePauseArmed || navigating.value) return;
   if (syncplayStatus.value.state !== 'ready') return;
   if (v.ended || !Number.isFinite(v.duration)) return;
-  if (v.duration - v.currentTime > AUTO_ADVANCE_PAUSE_EPS_S) return;
+  const ownGapWithinFrame = v.duration - v.currentTime <= AUTO_ADVANCE_PAUSE_EPS_S;
+  if (!ownGapWithinFrame && !syncplay.roomPausedAtEnd(v.duration)) return;
   autoAdvancePauseArmed = true;
   armAutoAdvance();
 }

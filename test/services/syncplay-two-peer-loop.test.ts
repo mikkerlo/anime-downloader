@@ -920,10 +920,14 @@ const RAW_CENSUS = censusOf((s) => s.raw)
 // **Re-derived for #512: `episode-change` 16 → 17.** `attachAutoAdvancer`'s
 // `step()` models `goToEpisode` for the countdown and the follow walk alike,
 // through one awaited `peer.goToEpisode(` call.
+//
+// **Re-derived for #506: `episode-change` 17 → 18.** The navigator's `step()`
+// gains `ownCommitInSave`, a user commit admitted during a later walk step's
+// `saveProgress`, which commits through one awaited `peer.goToEpisode(` call.
 const BLANKED_CENSUS: Record<string, number> = {
   adoption: 1,
   'double-next': 1,
-  'episode-change': 17,
+  'episode-change': 18,
   'ignore-counters': 4,
   loop: 4,
   'next-episode': 1

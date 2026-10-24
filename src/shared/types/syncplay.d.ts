@@ -47,6 +47,17 @@ interface SyncplayFilePayload {
    *  main only drops its stale snapshot. Absent on a first open, a reopen, a
    *  translation/quality switch and every re-push. Renderer→main only. */
   episodeSwitch?: SyncplayEpisodeSwitch
+  /** The `episodeInt` a room follow walk was heading for when it stopped short
+   *  of it (#506): this peer is on the episode it announces because it could
+   *  not reach that one, not because it chose it. A state, not an event, so the
+   *  opposite of `episodeSwitch` on both counts: **stored and on the wire**.
+   *  The renderer adds it to every push from the episode the walk reached (the
+   *  settle's own, the duration re-push, the transition-into-ready push, a
+   *  translation switch) until the next index commit to another episode. Main
+   *  keeps it in `currentFile`, so the reconnect re-announce carries it, and
+   *  sends it as `animeDlAppMeta.followShortOf`. A peer that receives it
+   *  declines the walk back and toasts instead. Old builds ignore the key. */
+  followShortOf?: string
 }
 
 type SyncplayEpisodeSwitch = 'local' | 'auto-advance' | 'follow'
@@ -113,6 +124,8 @@ interface SyncplayRoomUser {
     malId: number | null
     episodeInt: string
     translationId: number | null
+    /** `SyncplayFilePayload.followShortOf` as it came off the wire (#506). */
+    followShortOf?: string
   }
 }
 
@@ -128,4 +141,8 @@ interface SyncplayRemoteEpisode {
   translationId: number | null
   canonicalName: string
   fromUser: string
+  /** Present when `fromUser` is on `episodeInt` because their follow walk
+   *  stopped short of the episode this names (#506). The receiver declines to
+   *  walk and toasts instead. */
+  followShortOf?: string
 }

@@ -539,6 +539,11 @@ export interface SeatPeerOptions extends HarnessVideoOptions {
   /** The episode this peer *starts* on. Mutable afterwards through
    *  `Peer.goToEpisode()` — see the note there on why it cannot be a constant. */
   episodeInt?: string
+  /** Where an episode sits in the list, for a fixture whose composable must
+   *  see real indices (#506: the follow walk's target and the stopped-short
+   *  marker are compared by index). Without it `activeEpisodeIndex` is a
+   *  commit counter, starting at 0 and bumped by every `goToEpisode()`. */
+  indexOfEpisode?: (episodeInt: string) => number
 }
 
 /** `SyncplayClient`'s three `ignoringOnTheFly` counters, sampled together. */
@@ -989,7 +994,8 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
     // announced the episode the peer was seated on, so main's `setFile()` never
     // saw `identityChanged` and the de-adoption it drives was unreachable.
     let episodeInt = peerOpts.episodeInt ?? '7'
-    const activeEpisodeIndex = ref(0)
+    const indexOfEpisode = peerOpts.indexOfEpisode
+    const activeEpisodeIndex = ref(indexOfEpisode ? indexOfEpisode(episodeInt) : 0)
     const activeTranslationId = ref<number | null>(3)
     const remoteEpisodes: SyncplayRemoteEpisode[] = []
     const deps: SyncplayDeps = {
@@ -1083,7 +1089,9 @@ export async function createTwoPeerRoom(opts: TwoPeerRoomOptions = {}): Promise<
         }
         episodeInt = ep
         ui!.markEpisodeSwitch(origin)
-        activeEpisodeIndex.value += 1
+        activeEpisodeIndex.value = indexOfEpisode
+          ? indexOfEpisode(ep)
+          : activeEpisodeIndex.value + 1
         // The flush is the whole point, not tidiness: the composable's
         // episode-change watcher is a pre-flush `watch`, so it is *queued* by
         // the write above and runs on the next microtask drain — before the

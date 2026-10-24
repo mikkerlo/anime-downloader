@@ -523,7 +523,7 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
     showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt} (not available)`);
     return;
   }
-  if (idx === activeEpisodeIndex.value) return;
+  if (idx === activeEpisodeIndex.value || syncplay.declineFollowShort(ep)) return;
   showSyncplayToast(`${ep.fromUser} moved to episode ${ep.episodeInt}`);
   const dir = idx > activeEpisodeIndex.value ? 'next' : 'prev';
   // goToEpisode moves one step; step toward target in a loop.
@@ -586,7 +586,7 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // `finally`, so arrival, `unreachable`, a translation pick and a throw all
   // announce where this peer really is. A one-step follow takes the same path.
   let steps = 0;
-  syncplay.beginFollowWalk();
+  syncplay.beginFollowWalk(idx, ep.episodeInt);
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,

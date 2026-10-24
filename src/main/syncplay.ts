@@ -236,7 +236,7 @@ export interface SyncplaySnapshot {
   paused: boolean
 }
 
-export interface SyncplayFileInfo {
+export interface SyncplayFileInfo extends FollowShortMarker {
   animeId: number
   malId: number | null
   episodeInt: string
@@ -295,10 +295,10 @@ export interface SyncplayRoomUser {
     malId: number | null
     episodeInt: string
     translationId: number | null
-  }
+  } & FollowShortMarker
 }
 
-export interface SyncplayRemoteEpisode {
+export interface SyncplayRemoteEpisode extends FollowShortMarker {
   animeId: number
   malId: number | null
   episodeInt: string
@@ -330,15 +330,15 @@ function sameRosterFile(a: SyncplayRoomUser['file'], b: SyncplayRoomUser['file']
   return a.name === b.name && a.duration === b.duration && a.size === b.size
 }
 
-// `extractAppMeta()` is the single writer on both assemblers and its return
-// literal always carries all four keys, so this could be a stringify — spelled
-// out instead because the enclosing user object is *not* safe that way, and the
-// distinction is one nobody should have to re-derive.
+// `extractAppMeta()` is the single writer on both assemblers, so this could be a
+// stringify — spelled out because the enclosing user object is *not* safe that
+// way. The optional `followShortOf` (#506) is checked in the first arm: two metas
+// that differ there take `a === b`, false, so a marker flip is a roster change.
 function sameAppMeta(
   a: SyncplayRoomUser['animeDlAppMeta'],
   b: SyncplayRoomUser['animeDlAppMeta']
 ): boolean {
-  if (!a || !b) return a === b
+  if (!a || !b || a.followShortOf !== b.followShortOf) return a === b
   return (
     a.animeId === b.animeId &&
     a.malId === b.malId &&
@@ -1650,12 +1650,12 @@ export class SyncplayClient extends EventEmitter {
     if (!isObject(file.features) || !isObject(file.features.animeDlAppMeta)) return undefined
     const m = file.features.animeDlAppMeta
     if (typeof m.animeId !== 'number' || typeof m.episodeInt !== 'string') return undefined
-    return {
+    return withFollowShort(m, {
       animeId: m.animeId,
       malId: typeof m.malId === 'number' ? m.malId : null,
       episodeInt: m.episodeInt,
       translationId: typeof m.translationId === 'number' ? m.translationId : null
-    }
+    })
   }
 
   // The server's `List` reply covers *every* room it knows, so flattening it
@@ -1733,7 +1733,7 @@ export class SyncplayClient extends EventEmitter {
       const key = `${username}|${meta.animeId}|${meta.episodeInt}`
       if (key !== this.lastAppliedRoomEpisode) {
         this.lastAppliedRoomEpisode = key
-        this.emit('remote-episode-change', {
+        this.emitRemoteEpisode(meta, {
           animeId: meta.animeId,
           malId: meta.malId,
           episodeInt: meta.episodeInt,
@@ -2452,12 +2452,12 @@ export class SyncplayClient extends EventEmitter {
         duration: file.duration,
         size: 0,
         features: {
-          animeDlAppMeta: {
+          animeDlAppMeta: withFollowShort(file, {
             animeId: file.animeId,
             malId: file.malId,
             episodeInt: file.episodeInt,
             translationId: file.translationId
-          }
+          })
         }
       }
     }
@@ -3423,6 +3423,44 @@ export class SyncplayClient extends EventEmitter {
       pauseEdge: paused && !this.snapshot.paused
     })
   }
+
+  // `absorbRemoteFile()`'s emit, with the peer's `followShortOf` passed through
+  // (#506). Main keys and emits exactly as before; the receiving renderer is the
+  // one that declines to walk. Declared down here so the insertion shifts no
+  // line anchor above it.
+  private emitRemoteEpisode(
+    meta: NonNullable<SyncplayRoomUser['animeDlAppMeta']>,
+    episode: SyncplayRemoteEpisode
+  ): void {
+    this.emit('remote-episode-change', withFollowShort(meta, episode))
+  }
 }
 
 export const syncplay = new SyncplayClient()
+
+/** The episode a room follow walk stopped short of (#506), as an `episodeInt`.
+ *  A state, not an event, and so the opposite of `episodeSwitch` on both counts:
+ *  the renderer attaches it to every push from the episode the walk reached, so
+ *  it **is** stored (`setFile()`'s rest spread strips only `episodeSwitch`) and
+ *  it **is** on the wire, as `animeDlAppMeta.followShortOf`. Storing it is what
+ *  lets the reconnect re-announce of `currentFile` in `finishHandshake()` carry
+ *  it. Main only passes it through, on `SyncplayFileInfo`, on a roster user's
+ *  `animeDlAppMeta` and on `SyncplayRemoteEpisode`; the receiving renderer
+ *  decides not to walk. Old builds ignore the key. Declared down here, like the
+ *  helper below, so the insertion shifts no line anchor above it. */
+interface FollowShortMarker {
+  followShortOf?: string
+}
+
+// Copies a string `followShortOf` from `source` onto `target`, and nothing when
+// it is absent or not a string, so an unmarked meta keeps exactly its four keys.
+// The one spelling for all three field-by-field builders: `sendSetFile()`,
+// `extractAppMeta()` and the `remote-episode-change` emit.
+function withFollowShort<T extends object>(
+  source: { followShortOf?: unknown },
+  target: T
+): T & FollowShortMarker {
+  return typeof source.followShortOf === 'string'
+    ? { ...target, followShortOf: source.followShortOf }
+    : target
+}

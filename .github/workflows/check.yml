@@ -147,6 +147,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # The tag of e2e/mkv-seek-sub-sync.spec.ts (#557), spelled once for the
+      # shared e2e step's --grep-invert, the --list guard and the non-blocking
+      # run, so a typo reds the guard instead of emptying the non-blocking step.
+      MKV_SYNC_TAG: '@mkv-sync'
     steps:
       - uses: actions/checkout@v5
 
@@ -246,8 +251,31 @@ jobs:
           sudo apt-get install -y xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 \
             libgtk-3-0 libgbm1 libasound2t64 libxshmfence1 libdrm2
 
+      # The @mkv-sync spec runs in its own step below, not here.
       - name: Run Electron smoke test
-        run: xvfb-run -a npm run test:e2e
+        run: xvfb-run -a npm run test:e2e -- --grep-invert "$MKV_SYNC_TAG"
+
+      # Blocking: exits 1 with "Total: 0 tests" when the tag selects nothing,
+      # which in the continue-on-error step below would pass unnoticed.
+      - name: Check the MKV seek sync spec is still selected by its tag
+        run: npx playwright test --grep "$MKV_SYNC_TAG" --list
+
+      # Picture vs rendered subtitles after an uncached MKV seek, read off the
+      # pixels with real ffmpeg (#557). Needs the apt ffmpeg step above.
+      # Non-blocking until it has a run of green results.
+      - name: Run MKV seek subtitle-sync e2e (non-blocking)
+        id: mkv_sync
+        continue-on-error: true
+        run: xvfb-run -a npx playwright test --grep "$MKV_SYNC_TAG"
+
+      - name: Upload MKV seek sync report
+        if: steps.mkv_sync.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-mkv-sync
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload Playwright report
         if: failure()

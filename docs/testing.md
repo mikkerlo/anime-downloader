@@ -296,8 +296,8 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence
   round-trip, keyboard shortcuts; `e2e/anime-video.spec.ts`: crossorigin
   `<video>` + ranged `fetch()` of a 2 KB fixture over `anime-video://`).
-  Search→enqueue, player seek and live Shikimori sync are excluded to keep
-  CI deterministic; their logic is covered at the unit + integration layers.
+  Search→enqueue and live Shikimori sync are excluded (unit + integration
+  cover them); the MKV seek spec runs apart, see Real-ffmpeg tests.
 - **Conformance** (`conformance/`, #367) — the only layer whose subject is
   `MinElectionServer` itself rather than our code. Every fixture above believes
   the model; this one replays two-peer scenarios through real sockets against a
@@ -1097,6 +1097,41 @@ stream-copy and transcode-with-copied-audio, before and past 60 s.
 Locally the file skips when `ffmpeg` with libx264 is not on `PATH`. With `CI`
 set it fails instead, and the `quality` job installs apt `ffmpeg` before
 `npm run test:coverage`.
+
+`e2e/mkv-seek-sub-sync.spec.ts` (#557) checks the same bug class on screen:
+that Chromium's MSE and the SubtitlesOctopus clock (`video.currentTime +
+timeOffset`) honour the offset, so the picture and the rendered subtitles agree
+after a seek outside the buffer. `e2e/helpers/tick-fixture.ts` builds a 150 s,
+640×360 MKV (H.264 `-bf 2 -g 96 -keyint_min 96 -sc_threshold 0`, AAC, embedded
+ASS) with apt `ffmpeg` into `os.tmpdir()`, in about 5 s on 4 cores; no media is
+checked in. The picture's top band and the ASS track's bottom band both carry
+`floor(t / 0.5)` as 9 bits after an always-white sentinel block, and in the ASS
+the sentinel is part of each tick's own `{\p1}` drawing. Before launch the
+helper asserts that the target T = 82.75 s is at least 1 s after its keyframe K
+and that K's DTS is past 60 s, without which #556 would not fire, and decodes
+an ffmpeg grab at T.
+
+The spec seeds `<XDG_CONFIG_HOME>/Electron/ffmpeg` with both binaries (the
+`userData` of an unnamed launch, asserted), waits for `ffmpegCheck()`, opens
+the file through `__openTestPlayer` with `subtitleContent: ''`, and asserts a
+`blob:` source. It pauses, waits 500 ms, seeks to 82.75, and fails loudly
+unless the seek left the buffer: `buffered.start(0) >= 79.9`, or the
+`unbuffered seek` console line. It then reads both bands with
+`drawImage`/`getImageData` from `<video>` and `.libassjs-canvas`, not from a
+screenshot, which the paused controls' gradient covers. Once three reads repeat
+it asserts both sentinels are white, the subtitle code is 165, and only then
+that the video code equals it. With #556's fix reverted the picture reads 160.
+
+It is tagged `@mkv-sync`. The `quality` job's shared e2e step leaves it out
+with `--grep-invert`, a blocking `--grep @mkv-sync --list` step fails when the
+tag selects nothing, and the spec runs in its own `continue-on-error` step
+until it has a run of green results. All three read the tag from the job's
+`MKV_SYNC_TAG`. Locally it skips when `/usr/bin/ffmpeg` with libx264 is
+missing; with `CI` set it fails instead.
+
+```bash
+npm run build && xvfb-run -a npx playwright test --grep @mkv-sync
+```
 
 ## Syncplay interaction suite
 

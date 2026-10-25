@@ -633,8 +633,8 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `let prepareEpoch = 0;` and the `indexOf` below still finds it, still
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
-    // (`PlayerView.vue:658` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1244` ("const myPrepare = ++prepareEpoch")) and fail
+    // (`PlayerView.vue:663` ("myPrepare !== prepareEpoch"),
+    // `PlayerView.vue:1249` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
@@ -2553,5 +2553,25 @@ describe('#486 — who started an episode change, and the hold every failure arm
     expect(goTo).toMatch(
       /if \(!result\) \{\s*if \(navigationEpoch === myNav\) navigating\.value = false;\s*syncplay\.endEpisodeSwitchHold\(\);/
     )
+  })
+})
+
+describe('#516 — the merge-hold presence signal', () => {
+  it('raises playerViewOpened() once, at the <script setup> top level, not in onMounted', () => {
+    const opens = [...SRC.matchAll(/window\.api\.playerViewOpened\(/g)]
+    expect(opens).toHaveLength(1)
+    // Column 0 of the setup block: not nested in a hook, a function or a watch.
+    expect(SRC).toMatch(/^void window\.api\.playerViewOpened\(\);$/m)
+    expect(mountedBody()).not.toContain('playerViewOpened')
+    expect(SRC.indexOf('window.api.playerViewOpened(')).toBeLessThan(SRC.indexOf('onMounted('))
+  })
+
+  it('drops it as the first call after `unmounted = true`, before any await', () => {
+    const body = unmountedBody()
+    const flag = body.indexOf('unmounted = true;')
+    expect(flag).toBeGreaterThan(-1)
+    const rest = body.slice(flag + 'unmounted = true;'.length).trimStart()
+    expect(rest.startsWith('void window.api.playerViewClosed();')).toBe(true)
+    expect(body.split('window.api.playerViewClosed(').length - 1).toBe(1)
   })
 })

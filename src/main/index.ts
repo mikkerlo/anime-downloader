@@ -40,6 +40,7 @@ import { createShikimoriSyncService } from './services/shikimori-sync'
 import { createStreamingService, PLAYER_DIAG_LOG_FILENAME } from './streaming'
 import { createMp4StatsService } from './services/mp4-stats'
 import { createPlayerLockService } from './services/player-lock'
+import { createPlayerPresenceService } from './services/player-presence'
 import { App } from './app/core'
 import { registerIpcRouters } from './ipc'
 import { createEpisodeFileScanner } from './lib/episode-file-scan'
@@ -196,6 +197,7 @@ function broadcastToAll(channel: string, ...args: unknown[]): void {
 // probed-paths set + the write-serialization chain now live in the service.
 const mp4StatsService = createMp4StatsService({ store })
 const playerLockService = createPlayerLockService()
+const playerPresenceService = createPlayerPresenceService()
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
@@ -593,7 +595,8 @@ function registerIpcHandlers(): void {
     clearFileCache: fileScanner.clear,
     streamingService,
     mp4StatsService,
-    playerLockService
+    playerLockService,
+    playerPresenceService
   })
 }
 
@@ -674,6 +677,7 @@ async function bootstrap(): Promise<void> {
   )
   downloadManager.loadQueue()
   downloadManager.setFileLockCheck(playerLockService.isLocked)
+  downloadManager.setMergeHoldCheck(playerPresenceService.isOpen)
 
   const showBackgroundNotification = (title: string, body: string): void => {
     if (BrowserWindow.getFocusedWindow() !== null) return
@@ -702,6 +706,13 @@ async function bootstrap(): Promise<void> {
     void finalizeDeferredEpisodes().catch((err) =>
       console.error('[download] Deferred finalize failed:', err)
     )
+  })
+  // Merge hold (#516): the last player view closed — run what the hold
+  // stopped. Either release may come first; both orders merge once.
+  playerPresenceService.onRelease(() => {
+    void episodeCompletion
+      .resumeHeldMerges()
+      .catch((err) => console.error('[download] Resuming held merges failed:', err))
   })
 
   downloadManager.onEpisodeComplete(episodeCompletion.handleEpisodeComplete)

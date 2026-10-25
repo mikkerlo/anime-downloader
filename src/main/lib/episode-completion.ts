@@ -71,6 +71,8 @@ export interface EpisodeCompletionDownloadManager {
   >[]
   getMergeStatus: (translationId: number) => MergeStatus | null
   mergeCompleted: (ffmpegPath: string, ffprobePath: string, videoCodec?: string) => Promise<void>
+  /** Reads and clears the merge-hold request (#516). */
+  takeHeldRequest: () => boolean
 }
 
 export interface EpisodeCompletionDeps {
@@ -120,6 +122,11 @@ export interface EpisodeCompletionHandlers {
    * recovery.
    */
   finalizeDeferredEpisodes: () => Promise<void>
+  /**
+   * Merge hold (#516): when the last player view closes, run the merge pass a
+   * held cycle stopped at. Wired to `playerPresenceService.onRelease`.
+   */
+  resumeHeldMerges: () => Promise<void>
   /** `downloadManager.onEpisodeComplete` — the group-complete tail. */
   handleEpisodeComplete: (info: EpisodeCompleteInfo) => Promise<void>
   /** `downloadManager.onMergeComplete`. */
@@ -183,6 +190,19 @@ export function createEpisodeCompletionHandlers(
           skipAnalysisService.scheduleAutoSkipAnalysis(group.animeId, group.animeName)
       }
     }
+  }
+
+  async function resumeHeldMerges(): Promise<void> {
+    if (!downloadManager.takeHeldRequest()) return
+    const ffmpegInfo = await ffmpegReady
+    const ffmpegPath = getFfmpegPath()
+    // No `autoMerge` check, unlike the two tails around it: the held request
+    // can come from a manual Merge / Scan & merge that stopped at the gate, and
+    // with auto-merge off that work would be dropped. Paths and codec are read
+    // now, not when the hold went up, so a codec changed meanwhile applies.
+    if (!ffmpegInfo.available || !ffmpegPath) return
+    const codec = store.get('videoCodec') || 'copy'
+    await downloadManager.mergeCompleted(ffmpegPath, getFfprobePath(), codec)
   }
 
   async function handleEpisodeComplete(info: EpisodeCompleteInfo): Promise<void> {
@@ -333,6 +353,7 @@ export function createEpisodeCompletionHandlers(
 
   return {
     finalizeDeferredEpisodes,
+    resumeHeldMerges,
     handleEpisodeComplete,
     handleMergeComplete,
     handleVideoDownloaded

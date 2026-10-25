@@ -12,6 +12,7 @@ import type { AutoDlReason, AutoDlTickResult } from '../auto-downloader'
 import type { StreamingService } from '../streaming'
 import type { Mp4StatsService } from '../services/mp4-stats'
 import type { PlayerLockService } from '../services/player-lock'
+import type { PlayerPresenceService } from '../services/player-presence'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -108,6 +109,8 @@ export interface AppDeps {
   mp4StatsService: Mp4StatsService
   /** Files the built-in player holds open — gates .part rename + merge (#63). */
   playerLockService: PlayerLockService
+  /** Whether any player view is open — holds new merges (#516). */
+  playerPresenceService: PlayerPresenceService
 }
 
 /**

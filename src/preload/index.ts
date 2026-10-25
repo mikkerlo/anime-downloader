@@ -307,6 +307,8 @@ const api = {
     ipcRenderer.invoke(CHANNELS.PLAYER_OPENED, filePath) as Promise<void>,
   playerClosed: (filePath: string) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_CLOSED, filePath) as Promise<void>,
+  playerViewOpened: () => ipcRenderer.invoke(CHANNELS.PLAYER_VIEW_OPENED) as Promise<void>,
+  playerViewClosed: () => ipcRenderer.invoke(CHANNELS.PLAYER_VIEW_CLOSED) as Promise<void>,
   playerRemuxMkv: (mkvPath: string) =>
     ipcRenderer.invoke(CHANNELS.PLAYER_REMUX_MKV, mkvPath) as Promise<
       { mp4Path: string; subtitleContent?: string } | { error: string }

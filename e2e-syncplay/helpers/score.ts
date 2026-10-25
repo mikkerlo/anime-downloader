@@ -359,7 +359,9 @@ export class RowScorer {
     return full
   }
 
-  score(): RowScore {
+  /** `extra` is a row's own tally: its `fields` go into the JSONL summary and
+   *  its `line` onto the end of the summary line (E7b's top-ups, #552). */
+  score(extra?: { line: string; fields: Record<string, unknown> }): RowScore {
     const scoreable = this.records.filter((r) => r.setupOk)
     const s: RowScore = {
       row: this.row,
@@ -368,9 +370,13 @@ export class RowScorer {
       bad: scoreable.filter((r) => r.bad).length,
       records: this.records
     }
-    fs.appendFileSync(this.file, JSON.stringify({ summary: { ...s, records: undefined } }) + '\n')
+    fs.appendFileSync(
+      this.file,
+      JSON.stringify({ summary: { ...s, records: undefined, ...extra?.fields } }) + '\n'
+    )
     process.stdout.write(
-      `[syncplay-e2e] ${this.row}: n=${s.n} scoreable=${s.scoreable} bad=${s.bad}\n`
+      `[syncplay-e2e] ${this.row}: n=${s.n} scoreable=${s.scoreable} bad=${s.bad}` +
+        `${extra ? ' ' + extra.line : ''}\n`
     )
     return s
   }
@@ -449,4 +455,138 @@ export function rePausesAfterSeek(wireA: readonly Frame[], wireB: readonly Frame
     b: pausesAfter(wireB, 'out'),
     roomRePaused: pausesAfter(wireA, 'in') + pausesAfter(wireB, 'in') > 0
   }
+}
+
+/** Why an E7b run did not stage #533's case (#552), or `null` when it did and
+ *  is scoreable. The first that applies, in this order:
+ *
+ *  - `setup`: a setup step failed or A's Cancel never landed, B was never
+ *    rewound (A ended first), or no room end pause reached B at all.
+ *  - `no-gap`: B paused only at its own `ended`, or never: it ran out its file
+ *    before the room's pause reached it.
+ *  - `gap-below-band` / `gap-above-band`: B's gap at the pause sat outside the
+ *    lag's band. Below is the usual 10.5 s miss: a room state crossed the
+ *    window between B's rewind and A's `ended`, and the `diff > 3.0` apply put
+ *    the two back together, either A pulled back to the rewound B's report
+ *    (CI run 40195588263) or B pulled forward to the room (the local misses),
+ *    so B paused well under a second short. `corrected` tells them apart.
+ *  - `end-pause-in-file`: the room's end pause B received sat short of B's
+ *    duration, so the apply never had an out-of-file pause to refuse.
+ *
+ *  `null` is exactly the scoreable predicate E7b used before #552. */
+export type E7bMissReason =
+  | 'setup'
+  | 'no-gap'
+  | 'gap-below-band'
+  | 'gap-above-band'
+  | 'end-pause-in-file'
+
+export function e7bMissReason(
+  r: { setupOk: boolean; rewound: boolean; gap: number | null; endPauseOver: number | null },
+  band: readonly [number, number]
+): E7bMissReason | null {
+  if (!r.setupOk || !r.rewound || r.endPauseOver === null) return 'setup'
+  if (r.gap === null) return 'no-gap'
+  if (r.gap < band[0]) return 'gap-below-band'
+  if (r.gap > band[1]) return 'gap-above-band'
+  if (r.endPauseOver < 0) return 'end-pause-in-file'
+  return null
+}
+
+/** Extra runs E7b may spend on one lag that has no scoreable run after its
+ *  round-robin share (#552). */
+export const E7B_TOPUP_CAP = 4
+
+export interface E7bRun {
+  lag: number
+  /** Scoreable: `e7bMissReason` returned `null`. */
+  setupOk: boolean
+  topup: boolean
+}
+
+/** E7b's next run, as an index into `lags`: the first `n` runs deal the lags
+ *  round-robin, then each lag that still has no scoreable run is topped up,
+ *  first lag first, until it scores or has spent `cap` top-ups. `null` when
+ *  there is nothing left to run. A top-up only buys another attempt at staging:
+ *  the band and `endPauseOver >= 0` are the same, so a run counts only when it
+ *  staged the case. */
+export function e7bNextLag(
+  runs: readonly E7bRun[],
+  lags: readonly number[],
+  n: number,
+  cap = E7B_TOPUP_CAP
+): { k: number; topup: boolean } | null {
+  if (runs.length < n) return { k: runs.length % lags.length, topup: false }
+  for (let k = 0; k < lags.length; k++) {
+    const mine = runs.filter((r) => r.lag === lags[k])
+    if (mine.some((r) => r.setupOk)) continue
+    if (mine.filter((r) => r.topup).length < cap) return { k, topup: true }
+  }
+  return null
+}
+
+/** E7b's summary-line tally: the top-ups spent against the cap, and each lag's
+ *  scoreable runs over its runs, so a staging that has rotted and scores only
+ *  on its last top-up reads as rot, not as a plain green. */
+export function e7bTally(
+  runs: readonly E7bRun[],
+  lags: readonly number[],
+  cap = E7B_TOPUP_CAP
+): {
+  line: string
+  fields: {
+    topups: number
+    cap: number
+    byLag: { lag: number; runs: number; scoreable: number; topups: number }[]
+  }
+} {
+  const byLag = lags.map((lag) => {
+    const mine = runs.filter((r) => r.lag === lag)
+    return {
+      lag,
+      runs: mine.length,
+      scoreable: mine.filter((r) => r.setupOk).length,
+      topups: mine.filter((r) => r.topup).length
+    }
+  })
+  const topups = byLag.reduce((t, l) => t + l.topups, 0)
+  const per = byLag
+    .map((l) => `${l.lag} s: ${l.scoreable}/${l.runs} scoreable, ${l.topups}/${cap} top-ups`)
+    .join('; ')
+  return { line: `topups=${topups} (${per})`, fields: { topups, cap, byLag } }
+}
+
+/** Whether an element was moved on its own file (`src`) by more than `s`, in
+ *  direction `dir`, between `from` and its first `pause` or `ended` there: a
+ *  `seeking` whose target sits more than `s` behind (`back`) or ahead
+ *  (`forward`) of the last position recorded before it. `ev` and `smp` are
+ *  relative to the same instant.
+ *
+ *  E7b (#552) reads it from B's rewind, for the two ways a room state crossing
+ *  the window undoes the staging through the `diff > 3.0` apply: `aCorrected`,
+ *  A pulled back to the rewound B's report (CI run 40195588263), and
+ *  `bCorrected`, B pulled forward to the room's position before the end pause
+ *  reaches it (the local misses). B's own rewind is a move back, so it never
+ *  counts as `forward`. */
+export function corrected(
+  d: { ev: readonly MediaEv[]; smp: readonly { at: number; ct: number; src: string }[] },
+  src: string,
+  from: number,
+  dir: 'back' | 'forward',
+  s = 3
+): boolean {
+  const tail = src.slice(-40)
+  const ev = d.ev.filter((e) => e.src === tail)
+  const stopAt =
+    ev.find((e) => (e.t === 'pause' || e.t === 'ended') && e.at >= from)?.at ?? Infinity
+  return ev.some((e, k) => {
+    if (e.t !== 'seeking' || e.at < from || e.at > stopAt) return false
+    const prior = [
+      ...d.smp.filter((p) => p.src === tail && p.at < e.at),
+      ...ev.slice(0, k).filter((p) => p.at <= e.at)
+    ]
+    if (prior.length === 0) return false
+    const last = prior.reduce((x, y) => (y.at >= x.at ? y : x))
+    return dir === 'back' ? e.ct < last.ct - s : e.ct > last.ct + s
+  })
 }

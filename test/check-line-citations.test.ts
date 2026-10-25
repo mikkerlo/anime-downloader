@@ -3009,14 +3009,19 @@ const sentence = (text: string, from: RegExp, to: RegExp): string => {
   return text.slice(start, start + end)
 }
 
-// A number word joined by a hyphen is part of a name or a compound — the
-// "two-peer loop test", a "one-sided" cap — not a figure, so it is skipped.
-const NUMBER_WORD = /(?<!-)\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b(?!-)/gi
+// NAMES, NOT A HYPHEN RULE. These are the compounds the word-checked passages
+// actually contain, found by running the extractor over them: the "two-peer
+// loop test" and a "one-sided" cap. Skipping every hyphenated number word would
+// also pass "a four-landing pin", which is a figure in compound form and exactly
+// the stale count these sentences refuse. A new name gets added here by hand.
+const NAMED_COMPOUNDS = ['two-peer', 'one-sided']
+const NUMBER_WORD = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi
 
 const statedFigures = (text: string, words = false): string[] => {
   const prose = text.replace(/`[^`]*`/g, '').replace(/#\d+(?:\s+step\s+\d+)?/g, '')
   const digits = prose.match(/\d+/g) ?? []
-  const spelled = words ? (prose.match(NUMBER_WORD) ?? []) : []
+  const unnamed = NAMED_COMPOUNDS.reduce((t, name) => t.replaceAll(name, ''), prose)
+  const spelled = words ? (unnamed.match(NUMBER_WORD) ?? []) : []
   return [...digits, ...spelled]
 }
 
@@ -3102,5 +3107,10 @@ describe('the sentences that decline to carry a figure', () => {
     expect(
       statedFigures("#390's three, all in the two-peer loop test; plus #384's one", true)
     ).toEqual(['three', 'one'])
+
+    // A figure in compound form is still a figure: only the named compounds are
+    // exempt, not the hyphen.
+    expect(statedFigures('a four-landing pin', true)).toEqual(['four'])
+    expect(statedFigures('the three-anchor breakdown', true)).toEqual(['three'])
   })
 })

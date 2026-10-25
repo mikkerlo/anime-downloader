@@ -201,14 +201,15 @@ test('S6 — a seek while paused moves the peer and leaves the room paused', asy
 //       row (40 lost in #534's three sweeps) until #535 sent the re-assert
 //       position-only while the pause is in flight and #544 the seek too; it
 //       now asserts that no lost pause was resumed by any scrubber frame, and
-//       counts the unattributable (unread) ones without failing on them. So
-//       is a third shape no scrubber frame resumes: the scrub reached the
-//       server first and the server's gate dropped the pauser's press, which
-//       crossed it (`pauseCrossed`), so the room never paused. That press is
-//       the pauser's to recover, and is usually S10's drift instead (#544's
-//       run: the 1 seek-resumed S11 run, and each one #535 recorded, was it).
-//       Only its `seek` misread is exempt, until #547; a crossed run read as
-//       a re-assert or heartbeat resume still fails.
+//       counts the unattributable (unread) ones without failing on them. A
+//       third shape no scrubber frame resumes fails too: the scrub reached
+//       the server first and the server's gate dropped the pauser's press,
+//       which crossed it (`pauseCrossed`), so the room never paused. That
+//       press is the pauser's to recover, and until #547 it never was: #513's
+//       marker, armed for the crossing seek's resume, withheld the heartbeat
+//       that would have re-asserted it (#546 counted it apart, as `dropped`).
+//       Since #547 that heartbeat claims it, and the run reads as resumed by
+//       the seek, a failure, if it does not.
 //
 // `scrubPauseVerdict` reads which scrubber frame the server resumed on, and
 // `test/services/syncplay-ignoring-on-the-fly.test.ts` pins the server half of
@@ -369,9 +370,6 @@ function resumedByLine(s: { row: string; records: Record<string, unknown>[] }): 
   process.stdout.write(
     `[syncplay-e2e] ${s.row} lost to the scrubber's own seek (2b, failed since #544): n=${t.seek}\n`
   )
-  process.stdout.write(
-    `[syncplay-e2e] ${s.row} pauser's press dropped, crossed by the scrub, read as the seek (counted, not failed until #547): n=${t.dropped}\n`
-  )
   return t
 }
 
@@ -416,8 +414,7 @@ test('S10 / S11 — a far scrub and a peer’s pause 3 ms before to 5 ms after i
   // fixed, a pause the #252 re-assert behind the ack resumed (2a); on what #544
   // fixed, a pause the scrubber's own seek resumed (2b); and on a heartbeat
   // resume (#513's marker failing to withhold). A press the server dropped
-  // (`pauseCrossed`, about 1 in 64) and read as the seek is counted on its own
-  // line, not failed, until #547.
+  // (`pauseCrossed`) reads as the seek and fails with it since #547.
   expect(d.bad, 'S10: both paused, more than ECHO_SEEK_EPSILON_S apart').toBe(0)
   expect(t.failed, 'S11: a lost pause a re-assert, heartbeat or seek resumed').toBe(0)
 })

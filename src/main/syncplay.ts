@@ -903,7 +903,7 @@ export class SyncplayClient extends EventEmitter {
     const paused = origin === 'auto-advance' ? false : room.paused
     this.lastAppliedRemotePosition = null
     this.clientIgnoreCounter += 1
-    this.pendingClientAck = this.clientIgnoreCounter
+    this.setPendingClientAck('seek')
     this.crossedByForeign = null
     log('file-change seek', origin, 'counter=', this.clientIgnoreCounter, 'paused=', paused)
     this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
@@ -984,7 +984,7 @@ export class SyncplayClient extends EventEmitter {
     // frame carries the current `paused` anyway.
     if (payload.cause === 'seek') this.seekIntent = { at: Date.now(), attempts: 0 }
     this.clientIgnoreCounter += 1
-    this.pendingClientAck = this.clientIgnoreCounter
+    this.setPendingClientAck(payload.cause)
     this.crossedByForeign = null
     log(
       'local-state',
@@ -1177,7 +1177,7 @@ export class SyncplayClient extends EventEmitter {
     this.tlsUpgraded = false
     this.rosterReceived = false
     this.clientIgnoreCounter = 0
-    this.pendingClientAck = 0
+    this.resetPendingClientAck()
     this.pendingServerAck = 0
     this.crossedByForeign = null
     this.serverRtt = 0
@@ -1869,14 +1869,14 @@ export class SyncplayClient extends EventEmitter {
     // is a no-op for the symptom this exists to fix. The server's forced State
     // carries `ignoringOnTheFly.server` and the playstate in the same frame.
     //
-    // Read before the zero below overwrites `pendingClientAck` (#494): a peer's
-    // forced update that crossed our unacked change. Only latched at the emit,
-    // on what the renderer was actually handed; see `crossedByForeign`.
+    // Both read before the zero below (#494, #547): a peer's forced update that crossed our
+    // unacked change, latched only at the emit (`crossedByForeign`), and one of our pause.
     const crossesOurChange =
       serverCounter !== null &&
       this.pendingClientAck !== 0 &&
       ps !== null &&
       this.isForeignSetBy(typeof ps.setBy === 'string' ? ps.setBy : null)
+    const crossedOurPause = this.pauseCrossingUnclaimed(crossesOurChange)
     if (serverCounter !== null) {
       this.pendingServerAck = serverCounter
       // Zero our own counter unconditionally, matching the reference client
@@ -1897,7 +1897,7 @@ export class SyncplayClient extends EventEmitter {
       // ~1 RTT between our assertion going out and the server echoing it back.
       // Our change is already on the wire by then; we only stop suppressing
       // inbound states.
-      this.pendingClientAck = 0
+      this.clearPendingClientAck()
       // Answer on receipt rather than waiting for the heartbeat. Called from
       // *inside* this branch on purpose: four early returns sit between here
       // and the remote-state emit, and the self-`setBy` one is the dominant
@@ -1908,7 +1908,7 @@ export class SyncplayClient extends EventEmitter {
       this.sendAck()
     }
     if (clientEcho !== null) {
-      if (clientEcho === this.pendingClientAck) this.pendingClientAck = 0
+      if (clientEcho === this.pendingClientAck) this.clearPendingClientAck()
     }
 
     if (!ps) return
@@ -2157,8 +2157,8 @@ export class SyncplayClient extends EventEmitter {
     // and owns the pending-pause release and the "Paused by …" badge. Rewrite,
     // never drop.
     const seekIntentWasLive = this.seekIntent !== null
-    // A flip the re-assert below must not undo, gated as `armApplyInFlight()` says (#535).
-    if (willApplyRemoteState && paused !== this.snapshot.paused) this.armApplyInFlight(paused)
+    // A flip the re-assert below must not undo, gated as `armApplyInFlight()` says (#535, #547).
+    if (willApplyRemoteState && (paused || !crossedOurPause)) this.armApplyInFlight(paused)
     // Above the guards below, and below the lastRoomState write it reads
     // (#252). The self-`setBy` guard is the *dominant* path for the frame this
     // recovery exists to answer — the server broadcasts its forced update back
@@ -2349,9 +2349,9 @@ export class SyncplayClient extends EventEmitter {
     // retires an older marker: the renderer is about to land where the snapshot
     // already says, so the snapshot's claim is the right one again. A foreign,
     // acked flip is already armed above the re-assert (#535); this arm adds room
-    // voice and crossed echoes. See `armApplyInFlight()` for the clock.
+    // voice and crossed echoes. See `armApplyInFlight()` for the clock and the #547 skip.
     if (paused === this.snapshot.paused) this.applyInFlight = null
-    else this.armApplyInFlight(paused)
+    else if (paused || !crossedOurPause) this.armApplyInFlight(paused)
     const handed: SyncplayRemoteState = { paused, position: emitted, setBy: emittedSetBy, doSeek }
     // Flagged only when it crossed our unacked change (#544): the one frame the renderer's #488
     // hold may let a pause edge through on. Per frame, not latched: on the real server the
@@ -3134,7 +3134,22 @@ export class SyncplayClient extends EventEmitter {
   // `seekKeepsApplyInFlight()`), so that seek goes out position-only too. The
   // hold release that once made this drift S10c's sub-3 s scrub now fires only
   // on a crossed frame (`crossedOurChange`).
+  //
+  // Neither call arms for a resume on a frame that crossed our own unacked pause, nor for one
+  // after it until we have claimed the pause (`crossedOurPause`, #547). The marker's premise is
+  // that the renderer will apply the flip and push it, and here it will not: its adopted
+  // pending-pause hold declines those resumes, so no push ever retires the marker and it runs
+  // its full TTL. That withholds the heartbeat which re-asserts the press, and the press is the
+  // one the server's ignore gate dropped when it crossed the peer's forced update. Unarmed, the
+  // next heartbeat (≤ HEARTBEAT_MS, inside the renderer's ADOPTED_PENDING_PAUSE_MAX_MS) claims
+  // `paused: true` after our ack, so the server takes it and our pause wins the crossing, which
+  // is the hold's own documented rule. A crossed seek, play or file-change seek still arms, and
+  // so does any flip with no crossed pause outstanding. See `crossedPauseUnclaimed`.
+  //
+  // Arms only a flip: a `paused` equal to `snapshot.paused` changes nothing. The emit's call
+  // never passes one, since its own branch clears the marker on agreement.
   private armApplyInFlight(paused: boolean): void {
+    if (paused === this.snapshot.paused) return
     if (this.applyInFlight?.paused !== paused) this.applyInFlight = { paused, at: Date.now() }
   }
 
@@ -3150,6 +3165,8 @@ export class SyncplayClient extends EventEmitter {
     }
     const playstate = this.buildPlaystate(opts.doSeek, opts.override)
     if (playstate) msg.playstate = playstate
+    // Any claim of `paused` is the re-assert a crossed pause was waiting for (#547).
+    if (playstate && 'paused' in playstate) this.crossedPauseUnclaimed = false
     const iotf: JsonObject = {}
     if (this.pendingClientAck > 0) iotf.client = this.pendingClientAck
     if (this.pendingServerAck > 0) {
@@ -3549,6 +3566,61 @@ export class SyncplayClient extends EventEmitter {
   ): boolean {
     if (ownSeekLive && !doSeek && !crossed) return false
     return this.rendererWouldSeek(doSeek, paused, emitted)
+  }
+
+  // What our unacked change was (#547): the `cause` of the `sendLocalState()` that set
+  // `pendingClientAck`, or `'seek'` for `sendFileChangeSeek()`, and `null` whenever the counter
+  // is 0. Written and cleared only through the helpers below, beside the counter, so the pair
+  // cannot part: a stale cause read under a later counter would misname that change.
+  //
+  // `pauseCrossingUnclaimed()` reads it before `handleState()`'s counter zero: the frame is a
+  // peer's forced update that crossed our own unacked **pause**. The server's ignore gate
+  // dropped that press if its counter was up when the press arrived (S11's `pauseCrossed`
+  // shape), and the renderer's adopted pending-pause hold declines the frame's resume. So
+  // `armApplyInFlight()` must not arm for it; see there. The cause, not `snapshot.paused`: an
+  // unacked seek made while paused is crossed by the same resume, and that one the renderer
+  // applies. And the newest cause, not any pause still unacked: a pause and then a scrub before
+  // the ack is a seek by the time the frame arrives, so the marker arms as for any seek.
+  //
+  // Declared down here with its helpers, so the members shift no line anchor above them.
+  private pendingClientAckCause: 'play' | 'pause' | 'seek' | null = null
+
+  // A peer's forced update crossed our unacked pause, and nothing we have sent since has claimed
+  // `paused` (#547). The crossing frame is not the only resume that reaches us before our next
+  // heartbeat: the room's periodic, which the server sends us again once our ack lands, still
+  // plays, is foreign (the scrubber set the room), and carries no counter, so it is no crossing.
+  // The renderer's hold declines it as well, and armed for it the marker withholds that same
+  // heartbeat (the #546 trace: the periodic 6 ms ahead of it). So the skip lasts until the
+  // claim goes out: cleared in `sendStateMessage()` by the first playstate carrying `paused`,
+  // which is the next heartbeat while we assert, or the frame of a new change of ours that
+  // replaces the pause, and with the transport. Not a timer, and no frame of its own: it only
+  // keeps the marker off a resume the renderer is not going to apply.
+  private crossedPauseUnclaimed = false
+
+  // `crossedOurPause` in `handleState()`: this frame crossed our unacked pause, or an earlier one
+  // did and the pause is still unclaimed. Must run before the counter zero, which clears the
+  // cause.
+  private pauseCrossingUnclaimed(crossesOurChange: boolean): boolean {
+    if (crossesOurChange && this.pendingClientAckCause === 'pause')
+      this.crossedPauseUnclaimed = true
+    return this.crossedPauseUnclaimed
+  }
+
+  private setPendingClientAck(cause: 'play' | 'pause' | 'seek'): void {
+    this.pendingClientAck = this.clientIgnoreCounter
+    this.pendingClientAckCause = cause
+  }
+
+  // The ack, or a server counter: the change is answered, and a crossing pause stays latched.
+  private clearPendingClientAck(): void {
+    this.pendingClientAck = 0
+    this.pendingClientAckCause = null
+  }
+
+  // The transport went away, and with it every claim about this socket's changes.
+  private resetPendingClientAck(): void {
+    this.clearPendingClientAck()
+    this.crossedPauseUnclaimed = false
   }
 }
 

@@ -1883,32 +1883,28 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
         expect(gate.room).toEqual({ position: TARGET, paused: false, setBy: 'peer' })
       })
 
-      it('the frame the server applies is the first heartbeat past the #513 apply-in-flight window, not the one inside it', () => {
+      it('the frame the server applies is the first heartbeat after the crossing: the resume that crossed our pause arms no #513 marker (#547)', () => {
         const gate = pauseCrossedByScrub()
         let fed = feed(gate, 0)
         expect(fed).toBe(2)
 
         // The renderer took the seek and kept the user's pause (the trace's
-        // shape): it pushes the target, paused, while the room plays on.
+        // shape): its adopted pending-pause hold declines the resume, so it
+        // pushes the target, paused, while the room plays on.
         client.updateSnapshot({ position: TARGET, paused: true })
 
-        // The forced seek's `paused: false` armed #513's marker against our
-        // paused snapshot, so a heartbeat inside APPLY_IN_FLIGHT_TTL_MS
-        // (= HEARTBEAT_MS) claims the position and no `paused`: the server sees
-        // no pause change and forces nothing.
+        // Before #547 the forced seek's `paused: false` armed #513's marker
+        // against our paused snapshot, so this heartbeat, inside
+        // APPLY_IN_FLIGHT_TTL_MS, claimed the position and no `paused`, and the
+        // server applied the next one. The renderer never applies that resume,
+        // so main no longer arms for it, and this one claims the press the gate
+        // dropped.
         vi.advanceTimersByTime(HEARTBEAT_MS)
         fed = feed(gate, fed)
         const states = outboundStates(lastTlsSocket)
         expect(fed).toBe(3)
-        expect(states[2].playstate).toEqual({ position: TARGET, doSeek: false })
-        expect(gate.applied).toEqual([])
-        expect(gate.room.paused).toBe(false)
-
-        vi.advanceTimersByTime(HEARTBEAT_MS)
-        fed = feed(gate, fed)
-
-        expect(fed).toBe(4)
-        expect(gate.applied).toEqual([{ frame: 3, position: TARGET, paused: true, doSeek: false }])
+        expect(states[2].playstate).toEqual({ position: TARGET, paused: true, doSeek: false })
+        expect(gate.applied).toEqual([{ frame: 2, position: TARGET, paused: true, doSeek: false }])
         expect(gate.room).toEqual({ position: TARGET, paused: true, setBy: 'me' })
         expect(gate.serverIgnoringOnTheFly).toBe(1)
       })
@@ -2009,6 +2005,246 @@ describe('SyncplayClient ignoringOnTheFly server counter (#232)', () => {
       expect(marker()).toBeNull()
 
       genuinePauseStillWithheld()
+    })
+  })
+
+  // The third frame the arm skips (#547), and unlike the two above it is handed to
+  // the renderer. The marker's premise is that the renderer applies the flip it is
+  // armed for. On a peer's forced update that crossed our own unacked *pause* it
+  // does not: the adopted pending-pause hold declines that resume, so no push
+  // retires the marker, and the heartbeat that would re-assert the press the
+  // server's gate dropped went out position-only. The same goes for the room's
+  // periodic resume between the crossing and that heartbeat, so the skip holds
+  // until a playstate claims the pause. Gated on the crossed change's cause,
+  // not on `snapshot.paused`, and only past a crossing.
+  describe('the apply-in-flight arm, on a resume that crossed our own unacked pause (#547)', () => {
+    const marker = (): { paused: boolean } | null =>
+      (client as unknown as { applyInFlight: { paused: boolean } | null }).applyInFlight
+    const cause = (): string | null =>
+      (client as unknown as { pendingClientAckCause: string | null }).pendingClientAckCause
+    const unclaimed = (): boolean =>
+      (client as unknown as { crossedPauseUnclaimed: boolean }).crossedPauseUnclaimed
+    const playstates = (): NonNullable<StateFrame['playstate']>[] =>
+      outboundStates(lastTlsSocket).flatMap((s) => (s.playstate ? [s.playstate] : []))
+
+    // The two frames a peer's change crosses ours with: its scrub, forced with
+    // `doSeek` (S11's `pauseCrossed`), and a plain resume.
+    const crossings = [
+      { name: 'a peer’s scrub', position: 130, doSeek: true },
+      { name: 'a peer’s resume', position: 100, doSeek: false }
+    ]
+
+    for (const c of crossings) {
+      it(`(a) does not arm for ${c.name} crossing our pause, so the next heartbeat claims it`, () => {
+        handshake()
+        client.updateSnapshot({ position: 100, paused: false })
+        client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+        expect(pendingClientAck()).toBeGreaterThan(0)
+        expect(cause()).toBe('pause')
+        const n = remoteStates.length
+
+        forcedState({ server: 1, setBy: 'peer', paused: false, ...c })
+
+        // Handed to the renderer as the crossing, and not armed for.
+        expect(remoteStates).toHaveLength(n + 1)
+        expect(remoteStates.at(-1)).toMatchObject({ paused: false, crossedOurChange: true })
+        expect(marker()).toBeNull()
+        expect(cause(), 'cleared with the counter').toBeNull()
+
+        // The hold declines the resume and the renderer reports the pause.
+        client.updateSnapshot({ position: c.position, paused: true })
+        clearWrites()
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        expect(playstates()).toHaveLength(1)
+        expect(playstates()[0]).toMatchObject({ paused: true })
+      })
+
+      it(`(b) still arms for ${c.name} crossing a seek we made while paused`, () => {
+        handshake()
+        client.updateSnapshot({ position: 100, paused: true })
+        client.sendLocalState({ paused: true, position: 110, cause: 'seek' })
+        expect(pendingClientAck()).toBeGreaterThan(0)
+        expect(cause()).toBe('seek')
+
+        forcedState({ server: 1, setBy: 'peer', paused: false, ...c })
+
+        // The renderer applies this resume, so the snapshot's `paused: true` is
+        // the stale claim #513 withholds.
+        expect(remoteStates.at(-1)).toMatchObject({ paused: false, crossedOurChange: true })
+        expect(marker()).toMatchObject({ paused: false })
+        clearWrites()
+        vi.advanceTimersByTime(HEARTBEAT_MS)
+        expect(playstates().length).toBeGreaterThan(0)
+        expect(playstates().filter((p) => 'paused' in p)).toEqual([])
+      })
+    }
+
+    // The pauser's side of the #546 trace (test/syncplay-e2e-scrub-pause.test.ts,
+    // "the pauser’s press crossed by the scrub and dropped"), frame by frame:
+    // the press, the crossing forced seek at 52 ms, the room's periodic at
+    // 607 ms (still playing, `setBy` the scrubber, no server counter, an echo
+    // of the press's own counter), the heartbeat at 613 ms. Skipping only the
+    // crossing frame left the periodic to arm the marker, and the 613 ms
+    // heartbeat went out position-only, as in the trace.
+    it('(a) does not arm for the room’s periodic resume that follows the crossing either, until the pause is claimed (the #546 trace)', () => {
+      handshake()
+      client.updateSnapshot({ position: 595.671, paused: false })
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      client.sendLocalState({ paused: true, position: 595.671, cause: 'pause' })
+      const n = pendingClientAck()
+      expect(n).toBeGreaterThan(0)
+      vi.advanceTimersByTime(52)
+      forcedState({ server: 1, setBy: 'peer', position: 625.701, paused: false, doSeek: true })
+      client.updateSnapshot({ position: 625.701, paused: true })
+      vi.advanceTimersByTime(555)
+      const handed = remoteStates.length
+      forcedState({ client: n, setBy: 'peer', position: 625.971, paused: false, doSeek: false })
+
+      // Handed to the renderer, which declines it, so not armed for.
+      expect(remoteStates).toHaveLength(handed + 1)
+      expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      expect(marker()).toBeNull()
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS - 607)
+      expect(playstates()).toEqual([{ position: 625.701, paused: true, doSeek: false }])
+    })
+
+    // The latch ends at the claim: past it a foreign resume is an ordinary flip
+    // again, so a room resumed after our pause landed still gets #513's cover.
+    it('arms again once a heartbeat has claimed the pause', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      forcedState({ server: 1, setBy: 'peer', position: 130, paused: false, doSeek: true })
+      client.updateSnapshot({ position: 130, paused: true })
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      expect(playstates()).toEqual([{ position: 130, paused: true, doSeek: false }])
+
+      forcedState({ setBy: 'peer', position: 131, paused: false, doSeek: false })
+
+      expect(marker()).toMatchObject({ paused: false })
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      expect(playstates()).toHaveLength(1)
+      expect(playstates()[0]).not.toHaveProperty('paused')
+    })
+
+    // A new change of ours replaces the crossed pause: a resume crossing *it* is
+    // judged by its own cause.
+    it('arms again once a new change of ours has replaced the crossed pause', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      forcedState({ server: 1, setBy: 'peer', position: 130, paused: false, doSeek: true })
+      client.updateSnapshot({ position: 130, paused: true })
+      client.sendLocalState({ paused: true, position: 140, cause: 'seek' })
+      expect(cause()).toBe('seek')
+
+      forcedState({ server: 2, setBy: 'peer', position: 150, paused: false, doSeek: true })
+
+      expect(marker()).toMatchObject({ paused: false })
+    })
+
+    // #513's P6f shape: a peer's resume, with nothing of ours in flight.
+    it('(c) still arms for an uncrossed foreign resume', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: true })
+      expect(pendingClientAck()).toBe(0)
+
+      forcedState({ server: 1, setBy: 'peer', position: 100, paused: false, doSeek: false })
+
+      expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      expect(marker()).toMatchObject({ paused: false })
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      expect(playstates()).toHaveLength(1)
+      expect(playstates()[0]).not.toHaveProperty('paused')
+    })
+
+    // The gate needs the crossing, not just the cause. A frame that echoes our
+    // pause's counter and carries none of its own is the server answering the
+    // press it already processed, so a resume on it came after our pause: the
+    // room's, which our heartbeat must not undo by claiming the pause again.
+    it('(c) still arms for a foreign resume that answers our pause with a client echo and no server counter', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      const n = pendingClientAck()
+      expect(n).toBeGreaterThan(0)
+      expect(cause()).toBe('pause')
+
+      forcedState({ client: n, setBy: 'peer', position: 100, paused: false, doSeek: false })
+
+      expect(pendingClientAck()).toBe(0)
+      expect(cause()).toBeNull()
+      expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      expect(marker()).toMatchObject({ paused: false })
+      clearWrites()
+      vi.advanceTimersByTime(HEARTBEAT_MS)
+      expect(playstates()).toHaveLength(1)
+      expect(playstates()[0]).not.toHaveProperty('paused')
+    })
+
+    // The pause and the scrub on one peer, before the ack: the newest change is
+    // the seek, and a scrub's crossing resume is applied, so the marker arms as
+    // for any seek. Separate from #544's 2b, which is a seek kept through a
+    // marker already armed, not one armed on the crossing.
+    it('arms when a scrub follows our pause before the ack: the crossed change is the seek', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      client.sendLocalState({ paused: true, position: 130, cause: 'seek' })
+      expect(pendingClientAck()).toBe(2)
+      expect(cause()).toBe('seek')
+
+      forcedState({ server: 1, setBy: 'peer', position: 160, paused: false, doSeek: true })
+
+      expect(remoteStates.at(-1)).toMatchObject({ paused: false, crossedOurChange: true })
+      expect(marker()).toMatchObject({ paused: false })
+    })
+
+    // Since #547 the hoisted call no longer tests the flip itself, so
+    // `armApplyInFlight()` does. A crossing that agrees with the snapshot is no
+    // flip, and the #252 re-assert it triggers keeps its `paused`.
+    it('arms only a flip: a crossing resume over a playing snapshot leaves the re-assert its paused', () => {
+      handshake()
+      client.updateSnapshot({ position: 100, paused: false })
+      armLocalSeek(100 + 10 * SEEK_REASSERT_TOLERANCE_S)
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      clearWrites()
+
+      forcedState({ server: 1, setBy: 'peer', position: 100, paused: false, doSeek: false })
+
+      expect(marker()).toBeNull()
+      expect(playstates()).toEqual([
+        { position: 100 + 10 * SEEK_REASSERT_TOLERANCE_S, paused: false, doSeek: true }
+      ])
+    })
+
+    it('records the cause beside the counter and clears it with the counter on a transport reset', () => {
+      handshake({ autoReconnect: true })
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      expect(cause()).toBe('pause')
+
+      lastTlsSocket!.emit('close')
+
+      expect(pendingClientAck()).toBe(0)
+      expect(cause()).toBeNull()
+    })
+
+    it('drops an unclaimed crossed pause with the transport', () => {
+      handshake({ autoReconnect: true })
+      client.updateSnapshot({ position: 100, paused: false })
+      client.sendLocalState({ paused: true, position: 100, cause: 'pause' })
+      forcedState({ server: 1, setBy: 'peer', position: 130, paused: false, doSeek: true })
+      expect(unclaimed()).toBe(true)
+
+      lastTlsSocket!.emit('close')
+
+      expect(unclaimed()).toBe(false)
     })
   })
 })

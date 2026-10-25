@@ -164,9 +164,9 @@ const landing = (atFile, atLine, citedFile, start, end) => ({
  * matches. Both halves are needed: the same citer repointed is a different
  * claim, and the same anchor quoted somewhere else is a different reader.
  *
- * THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`, whose value is four, and the
- * two populations are disjoint by construction rather than by coincidence. That
- * pin counts landings on targets inside this repo, measured in the `quality`
+ * THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`: that pin and this list count
+ * disjoint populations, by construction rather than by coincidence. That pin
+ * counts landings on targets inside this repo, measured in the `quality`
  * run, where a `.py` target cannot resolve at all and so can never contribute to
  * it. This list is upstream landings only, measured in a run that has the
  * upstream tree on disk. Neither number can move the other, and folding them

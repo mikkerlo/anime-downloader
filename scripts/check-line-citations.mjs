@@ -202,11 +202,11 @@ export const MARKED_PIN = 90
 // retrofit into coverage, and skipping it costs nothing today and everything
 // later.
 //
-// 261 unmarked upstream-Python anchors on this tree, and re-measuring it has a
-// trap worth stating rather than rediscovering. A direct scan of tracked files
-// returns 292 — 286 unmarked and 6 marked — not the 261 pinned here. The 30 extra
-// are fixture strings in `test/check-line-citations.test.ts`, and that number
-// moves with every fixture added: pin against what the gate counts.
+// Re-measuring this ceiling has a trap worth stating, and it is why no census
+// figure is written here: a direct scan of tracked files over-counts the gate,
+// because it also sees the fixture strings in `test/check-line-citations.test.ts`
+// that `EXCLUDED_PATHS` keeps out. That gap moves with every fixture added, so a
+// figure for it is stale by the next one: pin against what the gate reports.
 export const UNMARKED_PY_PIN = 261
 
 // --- configuration ------------------------------------------------------------

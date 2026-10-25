@@ -1,10 +1,12 @@
 // Fixtures for the citation gate (#336). Every case that drives `analyze()`
 // drives it over a synthetic corpus rather than the real tree, so the
 // assertions stay exact: the real tree's counts are the gate's own pins and
-// move with every repair. The one block that does read a real file — the
-// prose-figure cases at the foot of this file (#461) — reads `docs/testing.md`
-// and compares it with the pin constants, never with a count taken off the
-// tree, so the reason above still holds there.
+// move with every repair. The blocks that do read real files are the two at
+// the foot of this file. The prose-figure cases (#461) read `docs/testing.md`
+// and compare it with the pin constants, never with a count taken off the tree.
+// The figureless-sentence cases (#511) read that page and the two gate scripts
+// and assert only that a few sentences state no figure at all. So the reason
+// above still holds for both.
 //
 // This file is in `EXCLUDED_PATHS`, and has to be. Its fixtures are citation
 // shapes on purpose — several are deliberately broken — so scanning it would
@@ -2980,5 +2982,95 @@ describe('the pin figures docs/testing.md restates', () => {
     // A tab after the hashes counts as well, so the two arms of `[ \t]` are both
     // live rather than one of them being decoration.
     expect(pinProseMismatches(atxish('##\tTab after the hashes.'), FIXTURE_PINS)).toEqual([])
+  })
+})
+
+// THE SENTENCES THAT DECLINE TO CARRY A FIGURE (#511 review). Each one used to
+// restate a number it had no way to keep in step: a direct-scan census, the
+// marked `.py` count, a pin's value spelled as a word. Each was stale on the
+// line itself when a reviewer read it. `pinProseMismatches` cannot catch that,
+// because it compares a figure with a constant and two of these numbers have no
+// constant. So the rule these sentences now follow is "no figure at all", and
+// this checks that rule. Issue references, `#395 step 2` and code spans are not
+// figures and are stripped first.
+const SCRIPTS_DIR = join(import.meta.dirname, '..', 'scripts')
+
+// Comment prefixes are stripped so a sentence wrapped across `//` or ` * `
+// lines matches the same `\s+`-joined pattern as one wrapped in markdown.
+const uncommented = (source: string): string => source.replace(/^[ \t]*(?:\/\/|\*)[ \t]?/gm, '')
+
+const sentence = (text: string, from: RegExp, to: RegExp): string => {
+  const starts = [...text.matchAll(new RegExp(from.source, 'g'))]
+  expect(starts, `${from} should match exactly once`).toHaveLength(1)
+  const start = starts[0].index ?? 0
+  const end = text.slice(start).search(to)
+  expect(end, `${to} should follow ${from}`).toBeGreaterThan(-1)
+  return text.slice(start, start + end)
+}
+
+const statedFigures = (text: string, words = false): string[] => {
+  const prose = text.replace(/`[^`]*`/g, '').replace(/#\d+(?:\s+step\s+\d+)?/g, '')
+  const digits = prose.match(/\d+/g) ?? []
+  const spelled = words
+    ? (prose.match(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi) ?? [])
+    : []
+  return [...digits, ...spelled]
+}
+
+describe('the sentences that decline to carry a figure', () => {
+  it('states no census, count or pin value where the figure would go stale (#511 review)', () => {
+    const doc = readFileSync(TESTING_DOC, 'utf8')
+    const lineGate = uncommented(
+      readFileSync(join(SCRIPTS_DIR, 'check-line-citations.mjs'), 'utf8')
+    )
+    const upstreamGate = uncommented(
+      readFileSync(join(SCRIPTS_DIR, 'check-upstream-citations.mjs'), 'utf8')
+    )
+
+    // The direct-scan trap, in the doc and above `UNMARKED_PY_PIN`. Digits only,
+    // because the doc's sentence says "one trap" in plain prose.
+    expect(
+      statedFigures(sentence(doc, /Re-measuring\s+the\s+cap/, /hand\s+census\s+does\./))
+    ).toEqual([])
+    expect(
+      statedFigures(sentence(lineGate, /Re-measuring\s+this\s+ceiling/, /the\s+gate\s+reports\./))
+    ).toEqual([])
+
+    // The marked `.py` count, in its own bullet and in the nightly section.
+    expect(
+      statedFigures(
+        sentence(doc, /\*\*Marked\s+upstream\s+`\.py`\s+anchors\s+—/, /penalise\s+the\s+cure\./)
+      )
+    ).toEqual([])
+    expect(
+      statedFigures(
+        sentence(doc, /upstream\s+anchor\s+is\s+therefore\s+verified/, /keep\s+visible\./)
+      )
+    ).toEqual([])
+
+    // `SUSPICIOUS_LANDING_PIN`'s value, which this sentence once gave as "four"
+    // against a constant of two. Words count here, since a word is how it was
+    // written.
+    expect(
+      statedFigures(
+        sentence(
+          upstreamGate,
+          /THIS\s+DOES\s+NOT\s+DUPLICATE\s+`SUSPICIOUS_LANDING_PIN`/,
+          /by\s+coincidence\./
+        ),
+        true
+      )
+    ).toEqual([])
+
+    // The two sentences as #511's first revision left them, so the clean results
+    // above are a property of the rewrite and not of a check that never fires.
+    expect(
+      statedFigures(
+        "a direct scan returns **292** — 286 unmarked and 6 marked — against the gate's 261"
+      )
+    ).toEqual(['292', '286', '6', '261'])
+    expect(
+      statedFigures('THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`, whose value is four', true)
+    ).toEqual(['four'])
   })
 })

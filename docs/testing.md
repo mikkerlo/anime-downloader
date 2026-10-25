@@ -608,15 +608,15 @@ tests* above — two exact, one a floor and one a ceiling:
   `.py` in the same change — 0 occurrences today, since no Python target resolves
   for it to fire on, so it is covered by a fixture rather than by the tree and the
   hole is closed before the population arrives. Re-measuring the cap has one
-  trap worth knowing, and it is not a number to carry forward by hand: a direct
-  scan returns **292** — 286 unmarked and 6 marked — against the gate's 261, so
-  the gap is 30 citation-shaped fixture strings inside
-  `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. That gap
-  is a property of the fixture file rather than of the tree, and it grows with
-  every fixture added, which is exactly how it was last carried forward wrong:
-  #457 added one to each side of a stale 268-and-seven while in fact adding
-  several fixture strings, and #395 step 2 added more of its own. Pin against what
-  the gate counts, not what a hand census does. The cap last rose
+  trap worth knowing, and it is deliberately written here without a number: a
+  direct scan of tracked files over-counts the gate, because it also sees the
+  citation-shaped fixture strings inside `test/check-line-citations.test.ts`,
+  which sits in `EXCLUDED_PATHS`. That gap is a property of the fixture file
+  rather than of the tree, and it grows with every fixture added, which is
+  exactly how a census of it kept being carried forward wrong: #457 adjusted
+  a figure that was already stale while in fact adding several fixture
+  strings, and #395 step 2 added more of its own. Pin against what the gate
+  itself reports, not what a hand census does. The cap last rose
   by one, for a qualifier on `RoomManager.broadcast` in
   `test/services/syncplay-two-peer-adoption.test.ts` naming the default-config
   branch that constructs the room manager — spelled out there and deliberately
@@ -638,12 +638,12 @@ tests* above — two exact, one a floor and one a ceiling:
   `continue` has been lifted by an injected extension set. Mechanical
   verification therefore holds for this class in the nightly run and not in
   `quality`, which is the split *The nightly upstream check* below describes. The
-  count is **0** today, so the figure exists to keep it visible rather than to
-  clear a backlog — folded into either neighbour it would falsify that line's own
-  sentence, and left unprinted the class could grow with every figure on the
-  gate's output unmoved. It takes no pin in either direction: marking an upstream
-  anchor is the remedy the cap's failure text recommends, so a floor would
-  penalise the retrofit and a ceiling would penalise the cure.
+  count is left for the gate to print, and the figure exists to keep the class
+  visible rather than to clear a backlog — folded into either neighbour it would
+  falsify that line's own sentence, and left unprinted the class could grow with
+  every figure on the gate's output unmoved. It takes no pin in either direction:
+  marking an upstream anchor is the remedy the cap's failure text recommends, so
+  a floor would penalise the retrofit and a ceiling would penalise the cure.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -925,12 +925,12 @@ All of those figures are pinned to the commit `993232ab…`, read from the
 workflow's own install line and confirmed against the installed distribution's
 `direct_url.json` before a single anchor is examined: a mismatch aborts with both
 shas rather than reporting line numbers measured against the wrong tree. A
-marked upstream anchor is therefore verified mechanically as soon as the
-population is non-empty — it is **0** today — which is what the printed
-marked-Python figure in `quality` exists to keep visible. A failure files its own
-issue, separate from the divergence one and deduped on the title, because a wrong
-line number in a comment and a model that has drifted from the reference have
-different readers and different repairs.
+marked upstream anchor is therefore verified mechanically in that run, and how
+many there are is what the printed marked-Python figure in `quality` exists to
+keep visible. A failure files its own issue, separate from the divergence one
+and deduped on the title, because a wrong line number in a comment and a model
+that has drifted from the reference have different readers and different
+repairs.
 
 ## Prose-shape gate
 

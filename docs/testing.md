@@ -1083,6 +1083,21 @@ both inside the ~7–13 point margin the other floors use. The single-file globs
 `use-syncplay-client.ts` still counts into the composables aggregate too and
 the tighter of the two floors is what binds.
 
+## Real-ffmpeg tests
+
+Fake-ffmpeg shell stubs (`test/streaming/streaming-service.test.ts`) pin
+argument shapes, but cannot model what ffmpeg does with them — #556 shipped
+because an output `-t` next to `-copyts` empties the probe, which no stub can
+see. `test/streaming/seek-anchor-real-ffmpeg.test.ts` runs the real binary: it
+builds a 100 s, 64×36 synthetic MKV (H.264 with B-frames, AAC, ASS) in about
+a second, runs the production live mux, matches the run's first packet back to
+the source by MD5, and asserts `probeSeekAnchor` equals that ground truth for
+stream-copy and transcode-with-copied-audio, before and past 60 s.
+
+Locally the file skips when `ffmpeg` with libx264 is not on `PATH`. With `CI`
+set it fails instead, and the `quality` job installs apt `ffmpeg` before
+`npm run test:coverage`.
+
 ## Syncplay interaction suite
 
 ```bash

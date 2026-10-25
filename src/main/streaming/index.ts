@@ -421,7 +421,11 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
   // transcode-with-copied-audio run). Limit only the stream being measured:
   // ffmpeg stops the whole mux as soon as either stream reaches its `-frames`
   // limit, so limiting both to one packet lets an earlier audio packet end a
-  // video probe before the landing keyframe is emitted.
+  // video probe before the landing keyframe is emitted. The duration cap must
+  // be an INPUT option (measured from the seek point): an output `-t` is checked
+  // against the copied absolute timestamps, so past 60 s into the file every
+  // packet exceeds it, the probe emits nothing, and the offset silently falls
+  // back to the raw request (#556).
   function probeAbsoluteStart(
     filePath: string,
     time: number,
@@ -435,6 +439,8 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         'error',
         '-ss',
         String(time),
+        '-t',
+        String(TIMESTAMP_PROBE_MAX_DURATION_SECONDS),
         '-i',
         filePath,
         '-map',
@@ -445,8 +451,6 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
         'copy',
         '-copyts',
         ...(stream === 'audio' ? ['-frames:a', '1'] : ['-frames:v', '1']),
-        '-t',
-        String(TIMESTAMP_PROBE_MAX_DURATION_SECONDS),
         '-f',
         'nut',
         'pipe:1'

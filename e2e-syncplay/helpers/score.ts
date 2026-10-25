@@ -271,7 +271,9 @@ export function scrubPauseVerdict(d: {
 
 /** The lost pauses of a scrub-vs-pause row, by the scrubber frame that resumed
  *  the room (`ScrubPauseVerdict.resumedBy`), over its scoreable runs. A pause
- *  the server dropped (`pauseCrossed`) is in `dropped` and in no other bucket. */
+ *  the server dropped (`pauseCrossed`) that reads as resumed by the seek is in
+ *  `dropped` and in no other bucket; one read as resumed by a re-assert or a
+ *  heartbeat stays in that bucket and fails. */
 export interface LostPauseTally {
   reassert: number
   seek: number
@@ -282,20 +284,27 @@ export interface LostPauseTally {
    *  resumed anything: the room never paused. Its loss is decided on the
    *  pauser's side, by whether its renderer's pending-pause hold outlasts
    *  #513's withheld heartbeat (the drift shape S10 snaps when it does), and is
-   *  outside what #535 and #544 fix. Counted, not failed. */
+   *  outside what #535 and #544 fix. Only the `seek` misread is exempt: the
+   *  crossing seek is the first forced `paused: false` the pauser sees, so
+   *  `resumedBy` files the run there, while a dropped press explains no
+   *  re-assert or heartbeat resume. Counted, not failed, until #547 (the
+   *  pending-pause hold outliving #513's withheld heartbeat, so the pauser
+   *  never recovers the press) removes this bucket. */
   dropped: number
   /** What the row fails on: a pause the #252 re-assert resumed, the 2a shape
    *  #535 fixed by arming the apply-in-flight marker above the re-assert; a
    *  heartbeat resumed, #513's marker failing to withhold; or the scrubber's own
    *  seek resumed, the 2b shape #544 fixed by keeping the marker through it.
-   *  An unread resume, which can't be attributed, and a dropped press are
-   *  counted but not failed. */
+   *  An unread resume, which can't be attributed, and a dropped press read as
+   *  the seek are counted but not failed. */
   failed: number
 }
 
 export function lostPauseTally(records: readonly Record<string, unknown>[]): LostPauseTally {
   const lostRuns = records.filter((r) => r.setupOk === true && r.lost === true)
-  const lost = lostRuns.filter((r) => r.pauseCrossed !== true)
+  // Only the bucket the crossing seek is misread into: a dropped press explains no re-assert or
+  // heartbeat resume, so those still fail.
+  const lost = lostRuns.filter((r) => !(r.pauseCrossed === true && r.resumedBy === 'seek'))
   const by = (k: ScrubPauseVerdict['resumedBy']): number =>
     lost.filter((r) => (r.resumedBy ?? null) === k).length
   const reassert = by('reassert')

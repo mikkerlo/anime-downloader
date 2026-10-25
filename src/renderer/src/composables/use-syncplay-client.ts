@@ -1600,11 +1600,11 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
     // carry the old position (`diff > 3`, or a pause edge past 0.5 s, against our in-flight
     // target); writing it would abort the seek. So while `isUserSeekInFlight()` every non-`doSeek`
     // arm is held, and a `doSeek` frame, a peer's deliberate seek, still wins (last writer wins).
-    // The one exception is a pause edge that says the server dropped the seek (#537,
-    // `userSeekLostToPause()`): we follow it onto the pauser's frame, as upstream does. The paused
-    // half below is computed independently either way.
+    // The one exception is a pause edge that says the server dropped the seek, on a frame main
+    // flags as crossing it (#537, #544, `userSeekLostToPause()`): we follow it onto the pauser's
+    // frame, as upstream does. The paused half below is computed independently either way.
     const heldForUserSeek =
-      !state.doSeek && isUserSeekInFlight() && !userSeekLostToPause(state.position, pauseEdge)
+      !state.doSeek && isUserSeekInFlight() && !userSeekLostToPause(state, pauseEdge)
     const needsSeek = !outOfFile && wouldSeek && !heldForUserSeek
     const effectivePaused = state.paused || !syncplayAllUsersReady()
     // The resume half of the same refusal (#281, slice B). A room *pause* is
@@ -2793,10 +2793,16 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // which on the MSE/respawn path need not equal the target while the seek is in
   // flight. Called only while `isUserSeekInFlight()`. Declared down here so the
   // insertion shifts no line anchor above it.
-  function userSeekLostToPause(position: number, pauseEdge: boolean): boolean {
-    if (!pauseEdge) return false
+  //
+  // Only on a frame main flags `crossedOurChange` (#544): the pause crossed our unacked seek, so
+  // the server's ignore window dropped it. Unflagged, the seek left after main acked the pause,
+  // the server took it and forced its target to the pauser, and snapping back to the pause's
+  // pre-scrub position would part us from the room by the scrub (S10c's uncrossed runs once #535's
+  // 2b kept the seek from resuming the room). Absent reads as uncrossed, so the hold stands.
+  function userSeekLostToPause(state: SyncplayRemoteState, pauseEdge: boolean): boolean {
+    if (!pauseEdge || state.crossedOurChange !== true) return false
     const target = seekOps.find((o) => o.id === userSeekOp.id)?.target
-    return target !== undefined && pauseSaysSeekDropped(Math.abs(position - target))
+    return target !== undefined && pauseSaysSeekDropped(Math.abs(state.position - target))
   }
 
   // The last state `recordRemoteState` was handed, for `roomPausedAtEnd` (#533). Forgotten on

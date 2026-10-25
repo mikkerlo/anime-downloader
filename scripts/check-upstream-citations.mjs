@@ -133,7 +133,9 @@ export function defClassBoundary(lines, startLine, endLine) {
  * this list would put an in-repo anchor and an upstream `.py` anchor into a
  * scanned file — see the header — so the strings are joined here and the entries
  * below carry numbers as numbers. The runtime shape is exactly the
- * `{ at, cited }` pair `findings()` compares against `analyze()`'s output.
+ * `{ at, cited }` pair `findings()` compares against `analyze()`'s output. It
+ * has no callers while the list below is empty, and it stays as the required
+ * spelling for the next entry.
  */
 const landing = (atFile, atLine, citedFile, start, end) => ({
   at: `${atFile}:${atLine}`,
@@ -143,17 +145,24 @@ const landing = (atFile, atLine, citedFile, start, end) => ({
 /**
  * The upstream landings that are legitimate, named one by one.
  *
+ * EMPTY AT THE PIN, because its one former entry was repaired rather than
+ * exempted. That entry was `docs/syncplay.md` citing `_allowTLSconnections()`
+ * whole, which landed on the intra-function blank between the three `open()`
+ * calls and the `getmtime()` after them. It was keyed on the citing doc line,
+ * and ordinary syncplay PRs adding paragraphs above that line moved it out of
+ * the exemption (#511). The anchor is now split into two marked ones placed
+ * beside the claims they support — the three opens, and the `except` arm that
+ * prints the fall-back warning — each quoting its range's end line, so neither
+ * range holds a blank line or a `def`/`class` and a slide either way trips
+ * quote rot or a predicate. Nothing is left to exempt. The mechanism stays:
+ * `findings()` still takes `allow`, and `landing()` spells the next entry.
+ *
  * A NAMED ALLOW-LIST, NOT A COUNT, and that difference is the only thing this
- * constant buys. The one entry is `docs/syncplay.md` citing
- * `_allowTLSconnections()` whole: the citation means the function, and the blank
- * line the heuristic objects to is the intra-function gap between the three
- * `open()` calls and the `getmtime()` that follows them. Nothing about the
- * anchor is stale. It is the only upstream landing at the pin. Pinned as a count
- * — "one landing is expected" — a DIFFERENT anchor sliding onto a different
- * blank line would hold the count at one and pass; keyed on the citer AND the
- * anchor it reds, because the pair no longer matches. Both halves are needed:
- * the same citer repointed is a different claim, and the same anchor quoted
- * somewhere else is a different reader.
+ * constant buys. Pinned as a count — "this many landings are expected" — a
+ * DIFFERENT anchor sliding onto a different blank line would hold the count and
+ * pass; keyed on the citer AND the anchor it reds, because the pair no longer
+ * matches. Both halves are needed: the same citer repointed is a different
+ * claim, and the same anchor quoted somewhere else is a different reader.
  *
  * THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`, whose value is four, and the
  * two populations are disjoint by construction rather than by coincidence. That
@@ -163,7 +172,7 @@ const landing = (atFile, atLine, citedFile, start, end) => ({
  * upstream tree on disk. Neither number can move the other, and folding them
  * would make one figure mean two things measured in two places.
  */
-export const UPSTREAM_LANDING_ALLOW = [landing('docs/syncplay.md', 444, 'server.py', 251, 257)]
+export const UPSTREAM_LANDING_ALLOW = []
 
 /**
  * The commit the conformance workflow actually installs.

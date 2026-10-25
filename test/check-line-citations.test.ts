@@ -2177,8 +2177,8 @@ describe('check-upstream-citations', () => {
     // `server.py:251-257` is `_allowTLSconnections()` whole. The `def` is on the
     // START line, so the boundary predicate is silent — correctly, the citation
     // means the function. The blank at `:256` is an intra-function gap, which
-    // `interiorBlankLine()` does report, which is why that anchor is named in
-    // `UPSTREAM_LANDING_ALLOW` rather than repaired.
+    // `interiorBlankLine()` does report, which is why the doc's anchor was split
+    // into two marked ones that hold no blank (#511) rather than named in a list.
     expect(defClassBoundary(TLS_PY, 251, 257)).toBeNull()
 
     const r = runResolvingPy({
@@ -2265,12 +2265,12 @@ describe('check-upstream-citations', () => {
   })
 
   it('keys the landing allow-list on the citer AND the anchor, not on a count', () => {
-    // WHY A LIST AND NOT A NUMBER. There is exactly one legitimate upstream
-    // landing at the pin, so "expect 1" would pass — and would go on passing if a
-    // different anchor slid onto a different blank line, because the count is
-    // unchanged. Both halves of the key are load-bearing: the same citer repointed
-    // is a different claim, and the same anchor written somewhere else is a
-    // different reader.
+    // WHY A LIST AND NOT A NUMBER. A pinned count of legitimate landings would
+    // go on passing if a different anchor slid onto a different blank line,
+    // because the count is unchanged. The list is empty at the pin (#511), and
+    // this case keeps the key honest for its next entry. Both halves of the key
+    // are load-bearing: the same citer repointed is a different claim, and the
+    // same anchor written somewhere else is a different reader.
     const corpus: Corpus = {
       'syncplay/server.py': FINDINGS_SERVER,
       'src/caller.ts': '// the chat relay (server.py:5-6)'

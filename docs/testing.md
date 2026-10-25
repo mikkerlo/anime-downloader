@@ -591,25 +591,25 @@ tests* above — two exact, one a floor and one a ceiling:
   from the 12 #372 set, where 52 anchors of slack let the verified population
   lose 81% of its members with the gate green; #459 took it 64 to 75 and #517
   to 90 with their retrofits, since slack is what stops a floor from binding.
-- **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
+- **Unmarked upstream `.py` anchors, capped at 261.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:
   each of these is counted as unresolvable by construction, no landing predicate
-  ever runs on it, and its line number is never compared with anything. 262
+  ever runs on it, and its line number is never compared with anything. 261
   anchors across 27 citing files, and **none of them carries a quote** — which is
   why the count is of the *unmarked* ones rather than a widening of `marked`
   above, whose printed line says "verified against their target" and would be
-  false by 262 in a single step. One more than the cap reds the PR that writes it,
+  false by 261 in a single step. One more than the cap reds the PR that writes it,
   which is the property a floor could not deliver: `analyze()` has no notion of
   "added in this PR" and a floor only says the count must not fall, so a new
-  unmarked upstream anchor would arrive green. The 262 already here are
+  unmarked upstream anchor would arrive green. The 261 already here are
   grandfathered rather than retrofitted under duress, and a retrofit lowers the
   count, so the number ratchets toward zero. The hash-comment predicate learned
   `.py` in the same change — 0 occurrences today, since no Python target resolves
   for it to fire on, so it is covered by a fixture rather than by the tree and the
   hole is closed before the population arrives. Re-measuring the cap has one
   trap worth knowing, and it is not a number to carry forward by hand: a direct
-  scan returns **292** — 286 unmarked and 6 marked — against the gate's 262, so
+  scan returns **292** — 286 unmarked and 6 marked — against the gate's 261, so
   the gap is 30 citation-shaped fixture strings inside
   `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. That gap
   is a property of the fixture file rather than of the tree, and it grows with
@@ -911,13 +911,13 @@ predicate that flagged it and the commit it was measured against:
   predicate ships against a clean tree and its first flag is news. The end line
   stays in scope, and only the first boundary in a range is reported;
 - **suspicious landings on an upstream line** — the existing ladder, which never
-  fires in `quality` because a Python target cannot resolve there. Exactly one
-  such landing exists at the pin: `docs/syncplay.md` cites `_allowTLSconnections()`
-  whole, and the blank line the heuristic objects to is the intra-function gap
-  between its `open()` calls and the `getmtime()` below them. It is allow-listed
-  by **citer and anchor together**, not by count — pinned as "one landing is
-  expected", a different anchor sliding onto a different blank line would hold
-  the count at one and pass;
+  fires in `quality` because a Python target cannot resolve there. **None**
+  exists at the pin: the one there was, `docs/syncplay.md` citing
+  `_allowTLSconnections()` whole across the gap below its `open()` calls, was
+  repaired by splitting it into the opens and the `except` arm's fall-back, each
+  marked with its range's end line (#511). The allow-list keeps its key of
+  **citer and anchor together** for any future entry, not a count, which would
+  hold while a different anchor slid onto a different blank line;
 - **marked anchors whose quote has rotted** — the content half of the marked form,
   which `quality` can only check the spelling of.
 

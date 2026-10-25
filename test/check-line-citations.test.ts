@@ -4,9 +4,9 @@
 // move with every repair. The blocks that do read real files are the two at
 // the foot of this file. The prose-figure cases (#461) read `docs/testing.md`
 // and compare it with the pin constants, never with a count taken off the tree.
-// The figureless-sentence cases (#511) read that page and the two gate scripts
-// and assert only that a few sentences state no figure at all. So the reason
-// above still holds for both.
+// The figureless-sentence cases (#511) read that page, the two gate scripts and
+// this file, and assert only that a few sentences state no figure at all. So the
+// reason above still holds for both.
 //
 // This file is in `EXCLUDED_PATHS`, and has to be. Its fixtures are citation
 // shapes on purpose — several are deliberately broken — so scanning it would
@@ -2482,9 +2482,9 @@ describe('check-upstream-citations', () => {
 // gets through.
 //
 // Deliberately NOT asserted: the cap's value where the page restates it as a
-// *measurement* ("262 anchors across 27 citing files", "false by 262"). The cap
-// is one-sided, so after a retrofit the count and the cap can legitimately
-// differ and asserting them would be wrong.
+// *measurement*, in the cap bullet's anchor-and-file census and its "false by"
+// clause. The cap is one-sided, so after a retrofit the count and the cap can
+// legitimately differ and asserting them would be wrong.
 
 const { MARKED_PIN, UNMARKED_PY_PIN, SUSPICIOUS_LANDING_PIN, UNCHECKABLE_PIN } = citations
 
@@ -2987,10 +2987,11 @@ describe('the pin figures docs/testing.md restates', () => {
 
 // THE SENTENCES THAT DECLINE TO CARRY A FIGURE (#511 review). Each one used to
 // restate a number it had no way to keep in step: a direct-scan census, the
-// marked `.py` count, a pin's value spelled as a word. Each was stale on the
-// line itself when a reviewer read it. `pinProseMismatches` cannot catch that,
-// because it compares a figure with a constant and two of these numbers have no
-// constant. So the rule these sentences now follow is "no figure at all", and
+// marked `.py` count, a pin's value spelled as a word, a per-issue breakdown of
+// that pin, a cap value quoted out of the page. Each was stale on the line
+// itself when a reviewer read it. `pinProseMismatches` cannot catch that,
+// because it compares a figure with a constant and most of these numbers have
+// no constant. So the rule these sentences now follow is "no figure at all", and
 // this checks that rule. Issue references, `#395 step 2` and code spans are not
 // figures and are stripped first.
 const SCRIPTS_DIR = join(import.meta.dirname, '..', 'scripts')
@@ -3008,12 +3009,14 @@ const sentence = (text: string, from: RegExp, to: RegExp): string => {
   return text.slice(start, start + end)
 }
 
+// A number word joined by a hyphen is part of a name or a compound — the
+// "two-peer loop test", a "one-sided" cap — not a figure, so it is skipped.
+const NUMBER_WORD = /(?<!-)\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b(?!-)/gi
+
 const statedFigures = (text: string, words = false): string[] => {
   const prose = text.replace(/`[^`]*`/g, '').replace(/#\d+(?:\s+step\s+\d+)?/g, '')
   const digits = prose.match(/\d+/g) ?? []
-  const spelled = words
-    ? (prose.match(/\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi) ?? [])
-    : []
+  const spelled = words ? (prose.match(NUMBER_WORD) ?? []) : []
   return [...digits, ...spelled]
 }
 
@@ -3062,6 +3065,27 @@ describe('the sentences that decline to carry a figure', () => {
       )
     ).toEqual([])
 
+    // What the suspicious-landings pin holds, which the page once counted as
+    // "#390's three … plus #384's one" — a sum that outlived #486 taking the pin
+    // to two. Words count here too. The bullet's other figures are history
+    // (#336's thirteen, the 81 and 119 line offsets), so only this sentence is
+    // held to the rule.
+    expect(
+      statedFigures(
+        sentence(doc, /What\s+it\s+holds\s+now\s+is\s+the\s+deliberate/, /reason\s+it\s+stays\./),
+        true
+      )
+    ).toEqual([])
+
+    // And this file's own note on the cap's restatements, which quoted the page's
+    // census at a cap value #511 then lowered.
+    const self = uncommented(
+      readFileSync(join(import.meta.dirname, 'check-line-citations.test.ts'), 'utf8')
+    )
+    expect(
+      statedFigures(sentence(self, /Deliberately\s+NOT\s+asserted:/, /would\s+be\s+wrong\./), true)
+    ).toEqual([])
+
     // The two sentences as #511's first revision left them, so the clean results
     // above are a property of the rewrite and not of a check that never fires.
     expect(
@@ -3072,5 +3096,11 @@ describe('the sentences that decline to carry a figure', () => {
     expect(
       statedFigures('THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`, whose value is four', true)
     ).toEqual(['four'])
+
+    // The landing breakdown as it stood before, in the same frame: the per-issue
+    // counts are figures, and the hyphenated test name beside them is not.
+    expect(
+      statedFigures("#390's three, all in the two-peer loop test; plus #384's one", true)
+    ).toEqual(['three', 'one'])
   })
 })

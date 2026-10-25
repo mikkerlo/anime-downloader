@@ -540,13 +540,13 @@ tests* above — two exact, one a floor and one a ceiling:
   `test/services/syncplay-mirror-election.test.ts` into `docs/syncplay.md`, one
   81 lines behind its subject and one 119. So the heuristic's measured
   false-positive rate on that population is zero, and the pin began there. What
-  it holds now is the deliberate landings that followed: #390's three, all
-  anchors in the `blankCommentsAndStrings` docstring in the two-peer loop test,
-  whose subject *is* which `goToEpisode(` matches are comments rather than call
-  sites, so its worked examples can only be comment lines; plus #384's one, the
-  premise correction in the conformance-harness header, which cites an
-  *absence* and so has no code line to point at. The comment block above
-  `SUSPICIOUS_LANDING_PIN` enumerates each of them. A further deliberate landing
+  it holds now is the deliberate landings #486 left standing: #390's, in the
+  `blankCommentsAndStrings` docstring in the two-peer loop test, whose subject
+  *is* which `goToEpisode(` matches are comments rather than call sites, so its
+  worked examples can only be comment lines; plus #384's, the premise correction
+  in the conformance-harness header, which cites an *absence* and so has no code
+  line to point at. The comment block above `SUSPICIOUS_LANDING_PIN` enumerates
+  each of them with the reason it stays. A further deliberate landing
   raises the pin by the landings it adds, with its reason in the commit
   message. What the pin does **not** cover is an anchor landing on a live
   code line: that is checked for existence only. The four same-file anchors in

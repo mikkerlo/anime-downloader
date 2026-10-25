@@ -130,138 +130,142 @@ test(
     // downloads its own and the player falls back to legacy remux meanwhile.
     const xdg = fs.mkdtempSync(join(os.tmpdir(), 'anime-dl-mkvsync-'))
     const userData = join(xdg, 'Electron')
-    fs.mkdirSync(join(userData, 'ffmpeg'), { recursive: true })
-    fs.symlinkSync(FFMPEG, join(userData, 'ffmpeg', 'ffmpeg'))
-    fs.symlinkSync(FFPROBE, join(userData, 'ffmpeg', 'ffprobe'))
-    fs.writeFileSync(
-      join(userData, 'config.json'),
-      JSON.stringify({ playerVolume: 0, playerMuted: true })
-    )
-
-    const args = [resolve(__dirname, '../out/main/index.js'), '--mute-audio']
-    if (process.env.CI) args.unshift('--no-sandbox')
-    const app = await electron.launch({ args, env: { ...process.env, XDG_CONFIG_HOME: xdg } })
+    // The outer finally removes the profile even when the launch throws.
     try {
-      expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(userData)
-      const page = await app.firstWindow()
-      const consoleLines: string[] = []
-      page.on('console', (m) => consoleLines.push(m.text()))
-      await page.waitForLoadState('domcontentloaded')
-
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            (
-              window as unknown as {
-                api: { ffmpegCheck: () => Promise<{ available: boolean; path: string }> }
-              }
-            ).api.ffmpegCheck()
-          )
-        )
-        .toEqual(
-          expect.objectContaining({ available: true, path: join(userData, 'ffmpeg', 'ffmpeg') })
-        )
-
-      await page.waitForFunction(() => typeof (window as any).__openTestPlayer === 'function')
-      // subtitleContent '' makes the embedded track arrive over
-      // player:stream-subtitles, the real extraction path.
-      await page.evaluate((filePath) => {
-        ;(window as any).__openTestPlayer({
-          filePath,
-          streamUrl: '',
-          subtitleContent: '',
-          animeName: 'Tick fixture',
-          episodeLabel: '1',
-          availableStreams: [],
-          translationId: 0,
-          translations: [],
-          downloadedTrIds: [],
-          allEpisodes: [],
-          episodeIndex: 0,
-          animeId: 0,
-          malId: 0
-        })
-      }, fixture.mkv)
-      await page.waitForFunction(
-        () => {
-          const v = document.querySelector('video')
-          if (v) {
-            v.muted = true
-            v.volume = 0
-          }
-          return !!v && v.readyState >= 2 && !!document.querySelector('.libassjs-canvas')
-        },
-        null,
-        { timeout: 30_000 }
+      fs.mkdirSync(join(userData, 'ffmpeg'), { recursive: true })
+      fs.symlinkSync(FFMPEG, join(userData, 'ffmpeg', 'ffmpeg'))
+      fs.symlinkSync(FFPROBE, join(userData, 'ffmpeg', 'ffprobe'))
+      fs.writeFileSync(
+        join(userData, 'config.json'),
+        JSON.stringify({ playerVolume: 0, playerMuted: true })
       )
-      expect(
-        await page.evaluate(() => document.querySelector('video')!.currentSrc),
-        'MKV must play through MSE, not the legacy remux fallback'
-      ).toMatch(/^blob:/)
 
-      // A timeupdate from the pause can pump the append queue during the
-      // 250 ms respawn debounce and land the seek inside the buffer, so let it
-      // settle first. No control seek before this one: moving the playhead
-      // lets the append throttle fill the buffer past the target.
-      await page.evaluate(() => document.querySelector('video')!.pause())
-      await page.waitForTimeout(500)
-      const firstLine = consoleLines.length
-      await page.evaluate((t) => {
-        document.querySelector('video')!.currentTime = t
-      }, SEEK_TARGET)
+      const args = [resolve(__dirname, '../out/main/index.js'), '--mute-audio']
+      if (process.env.CI) args.unshift('--no-sandbox')
+      const app = await electron.launch({ args, env: { ...process.env, XDG_CONFIG_HOME: xdg } })
+      try {
+        expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(userData)
+        const page = await app.firstWindow()
+        const consoleLines: string[] = []
+        page.on('console', (m) => consoleLines.push(m.text()))
+        await page.waitForLoadState('domcontentloaded')
 
-      const settled = await page
-        .waitForFunction(
+        await expect
+          .poll(() =>
+            page.evaluate(() =>
+              (
+                window as unknown as {
+                  api: { ffmpegCheck: () => Promise<{ available: boolean; path: string }> }
+                }
+              ).api.ffmpegCheck()
+            )
+          )
+          .toEqual(
+            expect.objectContaining({ available: true, path: join(userData, 'ffmpeg', 'ffmpeg') })
+          )
+
+        await page.waitForFunction(() => typeof (window as any).__openTestPlayer === 'function')
+        // subtitleContent '' makes the embedded track arrive over
+        // player:stream-subtitles, the real extraction path.
+        await page.evaluate((filePath) => {
+          ;(window as any).__openTestPlayer({
+            filePath,
+            streamUrl: '',
+            subtitleContent: '',
+            animeName: 'Tick fixture',
+            episodeLabel: '1',
+            availableStreams: [],
+            translationId: 0,
+            translations: [],
+            downloadedTrIds: [],
+            allEpisodes: [],
+            episodeIndex: 0,
+            animeId: 0,
+            malId: 0
+          })
+        }, fixture.mkv)
+        await page.waitForFunction(
           () => {
-            const v = document.querySelector('video')!
-            return !v.seeking && v.readyState >= 2
+            const v = document.querySelector('video')
+            if (v) {
+              v.muted = true
+              v.volume = 0
+            }
+            return !!v && v.readyState >= 2 && !!document.querySelector('.libassjs-canvas')
           },
           null,
-          { timeout: 15_000 }
+          { timeout: 30_000 }
         )
-        .then(
-          () => true,
-          () => false
-        )
-      const afterSeek = await videoState(page)
-      expect(settled, `seek never settled: ${JSON.stringify(afterSeek)}`).toBe(true)
+        expect(
+          await page.evaluate(() => document.querySelector('video')!.currentSrc),
+          'MKV must play through MSE, not the legacy remux fallback'
+        ).toMatch(/^blob:/)
 
-      const { buffered } = afterSeek
-      const respawnLogged = consoleLines.slice(firstLine).some((l) => l.includes(UNBUFFERED_LOG))
-      const seek = { ...afterSeek, respawnLogged }
-      expect(
-        (buffered.length > 0 && buffered[0][0] >= BUFFER_LEFT_FLOOR) || respawnLogged,
-        `seek never left the buffer, so this run tests nothing: ${JSON.stringify(seek)}`
-      ).toBe(true)
+        // A timeupdate from the pause can pump the append queue during the
+        // 250 ms respawn debounce and land the seek inside the buffer, so let it
+        // settle first. No control seek before this one: moving the playhead
+        // lets the append throttle fill the buffer past the target.
+        await page.evaluate(() => document.querySelector('video')!.pause())
+        await page.waitForTimeout(500)
+        const firstLine = consoleLines.length
+        await page.evaluate((t) => {
+          document.querySelector('video')!.currentTime = t
+        }, SEEK_TARGET)
 
-      // Both bands were stable ~0.85 s after the seek in review; poll rather
-      // than sleep.
-      const reads: { video: TickRead; sub: TickRead }[] = []
-      const key = (r: { video: TickRead; sub: TickRead }): string =>
-        [r.video.sentinel, r.video.code, r.sub.sentinel, r.sub.code].join()
-      let stable = 0
-      for (let i = 0; i < 40 && stable < STABLE_READS; i++) {
-        await page.waitForTimeout(150)
-        const bands = await readBands(page)
-        const read = {
-          video: decodeTickBand(bands.video, WIDTH, BAND_H),
-          sub: decodeTickBand(bands.sub, WIDTH, BAND_H)
+        const settled = await page
+          .waitForFunction(
+            () => {
+              const v = document.querySelector('video')!
+              return !v.seeking && v.readyState >= 2
+            },
+            null,
+            { timeout: 15_000 }
+          )
+          .then(
+            () => true,
+            () => false
+          )
+        const afterSeek = await videoState(page)
+        expect(settled, `seek never settled: ${JSON.stringify(afterSeek)}`).toBe(true)
+
+        const { buffered } = afterSeek
+        const respawnLogged = consoleLines.slice(firstLine).some((l) => l.includes(UNBUFFERED_LOG))
+        const seek = { ...afterSeek, respawnLogged }
+        expect(
+          (buffered.length > 0 && buffered[0][0] >= BUFFER_LEFT_FLOOR) || respawnLogged,
+          `seek never left the buffer, so this run tests nothing: ${JSON.stringify(seek)}`
+        ).toBe(true)
+
+        // Both bands were stable ~0.85 s after the seek in review; poll rather
+        // than sleep.
+        const reads: { video: TickRead; sub: TickRead }[] = []
+        const key = (r: { video: TickRead; sub: TickRead }): string =>
+          [r.video.sentinel, r.video.code, r.sub.sentinel, r.sub.code].join()
+        let stable = 0
+        for (let i = 0; i < 40 && stable < STABLE_READS; i++) {
+          await page.waitForTimeout(150)
+          const bands = await readBands(page)
+          const read = {
+            video: decodeTickBand(bands.video, WIDTH, BAND_H),
+            sub: decodeTickBand(bands.sub, WIDTH, BAND_H)
+          }
+          const prev = reads[reads.length - 1]
+          stable = prev && key(prev) === key(read) ? stable + 1 : 1
+          reads.push(read)
         }
-        const prev = reads[reads.length - 1]
-        stable = prev && key(prev) === key(read) ? stable + 1 : 1
-        reads.push(read)
-      }
-      const final = reads[reads.length - 1]
-      const summary = JSON.stringify({ final, reads: reads.length, seek })
-      test.info().annotations.push({ type: 'readback', description: summary })
-      expect(stable, `reads never repeated: ${summary}`).toBe(STABLE_READS)
+        const final = reads[reads.length - 1]
+        const summary = JSON.stringify({ final, reads: reads.length, seek })
+        test.info().annotations.push({ type: 'readback', description: summary })
+        expect(stable, `reads never repeated: ${summary}`).toBe(STABLE_READS)
 
-      expect(final.video.sentinel, `video band sentinel not white: ${summary}`).toBe(true)
-      expect(final.sub.sentinel, `subtitle band sentinel not white: ${summary}`).toBe(true)
-      expect(final.sub.code, `subtitles show the wrong tick: ${summary}`).toBe(EXPECTED_TICK)
-      expect(final.video.code, `picture and subtitles disagree: ${summary}`).toBe(final.sub.code)
+        expect(final.video.sentinel, `video band sentinel not white: ${summary}`).toBe(true)
+        expect(final.sub.sentinel, `subtitle band sentinel not white: ${summary}`).toBe(true)
+        expect(final.sub.code, `subtitles show the wrong tick: ${summary}`).toBe(EXPECTED_TICK)
+        expect(final.video.code, `picture and subtitles disagree: ${summary}`).toBe(final.sub.code)
+      } finally {
+        await app.close()
+      }
     } finally {
-      await app.close()
       fs.rmSync(xdg, { recursive: true, force: true })
     }
   }

@@ -264,8 +264,18 @@ jobs:
       # pixels with real ffmpeg (#557). Needs the apt ffmpeg step above.
       # Non-blocking until it has a run of green results.
       - name: Run MKV seek subtitle-sync e2e (non-blocking)
+        id: mkv_sync
         continue-on-error: true
         run: xvfb-run -a npx playwright test --grep "$MKV_SYNC_TAG"
+
+      - name: Upload MKV seek sync report
+        if: steps.mkv_sync.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-mkv-sync
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload Playwright report
         if: failure()

@@ -24,11 +24,13 @@ interface RunFfmpegOptions {
  * `setFfmpegDriver` so a test can hand in a fake command and run the real
  * `runFfmpeg` body — the probe re-check, the `'start'` priority drop and the
  * `'end'`/`'error'` bookkeeping — instead of replacing the method wholesale.
+ * `unlinkSync` is the unlink `destroy()` uses on a killed merge's output.
  */
 export interface FfmpegDriver {
   createCommand: (input: string) => ReturnType<typeof Ffmpeg>
   probeDuration: (ffmpegPath: string, ffprobePath: string, videoPath: string) => Promise<number>
   setPriority: (pid: number, priority: number) => void
+  unlinkSync: (file: string) => void
 }
 
 /**
@@ -64,7 +66,41 @@ function probeDuration(
 const DEFAULT_FFMPEG_DRIVER: FfmpegDriver = {
   createCommand: (input) => Ffmpeg(input),
   probeDuration,
-  setPriority: (pid, priority) => os.setPriority(pid, priority)
+  setPriority: (pid, priority) => os.setPriority(pid, priority),
+  unlinkSync: (file) => fs.unlinkSync(file)
+}
+
+const QUIT_UNLINK_DEADLINE_MS = 200
+const QUIT_UNLINK_RETRY_MS = 5
+
+/**
+ * Unlinks a killed merge's partial output on quit (#516). On Windows
+ * `TerminateProcess` returns before ffmpeg's file handle is closed, so the
+ * first unlink fails with a sharing violation (EBUSY, or EPERM) and one a few
+ * ms later succeeds. Quit is synchronous, so the retry sleeps with
+ * `Atomics.wait` up to a short deadline. ENOENT counts as removed; any other
+ * error, or the deadline, gives up and leaves the `.mkv` to the boot fallback.
+ */
+function unlinkKilledOutput(file: string, unlink: (file: string) => void): void {
+  const deadline = Date.now() + QUIT_UNLINK_DEADLINE_MS
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  for (let attempt = 1; ; attempt++) {
+    try {
+      unlink(file)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return
+      const left = deadline - Date.now()
+      if ((code !== 'EBUSY' && code !== 'EPERM') || left <= 0) {
+        console.warn(
+          `[merge] Could not remove the partial output on quit (${code}, ${attempt} tries); the next launch removes it`
+        )
+        return
+      }
+      Atomics.wait(sleeper, 0, 0, Math.min(QUIT_UNLINK_RETRY_MS, left))
+    }
+  }
 }
 
 function heldScanMessage(left: number): string {
@@ -419,8 +455,9 @@ export class DownloadManager {
 
   /**
    * Boot-time fallback for a merge the app never saw finish (#516): a crash,
-   * `kill -9`, power loss or a `destroy()` unlink that lost a Windows EBUSY
-   * race leaves a truncated `.mkv` at the final path. Only removed while the
+   * `kill -9`, power loss or a `destroy()` unlink that Windows still refused
+   * (EBUSY) when its retry deadline ran out leaves a truncated `.mkv` at the
+   * final path. Only removed while the
    * source `.mp4` still exists — a merge that finished and already unlinked its
    * source is left alone, and deleting a finished-but-unrecorded output only
    * costs a re-merge.
@@ -1022,7 +1059,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1654-1659`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1691-1696`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1051,7 +1088,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1650`)
+   * (`src/main/download-manager.ts:1687`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1957,11 +1994,7 @@ export class DownloadManager {
         console.warn('[merge] Could not kill ffmpeg on quit:', err)
       }
       if (this.activeMergeOutputPath) {
-        try {
-          fs.unlinkSync(this.activeMergeOutputPath)
-        } catch {
-          /* best-effort: Windows can still hold the handle (EBUSY) */
-        }
+        unlinkKilledOutput(this.activeMergeOutputPath, this.ffmpegDriver.unlinkSync)
       }
     }
   }

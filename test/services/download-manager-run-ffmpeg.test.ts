@@ -4,7 +4,7 @@
 // it just persisted. The merge-scheduling tests replace `runFfmpeg` wholesale,
 // so none of this ran under test before the seam.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import * as fs from 'fs'
@@ -113,6 +113,7 @@ describe('DownloadManager runFfmpeg through the driver seam (#516)', () => {
   let probe: () => Promise<number>
   let held: boolean
   let mergeCompletes: string[]
+  let unlink: (file: string) => void
 
   beforeEach(() => {
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-mgr-run-ud-'))
@@ -124,6 +125,7 @@ describe('DownloadManager runFfmpeg through the driver seam (#516)', () => {
     probe = async () => 60
     held = false
     mergeCompletes = []
+    unlink = (file) => fs.unlinkSync(file)
     dm.setFfmpegDriver({
       createCommand: (input) => {
         const cmd = new FakeCommand(input)
@@ -134,7 +136,8 @@ describe('DownloadManager runFfmpeg through the driver seam (#516)', () => {
       setPriority: (pid, priority) => {
         priorities.push([pid, priority])
         if (priorityError) throw priorityError
-      }
+      },
+      unlinkSync: (file) => unlink(file)
     })
     // Throws instead of spinning: a held pass that re-entered the cycle would
     // loop on microtasks, which starves every timer including the test timeout.
@@ -333,6 +336,119 @@ describe('DownloadManager runFfmpeg through the driver seam (#516)', () => {
       expect(commands).toHaveLength(1)
       expect(fs.existsSync(aMp4)).toBe(true)
       expect(mergeCompletes).toEqual([])
+    })
+
+    describe('the partial-.mkv unlink while Windows still holds the handle', () => {
+      const fsError = (code: string): NodeJS.ErrnoException =>
+        Object.assign(new Error(`${code}: fake`), { code })
+
+      /** A merge in flight with a partial .mkv on disk, killed by destroy(). */
+      async function quitMidMerge(): Promise<{
+        aMkv: string
+        calls: string[]
+        elapsedMs: number
+        finish: () => Promise<void>
+      }> {
+        const { aMkv } = seedTwo()
+        const cycle = dm.mergeCompleted(FFMPEG, FFPROBE)
+        await flush()
+        commands[0].spawned()
+        fs.writeFileSync(aMkv, 'partial')
+        const calls: string[] = []
+        const inner = unlink
+        unlink = (file) => {
+          calls.push(file)
+          inner(file)
+        }
+        const t0 = performance.now()
+        dm.destroy()
+        const elapsedMs = performance.now() - t0
+        expect(commands[0].signals).toEqual(['SIGKILL'])
+        return {
+          aMkv,
+          calls,
+          elapsedMs,
+          finish: async () => {
+            commands[0].emit('error', new Error('ffmpeg was killed with signal SIGKILL'))
+            await cycle
+            await flush()
+            expect(persisted(1)).toBe('merging')
+          }
+        }
+      }
+
+      it('retries through EBUSY / EPERM until the unlink goes through', async () => {
+        // Windows 11: TerminateProcess returns before ffmpeg's handle closes,
+        // so the first unlink right after the kill fails and one ~5 ms later
+        // succeeds.
+        const faults = ['EBUSY', 'EPERM', 'EBUSY']
+        unlink = (file) => {
+          const code = faults.shift()
+          if (code) throw fsError(code)
+          fs.unlinkSync(file)
+        }
+        const { aMkv, calls, finish } = await quitMidMerge()
+
+        expect(calls).toEqual([aMkv, aMkv, aMkv, aMkv])
+        expect(fs.existsSync(aMkv)).toBe(false)
+        await finish()
+      })
+
+      it('gives up on a persistent EBUSY within the deadline, without throwing', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          unlink = () => {
+            throw fsError('EBUSY')
+          }
+          const { aMkv, calls, elapsedMs, finish } = await quitMidMerge()
+
+          expect(calls.length).toBeGreaterThan(1)
+          expect(elapsedMs).toBeGreaterThanOrEqual(150)
+          expect(elapsedMs).toBeLessThan(1000)
+          // Left for the boot fallback (dropTruncatedMerge).
+          expect(fs.existsSync(aMkv)).toBe(true)
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining('EBUSY'))
+          await finish()
+        } finally {
+          warn.mockRestore()
+        }
+      })
+
+      it('does not retry any other error', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          unlink = () => {
+            throw fsError('EACCES')
+          }
+          const { aMkv, calls, elapsedMs, finish } = await quitMidMerge()
+
+          expect(calls).toEqual([aMkv])
+          expect(elapsedMs).toBeLessThan(100)
+          expect(fs.existsSync(aMkv)).toBe(true)
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining('EACCES'))
+          await finish()
+        } finally {
+          warn.mockRestore()
+        }
+      })
+
+      it('takes ENOENT as already removed', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        try {
+          unlink = (file) => {
+            fs.unlinkSync(file)
+            throw fsError('ENOENT')
+          }
+          const { aMkv, calls, finish } = await quitMidMerge()
+
+          expect(calls).toEqual([aMkv])
+          expect(fs.existsSync(aMkv)).toBe(false)
+          expect(warn).not.toHaveBeenCalled()
+          await finish()
+        } finally {
+          warn.mockRestore()
+        }
+      })
     })
 
     it("kills a merge caught before its PID exists the moment 'start' fires", async () => {

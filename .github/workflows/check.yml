@@ -224,6 +224,14 @@ jobs:
       # catches are too SHORT, not too long.
       - run: npm run check:prose-shape
 
+      # Real ffmpeg for test/streaming/seek-anchor-real-ffmpeg.test.ts (#556).
+      # Must precede test:coverage: with CI set, that file FAILS (not skips)
+      # when ffmpeg/libx264 is missing. The app itself never uses PATH ffmpeg.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       # Runs the full unit + integration suite with coverage instrumentation;
       # per-seam thresholds in vitest.config.ts fail the build on regression
       # (Phase 7, #140).

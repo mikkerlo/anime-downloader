@@ -352,12 +352,22 @@ describe('StreamingService probeCopyTimestampOffset', () => {
   it('caps both timestamp probes while waiting for the measured stream', async () => {
     await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
     const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
-    const probes = lines.filter(
-      (line) => line.includes('-f nut pipe:1') || line.includes('-f mp4 pipe:1')
-    )
+    const absoluteProbe = lines.filter((line) => line.includes('-f nut pipe:1'))
+    const emittedProbe = lines.filter((line) => line.includes('-f mp4 pipe:1'))
+    expect(absoluteProbe).toHaveLength(1)
+    expect(emittedProbe).toHaveLength(1)
 
-    expect(probes).toHaveLength(2)
-    for (const args of probes) expect(args).toContain('-t 60')
+    // The -copyts probe must cap its INPUT: an output -t is measured against
+    // the copied absolute timestamps, so every packet past 60 s into the file
+    // is dropped and the probe silently falls back to the raw request (#556).
+    const nut = ` ${absoluteProbe[0]} `
+    expect(nut.split(' -t 60 ')).toHaveLength(2)
+    expect(nut.indexOf(' -t 60 ')).toBeGreaterThan(-1)
+    expect(nut.indexOf(' -t 60 ')).toBeLessThan(nut.indexOf(' -i '))
+
+    // The emitted-start probe has no -copyts, so its output cap is correct.
+    const mp4 = ` ${emittedProbe[0]} `
+    expect(mp4.indexOf(' -t 60 ')).toBeGreaterThan(mp4.indexOf(' -i '))
   })
 
   it('omits the hvc1 tag for H.264 sources', async () => {

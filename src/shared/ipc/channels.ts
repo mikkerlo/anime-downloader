@@ -83,6 +83,8 @@ export const CHANNELS = {
   PLAYER_CLOSED: 'player:closed',
   PLAYER_FIND_LOCAL_FILE: 'player:find-local-file',
   PLAYER_OPENED: 'player:opened',
+  PLAYER_VIEW_CLOSED: 'player:view-closed',
+  PLAYER_VIEW_OPENED: 'player:view-opened',
   PLAYER_GET_LOCAL_SUBTITLES: 'player:get-local-subtitles',
   PLAYER_GET_STREAM_URL: 'player:get-stream-url',
   PLAYER_REMUX_MKV: 'player:remux-mkv',

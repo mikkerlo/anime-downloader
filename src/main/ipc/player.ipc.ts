@@ -129,6 +129,7 @@ export function register({
   mp4StatsService,
   downloadManager,
   playerLockService,
+  playerPresenceService,
   getFfmpegPath,
   getFfprobePath
 }: AppDeps): void {
@@ -139,6 +140,15 @@ export function register({
   })
   ipcMain.handle(CHANNELS.PLAYER_CLOSED, (_event, filePath: string) => {
     if (typeof filePath === 'string' && filePath) playerLockService.close(filePath)
+  })
+  // Merge hold (#516): any open player view — local, CDN or Syncplay — holds
+  // new merges. Counted per sender so a crashed or reloaded renderer releases
+  // its own count.
+  ipcMain.handle(CHANNELS.PLAYER_VIEW_OPENED, (event) => {
+    playerPresenceService.open(event.sender)
+  })
+  ipcMain.handle(CHANNELS.PLAYER_VIEW_CLOSED, (event) => {
+    playerPresenceService.close(event.sender.id)
   })
 
   ipcMain.handle(

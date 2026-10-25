@@ -221,6 +221,9 @@ interface Api {
   /** Report a local file opened/closed in the built-in player — gates deferred .part finalize (#63). */
   playerOpened: (filePath: string) => Promise<void>
   playerClosed: (filePath: string) => Promise<void>
+  /** Report a player view mounted/unmounted — holds new merges while any is open (#516). */
+  playerViewOpened: () => Promise<void>
+  playerViewClosed: () => Promise<void>
   playerRemuxMkv: (
     mkvPath: string
   ) => Promise<{ mp4Path: string; subtitleContent?: string } | { error: string }>

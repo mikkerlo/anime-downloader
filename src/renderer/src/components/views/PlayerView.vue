@@ -210,6 +210,11 @@ watch(
   { immediate: true }
 );
 
+// Merge hold (#516): while any player view is open the main process starts no
+// new merge. Raised synchronously in setup, never in the async `onMounted`, so
+// no close can land before it (#280).
+void window.api.playerViewOpened();
+
 // Report which local file the player holds so the main process defers the
 // .part → final rename + merge until we let go (player lock, #63).
 watch(
@@ -3069,6 +3074,8 @@ onBeforeUnmount(() => {
   // `onMounted` / `prepareMkvForPlayback` / `prepareHevcTranscode` reads this,
   // and `saveProgress(true)` below is async.
   unmounted = true;
+  // Release the merge hold (#516) ahead of everything that can throw.
+  void window.api.playerViewClosed();
   // Stream-skip detection cancel + signature-updated unsub + grace timer
   // cleanup all live inside useSkipMarkers' onBeforeUnmount.
   saveProgress(true);

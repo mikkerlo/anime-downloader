@@ -302,13 +302,29 @@ mergeCompleted(ffmpegPath, videoCodec):
        consumer bug inside it could delete a successfully merged file and blame
        ffmpeg. The flag, not a fall-through, because the catch also handles a
        cancelled merge and neither it nor a failure may fire a completion hook.
-    8. Sequential merging (one at a time) enforced via lock
+    8. Sequential merging (one at a time) enforced via lock. Merge hold
+       (#516): while any player view is open no new group starts — the gate
+       sits after the skip checks above and before 'merging' is set, and is
+       re-checked after the probe. A held pass sets `heldRequest` (never
+       `mergeRequested`, which would re-enter the cycle and spin) and ends
+       the cycle; the group stays 'pending'. An in-flight merge finishes, at
+       PRIORITY_LOW set in ffmpeg's 'start' handler. On the last player
+       view's release, resumeHeldMerges() (lib/episode-completion.ts) takes
+       `heldRequest` and calls mergeCompleted with paths and codec read
+       fresh, without an autoMerge check. The 'merging' set is persisted
+       before ffmpeg spawns, for the boot fallback in loadQueue.
     9. Merge can be cancelled (kills ffmpeg process, cleans up partial output)
+   10. Quit (destroy()) persists the queue, then kills the active merge and
+       unlinks its partial .mkv; the 'merging' status survives to boot,
+       where loadQueue unlinks a leftover .mkv if the .mp4 is still there
+       and resets the group to 'pending' (docs/ffmpeg.md, #516)
 
 scanAndMerge(ffmpegPath, videoCodec):
   Scans all download folders for .mp4 without matching .mkv
   Merges with .ass subtitle if available
   Reports per-file progress via IPC callback
+  Stops at the merge hold before the next file and reports the files left
+  in `failed` (#516)
   Available from Settings > Debug tab
 
 fixMetadata(ffmpegPath, ffprobePath):

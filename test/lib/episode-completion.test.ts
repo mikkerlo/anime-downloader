@@ -84,6 +84,8 @@ interface Harness {
    * one absorbs it, because it has no item and the rest of the tail must run.
    */
   storeSetError: Error | null
+  /** What `takeHeldRequest()` hands back once before clearing it (#516). */
+  heldRequest: boolean
 }
 
 function makeHarness(settings: Partial<Settings> = {}): Harness {
@@ -122,6 +124,12 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
       },
       mergeCompleted: async (ffmpegPath, ffprobePath, videoCodec) => {
         calls.push(`mergeCompleted(${ffmpegPath},${ffprobePath},${videoCodec})`)
+      },
+      takeHeldRequest: () => {
+        calls.push('takeHeldRequest')
+        const held = h.heldRequest
+        h.heldRequest = false
+        return held
       }
     },
     fileScanner: {
@@ -186,7 +194,8 @@ function makeHarness(settings: Partial<Settings> = {}): Harness {
     ffmpegPath: '/bin/ffmpeg',
     coldAdvanced: false,
     recordCheckGate: null,
-    storeSetError: null
+    storeSetError: null,
+    heldRequest: false
   }
   return h
 }
@@ -617,6 +626,40 @@ describe('episode-completion — the deferred-finalize pass', () => {
   })
 })
 
+describe('episode-completion — resuming held merges (#516)', () => {
+  it('is a no-op without a held request', async () => {
+    const h = makeHarness({ autoMerge: true })
+    await h.handlers.resumeHeldMerges()
+    expect(h.calls).toEqual(['takeHeldRequest'])
+  })
+
+  it('merges a held request even with autoMerge off', async () => {
+    // A manual Merge / Scan & merge that stopped at the gate leaves the same
+    // request as an auto-merge does; gating release on autoMerge drops it.
+    const h = makeHarness({ autoMerge: false })
+    h.heldRequest = true
+    await h.handlers.resumeHeldMerges()
+    expect(h.calls).toEqual(['takeHeldRequest', 'mergeCompleted(/bin/ffmpeg,/bin/ffprobe,copy)'])
+    expect(h.heldRequest).toBe(false)
+  })
+
+  it('reads the codec at release time, not when the hold went up', async () => {
+    const h = makeHarness({ autoMerge: true, videoCodec: 'copy' })
+    h.heldRequest = true
+    h.settings.videoCodec = 'libx265'
+    await h.handlers.resumeHeldMerges()
+    expect(h.calls).toContain('mergeCompleted(/bin/ffmpeg,/bin/ffprobe,libx265)')
+  })
+
+  it('does not merge without ffmpeg', async () => {
+    const h = makeHarness({ autoMerge: true })
+    h.heldRequest = true
+    h.ffmpegAvailable = false
+    await h.handlers.resumeHeldMerges()
+    expect(h.calls).toEqual(['takeHeldRequest'])
+  })
+})
+
 describe('episode-completion — the per-video tail', () => {
   it('persists a .mkv download and does NOT probe it for faststart', async () => {
     // This is the behavioural form of what used to be a source-text assertion
@@ -760,16 +803,25 @@ describe('episode-completion — the wiring left in src/main/index.ts', () => {
     )
     expect(text).toContain('createEpisodeCompletionHandlers({')
   })
+
+  it('gates merges on player presence and resumes them on its release edge (#516)', () => {
+    const text = source()
+    expect(text).toContain('downloadManager.setMergeHoldCheck(playerPresenceService.isOpen)')
+    const release = text.indexOf('playerPresenceService.onRelease(')
+    expect(release).toBeGreaterThan(-1)
+    expect(text.slice(release, release + 200)).toContain('.resumeHeldMerges()')
+  })
 })
 
 describe('episode-completion — construction', () => {
-  it('builds the four handlers and calls nothing at construction time', () => {
+  it('builds the five handlers and calls nothing at construction time', () => {
     const h = makeHarness()
     expect(Object.keys(h.handlers).sort()).toEqual([
       'finalizeDeferredEpisodes',
       'handleEpisodeComplete',
       'handleMergeComplete',
-      'handleVideoDownloaded'
+      'handleVideoDownloaded',
+      'resumeHeldMerges'
     ])
     expect(h.calls).toEqual([])
   })

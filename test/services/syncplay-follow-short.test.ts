@@ -188,6 +188,26 @@ describe('SyncplayClient — followShortOf is stored and on the wire (#506)', ()
     })
   })
 
+  // #502 review: a walk that never moved re-announces the episode it was on,
+  // marked. Keyed as before it would emit nothing, and the leader would never
+  // be told. A same-key push without the marker (a reopened player) still
+  // emits nothing, so the leader is not walked back to it.
+  it('emits a same-key push whose marker is new, and nothing for a same-key push without one', () => {
+    handshake()
+
+    peerFile('7')
+    peerFile('7', { followShortOf: '8' })
+    peerFile('7', { followShortOf: '8' })
+    peerFile('7')
+    peerFile('7', { followShortOf: '9' })
+
+    expect(episodes.map((e) => [e.episodeInt, e.followShortOf])).toEqual([
+      ['7', undefined],
+      ['7', '8'],
+      ['7', '9']
+    ])
+  })
+
   it('reads a non-string marker as absent', () => {
     handshake()
 

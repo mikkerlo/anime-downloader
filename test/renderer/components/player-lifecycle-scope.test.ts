@@ -633,8 +633,8 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // `let prepareEpoch = 0;` and the `indexOf` below still finds it, still
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
-    // (`PlayerView.vue:652` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1238` ("const myPrepare = ++prepareEpoch")) and fail
+    // (`PlayerView.vue:658` ("myPrepare !== prepareEpoch"),
+    // `PlayerView.vue:1244` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
@@ -1337,9 +1337,11 @@ describe('#501 — the follow walk announces only where it ends up', () => {
     expect(begin).toBeGreaterThan(-1)
     expect(begin).toBeLessThan(walk)
     // `finally`, so arrival, `unreachable`, a translation pick and a throw
-    // all settle. A `.then` would skip the throw.
+    // all settle; the settle alone would skip the throw on a `.then`. The
+    // `.then` only records the outcome, so a failed step reaches the settle
+    // (#502 review).
     expect(handler.slice(walk)).toMatch(
-      /^void walkEpisodeSteps\([^]*?\)\.finally\(\(\) => syncplay\.settleFollowWalk\(\)\);\s*\}\s*$/
+      /^void walkEpisodeSteps\([^]*?\)\s*\.then\(\(o\) => \(outcome = o\)\)\s*\.finally\(\(\) => syncplay\.settleFollowWalk\(outcome === 'unreachable'\)\);\s*\}\s*$/
     )
     // Every early return sits above the begin, so no path begins without
     // reaching the walk.

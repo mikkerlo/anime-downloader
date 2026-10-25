@@ -889,8 +889,7 @@ export class SyncplayClient extends EventEmitter {
   //
   // Only for `'local'` and `'auto-advance'`. A follower navigates after the
   // presser has started playing from 0, so a second seek would rewind the
-  // presser. Skipped while the room has told us nothing: nothing in it is stale
-  // yet.
+  // presser. Skipped while the room has told us nothing: nothing in it is stale yet.
   //
   // `'local'` keeps the room's `paused` (#496). `'auto-advance'` sends playing
   // (#512): by the time the countdown fires the room is paused only because the
@@ -907,6 +906,7 @@ export class SyncplayClient extends EventEmitter {
     this.crossedByForeign = null
     log('file-change seek', origin, 'counter=', this.clientIgnoreCounter, 'paused=', paused)
     this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
+    this.armFileChangeInFlight() // #502, on both origins
   }
 
   setReady(isReady: boolean): void {
@@ -985,7 +985,7 @@ export class SyncplayClient extends EventEmitter {
     if (payload.cause === 'seek') this.seekIntent = { at: Date.now(), attempts: 0 }
     this.clientIgnoreCounter += 1
     this.setPendingClientAck(payload.cause)
-    this.crossedByForeign = null
+    this.crossedByForeign = this.fileChangeInFlight = null
     log(
       'local-state',
       payload.cause,
@@ -1179,7 +1179,7 @@ export class SyncplayClient extends EventEmitter {
     this.clientIgnoreCounter = 0
     this.resetPendingClientAck()
     this.pendingServerAck = 0
-    this.crossedByForeign = null
+    this.crossedByForeign = this.fileChangeInFlight = null
     this.serverRtt = 0
     this.lastServerLatencyCalculation = null
     this.lastServerLatencyArrivalMs = 0
@@ -1720,7 +1720,7 @@ export class SyncplayClient extends EventEmitter {
     }
     user.file = { name, duration, size }
     user.animeDlAppMeta = meta
-
+    this.clearFileChangeIfSettled()
     this.emit('room-users', this.roomUsers.slice())
     if (username !== this.config?.username) {
       this.emit('room-event', {
@@ -1731,7 +1731,7 @@ export class SyncplayClient extends EventEmitter {
 
     if (meta && username !== this.config?.username) {
       const key = `${username}|${meta.animeId}|${meta.episodeInt}`
-      if (key !== this.lastAppliedRoomEpisode) {
+      if (this.isNewRoomEpisode(key, meta)) {
         this.lastAppliedRoomEpisode = key
         this.emitRemoteEpisode(meta, {
           animeId: meta.animeId,
@@ -1912,12 +1912,12 @@ export class SyncplayClient extends EventEmitter {
     }
 
     if (!ps) return
-
     const setBy = typeof ps.setBy === 'string' ? ps.setBy : null
-    const position = typeof ps.position === 'number' ? ps.position : 0
+    const oldFile = this.oldFileFrame(serverCounter, setBy, ps.position, crossesOurChange)
+    if (oldFile === 'drop') return // #502 ordering B: see `oldFileFrame()`
+    const position = oldFile ? 0 : typeof ps.position === 'number' ? ps.position : 0
     const paused = ps.paused === true
     const doSeek = ps.doSeek === true
-
     // Record the room's view before the echo guards below: a spectator mirrors this back to the
     // server, and the server's own periodic States are exactly the ones that keep it fresh. They
     // do carry a setBy, contrary to what this comment used to claim — server.py:82-87 always
@@ -2358,7 +2358,7 @@ export class SyncplayClient extends EventEmitter {
     // crossing forced pause itself is what carries the edge (see `SyncplayRemoteState`).
     if (crossesOurChange) handed.crossedOurChange = true
     log('remote-state', handed)
-    this.emit('remote-state', handed)
+    this.emitRemoteState(handed, oldFile === 'strip')
   }
 
   private handleChat(payload: unknown): void {
@@ -3498,8 +3498,8 @@ export class SyncplayClient extends EventEmitter {
   }
 
   // `absorbRemoteFile()`'s emit, with the peer's `followShortOf` passed through
-  // (#506). Main keys and emits exactly as before; the receiving renderer is the
-  // one that declines to walk. Declared down here so the insertion shifts no
+  // (#506). `isNewRoomEpisode()` gates it; the receiving renderer is the one
+  // that declines to walk. Declared down here so the insertion shifts no
   // line anchor above it.
   private emitRemoteEpisode(
     meta: NonNullable<SyncplayRoomUser['animeDlAppMeta']>,
@@ -3568,10 +3568,179 @@ export class SyncplayClient extends EventEmitter {
     return this.rendererWouldSeek(doSeek, paused, emitted)
   }
 
+  // ── An old-file frame crossing the file-change seek (#502) ──────────────────
+  //
+  // Declared down here so nothing above moves; the hooks above are one line
+  // each: the arm in `sendFileChangeSeek()`, the clears beside `crossedByForeign`
+  // in `sendLocalState()` and `resetTransportState()`, the settle check in
+  // `absorbRemoteFile()`, and the gate plus the corrective seek in
+  // `handleState()`.
+  //
+  // A Syncplay state carries no file identity, but the roster does. A peer that
+  // pauses (or plays, or seeks) in the slice we switch sent that frame *before*
+  // its own `Set{file}`, and the server relays both in order on one stream, so
+  // when the frame arrives our roster still lists that peer on the old episode,
+  // and the frame's position belongs to it.
+
+  // "Our file-change seek is out and a peer may still answer from the old
+  // episode": the episode `sendFileChangeSeek()` forced the room onto. A bound,
+  // not the signal, which is the setter's roster row (`oldFileFrame()`). Not
+  // cleared by our own echo, because in ordering A the old-file frame arrives
+  // after it. Cleared once every app peer has settled on the pick
+  // (`clearFileChangeIfSettled()`, from `absorbRemoteFile()` and the arm), by
+  // the next asserted local change beside the counter bump in
+  // `sendLocalState()` (a de-adopted push returns at the adoption gate first and
+  // leaves it armed), and in resetTransportState(). Deliberately not from
+  // `handleList()`: the gate reads the rebuilt roster anyway, so a `List` only
+  // lengthens its life. Never by the corrective seek's own bump, which does not
+  // go through `sendLocalState()`.
+  private fileChangeInFlight: { animeId: number; episodeInt: string } | null = null
+
+  // Armed on both origins: an auto-advance crossing carries the old episode's
+  // near-end position just as a press does, and the ordering split below is
+  // origin-blind. Disarmed straight away when no app peer is off the pick, so a
+  // room with nobody left behind never holds it.
+  private armFileChangeInFlight(): void {
+    const file = this.currentFile
+    this.fileChangeInFlight = file ? { animeId: file.animeId, episodeInt: file.episodeInt } : null
+    this.clearFileChangeIfSettled()
+  }
+
+  // The pick, or `null` once our own file has moved off it (a follow, a close):
+  // the marker is about the episode we forced, and a peer on any other one is
+  // not behind us any more.
+  private fileChangePick(): { animeId: number; episodeInt: string } | null {
+    const pick = this.fileChangeInFlight
+    const file = this.currentFile
+    if (!pick) return null
+    if (!file || file.animeId !== pick.animeId || file.episodeInt !== pick.episodeInt) {
+      this.fileChangeInFlight = null
+      return null
+    }
+    return pick
+  }
+
+  // Every app peer in the roster has settled on the pick, so no old-file frame
+  // can still be in flight from one. "Every", not "the one that crossed us":
+  // `sendFileChangeSeek()` cannot know which peer will, and in a room of three a
+  // second peer may still be on the old episode with a pause on the wire.
+  // Vanilla peers (no `animeDlAppMeta`) are excluded, as at `setFile()`'s
+  // adoption check: unknown, not contradicted.
+  private clearFileChangeIfSettled(): void {
+    const pick = this.fileChangePick()
+    if (!pick || !this.config) return
+    const self = this.config.username.toLowerCase()
+    const behind = this.roomUsers.some(
+      (u) =>
+        u.username.toLowerCase() !== self &&
+        !!u.animeDlAppMeta &&
+        !settledOnPick(u.animeDlAppMeta, pick)
+    )
+    if (behind) return
+    log('file change settled: every app peer is on', pick.episodeInt)
+    this.fileChangeInFlight = null
+  }
+
+  // The gate, read in `handleState()` below the counter block (so the ack has
+  // already gone out) and above the `lastRoomState` write. That record is taken
+  // from the raw frame above every guard, so a strip placed at the emit would
+  // leave the old number in it for a round trip, where the de-adopted
+  // heartbeat's mirror publishes it and `isAdopted()` cannot re-latch on 0.
+  //
+  // An old-file frame is forced (it carries `ignoringOnTheFly.server`), set by a
+  // peer whose roster `animeDlAppMeta` is present and not settled on the pick,
+  // and further than ADOPT_TOLERANCE_S from 0. A vanilla setter is never
+  // stripped. A frame already near 0 (#515's pause-at-target, a pause pressed
+  // after the pauser heard our seek) stays on #494's path untouched rather than
+  // costing a redundant seek. A pressing peer's own file-change seek follows its
+  // `Set{file}`, so both-press never matches.
+  //
+  // Server order decides what happens to it (#494). `crossesOurChange` means
+  // the server took the frame *before* our seek (ordering B): our seek is the
+  // room's last word, so the frame is dropped whole (`'drop'`). No emit, no
+  // corrective seek, and no `crossedByForeign` latch, so our own echo is handled
+  // as on an uncrossed episode change and the room ends on our seek's state at
+  // 0. Otherwise nothing of ours was unacked when it arrived (ordering A): the
+  // server took it last, so its `paused` stands and only its position becomes 0
+  // (`'strip'`), followed after the emit by `sendOldFileCorrectiveSeek()`.
+  private oldFileFrame(
+    serverCounter: number | null,
+    setBy: string | null,
+    position: unknown,
+    crossesOurChange: boolean
+  ): 'strip' | 'drop' | null {
+    if (serverCounter === null || setBy === null || !this.isForeignSetBy(setBy)) return null
+    if (typeof position !== 'number' || Math.abs(position) <= ADOPT_TOLERANCE_S) return null
+    const pick = this.fileChangePick()
+    if (!pick) return null
+    const setter = this.roomUsers.find((u) => u.username.toLowerCase() === setBy.toLowerCase())
+    const meta = setter?.animeDlAppMeta
+    if (!meta || settledOnPick(meta, pick)) return null
+    if (crossesOurChange) {
+      log('drop old-file frame: our file-change seek reached the server after it', {
+        setBy,
+        position
+      })
+      return 'drop'
+    }
+    log('old-file frame: position stripped to 0', { setBy, position })
+    return 'strip'
+  }
+
+  // Ordering A's answer: one forced seek to 0 carrying the old-file frame's
+  // `paused`, so the server lands where `handleState()` has just put our
+  // renderer. The same `override` path and the same bump as the file-change
+  // seek (#494's latch is already null in A, so clearing it costs nothing and
+  // keeps the two send sites identical): the mirror branch would put the old
+  // number back on the wire, and the bump makes its echo an own echo, so a
+  // crossed corrective seek cannot chain. Unlike the file-change seek it leaves
+  // `lastAppliedRemotePosition` alone, because a target armed by the frame it
+  // answers belongs to the new element. It neither re-arms nor clears the
+  // marker: a second old-file frame from a peer still behind is handled the
+  // same way.
+  private sendOldFileCorrectiveSeek(paused: boolean): void {
+    if (this.status.state !== 'ready') return
+    this.clientIgnoreCounter += 1
+    this.setPendingClientAck('seek')
+    this.crossedByForeign = null
+    log('old-file corrective seek', 'counter=', this.clientIgnoreCounter, 'paused=', paused)
+    this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
+  }
+
+  // `handleState()`'s emit, then #502 ordering A's corrective seek: the renderer
+  // has just been handed the stripped `{0, paused}`, and only now does the
+  // corrective seek put the server there too. Its bump must not come above the
+  // unacked guard, or this very frame would die there; it goes out after the
+  // emit, so the renderer hears 0 first. Declared down here so the merge with
+  // #546's `handed` shifts no line anchor.
+  private emitRemoteState(handed: SyncplayRemoteState, strip: boolean): void {
+    this.emit('remote-state', handed)
+    if (strip) this.sendOldFileCorrectiveSeek(handed.paused)
+  }
+
+  // `absorbRemoteFile()`'s emit gate. A new `user|anime|episode` key emits as
+  // before; so does a `followShortOf` that differs from the last emitted one on
+  // the same key (#502 review). That is a follow walk which never moved: the
+  // peer re-announces the episode it was already on, now marked, and the
+  // renderer has to see it to toast why the peer is behind. A same-key push
+  // without the marker still emits nothing, so a peer that reopens its player
+  // on the episode it stopped on (a fresh composable, unmarked) does not pull
+  // us back to it. Declared down here so the insertion shifts no line anchor.
+  private lastAppliedFollowShort: string | undefined = undefined
+  private isNewRoomEpisode(key: string, meta: { followShortOf?: string }): boolean {
+    const short = meta.followShortOf
+    const fresh =
+      key !== this.lastAppliedRoomEpisode ||
+      (short !== undefined && short !== this.lastAppliedFollowShort)
+    if (fresh) this.lastAppliedFollowShort = short
+    return fresh
+  }
+
   // What our unacked change was (#547): the `cause` of the `sendLocalState()` that set
-  // `pendingClientAck`, or `'seek'` for `sendFileChangeSeek()`, and `null` whenever the counter
-  // is 0. Written and cleared only through the helpers below, beside the counter, so the pair
-  // cannot part: a stale cause read under a later counter would misname that change.
+  // `pendingClientAck`, or `'seek'` for `sendFileChangeSeek()` and `sendOldFileCorrectiveSeek()`,
+  // and `null` whenever the counter is 0. Written and cleared only through the helpers below,
+  // beside the counter, so the pair cannot part: a stale cause read under a later counter would
+  // misname that change.
   //
   // `pauseCrossingUnclaimed()` reads it before `handleState()`'s counter zero: the frame is a
   // peer's forced update that crossed our own unacked **pause**. The server's ignore gate
@@ -3668,3 +3837,21 @@ type SeekReassertExit =
   | 'ceiling'
   | 'converged'
   | 'reasserted'
+
+/** A peer's roster meta has settled on our file-change pick (#502): it is on
+ *  the pick, or its follow walk stopped short of it and said so with
+ *  `followShortOf` (#506). A stopped-short follower is never going to announce
+ *  the pick, so without the second arm it would hold the marker armed until our
+ *  next asserted change and every legitimate seek it made on the episode it
+ *  stayed on would be stripped to 0, the corrective seek pulling the whole room
+ *  — that follower included — back with it. Compared on `animeId` +
+ *  `episodeInt` only, like `setFile()`'s adoption check: a translation
+ *  difference is not a different episode. Declared down here so the insertion
+ *  shifts no line anchor. */
+function settledOnPick(
+  meta: { animeId: number; episodeInt: string; followShortOf?: string },
+  pick: { animeId: number; episodeInt: string }
+): boolean {
+  if (meta.animeId !== pick.animeId) return false
+  return meta.episodeInt === pick.episodeInt || meta.followShortOf === pick.episodeInt
+}

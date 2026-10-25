@@ -47,11 +47,11 @@
 //    refuses to send anything at all for a falsey file. Added for #361's
 //    file-change scenarios: it is the only path a peer's episode reaches
 //    `absorbRemoteFile`, and therefore the only path `remote-episode-change`
-//    has. Note the asymmetry it leaves standing — `sendList` below synthesises
-//    its file entries and carries no `features`, where the reference renders
-//    the stored file — so `animeDlAppMeta` reaches a peer on the announcement
-//    and is dropped again by the next `List`. Fixtures read the episode change
-//    at arrival, never off the roster.
+//    has. `sendList` below synthesises name, duration and size but, since
+//    #502, carries the stored file's `features`, as the reference renders the
+//    stored file; a `List` that dropped them silenced #502's roster gate here
+//    only (see `storeFile()`). Fixtures read the episode *change* at arrival:
+//    only the announcement emits one.
 //  - `List` (`protocols.py:695`) renders a `None` file as `file: {}` rather
 //    than omitting the key.
 //  - A `doSeek` or a pause change forces a room update (`server.py:883-884`)
@@ -865,7 +865,7 @@ export class MinElectionServer {
     //    sends, and it is the one form that takes a watcher out of the ordering.
     //  - absent → the `Set` dispatch never reaches `setFile` at all. Untouched.
     if (isRecord(set.file)) {
-      w.file = typeof set.file.name === 'string' ? set.file.name : ''
+      this.storeFile(w, set.file)
       rosterDirty = true
       // `sendFileUpdate`'s guard is `if watcher.getFile():` — a *truthiness*
       // test, and `{}` is falsey in Python just as `None` is. So the empty
@@ -875,7 +875,7 @@ export class MinElectionServer {
       // used to relay unconditionally.
       if (Object.keys(set.file).length > 0) this.sendFileUpdate(username, set.file)
     } else if (set.file === null) {
-      w.file = null
+      this.storeFile(w, null)
       rosterDirty = true
       // No broadcast: `sendFileUpdate` (`server.py:175-178`) refuses a falsey
       // file, which is exactly why `sendClearFile()`'s own comment in
@@ -897,9 +897,9 @@ export class MinElectionServer {
    * relayed **whole** — `features.animeDlAppMeta` and all, which is what makes
    * it the one and only path `remote-episode-change` has. The `List` refresh
    * `applySet` sends alongside is the roster; this is the announcement, and the
-   * two are not interchangeable: this repo's `List` reply synthesises its file
-   * entries and carries no `features`, so a fixture reading the episode change
-   * off `roomUsers` would read `undefined`.
+   * two are not interchangeable: `List` carries the stored `features` too
+   * (#502), but main's `handleList()` only rebuilds `roomUsers` and never emits
+   * `remote-episode-change`, so a fixture reads the episode *change* here.
    *
    * **No sender exclusion**, which is the reference's own shape rather than an
    * oversight here: `handleSet`'s Rule 0 in `src/main/syncplay.ts` states it and
@@ -1013,7 +1013,8 @@ export class MinElectionServer {
       entry[w.username] = {
         isReady: w.ready,
         position: 0,
-        file: w.file === null ? {} : { name: w.file, duration: 1440, size: 1 }
+        file:
+          w.file === null ? {} : { name: w.file, duration: 1440, size: 1, ...this.featuresOf(w) }
       }
     }
     this.send(username, { List: { [this.room]: entry } })
@@ -1102,6 +1103,32 @@ export class MinElectionServer {
       }
     }
     this.applyState(username, state)
+  }
+
+  /**
+   * Each watcher's stored file `features` (#502), keyed by username. Declared
+   * down here, with the two helpers below, so no line anchor above moves.
+   * `Watcher.setFile` keeps the file dict whole
+   * (`server.py:742` ("self._file = file_")) and `List` renders it back
+   * (`protocols.py:695` ("watcher.getFile() if watcher.getFile() else {}")), so a
+   * peer's `animeDlAppMeta` is on every `List` the real server sends. Dropped
+   * here, it reached a peer on the announcement and vanished on the next
+   * `List`, and #502's roster gate, which reads `roomUsers`, was silent in
+   * this harness and nowhere else.
+   */
+  private readonly fileFeatures = new Map<string, JsonRecord>()
+
+  /** `Watcher.setFile`: the name for the election, the `features` for `List`. */
+  private storeFile(w: Watcher, file: JsonRecord | null): void {
+    w.file = file === null ? null : typeof file.name === 'string' ? file.name : ''
+    if (file && isRecord(file.features)) this.fileFeatures.set(w.username, file.features)
+    else this.fileFeatures.delete(w.username)
+  }
+
+  /** The `features` key of `w`'s `List` file entry, or nothing. */
+  private featuresOf(w: Watcher): { features?: JsonRecord } {
+    const features = this.fileFeatures.get(w.username)
+    return features ? { features } : {}
   }
 }
 

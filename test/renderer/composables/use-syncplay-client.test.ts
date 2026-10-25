@@ -7246,16 +7246,88 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(shorts(setFile)).toEqual(['31'])
   })
 
-  it('a walk that never moves pushes nothing, unless it held a push', async () => {
+  // #502 review: step 1 failed, so this peer is still on the episode it
+  // announced before the pick. Until #502's review the settle pushed nothing
+  // here, and the leader's file-change marker stayed armed against it.
+  it('a walk whose first step fails announces its episode at once, marked short of the pick', async () => {
+    const { deps } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    begin(client, 29)
+    client.settleFollowWalk(true)
+    expect(pushes(setFile)).toEqual([['29', undefined]])
+    expect(shorts(setFile)).toEqual(['30'])
+
+    // The same mark again (a third peer's arrival re-triggers the walk): the
+    // room already has it, so nothing is re-announced.
+    begin(client, 29)
+    client.settleFollowWalk(true)
+    expect(setFile).toHaveBeenCalledTimes(1)
+
+    // A reconnect the walk held still owes the room its file: once, marked.
+    begin(client, 29)
+    client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
+    await nextTick()
+    client.syncplayStatus.value = { state: 'ready', username: 'me' }
+    await nextTick()
+    client.settleFollowWalk(true)
+    expect(pushes(setFile)).toEqual([
+      ['29', undefined],
+      ['29', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['30', '30'])
+  })
+
+  // #548 review: "already has" is what the last push carried, not the local
+  // marker. A never-stepped walk re-targets the local marker without pushing,
+  // so compared against that, the failed walk below found its mark known and
+  // pushed nothing, and the room kept "short of 30" while the pick was 31.
+  it('a failed walk after a silent re-target announces the new mark', async () => {
+    const { deps } = walkDeps(fakeVideo())
+    const { client, setFile } = await ready(deps)
+
+    // Stuck on 29, announced short of 30.
+    begin(client, 29)
+    client.settleFollowWalk(true)
+    expect(shorts(setFile)).toEqual(['30'])
+
+    // The room moves to 31 while this peer's own move is in flight: the walk
+    // never steps, re-targets the marker to 31, and pushes nothing.
+    begin(client, 30)
+    client.settleFollowWalk()
+    expect(setFile).toHaveBeenCalledTimes(1)
+
+    // A later walk for 31 fails its step: the room still has "short of 30".
+    begin(client, 30)
+    client.settleFollowWalk(true)
+    expect(pushes(setFile)).toEqual([
+      ['29', undefined],
+      ['29', undefined]
+    ])
+    expect(shorts(setFile)).toEqual(['30', '31'])
+
+    // Now the room has it, so a repeat is not re-announced.
+    begin(client, 30)
+    client.settleFollowWalk(true)
+    expect(setFile).toHaveBeenCalledTimes(2)
+  })
+
+  // A walk that never stepped (this peer's own move or a translation pick was
+  // in flight) is no failure: it pushes nothing, and nothing it pushes later is
+  // marked. Nor is a failed walk for the episode this peer is already on.
+  it('a walk that never moves and did not fail marks nothing, and pushes only what it held', async () => {
     const { deps } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
 
     begin(client, 29)
     client.settleFollowWalk()
     expect(setFile).not.toHaveBeenCalled()
+    begin(client, 28)
+    client.settleFollowWalk(true)
+    expect(setFile).not.toHaveBeenCalled()
 
-    // A reconnect the walk held still owes the room its file, untagged — and
-    // unmarked (#506): step 1 failing leaves no new key for a peer to decline.
+    // A reconnect the walk held still owes the room its file, untagged and
+    // unmarked.
     begin(client, 29)
     client.syncplayStatus.value = { state: 'reconnecting', username: 'me' }
     await nextTick()
@@ -7263,8 +7335,12 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     await nextTick()
     expect(setFile).not.toHaveBeenCalled()
     client.settleFollowWalk()
-    expect(pushes(setFile)).toEqual([['29', undefined]])
-    expect(shorts(setFile)).toEqual([undefined])
+    client.pushSyncplayFile()
+    expect(pushes(setFile)).toEqual([
+      ['29', undefined],
+      ['29', undefined]
+    ])
+    expect(shorts(setFile)).toEqual([undefined, undefined])
   })
 
   it('a local commit the walk held is announced as local, not downgraded to a follow', async () => {
@@ -7409,8 +7485,10 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     expect(shorts(setFile)).toEqual([undefined])
   })
 
-  // …and a later pick this peer can't reach either: the walk fails at step 1,
-  // so the settle pushes nothing, but the marker it leaves names that pick.
+  // …and a later pick this peer doesn't reach either. A walk that never
+  // stepped re-targets the marker to that pick without pushing, so the next
+  // push names the episode the leader is on now (#506). One whose step 1 fails
+  // re-targets it and announces it at once (#502 review).
   it('a walk that never moves refreshes a stale marker to the latest pick', async () => {
     const { deps, episode } = walkDeps(fakeVideo())
     const { client, setFile } = await ready(deps)
@@ -7423,13 +7501,16 @@ describe('useSyncplayClient — a follow walk announces only where it ends up (#
     begin(client, 32)
     client.settleFollowWalk()
     expect(setFile).toHaveBeenCalledTimes(1)
-
     client.pushSyncplayFile()
+
+    begin(client, 33)
+    client.settleFollowWalk(true)
     expect(pushes(setFile)).toEqual([
       ['30', 'follow'],
+      ['30', undefined],
       ['30', undefined]
     ])
-    expect(shorts(setFile)).toEqual(['31', '33'])
+    expect(shorts(setFile)).toEqual(['31', '33', '34'])
   })
 
   // #506: the marker is a state. Every push from the reached episode carries

@@ -986,10 +986,13 @@ function attachNavigator(peer: Peer, startIdx: number): Navigator {
     const walkTranslation = translationEpoch
     walkStart = idx
     peer.ui.beginFollowWalk(target, ep.episodeInt)
+    let outcome: EpisodeStepOutcome | 'arrived' | null = null
     void walkEpisodeSteps(
       () => idx !== target && !navigating && translationEpoch === walkTranslation,
       () => step(dir, 'follow')
-    ).finally(() => peer.ui.settleFollowWalk())
+    )
+      .then((o) => (outcome = o))
+      .finally(() => peer.ui.settleFollowWalk(outcome === 'unreachable'))
   }
   // `remoteEpisodes` records rather than acts (see the harness); act on each.
   const arr = peer.remoteEpisodes as unknown as { push: (...x: unknown[]) => number }
@@ -1333,15 +1336,15 @@ describe('a follow walk announces only where it ends up (#501)', () => {
     fromBShort: () => (string | undefined)[]
   }
 
-  /** Both on episode 6 (index 5), agreed for four seconds. */
-  const seat = async (bindGapMs?: number): Promise<Seated> => {
+  /** Both on episode `start` (6, index 5, by default), agreed for four seconds. */
+  const seat = async (bindGapMs?: number, start = '6'): Promise<Seated> => {
     room = await createTwoPeerRoom({ position: 100, paused: false })
     const A = await room.seat({
       username: 'rigA',
       position: 100,
       paused: false,
       delayMs: DELAY_MS,
-      episodeInt: '6',
+      episodeInt: start,
       indexOfEpisode
     })
     const B = await room.seat({
@@ -1349,7 +1352,7 @@ describe('a follow walk announces only where it ends up (#501)', () => {
       position: 100,
       paused: false,
       delayMs: DELAY_MS,
-      episodeInt: '6',
+      episodeInt: start,
       indexOfEpisode,
       ...(bindGapMs !== undefined ? { bindGapMs } : {})
     })
@@ -1381,8 +1384,8 @@ describe('a follow walk announces only where it ends up (#501)', () => {
     return {
       A,
       B,
-      a: attachNavigator(A, 5),
-      b: attachNavigator(B, 5),
+      a: attachNavigator(A, indexOfEpisode(start)),
+      b: attachNavigator(B, indexOfEpisode(start)),
       bPushes,
       bShorts,
       bSnapshots,
@@ -1464,6 +1467,42 @@ describe('a follow walk announces only where it ends up (#501)', () => {
     expect(bShorts).toEqual(['8'])
     expect(fromB()).toEqual(['7'])
     expect(fromBShort()).toEqual(['8'])
+  })
+
+  // #502 review: B can't open N+1 at all, so its walk never moves. Until the
+  // review its settle pushed nothing, B's roster meta on A stayed plain
+  // episode 7, A's file-change marker stayed armed, and A stripped B's own
+  // seek and pause to 0, its corrective seek pulling B's element back with it.
+  // Now the settle announces 7 marked short of 8 at once, which settles A's
+  // marker and toasts on A.
+  it('a follower that can’t open N+1 settles the leader’s marker, and its own pause at 600 stands', async () => {
+    const { A, B, a, b, bPushes, bShorts, fromB, fromBShort } = await seat(undefined, '7')
+    b.unreachableIndex = 7 // episode 8
+    await a.pick('8')
+    await sampleLeader(a, 4)
+
+    expect(b.episode()).toBe('7')
+    expect(bPushes.map(([ep, sw]) => [ep, sw])).toEqual([['7', undefined]])
+    expect(bShorts).toEqual(['8'])
+    expect(fromB()).toEqual(['7'])
+    expect(fromBShort()).toEqual(['8'])
+    expect(a.toasts).toEqual(["rigB couldn't open episode 8"])
+    expect(A.client['fileChangeInFlight']).toBeNull()
+
+    B.userSeek(600)
+    await room!.advance(0.1)
+    B.userPause()
+    await room!.advance(4)
+
+    // Paused within the 0.1 s B played past its seek, nowhere near 0.
+    expect(room!.server.roomState().paused).toBe(true)
+    expect(room!.server.roomState().position).toBeGreaterThanOrEqual(600)
+    expect(room!.server.roomState().position).toBeLessThan(601)
+    expect(B.el.currentTime).toBeGreaterThanOrEqual(600)
+    expect(B.el.currentTime).toBeLessThan(601)
+    expect(B.el.paused).toBe(true)
+    expect(A.el.currentTime).toBeGreaterThanOrEqual(600)
+    expect(a.episode()).toBe('8')
   })
 
   // The marker is state, not a one-shot: B's re-pushes carry it. The first is

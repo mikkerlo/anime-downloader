@@ -38,6 +38,7 @@ vi.mock('tls', () => ({
 }))
 
 import { SyncplayClient } from '../../src/main/syncplay'
+import type { SyncplayRemoteState } from '../../src/main/syncplay'
 
 type Playstate = { position: number; paused?: boolean; doSeek: boolean }
 type StateFrame = { playstate?: Playstate; ignoringOnTheFly?: { client?: number } }
@@ -342,5 +343,377 @@ describe('SyncplayClient — the file-change seek (#486)', () => {
     file(EP8, { episodeSwitch: 'local' })
 
     expect(client['currentFile']).not.toHaveProperty('episodeSwitch')
+  })
+
+  // #502. A peer that pauses (or seeks, or plays) in the slice we switch sent
+  // that frame before its own `Set{file}`, so our roster still lists it on the
+  // old episode when the frame arrives, and its position belongs to that
+  // episode. The two-peer outcomes are in
+  // `syncplay-two-peer-ignore-counters.test.ts`; these pin the marker and the
+  // gate one frame at a time.
+  describe('an old-file frame crossing the file-change seek (#502)', () => {
+    /** `Set{user}` relaying `username`'s file, with app meta unless `vanilla`. */
+    const peerOn = (
+      username: string,
+      episodeInt: string,
+      extra: {
+        followShortOf?: string
+        translationId?: number
+        vanilla?: boolean
+        animeId?: number
+      } = {}
+    ): void => {
+      const meta = {
+        animeId: extra.animeId ?? 1,
+        malId: 2,
+        episodeInt,
+        translationId: extra.translationId ?? 3,
+        ...(extra.followShortOf ? { followShortOf: extra.followShortOf } : {})
+      }
+      emit({
+        Set: {
+          user: {
+            [username]: {
+              room: { name: 'cinema' },
+              file: {
+                name: `Some Anime - ${episodeInt}`,
+                duration: 1440,
+                ...(extra.vanilla ? {} : { features: { animeDlAppMeta: meta } })
+              }
+            }
+          }
+        }
+      })
+    }
+
+    /** A forced update, as the server broadcasts a pause change or a seek. */
+    const forced = (
+      position: number,
+      paused: boolean,
+      setBy: string,
+      server: number,
+      doSeek = false
+    ): void => {
+      emit({
+        State: { playstate: { position, paused, doSeek, setBy }, ignoringOnTheFly: { server } }
+      })
+    }
+
+    const remote: SyncplayRemoteState[] = []
+    const marker = (): unknown => client['fileChangeInFlight']
+
+    /** Adopted on episode 7 with `peer` listed there too, then a switch to 8. */
+    const seatAndSwitch = (
+      origin: SyncplayEpisodeSwitch = 'local',
+      paused = false,
+      peers: string[] = ['peer']
+    ): void => {
+      handshake()
+      withPeer()
+      for (const p of peers) peerOn(p, '7')
+      roomState(600, paused)
+      file(EP7, { newPlayer: true })
+      client.updateSnapshot({ position: 600, paused })
+      vi.advanceTimersByTime(1000)
+      expect(client['playbackAdopted']).toBe(true)
+      remote.length = 0
+      client.on('remote-state', (s: SyncplayRemoteState) => remote.push(s))
+      file(EP8, { episodeSwitch: origin })
+      lastTlsSocket!.write.mockClear()
+    }
+
+    /** Our own file-change seek, reflected back (closes the window). */
+    const ownEcho = (paused = false, server = 1): void => {
+      forced(0, paused, 'me', server, true)
+    }
+
+    it.each<SyncplayEpisodeSwitch>(['local', 'auto-advance'])(
+      'arms on a %s switch while an app peer is listed on the old episode',
+      (origin) => {
+        seatAndSwitch(origin)
+        expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
+      }
+    )
+
+    it('never arms on a follow, which sends no seek', () => {
+      seatAndSwitch('follow')
+      expect(marker()).toBeNull()
+    })
+
+    it('is not left armed when no app peer is off the pick', () => {
+      // A vanilla peer only: unknown, not contradicted.
+      seatAndSwitch('local', false, [])
+      expect(marker()).toBeNull()
+    })
+
+    it('ordering A: keeps the pause, hands the renderer 0, records 0 and sends one corrective seek', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      // Our own echo does not clear it: in ordering A the old-file frame
+      // arrives after it.
+      expect(marker()).not.toBeNull()
+      expect(client['pendingClientAck']).toBe(0)
+      remote.length = 0
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, true, 'peer', 2)
+
+      expect(remote).toEqual([{ paused: true, position: 0, setBy: 'peer', doSeek: false }])
+      expect(client['lastRoomState']!.position).toBe(0)
+      expect(client['lastRemoteRoomState']!.position).toBe(0)
+      // Built from the override, like the file-change seek, never the mirror.
+      expect(seeks()).toEqual([{ position: 0, paused: true, doSeek: true }])
+      expect(client['clientIgnoreCounter']).toBe(2)
+      expect(client['pendingClientAck']).toBe(2)
+      expect(client['crossedByForeign']).toBeNull()
+      // Its own bump does not go through `sendLocalState()` and leaves the
+      // marker armed.
+      expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
+    })
+
+    it('ordering A: an old-file seek goes out as a seek to 0, and its echo target survives the corrective seek', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, false, 'peer', 2, true)
+
+      expect(remote.at(-1)).toMatchObject({ paused: false, setBy: 'peer', doSeek: true })
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+      // Armed for the new element's `seeked` at ~0, and left armed: unlike the
+      // file-change seek, the corrective one does not null it.
+      expect(client['lastAppliedRemotePosition']).not.toBeNull()
+      expect(client['lastAppliedRemotePosition']!).toBeLessThan(1)
+    })
+
+    it('ordering A: an old-file play keeps its `paused: false`', () => {
+      seatAndSwitch('local', true)
+      ownEcho(true)
+      lastTlsSocket!.write.mockClear()
+
+      forced(300, false, 'peer', 2)
+
+      expect(remote.at(-1)).toMatchObject({ paused: false, setBy: 'peer' })
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+    })
+
+    it.each<SyncplayEpisodeSwitch>(['local', 'auto-advance'])(
+      'ordering B (%s): drops the frame whole and leaves the echo as on an uncrossed switch',
+      (origin) => {
+        const run = (crossed: boolean): SyncplayRemoteState[] => {
+          seatAndSwitch(origin)
+          expect(client['pendingClientAck']).toBe(1)
+          if (crossed) {
+            const before = client['lastRoomState']
+            forced(304, true, 'peer', 1)
+            // No emit, no corrective seek, no #494 latch, and the raw frame
+            // never reached `lastRoomState`.
+            expect(remote).toEqual([])
+            expect(seeks()).toEqual([])
+            expect(client['clientIgnoreCounter']).toBe(1)
+            expect(client['crossedByForeign']).toBeNull()
+            expect(client['lastRoomState']).toBe(before)
+          }
+          // A playing room: both origins' seeks carry `paused: false`.
+          ownEcho(false, 2)
+          const out = remote.slice()
+          client.disconnect()
+          client = new SyncplayClient()
+          remote.length = 0
+          return out
+        }
+        const control = run(false)
+        const episode = run(true)
+        expect(episode).toEqual(control)
+        expect(episode.at(-1)).toMatchObject({ paused: false, doSeek: true })
+      }
+    )
+
+    it('leaves a frame already at the new episode’s start alone', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      lastTlsSocket!.write.mockClear()
+
+      forced(0.5, true, 'peer', 2)
+
+      expect(remote.at(-1)).toEqual({ paused: true, position: 0.5, setBy: 'peer', doSeek: false })
+      expect(seeks()).toEqual([])
+      expect(client['clientIgnoreCounter']).toBe(1)
+    })
+
+    it('leaves a vanilla setter alone', () => {
+      seatAndSwitch('local')
+      peerOn('stranger', '7', { vanilla: true })
+      ownEcho()
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, true, 'stranger', 2)
+
+      expect(remote.at(-1)).toEqual({
+        paused: true,
+        position: 304,
+        setBy: 'stranger',
+        doSeek: false
+      })
+      expect(seeks()).toEqual([])
+    })
+
+    it('passes a settled peer’s seek unstripped while another app peer is still behind', () => {
+      seatAndSwitch('local', false, ['peer', 'third'])
+      ownEcho()
+      peerOn('peer', '8')
+      // `third` is still on 7, so the marker stays armed.
+      expect(marker()).not.toBeNull()
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, false, 'peer', 2, true)
+      expect(remote.at(-1)).toMatchObject({ setBy: 'peer', doSeek: true })
+      expect(remote.at(-1)!.position).toBeGreaterThan(300)
+      expect(seeks()).toEqual([])
+
+      forced(305, true, 'third', 3)
+      expect(remote.at(-1)).toEqual({ paused: true, position: 0, setBy: 'third', doSeek: false })
+      expect(seeks()).toEqual([{ position: 0, paused: true, doSeek: true }])
+    })
+
+    it('clears once the setter’s `Set{file}` matches ours, translation aside', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      peerOn('peer', '8', { translationId: 9 })
+      expect(marker()).toBeNull()
+
+      forced(304, false, 'peer', 2, true)
+      expect(remote.at(-1)!.position).toBeGreaterThan(300)
+      expect(seeks()).toEqual([])
+    })
+
+    // #506: a follower whose walk could not reach the pick announces the
+    // episode it reached, marked `followShortOf: <pick>`. It will never
+    // announce the pick, so it counts as settled; otherwise every legitimate
+    // seek it makes on its own episode would be stripped to 0 and the
+    // corrective seek would pull the room, that follower included, back to it.
+    it('clears on a stopped-short follower’s marked announce, and its seeks then pass', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      peerOn('peer', '7', { followShortOf: '8' })
+      expect(marker()).toBeNull()
+      lastTlsSocket!.write.mockClear()
+
+      forced(200, false, 'peer', 2, true)
+      expect(remote.at(-1)).toMatchObject({ setBy: 'peer', doSeek: true })
+      expect(remote.at(-1)!.position).toBeGreaterThan(199)
+      expect(seeks()).toEqual([])
+    })
+
+    it('a stopped-short follower does not hold the gate for another peer either', () => {
+      seatAndSwitch('local', false, ['peer', 'third'])
+      ownEcho()
+      peerOn('peer', '7', { followShortOf: '8' })
+      expect(marker()).not.toBeNull()
+      lastTlsSocket!.write.mockClear()
+
+      forced(200, false, 'peer', 2, true)
+      expect(remote.at(-1)!.position).toBeGreaterThan(199)
+      expect(seeks()).toEqual([])
+    })
+
+    // #502 review, the residual left in scope: a peer whose player is on
+    // another anime never follows, so its meta never settles on our pick, and
+    // until our next asserted change every seek it makes is stripped. Pinned so
+    // that is a decision, not an accident: a second seek is stripped too.
+    it('an unmarked peer on another anime still has its second seek stripped', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      peerOn('peer', '7', { animeId: 9 })
+      expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
+
+      forced(200, false, 'peer', 2, true)
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      ownEcho(false, 3)
+      lastTlsSocket!.write.mockClear()
+
+      forced(300, false, 'peer', 4, true)
+      expect(remote.at(-1)).toMatchObject({ setBy: 'peer', doSeek: true })
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+      expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
+    })
+
+    it('a stale `followShortOf` for another episode does not count as settled', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      peerOn('peer', '7', { followShortOf: '9' })
+      expect(marker()).not.toBeNull()
+    })
+
+    it('a `List` does not clear it, but the gate reads the rebuilt roster', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      emit({
+        List: {
+          cinema: {
+            me: { position: 0, file: {} },
+            peer: {
+              position: 0,
+              file: {
+                name: EP8,
+                duration: 1440,
+                features: { animeDlAppMeta: { animeId: 1, episodeInt: '8' } }
+              }
+            }
+          }
+        }
+      })
+      expect(marker()).not.toBeNull()
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, true, 'peer', 2)
+      expect(remote.at(-1)!.position).toBe(304)
+      expect(seeks()).toEqual([])
+    })
+
+    it('clears on the next asserted local change, with the counter bump', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      client.updateSnapshot({ position: 0, paused: false })
+      vi.advanceTimersByTime(1000)
+      expect(client['playbackAdopted']).toBe(true)
+      expect(marker()).not.toBeNull()
+
+      client.sendLocalState({ paused: true, position: 0.5, cause: 'pause' })
+
+      expect(client['clientIgnoreCounter']).toBe(2)
+      expect(marker()).toBeNull()
+    })
+
+    it('stays armed through a de-adopted local push, which returns before the bump', () => {
+      seatAndSwitch('local')
+      expect(client['playbackAdopted']).toBe(false)
+
+      client.sendLocalState({ paused: true, position: 0, cause: 'pause' })
+
+      expect(client['clientIgnoreCounter']).toBe(1)
+      expect(marker()).not.toBeNull()
+    })
+
+    it('clears in resetTransportState()', () => {
+      seatAndSwitch('local')
+      client['resetTransportState']()
+      expect(marker()).toBeNull()
+    })
+
+    it('goes inert once our own file moves off the pick', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      file('Some Anime - 9', { episodeSwitch: 'follow' })
+      lastTlsSocket!.write.mockClear()
+
+      forced(304, true, 'peer', 2)
+      expect(remote.at(-1)!.position).toBe(304)
+      expect(seeks()).toEqual([])
+      expect(marker()).toBeNull()
+    })
   })
 })

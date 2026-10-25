@@ -85,8 +85,9 @@
 // runs let both countdowns fire; odd runs click B's Cancel, so A advances alone
 // and B follows. Both runs are `bad == 0` over: right episode, both playing
 // from ~0, every seek `{0, paused: false}`, no outbound `paused: true` from
-// either after the first seek (the review's Critical item), and a following B's
-// outgoing element never playing from 0. The seek count is `e7SeekVerdict`'s
+// either once it could have known about the seek (the review's Critical item,
+// `rePausesAfterSeek`, #549), and a following B's outgoing element never
+// playing from 0. The seek count is `e7SeekVerdict`'s
 // (#532): on even runs either countdown can win the race, so at most one seek
 // per peer and at least one in total (both seeking is the both-press shape);
 // on Cancel runs one from A and none from B (a Cancel stays local). When both
@@ -146,7 +147,8 @@ import {
   e5Position,
   e5Split,
   resumeSplit,
-  e7SeekVerdict
+  e7SeekVerdict,
+  rePausesAfterSeek
 } from './helpers/score'
 import { FOLLOW_GRACE_MS } from '../src/renderer/src/utils'
 
@@ -552,10 +554,9 @@ test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), n
       const seeksB = ownSeeks(db)
       const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
       // The Critical item of the #512 review: no `paused: true` from either
-      // instance once the first auto-advance seek resumed the room.
-      const rePauses = [da, db].flatMap((d) =>
-        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
-      ).length
+      // instance once it could have known about the auto-advance seek (#549).
+      const re = rePausesAfterSeek(da.wire, db.wire)
+      const rePauses = re.a + re.b
       // A follower's outgoing element playing from the start of N: asserted on
       // the Cancel runs, where B is a pure follower. When both advance, the
       // race's loser has already committed its own switch when the winner's
@@ -599,6 +600,9 @@ test('E7 — end-of-episode auto-advance: both resume N+1 from 0 (#512 fixed), n
           seeksResume,
           cancelLocal,
           rePauses,
+          rePausesA: re.a,
+          rePausesB: re.b,
+          roomRePaused: re.roomRePaused,
           followerPlayedN,
           oldPlayedA,
           oldPlayedB
@@ -687,9 +691,8 @@ test('E7s — the room pauses B a frame short of its end and A cancels its count
       const seeksA = ownSeeks(da)
       const seeksB = ownSeeks(db)
       const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
-      const rePauses = [da, db].flatMap((d) =>
-        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
-      ).length
+      const re = rePausesAfterSeek(da.wire, db.wire)
+      const rePauses = re.a + re.b
       // A is the pure follower here, so its outgoing element playing N from 0 counts.
       const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
       const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
@@ -727,6 +730,9 @@ test('E7s — the room pauses B a frame short of its end and A cancels its count
           seeksResume,
           cancelLocal,
           rePauses,
+          rePausesA: re.a,
+          rePausesB: re.b,
+          roomRePaused: re.roomRePaused,
           followerPlayedN
         },
         bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
@@ -843,9 +849,8 @@ test('E7b — the room pauses B 1.5 s or 10 s short of its end and A cancels its
       const bMoved = endPause
         ? db.ev.filter((e) => e.t === 'seeking' && e.at > endPause.at && e.at < firstSeekAt).length
         : 0
-      const rePauses = [da, db].flatMap((d) =>
-        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
-      ).length
+      const re = rePausesAfterSeek(da.wire, db.wire)
+      const rePauses = re.a + re.b
       const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
       const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
       const resumed = !a.paused && !b.paused
@@ -862,7 +867,7 @@ test('E7b — the room pauses B 1.5 s or 10 s short of its end and A cancels its
         seeksB.length !== 1 && `B sent ${seeksB.length} {0} seeks, not 1`,
         !seeksResume && 'a B seek was paused',
         !cancelLocal && `A sent ${seeksA.length} {0} seek(s) after its Cancel`,
-        rePauses > 0 && `${rePauses} re-pause(s) after the advance`,
+        rePauses > 0 && `re-pause(s) after the advance: A ${re.a}, B ${re.b}`,
         followerPlayedN && "A's outgoing element played N from 0"
       ].filter((r): r is string => typeof r === 'string')
       const bad = reasons.length > 0
@@ -899,6 +904,9 @@ test('E7b — the room pauses B 1.5 s or 10 s short of its end and A cancels its
           seeksA: seeksA.length,
           seeksB: seeksB.length,
           rePauses,
+          rePausesA: re.a,
+          rePausesB: re.b,
+          roomRePaused: re.roomRePaused,
           followerPlayedN
         },
         bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined
@@ -985,9 +993,8 @@ test('E7c — B is on a 5 s longer cut of the episode, A ends and cancels its co
       const seeksA = ownSeeks(da)
       const seeksB = ownSeeks(db)
       const firstSeekAt = Math.min(...[...seeksA, ...seeksB].map((w) => w.at))
-      const rePauses = [da, db].flatMap((d) =>
-        d.wire.filter((w) => w.dir === 'out' && w.at > firstSeekAt && w.ps?.paused === true)
-      ).length
+      const re = rePausesAfterSeek(da.wire, db.wire)
+      const rePauses = re.a + re.b
       const followerPlayedN = playedOldFromZero(da, sa.src, firstSeekAt)
       const wrongEp = epIntOf(a.label) !== '2' || epIntOf(b.label) !== '2'
       const resumed = !a.paused && !b.paused
@@ -1003,7 +1010,7 @@ test('E7c — B is on a 5 s longer cut of the episode, A ends and cancels its co
         seeksB.length !== 1 && `B sent ${seeksB.length} {0} seeks, not 1`,
         !seeksResume && 'a B seek was paused',
         !cancelLocal && `A sent ${seeksA.length} {0} seek(s) after its Cancel`,
-        rePauses > 0 && `${rePauses} re-pause(s) after the advance`,
+        rePauses > 0 && `re-pause(s) after the advance: A ${re.a}, B ${re.b}`,
         followerPlayedN && "A's outgoing element played N from 0"
       ].filter((r): r is string => typeof r === 'string')
       const bad = reasons.length > 0
@@ -1040,6 +1047,9 @@ test('E7c — B is on a 5 s longer cut of the episode, A ends and cancels its co
           seeksA: seeksA.length,
           seeksB: seeksB.length,
           rePauses,
+          rePausesA: re.a,
+          rePausesB: re.b,
+          roomRePaused: re.roomRePaused,
           followerPlayedN
         },
         bad ? { A: await A.collect(from - 3000), B: await B.collect(from - 3000) } : undefined

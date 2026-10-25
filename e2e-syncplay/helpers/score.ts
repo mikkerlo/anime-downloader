@@ -417,9 +417,12 @@ export interface RePauses {
   /** Outbound `paused: true` frames from A after A could have known about the seek. */
   a: number
   b: number
-  /** Either peer received a `paused: true` after its own threshold: the server
-   *  forwarded a re-pause. Recorded for triage only, since whether a sent
-   *  re-pause comes back depends on the server's `ignoringOnTheFly` gate. */
+  /** Either peer received a `paused: true` after the server's broadcast of the
+   *  advance seek reached it: the server forwarded a re-pause. A seeker's own
+   *  seek out is not that threshold, since a room state sent before the server
+   *  processed the seek can land after it. Recorded for triage only, since
+   *  whether a sent re-pause comes back depends on the server's
+   *  `ignoringOnTheFly` gate. */
   roomRePaused: boolean
 }
 
@@ -444,7 +447,9 @@ export function rePausesAfterSeek(wireA: readonly Frame[], wireB: readonly Frame
     ...[...wireA, ...wireB].filter((f) => f.dir === 'out' && isAdvanceSeek(f)).map((f) => f.at)
   )
   const pausesAfter = (wire: readonly Frame[], dir: 'in' | 'out'): number => {
-    const known = wire.findIndex((f) => isAdvanceSeek(f) && f.at >= firstSeekAt)
+    const known = wire.findIndex(
+      (f) => isAdvanceSeek(f) && f.at >= firstSeekAt && (dir === 'out' || f.dir === 'in')
+    )
     return wire.filter(
       (f, i) =>
         f.dir === dir && f.ps?.paused === true && (known < 0 ? f.at > firstSeekAt : i > known)

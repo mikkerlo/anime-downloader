@@ -165,6 +165,17 @@ describe('a re-pause sent after the seek still counts (#549)', () => {
     expect(rePausesAfterSeek(wire(a), wire(b))).toEqual({ a: 1, b: 0, roomRePaused: true })
     expect(rePausesAfterSeek(wire(a), wire(e7cB)).a).toBe(1)
   })
+
+  it("a room state the server sent before it processed the seeker's seek is not a room re-pause", () => {
+    // B's end-pause room state lands after B's own seek out, in the same ms,
+    // and before the server's broadcast of the seek (its echo to B).
+    const b = wire([
+      [16833, 'out', { position: 0, paused: false, doSeek: true }, null],
+      [16833, 'in', { position: 1420, paused: true, doSeek: false, setBy: 'rigA' }, null],
+      [16834, 'in', { position: 0.001, paused: false, doSeek: true, setBy: 'rigB' }, null]
+    ])
+    expect(rePausesAfterSeek([], b)).toEqual({ a: 0, b: 0, roomRePaused: false })
+  })
 })
 
 describe('the threshold is the wire index, not `at` (#549)', () => {

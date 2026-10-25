@@ -2617,6 +2617,8 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   // another episode drops it (`holdForFollowWalk`). Peers read it and decline
   // to walk back here (`declineFollowShort`).
   let followShort: { index: number; target: string } | null = null
+  // The mark the last push that went out carried: what the room has (#502).
+  let pushedShort: { index: number; target: string } | null = null
   let disposed = false
 
   function followWalkHoldsResume(): boolean {
@@ -2648,20 +2650,17 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   // A walk that moved and ended short of its latest target marks where it
-  // stopped (#506). So does one whose first step failed (`stepFailed`: the
-  // walk came back `unreachable` without moving). That peer is still on the
-  // episode it announced before the pick, and unmarked it looks to the leader
-  // like a peer that has not answered yet: the leader's file-change marker
-  // stays armed and strips this peer's pauses and seeks to 0 (#502). So it
-  // pushes at once, with no origin, the same file with the marker on: the
-  // leader's main counts it settled, and its renderer toasts "couldn't open".
-  // A mark the room already has (the same episode, short of the same pick: a
-  // third peer's arrival re-triggered the walk) is not re-announced. A walk
-  // that never stepped (this peer's own move or a translation pick was in
-  // flight) is no failure, and only re-targets a marker an earlier walk left
-  // here to the latest pick (#506), which reaches peers through later pushes.
-  // A held own commit outranks the walk: the user (or the countdown) moved,
-  // and the room should follow that, so it goes out unmarked.
+  // stopped (#506). So does one whose first step failed (`stepFailed`): that
+  // peer is still on the episode it announced before the pick, and unmarked it
+  // looks to the leader like a peer that has not answered yet, whose pauses and
+  // seeks the armed file-change marker strips to 0 (#502). So it pushes at
+  // once, unoriginated, the same file marked: the leader's main counts it
+  // settled, and its renderer toasts "couldn't open". It skips only a mark the
+  // last push already carried (`pushedShort`: a third peer's arrival
+  // re-triggered the walk), not one merely set here: a walk that never stepped
+  // (an own move or translation pick in flight) is no failure and re-targets a
+  // marker left here to the latest pick without pushing (#506). A held own
+  // commit outranks the walk and goes out unmarked: the room follows the user.
   function settleFollowWalk(stepFailed = false): void {
     if (followWalkDepth === 0) return
     followWalkDepth -= 1
@@ -2675,7 +2674,7 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
       pushSyncplayFile('follow')
     } else {
       const stale = followShort?.index === reached
-      const known = stale && followShort?.target === short?.episodeInt
+      const known = pushedShort?.index === reached && pushedShort.target === short?.episodeInt
       if (short && (stepFailed || stale)) {
         followShort = { index: reached, target: short.episodeInt }
       }
@@ -2687,12 +2686,13 @@ export function useSyncplayClient(deps: SyncplayDeps): SyncplayClient {
   }
 
   // The push's two optional marks: `episodeSwitch` only on the push its caller
-  // hands it to (#486), `followShortOf` on every push from the marked episode,
-  // whichever caller sends it (#506). Spread into `pushSyncplayFile`'s payload.
+  // hands it to (#486), `followShortOf` on every push from the marked episode
+  // (#506). Runs only inside a push that goes out, so it records what it sent.
   function announceMarks(
     episodeSwitch?: SyncplayEpisodeSwitch
   ): Pick<SyncplayFilePayload, 'episodeSwitch' | 'followShortOf'> {
     const short = followShort?.index === deps.activeEpisodeIndex.value ? followShort : null
+    pushedShort = short
     return {
       ...(episodeSwitch ? { episodeSwitch } : {}),
       ...(short ? { followShortOf: short.target } : {})

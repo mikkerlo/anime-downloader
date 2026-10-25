@@ -262,7 +262,75 @@ describe('scrubPauseVerdict (#524)', () => {
         ])
       }
     })
-    expect(v).toMatchObject({ lost: true, seekCrossed: false, reasserts: 0, resumedBy: 'seek' })
+    expect(v).toMatchObject({
+      lost: true,
+      seekCrossed: false,
+      pauseCrossed: false,
+      reasserts: 0,
+      resumedBy: 'seek'
+    })
+  })
+
+  // A scrubs, B pauses in the same ms, and the scrub reaches the server first:
+  // the forced seek is the first forced update B hears after its press, with no
+  // `client` echo of the press. The gate drops B's press, so the room never
+  // pauses; B's first heartbeat is position-only (#513's marker), and by the
+  // second B's renderer has let its pending pause go, so it claims playing. The
+  // full-suite S11 run for #544, run 47: a lost pause that `resumedBy` reads as
+  // the seek, which is the scrubber's honest `paused: false` (it never heard the
+  // pause), so `pauseCrossed` takes it out of the 2b bucket.
+  it('the pauser’s press crossed by the scrub and dropped: lost, `pauseCrossed`, not 2b', () => {
+    const v = scrubPauseVerdict({
+      scrubber: {
+        name: 'rigA',
+        ct: 629.15,
+        paused: false,
+        wire: wire([
+          [51, 'out', { position: 625.7, paused: false, doSeek: true }, { client: 81 }],
+          [
+            52,
+            'in',
+            { position: 625.701, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1, client: 81 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [344, 'in', { position: 626.7, paused: false, doSeek: false, setBy: 'rigA' }, null],
+          [347, 'out', { position: 625.71, paused: false, doSeek: false }, null]
+        ])
+      },
+      pauser: {
+        name: 'rigB',
+        ct: 627.6,
+        paused: false,
+        wire: wire([
+          [52, 'out', { position: 595.671, paused: true, doSeek: false }, { client: 63 }],
+          [
+            52,
+            'in',
+            { position: 625.701, paused: false, doSeek: true, setBy: 'rigA' },
+            { server: 1 }
+          ],
+          [52, 'out', null, { server: 1 }],
+          [
+            607,
+            'in',
+            { position: 625.971, paused: false, doSeek: false, setBy: 'rigA' },
+            { client: 63 }
+          ],
+          [613, 'out', { position: 625.701, doSeek: false }, null],
+          [1607, 'in', { position: 626.971, paused: false, doSeek: false, setBy: 'rigA' }, null],
+          [1613, 'out', { position: 625.701, paused: false, doSeek: false }, null]
+        ])
+      }
+    })
+    expect(v).toMatchObject({
+      lost: true,
+      seekCrossed: false,
+      pauseCrossed: true,
+      reasserts: 0,
+      resumedBy: 'seek'
+    })
+    expect(lostPauseTally([{ setupOk: true, ...v }])).toMatchObject({ seek: 0, dropped: 1 })
   })
 
   // The uncrossed wire plus a `doSeek: true` the scrubber sends at 60 ms, after
@@ -357,7 +425,13 @@ describe('scrubPauseVerdict (#524)', () => {
         ])
       }
     })
-    expect(v).toMatchObject({ lost: false, drift: true, seekCrossed: false, resumedBy: null })
+    expect(v).toMatchObject({
+      lost: false,
+      drift: true,
+      seekCrossed: false,
+      pauseCrossed: true,
+      resumedBy: null
+    })
     expect(v.spread).toBeCloseTo(1.25, 2)
   })
 
@@ -408,6 +482,7 @@ describe('scrubPauseVerdict (#524)', () => {
       drift: false,
       spread: 0,
       seekCrossed: false,
+      pauseCrossed: false,
       reasserts: 0,
       resumedBy: null
     })
@@ -509,12 +584,14 @@ describe('the #537 shape is scored as drift, with no carve-out (S10c)', () => {
   })
 })
 
-// S11 / S11c / S12l since #535: a lost pause fails the row when the #252
-// re-assert (2a) or a heartbeat (#513's marker failing to withhold) resumed the
-// room. The seek-resumed one is 2b, #544's, and is counted without failing; so
-// is an unread resume, which can't be attributed.
-describe('lostPauseTally: what S11 fails on (#535)', () => {
-  type Rec = { setupOk: boolean; lost: boolean; resumedBy: string | null }
+// S11 / S11c / S12l since #544: a lost pause fails the row when the #252
+// re-assert (2a, #535), a heartbeat (#513's marker failing to withhold) or the
+// scrubber's own seek (2b, #544's kept marker failing) resumed the room. An
+// unread resume, which can't be attributed, and a press the server dropped
+// (`pauseCrossed`: the room never paused) that reads as the seek are counted
+// without failing, until #547.
+describe('lostPauseTally: what S11 fails on (#535, #544)', () => {
+  type Rec = { setupOk: boolean; lost: boolean; resumedBy: string | null; pauseCrossed?: boolean }
   const run = (resumedBy: Rec['resumedBy'], over: Partial<Rec> = {}): Rec => ({
     setupOk: true,
     lost: true,
@@ -524,28 +601,78 @@ describe('lostPauseTally: what S11 fails on (#535)', () => {
 
   it('a lost pause the re-assert resumed fails the row', () => {
     const t = lostPauseTally([run('reassert'), run(null, { lost: false })])
-    expect(t).toEqual({ reassert: 1, seek: 0, heartbeat: 0, unread: 0, failed: 1 })
+    expect(t).toEqual({ reassert: 1, seek: 0, heartbeat: 0, unread: 0, dropped: 0, failed: 1 })
   })
 
-  it('a lost pause the scrubber’s own seek resumed is counted, not failed (#544)', () => {
+  it('a lost pause the scrubber’s own seek resumed fails the row (#544)', () => {
     const t = lostPauseTally([run('seek'), run(null, { lost: false })])
-    expect(t).toEqual({ reassert: 0, seek: 1, heartbeat: 0, unread: 0, failed: 0 })
+    expect(t).toEqual({ reassert: 0, seek: 1, heartbeat: 0, unread: 0, dropped: 0, failed: 1 })
   })
 
   it('a lost pause a heartbeat resumed fails the row (#513’s marker did not withhold)', () => {
     const t = lostPauseTally([run('heartbeat'), run(null, { lost: false })])
-    expect(t).toEqual({ reassert: 0, seek: 0, heartbeat: 1, unread: 0, failed: 1 })
+    expect(t).toEqual({ reassert: 0, seek: 0, heartbeat: 1, unread: 0, dropped: 0, failed: 1 })
   })
 
   it('counts an unread resume without failing, and skips unscoreable runs', () => {
     const t = lostPauseTally([
       run(null),
+      run(null),
       run('reassert', { setupOk: false }),
       run('heartbeat', { setupOk: false }),
-      run('seek'),
+      run('seek', { setupOk: false })
+    ])
+    expect(t).toEqual({ reassert: 0, seek: 0, heartbeat: 0, unread: 2, dropped: 0, failed: 0 })
+  })
+
+  // A press the server dropped (`pauseCrossed`) left the room unpaused, and the
+  // crossing seek is the first forced `paused: false` the pauser sees, so
+  // `resumedBy` reads it as the seek: it is in `dropped` and no other bucket.
+  // Red if the seek bucket took it, the misreading that put every seek-resumed
+  // lost pause #535 and #544 saw into 2b.
+  it('counts a dropped press without failing, and keeps it out of the seek bucket', () => {
+    const t = lostPauseTally([
+      run('seek', { pauseCrossed: true }),
+      run('seek', { pauseCrossed: true, setupOk: false }),
       run('seek')
     ])
-    expect(t).toEqual({ reassert: 0, seek: 2, heartbeat: 0, unread: 1, failed: 0 })
+    expect(t).toEqual({ reassert: 0, seek: 1, heartbeat: 0, unread: 0, dropped: 1, failed: 1 })
+  })
+
+  // The exemption covers only that `seek` misread: a dropped press explains no
+  // re-assert or heartbeat resume, so a crossed run read as either still fails.
+  // Red if every `pauseCrossed` run were exempted.
+  it('fails a dropped press a heartbeat resumed', () => {
+    const t = lostPauseTally([run('heartbeat', { pauseCrossed: true })])
+    expect(t).toEqual({ reassert: 0, seek: 0, heartbeat: 1, unread: 0, dropped: 0, failed: 1 })
+  })
+
+  it('fails a dropped press the re-assert resumed', () => {
+    const t = lostPauseTally([run('reassert', { pauseCrossed: true })])
+    expect(t).toEqual({ reassert: 1, seek: 0, heartbeat: 0, unread: 0, dropped: 0, failed: 1 })
+  })
+
+  it('counts in `dropped` exactly the crossed runs read as the seek', () => {
+    const t = lostPauseTally([
+      run('seek', { pauseCrossed: true }),
+      run('seek', { pauseCrossed: true }),
+      run('reassert', { pauseCrossed: true }),
+      run('heartbeat', { pauseCrossed: true }),
+      run(null, { pauseCrossed: true }),
+      run('seek', { pauseCrossed: true, lost: false })
+    ])
+    expect(t).toEqual({ reassert: 1, seek: 0, heartbeat: 1, unread: 1, dropped: 2, failed: 2 })
+  })
+
+  it('fails on every attributed resume, whatever the mix', () => {
+    const t = lostPauseTally([
+      run('reassert'),
+      run('seek'),
+      run('seek'),
+      run('heartbeat'),
+      run(null)
+    ])
+    expect(t).toEqual({ reassert: 1, seek: 2, heartbeat: 1, unread: 1, dropped: 0, failed: 4 })
   })
 
   it('reads a record shaped as the sweep writes it: `setupOk` plus the verdict', () => {
@@ -558,11 +685,17 @@ describe('lostPauseTally: what S11 fails on (#535)', () => {
         drift: false,
         spread: 0,
         seekCrossed: resumedBy === 'reassert',
+        pauseCrossed: false,
         reasserts: resumedBy === 'reassert' ? 1 : 0,
         resumedBy
       } satisfies ReturnType<typeof scrubPauseVerdict>)
     })
     expect(lostPauseTally([rec('reassert')]).failed).toBe(1)
-    expect(lostPauseTally([rec('seek')]).failed).toBe(0)
+    expect(lostPauseTally([rec('seek')]).failed).toBe(1)
+    expect(lostPauseTally([{ ...rec('seek'), lost: false }]).failed).toBe(0)
+    expect(lostPauseTally([{ ...rec('seek'), pauseCrossed: true }])).toMatchObject({
+      dropped: 1,
+      failed: 0
+    })
   })
 })

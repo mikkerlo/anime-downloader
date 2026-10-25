@@ -82,3 +82,47 @@ describe('the E7 row', () => {
     expect(e7).toContain('const oldPlayedB = playedOldFromZero(db, sb.src, firstSeekAt)')
   })
 })
+
+describe('the E7 / E7s / E7b / E7c re-pause term (#549)', () => {
+  // Nothing in a PR runs these rows either. Each is sliced to the next row's
+  // `test(`, and E7c, the last test in the file, to its end.
+  const spec = readFileSync(join(__dirname, '..', 'e2e-syncplay', 'episode.spec.ts'), 'utf8')
+  const names = ['E7', 'E7s', 'E7b', 'E7c'] as const
+  const heads = names.map((n) => `test('${n} `)
+  const rows = heads.map((head, k) => {
+    const start = spec.indexOf(head)
+    const next = heads[k + 1]
+    return { head, start, body: spec.slice(start, next ? spec.indexOf(next, start) : undefined) }
+  })
+
+  it('finds each row once, in order, with E7c running to the end of the file', () => {
+    for (const r of rows) expect(spec.split(r.head).length - 1, r.head).toBe(1)
+    const starts = rows.map((r) => r.start)
+    expect(starts[0]).toBeGreaterThan(0)
+    expect(starts).toEqual([...starts].sort((x, y) => x - y))
+    expect(spec.indexOf("\ntest('", starts[3] + 1)).toBe(-1)
+    expect(rows.map((r) => r.body.match(/RowScorer\('(\w+)'\)/)?.[1])).toEqual([...names])
+  })
+
+  it.each(names.map((n, k) => [n, k] as const))(
+    '%s counts re-pauses with rePausesAfterSeek, not after the first seek',
+    (_, k) => {
+      const { body } = rows[k]
+      expect(body).toContain('const re = rePausesAfterSeek(da.wire, db.wire)')
+      expect(body).toContain('const rePauses = re.a + re.b')
+      expect(body).toMatch(/rePauses > 0( \|\||\s*&&)/)
+      expect(body).not.toContain('w.at > firstSeekAt && w.ps?.paused === true')
+    }
+  )
+
+  it.each(names.map((n, k) => [n, k] as const))(
+    '%s records which peer re-paused, and the room re-pause only for triage',
+    (_, k) => {
+      const { body } = rows[k]
+      expect(body).toContain('rePausesA: re.a,')
+      expect(body).toContain('rePausesB: re.b,')
+      expect(body).toContain('roomRePaused: re.roomRePaused,')
+      expect(body.replace('roomRePaused: re.roomRePaused,', '')).not.toContain('roomRePaused')
+    }
+  )
+})

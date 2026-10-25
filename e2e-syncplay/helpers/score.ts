@@ -369,3 +369,48 @@ export function e7SeekVerdict(d: {
   const winner = a > 0 && b > 0 ? 'both' : a > 0 ? 'A' : b > 0 ? 'B' : null
   return { ok, winner }
 }
+
+/** The re-pause term of E7 / E7s / E7b / E7c (#549), per peer. */
+export interface RePauses {
+  /** Outbound `paused: true` frames from A after A could have known about the seek. */
+  a: number
+  b: number
+  /** Either peer received a `paused: true` after its own threshold: the server
+   *  forwarded a re-pause. Recorded for triage only, since whether a sent
+   *  re-pause comes back depends on the server's `ignoringOnTheFly` gate. */
+  roomRePaused: boolean
+}
+
+/** An auto-advance seek: a `doSeek` to the start of the new episode. The
+ *  position filter keeps out a late `positionBoth()` / `stageBehind()` seek. */
+const isAdvanceSeek = (f: Frame): boolean => f.ps?.doSeek === true && f.ps.position < 1
+
+/** The re-pauses after an auto-advance (#512's Critical item), from both
+ *  peers' wire traces relative to the same instant. A peer's `paused: true`
+ *  counts only once that peer could have known about the seek: after the
+ *  first advance seek it sent or received, in its own wire's order. `at` is
+ *  the renderer's `Date.now()` and ties at ms resolution, and the main process
+ *  traces an inbound frame before handling it, so the array order is the real
+ *  one. Before that, its 1 Hz heartbeat still carries the room's end pause,
+ *  which is correct. After it, #513's apply-in-flight marker withholds
+ *  `paused`, so a `paused: true` is a real re-pause. The threshold seek is
+ *  never earlier than the earliest advance seek either peer sent, so a stale
+ *  one from before it can't count the end pause's heartbeats, and a peer the
+ *  seek never reached keeps the pre-#549 rule: sent after that seek's ms. */
+export function rePausesAfterSeek(wireA: readonly Frame[], wireB: readonly Frame[]): RePauses {
+  const firstSeekAt = Math.min(
+    ...[...wireA, ...wireB].filter((f) => f.dir === 'out' && isAdvanceSeek(f)).map((f) => f.at)
+  )
+  const pausesAfter = (wire: readonly Frame[], dir: 'in' | 'out'): number => {
+    const known = wire.findIndex((f) => isAdvanceSeek(f) && f.at >= firstSeekAt)
+    return wire.filter(
+      (f, i) =>
+        f.dir === dir && f.ps?.paused === true && (known < 0 ? f.at > firstSeekAt : i > known)
+    ).length
+  }
+  return {
+    a: pausesAfter(wireA, 'out'),
+    b: pausesAfter(wireB, 'out'),
+    roomRePaused: pausesAfter(wireA, 'in') + pausesAfter(wireB, 'in') > 0
+  }
+}

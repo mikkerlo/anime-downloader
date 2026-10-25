@@ -34,6 +34,10 @@ import { SEEK_REASSERT_TOLERANCE_S } from '../../src/main/syncplay'
 
 const ROOM_START = 100
 const DELAY_MS = 50
+const HEARTBEAT_MS = 1000
+// The renderer's adopted pending-pause hold,
+// `src/renderer/src/composables/use-syncplay-client.ts:52 ("const ADOPTED_PENDING_PAUSE_MAX_MS = 1500")`.
+const ADOPTED_PENDING_PAUSE_MAX_MS = 1500
 // The scrubber's seek is still loading when the forced pause reaches it, as
 // it was in all four of S10c's residual runs (`pauseInFlight`).
 const SEEK_LAND_MS = 400
@@ -170,5 +174,160 @@ describe('SyncplayClient — a short scrub crossed by a peer’s pause (#537)', 
     expect(scrubber.el.seekWrites.some((w) => Math.abs(w - pausedAt) < 1)).toBe(false)
     // And the re-assert went out.
     expect(doSeeks('hostuser')).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// The mirror crossing, on the pauser (#547): the scrub reaches the server first,
+// and the pause the pauser sent before hearing its forced update arrives inside
+// the pauser's ignore window, so the server drops the press. The forced seek's
+// `paused: false` is the only resume the pauser sees, and its adopted pending-
+// pause hold declines it, and so does it decline the room's periodic, still
+// playing, that can reach the pauser ahead of its next heartbeat. Before #547
+// main armed #513's marker for those resumes anyway; no push ever retired it,
+// so the first heartbeat after the crossing went out position-only and the
+// press was re-asserted a heartbeat later, after the hold had run out. On the
+// real server a resume reaching the pauser in that gap got through, and the
+// press was lost: S11's `dropped` bucket from #546. This model sends the pauser
+// no such resume, so here the old claim is only late, and the case pins when it
+// lands: inside the hold, at every phase of the pauser's heartbeat against the
+// server's periodic.
+const SEAT_GAPS_S = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+describe('SyncplayClient — a pause crossed by a peer’s scrub and dropped by the server (#547)', () => {
+  let room: TwoPeerRoom
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+  })
+
+  afterEach(() => {
+    room?.dispose()
+    vi.useRealTimers()
+  })
+
+  /**
+   * The scrubber scrubs just after the pauser's heartbeat; the pauser presses
+   * pause after the server has applied the scrub and before its forced update
+   * reaches the pauser. `seatGapS` seats the pauser that long after the
+   * scrubber, which sets the pauser's heartbeat phase against the server's 1 Hz
+   * periodic. Returns the press instant, the crossing frame, and `t0`, the
+   * epoch `ObservedFrame.at` counts from.
+   */
+  const pauseCrossedByScrub = async (
+    seatGapS: number
+  ): Promise<{
+    scrubber: Peer
+    pauser: Peer
+    pressAt: number
+    crossing: ObservedFrame
+    t0: number
+  }> => {
+    const t0 = Date.now()
+    room = await createTwoPeerRoom({
+      position: ROOM_START,
+      paused: false,
+      server: { ignoreWindow: true }
+    })
+    const scrubber = await room.seat({
+      username: 'hostuser',
+      position: ROOM_START,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    if (seatGapS > 0) await room.advance(seatGapS, 10)
+    const pauser = await room.seat({
+      username: 'joinuser',
+      position: ROOM_START + seatGapS,
+      paused: false,
+      delayMs: DELAY_MS
+    })
+    await room.advance(4)
+    expect(pauser.adopted() && scrubber.adopted(), 'setup: both peers adopted').toBe(true)
+
+    // The phase lock: the pauser has just put a heartbeat on the wire, so its
+    // next two are ~1 s and ~2 s away. The first lands inside the TTL of a
+    // marker armed by the crossing, the second after the renderer's adopted
+    // hold (ADOPTED_PENDING_PAUSE_MAX_MS) has run out.
+    const beats = room.server.wireOf('joinuser').length
+    while (room.server.wireOf('joinuser').length === beats) await room.advance(0.01, 10)
+
+    scrubber.userSeek(scrubber.el.currentTime + 20)
+    const seekFrame = (): { at: number } | undefined =>
+      room.server.wireOf('hostuser').find((f) => f.doSeek === true)
+    while (seekFrame() === undefined) await room.advance(0.01, 10)
+    // The server applies the scrub one delay after it left and forces it to the
+    // pauser; that frame lands a second delay later. Press inside it.
+    while (Date.now() < seekFrame()!.at + DELAY_MS + 10) await room.advance(0.01, 10)
+    pauser.userPause()
+    const pressAt = Date.now()
+    const isCrossing = (f: ObservedFrame): boolean => f.state.setBy === 'hostuser' && f.state.doSeek
+    while (!pauser.frames.some(isCrossing)) await room.advance(0.01, 10)
+    // The press lands one delay after it left, inside the pauser's window.
+    await room.advance(0.1, 10)
+    return { scrubber, pauser, pressAt, crossing: pauser.frames.find(isCrossing)!, t0 }
+  }
+
+  it('is the S11 `pauseCrossed` shape: the press crosses the forced seek, which is a resume, and the server drops it', async () => {
+    const { crossing } = await pauseCrossedByScrub(0)
+    expect(crossing.state.paused).toBe(false)
+    expect(crossing.state.crossedOurChange).toBe(true)
+    const ignored = room.server.ignored.filter((f) => f.username === 'joinuser')
+    expect(ignored.filter((f) => f.paused === true)).toHaveLength(1)
+    expect(room.server.roomState().paused).toBe(false)
+  })
+
+  for (const gap of SEAT_GAPS_S) {
+    it(`re-asserts the dropped press on the first heartbeat after the crossing, and the room pauses on it, by the pauser, inside the hold (seat gap ${gap} s)`, async () => {
+      const { scrubber, pauser, pressAt, t0 } = await pauseCrossedByScrub(gap)
+
+      await room.advance(4)
+
+      // The pauser's first playstate after its ack claims the pause, one
+      // heartbeat after the crossing: inside what #513's TTL would have
+      // withheld. Red before #547 at every phase, where it went out
+      // position-only and the claim came a heartbeat later, and red at the
+      // periodic-first phases if the skip covered only the crossing frame.
+      const after = room.server.wireOf('joinuser').filter((w) => w.at > pressAt + 2 * DELAY_MS)
+      expect(after[0].at - pressAt).toBeLessThan(HEARTBEAT_MS)
+      expect(after[0].paused).toBe(true)
+      // The server took it as a pause change and forced it, `setBy` the
+      // pauser, to the scrubber, and before the pauser's own hold ran out: so no
+      // resume the room sends in the meantime can get past the hold first. Red
+      // before #547, where it reached the scrubber about 2 s after the press.
+      const pauseFrame = scrubber.frames.find((f) => f.state.paused)
+      expect(pauseFrame, 'the room never paused').toBeDefined()
+      expect(pauseFrame!.state.setBy).toBe('joinuser')
+      expect(pauseFrame!.at + t0 - pressAt).toBeLessThan(ADOPTED_PENDING_PAUSE_MAX_MS)
+      // And the room ends paused, both elements with it, on the scrub's target.
+      expect(room.server.roomState().paused).toBe(true)
+      expect(pauser.el.paused).toBe(true)
+      expect(scrubber.el.paused).toBe(true)
+      expect(Math.abs(scrubber.el.currentTime - pauser.el.currentTime)).toBeLessThan(
+        ECHO_SEEK_EPSILON_S
+      )
+    })
+  }
+
+  // The phases where the room's periodic reached the pauser before its first
+  // heartbeat really do exist in this sweep, so the latch past the crossing
+  // frame is under test and not just written down.
+  it('reaches the periodic-first shape: a resume with no counter lands between the crossing and the first heartbeat', async () => {
+    const reached: number[] = []
+    for (const gap of SEAT_GAPS_S) {
+      const { pauser, pressAt, t0 } = await pauseCrossedByScrub(gap)
+      await room.advance(2)
+      const beat = room.server.wireOf('joinuser').find((w) => w.at > pressAt + 2 * DELAY_MS)!.at
+      const periodicFirst = pauser.frames.some(
+        (f) =>
+          f.at + t0 > pressAt &&
+          f.at + t0 < beat &&
+          f.state.paused === false &&
+          f.state.setBy === 'hostuser' &&
+          !f.state.doSeek
+      )
+      if (periodicFirst) reached.push(gap)
+      room.dispose()
+    }
+    expect(reached).toEqual([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
   })
 })

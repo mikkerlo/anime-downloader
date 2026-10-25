@@ -855,9 +855,12 @@ describe('SyncplayClient — a pause pressed inside the apply gap of a peer’s 
 // re-sends the scrub, and the server applies that. Before #535 the re-assert
 // claimed the stale `paused` and undid the flip at the scrub's target; the
 // marker is now armed above it, so it goes out position-only. Both directions:
-// a resume crossing a paused peer's scrub has the same shape. The uncrossed
-// shape (2b, the seek itself carrying the stale `paused`) is #544.
-describe('SyncplayClient — a pause or resume a few ms before a peer’s far scrub (#535)', () => {
+// a resume crossing a paused peer's scrub has the same shape. In the uncrossed
+// shape (2b, #544) the flip is received and acked before the seek leaves, and
+// the seek itself carried the stale `paused`; `sendLocalState()` now keeps the
+// marker through it, so the seek and the heartbeats after it go out
+// position-only until the renderer pushes the flip applied.
+describe('SyncplayClient — a pause or resume a few ms before a peer’s far scrub (#535, #544)', () => {
   let room: TwoPeerRoom
 
   beforeEach(() => {
@@ -883,6 +886,12 @@ describe('SyncplayClient — a pause or resume a few ms before a peer’s far sc
   }
 
   const press = (A: Peer, to: boolean): void => (to ? A.userPause() : A.userPlay())
+
+  /** Advance until B has just put a heartbeat on the wire (the phase lock). */
+  const afterBHeartbeat = async (): Promise<void> => {
+    const n = room.server.wireOf('rigB').length
+    while (room.server.wireOf('rigB').length === n) await room.advance(0.05)
+  }
 
   const bWireSince = (at: number): WireFrame[] =>
     room.server.wireOf('rigB').filter((w) => w.at >= at)
@@ -927,6 +936,45 @@ describe('SyncplayClient — a pause or resume a few ms before a peer’s far sc
       expect(reasserts.length).toBeGreaterThanOrEqual(1)
       for (const r of reasserts) expect(r).not.toHaveProperty('paused')
       expect(bWireSince(scrubAt + 1).filter((w) => w.paused === !to)).toEqual([])
+      expectSettled(A, B, to, target)
+    })
+
+    it('2b, uncrossed: B’s seek and the heartbeat after it carry no stale `paused` until the renderer applies the flip (#544)', async () => {
+      const [A, B] = await seat(!to, false)
+      await afterBHeartbeat()
+      B.holdRemoteState()
+      press(A, to)
+      const from = B.frames.length
+      while (!B.frames.slice(from).some((f) => f.state.paused === to)) await room.advance(0.05)
+      const receivedAt = Date.now()
+      // B's main has the flip and has acked it; its renderer has not applied it,
+      // so the seek it builds still says `paused: !to`.
+      expect(B.counters().pendingClientAck).toBe(0)
+      const target = B.el.currentTime + FAR
+      B.userSeek(target)
+      await afterBHeartbeat()
+
+      const gap = bWireSince(receivedAt)
+      expect(gap.map((w) => w.doSeek)).toEqual([true, false])
+      // The seek, then the heartbeat after it: both position-only. Red before
+      // #544 on both frames: the seek resumed (or re-paused) the room at the
+      // target, S11's 2b shape.
+      expect(gap[0].position).toBe(target)
+      expect(gap[0]).not.toHaveProperty('paused')
+      expect(gap[1]).not.toHaveProperty('paused')
+      expect(gap[1].at - receivedAt, 'inside APPLY_IN_FLIGHT_TTL_MS').toBeLessThanOrEqual(1000)
+      expect(room.server.roomState().paused).toBe(to)
+
+      // The renderer applies the flip and pushes it: the next heartbeat claims it.
+      expect(B.releaseRemoteState()).toBeGreaterThanOrEqual(1)
+      await room.advance(0.05)
+      expect(B.el.paused).toBe(to)
+      const releasedAt = Date.now()
+      await afterBHeartbeat()
+      expect(bWireSince(releasedAt).map((w) => w.paused)).toEqual([to])
+
+      await room.advance(4)
+      expect(bWireSince(receivedAt).filter((w) => w.paused === !to)).toEqual([])
       expectSettled(A, B, to, target)
     })
   })

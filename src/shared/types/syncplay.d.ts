@@ -113,6 +113,13 @@ interface SyncplayRemoteState {
   position: number
   setBy: string | null
   doSeek: boolean
+  /** This frame is a peer's forced update that crossed our own change while it
+   *  was unacked (#544): main's `crossesOurChange`, read at the emit, per frame.
+   *  The server was then ignoring us, so a seek of ours that left before this
+   *  frame arrived was dropped, and the renderer's #488 hold may let this pause
+   *  edge through (#537, `userSeekLostToPause()`). Only ever `true` when present.
+   *  Absent means false: the server took our seek, and the hold stands. */
+  crossedOurChange?: boolean
 }
 
 interface SyncplayRoomUser {

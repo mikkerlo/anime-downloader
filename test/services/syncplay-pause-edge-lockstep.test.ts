@@ -62,7 +62,13 @@ const outboundStates = (sock: FakeSocket | null): StateFrame[] =>
     .filter((f) => 'State' in f)
     .map((f) => f.State as StateFrame)
 
-type EmittedState = { position: number; setBy: string | null; paused: boolean; doSeek: boolean }
+type EmittedState = {
+  position: number
+  setBy: string | null
+  paused: boolean
+  doSeek: boolean
+  crossedOurChange?: boolean
+}
 
 describe('SyncplayClient — the echo target arms in lockstep with the pause-edge snap (#524)', () => {
   let client: SyncplayClient
@@ -72,7 +78,7 @@ describe('SyncplayClient — the echo target arms in lockstep with the pause-edg
   const armed = (): number | null =>
     (client as unknown as { lastAppliedRemotePosition: number | null }).lastAppliedRemotePosition
 
-  const handshake = (): void => {
+  const handshake = (roster: Record<string, unknown> = {}): void => {
     client.connect({
       host: 'syncplay.test',
       port: 8999,
@@ -87,7 +93,7 @@ describe('SyncplayClient — the echo target arms in lockstep with the pause-edg
       'data',
       Buffer.from('{"Hello":{"username":"me","room":{"name":"cinema"},"version":"1.6.9"}}\r\n')
     )
-    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { cinema: {} } }) + '\r\n'))
+    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ List: { cinema: roster } }) + '\r\n'))
   }
 
   // A peer's change, forced to us by the server: the frame a pause edge rides.
@@ -100,6 +106,19 @@ describe('SyncplayClient — the echo target arms in lockstep with the pause-edg
     }
     lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ State: state }) + '\r\n'))
   }
+
+  // A peer's periodic: no `server` counter, and `client` echoing ours when given.
+  const periodic = (position: number, paused: boolean, clientEcho?: number): void => {
+    const state = {
+      ping: { latencyCalculation: 1_770_000_000.25 },
+      ...(clientEcho === undefined ? {} : { ignoringOnTheFly: { client: clientEcho } }),
+      playstate: { position, paused, doSeek: false, setBy: 'peer' }
+    }
+    lastTlsSocket!.emit('data', Buffer.from(JSON.stringify({ State: state }) + '\r\n'))
+  }
+
+  const pendingClientAck = (): number =>
+    (client as unknown as { pendingClientAck: number }).pendingClientAck
 
   const doSeekFrames = (): StateFrame[] =>
     outboundStates(lastTlsSocket).filter((s) => s.playstate?.doSeek === true)
@@ -237,6 +256,136 @@ describe('SyncplayClient — the echo target arms in lockstep with the pause-edg
       expect(c.handed.position).toBe(c.room)
       expect(c.renderer).toBe(true)
       expect(c.main).toBe(false)
+    })
+  })
+
+  // #544. The renderer's hold release reads `crossedOurChange`, main's
+  // `crossesOurChange` at the emit: a peer's forced frame that arrived while our
+  // change was unacked. Per frame, not latched (the S10c traces: the crossing
+  // forced pause itself carries the edge, and the next frame is a periodic).
+  describe('the crossed flag the hold release reads (#544)', () => {
+    const TARGET = 300
+
+    const fresh = (): void => {
+      client.disconnect()
+      client = new SyncplayClient()
+      remoteStates = []
+      client.on('remote-state', (s) => remoteStates.push(s as EmittedState))
+    }
+
+    it('flags the forced frame that crosses our unacked seek, and only that frame', () => {
+      handshake()
+      client.updateSnapshot({ position: SNAP, paused: false })
+      client.sendLocalState({ paused: false, position: TARGET, cause: 'seek' })
+      expect(pendingClientAck()).toBeGreaterThan(0)
+      forced(TARGET + 1.5, true)
+      expect(remoteStates.at(-1)).toMatchObject({ paused: true, crossedOurChange: true })
+      // The room's next periodic repeats the pause and crossed nothing.
+      vi.advanceTimersByTime(1000)
+      periodic(TARGET + 1.5, true)
+      expect(remoteStates).toHaveLength(2)
+      expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+    })
+
+    it('leaves a pause that reached us before our seek left unflagged (S10c’s uncrossed shape)', () => {
+      handshake()
+      client.updateSnapshot({ position: SNAP, paused: false })
+      forced(SNAP, true)
+      expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      // Our ack went out on receipt, so the seek after it is one the server takes.
+      expect(pendingClientAck()).toBe(0)
+      client.sendLocalState({ paused: false, position: SNAP + 2, cause: 'seek' })
+      expect(doSeekFrames()).toHaveLength(1)
+    })
+
+    // A seek dropped before it reached the wire bumps no counter, so a pause
+    // forced over it crosses nothing and the renderer's hold stands. Correct:
+    // the room never saw that seek. Pinned so a change to the default can't flip it.
+    describe('a seek never asserted', () => {
+      it('dropped by the echo guard: the next forced pause is unflagged', () => {
+        handshake()
+        client.updateSnapshot({ position: SNAP, paused: false })
+        forced(SNAP + 10, false, true)
+        expect(armed()).toBe(SNAP + 10)
+        client.sendLocalState({ paused: false, position: SNAP + 10, cause: 'seek' })
+        expect(doSeekFrames(), 'swallowed as the echo').toHaveLength(0)
+        expect(pendingClientAck()).toBe(0)
+        forced(SNAP + 11, true)
+        expect(remoteStates.at(-1)).toMatchObject({ paused: true })
+        expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      })
+
+      it('dropped by the adoption gate: the next forced pause is unflagged', () => {
+        // A peer in the roster, so adoption waits for the room to agree with us.
+        handshake({ peer: { isReady: true, file: {} } })
+        client.updateSnapshot({ position: SNAP, paused: false })
+        forced(SNAP + 100, false)
+        client.sendLocalState({ paused: false, position: SNAP + 2, cause: 'seek' })
+        expect(doSeekFrames(), 'not sent before adoption').toHaveLength(0)
+        expect(pendingClientAck()).toBe(0)
+        forced(SNAP + 100, true)
+        expect(remoteStates.at(-1)).toMatchObject({ paused: true })
+        expect(remoteStates.at(-1)).not.toHaveProperty('crossedOurChange')
+      })
+    })
+
+    // The lockstep the plan review asked for. The renderer now holds an
+    // uncrossed pause edge across #537's whole band while its seek loads, so a
+    // main that still armed for it would leave a target the renderer never
+    // seeks to, and that target would swallow a later user seek near the pause.
+    // Main's stand-in for "the renderer's seek is in flight" is a seek intent
+    // live on the frame; where the intent substitutes our projection nothing
+    // moves anyway, so the cell this adds is the converged tick of an uncrossed
+    // frame. Reached here by our seek being acked by a `client` echo on a
+    // periodic that still shows the room elsewhere (so the intent re-asserts and
+    // survives), then a peer's pause forced near our target with nothing of
+    // ours unacked.
+    describe('an uncrossed pause edge while our seek is live', () => {
+      const uncrossedConverged = (offset: number): EmittedState => {
+        handshake()
+        client.updateSnapshot({ position: SNAP, paused: false })
+        client.sendLocalState({ paused: false, position: TARGET, cause: 'seek' })
+        periodic(SNAP, false, 1)
+        expect(pendingClientAck()).toBe(0)
+        expect(
+          (client as unknown as { seekIntent: unknown }).seekIntent,
+          'setup: the intent survived the periodic'
+        ).not.toBeNull()
+        forced(TARGET + offset, true)
+        expect(
+          (client as unknown as { seekIntent: unknown }).seekIntent,
+          'setup: retired on the converged tick'
+        ).toBeNull()
+        return remoteStates.at(-1)!
+      }
+
+      it('main arms exactly when the renderer snaps: never, across the band', () => {
+        for (const offset of [-2, -0.8, 0.8, 2]) {
+          fresh()
+          const handed = uncrossedConverged(offset)
+          expect(handed, `${offset}`).toMatchObject({ position: TARGET + offset, paused: true })
+          expect(handed).not.toHaveProperty('crossedOurChange')
+          // The renderer holds (its seek in flight, the frame unflagged), so
+          // it moves nothing; and main arms nothing. Red before #544's arm gate.
+          expect(armed(), `${offset}`).toBeNull()
+        }
+      })
+
+      it('so a user seek just past the pause reaches the room', () => {
+        uncrossedConverged(1.5)
+        client.sendLocalState({ paused: true, position: TARGET + 1.7, cause: 'seek' })
+        const seeks = doSeekFrames()
+        expect(seeks.at(-1)?.playstate?.position).toBe(TARGET + 1.7)
+      })
+
+      it('a crossed frame on the same tick still arms, in lockstep with the release', () => {
+        handshake()
+        client.updateSnapshot({ position: SNAP, paused: false })
+        client.sendLocalState({ paused: false, position: TARGET, cause: 'seek' })
+        forced(TARGET + 1.5, true)
+        expect(remoteStates.at(-1)).toMatchObject({ crossedOurChange: true })
+        expect(armed()).toBe(TARGET + 1.5)
+      })
     })
   })
 

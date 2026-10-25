@@ -1731,7 +1731,7 @@ export class SyncplayClient extends EventEmitter {
 
     if (meta && username !== this.config?.username) {
       const key = `${username}|${meta.animeId}|${meta.episodeInt}`
-      if (key !== this.lastAppliedRoomEpisode) {
+      if (this.isNewRoomEpisode(key, meta)) {
         this.lastAppliedRoomEpisode = key
         this.emitRemoteEpisode(meta, {
           animeId: meta.animeId,
@@ -3481,8 +3481,8 @@ export class SyncplayClient extends EventEmitter {
   }
 
   // `absorbRemoteFile()`'s emit, with the peer's `followShortOf` passed through
-  // (#506). Main keys and emits exactly as before; the receiving renderer is the
-  // one that declines to walk. Declared down here so the insertion shifts no
+  // (#506). `isNewRoomEpisode()` gates it; the receiving renderer is the one
+  // that declines to walk. Declared down here so the insertion shifts no
   // line anchor above it.
   private emitRemoteEpisode(
     meta: NonNullable<SyncplayRoomUser['animeDlAppMeta']>,
@@ -3628,6 +3628,24 @@ export class SyncplayClient extends EventEmitter {
     this.crossedByForeign = null
     log('old-file corrective seek', 'counter=', this.clientIgnoreCounter, 'paused=', paused)
     this.sendStateMessage({ doSeek: true, override: { position: 0, paused } })
+  }
+
+  // `absorbRemoteFile()`'s emit gate. A new `user|anime|episode` key emits as
+  // before; so does a `followShortOf` that differs from the last emitted one on
+  // the same key (#502 review). That is a follow walk which never moved: the
+  // peer re-announces the episode it was already on, now marked, and the
+  // renderer has to see it to toast why the peer is behind. A same-key push
+  // without the marker still emits nothing, so a peer that reopens its player
+  // on the episode it stopped on (a fresh composable, unmarked) does not pull
+  // us back to it. Declared down here so the insertion shifts no line anchor.
+  private lastAppliedFollowShort: string | undefined = undefined
+  private isNewRoomEpisode(key: string, meta: { followShortOf?: string }): boolean {
+    const short = meta.followShortOf
+    const fresh =
+      key !== this.lastAppliedRoomEpisode ||
+      (short !== undefined && short !== this.lastAppliedFollowShort)
+    if (fresh) this.lastAppliedFollowShort = short
+    return fresh
   }
 }
 

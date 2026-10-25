@@ -356,10 +356,15 @@ describe('SyncplayClient — the file-change seek (#486)', () => {
     const peerOn = (
       username: string,
       episodeInt: string,
-      extra: { followShortOf?: string; translationId?: number; vanilla?: boolean } = {}
+      extra: {
+        followShortOf?: string
+        translationId?: number
+        vanilla?: boolean
+        animeId?: number
+      } = {}
     ): void => {
       const meta = {
-        animeId: 1,
+        animeId: extra.animeId ?? 1,
         malId: 2,
         episodeInt,
         translationId: extra.translationId ?? 3,
@@ -612,6 +617,28 @@ describe('SyncplayClient — the file-change seek (#486)', () => {
       forced(200, false, 'peer', 2, true)
       expect(remote.at(-1)!.position).toBeGreaterThan(199)
       expect(seeks()).toEqual([])
+    })
+
+    // #502 review, the residual left in scope: a peer whose player is on
+    // another anime never follows, so its meta never settles on our pick, and
+    // until our next asserted change every seek it makes is stripped. Pinned so
+    // that is a decision, not an accident: a second seek is stripped too.
+    it('an unmarked peer on another anime still has its second seek stripped', () => {
+      seatAndSwitch('local')
+      ownEcho()
+      peerOn('peer', '7', { animeId: 9 })
+      expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
+
+      forced(200, false, 'peer', 2, true)
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      ownEcho(false, 3)
+      lastTlsSocket!.write.mockClear()
+
+      forced(300, false, 'peer', 4, true)
+      expect(remote.at(-1)).toMatchObject({ setBy: 'peer', doSeek: true })
+      expect(remote.at(-1)!.position).toBeLessThan(1)
+      expect(seeks()).toEqual([{ position: 0, paused: false, doSeek: true }])
+      expect(marker()).toEqual({ animeId: 1, episodeInt: '8' })
     })
 
     it('a stale `followShortOf` for another episode does not count as settled', () => {

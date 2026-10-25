@@ -1337,9 +1337,11 @@ describe('#501 — the follow walk announces only where it ends up', () => {
     expect(begin).toBeGreaterThan(-1)
     expect(begin).toBeLessThan(walk)
     // `finally`, so arrival, `unreachable`, a translation pick and a throw
-    // all settle. A `.then` would skip the throw.
+    // all settle; the settle alone would skip the throw on a `.then`. The
+    // `.then` only records the outcome, so a failed step reaches the settle
+    // (#502 review).
     expect(handler.slice(walk)).toMatch(
-      /^void walkEpisodeSteps\([^]*?\)\.finally\(\(\) => syncplay\.settleFollowWalk\(\)\);\s*\}\s*$/
+      /^void walkEpisodeSteps\([^]*?\)\s*\.then\(\(o\) => \(outcome = o\)\)\s*\.finally\(\(\) => syncplay\.settleFollowWalk\(outcome === 'unreachable'\)\);\s*\}\s*$/
     )
     // Every early return sits above the begin, so no path begins without
     // reaching the walk.

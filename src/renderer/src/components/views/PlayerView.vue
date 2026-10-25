@@ -585,13 +585,19 @@ function handleRemoteEpisodeChange(ep: SyncplayRemoteEpisode): void {
   // index once as a `'follow'` (or as a user's own commit it held). In
   // `finally`, so arrival, `unreachable`, a translation pick and a throw all
   // announce where this peer really is. A one-step follow takes the same path.
+  // The outcome tells the settle whether a step failed, which on a walk that
+  // never moved is what makes it announce its own episode marked short of the
+  // pick (#502 review); a throw leaves it unset.
   let steps = 0;
+  let outcome: EpisodeStepOutcome | 'arrived' | null = null;
   syncplay.beginFollowWalk(idx, ep.episodeInt);
   void walkEpisodeSteps(
     () =>
       activeEpisodeIndex.value !== idx && !navigating.value && translationEpoch === walkTranslation,
     () => goToEpisode(dir, 'follow', steps++ > 0)
-  ).finally(() => syncplay.settleFollowWalk());
+  )
+    .then((o) => (outcome = o))
+    .finally(() => syncplay.settleFollowWalk(outcome === 'unreachable'));
 }
 
 // Disposers for the non-syncplay broadcast subs (syncplay owns its own).

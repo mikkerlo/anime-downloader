@@ -540,13 +540,13 @@ tests* above — two exact, one a floor and one a ceiling:
   `test/services/syncplay-mirror-election.test.ts` into `docs/syncplay.md`, one
   81 lines behind its subject and one 119. So the heuristic's measured
   false-positive rate on that population is zero, and the pin began there. What
-  it holds now is the deliberate landings that followed: #390's three, all
-  anchors in the `blankCommentsAndStrings` docstring in the two-peer loop test,
-  whose subject *is* which `goToEpisode(` matches are comments rather than call
-  sites, so its worked examples can only be comment lines; plus #384's one, the
-  premise correction in the conformance-harness header, which cites an
-  *absence* and so has no code line to point at. The comment block above
-  `SUSPICIOUS_LANDING_PIN` enumerates each of them. A further deliberate landing
+  it holds now is the deliberate landings #486 left standing: #390's, in the
+  `blankCommentsAndStrings` docstring in the two-peer loop test, whose subject
+  *is* which `goToEpisode(` matches are comments rather than call sites, so its
+  worked examples can only be comment lines; plus #384's, the premise correction
+  in the conformance-harness header, which cites an *absence* and so has no code
+  line to point at. The comment block above `SUSPICIOUS_LANDING_PIN` enumerates
+  each of them with the reason it stays. A further deliberate landing
   raises the pin by the landings it adds, with its reason in the commit
   message. What the pin does **not** cover is an anchor landing on a live
   code line: that is checked for existence only. The four same-file anchors in
@@ -591,32 +591,32 @@ tests* above — two exact, one a floor and one a ceiling:
   from the 12 #372 set, where 52 anchors of slack let the verified population
   lose 81% of its members with the gate green; #459 took it 64 to 75 and #517
   to 90 with their retrofits, since slack is what stops a floor from binding.
-- **Unmarked upstream `.py` anchors, capped at 262.** The other one-sided count,
+- **Unmarked upstream `.py` anchors, capped at 261.** The other one-sided count,
   and the only one where *growth* is the hazard, so it is the floor's mirror image
   and is compared the other way. Nothing in this repo resolves a Python target:
   each of these is counted as unresolvable by construction, no landing predicate
-  ever runs on it, and its line number is never compared with anything. 262
+  ever runs on it, and its line number is never compared with anything. 261
   anchors across 27 citing files, and **none of them carries a quote** — which is
   why the count is of the *unmarked* ones rather than a widening of `marked`
   above, whose printed line says "verified against their target" and would be
-  false by 262 in a single step. One more than the cap reds the PR that writes it,
+  false by 261 in a single step. One more than the cap reds the PR that writes it,
   which is the property a floor could not deliver: `analyze()` has no notion of
   "added in this PR" and a floor only says the count must not fall, so a new
-  unmarked upstream anchor would arrive green. The 262 already here are
+  unmarked upstream anchor would arrive green. The 261 already here are
   grandfathered rather than retrofitted under duress, and a retrofit lowers the
   count, so the number ratchets toward zero. The hash-comment predicate learned
   `.py` in the same change — 0 occurrences today, since no Python target resolves
   for it to fire on, so it is covered by a fixture rather than by the tree and the
   hole is closed before the population arrives. Re-measuring the cap has one
-  trap worth knowing, and it is not a number to carry forward by hand: a direct
-  scan returns **292** — 286 unmarked and 6 marked — against the gate's 262, so
-  the gap is 30 citation-shaped fixture strings inside
-  `test/check-line-citations.test.ts`, which sits in `EXCLUDED_PATHS`. That gap
-  is a property of the fixture file rather than of the tree, and it grows with
-  every fixture added, which is exactly how it was last carried forward wrong:
-  #457 added one to each side of a stale 268-and-seven while in fact adding
-  several fixture strings, and #395 step 2 added more of its own. Pin against what
-  the gate counts, not what a hand census does. The cap last rose
+  trap worth knowing, and it is deliberately written here without a number: a
+  direct scan of tracked files over-counts the gate, because it also sees the
+  citation-shaped fixture strings inside `test/check-line-citations.test.ts`,
+  which sits in `EXCLUDED_PATHS`. That gap is a property of the fixture file
+  rather than of the tree, and it grows with every fixture added, which is
+  exactly how a census of it kept being carried forward wrong: #457 adjusted
+  a figure that was already stale while in fact adding several fixture
+  strings, and #395 step 2 added more of its own. Pin against what the gate
+  itself reports, not what a hand census does. The cap last rose
   by one, for a qualifier on `RoomManager.broadcast` in
   `test/services/syncplay-two-peer-adoption.test.ts` naming the default-config
   branch that constructs the room manager — spelled out there and deliberately
@@ -638,12 +638,12 @@ tests* above — two exact, one a floor and one a ceiling:
   `continue` has been lifted by an injected extension set. Mechanical
   verification therefore holds for this class in the nightly run and not in
   `quality`, which is the split *The nightly upstream check* below describes. The
-  count is **0** today, so the figure exists to keep it visible rather than to
-  clear a backlog — folded into either neighbour it would falsify that line's own
-  sentence, and left unprinted the class could grow with every figure on the
-  gate's output unmoved. It takes no pin in either direction: marking an upstream
-  anchor is the remedy the cap's failure text recommends, so a floor would
-  penalise the retrofit and a ceiling would penalise the cure.
+  count is left for the gate to print, and the figure exists to keep the class
+  visible rather than to clear a backlog — folded into either neighbour it would
+  falsify that line's own sentence, and left unprinted the class could grow with
+  every figure on the gate's output unmoved. It takes no pin in either direction:
+  marking an upstream anchor is the remedy the cap's failure text recommends, so
+  a floor would penalise the retrofit and a ceiling would penalise the cure.
 
 **Write the shortest path suffix only one file matches.** The resolver accepts
 any unique suffix of a tracked path, and checks it exactly as it checks a full
@@ -911,13 +911,13 @@ predicate that flagged it and the commit it was measured against:
   predicate ships against a clean tree and its first flag is news. The end line
   stays in scope, and only the first boundary in a range is reported;
 - **suspicious landings on an upstream line** — the existing ladder, which never
-  fires in `quality` because a Python target cannot resolve there. Exactly one
-  such landing exists at the pin: `docs/syncplay.md` cites `_allowTLSconnections()`
-  whole, and the blank line the heuristic objects to is the intra-function gap
-  between its `open()` calls and the `getmtime()` below them. It is allow-listed
-  by **citer and anchor together**, not by count — pinned as "one landing is
-  expected", a different anchor sliding onto a different blank line would hold
-  the count at one and pass;
+  fires in `quality` because a Python target cannot resolve there. **None**
+  exists at the pin: the one there was, `docs/syncplay.md` citing
+  `_allowTLSconnections()` whole across the gap below its `open()` calls, was
+  repaired by splitting it into the opens and the `except` arm's fall-back, each
+  marked with its range's end line (#511). The allow-list keeps its key of
+  **citer and anchor together** for any future entry, not a count, which would
+  hold while a different anchor slid onto a different blank line;
 - **marked anchors whose quote has rotted** — the content half of the marked form,
   which `quality` can only check the spelling of.
 
@@ -925,12 +925,12 @@ All of those figures are pinned to the commit `993232ab…`, read from the
 workflow's own install line and confirmed against the installed distribution's
 `direct_url.json` before a single anchor is examined: a mismatch aborts with both
 shas rather than reporting line numbers measured against the wrong tree. A
-marked upstream anchor is therefore verified mechanically as soon as the
-population is non-empty — it is **0** today — which is what the printed
-marked-Python figure in `quality` exists to keep visible. A failure files its own
-issue, separate from the divergence one and deduped on the title, because a wrong
-line number in a comment and a model that has drifted from the reference have
-different readers and different repairs.
+marked upstream anchor is therefore verified mechanically in that run, and how
+many there are is what the printed marked-Python figure in `quality` exists to
+keep visible. A failure files its own issue, separate from the divergence one
+and deduped on the title, because a wrong line number in a comment and a model
+that has drifted from the reference have different readers and different
+repairs.
 
 ## Prose-shape gate
 

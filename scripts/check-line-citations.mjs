@@ -183,9 +183,9 @@ export const MARKED_PIN = 90
 // landing predicate below ever runs on it and no line number is ever compared
 // against anything.
 //
-// Counted as UNMARKED rather than folded into `marked` above. Zero of the 262
+// Counted as UNMARKED rather than folded into `marked` above. Zero of the 261
 // carry a quote today, so widening that population would make its own printed
-// sentence — "verified against their target" — false by 262 in a single step.
+// sentence — "verified against their target" — false by 261 in a single step.
 // Hence a separate counter and a separate printed line, and deliberately no
 // `.py`-marked floor constant beside it: the ceiling states the same property
 // from the other side, and a second number would only be one more thing to keep
@@ -202,12 +202,12 @@ export const MARKED_PIN = 90
 // retrofit into coverage, and skipping it costs nothing today and everything
 // later.
 //
-// 262 unmarked upstream-Python anchors on this tree, and re-measuring it has a
-// trap worth stating rather than rediscovering. A direct scan of tracked files
-// returns 292 — 286 unmarked and 6 marked — not the 262 pinned here. The 30 extra
-// are fixture strings in `test/check-line-citations.test.ts`, and that number
-// moves with every fixture added: pin against what the gate counts.
-export const UNMARKED_PY_PIN = 262
+// Re-measuring this ceiling has a trap worth stating, and it is why no census
+// figure is written here: a direct scan of tracked files over-counts the gate,
+// because it also sees the fixture strings in `test/check-line-citations.test.ts`
+// that `EXCLUDED_PATHS` keeps out. That gap moves with every fixture added, so a
+// figure for it is stale by the next one: pin against what the gate reports.
+export const UNMARKED_PY_PIN = 261
 
 // --- configuration ------------------------------------------------------------
 

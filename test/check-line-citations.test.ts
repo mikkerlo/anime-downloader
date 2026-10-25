@@ -1,10 +1,12 @@
 // Fixtures for the citation gate (#336). Every case that drives `analyze()`
 // drives it over a synthetic corpus rather than the real tree, so the
 // assertions stay exact: the real tree's counts are the gate's own pins and
-// move with every repair. The one block that does read a real file — the
-// prose-figure cases at the foot of this file (#461) — reads `docs/testing.md`
-// and compares it with the pin constants, never with a count taken off the
-// tree, so the reason above still holds there.
+// move with every repair. The blocks that do read real files are the two at
+// the foot of this file. The prose-figure cases (#461) read `docs/testing.md`
+// and compare it with the pin constants, never with a count taken off the tree.
+// The figureless-sentence cases (#511) read that page, the two gate scripts and
+// this file, and assert only that a few sentences state no figure at all. So the
+// reason above still holds for both.
 //
 // This file is in `EXCLUDED_PATHS`, and has to be. Its fixtures are citation
 // shapes on purpose — several are deliberately broken — so scanning it would
@@ -2177,8 +2179,8 @@ describe('check-upstream-citations', () => {
     // `server.py:251-257` is `_allowTLSconnections()` whole. The `def` is on the
     // START line, so the boundary predicate is silent — correctly, the citation
     // means the function. The blank at `:256` is an intra-function gap, which
-    // `interiorBlankLine()` does report, which is why that anchor is named in
-    // `UPSTREAM_LANDING_ALLOW` rather than repaired.
+    // `interiorBlankLine()` does report, which is why the doc's anchor was split
+    // into two marked ones that hold no blank (#511) rather than named in a list.
     expect(defClassBoundary(TLS_PY, 251, 257)).toBeNull()
 
     const r = runResolvingPy({
@@ -2265,12 +2267,12 @@ describe('check-upstream-citations', () => {
   })
 
   it('keys the landing allow-list on the citer AND the anchor, not on a count', () => {
-    // WHY A LIST AND NOT A NUMBER. There is exactly one legitimate upstream
-    // landing at the pin, so "expect 1" would pass — and would go on passing if a
-    // different anchor slid onto a different blank line, because the count is
-    // unchanged. Both halves of the key are load-bearing: the same citer repointed
-    // is a different claim, and the same anchor written somewhere else is a
-    // different reader.
+    // WHY A LIST AND NOT A NUMBER. A pinned count of legitimate landings would
+    // go on passing if a different anchor slid onto a different blank line,
+    // because the count is unchanged. The list is empty at the pin (#511), and
+    // this case keeps the key honest for its next entry. Both halves of the key
+    // are load-bearing: the same citer repointed is a different claim, and the
+    // same anchor written somewhere else is a different reader.
     const corpus: Corpus = {
       'syncplay/server.py': FINDINGS_SERVER,
       'src/caller.ts': '// the chat relay (server.py:5-6)'
@@ -2480,9 +2482,9 @@ describe('check-upstream-citations', () => {
 // gets through.
 //
 // Deliberately NOT asserted: the cap's value where the page restates it as a
-// *measurement* ("262 anchors across 27 citing files", "false by 262"). The cap
-// is one-sided, so after a retrofit the count and the cap can legitimately
-// differ and asserting them would be wrong.
+// *measurement*, in the cap bullet's anchor-and-file census and its "false by"
+// clause. The cap is one-sided, so after a retrofit the count and the cap can
+// legitimately differ and asserting them would be wrong.
 
 const { MARKED_PIN, UNMARKED_PY_PIN, SUSPICIOUS_LANDING_PIN, UNCHECKABLE_PIN } = citations
 
@@ -2980,5 +2982,135 @@ describe('the pin figures docs/testing.md restates', () => {
     // A tab after the hashes counts as well, so the two arms of `[ \t]` are both
     // live rather than one of them being decoration.
     expect(pinProseMismatches(atxish('##\tTab after the hashes.'), FIXTURE_PINS)).toEqual([])
+  })
+})
+
+// THE SENTENCES THAT DECLINE TO CARRY A FIGURE (#511 review). Each one used to
+// restate a number it had no way to keep in step: a direct-scan census, the
+// marked `.py` count, a pin's value spelled as a word, a per-issue breakdown of
+// that pin, a cap value quoted out of the page. Each was stale on the line
+// itself when a reviewer read it. `pinProseMismatches` cannot catch that,
+// because it compares a figure with a constant and most of these numbers have
+// no constant. So the rule these sentences now follow is "no figure at all", and
+// this checks that rule. Issue references, `#395 step 2` and code spans are not
+// figures and are stripped first.
+const SCRIPTS_DIR = join(import.meta.dirname, '..', 'scripts')
+
+// Comment prefixes are stripped so a sentence wrapped across `//` or ` * `
+// lines matches the same `\s+`-joined pattern as one wrapped in markdown.
+const uncommented = (source: string): string => source.replace(/^[ \t]*(?:\/\/|\*)[ \t]?/gm, '')
+
+const sentence = (text: string, from: RegExp, to: RegExp): string => {
+  const starts = [...text.matchAll(new RegExp(from.source, 'g'))]
+  expect(starts, `${from} should match exactly once`).toHaveLength(1)
+  const start = starts[0].index ?? 0
+  const end = text.slice(start).search(to)
+  expect(end, `${to} should follow ${from}`).toBeGreaterThan(-1)
+  return text.slice(start, start + end)
+}
+
+// NAMES, NOT A HYPHEN RULE. These are the compounds the word-checked passages
+// actually contain, found by running the extractor over them: the "two-peer
+// loop test" and a "one-sided" cap. Skipping every hyphenated number word would
+// also pass "a four-landing pin", which is a figure in compound form and exactly
+// the stale count these sentences refuse. A new name gets added here by hand.
+const NAMED_COMPOUNDS = ['two-peer', 'one-sided']
+const NUMBER_WORD = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi
+
+const statedFigures = (text: string, words = false): string[] => {
+  const prose = text.replace(/`[^`]*`/g, '').replace(/#\d+(?:\s+step\s+\d+)?/g, '')
+  const digits = prose.match(/\d+/g) ?? []
+  const unnamed = NAMED_COMPOUNDS.reduce((t, name) => t.replaceAll(name, ''), prose)
+  const spelled = words ? (unnamed.match(NUMBER_WORD) ?? []) : []
+  return [...digits, ...spelled]
+}
+
+describe('the sentences that decline to carry a figure', () => {
+  it('states no census, count or pin value where the figure would go stale (#511 review)', () => {
+    const doc = readFileSync(TESTING_DOC, 'utf8')
+    const lineGate = uncommented(
+      readFileSync(join(SCRIPTS_DIR, 'check-line-citations.mjs'), 'utf8')
+    )
+    const upstreamGate = uncommented(
+      readFileSync(join(SCRIPTS_DIR, 'check-upstream-citations.mjs'), 'utf8')
+    )
+
+    // The direct-scan trap, in the doc and above `UNMARKED_PY_PIN`. Digits only,
+    // because the doc's sentence says "one trap" in plain prose.
+    expect(
+      statedFigures(sentence(doc, /Re-measuring\s+the\s+cap/, /hand\s+census\s+does\./))
+    ).toEqual([])
+    expect(
+      statedFigures(sentence(lineGate, /Re-measuring\s+this\s+ceiling/, /the\s+gate\s+reports\./))
+    ).toEqual([])
+
+    // The marked `.py` count, in its own bullet and in the nightly section.
+    expect(
+      statedFigures(
+        sentence(doc, /\*\*Marked\s+upstream\s+`\.py`\s+anchors\s+—/, /penalise\s+the\s+cure\./)
+      )
+    ).toEqual([])
+    expect(
+      statedFigures(
+        sentence(doc, /upstream\s+anchor\s+is\s+therefore\s+verified/, /keep\s+visible\./)
+      )
+    ).toEqual([])
+
+    // `SUSPICIOUS_LANDING_PIN`'s value, which this sentence once gave as "four"
+    // against a constant of two. Words count here, since a word is how it was
+    // written.
+    expect(
+      statedFigures(
+        sentence(
+          upstreamGate,
+          /THIS\s+DOES\s+NOT\s+DUPLICATE\s+`SUSPICIOUS_LANDING_PIN`/,
+          /by\s+coincidence\./
+        ),
+        true
+      )
+    ).toEqual([])
+
+    // What the suspicious-landings pin holds, which the page once counted as
+    // "#390's three … plus #384's one" — a sum that outlived #486 taking the pin
+    // to two. Words count here too. The bullet's other figures are history
+    // (#336's thirteen, the 81 and 119 line offsets), so only this sentence is
+    // held to the rule.
+    expect(
+      statedFigures(
+        sentence(doc, /What\s+it\s+holds\s+now\s+is\s+the\s+deliberate/, /reason\s+it\s+stays\./),
+        true
+      )
+    ).toEqual([])
+
+    // And this file's own note on the cap's restatements, which quoted the page's
+    // census at a cap value #511 then lowered.
+    const self = uncommented(
+      readFileSync(join(import.meta.dirname, 'check-line-citations.test.ts'), 'utf8')
+    )
+    expect(
+      statedFigures(sentence(self, /Deliberately\s+NOT\s+asserted:/, /would\s+be\s+wrong\./), true)
+    ).toEqual([])
+
+    // The two sentences as #511's first revision left them, so the clean results
+    // above are a property of the rewrite and not of a check that never fires.
+    expect(
+      statedFigures(
+        "a direct scan returns **292** — 286 unmarked and 6 marked — against the gate's 261"
+      )
+    ).toEqual(['292', '286', '6', '261'])
+    expect(
+      statedFigures('THIS DOES NOT DUPLICATE `SUSPICIOUS_LANDING_PIN`, whose value is four', true)
+    ).toEqual(['four'])
+
+    // The landing breakdown as it stood before, in the same frame: the per-issue
+    // counts are figures, and the hyphenated test name beside them is not.
+    expect(
+      statedFigures("#390's three, all in the two-peer loop test; plus #384's one", true)
+    ).toEqual(['three', 'one'])
+
+    // A figure in compound form is still a figure: only the named compounds are
+    // exempt, not the hyphen.
+    expect(statedFigures('a four-landing pin', true)).toEqual(['four'])
+    expect(statedFigures('the three-anchor breakdown', true)).toEqual(['three'])
   })
 })

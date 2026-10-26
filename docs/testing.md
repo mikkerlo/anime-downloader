@@ -422,6 +422,16 @@ scans read comment-stripped source; negative (`not.toContain`) scans read raw,
 where stripping could only loosen them. See #302 and #321, and the per-site
 notes in that test file.
 
+`test/net-adoption-guard.test.ts` (#567) is the one scan that walks the
+TypeScript AST instead of text: it fails on any bare `fetch` value reference
+in `src/main` outside `lib/net.ts` (a call, a default such as
+`fetchImpl = fetch`, an argument, `globalThis.fetch`) and on `bypassOffline`
+anywhere, while a `typeof fetch` type, a member name or a `"fetch failed"`
+string never matches. Its negative assertion is backed by the two rules above:
+a self-test feeds the scanner each reference shape, and the adopted sites are
+pinned by count (nine `fetchWithTimeout` references), so a scanner that stops
+finding anything goes red rather than green.
+
 The third way out is to stop scanning: a text guard on `src/main/index.ts` exists
 only because that file boots Electron at module scope and no test can import it,
 so extracting the code it guards converts the guard into an ordinary assertion.

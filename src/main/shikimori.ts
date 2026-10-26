@@ -1,9 +1,9 @@
 import type { StorageService } from './store/types'
-import { SHIKIMORI_ORIGIN } from '../shared/shikimori'
+import { shikimoriOrigin } from './lib/api-bases'
+import { fetchWithTimeout } from './lib/net'
 
 const CLIENT_ID = 'wlhQeTkDVSMFmXqvtDJqPG_ZhWEUnG8iI4YG9nadvLU'
 const CLIENT_SECRET = 'r_lIMZbmFWZmVgP9pC9-9XaS0e96lwduMOegZ3YREfM'
-const BASE_URL = SHIKIMORI_ORIGIN
 const REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob'
 const USER_AGENT = 'anime-dl'
 
@@ -156,12 +156,15 @@ export function getAuthUrl(): string {
     response_type: 'code',
     scope: 'user_rates'
   })
-  return `${BASE_URL}/oauth/authorize?${params}`
+  return `${shikimoriOrigin()}/oauth/authorize?${params}`
 }
 
-async function shikiFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`
-  const response = await fetch(url, {
+const MAX_429_RETRIES = 3
+const MAX_RETRY_AFTER_S = 60
+
+async function shikiFetch(path: string, options: RequestInit = {}, attempt = 0): Promise<Response> {
+  const url = path.startsWith('http') ? path : `${shikimoriOrigin()}${path}`
+  const response = await fetchWithTimeout(url, {
     ...options,
     headers: {
       'User-Agent': USER_AGENT,
@@ -169,10 +172,13 @@ async function shikiFetch(path: string, options: RequestInit = {}): Promise<Resp
     }
   })
 
-  if (response.status === 429) {
-    const retryAfter = Number(response.headers.get('retry-after') || '1')
+  if (response.status === 429 && attempt < MAX_429_RETRIES) {
+    const retryAfter = Math.min(
+      Number(response.headers.get('retry-after') || '1'),
+      MAX_RETRY_AFTER_S
+    )
     await new Promise((r) => setTimeout(r, retryAfter * 1000))
-    return shikiFetch(path, options)
+    return shikiFetch(path, options, attempt + 1)
   }
 
   if (!response.ok) {
@@ -195,7 +201,7 @@ async function shikiFetch(path: string, options: RequestInit = {}): Promise<Resp
 }
 
 export async function exchangeCode(code: string): Promise<ShikiCredentials> {
-  const response = await shikiFetch(`${BASE_URL}/oauth/token`, {
+  const response = await shikiFetch(`${shikimoriOrigin()}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -210,7 +216,7 @@ export async function exchangeCode(code: string): Promise<ShikiCredentials> {
 }
 
 async function refreshToken(token: string): Promise<ShikiCredentials> {
-  const response = await shikiFetch(`${BASE_URL}/oauth/token`, {
+  const response = await shikiFetch(`${shikimoriOrigin()}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -568,7 +574,7 @@ async function getFriendHistory(
       friendAvatar: friend.avatar,
       malId: entry.target.id,
       animeName: entry.target.russian || entry.target.name,
-      animeImage: img.startsWith('http') ? img : `${BASE_URL}${img}`,
+      animeImage: img.startsWith('http') ? img : `${shikimoriOrigin()}${img}`,
       description: entry.description,
       createdAt: entry.created_at
     })
@@ -673,7 +679,7 @@ export function buildFriendCard(
       malId: pick.anime.id,
       animeId: null,
       title: pick.anime.russian || pick.anime.name,
-      image: img.startsWith('http') ? img : `${BASE_URL}${img}`,
+      image: img.startsWith('http') ? img : `${shikimoriOrigin()}${img}`,
       episode: pick.episodes,
       total: pick.anime.episodes,
       status: pick.status

@@ -200,6 +200,12 @@ describe('scripts/ci-electron-libs.sh', () => {
     beforeEach(() => {
       dir = fs.mkdtempSync(join(os.tmpdir(), 'ci-libs-'))
       fs.mkdirSync(join(dir, 'bin'))
+      // The deb822 sources as today's runner image writes them (APT_ETC).
+      fs.mkdirSync(join(dir, 'etc', 'sources.list.d'), { recursive: true })
+      fs.writeFileSync(
+        join(dir, 'etc', 'sources.list.d', 'ubuntu.sources'),
+        'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates\n'
+      )
       // `sudo tee <list>` lands in the scratch dir; anything else just runs.
       stub('sudo', 'if [ "$1" = tee ]; then exec tee "$STUB/mirrors.txt"; fi\nexec "$@"\n')
       stub('dpkg', 'echo amd64\n')
@@ -233,6 +239,7 @@ describe('scripts/ci-electron-libs.sh', () => {
           ...process.env,
           PATH: `${join(dir, 'bin')}:${process.env.PATH}`,
           STUB: dir,
+          APT_ETC: join(dir, 'etc'),
           MISSING: '',
           STALL: '',
           ...env
@@ -258,6 +265,7 @@ describe('scripts/ci-electron-libs.sh', () => {
       const r = run({ MISSING: 'libgbm1', STALL: 'https://archive.ubuntu.com/ubuntu/' })
       expect(r.status).toBe(0)
       expect(r.stdout).toContain('::warning::Not installed: libgbm1')
+      expect(r.stdout).not.toContain('mirror rotation has no effect')
       expect(r.stdout).toContain(
         '::warning::apt stalled or failed on https://archive.ubuntu.com/ubuntu/; rotating mirror'
       )
@@ -286,6 +294,20 @@ describe('scripts/ci-electron-libs.sh', () => {
       expect(r.stdout).toContain('::error::apt failed on every mirror; giving up')
       expect(calls()).toEqual([])
       expect(fs.existsSync(join(dir, 'installed'))).toBe(false)
+    })
+
+    it('warns that rotation has no effect when the sources do not read the mirror list', () => {
+      fs.writeFileSync(
+        join(dir, 'etc', 'sources.list.d', 'ubuntu.sources'),
+        'Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\n'
+      )
+      const r = run({ MISSING: 'libgbm1' })
+      expect(r.stdout).toContain(
+        '::warning::apt sources do not read /etc/apt/apt-mirrors.txt; mirror rotation has no effect on this image'
+      )
+      // It degrades to the image's own sources: the attempts still run.
+      expect(r.status).toBe(0)
+      expect(calls()).toHaveLength(3)
     })
 
     it('fails when a package is still missing after apt succeeded', () => {

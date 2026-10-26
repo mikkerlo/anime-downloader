@@ -40,6 +40,14 @@ A=https://archive.ubuntu.com/ubuntu/
 Z=http://azure.archive.ubuntu.com/ubuntu/
 K=http://mirrors.edge.kernel.org/ubuntu/
 S=https://security.ubuntu.com/ubuntu/
+# The rotation only works while the image reads its mirrors through that file.
+# An image that sets its sources up differently (ubuntu-latest is moving to
+# 26.04) would make every attempt hit the same mirror, so say so; the attempts
+# still run, against the image's own sources. APT_ETC is for the guard test.
+etc=${APT_ETC:-/etc/apt}
+if ! grep -rqs 'mirror+file:/etc/apt/apt-mirrors.txt' "$etc/sources.list" "$etc/sources.list.d/"; then
+  echo '::warning::apt sources do not read /etc/apt/apt-mirrors.txt; mirror rotation has no effect on this image'
+fi
 use() {
   printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3\n' "$1" "$2" "$S" |
     sudo tee /etc/apt/apt-mirrors.txt >/dev/null

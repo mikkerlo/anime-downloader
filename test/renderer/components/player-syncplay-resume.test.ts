@@ -11,7 +11,7 @@ import { resolveMkvSpawnTarget } from '../../../src/renderer/src/utils'
 
 // The resume-vs-room precedence rule (#240). `resumeFromSavedPosition` is an
 // unexported `<script setup>` internal of a ~2.9k-line SFC wired to dozens of
-// `window.api` channels and to WebGPU/MSE/JASSUB init, so there is no mount
+// `window.api` channels and to WebGPU/MSE/libass init, so there is no mount
 // harness for it here — this scans the source, the same approach
 // `player-toast-slot.test.ts` takes for the toast-slot gate and
 // `test/ipc-channels.test.ts` takes for the channel table. The *behavior* the

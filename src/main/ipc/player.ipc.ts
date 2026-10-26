@@ -12,6 +12,33 @@ import type { MseSession } from '../streaming'
 import type { AppDeps } from './index'
 
 /**
+ * How long an open at T = 0 waits for its offset probe (#560). There the probe
+ * only measures the B-frame delay (74–106 ms on real files), and an open used
+ * to reply without one, so a probe that hangs on an odd file must not hold the
+ * reply for the probes' own timeouts. Past the cap the open replies 0, the old
+ * value. Seeks and opens past 0 wait for the probe as before.
+ */
+export const OPEN_AT_ZERO_PROBE_CAP_MS = 1000
+
+function capOpenAtZeroProbe(
+  probe: Promise<number>,
+  requestedSeek: number,
+  sessionId: string
+): Promise<number> {
+  if (requestedSeek > 0) return probe
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const cap = new Promise<number>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(
+        `[remux-stream] open ${sessionId.slice(0, 8)}: offset probe at 0 took over ${OPEN_AT_ZERO_PROBE_CAP_MS} ms, replying 0`
+      )
+      resolve(0)
+    }, OPEN_AT_ZERO_PROBE_CAP_MS)
+  })
+  return Promise.race([probe, cap]).finally(() => clearTimeout(timer))
+}
+
+/**
  * Extracts the first embedded subtitle track of `mkvPath` to `assPath` and
  * returns its content. Returns `undefined` when ffmpeg is unavailable, the
  * file has no subtitle stream, or extraction fails. Lifted verbatim out of
@@ -464,11 +491,11 @@ export function register({
       // desync. Probe the run's true timestampOffset concurrently with the spawn
       // (its result feeds only the IPC reply, not the session ffmpeg) so the
       // probe never delays first bytes (#198). An open at 0 is probed too: its
-      // B-frame delay makes the offset negative (#560).
-      const offsetPromise = streamingService.probeCopyTimestampOffset(
-        mkvPath,
+      // B-frame delay makes the offset negative (#560), within a capped wait.
+      const offsetPromise = capOpenAtZeroProbe(
+        streamingService.probeCopyTimestampOffset(mkvPath, requestedSeek, probe.videoCodec),
         requestedSeek,
-        probe.videoCodec
+        sessionId
       )
       session.proc = streamingService.spawnFfmpegForSession(
         session,
@@ -616,8 +643,13 @@ export function register({
       // before the request. probeSeekAnchor measures that audio landing (or
       // returns the raw request for a full transcode); labeling with the raw
       // request on the audio-copy path plays ~one GOP behind the clock — the
-      // #198 desync, transcode edition. Probed concurrently with the spawn.
-      const anchorPromise = streamingService.probeSeekAnchor(session, requestedSeek)
+      // #198 desync, transcode edition. Probed concurrently with the spawn, with
+      // the same capped wait at 0 as the copy handler.
+      const anchorPromise = capOpenAtZeroProbe(
+        streamingService.probeSeekAnchor(session, requestedSeek),
+        requestedSeek,
+        sessionId
+      )
       session.proc = streamingService.spawnFfmpegForSession(
         session,
         event,

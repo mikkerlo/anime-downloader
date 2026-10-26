@@ -701,8 +701,14 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     // Zero is the earliest track's start: the encoded video starts at the
     // request, so it is min(T, audio landing). Copied audio that lands after T
     // leaves the video earliest, and the fallback below returns T. Accepting
-    // that later landing instead stalls the player (#560).
-    if (isFinite(audioStart) && audioStart <= time + 0.001) return audioStart
+    // that later landing instead stalls the player (#560). A landing more than
+    // the copy path's lead window before T is a bad probe, not a lead.
+    if (
+      isFinite(audioStart) &&
+      audioStart > time - AUDIO_LEAD_WINDOW_SECONDS &&
+      audioStart <= time + 0.001
+    )
+      return audioStart
     warn(
       `probeSeekAnchor fallback stream=audio requested=${time.toFixed(3)} audioStart=${
         isFinite(audioStart) ? audioStart.toFixed(3) : 'n/a'

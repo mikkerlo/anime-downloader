@@ -580,6 +580,29 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
     )
   })
 
+  // #560 review: negatives are allowed now, but only inside the copy path's
+  // lead window. A bad probe far below T must fall back to T, not label the
+  // buffer with it.
+  it.each([
+    { label: 'a large negative', audio: '-500.000' },
+    { label: 'more than 10 s before T', audio: '196.000' }
+  ])('falls back to the requested time on $label audio landing', async ({ audio }) => {
+    fs.writeFileSync(
+      ffprobe,
+      `#!/bin/sh\ncase "$*" in\n  *" nut "*"a:0"*) echo ${audio} ;;\n  *" nut "*) echo 198.115 ;;\nesac\n`,
+      { mode: 0o755 }
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },
+      207
+    )
+    expect(anchor).toBe(207)
+    expect(warn).toHaveBeenCalledWith(
+      `[player][warn] probeSeekAnchor fallback stream=audio requested=207.000 audioStart=${audio}`
+    )
+  })
+
   it('negative times return 0 without probing', async () => {
     const anchor = await mkSvc().probeSeekAnchor(
       { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },

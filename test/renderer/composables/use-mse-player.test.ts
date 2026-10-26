@@ -654,6 +654,51 @@ describe('useMsePlayer — unbuffered seek keeps playhead on target (#198)', () 
     m.resetMseState()
   })
 
+  // #560: an open at 0 on a B-frame source has a negative offset (the keyframe
+  // is emitted at the B-frame delay). The open used to apply only `> 0`, which
+  // left the whole session 83 ms late; the playhead still never goes below 0,
+  // on a plain open or a refused one (#295).
+  it.each([
+    { label: 'play-from-start', resumeTarget: 0, refusedSeek: false },
+    { label: 'a refused open', resumeTarget: 3000, refusedSeek: true }
+  ])('applies a negative open offset — $label', ({ resumeTarget, refusedSeek }) => {
+    const fakeSb = new FakeSourceBuffer()
+    const fakeMs = new FakeMediaSource(fakeSb)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+
+    const video = {
+      currentTime: 0,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    const beginProgrammaticSeek = vi.fn(() => fakeSeekOp())
+    const m = useMsePlayer(
+      makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement, beginProgrammaticSeek })
+    )
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget,
+      timestampOffset: -0.083,
+      refusedSeek
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+    expect(fakeSb.timestampOffset).toBe(-0.083)
+
+    // The pre-zero frames fall outside the default appendWindowStart of 0.
+    fakeSb.buffered.ranges = [[0.0, 2.0]]
+    fakeSb.dispatchEvent(new Event('updateend'))
+
+    expect(video.currentTime).toBe(0)
+    expect(beginProgrammaticSeek).not.toHaveBeenCalled()
+
+    m.resetMseState()
+  })
+
   // #239: no wall clock gates the renderer's sends any more (#304 removed the
   // last of it), so this land is only kept off the wire by the marker.
   // Unmarked, syncplay reads it as the user seeking and the reference server

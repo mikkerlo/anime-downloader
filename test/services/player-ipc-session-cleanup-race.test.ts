@@ -227,8 +227,8 @@ describe('player.ipc — session reaping across a close (#280)', () => {
     let releaseOffset: () => void = () => {}
     svc.gateOffset(new Promise<void>((res) => (releaseOffset = res)))
 
-    // `initialSeek > 0` is what routes through `probeCopyTimestampOffset`
-    // rather than the `Promise.resolve(0)` short-circuit.
+    // Every copy open routes through `probeCopyTimestampOffset` (since #560 an
+    // open at 0 does too), so the gate parks this one at the reply.
     const open = handlers.get(CHANNELS.PLAYER_REMUX_MKV_STREAM)!(mkEvent(), mkvPath, 42)
     await new Promise((r) => setTimeout(r, 5))
     // The session is registered and spawned by now — the sweep reaches it.

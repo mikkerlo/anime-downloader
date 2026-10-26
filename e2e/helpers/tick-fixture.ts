@@ -27,6 +27,33 @@ export const BAND_H = 40
 export const FPS = 24
 export const DURATION_S = 150
 
+export interface TickFixtureOptions {
+  durationS: number
+  /** How long the audio outlasts the picture. */
+  audioExtraS: number
+  /** Remux with every video DTS 0.3 s earlier, so the audio lands before each keyframe (#560). */
+  audioEarliest: boolean
+}
+
+export const TICK_FIXTURE: TickFixtureOptions = {
+  durationS: DURATION_S,
+  audioExtraS: 0,
+  audioEarliest: false
+}
+
+// #560: short enough that the whole tail after an 82.6 s seek fits under
+// MAX_BUFFER_AHEAD and endOfStream is reached, with audio that outlasts the
+// picture, so `buffered` after EOS ends exactly at the audio's end.
+export const AUDIO_EARLIEST_FIXTURE: TickFixtureOptions = {
+  durationS: 100,
+  audioExtraS: 2,
+  audioEarliest: true
+}
+
+// `pts=PTS` is spelled out: ffmpeg 6.1's setts otherwise rewrites PTS to
+// decode order and the B-frames show out of order.
+const AUDIO_EARLIEST_BSF = 'setts=dts=DTS-0.3/TB:pts=PTS'
+
 // The GOP is pinned (-g 96 -keyint_min 96 -sc_threshold 0 at 24 fps), so
 // keyframes land every 4 s. The #556 bug labels the buffer from the keyframe
 // K at or before the target T, so the picture lags the subtitles by
@@ -88,7 +115,7 @@ function assTimestamp(t: number): string {
   return `${h}:${pad(m)}:${pad(s)}.${pad(cs % 100)}`
 }
 
-export function tickAss(): string {
+export function tickAss(durationS = DURATION_S): string {
   const blockW = WIDTH / BLOCKS
   const lines = [
     '[Script Info]',
@@ -105,7 +132,7 @@ export function tickAss(): string {
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
   ]
-  for (let tick = 0; tick < Math.ceil(DURATION_S / TICK_S); tick++) {
+  for (let tick = 0; tick < Math.ceil(durationS / TICK_S); tick++) {
     const bits = (1 << CODE_BITS) | tick
     const shapes: string[] = []
     for (let i = 0; i < BLOCKS; i++) {
@@ -122,13 +149,13 @@ export function tickAss(): string {
   return lines.join('\n') + '\n'
 }
 
-function ffmpegArgs(assPath: string, outPath: string): string[] {
+function ffmpegArgs(assPath: string, outPath: string, opts = TICK_FIXTURE): string[] {
   // geq runs on a tiny BLOCKS*2 x 2 image and is upscaled with neighbour
   // sampling: about 5 s on 4 cores, against ~13 s for geq over the full band.
   const block = `floor(X*${BLOCKS}/W)`
   const bit = `if(lt(${block},1),1,mod(floor(floor(T/${TICK_S})/pow(2,${CODE_BITS}-${block})),2))`
   const graph =
-    `color=c=black:s=${BLOCKS * 2}x2:r=${FPS}:d=${DURATION_S},format=yuv444p,` +
+    `color=c=black:s=${BLOCKS * 2}x2:r=${FPS}:d=${opts.durationS},format=yuv444p,` +
     `geq=lum='16+239*${bit}':cb=128:cr=128,` +
     `scale=${WIDTH}:${BAND_H}:flags=neighbor,format=yuv420p[top];` +
     `[0:v]drawbox=x=0:y=${HEIGHT - BAND_H}:w=${WIDTH}:h=${BAND_H}:color=black:t=fill[bg];` +
@@ -141,11 +168,11 @@ function ffmpegArgs(assPath: string, outPath: string): string[] {
     '-f',
     'lavfi',
     '-i',
-    `testsrc2=size=${WIDTH}x${HEIGHT}:rate=${FPS}:duration=${DURATION_S}`,
+    `testsrc2=size=${WIDTH}x${HEIGHT}:rate=${FPS}:duration=${opts.durationS}`,
     '-f',
     'lavfi',
     '-i',
-    `sine=frequency=440:sample_rate=48000:duration=${DURATION_S}`,
+    `sine=frequency=440:sample_rate=48000:duration=${opts.durationS + opts.audioExtraS}`,
     '-i',
     assPath,
     '-filter_complex',
@@ -191,11 +218,12 @@ export interface TickFixture {
 }
 
 /** Builds the fixture once into os.tmpdir(), keyed by its inputs. */
-export function buildTickFixture(): TickFixture {
-  const ass = tickAss()
+export function buildTickFixture(opts = TICK_FIXTURE): TickFixture {
+  const ass = tickAss(opts.durationS)
   const key = createHash('sha1')
     .update(ass)
-    .update(ffmpegArgs('ass', 'out').join('\0'))
+    .update(ffmpegArgs('ass', 'out', opts).join('\0'))
+    .update(opts.audioEarliest ? AUDIO_EARLIEST_BSF : '')
     .digest('hex')
     .slice(0, 12)
   const dir = join(os.tmpdir(), `anime-dl-e2e-tick-${key}`)
@@ -207,13 +235,45 @@ export function buildTickFixture(): TickFixture {
   fs.writeFileSync(assPath, ass)
   const partial = `${mkv}.${process.pid}.partial`
   const t0 = Date.now()
-  const run = spawnSync(FFMPEG, ffmpegArgs(assPath, partial), { encoding: 'utf-8' })
+  const run = spawnSync(FFMPEG, ffmpegArgs(assPath, partial, opts), { encoding: 'utf-8' })
   if (run.status !== 0) {
     fs.rmSync(partial, { force: true })
     throw new Error(`tick fixture build failed (exit ${run.status}): ${run.stderr}`)
   }
+  if (opts.audioEarliest) {
+    const remuxed = `${partial}.remux`
+    const remux = spawnSync(
+      FFMPEG,
+      [
+        ...['-hide_banner', '-loglevel', 'error', '-y', '-i', partial, '-map', '0', '-c', 'copy'],
+        ...['-bsf:v', AUDIO_EARLIEST_BSF, '-f', 'matroska', remuxed]
+      ],
+      { encoding: 'utf-8' }
+    )
+    fs.rmSync(partial, { force: true })
+    if (remux.status !== 0) {
+      fs.rmSync(remuxed, { force: true })
+      throw new Error(`tick fixture remux failed (exit ${remux.status}): ${remux.stderr}`)
+    }
+    fs.renameSync(remuxed, partial)
+  }
   fs.renameSync(partial, mkv)
   return { mkv, buildMs: Date.now() - t0 }
+}
+
+/** End of the first audio track: its last packet's PTS plus duration. */
+export function audioEnd(mkv: string): number {
+  const probe = spawnSync(
+    FFPROBE,
+    [
+      ...['-v', 'error', '-select_streams', 'a:0'],
+      ...['-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0', mkv]
+    ],
+    { encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024 }
+  )
+  if (probe.status !== 0) throw new Error(`ffprobe failed: ${probe.stderr}`)
+  const [pts, duration] = probe.stdout.trim().split('\n').pop()!.split(',').map(Number)
+  return pts + duration
 }
 
 export interface Keyframe {

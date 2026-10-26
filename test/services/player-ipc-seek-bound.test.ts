@@ -180,19 +180,16 @@ describe('player.ipc — the open seek is bounded against the probed duration (#
   // The #198 desync guard: the offset probe and ffmpeg must read *one* value.
   // The two handlers have different shapes here and both statements matter.
   describe('the offset probe sees the same value the spawn does', () => {
-    it('copy: the probe is skipped entirely on the rejection, and contentStart is 0', async () => {
-      // `probeCopyTimestampOffset` is conditional on `requestedSeek > 0`, so on
-      // the rejection there is no call to compare against — asserting "same
-      // value" would be vacuous. What is assertable is that the reply's
-      // `contentStart` is the 0 of the skipped probe, not the probe's 1234.
+    it('copy: the probe is called with the bounded 0 on the rejection', async () => {
+      // Unconditional since #560: an open at 0 has its own (negative) B-frame
+      // offset, so the copy handler no longer short-circuits to
+      // `Promise.resolve(0)` and its refused `contentStart` is what the probe
+      // measured at 0, like the transcode handler's.
       const res = await openCopy(2999)
-      expect(probeCopyTimestampOffset).not.toHaveBeenCalled()
-      expect(res.contentStart).toBe(0)
-      // The two fields have to agree on this path: `offsetPromise` short-circuits
-      // to `Promise.resolve(0)`, so a truthful `refusedSeek` sits next to a
-      // structural `contentStart` of 0 (#295). No transcode twin of this — that
-      // handler probes unconditionally, so its refused `contentStart` is
-      // whatever the anchor probe measures, i.e. the mock.
+      expect(probeCopyTimestampOffset).toHaveBeenCalledTimes(1)
+      expect(probeCopyTimestampOffset.mock.calls[0][1]).toBe(0)
+      expect(probeCopyTimestampOffset.mock.calls[0][1]).toBe(spawnSeek())
+      expect(res.contentStart).toBe(1234)
       expect(res.refusedSeek).toBe(true)
     })
 

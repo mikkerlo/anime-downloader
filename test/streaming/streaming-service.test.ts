@@ -335,7 +335,9 @@ describe('StreamingService probeCopyTimestampOffset', () => {
   it('does not let the first audio packet terminate either video probe', async () => {
     await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
     const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
-    const absoluteProbe = lines.find((line) => line.includes('-f nut pipe:1'))!
+    const absoluteProbe = lines.find(
+      (line) => line.includes('-f nut pipe:1') && !line.includes('-frames:a 1')
+    )!
     const emittedProbe = lines.find((line) => line.includes('-f mp4 pipe:1'))!
 
     // ffmpeg's per-stream frame limit terminates the whole output as soon as
@@ -354,16 +356,21 @@ describe('StreamingService probeCopyTimestampOffset', () => {
     const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
     const absoluteProbe = lines.filter((line) => line.includes('-f nut pipe:1'))
     const emittedProbe = lines.filter((line) => line.includes('-f mp4 pipe:1'))
-    expect(absoluteProbe).toHaveLength(1)
+    // Two NUT probes since #560: the video landing and the copied audio's.
+    expect(absoluteProbe).toHaveLength(2)
+    expect(absoluteProbe.filter((line) => line.includes('-frames:v 1'))).toHaveLength(1)
+    expect(absoluteProbe.filter((line) => line.includes('-frames:a 1'))).toHaveLength(1)
     expect(emittedProbe).toHaveLength(1)
 
-    // The -copyts probe must cap its INPUT: an output -t is measured against
+    // The -copyts probes must cap their INPUT: an output -t is measured against
     // the copied absolute timestamps, so every packet past 60 s into the file
     // is dropped and the probe silently falls back to the raw request (#556).
-    const nut = ` ${absoluteProbe[0]} `
-    expect(nut.split(' -t 60 ')).toHaveLength(2)
-    expect(nut.indexOf(' -t 60 ')).toBeGreaterThan(-1)
-    expect(nut.indexOf(' -t 60 ')).toBeLessThan(nut.indexOf(' -i '))
+    for (const line of absoluteProbe) {
+      const nut = ` ${line} `
+      expect(nut.split(' -t 60 ')).toHaveLength(2)
+      expect(nut.indexOf(' -t 60 ')).toBeGreaterThan(-1)
+      expect(nut.indexOf(' -t 60 ')).toBeLessThan(nut.indexOf(' -i '))
+    }
 
     // The emitted-start probe has no -copyts, so its output cap is correct.
     const mp4 = ` ${emittedProbe[0]} `
@@ -393,10 +400,57 @@ describe('StreamingService probeCopyTimestampOffset', () => {
     ])
   })
 
-  it('returns 0 for non-positive seek times without spawning anything', async () => {
-    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 0, 'h264')
+  it('returns 0 for negative seek times without spawning anything', async () => {
+    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', -5, 'h264')
     expect(offset).toBe(0)
     expect(fs.existsSync(argsFile)).toBe(false)
+  })
+
+  // #560: the mux zeroes on the earliest track. Audio landing at 197.900, before
+  // the video's zero of 198.032, is the zero; main used to return 198.032.
+  const audioAt = (audio: string): string =>
+    `#!/bin/sh\ncase "$*" in\n  *" nut "*"a:0"*) echo ${audio} ;;\n  *" nut "*) echo 198.115 ;;\n  *" mp4 "*) echo 0.083 ;;\nesac\n`
+
+  it('anchors on the copied audio when it lands before the video zero (#560)', async () => {
+    fs.writeFileSync(ffprobe, audioAt('197.900'), { mode: 0o755 })
+    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
+    expect(offset).toBeCloseTo(197.9, 3)
+  })
+
+  it.each([
+    { label: 'after the video zero', audio: '198.050' },
+    { label: 'more than 10 s before it', audio: '188.000' }
+  ])('ignores an audio landing $label', async ({ audio }) => {
+    fs.writeFileSync(ffprobe, audioAt(audio), { mode: 0o755 })
+    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 207, 'hevc')
+    expect(offset).toBeCloseTo(198.032, 3)
+  })
+
+  // The first GOP, as measured on the audio-earliest repro: the NUT probe reads
+  // the keyframe at 0 as 0.083 and the audio at 0.062 as 0.145. The file's own
+  // first packets (keyframes at 0 and 4, audio at 0.062) give the real starts.
+  const firstGop = (nutVideo: string, nutAudio = '0.145'): string =>
+    '#!/bin/sh\ncase "$*" in\n' +
+    `  *" nut "*"a:0"*) echo ${nutAudio} ;;\n  *" nut "*) echo ${nutVideo} ;;\n` +
+    '  *" mp4 "*) echo 0.083 ;;\n' +
+    '  *"v:0 -read_intervals %+2 "*) printf "0.000000,K__\\n0.125000,___\\n1.500000,K__\\n" ;;\n' +
+    '  *"a:0 -read_intervals %+#1 "*) echo 0.062000 ;;\nesac\n'
+
+  it.each([0, 2.0])(
+    'takes both starts from the file itself in the first GOP (T = %s)',
+    async (time) => {
+      fs.writeFileSync(ffprobe, firstGop('0.083'), { mode: 0o755 })
+      const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', time, 'h264')
+      // min(0.000 - 0.083, 0.062): negative, the B-frame delay.
+      expect(offset).toBeCloseTo(-0.083, 3)
+    }
+  )
+
+  it('uses the NUT values once the run lands on a later keyframe', async () => {
+    fs.writeFileSync(ffprobe, firstGop('1.500', '1.480'), { mode: 0o755 })
+    const offset = await mkSvc().probeCopyTimestampOffset('/x.mkv', 2.0, 'h264')
+    // 1.500 - 0.083 from the NUT probe; the audio at 1.480 is after that zero.
+    expect(offset).toBeCloseTo(1.417, 3)
   })
 })
 
@@ -474,7 +528,8 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
       207
     )
     expect(anchor).toBeCloseTo(198.043, 3)
-    const args = fs.readFileSync(argsFile, 'utf-8')
+    const lines = fs.readFileSync(argsFile, 'utf-8').trim().split('\n')
+    const args = lines.find((line) => line.includes('-frames:a 1'))!
     // Muxed context: BOTH streams mapped (a lone audio map seeks differently),
     // absolute timestamps preserved, stopped after the measured audio packet,
     // piped. Video stays mapped to preserve the live run's demux context, but
@@ -482,9 +537,33 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
     expect(args).toContain('-map 0:v:0')
     expect(args).toContain('-map 0:a:0?')
     expect(args).toContain('-copyts')
-    expect(args).toContain('-frames:a 1')
     expect(args).not.toContain('-frames:v 1')
     expect(args).toContain('-f nut pipe:1')
+    // The video landing is probed too, only to tell a first-GOP run (#560).
+    expect(lines.filter((line) => line.includes('-f nut pipe:1'))).toHaveLength(2)
+  })
+
+  it('takes the audio start from the file itself in the first GOP (#560)', async () => {
+    // NUT reads the keyframe at 0 as 0.083 and the audio at 0.100 as 0.162 (the
+    // repro fixture); the file's first audio packet is at 0.100.
+    fs.writeFileSync(
+      ffprobe,
+      '#!/bin/sh\ncase "$*" in\n' +
+        '  *" nut "*"a:0"*) echo 0.162 ;;\n  *" nut "*) echo 0.083 ;;\n' +
+        '  *"v:0 -read_intervals %+2 "*) printf "0.021000,K__\\n" ;;\n' +
+        '  *"a:0 -read_intervals %+#1 "*) echo 0.100000 ;;\nesac\n',
+      { mode: 0o755 }
+    )
+    const session = {
+      mkvPath: '/x.mkv',
+      transcode: true,
+      audioStrategy: 'copy' as const,
+      videoCodec: 'h264' as const
+    }
+    expect(await mkSvc().probeSeekAnchor(session, 2.0)).toBeCloseTo(0.1, 3)
+    // At T = 0 the audio lands after the request: min(T, audio) is T.
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await mkSvc().probeSeekAnchor(session, 0)).toBe(0)
   })
 
   it('warns when a copied-audio probe falls back to the requested time', async () => {
@@ -501,10 +580,33 @@ describe('StreamingService probeSeekAnchor (transcode audio-copy desync)', () =>
     )
   })
 
-  it('non-positive times return 0 without probing', async () => {
+  // #560 review: negatives are allowed now, but only inside the copy path's
+  // lead window. A bad probe far below T must fall back to T, not label the
+  // buffer with it.
+  it.each([
+    { label: 'a large negative', audio: '-500.000' },
+    { label: 'more than 10 s before T', audio: '196.000' }
+  ])('falls back to the requested time on $label audio landing', async ({ audio }) => {
+    fs.writeFileSync(
+      ffprobe,
+      `#!/bin/sh\ncase "$*" in\n  *" nut "*"a:0"*) echo ${audio} ;;\n  *" nut "*) echo 198.115 ;;\nesac\n`,
+      { mode: 0o755 }
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const anchor = await mkSvc().probeSeekAnchor(
       { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },
-      0
+      207
+    )
+    expect(anchor).toBe(207)
+    expect(warn).toHaveBeenCalledWith(
+      `[player][warn] probeSeekAnchor fallback stream=audio requested=207.000 audioStart=${audio}`
+    )
+  })
+
+  it('negative times return 0 without probing', async () => {
+    const anchor = await mkSvc().probeSeekAnchor(
+      { mkvPath: '/x.mkv', transcode: true, audioStrategy: 'copy', videoCodec: 'h264' },
+      -5
     )
     expect(anchor).toBe(0)
     expect(fs.existsSync(argsFile)).toBe(false)

@@ -2,14 +2,18 @@
 // Unsynced Shikimori changes on logout and account switch (#588): Disconnect
 // asks before discarding them, a Reconnect into another account says they were
 // kept, and kept changes stay visible with a way to discard them.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ConnectorsTab from '../../../src/renderer/src/components/settings/ConnectorsTab.vue'
 import { useShikimoriStore } from '../../../src/renderer/src/stores/shikimori'
 
 const ME = { id: 1, nickname: 'mikkerlo', avatar: '' }
 const OTHER = { id: 2, nickname: 'akvasha', avatar: '' }
+
+const queueListeners = new Set<(data: { length: number }) => void>()
+
+enableAutoUnmount(afterEach)
 
 const api = {
   getSetting: vi.fn(async () => ''),
@@ -21,6 +25,10 @@ const api = {
   shikimoriExchangeCode: vi.fn(async () => OTHER),
   shikimoriGetParkedQueues: vi.fn(async (): Promise<ShikiParkedQueueSummary[]> => []),
   shikimoriDiscardParkedQueue: vi.fn(async () => undefined),
+  onShikimoriOfflineQueueChanged: vi.fn((cb: (data: { length: number }) => void) => {
+    queueListeners.add(cb)
+    return () => queueListeners.delete(cb)
+  }),
   shikimoriGetSyncStatus: vi.fn(async () => ({
     state: 'idle',
     queueLength: 0,
@@ -63,7 +71,9 @@ function dialogButton(wrapper: VueWrapper, action: 'keep' | 'discard' | 'cancel'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  queueListeners.clear()
   api.shikimoriGetParkedQueues.mockResolvedValue([])
+  api.shikimoriLogout.mockResolvedValue(undefined)
   ;(window as unknown as { api: unknown }).api = apiProxy
   setActivePinia(createPinia())
 })
@@ -205,5 +215,88 @@ describe('ConnectorsTab — kept changes', () => {
     await dialogButton(wrapper, 'discard').trigger('click')
     await flushPromises()
     expect(api.shikimoriDiscardParkedQueue).toHaveBeenCalledWith(null)
+  })
+})
+
+describe('ConnectorsTab — dialog keyboard and failure handling (#588 review)', () => {
+  function pressEscape(): void {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  }
+
+  it('Esc cancels the Disconnect prompt without logging out', async () => {
+    const wrapper = await mountTab({ queueLength: 3 })
+    await button(wrapper, 'Disconnect').trigger('click')
+    await flushPromises()
+
+    pressEscape()
+    await flushPromises()
+
+    expect(wrapper.find('.pending-modal').exists()).toBe(false)
+    expect(api.shikimoriLogout).not.toHaveBeenCalled()
+  })
+
+  it('Esc on the switch prompt means Keep: it closes and discards nothing', async () => {
+    const wrapper = await mountTab({ sessionExpired: true, queueLength: 2 })
+    api.shikimoriGetParkedQueues.mockResolvedValue([
+      { ownerId: ME.id, nickname: ME.nickname, count: 2, parkedAt: 1 }
+    ])
+    await button(wrapper, 'Reconnect').trigger('click')
+    await flushPromises()
+    await wrapper.find('input[placeholder="Paste authorization code..."]').setValue('code')
+    await button(wrapper, 'Submit').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.pending-modal').exists()).toBe(true)
+
+    pressEscape()
+    await flushPromises()
+
+    expect(wrapper.find('.pending-modal').exists()).toBe(false)
+    expect(api.shikimoriDiscardParkedQueue).not.toHaveBeenCalled()
+  })
+
+  it('a failed kept-changes load after a successful exchange is not a connect error', async () => {
+    const wrapper = await mountTab({ sessionExpired: true })
+    await button(wrapper, 'Reconnect').trigger('click')
+    await flushPromises()
+    api.shikimoriGetParkedQueues.mockRejectedValueOnce(new Error('ipc down'))
+    await wrapper.find('input[placeholder="Paste authorization code..."]').setValue('code')
+    await button(wrapper, 'Submit').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.conn-card').text()).toContain('akvasha')
+
+    // The auth row is hidden once connected; reopening it shows any error
+    // the exchange recorded.
+    await button(wrapper, 'Reconnect').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.shikimori-auth').exists()).toBe(true)
+    expect(wrapper.find('.inline-result.bad').exists()).toBe(false)
+  })
+
+  it('a failed logout from the prompt is shown, not left unhandled', async () => {
+    const wrapper = await mountTab({ queueLength: 3 })
+    api.shikimoriLogout.mockRejectedValueOnce(new Error('logout failed'))
+    await button(wrapper, 'Disconnect').trigger('click')
+    await flushPromises()
+
+    await dialogButton(wrapper, 'keep').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.pending-error').text()).toContain('logout failed')
+    expect(wrapper.find('.conn-card').text()).toContain('mikkerlo')
+  })
+
+  it('reloads the kept-changes rows when main announces a queue change', async () => {
+    const wrapper = await mountTab()
+    expect(wrapper.findAll('.kept-queue-row')).toHaveLength(0)
+
+    // A late edit was parked for another account, or the drain consumed one.
+    api.shikimoriGetParkedQueues.mockResolvedValue([
+      { ownerId: 9, nickname: 'friend', count: 1, parkedAt: 1 }
+    ])
+    for (const listener of queueListeners) listener({ length: 0 })
+    await flushPromises()
+
+    expect(wrapper.findAll('.kept-queue-row')).toHaveLength(1)
+    expect(wrapper.find('.kept-queue-row').text()).toContain('friend: 1 unsynced change kept')
   })
 })

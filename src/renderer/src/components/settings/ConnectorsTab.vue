@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
@@ -53,7 +53,7 @@ function shikimoriCopyUrl(): void {
 // Unsynced changes kept for accounts other than the signed-in one (#588).
 const parkedQueues = ref<ShikiParkedQueueSummary[]>([]);
 const keptQueues = computed(() =>
-  parkedQueues.value.filter((p) => p.ownerId === null || p.ownerId !== shikimoriUser.value?.id)
+  parkedQueues.value.filter((p) => p.ownerId !== shikimoriUser.value?.id)
 );
 
 type PendingDialog =
@@ -61,9 +61,15 @@ type PendingDialog =
   | { mode: 'switch'; count: number; nickname: string; ownerId: number; newNickname: string }
   | { mode: 'discard'; count: number; nickname: string | null; ownerId: number | null };
 const pendingDialog = ref<PendingDialog | null>(null);
+const pendingError = ref('');
 
+// A failed reload keeps the rows already shown; it isn't the caller's failure.
 async function loadParkedQueues(): Promise<void> {
-  parkedQueues.value = await window.api.shikimoriGetParkedQueues();
+  try {
+    parkedQueues.value = await window.api.shikimoriGetParkedQueues();
+  } catch (err) {
+    console.warn('[shikimori] loading kept changes failed:', err);
+  }
 }
 
 async function shikimoriSubmitCode(): Promise<void> {
@@ -72,27 +78,28 @@ async function shikimoriSubmitCode(): Promise<void> {
   shikimoriConnecting.value = true;
   shikimoriError.value = '';
   const prev = shikimoriUser.value;
+  let next: ShikiUser;
   try {
-    const next = await window.api.shikimoriExchangeCode(code);
-    shikimoriUser.value = next;
-    shikimoriCode.value = '';
-    shikimoriAuthUrl.value = '';
-    await loadParkedQueues();
-    const kept =
-      prev && prev.id !== next.id && parkedQueues.value.find((p) => p.ownerId === prev.id);
-    if (prev && kept) {
-      pendingDialog.value = {
-        mode: 'switch',
-        count: kept.count,
-        nickname: prev.nickname,
-        ownerId: prev.id,
-        newNickname: next.nickname
-      };
-    }
+    next = await window.api.shikimoriExchangeCode(code);
   } catch (err) {
     shikimoriError.value = String(err);
+    return;
   } finally {
     shikimoriConnecting.value = false;
+  }
+  shikimoriUser.value = next;
+  shikimoriCode.value = '';
+  shikimoriAuthUrl.value = '';
+  await loadParkedQueues();
+  const kept = prev && prev.id !== next.id && parkedQueues.value.find((p) => p.ownerId === prev.id);
+  if (prev && kept) {
+    pendingDialog.value = {
+      mode: 'switch',
+      count: kept.count,
+      nickname: prev.nickname,
+      ownerId: prev.id,
+      newNickname: next.nickname
+    };
   }
 }
 
@@ -129,20 +136,38 @@ function confirmDiscardKept(kept: ShikiParkedQueueSummary): void {
 async function onPendingKeep(): Promise<void> {
   const dialog = pendingDialog.value;
   pendingDialog.value = null;
-  if (dialog?.mode === 'disconnect') await logout({ pending: 'keep' });
+  pendingError.value = '';
+  if (dialog?.mode !== 'disconnect') return;
+  try {
+    await logout({ pending: 'keep' });
+  } catch (err) {
+    pendingError.value = String(err);
+  }
 }
 
 async function onPendingDiscard(): Promise<void> {
   const dialog = pendingDialog.value;
   pendingDialog.value = null;
+  pendingError.value = '';
   if (!dialog) return;
-  if (dialog.mode === 'disconnect') {
-    await logout({ pending: 'discard' });
-    return;
+  try {
+    if (dialog.mode === 'disconnect') {
+      await logout({ pending: 'discard' });
+      return;
+    }
+    await window.api.shikimoriDiscardParkedQueue(dialog.ownerId);
+  } catch (err) {
+    pendingError.value = String(err);
   }
-  await window.api.shikimoriDiscardParkedQueue(dialog.ownerId);
   await loadParkedQueues();
 }
+
+// Main changes kept buckets on its own too (a late edit parked for its owner,
+// the drain consuming a parked entry), and announces both with this broadcast.
+const unsubscribeQueueChanged = window.api.onShikimoriOfflineQueueChanged(() => {
+  void loadParkedQueues();
+});
+onUnmounted(() => unsubscribeQueueChanged());
 
 onMounted(async () => {
   token.value = ((await window.api.getSetting('token')) as string) || '';
@@ -289,6 +314,9 @@ watch(token, (val) => {
           </div>
         </template>
         <button class="btn btn-sm btn-danger" @click="confirmDiscardKept(kept)">Discard</button>
+      </SettingsRow>
+      <SettingsRow v-if="pendingError" stack>
+        <div class="inline-result bad pending-error">{{ pendingError }}</div>
       </SettingsRow>
     </SettingsGroup>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 // `disconnect`: the live queue is about to be kept or dropped by a logout.
 // `switch`: main has already parked the previous account's changes, so there is
@@ -34,10 +34,26 @@ function close(): void {
   if (props.mode === 'switch') emit('keep');
   else emit('cancel');
 }
+
+const keepButton = ref<HTMLButtonElement | null>(null);
+const cancelButton = ref<HTMLButtonElement | null>(null);
+
+// On `window`: the backdrop can't take focus, so a key handler on it never fires.
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') close();
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown);
+  // The safe choice takes focus: Keep where there is one, else Cancel.
+  (keepButton.value ?? cancelButton.value)?.focus();
+});
+
+onUnmounted(() => window.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
-  <div class="pending-backdrop" @click.self="close" @keydown.esc="close">
+  <div class="pending-backdrop" @click.self="close">
     <div class="pending-modal" role="dialog" aria-modal="true">
       <div class="pending-title">{{ title }}</div>
       <p v-if="mode === 'disconnect'" class="pending-text">
@@ -54,6 +70,7 @@ function close(): void {
       <div class="pending-actions">
         <button
           v-if="mode !== 'switch'"
+          ref="cancelButton"
           class="btn btn-outline"
           data-action="cancel"
           @click="emit('cancel')"
@@ -65,9 +82,9 @@ function close(): void {
         </button>
         <button
           v-if="mode !== 'discard'"
+          ref="keepButton"
           class="btn btn-primary"
           data-action="keep"
-          autofocus
           @click="emit('keep')"
         >
           Keep for {{ owner }}

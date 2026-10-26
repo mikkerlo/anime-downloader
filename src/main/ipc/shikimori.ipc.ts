@@ -87,7 +87,9 @@ export function register({
   runAutoDownloadTick,
   broadcast
 }: AppDeps): void {
-  async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[]> {
+  // Null when the account changed while the list was in flight: it is the
+  // previous account's list and must not land in the new one's cache (#588).
+  async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[] | null> {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) throw new Error('Not logged in to Shikimori')
@@ -98,6 +100,7 @@ export function register({
     )
     const malIds = rates.map((r) => r.anime.id)
     const malMap = await lookupByMalIds(malIds)
+    if (currentUserId() !== user.id) return null
     const entries = buildRateCacheEntries(rates, malMap)
     if (!status) {
       store.set('shikimoriUserRates', entries)
@@ -108,6 +111,7 @@ export function register({
   function refreshShikimoriRatesInBackground(): void {
     fetchAndCacheShikimoriRates()
       .then((entries) => {
+        if (!entries) return
         sync.invalidateCalendarCache()
         // A full rate refresh can carry completions made outside the app (e.g.
         // on shikimori.one); clear the recs cache so it rebuilds from the
@@ -581,6 +585,9 @@ export function register({
           rewatches
         )
 
+    // The write landed on the previous account; the cache is the new one's.
+    if (currentUserId() !== userId) return updatedRate
+
     if (idx !== -1) {
       cached[idx] = {
         ...cached[idx],
@@ -644,6 +651,11 @@ export function register({
         'shikimoriParkedQueues',
         parkEntries(getParkedQueues(), ownerKey(owner), [entry], Date.now())
       )
+      // The live length is unchanged; the broadcast tells Connectors to reload
+      // its kept-changes rows.
+      broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+        length: (store.get('shikimoriUpdateQueue') as unknown[]).length
+      })
       return synthetic
     }
 
@@ -908,6 +920,7 @@ export function register({
       }
     }
     const entries = await fetchAndCacheShikimoriRates(status)
+    if (!entries) return status ? [] : (store.get('shikimoriUserRates') as unknown[])
     if (!status) void sync.prefetchShikimoriDetails()
     return entries
   })

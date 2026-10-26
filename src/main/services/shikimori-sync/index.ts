@@ -195,7 +195,14 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
   }
 
-  function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): void {
+  // An item in flight across a switch lands on the old account; the cache is
+  // the new one's by then (#588).
+  function reconcileCacheFromRate(
+    ownerId: number,
+    malId: number,
+    rate: shikimori.ShikiUserRate
+  ): void {
+    if (currentUserId() !== ownerId) return
     const cached = store.get('shikimoriUserRates') as {
       rate: Record<string, unknown> & {
         id?: number
@@ -246,6 +253,13 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       accessToken = await shikimori.ensureFreshToken(store)
     } catch (err) {
       syncInProgress = false
+      // The previous account's refresh failed after a switch: not this
+      // session's error, and its timer is not this drain's to stop.
+      if (currentUserId() !== user.id) {
+        broadcastSyncStatus()
+        void syncShikimoriQueue()
+        return
+      }
       if (!isNetworkError(err)) {
         lastSyncError = err instanceof Error ? err.message : String(err)
         console.warn('[shikimori sync] auth refresh failed:', err)
@@ -283,7 +297,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
             item.after.score,
             item.after.rewatches
           )
-          reconcileCacheFromRate(item.malId, created)
+          reconcileCacheFromRate(user.id, item.malId, created)
         } else {
           const driftMatches =
             current.episodes === item.before.episodes &&
@@ -299,7 +313,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
               item.after.score,
               item.after.rewatches
             )
-            reconcileCacheFromRate(item.malId, updated)
+            reconcileCacheFromRate(user.id, item.malId, updated)
           } else if (shouldApplyOnDrift(current, item.after)) {
             const updated = await shikimori.updateUserRate(
               accessToken,
@@ -309,9 +323,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
               item.after.score,
               item.after.rewatches
             )
-            reconcileCacheFromRate(item.malId, updated)
+            reconcileCacheFromRate(user.id, item.malId, updated)
           } else {
-            reconcileCacheFromRate(item.malId, current)
+            reconcileCacheFromRate(user.id, item.malId, current)
           }
         }
 
@@ -334,6 +348,8 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       if (work.indexOf(item) < work.length - 1) await sleep(SYNC_ITEM_DELAY_MS)
     }
 
+    // The owner may have changed while the last item was awaiting the network.
+    if (currentUserId() !== user.id) ownerChanged = true
     syncInProgress = false
     // An owner change is not a sync result, so it leaves the last one standing.
     if (!aborted && !ownerChanged) {

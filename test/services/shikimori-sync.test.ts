@@ -640,6 +640,72 @@ describe('ShikimoriSyncService — owner guard', () => {
     newOwnersToken.resolve('access-token-b')
     await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
   })
+
+  // The guard at the top of each iteration never runs again after the last
+  // item, so a switch during that item's await needs its own check (#588 review).
+  it('re-kicks after a single-item drain whose owner changed during its only item', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [entry(1, 1)] })
+    getUserRate.mockRejectedValueOnce(new ShikiApiError('unauthorized', 401))
+    await svc.syncShikimoriQueue()
+    expect(svc.getSyncStatus().lastSyncError).toBe('unauthorized')
+
+    switchDuringItem1(store, { park: true, liveForNewOwner: [entry(77, 9)] })
+    const newOwnersToken = deferred<string>()
+    ensureFreshToken
+      .mockResolvedValueOnce('access-token')
+      .mockReturnValueOnce(newOwnersToken.promise)
+
+    await svc.syncShikimoriQueue()
+
+    expect(svc.getSyncStatus().lastSyncError).toBe('unauthorized')
+    expect(svc.getSyncStatus().lastSyncAt).toBe(0)
+    newOwnersToken.resolve('access-token-b')
+    await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
+  })
+
+  it("an item in flight across a switch doesn't write the old account's rate into the new cache", async () => {
+    const bobsEntry = {
+      rate: { id: 5001, target_id: 1, episodes: 9, status: 'completed', score: 2 },
+      shikiAnime: { id: 1, name: 'X' },
+      smotretAnime: null
+    }
+    const { svc, store, broadcast } = makeService({
+      shikimoriUpdateQueue: [entry(1, 1)],
+      shikimoriUserRates: [emptyRate(1)]
+    })
+    switchDuringItem1(store, { park: true })
+    const switchAndFetch = getUserRate.getMockImplementation()!
+    getUserRate.mockImplementation(async (...args: [string, number, number]) => {
+      const rate = await switchAndFetch(...args)
+      store.set('shikimoriUserRates', [bobsEntry])
+      return rate
+    })
+
+    await svc.syncShikimoriQueue()
+
+    expect(updateUserRate).toHaveBeenCalledTimes(1)
+    expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
+    expect(broadcast).not.toHaveBeenCalledWith(CHANNELS.rateUpdated, expect.anything())
+  })
+
+  it("the old account's failed token refresh after a switch neither records an error nor stalls the new owner", async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [entry(1, 1)] })
+    let rejectOld!: (e: unknown) => void
+    ensureFreshToken
+      .mockReturnValueOnce(new Promise<string>((_res, rej) => (rejectOld = rej)))
+      .mockResolvedValue('access-token-b')
+    getUserRate.mockResolvedValue(serverRate(77))
+    updateUserRate.mockResolvedValue({ ...serverRate(77), episodes: 1 })
+
+    const drain = svc.syncShikimoriQueue()
+    store.set('shikimoriUser', { id: 2, nickname: 'b' })
+    store.set('shikimoriUpdateQueue', [entry(77, 9)])
+    rejectOld(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+    await drain
+
+    expect(svc.getSyncStatus().lastSyncError).toBeNull()
+    await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
+  })
 })
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {

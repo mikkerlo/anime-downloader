@@ -726,11 +726,16 @@ describe('shikimori IPC — unsynced changes on logout and account switch (#588)
       smotretAnime: null
     }
     store.set('shikimoriUserRates', [bobsEntry])
+    broadcast.mockClear()
     token.reject(new TypeError('fetch failed'))
     await edit
 
     expect(queueOf(store)).toHaveLength(0)
     expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
+    // Connectors reloads its kept-changes rows on this broadcast.
+    expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+      length: 0
+    })
     expect(broadcast).not.toHaveBeenCalledWith(
       EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
       expect.anything()
@@ -767,5 +772,128 @@ describe('shikimori IPC — unsynced changes on logout and account switch (#588)
 
     await invoke(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, null)
     expect(Object.keys(parkedOf(store))).toEqual(['10'])
+  })
+})
+
+// The previous account's network results must not land in the new account's
+// cache once a switch has reset it (#588 review). Each case resolves A's
+// request only after B has signed in and B's own list is cached.
+describe('shikimori IPC — stale-account results after a switch (#588)', () => {
+  const USER_B = { id: 8, nickname: 'other' }
+  const bobsEntry = {
+    rate: { id: 5042, target_id: 42, episodes: 9, status: 'completed', score: 2 },
+    shikiAnime: { id: 42 },
+    smotretAnime: null
+  }
+
+  function animeRate(malId: number, episodes: number) {
+    return {
+      id: 900 + malId,
+      score: 0,
+      status: 'watching',
+      episodes,
+      rewatches: 0,
+      updated_at: '2026-01-01T00:00:00Z',
+      anime: { id: malId }
+    }
+  }
+
+  async function switchToB(invoke: (c: string, ...a: unknown[]) => Promise<unknown>) {
+    exchangeCode.mockResolvedValue(CREDS_B)
+    getUser.mockResolvedValue(USER_B)
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+  }
+
+  it("a slow refresh of A's list resolving after B signs in leaves B's cache alone", async () => {
+    const { invoke, store, broadcast } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const alicesList = deferred<unknown[]>()
+    getUserAnimeRates.mockImplementation((_token: string, userId: number) =>
+      userId === 7 ? alicesList.promise : Promise.resolve([animeRate(42, 9)])
+    )
+
+    // Cache-first read: serves A's cache and refreshes it in the background.
+    await invoke(CHANNELS.SHIKIMORI_GET_ANIME_RATES)
+    await vi.waitFor(() =>
+      expect(getUserAnimeRates).toHaveBeenCalledWith('access-token', 7, undefined)
+    )
+    await switchToB(invoke)
+    await vi.waitFor(() =>
+      expect(broadcast).toHaveBeenCalledWith(
+        EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED,
+        expect.anything()
+      )
+    )
+    const bobsCache = structuredClone(store.get('shikimoriUserRates'))
+    broadcast.mockClear()
+
+    alicesList.resolve([animeRate(42, 3), animeRate(55, 1)])
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(store.get('shikimoriUserRates')).toEqual(bobsCache)
+    expect(broadcast).not.toHaveBeenCalledWith(
+      EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED,
+      expect.anything()
+    )
+  })
+
+  it("an update that lands on A's account after B signs in leaves B's cache alone", async () => {
+    const { invoke, store, broadcast } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserAnimeRates.mockReturnValue(new Promise(() => {}))
+    getUserRate.mockResolvedValue({
+      id: 942,
+      target_id: 42,
+      episodes: 3,
+      status: 'watching',
+      score: 7
+    })
+    const written = deferred<unknown>()
+    updateUserRate.mockReturnValue(written.promise)
+
+    const edit = updateRate(invoke)
+    await vi.waitFor(() => expect(updateUserRate).toHaveBeenCalled())
+    await switchToB(invoke)
+    store.set('shikimoriUserRates', [bobsEntry])
+    broadcast.mockClear()
+
+    written.resolve({
+      id: 942,
+      target_id: 42,
+      episodes: 4,
+      status: 'watching',
+      score: 7,
+      rewatches: 0
+    })
+    await edit
+
+    expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
+    expect(broadcast).not.toHaveBeenCalledWith(
+      EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+      expect.anything()
+    )
+  })
+
+  it('a mark-watched whose owner was switched away during getUserRate is kept for that owner', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserAnimeRates.mockReturnValue(new Promise(() => {}))
+    const lookup = deferred<unknown>()
+    getUserRate.mockReturnValueOnce(lookup.promise)
+
+    const mark = markWatched(invoke, 4)
+    await vi.waitFor(() => expect(getUserRate).toHaveBeenCalled())
+    await switchToB(invoke)
+    store.set('shikimoriUserRates', [bobsEntry])
+    lookup.reject(new TypeError('fetch failed'))
+    await mark
+
+    expect(queueOf(store)).toHaveLength(0)
+    expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
+    expect(parkedOf(store)['7'].entries).toEqual([
+      expect.objectContaining({
+        malId: 42,
+        rateId: 942,
+        before: { episodes: 3, status: 'watching', score: 7, rewatches: 0 },
+        after: { episodes: 4, status: 'watching', score: 7, rewatches: 0 }
+      })
+    ])
   })
 })

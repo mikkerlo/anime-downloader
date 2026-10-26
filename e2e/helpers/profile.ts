@@ -13,6 +13,8 @@
 // A seeded profile links ffmpeg + ffprobe from `PATH` and stubs fpcalc, so the
 // first-launch binary download never starts; `assertNoDownloads()` fails if one
 // did. `cold-start.spec.ts` opts out, because that download is what it tests.
+// Seeding is POSIX-only (symlinks, a `/bin/false` stub, no `PATHEXT` lookup),
+// so it throws on Windows; an unseeded profile like cold-start's runs anywhere.
 
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
 import fs from 'node:fs'
@@ -70,6 +72,13 @@ function findOnPath(bin: string): string | null {
 }
 
 export function makeProfile(opts: ProfileOpts = {}): Profile {
+  const seeds = (opts.ffmpeg ?? 'path') === 'path' || (opts.fpcalc ?? 'stub') === 'stub'
+  if (seeds && process.platform === 'win32') {
+    throw new Error(
+      'e2e profile seeding is POSIX-only (symlinks, a /bin/false fpcalc stub, no PATHEXT lookup); ' +
+        "on Windows only an unseeded profile ({ ffmpeg: 'none', fpcalc: 'none' }) is supported"
+    )
+  }
   // Electron resolves symlinks in `--user-data-dir` (macOS's /var is one), so
   // the root is canonicalised before any path is built from it.
   const root = fs.realpathSync(

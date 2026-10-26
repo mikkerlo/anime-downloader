@@ -146,31 +146,40 @@ describe('updateSyncMeta — tombstone GC on the next write', () => {
   })
 })
 
-describe('stampRateClocks — the owner', () => {
+describe('stampRateClocks', () => {
   const before = { episodes: 3, status: 'watching', score: 7, rewatches: 0 }
   const after = { ...before, episodes: 4 }
 
-  it('defaults to the signed-in Shikimori user', () => {
-    const store = new InMemoryStorage({ installId: 'install-a', shikimoriUser: { id: 7 } })
-    stampRateClocks(store, 42, before, after, undefined, NOW)
+  it('keys by the owner the caller captured, not the user signed in at stamp time', () => {
+    const store = new InMemoryStorage({ installId: 'install-a', shikimoriUser: { id: 8 } })
+    stampRateClocks(store, 7, 42, before, after, NOW)
     expect((store.get('syncMeta') as SyncMeta).rates).toEqual({
       '7:42': { episodes: { value: 4, at: NOW, origin: 'install-a' } }
     })
   })
 
-  it('takes an owner the caller captured over the current user', () => {
-    const store = new InMemoryStorage({ installId: 'install-a', shikimoriUser: { id: 8 } })
-    stampRateClocks(store, 42, before, after, 7, NOW)
-    expect(Object.keys((store.get('syncMeta') as SyncMeta).rates)).toEqual(['7:42'])
+  it('writes nothing when nothing changed', () => {
+    const store = new InMemoryStorage({ installId: 'install-a' })
+    stampRateClocks(store, 7, 42, before, { ...before }, NOW)
+    expect(store.get('syncMeta')).toBeUndefined()
   })
 
-  it('writes nothing with no owner, or with nothing changed', () => {
-    const signedOut = new InMemoryStorage({ installId: 'install-a', shikimoriUser: null })
-    stampRateClocks(signedOut, 42, before, after, undefined, NOW)
-    expect(signedOut.get('syncMeta')).toBeUndefined()
+  it('a stamp after a backwards clock step lands just past the clock it replaces', () => {
+    const ahead = NOW + 60_000
+    const store = new InMemoryStorage({
+      installId: 'install-a',
+      syncMeta: {
+        titles: {},
+        rates: { '7:42': { episodes: { value: 3, at: ahead, origin: 'install-a' } } }
+      }
+    })
 
-    const unchanged = new InMemoryStorage({ installId: 'install-a', shikimoriUser: { id: 7 } })
-    stampRateClocks(unchanged, 42, before, { ...before }, undefined, NOW)
-    expect(unchanged.get('syncMeta')).toBeUndefined()
+    stampRateClocks(store, 7, 42, before, after, NOW)
+
+    expect((store.get('syncMeta') as SyncMeta).rates['7:42'].episodes).toEqual({
+      value: 4,
+      at: ahead + 1,
+      origin: 'install-a'
+    })
   })
 })

@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
 import type { AppDeps } from './index'
 import type { AnimeSearchResult } from '../smotret-api'
-import { localClock, stampMembership, updateSyncMeta } from '../store/sync-meta'
+import { localClock, stampMembership, stampPriorityOrder, updateSyncMeta } from '../store/sync-meta'
 
 export function register({ store, animeCacheService }: AppDeps): void {
   const readLib = (): Record<string, AnimeSearchResult> =>
@@ -48,7 +48,7 @@ export function register({ store, animeCacheService }: AppDeps): void {
         stampMembership(meta, key, 'starred', false, clock)
         if (demoted) {
           stampMembership(meta, key, 'priority', false, clock)
-          meta.priorityOrder = clock
+          stampPriorityOrder(meta, clock)
         }
       })
       if (!readDownloaded()[String(anime.id)]) animeCacheService.deleteEntry(anime.id)
@@ -122,7 +122,7 @@ export function register({ store, animeCacheService }: AppDeps): void {
             if (starring) stampMembership(meta, key, 'starred', true, clock)
             if (promoting) {
               stampMembership(meta, key, 'priority', true, clock)
-              meta.priorityOrder = clock
+              stampPriorityOrder(meta, clock)
             }
           })
         }
@@ -136,7 +136,7 @@ export function register({ store, animeCacheService }: AppDeps): void {
       store.set('priorityAnimeIds', next)
       updateSyncMeta(store, (meta) => {
         stampMembership(meta, key, 'priority', false, clock)
-        meta.priorityOrder = clock
+        stampPriorityOrder(meta, clock)
       })
       return next.filter(resolvable())
     }

@@ -136,6 +136,7 @@ export function useEpisodeDownloads(deps: {
       console.error('Failed to set the watched flag:', err)
       return
     }
+    window.dispatchEvent(new CustomEvent('watch-progress-updated'))
     await loadWatchProgress()
   }
 

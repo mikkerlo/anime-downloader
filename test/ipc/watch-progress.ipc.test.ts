@@ -188,13 +188,26 @@ describe('watch-progress:save — the watched clock', () => {
     expect(row().sync).toEqual({ position: local(T0), watched: local(T2) })
   })
 
-  it("a completed re-watch ('playback', watched: true on a watched row) stamps sync.watched", async () => {
-    const { invoke, row } = registerRouter({ [KEY]: watchedRow() })
+  // PlayerView's saves on opening a watched episode: position 0 (as it writes
+  // for every watched row), `watched: false` until this open completes.
+  it('opening a watched row and playing leaves both clocks', async () => {
+    const { invoke, row } = registerRouter({ [KEY]: { ...watchedRow(), position: 0 } })
+
+    await save(invoke, 0, false, 77, 'playback')
+
+    expect(row().watched).toBe(true)
+    expect(row().sync).toEqual({ position: local(T0), watched: local(T0) })
+  })
+
+  // The save PlayerView makes once this open crosses the threshold
+  // (`completedThisOpen`): `watched: true` on a row that is already watched.
+  it('a re-watch completion stamps sync.watched and keeps watchedAt', async () => {
+    const { invoke, row } = registerRouter({ [KEY]: { ...watchedRow(), position: 0 } })
 
     await save(invoke, 0, true, 77, 'playback')
 
     expect(row().watchedAt).toBe(T0)
-    expect(row().sync?.watched).toEqual(local(T2))
+    expect(row().sync).toEqual({ position: local(T0), watched: local(T2) })
   })
 
   it("a 'choice' save reporting watched on a watched row is not a re-watch", async () => {
@@ -269,6 +282,25 @@ describe('watch-progress:set-watched — the explicit unwatch', () => {
     })
   })
 
+  it('marking watched zeroes the position, so the next open does not stamp sync.position', async () => {
+    const { invoke, row } = registerRouter({
+      [KEY]: {
+        position: 600,
+        duration: 1420,
+        updatedAt: T0,
+        watched: false,
+        translationId: 77,
+        sync: { position: local(T0) }
+      }
+    })
+
+    await invoke(CHANNELS.WATCH_PROGRESS_SET_WATCHED, 5, '3', true)
+    expect(row().position).toBe(0)
+    await save(invoke, 0, false, 77, 'playback')
+
+    expect(row().sync?.position).toEqual(local(T0))
+  })
+
   it('writes nothing when the flag already has that value', async () => {
     const { invoke, store } = registerRouter({ [KEY]: watchedRow() })
     const set = vi.spyOn(store, 'set')
@@ -276,5 +308,29 @@ describe('watch-progress:set-watched — the explicit unwatch', () => {
     expect(await invoke(CHANNELS.WATCH_PROGRESS_SET_WATCHED, 5, '3', true)).toEqual(watchedRow())
     expect(await invoke(CHANNELS.WATCH_PROGRESS_SET_WATCHED, 5, '4', false)).toBeNull()
     expect(set).not.toHaveBeenCalled()
+  })
+})
+
+describe('field clocks are monotonic', () => {
+  // The wall clock stepped back: the row's clocks are ahead of `Date.now()`.
+  const AHEAD = T2 + 60_000
+
+  it('a stamp after a backwards clock step lands just past the clock it replaces', async () => {
+    const { invoke, row } = registerRouter({
+      [KEY]: {
+        position: 600,
+        duration: 1420,
+        updatedAt: AHEAD,
+        watched: false,
+        translationId: 77,
+        sync: { position: local(AHEAD), watched: local(AHEAD) }
+      }
+    })
+
+    await save(invoke, 700, false, 77, 'playback')
+    expect(row().sync?.position).toEqual(local(AHEAD + 1))
+
+    await invoke(CHANNELS.WATCH_PROGRESS_SET_WATCHED, 5, '3', true)
+    expect(row().sync?.watched).toEqual(local(AHEAD + 1))
   })
 })

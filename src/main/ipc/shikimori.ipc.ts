@@ -541,7 +541,7 @@ export function register({
           rewatches
         )
     if (stamp)
-      stampRateClocks(store, malId, existing ? rateValues(existing) : NO_RATE_BEFORE, after, userId)
+      stampRateClocks(store, userId, malId, existing ? rateValues(existing) : NO_RATE_BEFORE, after)
 
     if (idx !== -1) {
       cached[idx] = {
@@ -581,6 +581,7 @@ export function register({
   // when there is one. `basis` is what the drain's drift check compares the
   // server against. Returns a synthetic rate so callers need no offline branch.
   function queueRate(
+    userId: number,
     malId: number,
     basis: { rateId: number | null; before: RateValues },
     after: RateValues,
@@ -592,7 +593,7 @@ export function register({
     const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
     queue.push({ malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() })
     store.set('shikimoriUpdateQueue', queue)
-    if (stamp) stampRateClocks(store, malId, basis.before, after)
+    if (stamp) stampRateClocks(store, userId, malId, basis.before, after)
 
     const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
     const idx = cached.findIndex((e) => e.rate.target_id === malId)
@@ -766,7 +767,7 @@ export function register({
       } catch (err) {
         const entry = findCachedRate(malId)
         if (!isQueueableRateError(err) || !entry) throw err
-        return queueRate(malId, cachedBasis(entry), after, err, true)
+        return queueRate(user.id, malId, cachedBasis(entry), after, err, true)
       }
     }
   )
@@ -793,7 +794,7 @@ export function register({
         const entry = findCachedRate(malId)
         const basis = entry ? cachedBasis(entry) : { rateId: null, before: NO_RATE_BEFORE }
         const next = nextWatchedRate(basis.before, epNum)
-        return next ? queueRate(malId, basis, next, err, true) : null
+        return next ? queueRate(user.id, malId, basis, next, err, true) : null
       }
 
       const before = existing ? rateValues(existing) : NO_RATE_BEFORE
@@ -803,7 +804,7 @@ export function register({
         return await sendRate(accessToken, user.id, malId, existing, next, true)
       } catch (err) {
         if (!isQueueableRateError(err)) throw err
-        return queueRate(malId, { rateId: existing?.id ?? null, before }, next, err, true)
+        return queueRate(user.id, malId, { rateId: existing?.id ?? null, before }, next, err, true)
       }
     }
   )

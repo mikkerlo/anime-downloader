@@ -612,6 +612,23 @@ describe('shikimori IPC — rate clocks', () => {
     expect(rateClocks(queued.store)).toEqual({ '7:42': { status: clock('on_hold') } })
   })
 
+  it('a queued clock keys by the user the request captured, even if the account switched meanwhile', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    // The switch lands during the awaited `getUserRate`, which then fails offline.
+    getUserRate.mockImplementation(async () => {
+      store.set('shikimoriUser', { id: 8, nickname: 'other' })
+      throw new TypeError('fetch failed')
+    })
+
+    await markWatched(invoke, 4)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(rateClocks(store)).toEqual({ '7:42': { episodes: clock(4) } })
+  })
+
   it('stamp: false writes the rate but stamps nothing, in both funnels', async () => {
     const { store, funnels } = registerRouter({
       installId: 'install-a',
@@ -629,6 +646,7 @@ describe('shikimori IPC — rate clocks', () => {
       false
     )
     funnels.queueRate(
+      7,
       42,
       { rateId: 942, before },
       { ...before, episodes: 5 },

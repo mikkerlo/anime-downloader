@@ -15,6 +15,14 @@ export function legacyWatchSync(row: { updatedAt: number; watchedAt?: number }):
   }
 }
 
+/**
+ * `clock`, moved past `prev` when the wall clock has stepped back, so a newer
+ * edit of a field never carries an older `at` than the edit it replaces.
+ */
+export function advanceClock(clock: SyncClock, prev: SyncClock | undefined): SyncClock {
+  return prev && prev.at >= clock.at ? { at: prev.at + 1, origin: clock.origin } : clock
+}
+
 /** A row's clocks: its own `sync`, or the legacy projection when it has none. */
 export function watchSyncOf(row: {
   updatedAt: number

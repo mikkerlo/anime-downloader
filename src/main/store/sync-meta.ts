@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { StorageService } from './types'
 import { pruneExpiredTombstones } from '../lib/sync-state/gc'
+import { advanceClock } from '../lib/sync-state/clock'
 
 const RATE_FIELDS: readonly SyncRateField[] = ['episodes', 'status', 'score', 'rewatches']
 
@@ -46,6 +47,11 @@ export function updateSyncMeta(
   store.set('syncMeta', pruneExpiredTombstones(meta, now))
 }
 
+/** Stamps the `priorityOrder` clock. */
+export function stampPriorityOrder(meta: SyncMeta, clock: SyncClock): void {
+  meta.priorityOrder = advanceClock(clock, meta.priorityOrder)
+}
+
 /** Stamps a `starred` / `priority` clock, or its tombstone when `present` is false. */
 export function stampMembership(
   meta: SyncMeta,
@@ -55,33 +61,36 @@ export function stampMembership(
   clock: SyncClock
 ): void {
   const title = (meta.titles[String(animeId)] ??= {})
-  title[field] = present ? { ...clock } : { deleted: true, ...clock }
+  const { at, origin } = advanceClock(clock, title[field])
+  title[field] = present ? { at, origin } : { deleted: true, at, origin }
 }
 
 /**
  * Stamps a rate clock for each field whose `after` differs from `before`, keyed
- * `"<ownerId>:<malId>"`. `ownerId` defaults to the signed-in Shikimori user; a
- * caller that captured its owner earlier passes it. With no owner, or nothing
- * changed, it writes nothing.
+ * `"<ownerId>:<malId>"`. `ownerId` is the Shikimori user the caller captured
+ * with its request, never the store's user at stamp time: an account switch
+ * during the request's awaits must not move the clock to the new account. With
+ * nothing changed it writes nothing.
  */
 export function stampRateClocks(
   store: StorageService,
+  ownerId: number,
   malId: number,
   before: RateFieldValues,
   after: RateFieldValues,
-  ownerId?: number,
   now = Date.now()
 ): void {
-  const owner = ownerId ?? store.get<{ id: number } | null | undefined>('shikimoriUser')?.id
-  if (owner === undefined) return
   const changed = RATE_FIELDS.filter((field) => before[field] !== after[field])
   if (changed.length === 0) return
-  const { at, origin } = localClock(store, now)
+  const clock = localClock(store, now)
   updateSyncMeta(
     store,
     (meta) => {
-      const clocks = (meta.rates[`${owner}:${malId}`] ??= {})
-      for (const field of changed) clocks[field] = { value: after[field], at, origin }
+      const clocks = (meta.rates[`${ownerId}:${malId}`] ??= {})
+      for (const field of changed) {
+        const { at, origin } = advanceClock(clock, clocks[field])
+        clocks[field] = { value: after[field], at, origin }
+      }
     },
     now
   )

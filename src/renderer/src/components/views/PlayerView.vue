@@ -331,6 +331,11 @@ let cumulativePlayTime = 0;
 let lastTimeUpdateAt = 0;
 let lastSaveAt = 0;
 let watchedReported = false;
+// This open's playback crossed the watched threshold (#572). Unlike
+// `watchedReported`, which `resumeFromSavedPosition` restores from the saved
+// row, opening an already-watched episode leaves this false, so its saves never
+// read as a re-watch and a real re-watch still completes.
+let completedThisOpen = false;
 // #262: the MKV ffmpeg session for this open was spawned at the room's position
 // rather than the saved one. Read by `resumeFromSavedPosition` instead of a live
 // `roomOwnsPlayhead()`: if the session drops between the spawn and
@@ -780,7 +785,7 @@ async function saveProgress(force = false): Promise<void> {
       epInt,
       positionToSave,
       duration.value,
-      watchedReported,
+      completedThisOpen,
       activeTranslationId.value ?? undefined,
       'playback'
     );
@@ -860,19 +865,23 @@ async function markEpisodeWatched(episodeInt: string): Promise<void> {
 }
 
 async function maybeMarkWatched(): Promise<void> {
-  if (watchedReported) return;
+  if (completedThisOpen) return;
   const video = videoRef.value;
   if (!video || !duration.value) return;
   const ratio = video.currentTime / duration.value;
   if (ratio < WATCH_THRESHOLD_RATIO) return;
   if (cumulativePlayTime < WATCH_THRESHOLD_SECONDS) return;
 
+  // A re-watch of an episode that was already watched when it opened gets its
+  // `sync.watched` stamp from the save below, but no Shikimori mark (#572).
+  const rewatch = watchedReported;
+  completedThisOpen = true;
   watchedReported = true;
   await saveProgress(true);
 
-  if (!props.malId) return;
+  if (rewatch || !props.malId) return;
   // #371 — the PLAYING episode, matching `saveProgress(true)` above. Both halves
-  // of this function share one `watchedReported` flag; if they keyed differently
+  // of this function share one completion; if they keyed differently
   // it would report episode N+1 watched to Shikimori while writing episode N's
   // progress row. "Which episode did the user actually watch" has one answer,
   // and it is the one that was decoding while `cumulativePlayTime` accrued.
@@ -891,6 +900,7 @@ function resetEpisodeTracking(): void {
   lastTimeUpdateAt = 0;
   lastSaveAt = 0;
   watchedReported = false;
+  completedThisOpen = false;
   autoAdvancePauseArmed = false;
   // Belongs to one open (#262). `prepareMkvForPlayback` re-decides it on every
   // MKV open and `mkvSessionSeededFromRoom()` pairs it with the live session id,

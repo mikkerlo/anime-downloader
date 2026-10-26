@@ -131,4 +131,18 @@ describe('EpisodeRow — mark as (un)watched', () => {
     expect(wrapper.get('.ep-row').classes()).toContain('watched')
     expect(wrapper.get('button.ep-watched-toggle').attributes('title')).toBe('Mark as unwatched')
   })
+
+  // Like every other progress writer, so Home's continue-watching refreshes.
+  it("announces the write with the 'watch-progress-updated' window event", async () => {
+    const heard = vi.fn()
+    window.addEventListener('watch-progress-updated', heard)
+    try {
+      const { wrapper } = mountRow({})
+      await wrapper.get('button.ep-watched-toggle').trigger('click')
+      await flushPromises()
+      expect(heard).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('watch-progress-updated', heard)
+    }
+  })
 })

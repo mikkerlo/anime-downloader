@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { CHANNELS } from '@shared/ipc/channels'
-import { watchSyncOf } from '../lib/sync-state/clock'
+import { advanceClock, watchSyncOf } from '../lib/sync-state/clock'
 import { localClock } from '../store/sync-meta'
 import type { AppDeps } from './index'
 
@@ -33,11 +33,14 @@ export function register({ store }: AppDeps): void {
           !sync.position ||
           Math.abs(position - prev!.position) >= POSITION_CHANGE_SEC ||
           nextTranslationId !== prev!.translationId
-        if (realChange) sync.position = clock
+        if (realChange) sync.position = advanceClock(clock, sync.position)
       }
-      if (source !== undefined) {
-        const rewatched = source === 'playback' && watched === true && !!prev?.watched
-        if (justWatched || rewatched) sync.watched = clock
+      // A `'playback'` save reports `watched: true` only once this open has
+      // crossed the threshold (PlayerView's `completedThisOpen`), so on a row
+      // that is already watched it is an explicit re-watch completion.
+      const completed = source === 'playback' && watched === true
+      if (source !== undefined && (justWatched || completed)) {
+        sync.watched = advanceClock(clock, sync.watched)
       }
       all[key] = {
         position,
@@ -62,14 +65,17 @@ export function register({ store }: AppDeps): void {
       const prev = all[key]
       if (!!prev?.watched === watched) return prev ?? null
       const clock = localClock(store)
+      const sync: WatchProgressSync = prev ? { ...watchSyncOf(prev) } : {}
       const next: WatchProgressEntry = {
-        position: prev?.position ?? 0,
+        // Zeroed like every other watched write, so the next `'playback'` save
+        // on open does not read as a move.
+        position: watched ? 0 : (prev?.position ?? 0),
         duration: prev?.duration ?? 0,
         updatedAt: clock.at,
         watched,
         watchedAt: watched ? clock.at : undefined,
         translationId: prev?.translationId,
-        sync: { ...(prev ? watchSyncOf(prev) : {}), watched: clock }
+        sync: { ...sync, watched: advanceClock(clock, sync.watched) }
       }
       all[key] = next
       store.set('watchProgress', all)

@@ -304,4 +304,26 @@ describe('library IPC — membership clocks and tombstones (#572)', () => {
     await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(8), false)
     expect(store.get('syncMeta')).toBeUndefined()
   })
+
+  it('after a backwards clock step, the tombstone and the order land just past the clocks they replace', async () => {
+    const ahead = T0 + 60_000
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      library: { '7': anime(7) },
+      priorityAnimeIds: ['7'],
+      syncMeta: {
+        titles: { '7': { starred: at(ahead), priority: at(ahead) } },
+        priorityOrder: at(ahead),
+        rates: {}
+      }
+    })
+
+    await invoke(CHANNELS.LIBRARY_TOGGLE, anime(7))
+
+    expect(meta(store)).toEqual({
+      titles: { '7': { starred: dead(ahead + 1), priority: dead(ahead + 1) } },
+      priorityOrder: at(ahead + 1),
+      rates: {}
+    })
+  })
 })

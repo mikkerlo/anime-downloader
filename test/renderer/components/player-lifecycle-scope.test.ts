@@ -634,7 +634,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
     // (`PlayerView.vue:663` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1249` ("const myPrepare = ++prepareEpoch")) and fail
+    // `PlayerView.vue:1230` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])
@@ -2330,6 +2330,12 @@ describe('#371 — the retargeted readers, the untouched readers, and the produc
     )
     expect(maybeMarkWatched).toContain('parseInt(playingEpisodeInt.value, 10)')
     expect(maybeMarkWatched).not.toContain('currentEpisodeInt')
+    // #565 — that `epNum` is what main's mark-episode-watched sends or queues.
+    // A renderer-side `shikimoriGetRate` first would throw offline and lose it.
+    expect(maybeMarkWatched).toContain('window.api.shikimoriMarkEpisodeWatched(props.malId, epNum)')
+    expect(SRC.split('shikimoriMarkEpisodeWatched(').length - 1).toBe(2)
+    expect(SRC).not.toContain('shikimoriGetRate')
+    expect(SRC).not.toContain('shikimoriUpdateRate')
   })
 
   // The amendment, and the third class the split produces: a writer whose KEY

@@ -117,6 +117,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `shikimori:profile-refreshed` | send | Profile dashboard payload re-assembled in background; ShikimoriView replaces its `profile` state |
 | `shikimori:get-rate` | invoke | Fetch user's anime rate from Shikimori by MAL ID |
 | `shikimori:update-rate` | invoke | Create or update user rate (episodes, status, score, rewatches); updates cached rates and broadcasts change |
+| `shikimori:mark-episode-watched` | invoke | The player's auto-mark (`malId`, `epNum`): computes the next rate (completed → rewatching with `rewatches + 1`, else `watching` when `epNum` is past `episodes`) from the live rate, and on a network error or `ShikiAuthError` from the cached one, then sends or queues it. Queues even when the title has no cached rate (`rateId: null`, empty `planned` `before`). `null` when signed out or nothing changes (#565) |
 | `shikimori:get-anime-rates` | invoke | Returns cached anime rates instantly (if available), triggers background API refresh; first call fetches from API |
 | `shikimori:rate-updated` | send | Single rate entry changed (after update-rate); renderer views surgically update their local state |
 | `shikimori:rates-refreshed` | send | Full rate list refreshed from API in background; renderer views replace their entries |

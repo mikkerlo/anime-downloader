@@ -115,6 +115,7 @@ export const CHANNELS = {
   SHIKIMORI_GET_SYNC_STATUS: 'shikimori:get-sync-status',
   SHIKIMORI_GET_USER: 'shikimori:get-user',
   SHIKIMORI_LOGOUT: 'shikimori:logout',
+  SHIKIMORI_MARK_EPISODE_WATCHED: 'shikimori:mark-episode-watched',
   SHIKIMORI_TRIGGER_DETAIL_PREFETCH: 'shikimori:trigger-detail-prefetch',
   SHIKIMORI_TRIGGER_SYNC: 'shikimori:trigger-sync',
   SHIKIMORI_UPDATE_RATE: 'shikimori:update-rate',

@@ -6,9 +6,10 @@ The built-in player auto-saves playback position to `watchProgress` (electron-st
 
 "Watched" detection counts real playback time via `timeupdate` deltas (clamped `< 2s` to ignore seek jumps). An episode is marked `watched: true` when `position / duration >= 0.8` AND cumulative playback `>= 180s`. The flag is set once per episode per session.
 
-When an episode is marked watched and `malId > 0`, the player fetches the current Shikimori rate and:
+When an episode is marked watched and `malId > 0`, the player calls `shikimoriMarkEpisodeWatched(malId, epNum)` (`shikimori:mark-episode-watched`), and main computes the next rate from the live Shikimori rate:
 - If `rate.status === 'completed'`: flips to `'rewatching'`, resets `episodes` to the just-watched episode number, and increments `rewatches` by 1 (starts a fresh rewatch cycle from whichever episode the user opened — typically ep 1). The status check itself prevents double-bumping: after the flip the status is `'rewatching'`, so the branch no longer fires.
-- Otherwise, if `epNum > rate.episodes`: calls `shikimoriUpdateRate` with `'watching'`, preserving the existing `rewatches` count.
+- Otherwise, if `epNum > rate.episodes`: writes `'watching'`, preserving the existing `rewatches` count. A title with no rate yet is created this way.
+- If the token refresh or the request fails with a network error or `ShikiAuthError` (an expired session), main computes the same next rate from the cached `shikimoriUserRates` entry instead and queues it in `shikimoriUpdateQueue`, exactly like an offline `shikimori:update-rate`. A title with no cached entry is queued too, with `rateId: null` and an empty `planned` `before`; the drain creates the rate. Before #565 the player fetched the rate itself first, so that fetch threw on all three cases and the mark was lost for good.
 
 `AnimeDetailView` loads all watch-progress entries for the anime on mount via `watchProgressGetAll` and renders a small ✓ badge (watched) or mini progress bar (partial) on each episode row. The view listens on a `watch-progress-updated` window event — dispatched by `PlayerView` after each save — to refresh indicators live.
 

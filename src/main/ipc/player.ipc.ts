@@ -168,7 +168,7 @@ export function register({
           .filter((s) => s.urls.length > 0)
           .map((s) => ({ height: s.height, url: s.urls[0] }))
 
-        // Fetch raw ASS subtitle content if available (rendered natively by JASSUB in the player)
+        // Fetch raw ASS subtitle content if available (rendered by SubtitlesOctopus in the player)
         let subtitleContent: string | null = null
         if (embed.subtitlesUrl) {
           subtitleContent = await smotretApi.fetchSubtitleContent(translationId)

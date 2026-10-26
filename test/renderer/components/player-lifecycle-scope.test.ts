@@ -13,7 +13,7 @@
 //      yet) and nothing else in the app reaps a stream session.
 //
 // There is no mount harness for `PlayerView` — it needs dozens of `window.api`
-// channels plus WebGPU/MSE/JASSUB init — so the regression halves below scan
+// channels plus WebGPU/MSE/libass init — so the regression halves below scan
 // the source, the same approach `player-syncplay-resume.test.ts` takes for this
 // SFC and `test/ipc-channels.test.ts` takes for the channel table. The one
 // behavioral test here (#1) reduces the scope question to our own invariant on

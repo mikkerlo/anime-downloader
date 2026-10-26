@@ -112,7 +112,7 @@ function ocr(imagePath) {
   // Prepare ASS subtitle file based on the gist content (https://gist.github.com/Cellane/3836678)
   // Timestamps shifted from 3:45+ to 0:01+ so we can use a short 30s test video.
   // Each subtitle gets a wide time window (6-8s) so it's still active when the screenshot
-  // is taken — JASSUB uses requestVideoFrameCallback and needs the video playing.
+  // is taken — SubtitlesOctopus redraws on `seeked`/`timeupdate`, paused or playing.
   const assTestFile = '/tmp/test-subs.ass'
   const gistDialogues = [
     // "Just get up and come." — screenshot at 2s, subtitle active 0:00:01–0:00:06
@@ -240,7 +240,7 @@ function ocr(imagePath) {
     const playerClosed = await page.evaluate(() => !document.querySelector('.player-overlay'))
     console.log('Player fully closed:', playerClosed)
 
-    // Test ASS subtitle rendering with JASSUB using actual gist content
+    // Test ASS subtitle rendering with SubtitlesOctopus using actual gist content
     console.log('Opening player with gist ASS subtitles...')
     const assContent = fs.readFileSync(assTestFile, 'utf-8')
     await page.evaluate(
@@ -266,11 +266,11 @@ function ocr(imagePath) {
       { mkvPath: mkvTestFile, subs: assContent }
     )
 
-    // Wait for remux + JASSUB init
+    // Wait for remux + SubtitlesOctopus init
     console.log('Waiting for remux + subtitle init...')
     await page.waitForTimeout(12000)
 
-    // Verify player is open and JASSUB is active
+    // Verify player is open and SubtitlesOctopus is active
     const playerReady = await page.evaluate(() => {
       const video = document.querySelector('video')
       return {
@@ -288,7 +288,7 @@ function ocr(imagePath) {
       process.exit(1)
     }
 
-    // Helper: seek, wait for JASSUB render (video must keep playing for requestVideoFrameCallback),
+    // Helper: seek, wait for SubtitlesOctopus to render the subtitle,
     // then screenshot + OCR verification
     async function seekAndScreenshot(seekTime, label, screenshotPath, expectedText) {
       console.log(`Seeking to ${seekTime}s — ${label}...`)
@@ -296,10 +296,10 @@ function ocr(imagePath) {
         const video = document.querySelector('video')
         if (video) {
           video.currentTime = t
-          video.play() // ensure playing — JASSUB needs requestVideoFrameCallback to fire
+          video.play() // `play()` isn't needed for subtitles; SubtitlesOctopus renders on `seeked`.
         }
       }, seekTime)
-      // Wait for JASSUB to render the subtitle (needs ~1-2 RVFC cycles)
+      // Wait for the worker's bitmap to be painted on the next `requestAnimationFrame`.
       await page.waitForTimeout(1500)
       // Move mouse to top-left corner away from subtitle area
       await page.mouse.move(1, 1)

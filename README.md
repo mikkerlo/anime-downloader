@@ -52,7 +52,7 @@ Anime DL is more than a downloader — it has a built-in player with MKV streami
 - **Instant MKV streaming** through MediaSource Extensions — no waiting for a full remux — with frame-accurate seeking.
 - **HEVC (H.265)** playback, with an automatic **H.264 transcode fallback** on platforms without a hardware HEVC decoder.
 - **Anime4K upscaling** via WebGPU compute shaders (Mode A / B / C) for real-time enhancement.
-- **Native ASS/SSA subtitles** rendered with [JASSUB](https://github.com/ThaUnknown/jassub) (libass) — full styling, positioning, fonts, and sign translations preserved.
+- **Native ASS/SSA subtitles** rendered with [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (libass) — full styling, positioning, fonts, and sign translations preserved.
 - **Quality & translation switching** mid-playback, seek-time preview, and previous/next episode with auto-advance.
 - **Auto-resume** — picks up where you left off and reports progress back to Shikimori.
 
@@ -174,7 +174,7 @@ Issues and pull requests are welcome. The [issues labelled **Ready for Implement
 - [smotret-anime.ru / anime365](https://smotret-anime.ru) — catalog and streaming source
 - [Shikimori](https://shikimori.one) — watchlist sync
 - [Anime4K](https://github.com/bloc97/Anime4K) — real-time upscaling shaders
-- [JASSUB](https://github.com/ThaUnknown/jassub) / libass — subtitle rendering
+- [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (`libass-wasm`) / [libass](https://github.com/libass/libass) — subtitle rendering
 - [FFmpeg](https://ffmpeg.org) — remuxing, transcoding, and merging
 - [Syncplay](https://syncplay.pl) — watch-together protocol
 

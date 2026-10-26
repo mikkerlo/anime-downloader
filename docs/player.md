@@ -69,13 +69,16 @@ Preset modes: Mode A (1080p source), Mode B (720p source), Mode C (480p source).
 
 ## Subtitles
 
-ASS subtitles are rendered natively using [JASSUB](https://github.com/ThaUnknown/jassub) (libass compiled to WASM), preserving full ASS styling — colors, positioning, fonts, effects, and sign translations. JASSUB renders subtitles onto a transparent canvas overlaid on the video element.
+ASS subtitles are rendered by [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (`libass-wasm` 4.1.0, libass compiled to WASM), preserving full ASS styling — colors, positioning, fonts, effects, and sign translations. It draws onto a main-thread 2D canvas (`.libassjs-canvas`, inside `.libassjs-canvas-parent`) overlaid on the video element; its worker renders the subtitle bitmaps and posts them to the main thread, which paints them on `requestAnimationFrame`.
 
 - **Local files**: `player:get-local-subtitles` reads raw `.ass` file alongside the `.mp4`
 - **Streaming**: `player:get-stream-url` fetches raw ASS content from smotret-anime API
-- Raw ASS content is passed to the renderer and fed directly to JASSUB via `subContent` option
-- JASSUB worker is bundled by Vite via `?worker&url` import; at runtime, the worker code is fetched, `import.meta.url` references are replaced with concrete URLs, and a blob URL is created for classic worker compatibility (Electron doesn't support module workers with `file://` protocol). A Vite plugin (`jassub-electron-fix`) strips `type: "module"` from JASSUB's Worker constructor.
-- On subtitle update (e.g., translation switch), the previous JASSUB instance is destroyed and a new one created
+- **Embedded MKV subtitles** are extracted asynchronously and arrive over `player:stream-subtitles`; `useSubtitles` applies them only when the session matches and no subtitle content is set yet
+- `useSubtitles` (`src/renderer/src/composables/use-subtitles.ts`) creates the instance with `subContent` (the raw ASS content) and `workerUrl` / `legacyWorkerUrl` / `fallbackFont` resolved against `document.baseURI` as `./libass/`. Those files are vendored in `src/renderer/public/libass/`, and the workers are classic workers, not ES module workers. Options: `lossyRender: true, prescaleFactor: 0.8, maxRenderHeight: 0`
+- The fallback font `default.woff2` is Liberation Sans, vendored from the `jassub` package; `libass-wasm` ships no font of its own
+- Its clock is `video.currentTime + timeOffset`, re-read on `seeked`, `timeupdate`, `playing` and `pause`. A paused frame still renders: `onSeeked` calls `setCurrentTime`, and the worker renders immediately when its own render loop isn't running
+- On subtitle update (e.g., translation switch), the previous instance is disposed and a new one created; after a fullscreen change `redrawAfterFullscreen` calls `setTrack` so a paused frame keeps its subtitles
+- Migrating to JASSUB is planned, not done: its ES module workers don't yet run under `file://` on Windows Electron (see `TODO.md`)
 
 ## Quality Selector
 

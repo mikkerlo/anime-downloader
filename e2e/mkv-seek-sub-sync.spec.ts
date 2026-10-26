@@ -32,8 +32,9 @@ import {
  * screenshot: pausing pins the controls on, and their gradient covers both
  * bands. With #556's fix reverted the picture reads 160 and the subtitles 165.
  *
- * Tagged `@mkv-sync`: CI runs it in its own non-blocking step after apt ffmpeg
- * is installed, and the shared e2e step leaves it out with `--grep-invert`.
+ * Tagged `@mkv-sync`: CI runs it in its own non-blocking step after the pinned
+ * static ffmpeg is installed on PATH (#591), and the shared e2e step leaves it
+ * out with `--grep-invert`.
  */
 interface SeekCase {
   fixture: TickFixtureOptions
@@ -137,11 +138,11 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
   const EXPECTED_TICK = tickAt(c.target)
   const UNBUFFERED_LOG = `[player] unbuffered seek → target ${c.target.toFixed(2)}`
   return async () => {
-    test.skip(process.platform !== 'linux', `the tick fixture is built with apt's ${FFMPEG}`)
+    test.skip(process.platform !== 'linux', `the tick fixture is built with ${FFMPEG} on PATH`)
     const ffmpegReady = hasRealFfmpeg()
-    // CI installs apt ffmpeg before this runs; a missing binary there must fail.
-    test.skip(!ffmpegReady && !process.env.CI, `${FFMPEG} with libx264 not found`)
-    expect(ffmpegReady, `CI must install ${FFMPEG} (with libx264) and ${FFPROBE}`).toBe(true)
+    // CI installs ffmpeg on PATH before this runs; a missing binary there must fail.
+    test.skip(!ffmpegReady && !process.env.CI, `${FFMPEG} with libx264 not found on PATH`)
+    expect(ffmpegReady, `CI must put ${FFMPEG} (with libx264) and ${FFPROBE} on PATH`).toBe(true)
     test.setTimeout(120_000)
 
     // A broken fixture fails here, before Electron launches.

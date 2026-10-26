@@ -145,6 +145,9 @@ jobs:
     # Runs on every PR regardless of which files changed (cheap, no artifacts).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # A normal run takes 2–4 minutes. Without a limit a stalled step runs to
+    # the 360-minute default (#591).
+    timeout-minutes: 25
     permissions:
       contents: read
     env:
@@ -232,10 +235,11 @@ jobs:
       # Real ffmpeg, needed by more than one step. With CI set, test:coverage's
       # seek-anchor-real-ffmpeg.test.ts (#556) FAILS without it, and so does every
       # e2e step: e2e/helpers/profile.ts links it into the app's profile (#562).
-      - name: Install ffmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      # The app's own pinned static 6.1 build from GitHub's release CDN, not apt
+      # (#591); the step budget fails a stalled download as setup.
+      - name: Install the app's pinned static ffmpeg
+        timeout-minutes: 5
+        run: bash scripts/ci-install-ffmpeg.sh
 
       # Runs the full unit + integration suite with coverage instrumentation;
       # per-seam thresholds in vitest.config.ts fail the build on regression
@@ -245,11 +249,12 @@ jobs:
       # The Playwright smoke + flow tests drive the built app.
       - run: npm run build
 
-      - name: Install Electron runtime + xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-            libgtk-3-0 libgbm1 libasound2t64 libxshmfence1 libdrm2
+      # The image ships all of them, so this normally makes no apt call; apt with
+      # a timed mirror rotation only if one is missing (#591). 12 minutes covers
+      # three timed attempts.
+      - name: Check the Electron runtime libs and xvfb
+        timeout-minutes: 12
+        run: bash scripts/ci-electron-libs.sh
 
       # The @mkv-sync spec runs in its own step below, not here.
       - name: Run Electron smoke test
@@ -261,7 +266,7 @@ jobs:
         run: npx playwright test --grep "$MKV_SYNC_TAG" --list
 
       # Picture vs rendered subtitles after an uncached MKV seek, read off the
-      # pixels with real ffmpeg (#557). Needs the apt ffmpeg step above.
+      # pixels with real ffmpeg (#557). Needs the static ffmpeg step above.
       # Non-blocking until it has a run of green results.
       - name: Run MKV seek subtitle-sync e2e (non-blocking)
         id: mkv_sync

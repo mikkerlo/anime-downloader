@@ -38,6 +38,8 @@ on:
       - 'playwright.syncplay.config.ts'
       - 'conformance/helpers/real-server.ts'
       - 'scripts/gen-syncplay-fixtures.mjs'
+      - 'scripts/ci-install-ffmpeg.sh'
+      - 'scripts/ci-electron-libs.sh'
       - '.github/workflows/syncplay-e2e.yml'
 
 permissions:
@@ -83,11 +85,17 @@ jobs:
           "$RUNNER_TEMP/sp176/bin/python" -c 'import OpenSSL, service_identity'
           "$RUNNER_TEMP/sp176/bin/syncplay-server" --help > /dev/null
 
-      - name: Install ffmpeg, Electron runtime and xvfb
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg xvfb libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-            libgtk-3-0 libgbm1 libasound2t64 libxshmfence1 libdrm2
+      # The app's own pinned static ffmpeg, then a check of the preinstalled
+      # Electron libs with apt only as a timed fallback (#591): a slow apt
+      # mirror once held a shard here for 2610 s and the job limit cancelled
+      # its suite. The step budgets fail a stall as setup instead.
+      - name: Install the app's pinned static ffmpeg
+        timeout-minutes: 5
+        run: bash scripts/ci-install-ffmpeg.sh
+
+      - name: Check the Electron runtime libs and xvfb
+        timeout-minutes: 12
+        run: bash scripts/ci-electron-libs.sh
 
       - run: npm ci
 

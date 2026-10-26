@@ -1095,15 +1095,15 @@ the source by MD5, and asserts `probeSeekAnchor` equals that ground truth for
 stream-copy and transcode-with-copied-audio, before and past 60 s.
 
 Locally the file skips when `ffmpeg` with libx264 is not on `PATH`. With `CI`
-set it fails instead, and the `quality` job installs apt `ffmpeg` before
-`npm run test:coverage`.
+set it fails instead, and the `quality` job installs the app's own pinned
+static ffmpeg (CI system setup, below) before `npm run test:coverage`.
 
 `e2e/mkv-seek-sub-sync.spec.ts` (#557) checks the same bug class on screen:
 that Chromium's MSE and the SubtitlesOctopus clock (`video.currentTime +
 timeOffset`) honour the offset, so the picture and the rendered subtitles agree
 after a seek outside the buffer. `e2e/helpers/tick-fixture.ts` builds a 150 s,
 640×360 MKV (H.264 `-bf 2 -g 96 -keyint_min 96 -sc_threshold 0`, AAC, embedded
-ASS) with apt `ffmpeg` into `os.tmpdir()`, in about 5 s on 4 cores; no media is
+ASS) with `ffmpeg` into `os.tmpdir()`, in about 5 s on 4 cores; no media is
 checked in. The picture's top band and the ASS track's bottom band both carry
 `floor(t / 0.5)` as 9 bits after an always-white sentinel block, and in the ASS
 the sentinel is part of each tick's own `{\p1}` drawing. Before launch the
@@ -1126,12 +1126,55 @@ It is tagged `@mkv-sync`. The `quality` job's shared e2e step leaves it out
 with `--grep-invert`, a blocking `--grep @mkv-sync --list` step fails when the
 tag selects nothing, and the spec runs in its own `continue-on-error` step
 until it has a run of green results. All three read the tag from the job's
-`MKV_SYNC_TAG`. Locally it skips when `/usr/bin/ffmpeg` with libx264 is
-missing; with `CI` set it fails instead.
+`MKV_SYNC_TAG`. Locally it skips when `ffmpeg` with libx264 is not on `PATH`;
+with `CI` set it fails instead.
 
 ```bash
 npm run build && xvfb-run -a npx playwright test --grep @mkv-sync
 ```
+
+## CI system setup
+
+`quality` and the three `syncplay-e2e` shards need real ffmpeg, the Electron
+runtime libraries and `xvfb`, and on the normal path none of it comes from apt
+(#591). Both jobs used to `apt-get install` all of it, and a crawling Azure
+mirror held single jobs for up to 44 minutes; one shard's suite was cancelled
+by the job's 60-minute limit with no test failed.
+
+`scripts/ci-install-ffmpeg.sh` installs the build the app itself downloads on
+Linux x64: `ffbinaries-prebuilt` v6.1, johnvansickle's `6.1-static`. It fetches
+both zips from GitHub's release CDN with `curl --retry 5 --speed-limit 100000
+--speed-time 30`, which aborts a crawl the way apt cannot, and checks them
+against pinned sha256s; the release is not immutable, so the pins are the only
+integrity check. It installs `ffmpeg` and `ffprobe` into `/usr/local/bin`,
+ahead of `/usr/bin` on the runner's `PATH`, and fails unless both names
+resolve there and the encoder list has libx264. There is no cache: each zip
+takes about 1.5 s, and a PR-scoped cache is not shared between PRs. A version
+bump changes `FFMPEG_VERSION` in `src/main/ffmpeg-binaries.ts` and both URLs
+and pins in the script together.
+
+`scripts/ci-electron-libs.sh` checks nine packages by their installed t64
+names (`xvfb libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64
+libgbm1 libasound2t64 libxshmfence1 libdrm2`), reading each one's
+arch-qualified `dpkg-query` status, which must be `ii`. The runner image ships
+all nine, so it normally makes no apt call. Only when one is missing does it
+fall back to apt, in three attempts. Each rewrites `/etc/apt/apt-mirrors.txt`
+(the image reads its mirrors through `mirror+file:`, and apt moves to the next
+one only on a failure, never on a crawl), then runs `update` under a 60 s
+`timeout` and a `--download-only` install under 150 s, so a kill never lands
+inside dpkg. The final install runs from the downloaded set, and if every
+attempt fails the step fails with `::error`. It overrides no `Acquire::`
+setting: the image's own `zz-retries` (one retry, 15 s timeout) fails over
+faster than a higher count would.
+
+Each script runs in its own step with a budget, 5 minutes for ffmpeg and 12 for
+the libraries (three timed attempts fit in about 11), so a stall fails as setup
+rather than eating the suite's time; `quality` itself has a 25-minute limit.
+`test/ci-setup-workflow.test.ts` holds all of this from `quality`: no apt
+`ffmpeg`, the URLs equal to `archiveUrl()`, both pins, the nine names, the
+timed fallback and the budgets. It also runs the library script against stub
+`sudo`, `dpkg-query`, `timeout` and `apt-get` binaries, so the rotation and the
+hard failure are exercised without touching apt.
 
 ## Syncplay interaction suite
 

@@ -110,7 +110,7 @@ export function makeProfile(opts: ProfileOpts = {}): Profile {
     if (!ffmpeg || !ffprobe) {
       fs.rmSync(root, { recursive: true, force: true })
       throw new Error(
-        'e2e profiles link ffmpeg and ffprobe from PATH (apt-get install ffmpeg); ' +
+        'e2e profiles link ffmpeg and ffprobe from PATH (CI: scripts/ci-install-ffmpeg.sh); ' +
           `found ffmpeg=${ffmpeg}, ffprobe=${ffprobe}`
       )
     }

@@ -9,7 +9,7 @@
 // from this file's location, never an absolute home path). Re-running is
 // cheap: a file whose recorded parameters match is left alone, so local runs
 // and CI produce the same set from the same script. Needs `ffmpeg` on PATH
-// (CI: `apt-get install ffmpeg`), or `FFMPEG=/path/to/ffmpeg`.
+// (CI: `scripts/ci-install-ffmpeg.sh`), or `FFMPEG=/path/to/ffmpeg`.
 //
 // What is generated, and why each property is there (see #489's fixture table):
 //  - ep1..ep4 at 720p and 360p (two quality variants for P7), H.264 + AAC MP4,

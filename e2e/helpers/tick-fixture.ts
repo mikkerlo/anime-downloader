@@ -15,8 +15,10 @@ import { join } from 'path'
 // bottom BAND_H rows, drawn by one `{\p1}` event per tick that includes the
 // sentinel, so a white sentinel means *this* tick's event rendered.
 
-export const FFMPEG = '/usr/bin/ffmpeg'
-export const FFPROBE = '/usr/bin/ffprobe'
+// Resolved from PATH, like e2e/helpers/profile.ts and the real-ffmpeg unit test.
+// CI puts the app's own pinned static 6.1 build in /usr/local/bin (#591).
+export const FFMPEG = 'ffmpeg'
+export const FFPROBE = 'ffprobe'
 
 export const TICK_S = 0.5
 export const CODE_BITS = 9
@@ -62,8 +64,9 @@ const GOP_FRAMES = 96
 
 export const tickAt = (t: number): number => Math.floor(t / TICK_S)
 
+// A spawn, not an existence check: the names are bare, so only running them
+// says whether PATH has them.
 export function hasRealFfmpeg(): boolean {
-  if (!fs.existsSync(FFMPEG) || !fs.existsSync(FFPROBE)) return false
   const enc = spawnSync(FFMPEG, ['-hide_banner', '-encoders'], { encoding: 'utf-8' })
   return (enc.stdout ?? '').includes('libx264') && spawnSync(FFPROBE, ['-version']).status === 0
 }

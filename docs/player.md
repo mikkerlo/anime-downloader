@@ -69,7 +69,7 @@ Preset modes: Mode A (1080p source), Mode B (720p source), Mode C (480p source).
 
 ## Subtitles
 
-ASS subtitles are rendered by [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (`libass-wasm` 4.1.0, libass compiled to WASM), preserving full ASS styling — colors, positioning, fonts, effects, and sign translations. It draws onto a main-thread 2D canvas (`.libassjs-canvas`, inside `.libassjs-canvas-parent`) overlaid on the video element; its worker renders the subtitle bitmaps and posts them to the main thread, which paints them on `requestAnimationFrame`.
+ASS subtitles are rendered by [SubtitlesOctopus](https://github.com/libass/JavascriptSubtitlesOctopus) (`libass-wasm`, libass compiled to WASM), preserving full ASS styling — colors, positioning, fonts, effects, and sign translations. It draws onto a main-thread 2D canvas (`.libassjs-canvas`, inside `.libassjs-canvas-parent`) overlaid on the video element; its worker renders the subtitle bitmaps and posts them to the main thread, which paints them on `requestAnimationFrame`.
 
 - **Local files**: `player:get-local-subtitles` reads raw `.ass` file alongside the `.mp4`
 - **Streaming**: `player:get-stream-url` fetches raw ASS content from smotret-anime API

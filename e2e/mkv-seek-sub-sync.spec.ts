@@ -1,7 +1,6 @@
-import { test, expect, _electron as electron, type Page } from '@playwright/test'
-import { resolve, join } from 'path'
-import * as fs from 'fs'
-import * as os from 'os'
+import { test, expect, type Page } from '@playwright/test'
+import { join } from 'path'
+import { assertNoDownloads, assertUserData, launchApp, makeProfile } from './helpers/profile'
 import {
   BAND_H,
   FFMPEG,
@@ -109,7 +108,7 @@ test(
   'MKV seek outside the buffer: picture and subtitles show the same tick',
   { tag: '@mkv-sync' },
   async () => {
-    test.skip(process.platform !== 'linux', 'XDG profile isolation is Linux-only')
+    test.skip(process.platform !== 'linux', `the tick fixture is built with apt's ${FFMPEG}`)
     const ffmpegReady = hasRealFfmpeg()
     // CI installs apt ffmpeg before this runs; a missing binary there must fail.
     test.skip(!ffmpegReady && !process.env.CI, `${FFMPEG} with libx264 not found`)
@@ -125,26 +124,17 @@ test(
       code: EXPECTED_TICK
     })
 
-    // Playwright launches out/main/index.js unnamed, so userData is
-    // <XDG_CONFIG_HOME>/Electron. Both binaries must exist there, or the app
-    // downloads its own and the player falls back to legacy remux meanwhile.
-    const xdg = fs.mkdtempSync(join(os.tmpdir(), 'anime-dl-mkvsync-'))
-    const userData = join(xdg, 'Electron')
+    // The helper links ffmpeg and ffprobe into the profile's userData; without
+    // both the app downloads its own and the player falls back to legacy remux
+    // meanwhile.
+    const profile = makeProfile({ prefix: 'anime-dl-mkvsync-' })
+    const userData = profile.userData
     // The outer finally removes the profile even when the launch throws.
     try {
-      fs.mkdirSync(join(userData, 'ffmpeg'), { recursive: true })
-      fs.symlinkSync(FFMPEG, join(userData, 'ffmpeg', 'ffmpeg'))
-      fs.symlinkSync(FFPROBE, join(userData, 'ffmpeg', 'ffprobe'))
-      fs.writeFileSync(
-        join(userData, 'config.json'),
-        JSON.stringify({ playerVolume: 0, playerMuted: true })
-      )
-
-      const args = [resolve(__dirname, '../out/main/index.js'), '--mute-audio']
-      if (process.env.CI) args.unshift('--no-sandbox')
-      const app = await electron.launch({ args, env: { ...process.env, XDG_CONFIG_HOME: xdg } })
+      const launched = await launchApp(profile)
+      const { app } = launched
       try {
-        expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(userData)
+        await assertUserData(app, profile)
         const page = await app.firstWindow()
         const consoleLines: string[] = []
         page.on('console', (m) => consoleLines.push(m.text()))
@@ -262,11 +252,12 @@ test(
         expect(final.sub.sentinel, `subtitle band sentinel not white: ${summary}`).toBe(true)
         expect(final.sub.code, `subtitles show the wrong tick: ${summary}`).toBe(EXPECTED_TICK)
         expect(final.video.code, `picture and subtitles disagree: ${summary}`).toBe(final.sub.code)
+        assertNoDownloads(launched)
       } finally {
         await app.close()
       }
     } finally {
-      fs.rmSync(xdg, { recursive: true, force: true })
+      profile.cleanup()
     }
   }
 )

@@ -291,13 +291,13 @@ npm run test:conformance  # Vitest against a real Syncplay server; needs SYNCPLA
   shape-2 case uses the knob the other way round: it holds a foreign periodic,
   delivers the press, then releases the stale frame, which is red until the
   pending-pause hold arms post-adoption.
-- **End-to-end** (`e2e/`) — Playwright drives the built Electron app: a boot
-  smoke (`e2e/smoke.spec.ts`) plus deterministic, network-free flows
-  (`e2e/navigation.spec.ts`: sidebar navigation, settings persistence
-  round-trip, keyboard shortcuts; `e2e/anime-video.spec.ts`: crossorigin
-  `<video>` + ranged `fetch()` of a 2 KB fixture over `anime-video://`).
-  Search→enqueue and live Shikimori sync are excluded (unit + integration
-  cover them); the MKV seek spec runs apart, see Real-ffmpeg tests.
+- **End-to-end** (`e2e/`) — Playwright drives the built Electron app, each
+  launch on a temp profile from `e2e/helpers/profile.ts`: a boot smoke plus
+  network-free flows (`e2e/navigation.spec.ts`: sidebar navigation, settings
+  persistence round-trip, keyboard shortcuts; `e2e/anime-video.spec.ts`:
+  crossorigin `<video>` + ranged `fetch()` over `anime-video://`). Search and
+  live Shikimori sync are excluded (unit + integration cover them); the MKV
+  seek spec runs apart, see Real-ffmpeg tests.
 - **Conformance** (`conformance/`, #367) — the only layer whose subject is
   `MinElectionServer` itself rather than our code. Every fixture above believes
   the model; this one replays two-peer scenarios through real sockets against a
@@ -1111,8 +1111,8 @@ helper asserts that the target T = 82.75 s is at least 1 s after its keyframe K
 and that K's DTS is past 60 s, without which #556 would not fire, and decodes
 an ffmpeg grab at T.
 
-The spec seeds `<XDG_CONFIG_HOME>/Electron/ffmpeg` with both binaries (the
-`userData` of an unnamed launch, asserted), waits for `ffmpegCheck()`, opens
+The spec launches through `e2e/helpers/profile.ts` (both ffmpeg binaries
+linked into the asserted `userData`), waits for `ffmpegCheck()`, opens
 the file through `__openTestPlayer` with `subtitleContent: ''`, and asserts a
 `blob:` source. It pauses, waits 500 ms, seeks to 82.75, and fails loudly
 unless the seek left the buffer: `buffered.start(0) >= 79.9`, or the
@@ -1178,6 +1178,10 @@ holds the translation-id → file map, two translations per episode. One more
 file, `ep1-720-longer.mp4`, is episode 1 five seconds longer, served only
 behind `LONGER_CUT`'s own translation id for E7c (#541); the 360p variants keep
 their episode's length, which the quality-switch rows depend on.
+Each app instance launches through `e2e/helpers/profile.ts` (#562) on its own
+temp profile, passed as `--user-data-dir` and asserted as the app's `userData`.
+It is seeded muted, with ffmpeg linked from `PATH` and fpcalc stubbed, and the
+launch fails if a first-launch download starts anyway (`assertNoDownloads`).
 
 Every row writes per-run records to `test-results/syncplay-traces/<row>.jsonl`;
 aggregate them with `jq`, never read them raw. The workflow

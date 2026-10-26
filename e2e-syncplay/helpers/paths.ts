@@ -5,7 +5,6 @@
 import path from 'node:path'
 
 export const REPO_ROOT = path.resolve(__dirname, '..', '..')
-export const APP_MAIN = path.join(REPO_ROOT, 'out', 'main', 'index.js')
 export const FIXTURE_DIR = path.resolve(
   process.env.SYNCPLAY_FIXTURE_DIR ?? path.join(REPO_ROOT, 'e2e-syncplay', '.fixtures')
 )

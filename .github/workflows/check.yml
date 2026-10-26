@@ -229,9 +229,9 @@ jobs:
       # catches are too SHORT, not too long.
       - run: npm run check:prose-shape
 
-      # Real ffmpeg for test/streaming/seek-anchor-real-ffmpeg.test.ts (#556).
-      # Must precede test:coverage: with CI set, that file FAILS (not skips)
-      # when ffmpeg/libx264 is missing. The app itself never uses PATH ffmpeg.
+      # Real ffmpeg, needed by more than one step. With CI set, test:coverage's
+      # seek-anchor-real-ffmpeg.test.ts (#556) FAILS without it, and so does every
+      # e2e step: e2e/helpers/profile.ts links it into the app's profile (#562).
       - name: Install ffmpeg
         run: |
           sudo apt-get update

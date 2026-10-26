@@ -1,7 +1,6 @@
-import { test, expect, _electron as electron } from '@playwright/test'
-import { resolve, join } from 'path'
-import * as fs from 'fs'
-import * as os from 'os'
+import { test, expect } from '@playwright/test'
+import { resolve } from 'path'
+import { assertNoDownloads, assertUserData, launchApp, makeProfile } from './helpers/profile'
 
 /**
  * anime-video:// regression (#490): the player's <video> carries
@@ -18,12 +17,14 @@ import * as os from 'os'
 const FIXTURE = resolve(__dirname, 'fixtures/test-pattern.mp4')
 
 test('anime-video:// serves a crossorigin <video> and a ranged fetch from the file:// renderer', async () => {
-  const xdg = fs.mkdtempSync(join(os.tmpdir(), 'anime-dl-animevideo-'))
-  const args = [resolve(__dirname, '../out/main/index.js'), '--mute-audio']
-  if (process.env.CI) args.unshift('--no-sandbox')
-
-  const app = await electron.launch({ args, env: { ...process.env, XDG_CONFIG_HOME: xdg } })
+  const profile = makeProfile({ prefix: 'anime-dl-animevideo-' })
+  const launched = await launchApp(profile).catch((e: unknown) => {
+    profile.cleanup()
+    throw e
+  })
+  const { app } = launched
   try {
+    await assertUserData(app, profile)
     const window = await app.firstWindow()
     await window.waitForLoadState('domcontentloaded')
     expect(new URL(window.url()).protocol).toBe('file:')
@@ -65,8 +66,9 @@ test('anime-video:// serves a crossorigin <video> and a ranged fetch from the fi
     expect(fetched.error).toBeNull()
     expect([200, 206]).toContain(fetched.status)
     expect(fetched.bytes).toBeGreaterThan(0)
+    assertNoDownloads(launched)
   } finally {
     await app.close()
-    fs.rmSync(xdg, { recursive: true, force: true })
+    profile.cleanup()
   }
 })

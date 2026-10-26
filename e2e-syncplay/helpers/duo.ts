@@ -16,10 +16,10 @@
 //
 // ── What each launch does, and why ──────────────────────────────────────────
 //
-//  - One isolated XDG profile per instance. The userData dir for an `out/`
-//    launch is `anime-dl-app` (package.json `name`), and the profile is
-//    seeded *there* with `playerVolume: 0` / `playerMuted: true`; seeding the
-//    wrong dir fails silently and the run comes up at full volume.
+//  - One temp profile per instance from `e2e/helpers/profile.ts` (#562),
+//    seeded with `playerVolume: 0` / `playerMuted: true` and handed to the app
+//    with `--user-data-dir`. A bare-script `out/` launch would otherwise read
+//    `<XDG_CONFIG_HOME>/Electron`, not `anime-dl-app`, so `userData` is asserted.
 //  - Muted three ways: `--mute-audio`, the seeded profile, and an in-page
 //    enforcer on every `play` / `playing` / `volumechange`.
 //  - Background throttling and occlusion are disabled, and the whole run is
@@ -29,15 +29,13 @@
 //    `NODE_EXTRA_CA_CERTS` makes the app trust the throwaway CA.
 //  - Timing is anchored to `Date.now()` in both renderers; `performance`'s
 //    time origin drifts by hundreds of ms between processes.
-//  - The bundled ffmpeg auto-download is not relied on: if the developer's own
-//    profile has ffmpeg binaries they are copied in (the MKV path needs them).
+//  - ffmpeg and ffprobe are linked from `PATH` and fpcalc is stubbed, so no
+//    first-launch download starts; the launch fails if one does.
 //  - Teardown is by explicit pid. `app.close()` first; anything still alive is
 //    SIGKILLed by pid. Never `pkill -f`, which matches the shell running it.
 
-import { _electron as electron } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { CHANNELS } from '../../src/shared/ipc/channels'
 import { bootRealServer, type RealServer } from '../../conformance/helpers/real-server'
@@ -61,7 +59,13 @@ import {
 import { startFixtureServer, type FixtureServer } from './fixture-server'
 import { makeTlsDir, probeStartTls, type TlsDir } from './tls'
 import { startRelay, type Relay } from './relay'
-import { APP_MAIN, RUN_DIR } from './paths'
+import { RUN_DIR } from './paths'
+import {
+  assertNoDownloads,
+  assertUserData,
+  launchApp,
+  makeProfile
+} from '../../e2e/helpers/profile'
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -221,31 +225,6 @@ export interface LaunchOpts {
   resolveMs?: number
 }
 
-function seedProfile(runDir: string, name: string): string {
-  const xdg = fs.mkdtempSync(path.join(runDir, `xdg-${name}-`))
-  const ud = path.join(xdg, 'config', 'anime-dl-app')
-  fs.mkdirSync(ud, { recursive: true })
-  fs.writeFileSync(
-    path.join(ud, 'config.json'),
-    JSON.stringify({ playerVolume: 0, playerMuted: true }),
-    { mode: 0o600 }
-  )
-  // The MKV path needs ffmpeg; the app's own auto-download is not something a
-  // test should wait on. Copy the developer's (or CI's pre-seeded) binaries.
-  const ff = path.join(os.homedir(), '.config', 'anime-dl-app', 'ffmpeg')
-  if (fs.existsSync(path.join(ff, 'ffmpeg'))) {
-    fs.mkdirSync(path.join(ud, 'ffmpeg'), { recursive: true })
-    for (const b of ['ffmpeg', 'ffprobe']) {
-      if (!fs.existsSync(path.join(ff, b))) continue
-      fs.copyFileSync(path.join(ff, b), path.join(ud, 'ffmpeg', b))
-      fs.chmodSync(path.join(ud, 'ffmpeg', b), 0o755)
-    }
-  }
-  fs.mkdirSync(path.join(xdg, 'data'), { recursive: true })
-  fs.mkdirSync(path.join(xdg, 'cache'), { recursive: true })
-  return xdg
-}
-
 /**
  * Replace the two player handlers that would reach the network or the
  * download store with fixture-backed ones. Runs in the main process; every
@@ -305,29 +284,45 @@ export async function launchInstance(
   name: string,
   opts: LaunchOpts = {}
 ): Promise<Instance> {
-  const xdg = seedProfile(rig.runDir, name)
+  const profile = makeProfile({ parent: rig.runDir, prefix: `xdg-${name}-` })
   const mainLog: { at: number; line: string }[] = []
-  const app = await setupRetry(`launch ${name}`, () =>
-    electron.launch({
+  const launched = await setupRetry(`launch ${name}`, () =>
+    launchApp(profile, {
       args: [
-        '--mute-audio',
         '--no-sandbox',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--disable-background-timer-throttling',
-        APP_MAIN
+        '--disable-background-timer-throttling'
       ],
-      env: {
-        ...process.env,
-        XDG_CONFIG_HOME: path.join(xdg, 'config'),
-        XDG_DATA_HOME: path.join(xdg, 'data'),
-        XDG_CACHE_HOME: path.join(xdg, 'cache'),
-        NODE_EXTRA_CA_CERTS: rig.tls.caPath,
-        SYNCPLAY_DEBUG: '1'
-      }
+      env: { NODE_EXTRA_CA_CERTS: rig.tls.caPath, SYNCPLAY_DEBUG: '1' }
     })
-  )
+  ).catch((e: unknown) => {
+    profile.cleanup()
+    throw e
+  })
+  const { app } = launched
   const pid = app.process().pid
+  const shutdown = async (): Promise<void> => {
+    await Promise.race([app.close().catch(() => {}), sleep(10_000)])
+    if (pid) {
+      try {
+        process.kill(pid, 0)
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+    profile.cleanup()
+  }
+  // Deterministic, so outside `setupRetry`: a wrong seed fails once, by name.
+  const check = async (fn: () => void | Promise<void>): Promise<void> => {
+    try {
+      await fn()
+    } catch (e) {
+      await shutdown()
+      throw new Error(`${name}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
   const onMain = (buf: Buffer): void => {
     const at = Date.now()
     for (const line of String(buf).split('\n')) {
@@ -337,6 +332,7 @@ export async function launchInstance(
   }
   app.process().stdout?.on('data', onMain)
   app.process().stderr?.on('data', onMain)
+  await check(() => assertUserData(app, profile))
 
   // `bootstrap()` calls `createWindow()` right after `registerIpcHandlers()`, so
   // once the first window exists the app's own handlers are registered and the
@@ -352,6 +348,7 @@ export async function launchInstance(
   // The cold-start IPC race (first window's listeners can miss the earliest
   // broadcasts): settle, then reload once, as every capture rig here does.
   await sleep(2500)
+  await check(() => assertNoDownloads(launched))
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
   await page.waitForFunction(() => !!(window as unknown as { api?: unknown }).api, null, {
@@ -678,18 +675,7 @@ export async function launchInstance(
         toasts: rel(d.toasts as Toast[])
       }
     },
-    close: async () => {
-      await Promise.race([app.close().catch(() => {}), sleep(10_000)])
-      if (pid) {
-        try {
-          process.kill(pid, 0)
-          process.kill(pid, 'SIGKILL')
-        } catch {
-          /* already gone */
-        }
-      }
-      fs.rmSync(xdg, { recursive: true, force: true })
-    }
+    close: shutdown
   }
   return inst
 }

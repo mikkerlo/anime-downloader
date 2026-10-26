@@ -1,11 +1,12 @@
+import { test, expect, type Page } from '@playwright/test'
 import {
-  test,
-  expect,
-  _electron as electron,
-  type ElectronApplication,
-  type Page
-} from '@playwright/test'
-import { resolve } from 'path'
+  assertNoDownloads,
+  assertUserData,
+  launchApp,
+  makeProfile,
+  type LaunchedApp,
+  type Profile
+} from './helpers/profile'
 
 /**
  * Navigation e2e (Phase 7 PR 4, #140).
@@ -16,20 +17,28 @@ import { resolve } from 'path'
  * PR description for why they're deferred.
  */
 
-let app: ElectronApplication
+// A fresh temp profile per run: on a shared one, the token round-trip below
+// read the previous run's token back and passed without typing it (#562).
+let profile: Profile
+let launched: LaunchedApp
 let page: Page
 
 test.beforeAll(async () => {
-  const args = [resolve(__dirname, '../out/main/index.js')]
-  if (process.env.CI) args.unshift('--no-sandbox')
-  app = await electron.launch({ args })
-  page = await app.firstWindow()
+  profile = makeProfile({ prefix: 'anime-dl-nav-' })
+  launched = await launchApp(profile)
+  await assertUserData(launched.app, profile)
+  page = await launched.app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   await expect.poll(() => page.title()).toContain('Anime DL')
 })
 
 test.afterAll(async () => {
-  await app?.close()
+  try {
+    if (launched) assertNoDownloads(launched)
+  } finally {
+    await launched?.app.close()
+    profile?.cleanup()
+  }
 })
 
 test('sidebar navigates between local views', async () => {

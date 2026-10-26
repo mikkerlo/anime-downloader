@@ -15,7 +15,7 @@ This document is an index. Each subsystem lives in its own page under [`docs/`](
 | `electron-store` settings schema | [docs/settings.md](./docs/settings.md) |
 | Watch progress + auto-resume + Shikimori sync on watched | [docs/watch-progress.md](./docs/watch-progress.md) |
 | Hot/cold storage and on-disk file layout | [docs/storage.md](./docs/storage.md) |
-| Built-in video player (MSE, Anime4K, JASSUB, prefetch, episode nav) | [docs/player.md](./docs/player.md) |
+| Built-in video player (MSE, Anime4K, SubtitlesOctopus, prefetch, episode nav) | [docs/player.md](./docs/player.md) |
 | Auto-update via `electron-updater` | [docs/auto-update.md](./docs/auto-update.md) |
 | Shikimori integration: OAuth, rate cache, offline queue, Friends, Calendar, Chronology, auto-download | [docs/shikimori.md](./docs/shikimori.md) |
 | Watch Together (Syncplay) | [docs/syncplay.md](./docs/syncplay.md) |

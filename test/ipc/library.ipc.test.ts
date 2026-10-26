@@ -5,7 +5,7 @@
 // priority ⊆ library. These tests pin the three places that enforce it —
 // promote (stars if needed), un-star (demotes), and read (prunes) — plus the
 // ordering guarantee that makes the Priority tab read as a queue.
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { ipcMain } from 'electron'
 import { CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
@@ -217,5 +217,91 @@ describe('library IPC — library-get-priority', () => {
     )
 
     expect(await handlers.get(CHANNELS.LIBRARY_GET_PRIORITY)!({})).toEqual([])
+  })
+})
+
+describe('library IPC — membership clocks and tombstones (#572)', () => {
+  const T0 = Date.UTC(2026, 0, 1)
+  const at = (t: number): SyncClock => ({ at: t, origin: 'install-a' })
+  const dead = (t: number): SyncMembershipClock => ({ deleted: true, ...at(t) })
+
+  function meta(store: InMemoryStorage): SyncMeta {
+    return store.get('syncMeta') as SyncMeta
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(T0)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('starring stamps a starred clock', async () => {
+    const { invoke, store } = registerRouter({ installId: 'install-a' })
+    await invoke(CHANNELS.LIBRARY_TOGGLE, anime(7))
+    expect(meta(store)).toEqual({ titles: { '7': { starred: at(T0) } }, rates: {} })
+  })
+
+  it('un-starring leaves a tombstone, and demotes with a priority tombstone and an order clock', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      library: { '7': anime(7), '8': anime(8) },
+      priorityAnimeIds: ['8', '7']
+    })
+
+    await invoke(CHANNELS.LIBRARY_TOGGLE, anime(7))
+
+    expect(meta(store)).toEqual({
+      titles: { '7': { starred: dead(T0), priority: dead(T0) } },
+      priorityOrder: at(T0),
+      rates: {}
+    })
+  })
+
+  it('un-starring a non-prioritized title leaves the priority clocks alone', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      library: { '7': anime(7) },
+      priorityAnimeIds: []
+    })
+    await invoke(CHANNELS.LIBRARY_TOGGLE, anime(7))
+    expect(meta(store)).toEqual({ titles: { '7': { starred: dead(T0) } }, rates: {} })
+  })
+
+  it('promoting an unstarred title stamps starred, priority and the order', async () => {
+    const { invoke, store } = registerRouter({ installId: 'install-a' })
+    await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(7), true)
+    expect(meta(store)).toEqual({
+      titles: { '7': { starred: at(T0), priority: at(T0) } },
+      priorityOrder: at(T0),
+      rates: {}
+    })
+  })
+
+  it('demoting leaves a priority tombstone and stamps the order', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      library: { '7': anime(7) },
+      priorityAnimeIds: ['7']
+    })
+    await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(7), false)
+    expect(meta(store)).toEqual({
+      titles: { '7': { priority: dead(T0) } },
+      priorityOrder: at(T0),
+      rates: {}
+    })
+  })
+
+  it('a repeat promote and an absent demote change nothing, so they stamp nothing', async () => {
+    const { invoke, store } = registerRouter({
+      installId: 'install-a',
+      library: { '7': anime(7) },
+      priorityAnimeIds: ['7']
+    })
+    await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(7), true)
+    await invoke(CHANNELS.LIBRARY_SET_PRIORITY, anime(8), false)
+    expect(store.get('syncMeta')).toBeUndefined()
   })
 })

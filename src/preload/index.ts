@@ -95,8 +95,9 @@ const api = {
     episodeInt: string,
     position: number,
     duration: number,
-    watched?: boolean,
-    translationId?: number
+    watched: boolean | undefined,
+    translationId: number | undefined,
+    source: WatchProgressSaveSource
   ) =>
     ipcRenderer.invoke(
       CHANNELS.WATCH_PROGRESS_SAVE,
@@ -105,8 +106,16 @@ const api = {
       position,
       duration,
       watched,
-      translationId
+      translationId,
+      source
     ),
+  watchProgressSetWatched: (animeId: number, episodeInt: string, watched: boolean) =>
+    ipcRenderer.invoke(
+      CHANNELS.WATCH_PROGRESS_SET_WATCHED,
+      animeId,
+      episodeInt,
+      watched
+    ) as Promise<WatchProgressEntry | null>,
   watchProgressGet: (animeId: number, episodeInt: string) =>
     ipcRenderer.invoke(CHANNELS.WATCH_PROGRESS_GET, animeId, episodeInt) as Promise<{
       position: number

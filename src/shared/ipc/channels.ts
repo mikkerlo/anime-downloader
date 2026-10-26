@@ -160,6 +160,7 @@ export const CHANNELS = {
   WATCH_PROGRESS_GET: 'watch-progress:get',
   WATCH_PROGRESS_GET_ALL: 'watch-progress:get-all',
   WATCH_PROGRESS_SAVE: 'watch-progress:save',
+  WATCH_PROGRESS_SET_WATCHED: 'watch-progress:set-watched',
 
   // Core / legacy un-namespaced
   CACHE_GET_POSTER: 'cache-get-poster',

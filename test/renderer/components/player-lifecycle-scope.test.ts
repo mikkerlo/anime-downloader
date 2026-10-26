@@ -634,7 +634,7 @@ describe('#291 — supersede identity and the targeted unwind', () => {
     // inside the bounds, still green. What closes that hole here is not this
     // scan — it is typecheck, since two code-side sites read the binding
     // (`PlayerView.vue:663` ("myPrepare !== prepareEpoch"),
-    // `PlayerView.vue:1230` ("const myPrepare = ++prepareEpoch")) and fail
+    // `PlayerView.vue:1232` ("const myPrepare = ++prepareEpoch")) and fail
     // before any test runs.
     const scripts = SOURCE.split('\n').filter((l) => l.startsWith('<script'))
     expect(scripts).toEqual(['<script setup lang="ts">'])

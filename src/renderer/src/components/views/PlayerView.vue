@@ -781,7 +781,8 @@ async function saveProgress(force = false): Promise<void> {
       positionToSave,
       duration.value,
       watchedReported,
-      activeTranslationId.value ?? undefined
+      activeTranslationId.value ?? undefined,
+      'playback'
     );
     window.dispatchEvent(new CustomEvent('watch-progress-updated'));
   } catch (err) {
@@ -830,7 +831,8 @@ async function persistSelectedTranslation(translationId: number): Promise<void> 
       pos,
       dur,
       watchedReported,
-      translationId
+      translationId,
+      'choice'
     );
     window.dispatchEvent(new CustomEvent('watch-progress-updated'));
   } catch (err) {
@@ -841,7 +843,7 @@ async function persistSelectedTranslation(translationId: number): Promise<void> 
 async function markEpisodeWatched(episodeInt: string): Promise<void> {
   if (!props.animeId || !episodeInt) return;
   try {
-    await window.api.watchProgressSave(props.animeId, episodeInt, 0, 0, true);
+    await window.api.watchProgressSave(props.animeId, episodeInt, 0, 0, true, undefined, 'mark');
     window.dispatchEvent(new CustomEvent('watch-progress-updated'));
   } catch (err) {
     console.warn('[player] failed to mark episode watched:', err);

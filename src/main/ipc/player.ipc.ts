@@ -463,11 +463,13 @@ export function register({
       // the buffer with the un-snapped time → the classic subtitles-run-ahead
       // desync. Probe the run's true timestampOffset concurrently with the spawn
       // (its result feeds only the IPC reply, not the session ffmpeg) so the
-      // probe never delays first bytes (#198).
-      const offsetPromise =
-        requestedSeek > 0
-          ? streamingService.probeCopyTimestampOffset(mkvPath, requestedSeek, probe.videoCodec)
-          : Promise.resolve(0)
+      // probe never delays first bytes (#198). An open at 0 is probed too: its
+      // B-frame delay makes the offset negative (#560).
+      const offsetPromise = streamingService.probeCopyTimestampOffset(
+        mkvPath,
+        requestedSeek,
+        probe.videoCodec
+      )
       session.proc = streamingService.spawnFfmpegForSession(
         session,
         event,

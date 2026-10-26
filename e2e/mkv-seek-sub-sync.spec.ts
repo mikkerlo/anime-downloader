@@ -2,17 +2,21 @@ import { test, expect, type Page } from '@playwright/test'
 import { join } from 'path'
 import { assertNoDownloads, assertUserData, launchApp, makeProfile } from './helpers/profile'
 import {
+  AUDIO_EARLIEST_FIXTURE,
   BAND_H,
   FFMPEG,
   FFPROBE,
   HEIGHT,
+  TICK_FIXTURE,
   WIDTH,
+  audioEnd,
   buildTickFixture,
   decodeTickBand,
   grabVideoBand,
   hasRealFfmpeg,
   seekKeyframe,
   tickAt,
+  type TickFixtureOptions,
   type TickRead
 } from './helpers/tick-fixture'
 
@@ -31,11 +35,36 @@ import {
  * Tagged `@mkv-sync`: CI runs it in its own non-blocking step after apt ffmpeg
  * is installed, and the shared e2e step leaves it out with `--grep-invert`.
  */
-const SEEK_TARGET = 82.75 // frame 1986, 0.25 s from both tick boundaries
-const EXPECTED_TICK = tickAt(SEEK_TARGET)
-const BUFFER_LEFT_FLOOR = 79.9 // the keyframe before the target is at 80.0
-const UNBUFFERED_LOG = `[player] unbuffered seek → target ${SEEK_TARGET.toFixed(2)}`
+interface SeekCase {
+  fixture: TickFixtureOptions
+  target: number
+  /** A buffer starting at or past this proves the seek left the buffer. */
+  bufferLeftFloor: number
+  /** Also check `buffered` after endOfStream against the file's audio end. */
+  checkAudioEnd: boolean
+}
+
+const TICK_CASE: SeekCase = {
+  fixture: TICK_FIXTURE,
+  target: 82.75, // frame 1986, 0.25 s from both tick boundaries
+  bufferLeftFloor: 79.9, // the keyframe before the target is at 80.0
+  checkAudioEnd: false
+}
+
+// #560: the audio lands ~0.38 s before every keyframe, so the zero is the audio
+// landing; anchored on the video, the picture reads 164 and `buffered` ends
+// ~0.3 s past the audio. The target is 0.1 s after a tick boundary.
+const AUDIO_EARLIEST_CASE: SeekCase = {
+  fixture: AUDIO_EARLIEST_FIXTURE,
+  target: 82.6,
+  bufferLeftFloor: 79.5,
+  checkAudioEnd: true
+}
+
 const STABLE_READS = 3
+// Before endOfStream `buffered` is the intersection of the tracks and ends with
+// the picture at 100 s; only after it does the range reach the audio's end.
+const AUDIO_EOS_FLOOR = 100.5
 
 interface Bands {
   video: number[]
@@ -104,10 +133,10 @@ function videoState(page: Page): Promise<VideoState> {
   })
 }
 
-test(
-  'MKV seek outside the buffer: picture and subtitles show the same tick',
-  { tag: '@mkv-sync' },
-  async () => {
+function runSeekCase(c: SeekCase): () => Promise<void> {
+  const EXPECTED_TICK = tickAt(c.target)
+  const UNBUFFERED_LOG = `[player] unbuffered seek → target ${c.target.toFixed(2)}`
+  return async () => {
     test.skip(process.platform !== 'linux', `the tick fixture is built with apt's ${FFMPEG}`)
     const ffmpegReady = hasRealFfmpeg()
     // CI installs apt ffmpeg before this runs; a missing binary there must fail.
@@ -116,10 +145,10 @@ test(
     test.setTimeout(120_000)
 
     // A broken fixture fails here, before Electron launches.
-    const fixture = buildTickFixture()
+    const fixture = buildTickFixture(c.fixture)
     test.info().annotations.push({ type: 'fixture build ms', description: String(fixture.buildMs) })
-    seekKeyframe(fixture.mkv, SEEK_TARGET)
-    expect(grabVideoBand(fixture.mkv, SEEK_TARGET)).toMatchObject({
+    seekKeyframe(fixture.mkv, c.target)
+    expect(grabVideoBand(fixture.mkv, c.target)).toMatchObject({
       sentinel: true,
       code: EXPECTED_TICK
     })
@@ -200,7 +229,7 @@ test(
         const firstLine = consoleLines.length
         await page.evaluate((t) => {
           document.querySelector('video')!.currentTime = t
-        }, SEEK_TARGET)
+        }, c.target)
 
         const settled = await page
           .waitForFunction(
@@ -222,7 +251,7 @@ test(
         const respawnLogged = consoleLines.slice(firstLine).some((l) => l.includes(UNBUFFERED_LOG))
         const seek = { ...afterSeek, respawnLogged }
         expect(
-          (buffered.length > 0 && buffered[0][0] >= BUFFER_LEFT_FLOOR) || respawnLogged,
+          (buffered.length > 0 && buffered[0][0] >= c.bufferLeftFloor) || respawnLogged,
           `seek never left the buffer, so this run tests nothing: ${JSON.stringify(seek)}`
         ).toBe(true)
 
@@ -252,6 +281,25 @@ test(
         expect(final.sub.sentinel, `subtitle band sentinel not white: ${summary}`).toBe(true)
         expect(final.sub.code, `subtitles show the wrong tick: ${summary}`).toBe(EXPECTED_TICK)
         expect(final.video.code, `picture and subtitles disagree: ${summary}`).toBe(final.sub.code)
+
+        if (c.checkAudioEnd) {
+          // Exact to the ms and needs no audio output: after endOfStream the
+          // range ends at timestampOffset + the run's audio end, which is the
+          // file's audio end only when the offset is the audio's zero.
+          const expectedEnd = audioEnd(fixture.mkv)
+          let end = 0
+          for (let i = 0; i < 100 && end < AUDIO_EOS_FLOOR; i++) {
+            await page.waitForTimeout(200)
+            const { buffered: ranges } = await videoState(page)
+            end = ranges.length > 0 ? ranges[ranges.length - 1][1] : 0
+          }
+          const eos = JSON.stringify({ end, expectedEnd, final: await videoState(page) })
+          test.info().annotations.push({ type: 'buffered after EOS', description: eos })
+          expect(end, `endOfStream never reached: ${eos}`).toBeGreaterThan(AUDIO_EOS_FLOOR)
+          expect(Math.abs(end - expectedEnd), `buffered ends off the audio: ${eos}`).toBeLessThan(
+            0.005
+          )
+        }
         assertNoDownloads(launched)
       } finally {
         await app.close()
@@ -260,4 +308,16 @@ test(
       profile.cleanup()
     }
   }
+}
+
+test(
+  'MKV seek outside the buffer: picture and subtitles show the same tick',
+  { tag: '@mkv-sync' },
+  runSeekCase(TICK_CASE)
+)
+
+test(
+  'MKV seek with the audio landing before the keyframe: picture, subtitles and audio agree (#560)',
+  { tag: '@mkv-sync' },
+  runSeekCase(AUDIO_EARLIEST_CASE)
 )

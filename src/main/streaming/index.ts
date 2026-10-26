@@ -114,6 +114,15 @@ export const PLAYER_DIAG_LOG_FILENAME = 'player-diag.log'
 // measured stream instead of relying on its first packet eventually arriving.
 const TIMESTAMP_PROBE_MAX_DURATION_SECONDS = 60
 
+// How far into the file `probeFileHead` scans for the second keyframe. It only
+// has to tell the first keyframe's NUT-shifted PTS (the B-frame delay or AAC
+// priming, well under a second) from the next keyframe, so a short scan does.
+const FIRST_GOP_SCAN_SECONDS = 2
+
+// How far a copied audio track may lead the video's zero before its landing is
+// taken for a bad probe and ignored. The widest real lead measured is 0.364 s.
+const AUDIO_LEAD_WINDOW_SECONDS = 10
+
 /**
  * Which stream anchors the output timeline of a seeked ffmpeg run — i.e. what
  * `probeSeekAnchor` must measure to label the buffer:
@@ -156,6 +165,12 @@ export interface StreamingService {
    * A keyframe-PTS-only probe is off by the mux's zeroing shift (B-frame
    * reorder + `-avoid_negative_ts make_zero` anchoring on the earliest DTS
    * across streams) — a sub-second subtitle drift.
+   *
+   * The mux zeroes on whichever track starts first (#560). When the copied
+   * audio starts before the video's first DTS, the first video sample is
+   * stretched over the gap and (b) no longer carries it, so a third concurrent
+   * probe reads the audio landing and the offset is the earlier of the two.
+   * It can be negative (the B-frame delay at T = 0 and in the first GOP).
    */
   probeCopyTimestampOffset(
     filePath: string,
@@ -168,6 +183,7 @@ export interface StreamingService {
    * track's absolute landing (probed in the same muxed demux context as the
    * live run — a lone `-map 0:a:0` seek positions differently) for
    * transcode-with-copied-audio, or the raw request for a full transcode.
+   * Measures T = 0 too: an open at the start has the same B-frame delay.
    */
   probeSeekAnchor(
     session: Pick<MseSession, 'mkvPath' | 'transcode' | 'audioStrategy' | 'videoCodec'>,
@@ -538,6 +554,68 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     ).then((line) => parseFloat(line))
   }
 
+  // The file's own first packets, read straight from the file: the first video
+  // keyframe, the first audio packet, and the next keyframe (or the end of the
+  // scan, when the first GOP is longer than it).
+  function probeFileHead(
+    filePath: string
+  ): Promise<{ video: number; audio: number; nextKeyframe: number }> {
+    const run = (args: string[]): Promise<string> =>
+      new Promise((resolve) => {
+        execFile(
+          getFfprobePath(),
+          ['-v', 'error', ...args, '-of', 'csv=p=0', filePath],
+          { timeout: 10_000 },
+          (err, stdout) => resolve(err ? '' : String(stdout))
+        )
+      })
+    return Promise.all([
+      run([
+        '-select_streams',
+        'v:0',
+        '-read_intervals',
+        `%+${FIRST_GOP_SCAN_SECONDS}`,
+        '-show_entries',
+        'packet=pts_time,flags'
+      ]),
+      run(['-select_streams', 'a:0', '-read_intervals', '%+#1', '-show_entries', 'packet=pts_time'])
+    ]).then(([videoOut, audioOut]) => {
+      const keyframes = videoOut
+        .split('\n')
+        .map((line) => line.trim().split(','))
+        .filter(([, flags]) => flags?.startsWith('K'))
+        .map(([pts]) => parseFloat(pts))
+      const video = keyframes.length > 0 ? keyframes[0] : NaN
+      return {
+        video,
+        audio: parseFloat(audioOut),
+        nextKeyframe: keyframes[1] ?? video + FIRST_GOP_SCAN_SECONDS
+      }
+    })
+  }
+
+  // Absolute starts of both tracks for a run seeked to `time`. When the run
+  // lands on the file's first keyframe (always at T = 0), the NUT probe can't be
+  // used: its default negative-timestamp avoidance shifts the file's first
+  // packets (keyframe PTS 0 reads as 0.083 on a B-frame source, and audio by a
+  // different amount), so both starts come from the file itself instead (#560).
+  // A shifted NUT landing sits under a second past the first keyframe, so it is
+  // the first GOP exactly when it is before the next keyframe.
+  async function probeLandingStarts(
+    filePath: string,
+    time: number
+  ): Promise<{ video: number; audio: number; firstGop: boolean }> {
+    const [video, audio, head] = await Promise.all([
+      probeAbsoluteStart(filePath, time, 'video'),
+      probeAbsoluteStart(filePath, time, 'audio'),
+      probeFileHead(filePath)
+    ])
+    if (isFinite(video) && isFinite(head.video) && video < head.nextKeyframe) {
+      return { video: head.video, audio: head.audio, firstGop: true }
+    }
+    return { video, audio, firstGop: false }
+  }
+
   // Ground-truth timestampOffset for a stream-copy seek (see the interface doc).
   // ffmpeg's Matroska `-ss` input seek lands on the keyframe strictly before the
   // request (a ~0.5–1s deadzone after each keyframe still snaps to the previous
@@ -553,24 +631,28 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
   ): Promise<number> {
     const ffmpegPath = getFfmpegPath()
     const ffprobePath = getFfprobePath()
-    if (!ffmpegPath || !ffprobePath || !isFinite(time) || time <= 0) {
+    if (!ffmpegPath || !ffprobePath || !isFinite(time) || time < 0) {
       return Math.max(0, time || 0)
     }
-    const [absStart, emittedStart] = await Promise.all([
-      probeAbsoluteStart(filePath, time, 'video'),
+    const [landing, emittedStart] = await Promise.all([
+      probeLandingStarts(filePath, time),
       probeEmittedStart(filePath, time, videoCodec)
     ])
+    const { video: absStart, audio: audioLanding } = landing
     if (diagEnabled()) {
       diag(
         `probeCopyTimestampOffset requested=${time.toFixed(3)} absStart=${
           isFinite(absStart) ? absStart.toFixed(3) : 'n/a'
-        } emittedStart=${isFinite(emittedStart) ? emittedStart.toFixed(3) : 'n/a'}`
+        } emittedStart=${isFinite(emittedStart) ? emittedStart.toFixed(3) : 'n/a'} audioLanding=${
+          isFinite(audioLanding) ? audioLanding.toFixed(3) : 'n/a'
+        } firstGop=${landing.firstGop}`
       )
     }
-    // A copy seek only ever starts at-or-before the request; a sane emitted
-    // start is a sub-minute mux offset. Anything else means a probe failed —
-    // fall back to the request itself (worst case: the pre-#198 drift).
-    if (!isFinite(absStart) || absStart < 0 || absStart > time + 0.001) {
+    // A copy seek only ever starts at-or-before the request (or, in the first
+    // GOP, at the file's first keyframe, which may be after T = 0); a sane
+    // emitted start is a sub-minute mux offset. Anything else means a probe
+    // failed — fall back to the request itself (worst case: the pre-#198 drift).
+    if (!isFinite(absStart) || absStart < 0 || (!landing.firstGop && absStart > time + 0.001)) {
       warn(
         `probeCopyTimestampOffset fallback requested=${time.toFixed(3)} absStart=${
           isFinite(absStart) ? absStart.toFixed(3) : 'n/a'
@@ -580,14 +662,23 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     }
     const emitted =
       isFinite(emittedStart) && emittedStart >= 0 && emittedStart < 60 ? emittedStart : 0
-    return Math.max(0, absStart - emitted)
+    // The mux zeroes on the earliest track. When the copied audio starts before
+    // the video's first DTS, the first video sample is stretched over the gap
+    // and its emitted PTS no longer carries it, so the audio landing is the zero
+    // (#560). Negative is allowed: at T = 0 the B-frame delay puts it below 0.
+    const videoZero = absStart - emitted
+    const audioLeads =
+      isFinite(audioLanding) &&
+      videoZero - AUDIO_LEAD_WINDOW_SECONDS < audioLanding &&
+      audioLanding < videoZero
+    return audioLeads ? audioLanding : videoZero
   }
 
   async function probeSeekAnchor(
     session: Pick<MseSession, 'mkvPath' | 'transcode' | 'audioStrategy' | 'videoCodec'>,
     time: number
   ): Promise<number> {
-    if (!getFfmpegPath() || !getFfprobePath() || !isFinite(time) || time <= 0) {
+    if (!getFfmpegPath() || !getFfprobePath() || !isFinite(time) || time < 0) {
       return Math.max(0, time || 0)
     }
     const stream = seekAnchorStreamFor(session)
@@ -597,17 +688,21 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
     }
     // Transcode with copied audio: the untrimmable AAC track anchors the output
     // timeline at its first copied packet. AAC packets have PTS = DTS, so the
-    // absolute-start probe reads exactly the make_zero anchor.
-    const audioStart = await probeAbsoluteStart(session.mkvPath, time, 'audio')
+    // absolute-start probe reads exactly the make_zero anchor. The video probe
+    // runs only to tell whether the run lands in the first GOP.
+    const { audio: audioStart, firstGop } = await probeLandingStarts(session.mkvPath, time)
     if (diagEnabled()) {
       diag(
         `probeSeekAnchor stream=audio requested=${time.toFixed(3)} -> anchor=${
           isFinite(audioStart) ? audioStart.toFixed(3) : 'n/a'
-        }`
+        } firstGop=${firstGop}`
       )
     }
-    // A copied-audio anchor only ever starts at-or-before the request.
-    if (isFinite(audioStart) && audioStart >= 0 && audioStart <= time + 0.001) return audioStart
+    // Zero is the earliest track's start: the encoded video starts at the
+    // request, so it is min(T, audio landing). Copied audio that lands after T
+    // leaves the video earliest, and the fallback below returns T. Accepting
+    // that later landing instead stalls the player (#560).
+    if (isFinite(audioStart) && audioStart <= time + 0.001) return audioStart
     warn(
       `probeSeekAnchor fallback stream=audio requested=${time.toFixed(3)} audioStart=${
         isFinite(audioStart) ? audioStart.toFixed(3) : 'n/a'

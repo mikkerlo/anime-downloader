@@ -229,7 +229,7 @@ export function useMsePlayer(deps: {
           // SourceBuffer offset to map fragments back onto the absolute file
           // timeline. Without this, video.currentTime = target plays the wrong
           // content because the buffered range is shifted.
-          if (timestampOffset > 0) {
+          if (timestampOffset !== 0) {
             try {
               sb.timestampOffset = timestampOffset
             } catch (e) {

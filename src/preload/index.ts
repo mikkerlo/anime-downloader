@@ -389,6 +389,8 @@ const api = {
     rewatches: number
   ) =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_UPDATE_RATE, malId, episodes, status, score, rewatches),
+  shikimoriMarkEpisodeWatched: (malId: number, epNum: number) =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED, malId, epNum),
   shikimoriGetFriendsRates: (malId: number) =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_FRIENDS_RATES, malId) as Promise<ShikiFriendRate[]>,
   shikimoriGetAnimeRates: (status?: string) =>

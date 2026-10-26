@@ -19,6 +19,59 @@ import type { AppDeps } from './index'
 
 const SHIKI_BASE = SHIKIMORI_ORIGIN
 
+type RateValues = QueuedShikimoriUpdate['after']
+
+type CachedRateEntry = {
+  rate: Record<string, unknown> & {
+    id?: number
+    target_id: number
+    episodes: number
+    status: shikimori.ShikiUserRateStatus
+    score: number
+    rewatches?: number
+  }
+  shikiAnime: unknown
+  smotretAnime: unknown
+}
+
+// The `before` of a title that has no rate yet. The drain creates the rate when
+// the server has none; when it has one after all, this won't match it, and
+// `shouldApplyOnDrift` decides as for any other stale `before`.
+const NO_RATE_BEFORE: RateValues = { episodes: 0, status: 'planned', score: 0, rewatches: 0 }
+
+function rateValues(rate: CachedRateEntry['rate'] | shikimori.ShikiUserRate): RateValues {
+  const { episodes, status, score } = rate
+  return { episodes, status, score, rewatches: rate.rewatches ?? 0 }
+}
+
+function cachedBasis(entry: CachedRateEntry): { rateId: number | null; before: RateValues } {
+  return {
+    rateId: typeof entry.rate.id === 'number' ? entry.rate.id : null,
+    before: rateValues(entry.rate)
+  }
+}
+
+// What "episode `epNum` watched" moves a rate to, or null when it changes
+// nothing. A completed title starts a rewatch from `epNum` (the flipped status
+// is what stops a second bump); anything else only moves forward.
+function nextWatchedRate(current: RateValues, epNum: number): RateValues | null {
+  const { score, rewatches } = current
+  if (current.status === 'completed') {
+    return { episodes: epNum, status: 'rewatching', score, rewatches: rewatches + 1 }
+  }
+  if (epNum > current.episodes) return { episodes: epNum, status: 'watching', score, rewatches }
+  return null
+}
+
+// An expired session joins the offline path rather than bypassing it: the edit
+// that discovered the dead token is exactly the one we must not lose, and it
+// replays on reconnect like any queued update (#244). Deliberately
+// `ShikiAuthError`, not `ShikiApiError` — a genuine 400/422 from `user_rates`
+// must keep dropping, or one malformed entry would jam the drain forever.
+function isQueueableRateError(err: unknown): boolean {
+  return isNetworkError(err) || err instanceof shikimori.ShikiAuthError
+}
+
 export function register({
   store,
   shikimoriSyncService: sync,
@@ -455,6 +508,127 @@ export function register({
     store.set('shikimoriRecommendations', [])
   }
 
+  function findCachedRate(malId: number): CachedRateEntry | undefined {
+    const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
+    return cached.find((e) => e.rate.target_id === malId)
+  }
+
+  // Writes `after` to Shikimori (creating the rate when `existing` is null),
+  // then patches the cached entry and fans out the change.
+  async function sendRate(
+    accessToken: string,
+    userId: number,
+    malId: number,
+    existing: shikimori.ShikiUserRate | null,
+    after: RateValues
+  ): Promise<shikimori.ShikiUserRate> {
+    const { episodes, status, score, rewatches } = after
+    const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
+    const idx = cached.findIndex((e) => e.rate.target_id === malId)
+    const prevStatus = idx !== -1 ? cached[idx].rate.status : undefined
+
+    const updatedRate = existing
+      ? await shikimori.updateUserRate(accessToken, existing.id, episodes, status, score, rewatches)
+      : await shikimori.createUserRate(
+          accessToken,
+          userId,
+          malId,
+          episodes,
+          status,
+          score,
+          rewatches
+        )
+
+    if (idx !== -1) {
+      cached[idx] = {
+        ...cached[idx],
+        rate: {
+          id: updatedRate.id,
+          score: updatedRate.score,
+          status: updatedRate.status,
+          episodes: updatedRate.episodes,
+          rewatches: updatedRate.rewatches ?? 0,
+          updated_at: new Date().toISOString(),
+          target_id: updatedRate.target_id
+        }
+      }
+      store.set('shikimoriUserRates', cached)
+      sync.invalidateCalendarCache()
+      invalidateRecommendations()
+      broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
+      void maybeBroadcastCleanupPrompt(
+        cached[idx].smotretAnime,
+        malId,
+        updatedRate.status,
+        prevStatus
+      )
+    } else {
+      invalidateRecommendations()
+      refreshShikimoriRatesInBackground()
+      void maybeBroadcastCleanupPrompt(null, malId, updatedRate.status, undefined)
+    }
+
+    void sync.syncShikimoriQueue()
+    return updatedRate
+  }
+
+  // Queues `after` for the drain and patches the cached entry optimistically
+  // when there is one. `basis` is what the drain's drift check compares the
+  // server against. Returns a synthetic rate so callers need no offline branch.
+  function queueRate(
+    malId: number,
+    basis: { rateId: number | null; before: RateValues },
+    after: RateValues,
+    err: unknown
+  ): shikimori.ShikiUserRate {
+    const { episodes, status, score, rewatches } = after
+    const isExpiredSession = err instanceof shikimori.ShikiAuthError
+    const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+    queue.push({ malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() })
+    store.set('shikimoriUpdateQueue', queue)
+
+    const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
+    const idx = cached.findIndex((e) => e.rate.target_id === malId)
+    const prevStatus = idx !== -1 ? cached[idx].rate.status : undefined
+    if (idx !== -1) {
+      cached[idx] = {
+        ...cached[idx],
+        rate: {
+          ...cached[idx].rate,
+          episodes,
+          status,
+          score,
+          rewatches,
+          updated_at: new Date().toISOString()
+        }
+      }
+      store.set('shikimoriUserRates', cached)
+      sync.invalidateCalendarCache()
+      invalidateRecommendations()
+      broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
+    }
+    broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
+    // Without this the expiry banner never appears on the path that
+    // discovers expiry most often: this branch broadcasts the queue change
+    // but nothing else here reports sync status, and the renderer polls it
+    // from exactly one view (#244).
+    sync.broadcastSyncStatus()
+    if (!isExpiredSession) sync.startSyncTimer()
+    if (idx !== -1) {
+      void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
+    }
+
+    return {
+      id: basis.rateId ?? -1,
+      score,
+      status,
+      episodes,
+      rewatches,
+      target_id: malId,
+      target_type: 'Anime'
+    } satisfies shikimori.ShikiUserRate
+  }
+
   // When the detail-prefetch worker finishes a run, the genres aggregation has
   // broader coverage — recompute and rebroadcast the profile so an open
   // dashboard fills in its favorite-genres panel without a manual refresh (#183).
@@ -576,132 +750,53 @@ export function register({
     ) => {
       const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
       if (!user) throw new Error('Not logged in to Shikimori')
-
-      const cached = store.get('shikimoriUserRates') as {
-        rate: Record<string, unknown> & {
-          id?: number
-          target_id: number
-          episodes: number
-          status: shikimori.ShikiUserRateStatus
-          score: number
-          rewatches?: number
-        }
-        shikiAnime: unknown
-        smotretAnime: unknown
-      }[]
-      const idx = cached.findIndex((e) => e.rate.target_id === malId)
-      const prevStatus = idx !== -1 ? cached[idx].rate.status : undefined
+      const after = { episodes, status, score, rewatches }
 
       try {
         const accessToken = await shikimori.ensureFreshToken(store)
         const existing = await shikimori.getUserRate(accessToken, user.id, malId)
-        const updatedRate = existing
-          ? await shikimori.updateUserRate(
-              accessToken,
-              existing.id,
-              episodes,
-              status,
-              score,
-              rewatches
-            )
-          : await shikimori.createUserRate(
-              accessToken,
-              user.id,
-              malId,
-              episodes,
-              status,
-              score,
-              rewatches
-            )
-
-        if (idx !== -1) {
-          cached[idx] = {
-            ...cached[idx],
-            rate: {
-              id: updatedRate.id,
-              score: updatedRate.score,
-              status: updatedRate.status,
-              episodes: updatedRate.episodes,
-              rewatches: updatedRate.rewatches ?? 0,
-              updated_at: new Date().toISOString(),
-              target_id: updatedRate.target_id
-            }
-          }
-          store.set('shikimoriUserRates', cached)
-          sync.invalidateCalendarCache()
-          invalidateRecommendations()
-          broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
-          void maybeBroadcastCleanupPrompt(
-            cached[idx].smotretAnime,
-            malId,
-            updatedRate.status,
-            prevStatus
-          )
-        } else {
-          invalidateRecommendations()
-          refreshShikimoriRatesInBackground()
-          void maybeBroadcastCleanupPrompt(null, malId, updatedRate.status, undefined)
-        }
-
-        void sync.syncShikimoriQueue()
-        return updatedRate
+        return await sendRate(accessToken, user.id, malId, existing, after)
       } catch (err) {
-        // An expired session joins the offline path rather than bypassing it:
-        // the edit that discovered the dead token is exactly the one we must not
-        // lose, and it replays on reconnect like any queued update (#244).
-        // Deliberately `ShikiAuthError`, not `ShikiApiError` — a genuine 400/422
-        // from `user_rates` must keep dropping, or one malformed entry would jam
-        // the drain forever.
-        const isExpiredSession = err instanceof shikimori.ShikiAuthError
-        if ((!isNetworkError(err) && !isExpiredSession) || idx === -1) throw err
+        const entry = findCachedRate(malId)
+        if (!isQueueableRateError(err) || !entry) throw err
+        return queueRate(malId, cachedBasis(entry), after, err)
+      }
+    }
+  )
 
-        const cachedEntry = cached[idx]
-        const rateId = typeof cachedEntry.rate.id === 'number' ? cachedEntry.rate.id : null
-        const before = {
-          episodes: cachedEntry.rate.episodes,
-          status: cachedEntry.rate.status,
-          score: cachedEntry.rate.score,
-          rewatches: cachedEntry.rate.rewatches ?? 0
-        }
-        const after = { episodes, status, score, rewatches }
+  // The player's auto-mark (#565). It used to be a renderer-side get-rate then
+  // update-rate, and the get threw first on every failure update-rate queues:
+  // offline, and an expired session from `ensureFreshToken`. Online it still
+  // decides from the live rate, so a count raised on shikimori.one since the
+  // last cache refresh is never lowered. Offline it decides from the cache, and
+  // queues even for a title with no cache entry, which update-rate refuses.
+  ipcMain.handle(
+    CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED,
+    async (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> => {
+      const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+      if (!user || !Number.isInteger(epNum) || epNum <= 0) return null
 
-        const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
-        queue.push({ malId, rateId, before, after, queuedAt: Date.now() })
-        store.set('shikimoriUpdateQueue', queue)
+      let accessToken: string
+      let existing: shikimori.ShikiUserRate | null
+      try {
+        accessToken = await shikimori.ensureFreshToken(store)
+        existing = await shikimori.getUserRate(accessToken, user.id, malId)
+      } catch (err) {
+        if (!isQueueableRateError(err)) throw err
+        const entry = findCachedRate(malId)
+        const basis = entry ? cachedBasis(entry) : { rateId: null, before: NO_RATE_BEFORE }
+        const next = nextWatchedRate(basis.before, epNum)
+        return next ? queueRate(malId, basis, next, err) : null
+      }
 
-        cached[idx] = {
-          ...cachedEntry,
-          rate: {
-            ...cachedEntry.rate,
-            episodes,
-            status,
-            score,
-            rewatches,
-            updated_at: new Date().toISOString()
-          }
-        }
-        store.set('shikimoriUserRates', cached)
-        sync.invalidateCalendarCache()
-        invalidateRecommendations()
-        broadcast(EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED, cached[idx])
-        broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
-        // Without this the expiry banner never appears on the path that
-        // discovers expiry most often: this branch broadcasts the queue change
-        // but nothing else here reports sync status, and the renderer polls it
-        // from exactly one view (#244).
-        sync.broadcastSyncStatus()
-        if (!isExpiredSession) sync.startSyncTimer()
-        void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
-
-        return {
-          id: rateId ?? -1,
-          score,
-          status,
-          episodes,
-          rewatches,
-          target_id: malId,
-          target_type: 'Anime'
-        } satisfies shikimori.ShikiUserRate
+      const before = existing ? rateValues(existing) : NO_RATE_BEFORE
+      const next = nextWatchedRate(before, epNum)
+      if (!next) return null
+      try {
+        return await sendRate(accessToken, user.id, malId, existing, next)
+      } catch (err) {
+        if (!isQueueableRateError(err)) throw err
+        return queueRate(malId, { rateId: existing?.id ?? null, before }, next, err)
       }
     }
   )

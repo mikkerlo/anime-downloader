@@ -212,7 +212,7 @@ export class SmotretApi {
     const url = this.getSubtitlesUrl(translationId)
     try {
       const response = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } })
-      if (response.ok) return response.text()
+      if (response.ok) return await response.text()
       return null
     } catch {
       return null

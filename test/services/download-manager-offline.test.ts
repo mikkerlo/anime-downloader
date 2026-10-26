@@ -8,6 +8,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
+  DOWNLOAD_CONNECT_MS,
   DOWNLOAD_IDLE_MS,
   DownloadManager,
   type DownloadItem
@@ -122,7 +123,56 @@ describe('DownloadManager — stalled transfer (#567)', () => {
     expect(retryInit.headers).toMatchObject({ Range: `bytes=${HEAD.length}-` })
   })
 
-  it('uses a 60 s idle timeout', () => {
+  it('uses a 60 s idle timeout and a 60 s connect deadline', () => {
     expect(DOWNLOAD_IDLE_MS).toBe(60_000)
+    expect(DOWNLOAD_CONNECT_MS).toBe(60_000)
+  })
+
+  // The default 15 s connect deadline would send a CDN that is slow to answer
+  // (redirects included) down the retry ladder; a download waits as long for
+  // headers as it does for bytes.
+  it('waits up to 60 s for the first response before retrying', async () => {
+    const ok = 'video'
+    const fetchStub: Mock = vi.fn(
+      (_url: unknown, init: unknown) =>
+        new Promise<Response>((resolve) => {
+          const { signal } = init as { signal: AbortSignal }
+          const t = setTimeout(
+            () => resolve(new Response(ok, { headers: { 'content-length': '5' } })),
+            DOWNLOAD_CONNECT_MS - 1000
+          )
+          signal.addEventListener('abort', () => clearTimeout(t))
+        })
+    )
+    globalThis.fetch = fetchStub as unknown as typeof fetch
+
+    const item = makeItem()
+    const internals = dm as unknown as Internals
+    internals.queue = [item]
+    void internals.startDownload(item)
+
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_CONNECT_MS - 1000)
+    await until(() => item.status !== 'downloading')
+    expect(item.status).toBe('completed')
+    expect(fetchStub).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries when the first response takes longer than 60 s', async () => {
+    const observer = { onFailure: vi.fn(), onSuccess: vi.fn() }
+    setNetworkObserver(observer)
+    const fetchStub: Mock = vi.fn(() => new Promise<Response>(() => {}))
+    globalThis.fetch = fetchStub as unknown as typeof fetch
+
+    const item = makeItem()
+    const internals = dm as unknown as Internals
+    internals.queue = [item]
+    void internals.startDownload(item)
+
+    await vi.advanceTimersByTimeAsync(DOWNLOAD_CONNECT_MS - 1)
+    expect(item.status).toBe('downloading')
+    await vi.advanceTimersByTimeAsync(1)
+    await until(() => item.status !== 'downloading')
+    expect(item.status).toBe('queued')
+    expect(observer.onFailure.mock.calls[0][0]).toBeInstanceOf(TimeoutError)
   })
 })

@@ -5,12 +5,14 @@ import ts from 'typescript'
 
 // #567: every HTTP request in main goes through `fetchWithTimeout`
 // (`src/main/lib/net.ts`), which owns the timeouts and the offline refusal. A
-// bare `fetch` anywhere else would bypass both. "Bare" means any value
-// reference — a call, a default (`fetchImpl = fetch`), an argument, or
-// `globalThis.fetch` — not only `fetch(`. Type positions (`typeof fetch`),
-// member names (`.fetch`, `fetch:`) and longer identifiers are not references.
-// Walking the TypeScript AST rather than grepping keeps comments and string
-// literals ("fetch failed") out of the scan.
+// bare `fetch` anywhere else would bypass both. This is an accident-catcher,
+// not a proof: it flags the direct shapes — a call, a default
+// (`fetchImpl = fetch`), an argument, shorthand, an import, and
+// `globalThis.fetch` / `globalThis['fetch']` — but deliberate aliasing
+// (`const g = globalThis; g.fetch(…)`, `Reflect.get`) gets past it. Type
+// positions (`typeof fetch`), member names (`.fetch`, `fetch:`) and longer
+// identifiers are not references. Walking the TypeScript AST rather than
+// grepping keeps comments and string literals ("fetch failed") out of the scan.
 const ROOT = path.resolve(__dirname, '..')
 const MAIN = path.join(ROOT, 'src', 'main')
 const NET = path.join('src', 'main', 'lib', 'net.ts')

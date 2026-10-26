@@ -423,11 +423,11 @@ where stripping could only loosen them. See #302 and #321, and the per-site
 notes in that test file.
 
 `test/net-adoption-guard.test.ts` (#567) is the one scan that walks the
-TypeScript AST instead of text: it fails on any bare `fetch` value reference
-in `src/main` outside `lib/net.ts` (a call, a default such as
-`fetchImpl = fetch`, an argument, `globalThis.fetch`) and on `bypassOffline`
-anywhere, while a `typeof fetch` type, a member name or a `"fetch failed"`
-string never matches. Its negative assertion is backed by the two rules above:
+TypeScript AST instead of text: it fails on a direct bare `fetch` reference
+in `src/main` outside `lib/net.ts` (a call, a default, an argument,
+`globalThis.fetch`) and on `bypassOffline`; deliberate aliasing such as
+`const g = globalThis; g.fetch` gets past it, so it catches accidents only.
+Its negative assertion is backed by the two rules above:
 a self-test feeds the scanner each reference shape, and the adopted sites are
 pinned by count (nine `fetchWithTimeout` references), so a scanner that stops
 finding anything goes red rather than green.

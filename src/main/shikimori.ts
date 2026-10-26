@@ -173,8 +173,10 @@ async function shikiFetch(path: string, options: RequestInit = {}, attempt = 0):
   })
 
   if (response.status === 429 && attempt < MAX_429_RETRIES) {
+    await response.body?.cancel().catch(() => {})
+    const header = Number(response.headers.get('retry-after') || '1')
     const retryAfter = Math.min(
-      Number(response.headers.get('retry-after') || '1'),
+      Number.isFinite(header) && header >= 0 ? header : 1,
       MAX_RETRY_AFTER_S
     )
     await new Promise((r) => setTimeout(r, retryAfter * 1000))

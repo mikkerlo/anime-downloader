@@ -290,6 +290,7 @@ interface Api {
     score: number,
     rewatches: number
   ) => Promise<ShikiUserRate>
+  shikimoriMarkEpisodeWatched: (malId: number, epNum: number) => Promise<ShikiUserRate | null>
   shikimoriGetFriendsRates: (malId: number) => Promise<ShikiFriendRate[]>
   shikimoriGetAnimeRates: (status?: string) => Promise<ShikiAnimeRateEntry[]>
   shikimoriGetFriendsActivity: () => Promise<ShikiFriendActivityEntry[]>

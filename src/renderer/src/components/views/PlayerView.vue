@@ -851,19 +851,7 @@ async function markEpisodeWatched(episodeInt: string): Promise<void> {
   const epNum = parseInt(episodeInt, 10);
   if (!Number.isFinite(epNum) || epNum <= 0) return;
   try {
-    const rate = await window.api.shikimoriGetRate(props.malId);
-    const currentEps = rate?.episodes ?? 0;
-    const score = rate?.score ?? 0;
-    const rewatches = rate?.rewatches ?? 0;
-    // Rewatching a completed show: flip status, reset episode count to the one
-    // just finished, bump the rewatch counter. Guarded once-per-watched event by
-    // the status check itself — after the flip, rate.status is 'rewatching' and
-    // this branch no longer fires.
-    if (rate?.status === 'completed') {
-      await window.api.shikimoriUpdateRate(props.malId, epNum, 'rewatching', score, rewatches + 1);
-    } else if (epNum > currentEps) {
-      await window.api.shikimoriUpdateRate(props.malId, epNum, 'watching', score, rewatches);
-    }
+    await window.api.shikimoriMarkEpisodeWatched(props.malId, epNum);
   } catch (err) {
     console.warn('[player] failed to update Shikimori episode count:', err);
   }
@@ -889,15 +877,8 @@ async function maybeMarkWatched(): Promise<void> {
   const epNum = parseInt(playingEpisodeInt.value, 10);
   if (!Number.isFinite(epNum) || epNum <= 0) return;
   try {
-    const rate = await window.api.shikimoriGetRate(props.malId);
-    const currentEps = rate?.episodes ?? 0;
-    const score = rate?.score ?? 0;
-    const rewatches = rate?.rewatches ?? 0;
-    if (rate?.status === 'completed') {
-      await window.api.shikimoriUpdateRate(props.malId, epNum, 'rewatching', score, rewatches + 1);
-    } else if (epNum > currentEps) {
-      await window.api.shikimoriUpdateRate(props.malId, epNum, 'watching', score, rewatches);
-    }
+    // Sends or queues in main, so an offline or expired-session mark isn't lost (#565).
+    await window.api.shikimoriMarkEpisodeWatched(props.malId, epNum);
   } catch (err) {
     console.warn('[player] failed to update Shikimori episode count:', err);
   }

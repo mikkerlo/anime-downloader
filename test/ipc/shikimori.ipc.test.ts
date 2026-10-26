@@ -35,6 +35,7 @@ vi.mock('../../src/main/shikimori', async () => {
 import { register } from '../../src/main/ipc/shikimori.ipc'
 import type { AppDeps } from '../../src/main/ipc/index'
 import { ShikiApiError, ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
+import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 
 type SyncStub = {
   broadcastSyncStatus: Mock
@@ -200,6 +201,265 @@ describe('shikimori IPC — update-rate against a genuine API error', () => {
 
     await expect(updateRate(invoke)).rejects.toThrow(/400/)
     expect(store.get('shikimoriUpdateQueue')).toHaveLength(0)
+  })
+
+  it('still rethrows offline for a title with no cached entry (mark-watched is the path that queues it)', async () => {
+    const { invoke, store } = registerRouter()
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await expect(updateRate(invoke)).rejects.toThrow(/fetch failed/)
+    expect(store.get('shikimoriUpdateQueue')).toHaveLength(0)
+  })
+})
+
+type QueueEntry = {
+  malId: number
+  rateId: number | null
+  before: { episodes: number; status: string; score: number; rewatches: number }
+  after: { episodes: number; status: string; score: number; rewatches: number }
+}
+
+/** `mark-episode-watched(malId, epNum)`. */
+function markWatched(
+  invoke: (c: string, ...a: unknown[]) => Promise<unknown>,
+  epNum: number,
+  malId = 42
+): Promise<unknown> {
+  return invoke(CHANNELS.SHIKIMORI_MARK_EPISODE_WATCHED, malId, epNum)
+}
+
+/**
+ * As `PlayerView` calls it: a throw is caught and only warned about, so it
+ * loses the mark exactly like a silent no-op. The hole tests therefore assert
+ * the queue, not whether the call rejected.
+ */
+function markAsPlayer(
+  invoke: (c: string, ...a: unknown[]) => Promise<unknown>,
+  epNum: number
+): Promise<unknown> {
+  return markWatched(invoke, epNum).catch((err: unknown) => err)
+}
+
+function queueOf(store: InMemoryStorage): QueueEntry[] {
+  return store.get('shikimoriUpdateQueue') as QueueEntry[]
+}
+
+// The player's auto-mark used to be a renderer-side get-rate then update-rate.
+// The get threw first on all three failures below, so the mark never reached
+// update-rate's queue and was lost for good (#565). Each test is one hole; on
+// the old sequence each leaves the queue at length 0.
+describe('shikimori IPC — mark-episode-watched queues instead of losing the mark (#565)', () => {
+  it('hole 1, offline: queues the next rate computed from the cached entry', async () => {
+    const { invoke, store, sync } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    const result = await markAsPlayer(invoke, 4)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(queueOf(store)[0]).toMatchObject({
+      malId: 42,
+      rateId: 942,
+      before: { episodes: 3, status: 'watching', score: 7, rewatches: 0 },
+      after: { episodes: 4, status: 'watching', score: 7, rewatches: 0 }
+    })
+    expect(result).toMatchObject({ id: 942, episodes: 4, status: 'watching' })
+    const cached = store.get('shikimoriUserRates') as { rate: { episodes: number } }[]
+    expect(cached[0].rate.episodes).toBe(4)
+    expect(sync.startSyncTimer).toHaveBeenCalledTimes(1)
+  })
+
+  it('hole 2, expired session: queues it, and leaves the timer off like update-rate does', async () => {
+    const { invoke, store, sync, broadcast } = registerRouter({
+      shikimoriUserRates: [cachedRate(42)],
+      shikimoriSessionExpired: true
+    })
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+
+    await markAsPlayer(invoke, 4)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(queueOf(store)[0]).toMatchObject({ malId: 42, rateId: 942, after: { episodes: 4 } })
+    expect(getUserRate).not.toHaveBeenCalled()
+    expect(sync.startSyncTimer).not.toHaveBeenCalled()
+    expect(broadcast).toHaveBeenCalledWith(
+      EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+      expect.objectContaining({ sessionExpired: true, queueLength: 1 })
+    )
+  })
+
+  it('hole 3, a title not on the list yet: queues rateId null with an empty planned before', async () => {
+    const { invoke, store, broadcast } = registerRouter()
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    const result = await markAsPlayer(invoke, 1)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(queueOf(store)[0]).toMatchObject({
+      malId: 42,
+      rateId: null,
+      before: { episodes: 0, status: 'planned', score: 0, rewatches: 0 },
+      after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+    })
+    expect(result).toMatchObject({ id: -1, episodes: 1, status: 'watching' })
+    expect(store.get('shikimoriUserRates')).toEqual([])
+    expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+      length: 1
+    })
+  })
+
+  it('hole 3 also holds for an expired session', async () => {
+    const { invoke, store } = registerRouter()
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+
+    await markAsPlayer(invoke, 1)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(queueOf(store)[0]).toMatchObject({ rateId: null, after: { episodes: 1 } })
+  })
+
+  it('the drain creates the rate a hole-3 entry stands for', async () => {
+    const { invoke, store } = registerRouter({
+      shikimoriCredentials: { access_token: 't', refresh_token: 'r' }
+    })
+    getUserRate.mockRejectedValueOnce(new TypeError('fetch failed'))
+    await markWatched(invoke, 1)
+
+    getUserRate.mockResolvedValue(null)
+    createUserRate.mockResolvedValue({
+      id: 5001,
+      target_id: 42,
+      episodes: 1,
+      status: 'watching',
+      score: 0,
+      rewatches: 0
+    })
+    const drain = createShikimoriSyncService({
+      store,
+      broadcast: vi.fn(),
+      syncStatusChannel: EVENT_CHANNELS.SHIKIMORI_SYNC_STATUS,
+      offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
+      rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+      animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED
+    } as unknown as Parameters<typeof createShikimoriSyncService>[0])
+    await drain.syncShikimoriQueue()
+
+    expect(createUserRate).toHaveBeenCalledWith('access-token', 7, 42, 1, 'watching', 0, 0)
+    expect(queueOf(store)).toHaveLength(0)
+  })
+})
+
+describe('shikimori IPC — mark-episode-watched next-rate rule', () => {
+  function remote(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 942,
+      target_id: 42,
+      target_type: 'Anime',
+      episodes: 3,
+      status: 'watching',
+      score: 7,
+      rewatches: 0,
+      ...over
+    }
+  }
+
+  it('online: decides from the live rate and writes forward progress', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockResolvedValue(remote())
+    updateUserRate.mockResolvedValue(remote({ episodes: 4 }))
+
+    await markWatched(invoke, 4)
+
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 942, 4, 'watching', 7, 0)
+    expect(queueOf(store)).toHaveLength(0)
+  })
+
+  it('online: never lowers a count the live rate already has past the stale cache', async () => {
+    // The cache says 3; shikimori.one moved it to 7. Watching episode 4 must not
+    // send 4, which is what deciding from the cache online would do.
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockResolvedValue(remote({ episodes: 7 }))
+
+    expect(await markWatched(invoke, 4)).toBeNull()
+    expect(updateUserRate).not.toHaveBeenCalled()
+  })
+
+  it('online: creates the rate when the title is not on the list', async () => {
+    const { invoke } = registerRouter()
+    getUserRate.mockResolvedValue(null)
+    createUserRate.mockResolvedValue(remote({ episodes: 1, score: 0 }))
+
+    await markWatched(invoke, 1)
+
+    expect(createUserRate).toHaveBeenCalledWith('access-token', 7, 42, 1, 'watching', 0, 0)
+  })
+
+  it('online: a completed title starts a rewatch from the episode with rewatches + 1', async () => {
+    const { invoke } = registerRouter()
+    getUserRate.mockResolvedValue(remote({ episodes: 12, status: 'completed', rewatches: 1 }))
+    updateUserRate.mockResolvedValue(remote())
+
+    await markWatched(invoke, 1)
+
+    expect(updateUserRate).toHaveBeenCalledWith('access-token', 942, 1, 'rewatching', 7, 2)
+  })
+
+  it('online: queues against the live rate when the write itself fails offline', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockResolvedValue(remote({ episodes: 5 }))
+    updateUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await markWatched(invoke, 6)
+
+    expect(queueOf(store)).toHaveLength(1)
+    expect(queueOf(store)[0]).toMatchObject({
+      rateId: 942,
+      before: { episodes: 5, status: 'watching' },
+      after: { episodes: 6, status: 'watching' }
+    })
+  })
+
+  it('offline: a completed cache entry flips to rewatching once, not on every episode', async () => {
+    const completed = {
+      rate: { id: 942, target_id: 42, episodes: 12, status: 'completed', score: 9, rewatches: 0 },
+      shikiAnime: { id: 42 },
+      smotretAnime: null
+    }
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [completed] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    await markWatched(invoke, 1)
+    await markWatched(invoke, 2)
+
+    expect(queueOf(store).map((e) => e.after)).toEqual([
+      { episodes: 1, status: 'rewatching', score: 9, rewatches: 1 },
+      { episodes: 2, status: 'watching', score: 9, rewatches: 1 }
+    ])
+  })
+
+  it('offline: an episode at or below the cached count queues nothing', async () => {
+    const { invoke, store, broadcast } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+
+    expect(await markWatched(invoke, 3)).toBeNull()
+    expect(queueOf(store)).toHaveLength(0)
+    expect(broadcast).not.toHaveBeenCalled()
+  })
+
+  it('still rethrows a 422 rather than queueing it', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockRejectedValue(new ShikiApiError('Shikimori API error: 422 (bad score)', 422))
+
+    await expect(markWatched(invoke, 4)).rejects.toThrow(/422/)
+    expect(queueOf(store)).toHaveLength(0)
+  })
+
+  it('signed out: does nothing and queues nothing', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUser: null })
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError('not connected'))
+
+    expect(await markWatched(invoke, 4)).toBeNull()
+    expect(ensureFreshToken).not.toHaveBeenCalled()
+    expect(queueOf(store)).toHaveLength(0)
   })
 })
 

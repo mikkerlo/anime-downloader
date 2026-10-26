@@ -625,6 +625,39 @@ describe('shikimori client — fixture replay', () => {
 
       expect(store.get('shikimoriCredentials')).toBeNull()
     })
+
+    // A logout plus another account's login while A's refresh is in flight
+    // (#588): the stored credentials are B's by the time it settles.
+    const CREDS_B = {
+      access_token: 'fake-access-token-b',
+      refresh_token: 'fake-refresh-token-b',
+      created_at: Math.floor(Date.now() / 1000),
+      expires_in: 86_400
+    }
+
+    it("does not overwrite another account's credentials with A's refreshed ones", async () => {
+      mockFetchOnce(fixture('token-refresh.json'))
+      const store = expiredCredsStore()
+      const pending = ensureFresh(store)
+      store.set('shikimoriCredentials', CREDS_B)
+
+      await pending
+
+      expect(store.get('shikimoriCredentials')).toEqual(CREDS_B)
+    })
+
+    it("does not sign another account out when A's refresh is rejected", async () => {
+      mockFetchOnce(INVALID_GRANT_BODY, 400)
+      const store = expiredCredsStore()
+      const pending = ensureFresh(store)
+      store.set('shikimoriCredentials', CREDS_B)
+
+      const err = await pending.catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(shikimori.ShikiAuthError)
+      expect(store.get('shikimoriCredentials')).toEqual(CREDS_B)
+      expect(store.get('shikimoriSessionExpired')).toBeFalsy()
+    })
   })
 
   describe('error handling', () => {

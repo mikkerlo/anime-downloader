@@ -536,3 +536,116 @@ describe('ShikimoriSyncService — prefetchShikimoriDetails genre coverage (#183
     expect(onDetailsPrefetched).not.toHaveBeenCalled()
   })
 })
+
+// A logout or account switch can land while the drain is mid-loop (#588). The
+// item in flight finishes on the old owner's account with the token it holds;
+// nothing after it may.
+describe('ShikimoriSyncService — owner guard', () => {
+  function entry(malId: number, queuedAt: number) {
+    return {
+      malId,
+      rateId: null,
+      queuedAt,
+      before: { episodes: 0, status: 'watching', score: 0, rewatches: 0 },
+      after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+    }
+  }
+  const OLD_QUEUE = [entry(1, 1), entry(2, 2)]
+  const serverRate = (malId: number) => ({
+    id: 900 + malId,
+    target_id: malId,
+    episodes: 0,
+    status: 'watching',
+    score: 0,
+    rewatches: 0
+  })
+
+  type Parked = Record<string, { nickname: string; entries: unknown[]; parkedAt: number }>
+
+  /**
+   * Item 1's `getUserRate` resolves only after the store has switched to user 2,
+   * as exchange-code leaves it: user 1's queue parked (or discarded), and
+   * `liveForNewOwner` as the new live queue.
+   */
+  function switchDuringItem1(
+    store: InMemoryStorage,
+    opts: { park: boolean; liveForNewOwner?: unknown[] }
+  ): void {
+    getUserRate.mockImplementation(async (_token: string, userId: number, malId: number) => {
+      if (userId === 1 && malId === 1) {
+        store.set('shikimoriUser', { id: 2, nickname: 'b' })
+        store.set('shikimoriUpdateQueue', opts.liveForNewOwner ?? [])
+        if (opts.park) {
+          store.set('shikimoriParkedQueues', {
+            '1': { nickname: 'a', entries: OLD_QUEUE, parkedAt: 5 }
+          } satisfies Parked)
+        }
+      }
+      return serverRate(malId)
+    })
+    updateUserRate.mockImplementation(async (_t: string, id: number) => ({
+      ...serverRate(id - 900),
+      episodes: 1
+    }))
+  }
+
+  it('stops before the next item and drops the consumed one from the parked bucket', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: OLD_QUEUE })
+    switchDuringItem1(store, { park: true })
+
+    await svc.syncShikimoriQueue()
+
+    expect(getUserRate).toHaveBeenCalledTimes(1)
+    expect(getUserRate).not.toHaveBeenCalledWith(expect.anything(), 1, 2)
+    expect(updateUserRate).toHaveBeenCalledTimes(1)
+    const parked = store.get('shikimoriParkedQueues') as Parked
+    expect(parked['1'].entries).toEqual([entry(2, 2)])
+    expect(store.get('shikimoriUpdateQueue')).toEqual([])
+  })
+
+  it('creates no bucket after Discard, and broadcasts the live length', async () => {
+    const { svc, store, broadcast } = makeService({ shikimoriUpdateQueue: OLD_QUEUE })
+    const ownersPending = deferred<string>()
+    switchDuringItem1(store, { park: false, liveForNewOwner: [entry(77, 9)] })
+    // Hold the re-kicked drain at its token refresh, so user 2's entry is still
+    // live when the assertions run.
+    ensureFreshToken
+      .mockResolvedValueOnce('access-token')
+      .mockReturnValueOnce(ownersPending.promise)
+
+    await svc.syncShikimoriQueue()
+
+    expect(store.get('shikimoriParkedQueues')).toBeUndefined()
+    expect(broadcast).toHaveBeenCalledWith(CHANNELS.offlineQueueChanged, { length: 1 })
+    expect(store.get('shikimoriUpdateQueue')).toEqual([entry(77, 9)])
+  })
+
+  it('re-kicks itself for the new owner without waiting for the timer or recording an error', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: OLD_QUEUE })
+    // A prior run leaves an error standing; an owner change must not touch it.
+    getUserRate.mockRejectedValueOnce(new ShikiApiError('unauthorized', 401))
+    await svc.syncShikimoriQueue()
+    expect(svc.getSyncStatus().lastSyncError).toBe('unauthorized')
+
+    switchDuringItem1(store, { park: true, liveForNewOwner: [entry(77, 9)] })
+    const newOwnersToken = deferred<string>()
+    ensureFreshToken
+      .mockResolvedValueOnce('access-token')
+      .mockReturnValueOnce(newOwnersToken.promise)
+
+    await svc.syncShikimoriQueue()
+
+    expect(svc.getSyncStatus().lastSyncError).toBe('unauthorized')
+    expect(svc.getSyncStatus().lastSyncAt).toBe(0)
+    newOwnersToken.resolve('access-token-b')
+    await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
+  })
+})
+
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}

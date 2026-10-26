@@ -10,10 +10,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
+import { ipcMain } from 'electron'
+import { CHANNELS } from '../../src/shared/ipc/channels'
+
 const ensureFreshToken = vi.fn()
 const getUserRate = vi.fn()
 const createUserRate = vi.fn()
 const updateUserRate = vi.fn()
+const exchangeCode = vi.fn()
+const getUser = vi.fn()
+const getUserAnimeRates = vi.fn()
 
 vi.mock('../../src/main/shikimori', async () => {
   const actual = await vi.importActual<typeof import('../../src/main/shikimori')>(
@@ -24,11 +30,17 @@ vi.mock('../../src/main/shikimori', async () => {
     ensureFreshToken: (...a: unknown[]) => ensureFreshToken(...a),
     getUserRate: (...a: unknown[]) => getUserRate(...a),
     createUserRate: (...a: unknown[]) => createUserRate(...a),
-    updateUserRate: (...a: unknown[]) => updateUserRate(...a)
+    updateUserRate: (...a: unknown[]) => updateUserRate(...a),
+    exchangeCode: (...a: unknown[]) => exchangeCode(...a),
+    getUser: (...a: unknown[]) => getUser(...a),
+    getUserAnimeRates: (...a: unknown[]) => getUserAnimeRates(...a)
   }
 })
 
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
+import { register } from '../../src/main/ipc/shikimori.ipc'
+import type { AppDeps } from '../../src/main/ipc/index'
+import { ShikiAuthError, SESSION_EXPIRED_MESSAGE } from '../../src/main/shikimori'
 
 const CH = {
   syncStatus: 'shikimori:sync-status',
@@ -208,5 +220,205 @@ describe('Shikimori offline drain — multi-item integration', () => {
     expect(status.queueLength).toBe(0)
     expect(status.lastSyncError).toBeNull()
     expect(status.lastSyncAt).toBeGreaterThan(0)
+  })
+})
+
+// Unsynced changes across logout and account switch (#588): the real drain and
+// the real IPC router on one store, with the Shikimori HTTP client stubbed.
+describe('Shikimori offline queue — kept per owner across accounts (#588)', () => {
+  const ALICE = { id: 1, nickname: 'alice', avatar: '' }
+  const BOB = { id: 2, nickname: 'bob', avatar: '' }
+  const credsFor = (u: { nickname: string }) => ({
+    access_token: `access-${u.nickname}`,
+    refresh_token: `refresh-${u.nickname}`,
+    created_at: 1,
+    expires_in: 86_400
+  })
+
+  type Status = 'planned' | 'watching' | 'completed'
+  const values = (episodes: number, status: Status) => ({
+    episodes,
+    status,
+    score: 0,
+    rewatches: 0
+  })
+
+  // A drift-matching edit, a #566-style entry for a title with no rate yet, and
+  // a stale edit the server has since moved past (a higher-ranked status).
+  const ALICE_QUEUE = [
+    {
+      malId: 10,
+      rateId: 910,
+      before: values(3, 'watching'),
+      after: values(4, 'watching'),
+      queuedAt: 1
+    },
+    {
+      malId: 20,
+      rateId: null,
+      before: values(0, 'planned'),
+      after: values(1, 'watching'),
+      queuedAt: 2
+    },
+    {
+      malId: 30,
+      rateId: 930,
+      before: values(2, 'watching'),
+      after: values(3, 'watching'),
+      queuedAt: 3
+    }
+  ]
+  const ALICE_MAL_IDS = ALICE_QUEUE.map((e) => e.malId)
+
+  function serverRate(malId: number, episodes: number, status: Status) {
+    return { id: 900 + malId, target_id: malId, ...values(episodes, status) }
+  }
+
+  function bootApp(initial: Record<string, unknown>) {
+    const { store, broadcast, svc } = boot(initial)
+    ;(ipcMain.handle as unknown as { mockClear: () => void }).mockClear()
+    register({
+      store,
+      shikimoriSyncService: svc,
+      lookupByMalIds: vi.fn(async () => new Map()),
+      maybeBroadcastCleanupPrompt: vi.fn(async () => undefined),
+      runAutoDownloadTick: vi.fn(async () => ({})),
+      broadcast
+    } as unknown as AppDeps)
+    const handlers = new Map<string, (...args: unknown[]) => unknown>(
+      (ipcMain.handle as unknown as { mock: { calls: [string, never][] } }).mock.calls.map(
+        ([channel, handler]) => [channel, handler]
+      )
+    )
+    const invoke = async (channel: string, ...args: unknown[]) =>
+      handlers.get(channel)!({}, ...args)
+    async function signIn(user: typeof ALICE): Promise<void> {
+      exchangeCode.mockResolvedValueOnce(credsFor(user))
+      getUser.mockResolvedValueOnce(user)
+      await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+    }
+    async function settle(): Promise<void> {
+      await vi.waitFor(
+        () => {
+          expect(svc.getSyncStatus().state).toBe('idle')
+          expect((store.get('shikimoriUpdateQueue') as unknown[]).length).toBe(0)
+        },
+        { timeout: 5000 }
+      )
+    }
+    return { store, svc, invoke, signIn, settle }
+  }
+
+  beforeEach(() => {
+    exchangeCode.mockReset()
+    getUser.mockReset()
+    getUserAnimeRates.mockReset().mockResolvedValue([])
+    // As in production: the token is whatever the store holds right now.
+    ensureFreshToken.mockImplementation(async (store: InMemoryStorage) => {
+      const creds = store.get('shikimoriCredentials') as { access_token: string } | null
+      if (!creds) throw new ShikiAuthError(SESSION_EXPIRED_MESSAGE)
+      return creds.access_token
+    })
+    const server: Record<number, Record<number, ReturnType<typeof serverRate> | null>> = {
+      [ALICE.id]: {
+        10: serverRate(10, 3, 'watching'),
+        20: null,
+        30: serverRate(30, 1, 'completed')
+      },
+      [BOB.id]: {}
+    }
+    getUserRate.mockImplementation(
+      async (_t: string, userId: number, malId: number) => server[userId]?.[malId] ?? null
+    )
+    createUserRate.mockImplementation(
+      async (_t: string, _u: number, malId: number, episodes: number, status: Status) =>
+        serverRate(malId, episodes, status)
+    )
+    updateUserRate.mockImplementation(
+      async (_t: string, rateId: number, episodes: number, status: Status) =>
+        serverRate(rateId - 900, episodes, status)
+    )
+  })
+
+  const departures = {
+    'A logs out and keeps the changes': async (app: ReturnType<typeof bootApp>) => {
+      await app.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'keep' })
+      await app.signIn(BOB)
+    },
+    'A expires and Reconnect signs in as B': async (app: ReturnType<typeof bootApp>) => {
+      app.store.set('shikimoriCredentials', null)
+      app.store.set('shikimoriSessionExpired', true)
+      await app.signIn(BOB)
+    }
+  }
+
+  it.each(Object.keys(departures))(
+    '%s: nothing reaches B, and A gets every change back on signing in again',
+    async (departure) => {
+      const app = bootApp({
+        shikimoriUser: ALICE,
+        shikimoriCredentials: credsFor(ALICE),
+        shikimoriUpdateQueue: ALICE_QUEUE
+      })
+
+      // Step 2: B signs in and its drain runs.
+      await departures[departure as keyof typeof departures](app)
+      await app.settle()
+      await app.svc.syncShikimoriQueue()
+      for (const fn of [getUserRate, createUserRate, updateUserRate]) {
+        for (const call of fn.mock.calls) {
+          expect(call[0]).not.toBe('access-bob')
+          expect(call).not.toContain(BOB.id)
+        }
+      }
+      expect(getUserRate.mock.calls.filter((c) => ALICE_MAL_IDS.includes(c[2]))).toEqual([])
+      expect(Object.keys(app.store.get('shikimoriParkedQueues') as object)).toEqual(['1'])
+
+      // Step 3: B leaves, A comes back; every call carries A's id and token.
+      await app.invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'keep' })
+      await app.signIn(ALICE)
+      await app.settle()
+
+      // The stale edit kept its original `before`, so it lost to the server's
+      // completed status: only the matching edit is written.
+      expect(updateUserRate.mock.calls).toEqual([['access-alice', 910, 4, 'watching', 0, 0]])
+      expect(createUserRate.mock.calls).toEqual([
+        ['access-alice', ALICE.id, 20, 1, 'watching', 0, 0]
+      ])
+      expect(getUserRate.mock.calls.map((c) => [c[0], c[1], c[2]])).toEqual([
+        ['access-alice', ALICE.id, 10],
+        ['access-alice', ALICE.id, 20],
+        ['access-alice', ALICE.id, 30]
+      ])
+      expect(app.store.get('shikimoriParkedQueues')).toEqual({})
+      app.svc.stopSyncTimer()
+    }
+  )
+
+  it('the switch window: a drain tick during B’s pending getUser sends nothing with B’s token', async () => {
+    const app = bootApp({
+      shikimoriUser: ALICE,
+      shikimoriCredentials: null,
+      shikimoriSessionExpired: true,
+      shikimoriUpdateQueue: ALICE_QUEUE.slice(0, 1)
+    })
+    app.svc.startSyncTimer()
+    exchangeCode.mockResolvedValueOnce(credsFor(BOB))
+    let resolveUser!: (u: typeof BOB) => void
+    getUser.mockReturnValueOnce(new Promise((res) => (resolveUser = res)))
+
+    const exchange = app.invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+    await vi.waitFor(() => expect(getUser).toHaveBeenCalled())
+    await app.svc.syncShikimoriQueue()
+
+    expect(getUserRate).not.toHaveBeenCalled()
+    expect(updateUserRate).not.toHaveBeenCalled()
+
+    resolveUser(BOB)
+    await exchange
+    await app.settle()
+    for (const call of getUserRate.mock.calls) expect(call[1]).not.toBe(ALICE.id)
+    expect(updateUserRate).not.toHaveBeenCalled()
+    app.svc.stopSyncTimer()
   })
 })

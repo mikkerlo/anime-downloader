@@ -110,8 +110,10 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `file:show-in-folder` | invoke | Reveal file in explorer |
 | `file:delete-episode` | invoke | Delete episode files for specific translation or all versions (invalidates file scan cache) |
 | `shikimori:get-auth-url` | invoke | Get Shikimori OAuth authorize URL |
-| `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user |
-| `shikimori:logout` | invoke | Clear Shikimori credentials and user |
+| `shikimori:exchange-code` | invoke | Exchange OAuth code for tokens, fetch user; writes nothing until the user is known. On an account switch parks the previous user's queue and resets the user-scoped caches; then restores the signed-in user's kept changes and broadcasts the live queue length (#588) |
+| `shikimori:logout` | invoke | Clear Shikimori credentials, user and caches. Takes `{ pending: 'keep' \| 'discard' }` for the live queue (default `keep`: parked under the user's id) |
+| `shikimori:get-parked-queues` | invoke | `ShikiParkedQueueSummary[]` (`{ ownerId, nickname, count, parkedAt }`; `ownerId: null` for the unknown-account bucket) for the kept-changes rows in Settings → Connectors |
+| `shikimori:discard-parked-queue` | invoke | Drop one kept bucket by owner id (`null` for the unknown-account bucket) |
 | `shikimori:get-user` | invoke | Get cached Shikimori user profile |
 | `shikimori:get-profile` | invoke | Returns the cached `ShikimoriProfile` dashboard payload instantly (if available) + triggers a background refresh; first call fetches `/api/users/:id` stats and assembles it. `null` when logged out. Powers the ShikimoriView dashboard (#178) |
 | `shikimori:profile-refreshed` | send | Profile dashboard payload re-assembled in background; ShikimoriView replaces its `profile` state |

@@ -25,6 +25,7 @@ import { SmotretApi } from './smotret-api'
 import { parseEpisodeFromFilename } from './lib/filename'
 import { createEpisodeCompletionHandlers } from './lib/episode-completion'
 import { installShikimoriReferer } from './lib/shikimori-images'
+import type { ParkedQueues } from './lib/shikimori-queue'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
@@ -124,6 +125,7 @@ const STORE_DEFAULTS = {
   }[],
   shikimoriUserRates: [] as unknown[],
   shikimoriUpdateQueue: [] as unknown[],
+  shikimoriParkedQueues: {} as ParkedQueues,
   shikimoriSessionExpired: false,
   shikimoriAnimeDetails: {} as Record<
     string,
@@ -177,7 +179,12 @@ const store = createStorageService(STORE_DEFAULTS, {
   // Keys whose last write must survive a crash inside the persist-coalescing
   // window: queued offline Shikimori edits and auth material. Everything else
   // (caches, watch positions) tolerates losing the final ≤500ms before a crash.
-  writeThroughKeys: ['shikimoriUpdateQueue', 'token', 'shikimoriCredentials']
+  writeThroughKeys: [
+    'shikimoriUpdateQueue',
+    'shikimoriParkedQueues',
+    'token',
+    'shikimoriCredentials'
+  ]
 })
 
 // Compile-time guard: `STORE_DEFAULTS` keys must equal `PERSISTED_STORE_KEYS`.

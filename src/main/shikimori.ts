@@ -260,6 +260,13 @@ export function __resetRefreshStateForTests(): void {
   onSessionExpired = undefined
 }
 
+// Whether the stored credentials are still the session a refresh started from.
+// A logout plus another account's login can land while it is in flight (#588).
+function isSameSession(store: StorageService, refreshedFrom: ShikiCredentials): boolean {
+  const stored = store.get('shikimoriCredentials') as ShikiCredentials | null
+  return stored?.refresh_token === refreshedFrom.refresh_token
+}
+
 /**
  * The single point every Shikimori request converges on, and therefore the only
  * place session expiry can be detected without auditing 11 call sites — four of
@@ -303,8 +310,10 @@ export async function ensureFreshToken(store: StorageService): Promise<string> {
       //
       // Re-read first: a logout (or another expiry) may have landed while the
       // refresh was in flight, and writing the resolved credentials back would
-      // silently re-authenticate an account the user just disconnected.
-      if (store.get('shikimoriCredentials')) store.set('shikimoriCredentials', refreshed)
+      // silently re-authenticate an account the user just disconnected. A
+      // logout plus another account's login in that window leaves credentials
+      // that aren't this session's, and they must survive too (#588).
+      if (isSameSession(store, creds)) store.set('shikimoriCredentials', refreshed)
       return refreshed
     })().finally(() => {
       inFlightRefresh = null
@@ -316,10 +325,12 @@ export async function ensureFreshToken(store: StorageService): Promise<string> {
     newCreds = await inFlightRefresh
   } catch (err) {
     if (!isInvalidGrant(err)) throw err
-    store.set('shikimoriCredentials', null)
-    const wasExpired = Boolean(store.get('shikimoriSessionExpired'))
-    store.set('shikimoriSessionExpired', true)
-    if (!wasExpired) onSessionExpired?.()
+    if (isSameSession(store, creds)) {
+      store.set('shikimoriCredentials', null)
+      const wasExpired = Boolean(store.get('shikimoriSessionExpired'))
+      store.set('shikimoriSessionExpired', true)
+      if (!wasExpired) onSessionExpired?.()
+    }
     const detail = err instanceof ShikiApiError ? err.body : ''
     throw new ShikiAuthError(
       SESSION_EXPIRED_MESSAGE,

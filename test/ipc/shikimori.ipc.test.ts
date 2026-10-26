@@ -16,6 +16,7 @@ const createUserRate = vi.fn()
 const updateUserRate = vi.fn()
 const getUser = vi.fn()
 const exchangeCode = vi.fn()
+const getUserAnimeRates = vi.fn()
 
 vi.mock('../../src/main/shikimori', async () => {
   const actual = await vi.importActual<typeof import('../../src/main/shikimori')>(
@@ -28,7 +29,8 @@ vi.mock('../../src/main/shikimori', async () => {
     createUserRate: (...args: unknown[]) => createUserRate(...args),
     updateUserRate: (...args: unknown[]) => updateUserRate(...args),
     getUser: (...args: unknown[]) => getUser(...args),
-    exchangeCode: (...args: unknown[]) => exchangeCode(...args)
+    exchangeCode: (...args: unknown[]) => exchangeCode(...args),
+    getUserAnimeRates: (...args: unknown[]) => getUserAnimeRates(...args)
   }
 })
 
@@ -130,6 +132,8 @@ beforeEach(() => {
   getUserRate.mockReset()
   createUserRate.mockReset()
   updateUserRate.mockReset()
+  getUserAnimeRates.mockReset()
+  getUserAnimeRates.mockResolvedValue([])
 })
 
 describe('shikimori IPC — update-rate against an expired session', () => {
@@ -492,5 +496,276 @@ describe('shikimori IPC — session lifecycle', () => {
 
     expect(store.get('shikimoriSessionExpired')).toBe(false)
     expect(store.get('shikimoriUser')).toBeNull()
+    // An empty queue parks nothing: no empty bucket for the kept-changes row.
+    expect(store.get('shikimoriParkedQueues') ?? {}).toEqual({})
+
+    const seeded = registerRouter({ shikimoriSessionExpired: true, shikimoriUpdateQueue: seed() })
+    await seeded.invoke(CHANNELS.SHIKIMORI_LOGOUT)
+    expect(parkedOf(seeded.store)['7'].entries).toEqual(seed())
+  })
+})
+
+type Entry = QueueEntry & { queuedAt: number }
+
+/**
+ * Three entries owned by user 7. The middle one is S0's (#566) shape for a
+ * title with no rate yet: `rateId: null` and the synthetic empty-`planned`
+ * `before`.
+ */
+function seed(): Entry[] {
+  return [
+    {
+      malId: 42,
+      rateId: 942,
+      before: { episodes: 3, status: 'watching', score: 7, rewatches: 0 },
+      after: { episodes: 4, status: 'watching', score: 7, rewatches: 0 },
+      queuedAt: 100
+    },
+    {
+      malId: 43,
+      rateId: null,
+      before: { episodes: 0, status: 'planned', score: 0, rewatches: 0 },
+      after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 },
+      queuedAt: 200
+    },
+    {
+      malId: 44,
+      rateId: 944,
+      before: { episodes: 10, status: 'watching', score: 0, rewatches: 0 },
+      after: { episodes: 12, status: 'completed', score: 8, rewatches: 0 },
+      queuedAt: 300
+    }
+  ]
+}
+
+type Bucket = { nickname: string; entries: Entry[]; parkedAt: number }
+
+function parkedOf(store: InMemoryStorage): Record<string, Bucket> {
+  return (store.get('shikimoriParkedQueues') as Record<string, Bucket> | undefined) ?? {}
+}
+
+const CREDS_B = {
+  access_token: 'access-b',
+  refresh_token: 'refresh-b',
+  created_at: 1,
+  expires_in: 86_400
+}
+const CREDS_A = { ...CREDS_B, access_token: 'access-a', refresh_token: 'refresh-a' }
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (v: T) => void
+  reject: (e: unknown) => void
+} {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('shikimori IPC — unsynced changes on logout and account switch (#588)', () => {
+  it.each([
+    ['{ pending: keep }', { pending: 'keep' }],
+    ['no argument', undefined]
+  ])('logout with %s keeps the queue for its owner', async (_label, opts) => {
+    const { invoke, store, broadcast } = registerRouter({ shikimoriUpdateQueue: seed() })
+
+    await invoke(CHANNELS.SHIKIMORI_LOGOUT, opts)
+
+    const kept = Object.values(parkedOf(store)).flatMap((b) => b.entries)
+    expect(queueOf(store).length + kept.length).toBe(3)
+    expect(queueOf(store)).toHaveLength(0)
+    expect(parkedOf(store)['7'].entries).toEqual(seed())
+    expect(parkedOf(store)['7'].nickname).toBe('me')
+    expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+      length: 0
+    })
+  })
+
+  it('logout with { pending: discard } drops the queue and parks nothing', async () => {
+    const { invoke, store } = registerRouter({ shikimoriUpdateQueue: seed() })
+
+    await invoke(CHANNELS.SHIKIMORI_LOGOUT, { pending: 'discard' })
+
+    expect(queueOf(store)).toHaveLength(0)
+    expect(parkedOf(store)).toEqual({})
+  })
+
+  it('a switch parks the old queue, resets the user caches and refreshes the views', async () => {
+    const { invoke, store, broadcast, sync } = registerRouter({
+      shikimoriSessionExpired: true,
+      shikimoriUpdateQueue: seed(),
+      shikimoriUserRates: [cachedRate(42)],
+      shikimoriProfile: { id: 7 },
+      shikimoriFriends: [{ id: 1 }]
+    })
+    exchangeCode.mockResolvedValue(CREDS_B)
+    getUser.mockResolvedValue({ id: 8, nickname: 'other' })
+
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+
+    expect(store.get('shikimoriUser')).toEqual({ id: 8, nickname: 'other' })
+    expect(queueOf(store)).toHaveLength(0)
+    expect(parkedOf(store)['7'].entries).toEqual(seed())
+    expect(store.get('shikimoriUserRates')).toEqual([])
+    expect(store.get('shikimoriProfile')).toBeNull()
+    expect(store.get('shikimoriFriends')).toEqual([])
+    expect(sync.abortPrefetch).toHaveBeenCalled()
+    expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+      length: 0
+    })
+
+    await vi.waitFor(() =>
+      expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_RATES_REFRESHED, [])
+    )
+  })
+
+  it('the switch window: nothing is saved until getUser resolves, then credentials and user land together', async () => {
+    const { invoke, store } = registerRouter({
+      shikimoriSessionExpired: true,
+      shikimoriCredentials: null,
+      shikimoriUpdateQueue: seed()
+    })
+    exchangeCode.mockResolvedValue(CREDS_B)
+    const user = deferred<{ id: number; nickname: string }>()
+    getUser.mockReturnValue(user.promise)
+
+    const pending = invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+    await vi.waitFor(() => expect(getUser).toHaveBeenCalled())
+
+    expect(store.get('shikimoriCredentials')).toBeNull()
+    expect(store.get('shikimoriUser')).toEqual({ id: 7, nickname: 'me' })
+
+    // Whatever runs next after the credentials write (a drain tick, say) must
+    // already see the new user: the two writes share one synchronous block.
+    const userNextTick: unknown[] = []
+    const set = store.set.bind(store)
+    vi.spyOn(store, 'set').mockImplementation((key: string, value: unknown) => {
+      set(key, value)
+      if (key === 'shikimoriCredentials') {
+        queueMicrotask(() => userNextTick.push(store.get('shikimoriUser')))
+      }
+    })
+    user.resolve({ id: 8, nickname: 'other' })
+    await pending
+
+    expect(store.get('shikimoriCredentials')).toEqual(CREDS_B)
+    expect(userNextTick).toEqual([{ id: 8, nickname: 'other' }])
+  })
+
+  it('a real 7→7 reconnect parks nothing and keeps the caches', async () => {
+    const live = seed().slice(0, 2)
+    const { invoke, store, sync } = registerRouter({
+      shikimoriSessionExpired: true,
+      shikimoriUpdateQueue: live,
+      shikimoriUserRates: [cachedRate(42)]
+    })
+    exchangeCode.mockResolvedValue(CREDS_A)
+    getUser.mockResolvedValue({ id: 7, nickname: 'me' })
+
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+
+    expect(queueOf(store)).toEqual(live)
+    expect(store.get('shikimoriUserRates')).toEqual([cachedRate(42)])
+    expect(parkedOf(store)).toEqual({})
+    expect(sync.abortPrefetch).not.toHaveBeenCalled()
+  })
+
+  it('the same user signing back in gets their kept changes back verbatim', async () => {
+    const shuffled = [seed()[2], seed()[0], seed()[1]]
+    const { invoke, store, broadcast, sync } = registerRouter({
+      shikimoriUser: null,
+      shikimoriParkedQueues: { '7': { nickname: 'me', entries: shuffled, parkedAt: 1 } }
+    })
+    exchangeCode.mockResolvedValue(CREDS_A)
+    getUser.mockResolvedValue({ id: 7, nickname: 'me' })
+
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+
+    expect(queueOf(store)).toEqual(seed())
+    expect(parkedOf(store)).toEqual({})
+    expect(broadcast).toHaveBeenCalledWith(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+      length: 3
+    })
+    expect(sync.syncShikimoriQueue).toHaveBeenCalled()
+  })
+
+  it('ownerless entries go to the unknown bucket, not to whoever signs in', async () => {
+    const { invoke, store } = registerRouter({
+      shikimoriUser: null,
+      shikimoriUpdateQueue: seed().slice(0, 2)
+    })
+    exchangeCode.mockResolvedValue(CREDS_B)
+    getUser.mockResolvedValue({ id: 8, nickname: 'other' })
+
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+
+    expect(queueOf(store)).toHaveLength(0)
+    expect(parkedOf(store).unknown.entries).toEqual(seed().slice(0, 2))
+    expect(parkedOf(store)['8']).toBeUndefined()
+  })
+
+  it('an edit whose owner was switched away during its await is kept for that owner', async () => {
+    const { invoke, store, broadcast } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const token = deferred<string>()
+    ensureFreshToken.mockReturnValueOnce(token.promise)
+    exchangeCode.mockResolvedValue(CREDS_B)
+    getUser.mockResolvedValue({ id: 8, nickname: 'other' })
+    getUserAnimeRates.mockReturnValue(new Promise(() => {}))
+
+    const edit = updateRate(invoke)
+    await invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, 'code')
+    // B's own list, as the switch's background refresh would cache it: the
+    // same title at B's values, which must not become A's `before`.
+    const bobsEntry = {
+      rate: { id: 5042, target_id: 42, episodes: 9, status: 'completed', score: 2 },
+      shikiAnime: { id: 42 },
+      smotretAnime: null
+    }
+    store.set('shikimoriUserRates', [bobsEntry])
+    token.reject(new TypeError('fetch failed'))
+    await edit
+
+    expect(queueOf(store)).toHaveLength(0)
+    expect(store.get('shikimoriUserRates')).toEqual([bobsEntry])
+    expect(broadcast).not.toHaveBeenCalledWith(
+      EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
+      expect.anything()
+    )
+    expect(parkedOf(store)['7'].entries).toEqual([
+      expect.objectContaining({
+        malId: 42,
+        rateId: 942,
+        before: { episodes: 3, status: 'watching', score: 7, rewatches: 0 },
+        after: { episodes: 4, status: 'watching', score: 7, rewatches: 0 }
+      })
+    ])
+  })
+
+  it('lists kept queues and discards one bucket at a time', async () => {
+    const { invoke, store } = registerRouter({
+      shikimoriParkedQueues: {
+        '9': { nickname: 'nine', entries: seed(), parkedAt: 5 },
+        '10': { nickname: 'ten', entries: seed().slice(0, 1), parkedAt: 6 },
+        unknown: { nickname: '', entries: seed().slice(0, 2), parkedAt: 7 }
+      }
+    })
+
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_PARKED_QUEUES)).toEqual(
+      expect.arrayContaining([
+        { ownerId: 9, nickname: 'nine', count: 3, parkedAt: 5 },
+        { ownerId: 10, nickname: 'ten', count: 1, parkedAt: 6 },
+        { ownerId: null, nickname: '', count: 2, parkedAt: 7 }
+      ])
+    )
+
+    await invoke(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, 9)
+    expect(Object.keys(parkedOf(store)).sort()).toEqual(['10', 'unknown'])
+
+    await invoke(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, null)
+    expect(Object.keys(parkedOf(store))).toEqual(['10'])
   })
 })

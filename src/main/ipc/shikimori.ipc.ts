@@ -86,7 +86,8 @@ export function register({
   lookupByMalIds,
   maybeBroadcastCleanupPrompt,
   runAutoDownloadTick,
-  broadcast
+  broadcast,
+  offlineService
 }: AppDeps) {
   // Null when the account changed while the list was in flight: it is the
   // previous account's list and must not land in the new one's cache (#588).
@@ -110,6 +111,7 @@ export function register({
   }
 
   function refreshShikimoriRatesInBackground(): void {
+    if (offlineService?.isOffline()) return
     fetchAndCacheShikimoriRates()
       .then((entries) => {
         if (!entries) return

@@ -8,7 +8,8 @@ import { spawn } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
-import { fetchWithTimeout } from './lib/net'
+import { fetchWithTimeout, OfflineError } from './lib/net'
+import { isTransportError } from './lib/errors'
 
 const FPCALC_VERSION = '1.5.1'
 const RELEASE_BASE = `https://github.com/acoustid/chromaprint/releases/download/v${FPCALC_VERSION}`
@@ -120,7 +121,11 @@ async function findBinaryRecursively(dir: string, name: string): Promise<string 
   return null
 }
 
-export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
+/** Like `ensureFfmpeg`: resolves `''` without downloading while offline (#567). */
+export async function ensureFpcalc(
+  win?: BrowserWindow,
+  isOffline: () => boolean = () => false
+): Promise<string> {
   const dest = getFpcalcDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
   const binary = path.join(dest, `fpcalc${ext}`)
@@ -128,6 +133,11 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
   if (fs.existsSync(binary)) {
     fpcalcPath = binary
     return binary
+  }
+
+  if (isOffline()) {
+    console.log('[fpcalc] Offline: install deferred until the app is online')
+    return ''
   }
 
   const platInfo = detectFpcalcPlatform()
@@ -187,6 +197,11 @@ export async function ensureFpcalc(win?: BrowserWindow): Promise<string> {
     console.log(`[fpcalc] Installed at ${binary}`)
     return binary
   } catch (err) {
+    if (err instanceof OfflineError || (isOffline() && isTransportError(err))) {
+      sendProgress('deferred')
+      console.log('[fpcalc] Offline: install deferred until the app is online', err)
+      return ''
+    }
     sendProgress('failed')
     console.error('[fpcalc] Failed to install:', err)
     throw err

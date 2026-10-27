@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSettingsStore } from '../../stores/settings';
+import { useOfflineStore } from '../../stores/offline';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
@@ -10,6 +11,12 @@ import SettingsSwitch from './SettingsSwitch.vue';
 const settingsStore = useSettingsStore();
 const { updateStatus } = storeToRefs(settingsStore);
 const { autoSave, showSaved } = useSettingsAutosave();
+const offlineStore = useOfflineStore();
+const { isManual: workOffline } = storeToRefs(offlineStore);
+
+function setWorkOffline(on: boolean): void {
+  void offlineStore.setManual(on).then(() => showSaved());
+}
 
 const loaded = ref(false);
 const appVersion = ref('');
@@ -205,6 +212,16 @@ watch(autoDownloadEnabled, (val) => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
           </svg>
         </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Work offline"
+        desc="Stop all network access: no searches, syncs, downloads, update checks or Watch Together. Shikimori changes queue until you turn it off."
+      >
+        <SettingsSwitch
+          :model-value="workOffline"
+          data-testid="work-offline-switch"
+          @update:model-value="setWorkOffline"
+        />
       </SettingsRow>
     </SettingsGroup>
 

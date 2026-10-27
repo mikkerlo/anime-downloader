@@ -13,6 +13,7 @@ import {
   getFfprobePath,
   clearFfmpegPaths
 } from '../../src/main/ffmpeg-binaries'
+import { setOfflineCheck } from '../../src/main/lib/net'
 
 describe('ffmpeg-binaries platform mapping', () => {
   it.each([
@@ -225,6 +226,67 @@ describe('ensureFfmpeg zip install', () => {
       expect(fs.statSync(ffprobeBin).mode & 0o777).toBe(0o755)
     }
     expect(send.mock.calls.some((c) => c[1]?.status === 'done')).toBe(true)
+  })
+
+  // #567: offline only refuses *new* requests, so the app can go offline after
+  // the ffmpeg archive and before the ffprobe one. That is a skip, not a
+  // failure: no 'failed' modal, and the online kick-off retries the install.
+  it('defers, without the failed modal, when the app goes offline between the two archives', async () => {
+    const ffmpegZip = buildSingleEntryZip(ffmpegEntry, ffmpegBytes)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      setOfflineCheck(() => true)
+      return new Response(new Uint8Array(ffmpegZip), {
+        status: 200,
+        headers: { 'content-length': String(ffmpegZip.length) }
+      })
+    })
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+      typeof ensureFfmpeg
+    >[0]
+    try {
+      await expect(ensureFfmpeg(win)).resolves.toBe('')
+    } finally {
+      setOfflineCheck(null)
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const statuses = send.mock.calls.map((c) => c[1]?.status)
+    expect(statuses).not.toContain('failed')
+    expect(statuses.at(-1)).toBe('deferred')
+    expect(getFfmpegPath()).toBe('')
+  })
+
+  // The other arm of the deferral: the switch flipped while a request was in
+  // flight, so the error is the transport's, not a refusal. Only a
+  // network-coded error defers; a bare TypeError is a bug and still fails.
+  it.each([
+    [
+      'a network-coded error defers',
+      () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENETUNREACH' } }),
+      'deferred'
+    ],
+    [
+      'a bare TypeError (a bug) still fails',
+      () => new TypeError("reading 'x' of undefined"),
+      'failed'
+    ]
+  ])('offline mid-request: %s', async (_name, makeErr, expected) => {
+    let offline = false
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      offline = true
+      throw makeErr()
+    })
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+      typeof ensureFfmpeg
+    >[0]
+    const outcome = await ensureFfmpeg(win, () => offline).then(
+      (v) => v,
+      () => 'rejected'
+    )
+    const statuses = send.mock.calls.map((c) => c[1]?.status)
+    expect(statuses.at(-1)).toBe(expected)
+    expect(outcome).toBe(expected === 'deferred' ? '' : 'rejected')
   })
 
   it('wraps an extractZip failure with the ffmpeg prefix and the recovery step', async () => {

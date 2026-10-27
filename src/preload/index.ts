@@ -500,6 +500,13 @@ const api = {
     EVENT_CHANNELS.SYNCPLAY_TRACE
   ),
 
+  // Offline (#567)
+  offlineGetState: () => ipcRenderer.invoke(CHANNELS.OFFLINE_GET_STATE) as Promise<OfflineState>,
+  offlineSetManual: (on: boolean) =>
+    ipcRenderer.invoke(CHANNELS.OFFLINE_SET_MANUAL, on) as Promise<OfflineState>,
+  offlineRetry: () => ipcRenderer.invoke(CHANNELS.OFFLINE_RETRY) as Promise<OfflineState>,
+  onOfflineStateChanged: subscribe<OfflineState>(EVENT_CHANNELS.OFFLINE_STATE_CHANGED),
+
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) =>
     ipcRenderer.invoke(

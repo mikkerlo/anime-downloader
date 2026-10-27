@@ -8,6 +8,7 @@ import { pipeline } from 'stream/promises'
 import Ffmpeg from 'fluent-ffmpeg'
 import type { SmotretApi } from './smotret-api'
 import { fetchWithTimeout } from './lib/net'
+import { isNetworkError } from './lib/errors'
 
 interface RunFfmpegOptions {
   ffmpegPath: string
@@ -390,6 +391,8 @@ export class DownloadManager {
   // once and spin — and `resumeHeldMerges()` takes it on the release edge.
   private isMergeHeld: () => boolean = () => false
   private heldRequest = false
+  // Offline (#567): the pump starts nothing while this is true.
+  private isOffline: () => boolean = () => false
   // Set by `destroy()` (quit). Every merge path checks it so nothing starts,
   // persists or completes once the queue has been written for the last time.
   private destroyed = false
@@ -605,6 +608,33 @@ export class DownloadManager {
   /** Merge hold (#516): true while any player view is open. */
   setMergeHoldCheck(isHeld: () => boolean): void {
     this.isMergeHeld = isHeld
+  }
+
+  setOfflineCheck(isOffline: () => boolean): void {
+    this.isOffline = isOffline
+  }
+
+  /**
+   * Entering offline (#567): aborts every active transfer and puts it back in
+   * 'queued'. The `.part` stays, so the next start resumes with `Range`; the
+   * aborted attempt's `finally` gives its slot back (#601's `slotReleased`).
+   */
+  suspendForOffline(): void {
+    for (const item of this.queue) {
+      if (item.status !== 'downloading') continue
+      const controller = this.abortControllers.get(item.id)
+      if (!controller) continue
+      this.abortControllers.delete(item.id)
+      item.status = 'queued'
+      item.speed = 0
+      controller.abort()
+    }
+    this.schedulePersist()
+  }
+
+  /** Back online (#567): the pump starts what the offline gate held. */
+  resumeAfterOffline(): void {
+    this.processQueue()
   }
 
   setFfmpegDriver(driver: FfmpegDriver): void {
@@ -1082,7 +1112,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1714-1719`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1745-1750`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1111,7 +1141,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1710`)
+   * (`src/main/download-manager.ts:1741`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1685,6 +1715,7 @@ export class DownloadManager {
   }
 
   private processQueue(): void {
+    if (this.isOffline()) return
     while (this.activeCount < this.getConcurrentLimit()) {
       // Subtitles first: they are tiny and watching-while-downloading (#63)
       // needs the .ass on disk before the video is anywhere near done.
@@ -1911,6 +1942,16 @@ export class DownloadManager {
         return
       }
 
+      // A failure that arrives while offline (#567) is the offline switch, not
+      // the transfer: back to 'queued' without spending a rung of the ladder.
+      if (this.isOffline() && isNetworkError(err)) {
+        item.status = 'queued'
+        item.speed = 0
+        slotReleased = true
+        this.activeCount--
+        return
+      }
+
       // A deterministic rejection (#444) skips the retry ladder: the same URL
       // would answer with the same wrong body three more times, and the user
       // would wait ~7 s for a verdict the first response already gave.
@@ -1924,7 +1965,10 @@ export class DownloadManager {
           item.status = 'queued'
           slotReleased = true
           this.activeCount--
-          setTimeout(() => this.startDownload(item, retryCount, attempts), PROGRESS_RETRY_DELAY_MS)
+          setTimeout(
+            () => this.startFromRetryTimer(item, retryCount, attempts),
+            PROGRESS_RETRY_DELAY_MS
+          )
           return
         }
         if (retryCount < RETRY_LIMIT) {
@@ -1932,7 +1976,7 @@ export class DownloadManager {
           slotReleased = true
           this.activeCount--
           const delay = Math.pow(2, retryCount) * 1000
-          setTimeout(() => this.startDownload(item, retryCount + 1, attempts), delay)
+          setTimeout(() => this.startFromRetryTimer(item, retryCount + 1, attempts), delay)
           return
         }
       }
@@ -1951,6 +1995,17 @@ export class DownloadManager {
         this.processQueue()
       }
     }
+  }
+
+  /**
+   * The retry ladder's timer bypasses the pump, so it re-checks the pump's
+   * gates (#567): offline leaves the item 'queued' for the pump, and an item
+   * the pump already started — or that was paused or cancelled meanwhile — is
+   * no longer this timer's to start.
+   */
+  private startFromRetryTimer(item: DownloadItem, retryCount: number, attemptCount: number): void {
+    if (item.status !== 'queued' || this.isOffline()) return
+    void this.startDownload(item, retryCount, attemptCount)
   }
 
   /**

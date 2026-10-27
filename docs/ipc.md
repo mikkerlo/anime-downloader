@@ -42,6 +42,10 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `get-quality-mismatch-count` | invoke | Get number of collected mismatches |
 | `dump-quality-mismatches` | invoke | Write mismatches to JSON file in download dir |
 | `home:get-continue-watching` | invoke | Build merged Resume + Next-up list (capped at 24) for the Home view from local stores; no network |
+| `offline:get-state` | invoke | The `OfflineService` state `{ mode: 'online' \| 'offline-auto' \| 'offline-manual', since, lastProbeAt }` (#567), for the `useOfflineStore` seed |
+| `offline:set-manual` | invoke | Work offline on/off (`boolean`). Persists `workOffline` and returns the new state; turning it off runs the online kick-off |
+| `offline:retry` | invoke | Probe both API hosts now, joining a probe in flight, and return the resulting state — the auto-mode pill's "check again" instead of waiting out the 15 s → 2 min backoff. A no-op in manual mode |
+| `offline:state-changed` | main→renderer | Broadcast on every mode change and after every probe; payload is the same state. Consumed by `useOfflineStore` |
 | `library-get` | invoke | List all starred + downloaded anime (merged) |
 | `library-toggle` | invoke | Add/remove from starred library |
 | `library-has` | invoke | Check if anime is starred |
@@ -86,7 +90,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |
 | `ffmpeg:download-progress` | send | FFmpeg/ffprobe download progress on first launch. Payload `{ status, progress?, message? }` — `message` is set only on `status: 'failed'` and carries the user-facing reason the install failed (#469): the `ffmpeg:`-prefixed extractor wrap, the `!res.ok` text, the unsupported-platform throw, or a dressed-up transport error. `useSettingsStore` parks it in `ffmpegError`, which keeps the first-launch overlay up with a Dismiss button instead of hiding it as though the install had worked |
-| `fpcalc:download-progress` | send | Chromaprint fpcalc download progress on first launch |
+| `fpcalc:download-progress` | send | Chromaprint fpcalc download progress on first launch. Both progress channels send `status: 'deferred'` when the app went offline mid-install (#567): the renderer drops the overlay without an error, and the online kick-off retries |
 | `skip-detector:analyze-show` | invoke | Run Chromaprint fingerprinting + pairwise comparison for the given anime's downloaded episodes; persists per-episode OP/ED boundaries |
 | `skip-detector:get-detections` | invoke | Returns cached `ShowSkipDetections` for an anime (or `null`) |
 | `skip-detector:detect-stream` | invoke | Fingerprint the currently-playing remote stream on demand and return OP/ED ranges only when they confidently match the show's locally-derived signatures |

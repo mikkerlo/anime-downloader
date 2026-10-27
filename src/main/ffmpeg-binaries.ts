@@ -7,7 +7,8 @@ import * as os from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
-import { fetchWithTimeout } from './lib/net'
+import { fetchWithTimeout, OfflineError } from './lib/net'
+import { isTransportError } from './lib/errors'
 
 const FFMPEG_VERSION = '6.1'
 const RELEASE_BASE = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}`
@@ -212,7 +213,15 @@ async function fetchComponent(
   }
 }
 
-export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
+/**
+ * Resolves `''` without downloading while `isOffline()` is true (#567): the
+ * install is skipped, not failed, so no error modal, and the caller retries it
+ * when the app is online again.
+ */
+export async function ensureFfmpeg(
+  win?: BrowserWindow,
+  isOffline: () => boolean = () => false
+): Promise<string> {
   const dest = getFfmpegDir()
   const ext = process.platform === 'win32' ? '.exe' : ''
   const ffmpegBin = path.join(dest, `ffmpeg${ext}`)
@@ -222,6 +231,11 @@ export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
     ffmpegPath = ffmpegBin
     ffprobePath = ffprobeBin
     return ffmpegBin
+  }
+
+  if (isOffline()) {
+    console.log('[ffmpeg] Offline: install deferred until the app is online')
+    return ''
   }
 
   const sendProgress = (status: string, progress?: number, message?: string): void => {
@@ -272,6 +286,14 @@ export async function ensureFfmpeg(win?: BrowserWindow): Promise<string> {
     console.log(`[ffmpeg] Installed ffmpeg + ffprobe at ${dest}`)
     return ffmpegBin
   } catch (err) {
+    // The app went offline mid-install (#567), e.g. between the ffmpeg and
+    // ffprobe archives: skipped, not failed, so no error modal; the online
+    // kick-off retries it.
+    if (err instanceof OfflineError || (isOffline() && isTransportError(err))) {
+      sendProgress('deferred')
+      console.log('[ffmpeg] Offline: install deferred until the app is online', err)
+      return ''
+    }
     // The renderer renders this verbatim (#469) — it is the only place a user
     // ever learns why merging is unavailable.
     sendProgress('failed', undefined, describeInstallFailure(err))

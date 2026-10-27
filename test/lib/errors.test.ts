@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { errorCode, isNetworkError } from '../../src/main/lib/errors'
+import { errorCode, isNetworkError, isTransportError } from '../../src/main/lib/errors'
 import { ShikiApiError } from '../../src/main/shikimori'
 
 describe('errorCode', () => {
@@ -47,5 +47,28 @@ describe('isNetworkError', () => {
     expect(isNetworkError({ code: 'EACCES' })).toBe(false)
     expect(isNetworkError(new Error('logic bug'))).toBe(false)
     expect(isNetworkError(null)).toBe(false)
+  })
+})
+
+describe('isTransportError (#567)', () => {
+  it('accepts a timeout or a network errno on the error or its cause', () => {
+    const timeout = new Error('timed out')
+    timeout.name = 'TimeoutError'
+    expect(isTransportError(timeout)).toBe(true)
+    expect(isTransportError({ code: 'ECONNRESET' })).toBe(true)
+    expect(
+      isTransportError(
+        Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENETUNREACH' } })
+      )
+    ).toBe(true)
+    expect(isTransportError({ code: 'ANIME_DL_OFFLINE' })).toBe(true)
+  })
+
+  it('rejects a bare TypeError, which isNetworkError accepts', () => {
+    const bug = new TypeError("Cannot read properties of undefined (reading 'x')")
+    expect(isNetworkError(bug)).toBe(true)
+    expect(isTransportError(bug)).toBe(false)
+    expect(isTransportError(new Error('logic bug'))).toBe(false)
+    expect(isTransportError({ code: 'EACCES' })).toBe(false)
   })
 })

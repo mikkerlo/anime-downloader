@@ -77,6 +77,11 @@ export const CHANNELS = {
   // Home
   HOME_GET_CONTINUE_WATCHING: 'home:get-continue-watching',
 
+  // Offline
+  OFFLINE_GET_STATE: 'offline:get-state',
+  OFFLINE_RETRY: 'offline:retry',
+  OFFLINE_SET_MANUAL: 'offline:set-manual',
+
   // Player
   PLAYER_CLEANUP_REMUX: 'player:cleanup-remux',
   PLAYER_CLOSE_STREAM_SESSION: 'player:close-stream-session',
@@ -228,6 +233,9 @@ export const EVENT_CHANNELS = {
 
   // File management
   FILE_EPISODES_CHANGED: 'file:episodes-changed',
+
+  // Offline
+  OFFLINE_STATE_CHANGED: 'offline:state-changed',
 
   // Player
   PLAYER_STREAM_CHUNK: 'player:stream-chunk',

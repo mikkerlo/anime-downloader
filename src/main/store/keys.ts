@@ -61,6 +61,8 @@ export const PERSISTED_STORE_KEYS = [
   'shikimoriFriends',
   'shikimoriRecommendations',
   'priorityAnimeIds',
+  'installId',
+  'syncMeta',
   'workOffline'
 ] as const
 

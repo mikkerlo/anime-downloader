@@ -1,6 +1,7 @@
 import Store from 'electron-store'
 import type { StorageService } from './types'
 import { migrateWatchProgressV2 } from './migrate'
+import { ensureInstallId } from './sync-meta'
 import { timeSlowSync, SLOW_STORE_OP_MS } from '../lib/perf'
 
 export type { StorageService } from './types'
@@ -21,6 +22,8 @@ export const PERSIST_DEBOUNCE_MS = 500
  */
 export interface MainStorageService<S extends Record<string, unknown>> extends StorageService<S> {
   migrateWatchProgressV2(): void
+  /** Generates and persists `installId` when it is missing; returns it. */
+  ensureInstallId(): string
   /** Persists any writes still waiting on the coalescing timer. Wire into `before-quit`. */
   flush(): void
 }
@@ -169,7 +172,8 @@ export function createStorageService<S extends Record<string, unknown>>(
     flush: () => {
       if (dirty) persistNow()
     },
-    migrateWatchProgressV2: () => migrateWatchProgressV2(svc)
+    migrateWatchProgressV2: () => migrateWatchProgressV2(svc),
+    ensureInstallId: () => ensureInstallId(svc)
   }
   return svc
 }

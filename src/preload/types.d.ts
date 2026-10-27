@@ -81,9 +81,15 @@ interface Api {
     episodeInt: string,
     position: number,
     duration: number,
-    watched?: boolean,
-    translationId?: number
+    watched: boolean | undefined,
+    translationId: number | undefined,
+    source: WatchProgressSaveSource
   ) => Promise<void>
+  watchProgressSetWatched: (
+    animeId: number,
+    episodeInt: string,
+    watched: boolean
+  ) => Promise<WatchProgressEntry | null>
   watchProgressGet: (animeId: number, episodeInt: string) => Promise<WatchProgressEntry | null>
   watchProgressGetAll: (animeId: number) => Promise<Record<string, WatchProgressEntry>>
 

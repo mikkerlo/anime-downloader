@@ -107,17 +107,7 @@ const STORE_DEFAULTS = {
   anime4kPreset: 'off' as 'off' | 'mode-a' | 'mode-b' | 'mode-c',
   hevcTranscodeOnPlay: 'ask' as 'ask' | 'always' | 'never',
   prefetchNextEpisode: 'progress-50' as 'off' | 'open' | 'time-5min' | 'progress-50',
-  watchProgress: {} as Record<
-    string,
-    {
-      position: number
-      duration: number
-      updatedAt: number
-      watched?: boolean
-      watchedAt?: number
-      translationId?: number
-    }
-  >,
+  watchProgress: {} as Record<string, WatchProgressEntry>,
   watchProgressMigrationV2: false,
   autoCleanupWatchedDays: 0,
   autoCleanupConfirm: true,
@@ -179,6 +169,8 @@ const STORE_DEFAULTS = {
   shikimoriFriends: [] as ShikiFriendCard[],
   shikimoriRecommendations: [] as RecommendationEntry[],
   priorityAnimeIds: [] as string[],
+  installId: '',
+  syncMeta: { titles: {}, rates: {} } as SyncMeta,
   workOffline: false
 }
 
@@ -696,6 +688,7 @@ async function bootstrap(): Promise<void> {
 
   animeCacheService.cleanupStale()
   store.migrateWatchProgressV2()
+  store.ensureInstallId()
 
   // Resolved by the background ffmpeg-ensure task below. The episode-complete
   // hook awaits it, so a download finishing before ffmpeg is ready still

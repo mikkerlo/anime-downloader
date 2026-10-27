@@ -8,13 +8,13 @@
 //
 // The mechanism, from #487: B follows A's change with an absolute index lookup
 // and a relative walk (`handleRemoteEpisodeChange`,
-// `src/renderer/src/components/views/PlayerView.vue:526`), and B's `navigating`
+// `src/renderer/src/components/views/PlayerView.vue:530`), and B's `navigating`
 // lock — which is what disables its Next button
-// (`PlayerView.vue:3453`) — is released in the `nextTick` after
-// `playerGetStreamUrl` resolves (`PlayerView.vue:2696`), not when the followed
+// (`PlayerView.vue:3463`) — is released in the `nextTick` after
+// `playerGetStreamUrl` resolves (`PlayerView.vue:2706`), not when the followed
 // episode has loaded. B's user is still looking at episode N; a Next pressed
 // after that release reads its target relative to the already-committed N+1
-// (`PlayerView.vue:2422`), and before the fix both peers landed on N+2. The
+// (`PlayerView.vue:2432`), and before the fix both peers landed on N+2. The
 // fix leaves the early release alone and adds a pending-follow token: a room
 // follow's Next step arms it at its commit, `FOLLOW_GRACE_MS` after the step's
 // `loadeddata` it clears (#500; it cleared at `loadedmetadata` until then), and

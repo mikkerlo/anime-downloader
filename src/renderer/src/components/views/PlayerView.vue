@@ -333,9 +333,13 @@ let lastSaveAt = 0;
 let watchedReported = false;
 // This open's playback crossed the watched threshold (#572). Unlike
 // `watchedReported`, which `resumeFromSavedPosition` restores from the saved
-// row, opening an already-watched episode leaves this false, so its saves never
-// read as a re-watch and a real re-watch still completes.
+// row, opening an already-watched episode leaves this false, so a real re-watch
+// still completes.
 let completedThisOpen = false;
+// One-shot, consumed by the next `saveProgress`: only the completing save sends
+// `watched: true`, so main stamps `sync.watched` at the completion and not at
+// every later save of the open (main keeps the flag sticky).
+let completionPending = false;
 // #262: the MKV ffmpeg session for this open was spawned at the room's position
 // rather than the saved one. Read by `resumeFromSavedPosition` instead of a live
 // `roomOwnsPlayhead()`: if the session drops between the spawn and
@@ -779,18 +783,22 @@ async function saveProgress(force = false): Promise<void> {
   lastSaveAt = now;
   // When watched, clear the position so we don't try to resume near the end later
   const positionToSave = watchedReported ? 0 : video.currentTime;
+  const completing = completionPending;
+  completionPending = false;
   try {
     await window.api.watchProgressSave(
       props.animeId,
       epInt,
       positionToSave,
       duration.value,
-      completedThisOpen,
+      completing,
       activeTranslationId.value ?? undefined,
       'playback'
     );
     window.dispatchEvent(new CustomEvent('watch-progress-updated'));
   } catch (err) {
+    // A lost completing save would lose the flip; the next save retries it.
+    if (completing) completionPending = true;
     console.warn('[player] failed to save watch progress:', err);
   }
 }
@@ -876,6 +884,7 @@ async function maybeMarkWatched(): Promise<void> {
   // `sync.watched` stamp from the save below, but no Shikimori mark (#572).
   const rewatch = watchedReported;
   completedThisOpen = true;
+  completionPending = true;
   watchedReported = true;
   await saveProgress(true);
 
@@ -901,6 +910,7 @@ function resetEpisodeTracking(): void {
   lastSaveAt = 0;
   watchedReported = false;
   completedThisOpen = false;
+  completionPending = false;
   autoAdvancePauseArmed = false;
   // Belongs to one open (#262). `prepareMkvForPlayback` re-decides it on every
   // MKV open and `mkvSessionSeededFromRoom()` pairs it with the live session id,

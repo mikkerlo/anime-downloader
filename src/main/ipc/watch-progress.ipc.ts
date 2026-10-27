@@ -35,9 +35,10 @@ export function register({ store }: AppDeps): void {
           nextTranslationId !== prev!.translationId
         if (realChange) sync.position = advanceClock(clock, sync.position)
       }
-      // A `'playback'` save reports `watched: true` only once this open has
-      // crossed the threshold (PlayerView's `completedThisOpen`), so on a row
-      // that is already watched it is an explicit re-watch completion.
+      // A `'playback'` save reports `watched: true` only on the one save that
+      // completes an open (PlayerView's one-shot `completionPending`); every
+      // later save of that open sends `false`. On a row that is already
+      // watched, it is a re-watch completion.
       const completed = source === 'playback' && watched === true
       if (source !== undefined && (justWatched || completed)) {
         sync.watched = advanceClock(clock, sync.watched)

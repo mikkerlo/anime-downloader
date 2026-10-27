@@ -43,6 +43,8 @@ interface Rig {
   store: InMemoryStorage
   video: { currentTime: number; duration: number }
   markShikimori: Mock
+  /** Makes the next `n` completing (`watched: true`) saves reject, as an IPC failure would. */
+  failSaves: (n: number) => void
   row: () => WatchProgressEntry
   open: () => Promise<void>
   /** One second of playback: the element's clock and the wall clock both move. */
@@ -58,9 +60,13 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
   const call = (channel: string, ...args: unknown[]): Promise<unknown> =>
     Promise.resolve(handlers.get(channel)!({}, ...args))
   const markShikimori = vi.fn(async () => null)
+  let failing = 0
   ;(globalThis as { window?: unknown }).window = {
     api: {
-      watchProgressSave: (...args: unknown[]) => call(CHANNELS.WATCH_PROGRESS_SAVE, ...args),
+      watchProgressSave: (...args: unknown[]) =>
+        args[4] === true && failing-- > 0
+          ? Promise.reject(new Error('ipc down'))
+          : call(CHANNELS.WATCH_PROGRESS_SAVE, ...args),
       watchProgressGet: (...args: unknown[]) => call(CHANNELS.WATCH_PROGRESS_GET, ...args),
       shikimoriMarkEpisodeWatched: markShikimori
     },
@@ -100,7 +106,7 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
             playingEpisodeInt, currentEpisodeInt, activeTranslationId, roomOwnsPlayhead,
             mkvSessionSeededFromRoom } = ctx;
      let cumulativePlayTime = 0, lastTimeUpdateAt = 0, lastSaveAt = 0, watchedReported = false;
-     let completedThisOpen = false;
+     let completedThisOpen = false, completionPending = false;
      let autoAdvancePauseArmed = false, mkvSpawnFromRoom = false, openedIntoRoom = false;
      let episodeOpenedAt = 0;
      ${js}
@@ -112,6 +118,9 @@ function makeRig(initial: Record<string, WatchProgressEntry>): Rig {
     store,
     video,
     markShikimori,
+    failSaves: (n) => {
+      failing = n
+    },
     row: () => (store.get('watchProgress') as Record<string, WatchProgressEntry>)['5:3'],
     open: async () => {
       fns.resetEpisodeTracking()
@@ -140,6 +149,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.useRealTimers()
   delete (globalThis as { window?: unknown }).window
 })
@@ -168,18 +178,23 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
     expect(rig.row().sync?.watched).toEqual(local(T0))
   })
 
-  it('crossing the threshold again stamps the re-watch, with no second Shikimori mark', async () => {
+  // 30 more ticks after the threshold: six more 5 s saves of the same open.
+  it('crossing the threshold again stamps the re-watch once, with no second Shikimori mark', async () => {
     const rig = makeRig({ '5:3': watchedRow() })
     await rig.open()
 
     await playToThreshold(rig)
+    const completedAt = Date.now()
+    expect(rig.row().sync?.watched).toEqual(local(completedAt))
+    for (let i = 0; i < 30; i++) await rig.tick()
 
-    expect(rig.row().sync?.watched).toEqual(local(Date.now()))
-    expect(rig.row().watchedAt).toBe(T0)
+    expect(rig.row().updatedAt).toBeGreaterThan(completedAt)
+    expect(rig.row()).toMatchObject({ watched: true, watchedAt: T0 })
+    expect(rig.row().sync?.watched).toEqual(local(completedAt))
     expect(rig.markShikimori).not.toHaveBeenCalled()
   })
 
-  it('a first completion still marks Shikimori exactly once and stamps the flip', async () => {
+  it('a first completion marks Shikimori once and stamps sync.watched at the completion, not the last save', async () => {
     const rig = makeRig({})
     await rig.open()
 
@@ -189,7 +204,40 @@ describe('PlayerView × watch-progress router — the watched clock', () => {
 
     expect(rig.markShikimori).toHaveBeenCalledTimes(1)
     expect(rig.markShikimori).toHaveBeenCalledWith(42, 3)
+    expect(rig.row().updatedAt).toBeGreaterThan(completedAt)
     expect(rig.row()).toMatchObject({ watched: true, watchedAt: completedAt })
+    expect(rig.row().sync?.watched).toEqual(local(completedAt))
+  })
+
+  it('a completing save that fails is retried by the next save, so the flip is not lost', async () => {
+    const rig = makeRig({})
+    await rig.open()
+    while (rig.video.currentTime < DURATION * 0.8 - 1) await rig.tick()
+    rig.failSaves(1)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await rig.tick()
+    expect(rig.row().watched).toBe(false)
+    expect(warn).toHaveBeenCalledTimes(1)
+    for (let i = 0; i < 5; i++) await rig.tick()
+
+    expect(rig.row()).toMatchObject({ watched: true, watchedAt: Date.now() })
+    expect(rig.row().sync?.watched).toEqual(local(Date.now()))
+  })
+
+  it('a completion still pending when the episode changes does not reach the next open', async () => {
+    const rig = makeRig({})
+    await rig.open()
+    while (rig.video.currentTime < DURATION * 0.8 - 1) await rig.tick()
+    rig.failSaves(1)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await rig.tick()
+
+    rig.video.currentTime = 0
+    await rig.open()
+    for (let i = 0; i < 20; i++) await rig.tick()
+
+    expect(rig.row().watched).toBe(false)
   })
 
   it('the completion belongs to one open: the next open of the episode starts clean', async () => {

@@ -1568,3 +1568,178 @@ describe('useMsePlayer — the resume land retracts its own seek operation (#306
     m.resetMseState()
   })
 })
+
+// #607: main holds a run's `player:stream-end` until `player:stream-start` has
+// flushed the prelude, so after an unbuffered seek the renderer sees the reply,
+// then the new run's chunks, then its end. The first case is that contract; the
+// second is why main has to hold the end at all — the reply clears
+// `streamEnded`, so an end that beats it is lost.
+describe('useMsePlayer — stream end vs. the seek reply (#607)', () => {
+  class FakeBuffered {
+    ranges: [number, number][] = []
+    get length(): number {
+      return this.ranges.length
+    }
+    start(i: number): number {
+      return this.ranges[i][0]
+    }
+    end(i: number): number {
+      return this.ranges[i][1]
+    }
+  }
+
+  class FakeSourceBuffer extends EventTarget {
+    updating = false
+    timestampOffset = 0
+    buffered = new FakeBuffered()
+    constructor(private log: string[]) {
+      super()
+    }
+    appendBuffer(chunk: Uint8Array): void {
+      this.updating = true
+      this.log.push(`append:${chunk[0]}`)
+      queueMicrotask(() => {
+        this.updating = false
+        this.dispatchEvent(new Event('updateend'))
+      })
+    }
+    remove(): void {
+      queueMicrotask(() => this.dispatchEvent(new Event('updateend')))
+    }
+    abort(): void {
+      // The fresh run's range, already wide enough for the buffer-ahead gate.
+      this.buffered.ranges = [[1395, 1410]]
+    }
+  }
+
+  class FakeMediaSource extends EventTarget {
+    readyState = 'closed'
+    duration = 0
+    endOfStream = vi.fn(() => {
+      this.log.push('endOfStream')
+      this.readyState = 'ended'
+    })
+    constructor(
+      public sb: FakeSourceBuffer,
+      private log: string[]
+    ) {
+      super()
+    }
+    addSourceBuffer(): FakeSourceBuffer {
+      this.readyState = 'open'
+      return this.sb
+    }
+  }
+
+  let origMediaSource: unknown
+  let origURL: unknown
+
+  beforeEach(() => {
+    origMediaSource = (globalThis as Record<string, unknown>).MediaSource
+    origURL = (globalThis as Record<string, unknown>).URL
+    ;(globalThis as Record<string, unknown>).URL = {
+      createObjectURL: () => 'blob:fake',
+      revokeObjectURL: () => {}
+    }
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).MediaSource = origMediaSource
+    ;(globalThis as Record<string, unknown>).URL = origURL
+    vi.restoreAllMocks()
+  })
+
+  const settle = (): Promise<void> => new Promise((res) => setTimeout(res, 0))
+
+  function openAndSeek() {
+    const log: string[] = []
+    const fakeSb = new FakeSourceBuffer(log)
+    fakeSb.buffered.ranges = [[0, 5]]
+    const fakeMs = new FakeMediaSource(fakeSb, log)
+    ;(globalThis as Record<string, unknown>).MediaSource = vi.fn(() => fakeMs)
+    const video = {
+      currentTime: 1400,
+      paused: true,
+      error: null,
+      play: vi.fn(async () => {}),
+      pause: vi.fn(() => {})
+    }
+    let reply: (r: { generation: number; timestampOffset: number }) => void = () => {}
+    const startSpy = vi.fn(async () => {})
+    setApi({
+      playerStreamSeek: vi.fn(
+        () => new Promise<{ generation: number; timestampOffset: number }>((res) => (reply = res))
+      ),
+      playerStreamStart: startSpy,
+      playerStreamAck: vi.fn(async () => {})
+    })
+    const m = useMsePlayer(makeDeps({ getVideoEl: () => video as unknown as HTMLVideoElement }))
+    m.startMseSession({
+      sessionId: 's1',
+      generation: 0,
+      duration: 1421,
+      mimeType: 'video/mp4',
+      resumeTarget: 0,
+      timestampOffset: 0,
+      refusedSeek: false
+    })
+    fakeMs.dispatchEvent(new Event('sourceopen'))
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    const seekDone = m._internal.handleUnbufferedSeek()
+    return {
+      m,
+      log,
+      fakeMs,
+      seekDone,
+      replyAndHandshake: async (): Promise<void> => {
+        reply({ generation: 1, timestampOffset: 1395 })
+        await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2))
+      }
+    }
+  }
+
+  it('an end that follows the new run’s chunks ends the stream once, after the drain', async () => {
+    const { m, log, fakeMs, seekDone, replyAndHandshake } = openAndSeek()
+    await replyAndHandshake()
+
+    // The order main's hold guarantees: the prelude chunks, then the end, on
+    // one sender — so they can land while the queue is still draining.
+    m._internal.handleStreamChunk('s1', 1, new Uint8Array([1]))
+    m._internal.handleStreamChunk('s1', 1, new Uint8Array([2]))
+    m._internal.handleStreamEnd('s1')
+    expect(fakeMs.endOfStream).not.toHaveBeenCalled()
+    await settle()
+
+    expect(fakeMs.endOfStream).toHaveBeenCalledTimes(1)
+    expect(log).toEqual(['append:1', 'append:2', 'endOfStream'])
+
+    await seekDone
+    m.resetMseState()
+  })
+
+  it('an end that beats the seek reply is dropped; only a later end ends the stream', async () => {
+    const { m, log, fakeMs, seekDone, replyAndHandshake } = openAndSeek()
+
+    // The #607 red order, which main no longer produces: the new run's end
+    // arrives while the reply is still outstanding.
+    m._internal.handleStreamEnd('s1')
+    await replyAndHandshake()
+    m._internal.handleStreamChunk('s1', 1, new Uint8Array([1]))
+    m._internal.handleStreamChunk('s1', 1, new Uint8Array([2]))
+    await settle()
+
+    // Every chunk is in, the source is still open, and nothing re-arms the end
+    // the reply cleared (`streamEnded = false` in `handleUnbufferedSeek`).
+    expect(log).toEqual(['append:1', 'append:2'])
+    expect(fakeMs.endOfStream).not.toHaveBeenCalled()
+    expect(fakeMs.readyState).toBe('open')
+
+    m._internal.handleStreamEnd('s1')
+    await settle()
+    expect(fakeMs.endOfStream).toHaveBeenCalledTimes(1)
+
+    await seekDone
+    m.resetMseState()
+  })
+})

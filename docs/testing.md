@@ -1150,13 +1150,16 @@ marks the seek in the same timeline and waits up to 20 s for an
 The `buffered after EOS` annotation carries the timeline from the seek on
 (append runs folded into one entry), so a red run shows whether the call never
 came, threw, or was followed by an append that re-opened the source. The
-intermittent local reds (#604) are the first kind: all of the run's appends
-land and `endOfStream()` is never called, because the seeked run's
+intermittent local reds (#604) were the first kind: all of the run's appends
+landed and `endOfStream()` was never called, because the seeked run's
 `player:stream-end` reached the renderer before the `player:stream-seek`
-reply, which then clears it. That is a player race, not a spec timing
-problem, and the spec keeps failing on it. Before the player opens, the spec
-calls `endOfStream()` on a closed MediaSource and asserts the wrapper records
-it as thrown, then drops that entry.
+reply, which then cleared it. That was a player race, not a spec timing
+problem, and #607 fixed it in main: a run's end is now held until
+`player:stream-start` has flushed the prelude (see `docs/player.md`). A red
+run reading `endOfStream was never called after the seek` whose timeline has
+no `endOfStream` entry at all means that hold has regressed. Before the
+player opens, the spec calls `endOfStream()` on a closed MediaSource and
+asserts the wrapper records it as thrown, then drops that entry.
 
 Each case also records how long each phase took (`build`: the cached fixture
 plus the pre-launch ffmpeg checks; `launch`; `ready`: `ffmpegCheck()` and the

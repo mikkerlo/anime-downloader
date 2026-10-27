@@ -14,6 +14,7 @@ export interface MseSession {
   senderId: number
   ready: boolean
   prelude: Buffer[]
+  endPending: boolean
   mkvPath: string
   generation: number
   videoCodec: 'h264' | 'hevc'
@@ -889,6 +890,12 @@ export function createStreamingService(deps: StreamingServiceDeps): StreamingSer
       if (session.done) return
       flushBatch()
       session.done = true
+      // Like the chunks, the end waits for `player:stream-start` to flush the
+      // prelude: sent now, it can land before the seek reply that clears it.
+      if (!session.ready) {
+        session.endPending = true
+        return
+      }
       const sender = event.sender
       if (sender && !sender.isDestroyed()) {
         sender.send(channels.streamEnd, { sessionId })

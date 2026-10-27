@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useSettingsAutosave } from '../../composables/use-settings-autosave';
 import SettingsGroup from './SettingsGroup.vue';
 import SettingsRow from './SettingsRow.vue';
+import ShikimoriPendingDialog from './ShikimoriPendingDialog.vue';
 
 const shikimoriStore = useShikimoriStore();
 const { user: shikimoriUser, sessionExpired, offlineQueueLength } = storeToRefs(shikimoriStore);
@@ -49,35 +50,131 @@ function shikimoriCopyUrl(): void {
   void navigator.clipboard.writeText(shikimoriAuthUrl.value);
 }
 
+// Unsynced changes kept for accounts other than the signed-in one (#588).
+const parkedQueues = ref<ShikiParkedQueueSummary[]>([]);
+const keptQueues = computed(() =>
+  parkedQueues.value.filter((p) => p.ownerId !== shikimoriUser.value?.id)
+);
+
+type PendingDialog =
+  | { mode: 'disconnect'; count: number; nickname: string }
+  | { mode: 'switch'; count: number; nickname: string; ownerId: number; newNickname: string }
+  | { mode: 'discard'; count: number; nickname: string | null; ownerId: number | null };
+const pendingDialog = ref<PendingDialog | null>(null);
+const pendingError = ref('');
+
+// A failed reload keeps the rows already shown; it isn't the caller's failure.
+async function loadParkedQueues(): Promise<void> {
+  try {
+    parkedQueues.value = await window.api.shikimoriGetParkedQueues();
+  } catch (err) {
+    console.warn('[shikimori] loading kept changes failed:', err);
+  }
+}
+
 async function shikimoriSubmitCode(): Promise<void> {
   const code = shikimoriCode.value.trim();
   if (!code) return;
   shikimoriConnecting.value = true;
   shikimoriError.value = '';
+  const prev = shikimoriUser.value;
+  let next: ShikiUser;
   try {
-    shikimoriUser.value = await window.api.shikimoriExchangeCode(code);
-    shikimoriCode.value = '';
-    shikimoriAuthUrl.value = '';
+    next = await window.api.shikimoriExchangeCode(code);
   } catch (err) {
     shikimoriError.value = String(err);
+    return;
   } finally {
     shikimoriConnecting.value = false;
   }
+  shikimoriUser.value = next;
+  shikimoriCode.value = '';
+  shikimoriAuthUrl.value = '';
+  await loadParkedQueues();
+  const kept = prev && prev.id !== next.id && parkedQueues.value.find((p) => p.ownerId === prev.id);
+  if (prev && kept) {
+    pendingDialog.value = {
+      mode: 'switch',
+      count: kept.count,
+      nickname: prev.nickname,
+      ownerId: prev.id,
+      newNickname: next.nickname
+    };
+  }
 }
 
-async function shikimoriDisconnect(): Promise<void> {
-  await window.api.shikimoriLogout();
+async function logout(opts?: ShikiLogoutOptions): Promise<void> {
+  await window.api.shikimoriLogout(opts);
   shikimoriUser.value = null;
   shikimoriAuthUrl.value = '';
   shikimoriCode.value = '';
   shikimoriError.value = '';
+  await loadParkedQueues();
 }
+
+async function shikimoriDisconnect(): Promise<void> {
+  if (offlineQueueLength.value > 0 && shikimoriUser.value) {
+    pendingDialog.value = {
+      mode: 'disconnect',
+      count: offlineQueueLength.value,
+      nickname: shikimoriUser.value.nickname
+    };
+    return;
+  }
+  await logout();
+}
+
+function confirmDiscardKept(kept: ShikiParkedQueueSummary): void {
+  pendingDialog.value = {
+    mode: 'discard',
+    count: kept.count,
+    nickname: kept.ownerId === null ? null : kept.nickname,
+    ownerId: kept.ownerId
+  };
+}
+
+async function onPendingKeep(): Promise<void> {
+  const dialog = pendingDialog.value;
+  pendingDialog.value = null;
+  pendingError.value = '';
+  if (dialog?.mode !== 'disconnect') return;
+  try {
+    await logout({ pending: 'keep' });
+  } catch (err) {
+    pendingError.value = String(err);
+  }
+}
+
+async function onPendingDiscard(): Promise<void> {
+  const dialog = pendingDialog.value;
+  pendingDialog.value = null;
+  pendingError.value = '';
+  if (!dialog) return;
+  try {
+    if (dialog.mode === 'disconnect') {
+      await logout({ pending: 'discard' });
+      return;
+    }
+    await window.api.shikimoriDiscardParkedQueue(dialog.ownerId);
+  } catch (err) {
+    pendingError.value = String(err);
+  }
+  await loadParkedQueues();
+}
+
+// Main changes kept buckets on its own too (a late edit parked for its owner,
+// the drain consuming a parked entry), and announces both with this broadcast.
+const unsubscribeQueueChanged = window.api.onShikimoriOfflineQueueChanged(() => {
+  void loadParkedQueues();
+});
+onUnmounted(() => unsubscribeQueueChanged());
 
 onMounted(async () => {
   token.value = ((await window.api.getSetting('token')) as string) || '';
   if (!shikimoriUser.value) {
     shikimoriUser.value = await window.api.shikimoriGetUser();
   }
+  await loadParkedQueues();
   loaded.value = true;
 });
 
@@ -198,7 +295,41 @@ watch(token, (val) => {
           <div v-if="shikimoriError" class="inline-result bad">{{ shikimoriError }}</div>
         </div>
       </SettingsRow>
+
+      <SettingsRow
+        v-for="kept in keptQueues"
+        :key="kept.ownerId ?? 'unknown'"
+        class="kept-queue-row"
+      >
+        <template #text>
+          <div v-if="kept.ownerId === null" class="sr-desc">
+            {{ kept.count }} unsynced change{{ kept.count === 1 ? '' : 's' }} from an unknown
+            account. They won't sync automatically.
+          </div>
+          <div v-else class="sr-desc">
+            {{ kept.nickname }}: {{ kept.count }} unsynced change{{
+              kept.count === 1 ? '' : 's'
+            }}
+            kept. They sync when {{ kept.nickname }} signs in again.
+          </div>
+        </template>
+        <button class="btn btn-sm btn-danger" @click="confirmDiscardKept(kept)">Discard</button>
+      </SettingsRow>
+      <SettingsRow v-if="pendingError" stack>
+        <div class="inline-result bad pending-error">{{ pendingError }}</div>
+      </SettingsRow>
     </SettingsGroup>
+
+    <ShikimoriPendingDialog
+      v-if="pendingDialog"
+      :mode="pendingDialog.mode"
+      :count="pendingDialog.count"
+      :nickname="pendingDialog.nickname"
+      :new-nickname="pendingDialog.mode === 'switch' ? pendingDialog.newNickname : undefined"
+      @keep="onPendingKeep"
+      @discard="onPendingDiscard"
+      @cancel="pendingDialog = null"
+    />
   </div>
 </template>
 

@@ -272,7 +272,9 @@ interface Api {
   // Shikimori
   shikimoriGetAuthUrl: () => Promise<string>
   shikimoriExchangeCode: (code: string) => Promise<ShikiUser>
-  shikimoriLogout: () => Promise<void>
+  shikimoriLogout: (opts?: ShikiLogoutOptions) => Promise<void>
+  shikimoriGetParkedQueues: () => Promise<ShikiParkedQueueSummary[]>
+  shikimoriDiscardParkedQueue: (ownerId: number | null) => Promise<void>
   shikimoriGetUser: () => Promise<ShikiUser | null>
   shikimoriGetProfile: () => Promise<ShikimoriProfile | null>
   onShikimoriProfileRefreshed: (callback: (profile: ShikimoriProfile) => void) => Unsubscribe

@@ -42,6 +42,7 @@ export const PERSISTED_STORE_KEYS = [
   'cleanupLog',
   'shikimoriUserRates',
   'shikimoriUpdateQueue',
+  'shikimoriParkedQueues',
   'shikimoriSessionExpired',
   'shikimoriAnimeDetails',
   'autoDownloadSubscriptions',

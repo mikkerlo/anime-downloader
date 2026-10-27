@@ -48,6 +48,7 @@ src/renderer/src/
       GeneralTab.vue
       StorageTab.vue
       ConnectorsTab.vue
+      ShikimoriPendingDialog.vue  Keep/Discard prompt for unsynced Shikimori changes (#588)
       MergingTab.vue
       PlayerTab.vue
       ShortcutsTab.vue

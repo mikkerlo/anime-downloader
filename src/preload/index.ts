@@ -361,7 +361,12 @@ const api = {
   shikimoriGetAuthUrl: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_AUTH_URL) as Promise<string>,
   shikimoriExchangeCode: (code: string) =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_EXCHANGE_CODE, code),
-  shikimoriLogout: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_LOGOUT),
+  shikimoriLogout: (opts?: ShikiLogoutOptions) =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_LOGOUT, opts),
+  shikimoriGetParkedQueues: () =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_PARKED_QUEUES) as Promise<ShikiParkedQueueSummary[]>,
+  shikimoriDiscardParkedQueue: (ownerId: number | null) =>
+    ipcRenderer.invoke(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, ownerId) as Promise<void>,
   shikimoriGetUser: () => ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_USER),
   shikimoriGetProfile: () =>
     ipcRenderer.invoke(CHANNELS.SHIKIMORI_GET_PROFILE) as Promise<ShikimoriProfile | null>,

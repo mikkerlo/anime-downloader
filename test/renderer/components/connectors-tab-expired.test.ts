@@ -16,6 +16,7 @@ const api = {
   shikimoriGetUser: vi.fn(async () => null),
   shikimoriGetAuthUrl: vi.fn(async () => 'https://shikimori.io/oauth/authorize?x=1'),
   shellOpenExternal: vi.fn(async () => true),
+  shikimoriGetParkedQueues: vi.fn(async () => []),
   shikimoriGetSyncStatus: vi.fn(async () => ({
     state: 'idle',
     queueLength: 0,

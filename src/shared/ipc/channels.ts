@@ -99,6 +99,7 @@ export const CHANNELS = {
   SHELL_OPEN_EXTERNAL_FILE: 'shell:open-external-file',
 
   // Shikimori
+  SHIKIMORI_DISCARD_PARKED_QUEUE: 'shikimori:discard-parked-queue',
   SHIKIMORI_EXCHANGE_CODE: 'shikimori:exchange-code',
   SHIKIMORI_GET_ANIME_DETAILS: 'shikimori:get-anime-details',
   SHIKIMORI_GET_ANIME_RATES: 'shikimori:get-anime-rates',
@@ -108,6 +109,7 @@ export const CHANNELS = {
   SHIKIMORI_GET_FRIENDS_ACTIVITY: 'shikimori:get-friends-activity',
   SHIKIMORI_GET_FRIENDS_RATES: 'shikimori:get-friends-rates',
   SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH: 'shikimori:get-offline-queue-length',
+  SHIKIMORI_GET_PARKED_QUEUES: 'shikimori:get-parked-queues',
   SHIKIMORI_GET_PROFILE: 'shikimori:get-profile',
   SHIKIMORI_GET_RATE: 'shikimori:get-rate',
   SHIKIMORI_GET_RECOMMENDATIONS: 'shikimori:get-recommendations',

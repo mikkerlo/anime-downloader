@@ -530,6 +530,33 @@ describe('apply: legacy rows and clocks are left alone, changed rows keep their 
       expect(applied[key].updatedAt).toBe(row.updatedAt)
   })
 
+  // `set-watched` advances only `sync.watched`; done locally it moves
+  // `updatedAt` to its clock, so the same change arriving by sync does too.
+  it('a remote un-watch that keeps its position moves updatedAt to watched.at', () => {
+    const s = new InMemoryStorage({
+      installId: 'pc-a',
+      watchProgress: {
+        [`${A}:1`]: {
+          position: 600,
+          duration: 1420,
+          updatedAt: 5000,
+          watched: true,
+          watchedAt: 4000,
+          sync: { position: { at: 3000, origin: 'pc-a' }, watched: { at: 4000, origin: 'pc-a' } }
+        }
+      }
+    })
+    const doc = projectSyncDoc(s, [A], projectDeps)
+    const entry = doc.titles[A].watch!['1']
+    entry.watched = { value: false, at: 9000, origin: 'pc-b' }
+    entry.watchedAt = null
+
+    applySyncDoc(s, doc, [A], applyDeps({ now: () => NOW }))
+
+    const row = (s.get('watchProgress') as Record<string, WatchProgressEntry>)[`${A}:1`]
+    expect(row).toMatchObject({ position: 600, watched: false, updatedAt: 9000 })
+  })
+
   it('a changed row never moves its updatedAt backwards', () => {
     const s = new InMemoryStorage({
       installId: 'pc-a',

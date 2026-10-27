@@ -128,9 +128,10 @@ export function applySyncDoc(
         }
       }
       if (seen && sameValue(next, seen)) continue
-      // From the doc's clock, as `watch-progress:save` does: rows brought in by
-      // a sync keep their own recency instead of all reading "now".
-      next.updatedAt = Math.max(prev?.updatedAt ?? 0, entry.position.at)
+      // From the doc's clocks, as `watch-progress:save` and `set-watched` do:
+      // rows brought in by a sync keep their own recency instead of all
+      // reading "now", and a watched-only change still moves it.
+      next.updatedAt = Math.max(prev?.updatedAt ?? 0, entry.position.at, entry.watched.at)
       watchProgress[key] = next
       changed.add('watchProgress')
       report.applied.push(`${path}.watch.${episodeInt}`)

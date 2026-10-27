@@ -3,6 +3,8 @@ import { isNetworkError } from '../../lib/errors'
 import {
   consolidateQueue,
   dropFromParked,
+  recordServerError,
+  recordServerErrorInParked,
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../../lib/shikimori-queue'
@@ -195,6 +197,26 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
   }
 
+  // Routed like dropConsumedEntries, so a stamp never lands in the next owner's
+  // queue. Returns whether the item's 5xx window has expired.
+  function recordConsumedServerError(
+    ownerId: number,
+    malId: number,
+    consumedQueuedAts: number[]
+  ): boolean {
+    const now = Date.now()
+    if (currentUserId() === ownerId) {
+      const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+      const result = recordServerError(queue, malId, consumedQueuedAts, now)
+      if (result.entries !== queue) store.set('shikimoriUpdateQueue', result.entries)
+      return result.expired
+    }
+    const parked = (store.get('shikimoriParkedQueues') as ParkedQueues | undefined) ?? {}
+    const result = recordServerErrorInParked(parked, String(ownerId), malId, consumedQueuedAts, now)
+    if (result.parked !== parked) store.set('shikimoriParkedQueues', result.parked)
+    return result.expired
+  }
+
   // An item in flight across a switch lands on the old account; the cache is
   // the new one's by then (#588).
   function reconcileCacheFromRate(
@@ -276,6 +298,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     const work = consolidateQueue(queue)
     let aborted = false
     let ownerChanged = false
+    let hadServerError = false
 
     for (const item of work) {
       // A logout or account switch since the drain started: the rest of this
@@ -335,20 +358,40 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           aborted = true
           break
         }
+        // After a switch mid-item the error is the previous account's, so it
+        // must not reach the session that signed in meanwhile.
+        const ownerCurrent = currentUserId() === user.id
         if (err instanceof shikimori.ShikiApiError && (err.status === 401 || err.status === 403)) {
           aborted = true
-          lastSyncError = err.message
+          if (ownerCurrent) lastSyncError = err.message
           console.warn('[shikimori sync] auth error, stopping drain:', err)
           break
         }
         if (err instanceof shikimori.ShikiApiError && err.status === 429) {
           aborted = true
-          lastSyncError = 'Shikimori rate limit — will retry'
+          if (ownerCurrent) lastSyncError = 'Shikimori rate limit — will retry'
           console.warn('[shikimori sync] rate limited, stopping drain:', err)
           break
         }
-        console.warn('[shikimori sync] dropping item', item.malId, err)
-        dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+        // Often specific to one item, so the drain moves on instead of stopping.
+        if (err instanceof shikimori.ShikiApiError && err.status >= 500 && err.status < 600) {
+          if (recordConsumedServerError(user.id, item.malId, item.consumedQueuedAts)) {
+            console.warn(
+              '[shikimori sync] dropping item',
+              item.malId,
+              'after 24 h of server errors:',
+              err.message
+            )
+            dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+          } else {
+            hadServerError = true
+            if (ownerCurrent) lastSyncError = 'Shikimori server error — will retry'
+            console.warn('[shikimori sync] server error, keeping item', item.malId, err.status)
+          }
+        } else {
+          console.warn('[shikimori sync] dropping item', item.malId, err)
+          dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
+        }
       }
 
       if (work.indexOf(item) < work.length - 1) await sleep(SYNC_ITEM_DELAY_MS)
@@ -358,7 +401,8 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     if (currentUserId() !== user.id) ownerChanged = true
     syncInProgress = false
     // An owner change is not a sync result, so it leaves the last one standing.
-    if (!aborted && !ownerChanged) {
+    // A kept 5xx item is not synced, so it keeps its retry message.
+    if (!aborted && !ownerChanged && !hadServerError) {
       lastSyncAt = Date.now()
       lastSyncError = null
     }
@@ -418,7 +462,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       broadcast(deps.animeDetailsUpdatedChannel, { malId, details })
       return details
     } catch (err) {
-      if (!isNetworkError(err)) {
+      if (err instanceof shikimori.ShikiApiError && err.status >= 500 && err.status < 600) {
+        console.warn('[shikimori] single-show refresh: server error', err.status, 'for', malId)
+      } else if (!isNetworkError(err)) {
         console.warn('[shikimori] single-show refresh failed for', malId, err)
       }
       return null
@@ -480,6 +526,12 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           }
           if (err instanceof shikimori.ShikiApiError && err.status === 404) {
             console.warn('[shikimori prefetch] anime', malId, 'not found, skipping')
+          } else if (
+            err instanceof shikimori.ShikiApiError &&
+            err.status >= 500 &&
+            err.status < 600
+          ) {
+            console.warn('[shikimori prefetch] server error', err.status, 'for', malId, 'skipping')
           } else {
             console.warn('[shikimori prefetch] error fetching', malId, err)
           }

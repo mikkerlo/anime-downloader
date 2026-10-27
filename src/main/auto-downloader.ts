@@ -52,6 +52,8 @@ interface AutoDownloaderDeps {
   broadcast: (channel: string, ...args: unknown[]) => void
   isShikimoriLoggedIn: () => boolean
   refreshShikimoriDetails: (malId: number) => Promise<shikimori.ShikiAnimeDetails | null>
+  /** While offline (#567) every tick returns before touching the network. */
+  isOffline?: () => boolean
 }
 
 const MAX_ENQUEUES_PER_TICK = 10
@@ -250,7 +252,7 @@ export async function runAutoDownloadTick(reason: AutoDlReason): Promise<AutoDlT
     details: []
   }
 
-  if (!deps) return result
+  if (!deps || deps.isOffline?.()) return result
 
   const now = Date.now()
   if (tickRunning || now < lockReleaseAt) {

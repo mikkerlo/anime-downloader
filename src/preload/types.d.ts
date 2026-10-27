@@ -363,6 +363,12 @@ interface Api {
     callback: (entry: { dir: 'in' | 'out'; keys: string; msg: unknown }) => void
   ) => Unsubscribe
 
+  // Offline (#567)
+  offlineGetState: () => Promise<OfflineState>
+  offlineSetManual: (on: boolean) => Promise<OfflineState>
+  offlineRetry: () => Promise<OfflineState>
+  onOfflineStateChanged: (callback: (state: OfflineState) => void) => Unsubscribe
+
   // Auto-downloader
   autoDlGetSubscription: (animeId: number) => Promise<AutoDownloadSubscription | null>
   autoDlSetSubscription: (

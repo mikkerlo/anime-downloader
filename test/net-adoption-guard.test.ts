@@ -13,14 +13,24 @@ import ts from 'typescript'
 // positions (`typeof fetch`), member names (`.fetch`, `fetch:`) and longer
 // identifiers are not references. Walking the TypeScript AST rather than
 // grepping keeps comments and string literals ("fetch failed") out of the scan.
+//
+// The two transports that are not `fetch` — a raw socket (`net.createConnection`)
+// and `electron-updater` (`autoUpdater.`) — are allowed only in the files that
+// gate them on the offline state, and `bypassOffline` only in the offline
+// service's probe.
 const ROOT = path.resolve(__dirname, '..')
 const MAIN = path.join(ROOT, 'src', 'main')
 const NET = path.join('src', 'main', 'lib', 'net.ts')
 const GLOBALS = new Set(['globalThis', 'global', 'window', 'self'])
+const ALLOWED: Record<'bypassOffline' | 'createConnection' | 'autoUpdater', string[]> = {
+  bypassOffline: ['src/main/services/offline/index.ts'],
+  createConnection: ['src/main/syncplay.ts'],
+  autoUpdater: ['src/main/ipc/app.ipc.ts']
+}
 
 interface Finding {
   line: number
-  kind: 'fetch' | 'bypassOffline' | 'adopted'
+  kind: 'fetch' | 'bypassOffline' | 'adopted' | 'createConnection' | 'autoUpdater'
   text: string
 }
 
@@ -77,6 +87,12 @@ function scanSource(source: string, fileName = 'x.ts'): Finding[] {
         report(node, 'adopted')
       }
     }
+    if (ts.isPropertyAccessExpression(node)) {
+      if (node.name.text === 'createConnection') report(node.name, 'createConnection')
+      if (ts.isIdentifier(node.expression) && node.expression.text === 'autoUpdater') {
+        report(node.expression, 'autoUpdater')
+      }
+    }
     if (
       ts.isElementAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
@@ -102,10 +118,18 @@ function walk(dir: string): string[] {
 
 function scanMain(root: string = ROOT): Array<Finding & { file: string }> {
   return walk(path.join(root, 'src', 'main')).flatMap((abs) => {
-    const file = path.relative(root, abs)
-    if (file === NET) return []
+    const file = path.relative(root, abs).split(path.sep).join('/')
+    if (file === NET.split(path.sep).join('/')) return []
     return scanSource(fs.readFileSync(abs, 'utf-8'), abs).map((f) => ({ ...f, file }))
   })
+}
+
+function countPerFile(kind: Finding['kind']): Record<string, number> {
+  const perFile: Record<string, number> = {}
+  for (const f of scanMain().filter((x) => x.kind === kind)) {
+    perFile[f.file] = (perFile[f.file] ?? 0) + 1
+  }
+  return perFile
 }
 
 describe('net adoption guard — the scanner', () => {
@@ -154,6 +178,14 @@ describe('net adoption guard — the scanner', () => {
     ])
   })
 
+  it('flags a raw socket open and any electron-updater use', () => {
+    expect(kinds(`net.createConnection({ host, port })`)).toEqual(['createConnection'])
+    expect(kinds(`createConnection({ host, port }); tls.connect(o)`)).toEqual([])
+    expect(kinds(`autoUpdater.checkForUpdates()`)).toEqual(['autoUpdater'])
+    expect(kinds(`autoUpdater.autoDownload = false`)).toEqual(['autoUpdater'])
+    expect(kinds(`import { autoUpdater } from 'electron-updater'`)).toEqual([])
+  })
+
   it('reports the line of each finding', () => {
     expect(scanSource(`const a = 1\n\nawait fetch(u)`)).toMatchObject([{ line: 3 }])
   })
@@ -174,26 +206,36 @@ describe('net adoption guard — src/main', () => {
     expect(scanMain().filter((f) => f.kind === 'fetch')).toEqual([])
   })
 
-  it('has no bypassOffline outside lib/net.ts', () => {
-    expect(scanMain().filter((f) => f.kind === 'bypassOffline')).toEqual([])
+  // The probe is the one request that must reach the network while offline.
+  it('uses bypassOffline only in the offline service probe', () => {
+    expect(countPerFile('bypassOffline')).toEqual({ 'src/main/services/offline/index.ts': 1 })
+    expect(Object.keys(countPerFile('bypassOffline'))).toEqual(ALLOWED.bypassOffline)
   })
 
-  // Pinned so a scanner that silently stops matching goes red: these are the
-  // nine sites that were bare `fetch` before #567 (eight calls plus the
-  // `checkLatestRelease` default). A new adopter bumps its file's count.
+  it('opens a raw socket only in the gated Syncplay connect', () => {
+    expect(countPerFile('createConnection')).toEqual({ 'src/main/syncplay.ts': 1 })
+    expect(Object.keys(countPerFile('createConnection'))).toEqual(ALLOWED.createConnection)
+  })
+
+  it('touches electron-updater only in the gated app router', () => {
+    const perFile = countPerFile('autoUpdater')
+    expect(Object.keys(perFile)).toEqual(ALLOWED.autoUpdater)
+    expect(perFile['src/main/ipc/app.ipc.ts']).toBeGreaterThan(0)
+  })
+
+  // Pinned so a scanner that silently stops matching goes red: the nine sites
+  // that were bare `fetch` before #567 (eight calls plus the
+  // `checkLatestRelease` default), and the offline probe. A new adopter bumps
+  // its file's count.
   it('finds every adopted site', () => {
-    const perFile: Record<string, number> = {}
-    for (const f of scanMain().filter((x) => x.kind === 'adopted')) {
-      const key = f.file.split(path.sep).join('/')
-      perFile[key] = (perFile[key] ?? 0) + 1
-    }
-    expect(perFile).toEqual({
+    expect(countPerFile('adopted')).toEqual({
       'src/main/shikimori.ts': 1,
       'src/main/smotret-api.ts': 4,
       'src/main/ffmpeg-binaries.ts': 1,
       'src/main/fpcalc-binaries.ts': 1,
       'src/main/lib/manual-update.ts': 1,
-      'src/main/download-manager.ts': 1
+      'src/main/download-manager.ts': 1,
+      'src/main/services/offline/index.ts': 1
     })
   })
 })

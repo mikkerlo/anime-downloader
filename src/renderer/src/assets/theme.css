@@ -313,6 +313,37 @@ body {
   border-radius: 50%;
   background: currentColor;
 }
+/* Offline pill (#567) — sits above the user chip, so it shows signed out too. */
+.offline-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 6px;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: none;
+  color: var(--st-orange);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.offline-pill.manual {
+  color: var(--text-2);
+}
+.offline-pill:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.offline-pill:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.offline-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
 
 /* ============================================================ Poster grid + anime card ============================================================
    Card internals (poster / star / score / watch-bar) are nested under

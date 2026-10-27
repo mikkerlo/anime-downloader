@@ -38,3 +38,14 @@ export function isNetworkError(err: unknown): boolean {
   if (code && NETWORK_ERROR_CODES.has(code)) return true
   return false
 }
+
+/**
+ * Narrower than `isNetworkError`: a timeout or an error carrying a network
+ * errno (on itself or its `cause`). A bare `TypeError` does not count, so a
+ * plain bug is never mistaken for a lost connection.
+ */
+export function isTransportError(err: unknown): boolean {
+  if (err instanceof Error && err.name === 'TimeoutError') return true
+  const code = errorCode(err)
+  return code !== undefined && NETWORK_ERROR_CODES.has(code)
+}

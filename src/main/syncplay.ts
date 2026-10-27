@@ -1204,7 +1204,7 @@ export class SyncplayClient extends EventEmitter {
   }
 
   private openSocket(): void {
-    if (!this.config) return
+    if (!this.config || this.refusedForOffline()) return
     const { host, port } = this.config
     this.lastAttemptPhase = 'connecting'
     this.lastSocketError = null
@@ -3791,7 +3791,70 @@ export class SyncplayClient extends EventEmitter {
     this.clearPendingClientAck()
     this.crossedPauseUnclaimed = false
   }
+
+  // Offline (#567). The members live down here, not beside `openSocket()`, so
+  // the many line anchors into this file stay put.
+  private isOffline: () => boolean = () => false
+
+  setOfflineCheck(isOffline: () => boolean): void {
+    this.isOffline = isOffline
+  }
+
+  /** Every socket open — connect, reconnect timer, resume — asks this first. */
+  private refusedForOffline(): boolean {
+    if (!this.isOffline()) return false
+    this.markOfflineDisconnected()
+    return true
+  }
+
+  private markOfflineDisconnected(): void {
+    const cfg = this.config
+    this.setStatus({
+      state: 'disconnected',
+      host: cfg?.host,
+      port: cfg?.port,
+      room: cfg?.room,
+      username: cfg?.username,
+      error: SYNCPLAY_OFFLINE_ERROR
+    })
+    this.emit('room-event', { level: 'warn', text: 'Disconnected from Syncplay room: offline' })
+  }
+
+  /**
+   * Entering offline: drops the socket as a lost connection would — room
+   * state survives for the reconnect — but schedules no retry.
+   */
+  suspendForOffline(): void {
+    if (!this.config || this.status.state === 'idle' || this.status.state === 'disconnected') {
+      return
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.stopHeartbeat()
+    this.stopListPolling()
+    if (this.socket) {
+      this.socket.removeAllListeners()
+      this.socket.destroy()
+      this.socket = null
+    }
+    this.resetTransportState()
+    this.markOfflineDisconnected()
+  }
+
+  /** Back online: a session offline dropped reconnects if its config allows. */
+  resumeAfterOffline(): void {
+    if (this.status.state !== 'disconnected' || this.status.error !== SYNCPLAY_OFFLINE_ERROR) {
+      return
+    }
+    if (!this.config?.autoReconnect) return
+    this.reconnectAttempts = 0
+    this.openSocket()
+  }
 }
+
+export const SYNCPLAY_OFFLINE_ERROR = 'Offline — Watch Together needs the network'
 
 export const syncplay = new SyncplayClient()
 

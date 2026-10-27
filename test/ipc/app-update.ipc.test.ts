@@ -28,24 +28,39 @@ function setPlatform(platform: string): void {
 }
 
 /** Registers the router against a fresh store and returns the captured handlers + a broadcast spy. */
-function registerRouter(): {
+function registerRouter(opts: { offline?: boolean; lastUpdateCheck?: number } = {}): {
   invoke: (channel: string) => Promise<unknown>
   send: Mock
   store: InMemoryStorage
+  /** Moves the stub offline service and fires its `onChange` listeners. */
+  setMode: (mode: OfflineMode) => void
 } {
   const send = vi.fn()
   ;(BrowserWindow.getAllWindows as Mock).mockReturnValue([{ webContents: { send } }])
   const store = new InMemoryStorage()
   // Suppress the boot-time check so each test drives handlers explicitly.
-  store.set('lastUpdateCheck', Date.now())
-  register({ store } as unknown as AppDeps)
+  store.set('lastUpdateCheck', opts.lastUpdateCheck ?? Date.now())
+  let mode: OfflineMode = opts.offline ? 'offline-manual' : 'online'
+  const listeners: Array<(s: OfflineState) => void> = []
+  const offlineService = {
+    isOffline: () => mode !== 'online',
+    onChange: (l: (s: OfflineState) => void) => {
+      listeners.push(l)
+      return () => {}
+    }
+  }
+  register({ store, offlineService } as unknown as AppDeps)
   const handlers = new Map<string, (...args: unknown[]) => unknown>(
     (ipcMain.handle as Mock).mock.calls.map(([channel, handler]) => [channel, handler])
   )
   return {
     invoke: async (channel) => handlers.get(channel)!({}),
     send,
-    store
+    store,
+    setMode: (next) => {
+      mode = next
+      for (const l of listeners) l({ mode, since: 0, lastProbeAt: null })
+    }
   }
 }
 
@@ -159,5 +174,65 @@ describe('update IPC — manual mode (Windows portable)', () => {
       EVENT_CHANNELS.UPDATE_STATUS,
       expect.objectContaining({ status: 'error' })
     )
+  })
+})
+
+// electron-updater is not `fetch`, so `fetchWithTimeout`'s refusal never sees
+// it; the router gates it (#567).
+describe('update IPC — offline', () => {
+  it('check and download broadcast "Offline" and never reach electron-updater', async () => {
+    const { invoke, send } = registerRouter({ offline: true })
+
+    await invoke(CHANNELS.UPDATE_CHECK)
+    await invoke(CHANNELS.UPDATE_DOWNLOAD)
+
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenNthCalledWith(1, EVENT_CHANNELS.UPDATE_STATUS, {
+      status: 'error',
+      error: 'Offline'
+    })
+  })
+
+  it('portable builds make no GitHub request while offline', async () => {
+    process.env.PORTABLE_EXECUTABLE_DIR = 'C:\\portable'
+    setPlatform('win32')
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { invoke } = registerRouter({ offline: true })
+
+    await invoke(CHANNELS.UPDATE_CHECK)
+    await invoke(CHANNELS.UPDATE_DOWNLOAD)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(shell.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('skips the startup check while offline', () => {
+    registerRouter({ offline: true, lastUpdateCheck: 0 })
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('runs the startup check online (the control)', () => {
+    registerRouter({ offline: false, lastUpdateCheck: 0 })
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('a daily check skipped at boot runs once on the first online edge', () => {
+    const { setMode } = registerRouter({ offline: true, lastUpdateCheck: 0 })
+    setMode('offline-auto')
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+    setMode('offline-auto')
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('an online edge runs no check when boot did not skip one', () => {
+    const { setMode } = registerRouter({ offline: true })
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
   })
 })

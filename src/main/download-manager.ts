@@ -189,6 +189,15 @@ export interface EpisodeCompleteInfo {
 
 const USER_AGENT = 'smotret-anime-dl'
 const RETRY_LIMIT = 3
+// A failed attempt that grew the `.part` by at least this much retries at the
+// same rung after a short fixed delay instead of the 1/2/4 s ladder (#597): a
+// throttled transfer from a server with a short keep-alive is cut off with
+// `TypeError: terminated` while it is still making progress. Every attempt in
+// one chain counts toward the attempt limit, so a server that drops every
+// connection cannot loop forever.
+export const PROGRESS_RETRY_MIN_BYTES = 256 * 1024
+export const PROGRESS_RETRY_DELAY_MS = 250
+export const RETRY_ATTEMPT_LIMIT = 20
 const PROGRESS_INTERVAL_MS = 500
 // A transfer with no headers, or no bytes, for this long rejects with
 // `TimeoutError` and takes the retry ladder; the `.part` stays for the `Range`
@@ -282,6 +291,14 @@ class NonRetryableDownloadError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'NonRetryableDownloadError'
+  }
+}
+
+function partSize(partPath: string): number {
+  try {
+    return fs.statSync(partPath).size
+  } catch {
+    return 0
   }
 }
 
@@ -1065,7 +1082,7 @@ export class DownloadManager {
    *   **and** its size is `bytesReceived`, or short of it by at most
    *   `PART_IN_FLIGHT_SLACK`. The size half is the one that matters.
    *   `startDownload` stats the `.part` and resumes with
-   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1697-1702`), so a same-named `.part` left
+   *   `Range: bytes=<size>-` (`src/main/download-manager.ts:1714-1719`), so a same-named `.part` left
    *   by some *other* download is appended to from its own length and nothing
    *   anywhere reports an error — the "adopts someone else's files" hazard.
    *   Equality would be the wrong test, though, because the counter legitimately
@@ -1094,7 +1111,7 @@ export class DownloadManager {
    * `busy` is separate because a `downloading` item or a `merging` merge cannot
    * be settled by looking at files at all: both hold their paths in locals taken
    * under the old root, and `mkdirSync(…, { recursive: true })`
-   * (`src/main/download-manager.ts:1693`)
+   * (`src/main/download-manager.ts:1710`)
    * recreates a dead mount path rather than failing, so a live write may be
    * landing somewhere that is neither the old drive nor the new one. The caller
    * refuses on it.
@@ -1679,7 +1696,7 @@ export class DownloadManager {
     }
   }
 
-  private async startDownload(item: DownloadItem, retryCount = 0): Promise<void> {
+  private async startDownload(item: DownloadItem, retryCount = 0, attemptCount = 0): Promise<void> {
     item.status = 'downloading'
     item.error = undefined
     this.activeCount++
@@ -1705,6 +1722,7 @@ export class DownloadManager {
       /* file doesn't exist yet */
     }
 
+    let fileStream: fs.WriteStream | undefined
     try {
       console.log(`[download] Starting: ${item.filename} -> ${item.url.substring(0, 120)}...`)
       const response = await fetchWithTimeout(item.url, {
@@ -1794,7 +1812,7 @@ export class DownloadManager {
       if (!response.body) throw new Error('No response body')
 
       const fileFlags = existingBytes > 0 && response.status === 206 ? 'a' : 'w'
-      const fileStream = fs.createWriteStream(partPath, { flags: fileFlags })
+      fileStream = fs.createWriteStream(partPath, { flags: fileFlags })
 
       let lastTime = Date.now()
       let lastBytes = item.bytesReceived
@@ -1874,15 +1892,37 @@ export class DownloadManager {
         return
       }
 
+      // Both the progress measurement below and the next attempt's `Range`
+      // stat read the `.part` size, so the previous fd's last write must have
+      // landed first (#597).
+      if (fileStream) await this.waitForPartClose(fileStream)
+      // Paused or cancelled while the stream was closing: the controller is
+      // already gone, so `pause()`/`cancel()` could only set the status.
+      const statusAfterClose = item.status as DownloadItem['status']
+      if (statusAfterClose === 'paused' || statusAfterClose === 'cancelled') return
+
       // A deterministic rejection (#444) skips the retry ladder: the same URL
       // would answer with the same wrong body three more times, and the user
       // would wait ~7 s for a verdict the first response already gave.
-      if (retryCount < RETRY_LIMIT && !(err instanceof NonRetryableDownloadError)) {
-        item.status = 'queued'
-        this.activeCount--
-        const delay = Math.pow(2, retryCount) * 1000
-        setTimeout(() => this.startDownload(item, retryCount + 1), delay)
-        return
+      const attempts = attemptCount + 1
+      if (!(err instanceof NonRetryableDownloadError) && attempts < RETRY_ATTEMPT_LIMIT) {
+        // Measured on disk, never from `item.bytesReceived`, which counts
+        // bytes `throttle` and `fileStream` never wrote (PART_IN_FLIGHT_SLACK).
+        // `existingBytes` is this attempt's baseline: 0 after a 200.
+        const progress = partSize(partPath) - existingBytes
+        if (progress >= PROGRESS_RETRY_MIN_BYTES) {
+          item.status = 'queued'
+          this.activeCount--
+          setTimeout(() => this.startDownload(item, retryCount, attempts), PROGRESS_RETRY_DELAY_MS)
+          return
+        }
+        if (retryCount < RETRY_LIMIT) {
+          item.status = 'queued'
+          this.activeCount--
+          const delay = Math.pow(2, retryCount) * 1000
+          setTimeout(() => this.startDownload(item, retryCount + 1, attempts), delay)
+          return
+        }
       }
 
       item.status = 'failed'
@@ -1896,6 +1936,20 @@ export class DownloadManager {
         this.processQueue()
       }
     }
+  }
+
+  /**
+   * Resolves once the `.part` write stream's fd is closed (#597). On Node 21
+   * `pipeline()` rejects while the destroyed `fs.WriteStream` still has a
+   * write in flight, and that write lands afterwards — so a `.part` stat taken
+   * before `'close'` can be short, and a `Range` built from it re-requests
+   * bytes the file already holds. Node 22 and Electron 41's Node 24 wait for
+   * the `'close'` inside `pipeline()`; this does not rely on that.
+   */
+  private waitForPartClose(stream: fs.WriteStream): Promise<void> {
+    if (!stream.destroyed) stream.destroy()
+    if (stream.closed) return Promise.resolve()
+    return new Promise((resolve) => stream.once('close', () => resolve()))
   }
 
   /**

@@ -211,6 +211,24 @@ getRealHeight(tr) = realQuality.get(tr.id) ?? tr.height
         the player's anime-video:// URL everywhere.
    f. On failure: retry up to 3x with exponential backoff — EXCEPT a
       deterministic rejection from (c), which fails on the first response
+      - The catch first awaits the write stream's 'close' (#597): on Node 21
+        pipeline() rejects while the destroyed stream still has a write in
+        flight (Node 22 and Electron 41's Node 24 wait for it), and a .part
+        stat taken before that write lands would undercount the progress
+        below and build the next Range from a short file, which then
+        appends bytes the file already holds
+      - Progress-aware rung (#597): an attempt that grew the on-disk .part
+        by >= 256 KiB (PROGRESS_RETRY_MIN_BYTES) past its own starting size
+        (0 after a 200) retries at the SAME rung after a fixed 250 ms
+        (PROGRESS_RETRY_DELAY_MS) instead of the 1/2/4 s ladder. A throttled
+        transfer from a short keep-alive server ends in `TypeError:
+        terminated` while still making progress. Progress is the .part size
+        on disk, never item.bytesReceived (see PART_IN_FLIGHT_SLACK)
+      - Attempt limit: 20 attempts per retry chain (RETRY_ATTEMPT_LIMIT),
+        progress or not, then 'failed' with the last error. The count is
+        startDownload's `attemptCount` parameter next to `retryCount`, both
+        defaulting to 0, so a fresh start from processQueue() (a user
+        resume, or the 416 restart in b) begins a new chain
 8. broadcastProgress() every 500ms --> renderer updates
 9. checkEpisodeComplete() --> trigger auto-merge if enabled
 10. persistQueue() on every state change --> queue.json in userData

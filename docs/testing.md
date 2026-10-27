@@ -1157,9 +1157,12 @@ reply, which then cleared it. That was a player race, not a spec timing
 problem, and #607 fixed it in main: a run's end is now held until
 `player:stream-start` has flushed the prelude (see `docs/player.md`). A red
 run reading `endOfStream was never called after the seek` whose timeline has
-no `endOfStream` entry at all means that hold has regressed. Before the
-player opens, the spec calls `endOfStream()` on a closed MediaSource and
-asserts the wrapper records it as thrown, then drops that entry.
+no `endOfStream` entry at all means that hold has regressed, so start from
+#607 rather than from the spec. The same message also covers a call followed
+by an append, which the timeline shows as an `appendBuffer` after the
+`endOfStream`. Before the player opens, the spec calls `endOfStream()` on a
+closed MediaSource and asserts the wrapper records it as thrown, then drops
+that entry.
 
 Each case also records how long each phase took (`build`: the cached fixture
 plus the pre-launch ffmpeg checks; `launch`; `ready`: `ffmpegCheck()` and the

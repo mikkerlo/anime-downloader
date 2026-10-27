@@ -33,6 +33,8 @@ import { createOfflineService } from './services/offline'
 import { createOfflineKickoff, type OfflineKickoff } from './services/offline/kickoff'
 import { createBinaryInstalls } from './lib/binary-installs'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
+import { createAnimePosterHandler } from './streaming/anime-poster-protocol'
+import { createRecentWatchIndex } from './lib/recent-watch'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
 import type { ShowSkipDetections, CachedFingerprint } from './skip-detector'
@@ -209,18 +211,23 @@ const playerPresenceService = createPlayerPresenceService()
 
 // --- Anime cache helpers (for offline support + fast-loading detail view) ---
 
+// Sub-key reads: these run per cache write and per entry in `cleanupStale`,
+// and a whole-map read would clone the library each time.
 function isDownloadedAnime(animeId: number): boolean {
-  const downloaded = store.get('downloadedAnime') as Record<string, AnimeSearchResult>
-  return !!downloaded[String(animeId)]
+  return !!store.get(`downloadedAnime.${animeId}`)
 }
 
 function isStarredAnime(animeId: number): boolean {
-  const lib = store.get('library') as Record<string, AnimeSearchResult>
-  return !!lib[String(animeId)]
+  return !!store.get(`library.${animeId}`)
 }
 
+const recentWatch = createRecentWatchIndex({
+  readWatchProgress: () => store.get('watchProgress') as Record<string, WatchProgressEntry>
+})
+
+// Continue-watching titles count too (#570), so they keep their cache offline.
 function isCachableAnime(animeId: number): boolean {
-  return isDownloadedAnime(animeId) || isStarredAnime(animeId)
+  return isDownloadedAnime(animeId) || isStarredAnime(animeId) || recentWatch.has(animeId)
 }
 
 function getDisplayName(anime: AnimeSearchResult): string {
@@ -383,7 +390,8 @@ const shikimoriSyncService = createShikimoriSyncService({
   offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
   rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
   animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
-  isOffline
+  isOffline,
+  snapshotsPath: path.join(app.getPath('userData'), 'shikimori-snapshots.json')
 })
 // `ensureFreshToken` is where a dead refresh token is detected, but that module
 // only knows about the store. Give it a way to push the transition out so the
@@ -620,7 +628,8 @@ function registerIpcHandlers(): void {
     mp4StatsService,
     playerLockService,
     playerPresenceService,
-    offlineService
+    offlineService,
+    recentWatch
   })
 }
 
@@ -684,6 +693,10 @@ async function bootstrap(): Promise<void> {
     createAnimeVideoHandler({
       getActiveDownload: (fp) => downloadManager?.getActiveDownloadByPath(fp) ?? null
     })
+  )
+  protocol.handle(
+    'anime-poster',
+    createAnimePosterHandler({ posterDir: animeCacheService.getPosterCacheDir() })
   )
 
   animeCacheService.cleanupStale()

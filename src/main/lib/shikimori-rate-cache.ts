@@ -10,7 +10,7 @@
 // store can never mirror a status from cache.
 
 import type { AnimeSearchResult } from '../smotret-api'
-import type { ShikiAnimeRateEntry } from '../shikimori'
+import type { ShikiAnimeRateEntry, ShikiUserRate } from '../shikimori'
 
 export interface CachedRateEntry {
   rate: {
@@ -49,4 +49,34 @@ export function buildRateCacheEntries(
     shikiAnime: rate.anime,
     smotretAnime: malMap[rate.anime.id] ?? null
   }))
+}
+
+/** A cached entry as stored; rows from older versions can lack these fields. */
+export interface StoredRateEntry {
+  rate: Pick<CachedRateEntry['rate'], 'score' | 'status' | 'episodes'> &
+    Partial<Pick<CachedRateEntry['rate'], 'id' | 'rewatches' | 'target_id'>>
+  shikiAnime?: { id: number }
+}
+
+/** The entry for `malId`, matched by `rate.target_id`, then `shikiAnime.id`. */
+export function findRateEntry<E extends StoredRateEntry>(entries: E[], malId: number): E | null {
+  return entries.find((e) => (e.rate.target_id ?? e.shikiAnime?.id) === malId) ?? null
+}
+
+/**
+ * `get-rate`'s answer from the cache (#570) when the live read can't be made.
+ * `id` is `-1` when missing, the sentinel `queueRate` uses for "no rate yet".
+ */
+export function rateFromCacheEntry(entry: StoredRateEntry): ShikiUserRate & { stale: true } {
+  const { rate, shikiAnime } = entry
+  return {
+    id: typeof rate.id === 'number' ? rate.id : -1,
+    score: rate.score,
+    status: rate.status,
+    episodes: rate.episodes,
+    rewatches: rate.rewatches ?? 0,
+    target_id: rate.target_id ?? shikiAnime?.id ?? -1,
+    target_type: 'Anime',
+    stale: true
+  }
 }

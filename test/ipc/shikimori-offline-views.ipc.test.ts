@@ -7,6 +7,9 @@
 // `OfflineError` while the real OfflineService reports offline — which is what
 // `fetchWithTimeout` does underneath them in the app.
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { ipcMain } from 'electron'
 import { CHANNELS, EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
@@ -96,7 +99,7 @@ interface Harness {
   lookupByMalIds: Mock
 }
 
-function harness(): Harness {
+function harness(snapshotsPath?: string): Harness {
   const store = new InMemoryStorage({
     shikimoriCredentials: { access_token: 'a', refresh_token: 'r' },
     shikimoriUser: { id: 7, nickname: 'me' },
@@ -121,7 +124,8 @@ function harness(): Harness {
     offlineQueueChangedChannel: EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED,
     rateUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_RATE_UPDATED,
     animeDetailsUpdatedChannel: EVENT_CHANNELS.SHIKIMORI_ANIME_DETAILS_UPDATED,
-    isOffline: offline.isOffline
+    isOffline: offline.isOffline,
+    snapshotsPath
   })
   const lookupByMalIds = vi.fn(async () => ({}))
   register({
@@ -417,5 +421,86 @@ describe('snapshots are per user (#568)', () => {
 
     expect(await calendar(h)).toEqual({ data: [], fetchedAt: null, stale: true })
     expect(await activity(h)).toEqual({ data: [], fetchedAt: null, stale: true })
+  })
+})
+
+// #570: the snapshots persist, so a restart is just another service created
+// over the same userData dir.
+describe('snapshots across a restart (#570)', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shiki-views-restart-'))
+    file = path.join(dir, 'shikimori-snapshots.json')
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('a loaded calendar is a miss online: the first open refetches, inside the TTL', async () => {
+    await calendar(harness(file))
+    const h = harness(file)
+    vi.setSystemTime(T0 + 60_000)
+    getCalendar.mockClear()
+
+    expect(await calendar(h)).toMatchObject({ fetchedAt: T0 + 60_000, stale: false })
+    expect(getCalendar).toHaveBeenCalledTimes(1)
+  })
+
+  it('offline, both loaded snapshots are served stale with their fetch time', async () => {
+    const first = harness(file)
+    await calendar(first)
+    await activity(first)
+    vi.setSystemTime(T0 + 3 * HOUR)
+
+    const h = harness(file)
+    h.offline.setManual(true)
+    expect(await calendar(h)).toEqual({
+      data: [expect.objectContaining({ malId: MAL, name: 'Стальной алхимик' })],
+      fetchedAt: T0,
+      stale: true
+    })
+    expect(await activity(h)).toEqual({
+      data: [expect.objectContaining({ friendNickname: 'alice' })],
+      fetchedAt: T0,
+      stale: true
+    })
+  })
+
+  it('logout deletes the file, so a restart has nothing to serve', async () => {
+    const first = harness(file)
+    await calendar(first)
+    await first.invoke(CHANNELS.SHIKIMORI_LOGOUT)
+    expect(fs.existsSync(file)).toBe(false)
+  })
+})
+
+// #570: the rate is read from the cached list offline, before anything that
+// could reach the network.
+describe('get-rate offline (#570)', () => {
+  it('answers from the cached list without ensureFreshToken or getUserRate', async () => {
+    const h = harness()
+    h.offline.setManual(true)
+    expect(await h.invoke(CHANNELS.SHIKIMORI_GET_RATE, MAL)).toEqual({
+      id: 900 + MAL,
+      score: 7,
+      status: 'watching',
+      episodes: 3,
+      rewatches: 0,
+      target_id: MAL,
+      target_type: 'Anime',
+      stale: true
+    })
+    expect(ensureFreshToken).not.toHaveBeenCalled()
+    expect(getUserRate).not.toHaveBeenCalled()
+  })
+
+  it('with a never-loaded list throws OfflineError, as before', async () => {
+    const h = harness()
+    h.store.set('shikimoriUserRates', [])
+    h.offline.setManual(true)
+    await expect(h.invoke(CHANNELS.SHIKIMORI_GET_RATE, MAL)).rejects.toBeInstanceOf(OfflineError)
   })
 })

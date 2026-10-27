@@ -10,8 +10,9 @@ interface ApiResponse<T> {
 }
 
 /**
- * `get-anime-cache`. Online an entry past the 24 h TTL reads as null; offline
- * it is returned with `stale: true` (#568).
+ * `get-anime-cache`. An entry past the 24 h TTL is returned with `stale: true`
+ * offline (#568), and online for a cachable title (#570); online, any other
+ * title's expired entry reads as null.
  */
 interface AnimeCacheResult {
   data: AnimeDetail

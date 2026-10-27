@@ -37,6 +37,7 @@ interface Api {
   ) => Promise<ApiResponse<EpisodeDetail[]>>
   probeEmbedQuality: (translationId: number, animeId?: number) => Promise<number | null>
   getCachedPoster: (animeId: number) => Promise<string | null>
+  getCachedPosterIds: () => Promise<number[]>
   probeFullScanNeeded: (animeId: number, episodeCount: number) => Promise<boolean>
   probeFullScanDone: (animeId: number, episodeCount: number) => Promise<void>
   reportQualityMismatch: (data: {
@@ -290,7 +291,7 @@ interface Api {
   onShikimoriRecommendationsRefreshed: (
     callback: (recommendations: RecommendationEntry[]) => void
   ) => Unsubscribe
-  shikimoriGetRate: (malId: number) => Promise<ShikiUserRate | null>
+  shikimoriGetRate: (malId: number) => Promise<ShikiUserRateResult | null>
   shikimoriUpdateRate: (
     malId: number,
     episodes: number,

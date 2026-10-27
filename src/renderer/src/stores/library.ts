@@ -75,6 +75,23 @@ export const useLibraryStore = defineStore('library', () => {
   const animeHistoryByView = ref<Record<StackedView, number[]>>(emptyHistory())
   const focusEpisodeIntForAnime = ref<Record<number, string | undefined>>({})
   const pendingSettingsTab = ref<SettingsTab | null>(null)
+  // Ids with a poster in main's disk cache (#570): one request per view load,
+  // not one per card. A poster cached since then falls back to its remote URL.
+  const posterIds = ref<ReadonlySet<number>>(new Set())
+  let posterIdsInFlight: Promise<void> | null = null
+
+  function loadPosterIds(): Promise<void> {
+    posterIdsInFlight ??= Promise.resolve()
+      .then(() => window.api.getCachedPosterIds())
+      .then((ids) => {
+        posterIds.value = new Set(ids)
+      })
+      .catch((err) => console.error('Failed to load cached poster ids:', err))
+      .finally(() => {
+        posterIdsInFlight = null
+      })
+    return posterIdsInFlight
+  }
 
   function isStackedView(view: LibraryView): view is StackedView {
     return (STACKED_VIEWS as readonly string[]).includes(view)
@@ -140,6 +157,8 @@ export const useLibraryStore = defineStore('library', () => {
     animeHistoryByView,
     focusEpisodeIntForAnime,
     pendingSettingsTab,
+    posterIds,
+    loadPosterIds,
     activeAnimeId,
     activeFocusEpisodeInt,
     navigate,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   formatAgo,
+  getPosterSrc,
   previewSeek,
   resolveSeekTarget,
   resolveMkvSpawnTarget,
@@ -527,5 +528,22 @@ describe('formatAgo (#568)', () => {
     [-5_000, 'just now']
   ])('%i ms ago reads %s', (ago, label) => {
     expect(formatAgo(NOW - ago, NOW)).toBe(label)
+  })
+})
+
+// #570: cards and the detail hero load a cached poster through anime-poster://.
+describe('getPosterSrc', () => {
+  it('returns anime-poster://<id> when the id has a cached poster', () => {
+    expect(getPosterSrc(42, 'https://x/p.jpg', new Set([42]))).toBe('anime-poster://42')
+  })
+
+  it('returns the remote URL otherwise', () => {
+    expect(getPosterSrc(42, 'https://x/p.jpg', new Set([7]))).toBe('https://x/p.jpg')
+    expect(getPosterSrc(42, 'https://x/p.jpg', new Set())).toBe('https://x/p.jpg')
+  })
+
+  it('returns the remote URL for an entry with no id', () => {
+    expect(getPosterSrc(null, 'https://x/p.jpg', new Set([0]))).toBe('https://x/p.jpg')
+    expect(getPosterSrc(undefined, '', new Set())).toBe('')
   })
 })

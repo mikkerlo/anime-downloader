@@ -123,3 +123,38 @@ describe('AnimeDetailView — hero poster layout (anti-stretch regression)', () 
     expect(wrapper.find('.synopsis-toggle').text()).toBe('Show less')
   })
 })
+
+// #570: the hero paints the poster from main's disk cache when it has one, so
+// it shows offline; a failing local poster falls back to the remote URL, and
+// `getCachedPoster` stays the last fallback.
+describe('AnimeDetailView — hero poster source (#570)', () => {
+  function withPosterIds(ids: number[]): void {
+    const api = (window as unknown as { api: Record<string, unknown> }).api
+    ;(window as unknown as { api: unknown }).api = new Proxy(
+      { getCachedPosterIds: vi.fn().mockResolvedValue(ids), getCachedPoster: vi.fn() },
+      { get: (t, p) => (p in t ? Reflect.get(t, p) : api[p as string]) }
+    )
+  }
+
+  it('uses anime-poster://<id> when main reports a cached poster', async () => {
+    withPosterIds([1])
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('.detail-poster img').attributes('src')).toBe('anime-poster://1')
+  })
+
+  it('uses the remote poster when none is cached — today', async () => {
+    withPosterIds([2])
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('.detail-poster img').attributes('src')).toBe('poster.jpg')
+  })
+
+  it('a failing cached poster falls back to the remote one', async () => {
+    withPosterIds([1])
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    await wrapper.find('.detail-poster img').trigger('error')
+    expect(wrapper.find('.detail-poster img').attributes('src')).toBe('poster.jpg')
+  })
+})

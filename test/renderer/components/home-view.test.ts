@@ -231,3 +231,29 @@ function rate(
         }
   }
 }
+
+// #570: continue-watching cards keep their poster offline from main's cache.
+describe('HomeView — cached posters (#570)', () => {
+  it('a card with a cached poster loads anime-poster://<id>, the rest stay remote', async () => {
+    const api = stubApi([resumeEntry, nextEntry])
+    api.getCachedPosterIds = vi.fn().mockResolvedValue([1])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    const imgs = wrapper.findAll('.cw-poster img')
+    expect(imgs.map((i) => i.attributes('src'))).toEqual(['anime-poster://1', 'poster2.jpg'])
+  })
+
+  it('a failing cached poster falls back to the remote URL, not to the blank tile', async () => {
+    const api = stubApi([resumeEntry])
+    api.getCachedPosterIds = vi.fn().mockResolvedValue([1])
+    const wrapper = mount(HomeView)
+    await flushPromises()
+
+    await wrapper.find('.cw-poster img').trigger('error')
+    expect(wrapper.find('.cw-poster img').attributes('src')).toBe('poster.jpg')
+    await wrapper.find('.cw-poster img').trigger('error')
+    expect(wrapper.find('.cw-poster img').exists()).toBe(false)
+    expect(wrapper.find('.cw-poster-fallback').exists()).toBe(true)
+  })
+})

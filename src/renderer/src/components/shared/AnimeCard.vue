@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { getAnimeName } from '../../utils';
+import { computed, ref, watch } from 'vue';
+import { getAnimeName, getPosterSrc, POSTER_SCHEME } from '../../utils';
+import { useLibraryStore } from '../../stores/library';
 
 // `prioritized` is optional so a grid that has not bound it still mounts and
 // renders an inert (un-filled) priority flag rather than throwing.
-withDefaults(
+const props = withDefaults(
   defineProps<{
     anime: AnimeSearchResult;
     starred: boolean;
@@ -16,12 +18,38 @@ const emit = defineEmits<{
   toggleStar: [anime: AnimeSearchResult];
   togglePriority: [anime: AnimeSearchResult];
 }>();
+
+const libraryStore = useLibraryStore();
+// A cached poster that fails to load (deleted since the id list was read)
+// falls back to the remote URL once.
+const localFailed = ref(false);
+watch(
+  () => props.anime.id,
+  () => {
+    localFailed.value = false;
+  }
+);
+const posterSrc = computed(() =>
+  localFailed.value
+    ? props.anime.posterUrlSmall
+    : getPosterSrc(props.anime.id, props.anime.posterUrlSmall, libraryStore.posterIds)
+);
+
+function onPosterError(): void {
+  if (posterSrc.value.startsWith(POSTER_SCHEME)) localFailed.value = true;
+}
 </script>
 
 <template>
   <div class="acard">
     <div class="poster-wrap">
-      <img :src="anime.posterUrlSmall" :alt="anime.title" class="poster" loading="lazy" />
+      <img
+        :src="posterSrc"
+        :alt="anime.title"
+        class="poster"
+        loading="lazy"
+        @error="onPosterError"
+      />
       <button class="star-btn" :class="{ active: starred }" @click.stop="emit('toggleStar', anime)">
         <svg
           viewBox="0 0 24 24"

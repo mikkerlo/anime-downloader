@@ -157,16 +157,47 @@ describe('AnimeCacheService', () => {
     })
   })
 
-  it('cleanupStale drops cache rows whose anime is neither downloaded nor in library', () => {
-    store.set('animeCache', {
-      '1': { episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false, animeDetail: null },
-      '2': { episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false, animeDetail: null },
-      '3': { episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false, animeDetail: null }
-    })
-    store.set('downloadedAnime', { '1': {} })
-    store.set('library', { '3': {} })
+  function emptyEntry(): AnimeCacheEntry {
+    return { episodes: {}, qualityProbes: {}, cachedAt: 0, posterCached: false, animeDetail: null }
+  }
+
+  it('cleanupStale drops the rows and posters the injected predicate rejects', () => {
+    store.set('animeCache', { '1': emptyEntry(), '2': emptyEntry(), '3': emptyEntry() })
+    fs.mkdirSync(svc.getPosterCacheDir(), { recursive: true })
+    for (const id of [1, 2, 3]) fs.writeFileSync(svc.getPosterCachePath(id), 'p')
+    cachable = new Set([1, 3])
     svc.cleanupStale()
     const after = store.get<Record<string, AnimeCacheEntry>>('animeCache')!
     expect(Object.keys(after).sort()).toEqual(['1', '3'])
+    expect(fs.existsSync(svc.getPosterCachePath(2))).toBe(false)
+    expect(fs.existsSync(svc.getPosterCachePath(1))).toBe(true)
+  })
+
+  // Red on the old cleanupStale, which re-checked `downloadedAnime` / `library`
+  // itself and ignored the predicate (#570).
+  it('cleanupStale keeps a continue-watching-only title and its poster', () => {
+    store.set('animeCache', { '2': emptyEntry() })
+    store.set('downloadedAnime', {})
+    store.set('library', {})
+    fs.mkdirSync(svc.getPosterCacheDir(), { recursive: true })
+    fs.writeFileSync(svc.getPosterCachePath(2), 'p')
+    cachable = new Set([2])
+    svc.cleanupStale()
+    expect(Object.keys(store.get<Record<string, AnimeCacheEntry>>('animeCache')!)).toEqual(['2'])
+    expect(fs.existsSync(svc.getPosterCachePath(2))).toBe(true)
+  })
+
+  it('getCachedPosterIds lists the ids with a poster on disk, and nothing else', () => {
+    expect(svc.getCachedPosterIds()).toEqual([])
+    fs.mkdirSync(svc.getPosterCacheDir(), { recursive: true })
+    for (const name of ['7.jpg', '42.jpg', '0.jpg', 'x.jpg', '9.jpg.tmp', '-1.jpg']) {
+      fs.writeFileSync(path.join(svc.getPosterCacheDir(), name), 'p')
+    }
+    expect(svc.getCachedPosterIds().sort((a, b) => a - b)).toEqual([7, 42])
+  })
+
+  it('isCachable is the injected predicate', () => {
+    expect(svc.isCachable(1)).toBe(true)
+    expect(svc.isCachable(99)).toBe(false)
   })
 })

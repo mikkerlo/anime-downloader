@@ -253,6 +253,86 @@ function queueOf(store: InMemoryStorage): QueueEntry[] {
   return store.get('shikimoriUpdateQueue') as QueueEntry[]
 }
 
+// get-rate used to be network-only, so the detail page lost the user's status
+// whenever the read failed, although the whole list is cached (#570).
+describe('shikimori IPC — get-rate falls back to the cached list (#570)', () => {
+  const STALE_42 = {
+    id: 942,
+    score: 7,
+    status: 'watching',
+    episodes: 3,
+    rewatches: 0,
+    target_id: 42,
+    target_type: 'Anime',
+    stale: true
+  }
+
+  it("a fetch that rejects TypeError('fetch failed') returns the cached entry, stale", async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).toEqual(STALE_42)
+  })
+
+  it('an expired session answers from the cache too', async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    ensureFreshToken.mockRejectedValue(new ShikiAuthError(SESSION_EXPIRED_MESSAGE))
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).toEqual(STALE_42)
+    expect(getUserRate).not.toHaveBeenCalled()
+  })
+
+  it('matches an older entry without target_id by shikiAnime.id', async () => {
+    const legacy = {
+      rate: { id: 5, episodes: 1, status: 'planned', score: 0 },
+      shikiAnime: { id: 42 },
+      smotretAnime: null
+    }
+    const { invoke } = registerRouter({ shikimoriUserRates: [legacy] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).toMatchObject({
+      id: 5,
+      target_id: 42,
+      stale: true
+    })
+  })
+
+  it('a title missing from a non-empty cache returns null', async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(7)] })
+    getUserRate.mockRejectedValue(new TypeError('fetch failed'))
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).toBeNull()
+  })
+
+  it('an empty (never loaded) cache rethrows', async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [] })
+    const err = new TypeError('fetch failed')
+    getUserRate.mockRejectedValue(err)
+    await expect(invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).rejects.toBe(err)
+  })
+
+  it('a ShikiApiError(422) still rethrows', async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const err = new ShikiApiError('Shikimori API error: 422', 422)
+    getUserRate.mockRejectedValue(err)
+    await expect(invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).rejects.toBe(err)
+  })
+
+  it('a successful read returns the live rate, without stale', async () => {
+    const { invoke } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const live = { id: 942, score: 9, status: 'completed', episodes: 12, rewatches: 0 }
+    getUserRate.mockResolvedValue(live)
+    expect(await invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).toEqual(live)
+  })
+
+  it("an account switch during the read rethrows rather than serve the new account's list", async () => {
+    const { invoke, store } = registerRouter({ shikimoriUserRates: [cachedRate(42)] })
+    const err = new TypeError('fetch failed')
+    getUserRate.mockImplementation(async () => {
+      store.set('shikimoriUser', { id: 8, nickname: 'other' })
+      throw err
+    })
+    await expect(invoke(CHANNELS.SHIKIMORI_GET_RATE, 42)).rejects.toBe(err)
+  })
+})
+
 // The player's auto-mark used to be a renderer-side get-rate then update-rate.
 // The get threw first on all three failures below, so the mark never reached
 // update-rate's queue and was lost for good (#565). Each test is one hole; on

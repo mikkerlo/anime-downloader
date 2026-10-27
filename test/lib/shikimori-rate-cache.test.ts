@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { buildRateCacheEntries } from '../../src/main/lib/shikimori-rate-cache'
+import {
+  buildRateCacheEntries,
+  findRateEntry,
+  rateFromCacheEntry
+} from '../../src/main/lib/shikimori-rate-cache'
 import type { ShikiAnimeRateEntry } from '../../src/main/shikimori'
 import type { AnimeSearchResult } from '../../src/main/smotret-api'
 
@@ -49,5 +53,63 @@ describe('buildRateCacheEntries', () => {
   it('leaves smotretAnime null when the mal map has no match', () => {
     const [entry] = buildRateCacheEntries([animeRatesRow(54595)], {})
     expect(entry.smotretAnime).toBeNull()
+  })
+})
+
+// `get-rate` from the cache (#570): the `getUserRate` shape, field by field.
+describe('rateFromCacheEntry', () => {
+  const full = {
+    rate: {
+      id: 159054595,
+      score: 8,
+      status: 'watching' as const,
+      episodes: 5,
+      rewatches: 2,
+      updated_at: '2026-10-01T00:00:00Z',
+      target_id: 54595
+    },
+    shikiAnime: { id: 54595 }
+  }
+
+  it('maps every field of a complete entry and marks it stale', () => {
+    expect(rateFromCacheEntry(full)).toEqual({
+      id: 159054595,
+      score: 8,
+      status: 'watching',
+      episodes: 5,
+      rewatches: 2,
+      target_id: 54595,
+      target_type: 'Anime',
+      stale: true
+    })
+  })
+
+  it('a missing id becomes -1, the sentinel queueRate returns', () => {
+    const { id: _id, ...rate } = full.rate
+    expect(rateFromCacheEntry({ ...full, rate }).id).toBe(-1)
+  })
+
+  it('a missing rewatches becomes 0', () => {
+    const { rewatches: _r, ...rate } = full.rate
+    expect(rateFromCacheEntry({ ...full, rate }).rewatches).toBe(0)
+  })
+
+  it('a missing target_id falls back to shikiAnime.id', () => {
+    const { target_id: _t, ...rate } = full.rate
+    expect(rateFromCacheEntry({ rate, shikiAnime: { id: 777 } }).target_id).toBe(777)
+  })
+})
+
+describe('findRateEntry', () => {
+  const byTarget = { rate: { score: 0, status: 'planned' as const, episodes: 0, target_id: 1 } }
+  const byAnime = {
+    rate: { score: 0, status: 'planned' as const, episodes: 0 },
+    shikiAnime: { id: 2 }
+  }
+
+  it('matches by rate.target_id, then by shikiAnime.id', () => {
+    expect(findRateEntry([byTarget, byAnime], 1)).toBe(byTarget)
+    expect(findRateEntry([byTarget, byAnime], 2)).toBe(byAnime)
+    expect(findRateEntry([byTarget, byAnime], 3)).toBeNull()
   })
 })

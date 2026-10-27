@@ -19,7 +19,10 @@ export interface AnimeCacheServiceDeps {
   userDataDir: string
   /** Smotret-anime poster fetcher. Returning `null` skips the write. */
   fetchPoster: (posterUrl: string) => Promise<Buffer | null | undefined>
-  /** Index.ts-owned gate: anime is in library or downloaded, so worth caching. */
+  /**
+   * Index.ts-owned gate: starred, downloaded, or watched in the last 90 days
+   * (#570), so worth caching. `cleanupStale` keeps exactly these.
+   */
   isCachable: (animeId: number) => boolean
 }
 
@@ -35,6 +38,9 @@ export interface AnimeCacheService {
   cachePosterImage(animeId: number, posterUrl: string): Promise<void>
   getPosterCacheDir(): string
   getPosterCachePath(animeId: number): string
+  /** Ids with a poster on disk, for the renderer's `anime-poster://` sources. */
+  getCachedPosterIds(): number[]
+  isCachable(animeId: number): boolean
   cleanupStale(): void
 }
 
@@ -134,13 +140,26 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     setEntry(animeId, entry)
   }
 
+  function getCachedPosterIds(): number[] {
+    let names: string[]
+    try {
+      names = fs.readdirSync(getPosterCacheDir())
+    } catch {
+      return []
+    }
+    const ids: number[] = []
+    for (const name of names) {
+      const match = /^([1-9]\d*)\.jpg$/.exec(name)
+      if (match) ids.push(Number(match[1]))
+    }
+    return ids
+  }
+
   function cleanupStale(): void {
     const cache = store.get('animeCache') as Record<string, AnimeCacheEntry>
-    const downloaded = store.get('downloadedAnime') as Record<string, unknown>
-    const lib = store.get('library') as Record<string, unknown>
     let changed = false
     for (const key of Object.keys(cache)) {
-      if (!downloaded[key] && !lib[key]) {
+      if (!isCachable(Number(key))) {
         delete cache[key]
         const posterPath = getPosterCachePath(Number(key))
         try {
@@ -166,6 +185,8 @@ export function createAnimeCacheService(deps: AnimeCacheServiceDeps): AnimeCache
     cachePosterImage,
     getPosterCacheDir,
     getPosterCachePath,
+    getCachedPosterIds,
+    isCachable,
     cleanupStale
   }
 }

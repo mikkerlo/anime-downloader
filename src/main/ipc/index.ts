@@ -14,6 +14,7 @@ import type { Mp4StatsService } from '../services/mp4-stats'
 import type { PlayerLockService } from '../services/player-lock'
 import type { PlayerPresenceService } from '../services/player-presence'
 import type { OfflineService } from '../services/offline'
+import type { RecentWatchIndex } from '../lib/recent-watch'
 import * as appRouter from './app.ipc'
 import * as animeRouter from './anime.ipc'
 import * as libraryRouter from './library.ipc'
@@ -115,6 +116,8 @@ export interface AppDeps {
   playerPresenceService: PlayerPresenceService
   /** Offline state (#567): Work offline, auto-detect, and the gates that read it. */
   offlineService: OfflineService
+  /** Titles watched in the last 90 days, part of the anime-cache scope (#570). */
+  recentWatch: RecentWatchIndex
 }
 
 /**

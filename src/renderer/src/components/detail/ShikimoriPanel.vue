@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia';
 import { SHIKIMORI_ORIGIN } from '@shared/shikimori';
 import { useShikimoriStore } from '../../stores/shikimori';
 import { useLibraryStore } from '../../stores/library';
+import { useOfflineStore } from '../../stores/offline';
 import { ShikimoriKey } from './keys';
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ if (!shikimori) throw new Error('ShikimoriPanel: missing ShikimoriKey injection'
 
 const {
   shikiUser,
+  shikiRateStale,
   shikiStatus,
   shikiEpisodes,
   shikiScore,
@@ -29,6 +31,9 @@ const {
 } = shikimori;
 
 const { offlineQueueLength, sessionExpired } = storeToRefs(useShikimoriStore());
+// A cached rate (#570) carries the detail page's stamp, without a date: the
+// list has no fetch time per title.
+const { isOffline: appOffline } = storeToRefs(useOfflineStore());
 const libraryStore = useLibraryStore();
 
 const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
@@ -46,6 +51,12 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
     <template v-if="shikiUser">
       <h4>
         <span class="sk-logo">Sh</span>Shikimori
+        <span
+          v-if="!shikiLoading && shikiRateStale"
+          class="sk-saved"
+          data-testid="shiki-saved-badge"
+          >{{ appOffline ? 'Saved, offline' : 'Saved' }}</span
+        >
         <a
           :href="`${SHIKIMORI_ORIGIN}/animes/${props.anime.myAnimeListId}`"
           target="_blank"
@@ -238,6 +249,16 @@ const SHIKI_STATUSES: { value: ShikiUserRateStatus; label: string }[] = [
   color: #fff;
   font-size: 0.6rem;
   font-weight: 800;
+}
+
+.sk-saved {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+  color: var(--text-3);
 }
 
 .sk-open {

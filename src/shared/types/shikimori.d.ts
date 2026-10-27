@@ -37,6 +37,13 @@ interface ShikiUserRate {
   target_type: string
 }
 
+/**
+ * `shikimori:get-rate`. `stale` is set when the value comes from the cached
+ * `shikimoriUserRates` list because the app is offline or the fetch failed
+ * (#570).
+ */
+type ShikiUserRateResult = ShikiUserRate & { stale?: boolean }
+
 interface ShikiAnimeInfo {
   id: number
   name: string
@@ -207,8 +214,8 @@ interface CalendarEntry {
 
 /**
  * `shikimori:get-calendar` / `shikimori:get-friends-activity` (#568). `stale` is
- * true when `data` is main's in-memory snapshot because the app is offline or
- * the fetch failed. `fetchedAt` is null only offline with no snapshot, where
+ * true when `data` is main's snapshot (persisted to disk, #570) because the app
+ * is offline or the fetch failed. `fetchedAt` is null only offline with no snapshot, where
  * `data` is empty.
  */
 interface ShikiSnapshotResult<T> {

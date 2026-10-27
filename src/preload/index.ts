@@ -46,6 +46,7 @@ const api = {
   debugResetMp4Stats: () => ipcRenderer.invoke(CHANNELS.DEBUG_RESET_MP4_STATS) as Promise<void>,
   getCachedPoster: (animeId: number) =>
     ipcRenderer.invoke(CHANNELS.CACHE_GET_POSTER, animeId) as Promise<string | null>,
+  getCachedPosterIds: () => ipcRenderer.invoke(CHANNELS.CACHE_GET_POSTER_IDS) as Promise<number[]>,
   libraryGet: () => ipcRenderer.invoke(CHANNELS.LIBRARY_GET),
   libraryToggle: (anime: unknown) => ipcRenderer.invoke(CHANNELS.LIBRARY_TOGGLE, anime),
   libraryHas: (id: number) => ipcRenderer.invoke(CHANNELS.LIBRARY_HAS, id),

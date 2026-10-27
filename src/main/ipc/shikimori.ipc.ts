@@ -20,7 +20,13 @@ import {
   type ParkedQueues,
   type QueuedShikimoriUpdate
 } from '../lib/shikimori-queue'
-import { buildRateCacheEntries } from '../lib/shikimori-rate-cache'
+import {
+  buildRateCacheEntries,
+  findRateEntry,
+  rateFromCacheEntry,
+  type StoredRateEntry
+} from '../lib/shikimori-rate-cache'
+import { OfflineError } from '../lib/net'
 import { stampRateClocks } from '../store/sync-meta'
 import {
   CALENDAR_CACHE_TTL_MS,
@@ -846,12 +852,37 @@ export function register({
     }
   })
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_GET_RATE, async (_event, malId: number) => {
-    const accessToken = await shikimori.ensureFreshToken(store)
-    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
-    if (!user) throw new Error('Not logged in to Shikimori')
-    return shikimori.getUserRate(accessToken, user.id, malId)
-  })
+  // Offline, or when the live read fails the way a queued write would, the
+  // cached list answers (#570). The list is the whole list as of its last
+  // refresh, so a title missing from a non-empty list has no rate; an empty
+  // list was never loaded, and the error stands.
+  function rateFromCache(malId: number, err: unknown): ShikiUserRateResult | null {
+    const cached = store.get('shikimoriUserRates') as StoredRateEntry[]
+    if (cached.length === 0) throw err
+    const entry = findRateEntry(cached, malId)
+    return entry ? rateFromCacheEntry(entry) : null
+  }
+
+  ipcMain.handle(
+    CHANNELS.SHIKIMORI_GET_RATE,
+    async (_event, malId: number): Promise<ShikiUserRateResult | null> => {
+      const userAtStart = currentUserId()
+      if (offlineService?.isOffline()) {
+        if (userAtStart === undefined) throw new Error('Not logged in to Shikimori')
+        return rateFromCache(malId, new OfflineError())
+      }
+      try {
+        const accessToken = await shikimori.ensureFreshToken(store)
+        const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+        if (!user) throw new Error('Not logged in to Shikimori')
+        return await shikimori.getUserRate(accessToken, user.id, malId)
+      } catch (err) {
+        // After an account switch the cache is the new account's list.
+        if (!isQueueableRateError(err) || currentUserId() !== userAtStart) throw err
+        return rateFromCache(malId, err)
+      }
+    }
+  )
 
   ipcMain.handle(
     CHANNELS.SHIKIMORI_UPDATE_RATE,

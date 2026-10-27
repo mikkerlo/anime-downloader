@@ -85,6 +85,8 @@ const filteredLibrary = computed(() => {
 });
 
 onMounted(async () => {
+  // Before the cards, so a cached poster is their first src (#570).
+  await libraryStore.loadPosterIds();
   await loadLibrary();
   // Hydrate Shikimori rates (cache-first) so the status tabs have data.
   if (shikimoriStore.loggedIn && rates.value.length === 0) {

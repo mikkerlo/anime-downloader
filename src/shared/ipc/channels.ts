@@ -33,6 +33,9 @@ export const CHANNELS = {
   AUTO_DL_SET_SUBSCRIPTION: 'auto-dl:set-subscription',
   AUTO_DL_TRIGGER: 'auto-dl:trigger',
 
+  // Cache
+  CACHE_GET_POSTER_IDS: 'cache:get-poster-ids',
+
   // Cleanup
   CLEANUP_EXECUTE: 'cleanup:execute',
   CLEANUP_GET_ACTIVE_DOWNLOADS: 'cleanup:get-active-downloads',

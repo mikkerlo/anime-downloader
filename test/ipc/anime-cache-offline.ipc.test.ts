@@ -1,7 +1,11 @@
 // The detail page offline (#568): `GET_ANIME_CACHE` drops its 24 h TTL and
 // flags the entry `stale`, and `GET_ANIME` answers from the cache without
-// calling the API. Online both behave exactly as before.
+// calling the API. Online `GET_ANIME` behaves as before, and `GET_ANIME_CACHE`
+// drops the TTL for cachable titles only (#570).
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { ipcMain } from 'electron'
 import { CHANNELS } from '../../src/shared/ipc/channels'
 import { register as registerAnime } from '../../src/main/ipc/anime.ipc'
@@ -24,7 +28,7 @@ interface Harness {
   rememberAnimeMeta: Mock
 }
 
-function harness(cachedAt: number | null): Harness {
+function harness(cachedAt: number | null, cachable = true): Harness {
   const store = new InMemoryStorage({
     animeCache:
       cachedAt === null
@@ -50,7 +54,7 @@ function harness(cachedAt: number | null): Harness {
     store,
     userDataDir: '/tmp/anime-cache-offline-test',
     fetchPoster: async () => null,
-    isCachable: () => true
+    isCachable: () => cachable
   })
   const getAnime = vi.fn(async () => ({ data: FRESH }))
   const rememberAnimeMeta = vi.fn()
@@ -106,9 +110,26 @@ describe('GET_ANIME_CACHE (#568)', () => {
     expect(await h.invoke(CHANNELS.GET_ANIME_CACHE, 1)).toBeNull()
   })
 
-  it('online: a 3-day-old entry is null — today', async () => {
+  // #570: a cachable title (starred, downloaded or watched lately) skips the
+  // TTL online too; the detail page paints it, then refreshes. Null on main.
+  it('online: a 3-day-old entry for a cachable title is returned with stale: true', async () => {
     const h = harness(T0 - 3 * DAY)
+    expect(await h.invoke(CHANNELS.GET_ANIME_CACHE, 1)).toEqual({
+      data: DETAIL,
+      cachedAt: T0 - 3 * DAY,
+      stale: true
+    })
+  })
+
+  it('online: a 3-day-old entry for a non-cachable title is still null', async () => {
+    const h = harness(T0 - 3 * DAY, false)
     expect(await h.invoke(CHANNELS.GET_ANIME_CACHE, 1)).toBeNull()
+  })
+
+  it('offline: a 3-day-old entry for a non-cachable title is still returned stale', async () => {
+    const h = harness(T0 - 3 * DAY, false)
+    h.offline.setManual(true)
+    expect(await h.invoke(CHANNELS.GET_ANIME_CACHE, 1)).toMatchObject({ stale: true })
   })
 
   it('online: an entry inside the TTL is returned, stale: false — today', async () => {
@@ -147,5 +168,30 @@ describe('GET_ANIME (#568)', () => {
     const h = harness(T0 - 3 * DAY)
     h.getAnime.mockRejectedValue(new Error('500'))
     expect(await h.invoke(CHANNELS.GET_ANIME, 1)).toEqual({ data: DETAIL, source: 'cache' })
+  })
+})
+
+describe('CACHE_GET_POSTER_IDS (#570)', () => {
+  it('answers with the ids whose poster is on disk', async () => {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'poster-ids-ipc-'))
+    try {
+      const store = new InMemoryStorage({ animeCache: {} })
+      const animeCacheService = createAnimeCacheService({
+        store,
+        userDataDir,
+        fetchPoster: async () => null,
+        isCachable: () => true
+      })
+      fs.mkdirSync(animeCacheService.getPosterCacheDir())
+      fs.writeFileSync(animeCacheService.getPosterCachePath(12), 'p')
+      ;(ipcMain.handle as Mock).mockClear()
+      registerCache({ animeCacheService } as unknown as AppDeps)
+      const handler = (ipcMain.handle as Mock).mock.calls.find(
+        ([channel]) => channel === CHANNELS.CACHE_GET_POSTER_IDS
+      )![1]
+      expect(await handler({})).toEqual([12])
+    } finally {
+      fs.rmSync(userDataDir, { recursive: true, force: true })
+    }
   })
 })

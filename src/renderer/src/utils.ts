@@ -373,6 +373,21 @@ export async function resolveEpisodeTranslation(
   return { outcome: 'resolved', translation: resolvedTr, translations, forceLocal }
 }
 
+export const POSTER_SCHEME = 'anime-poster://'
+
+/**
+ * The poster from main's disk cache when it has one (#570), so it shows
+ * offline; `remoteUrl` otherwise.
+ */
+export function getPosterSrc(
+  animeId: number | null | undefined,
+  remoteUrl: string,
+  cachedIds: ReadonlySet<number>
+): string {
+  if (animeId != null && cachedIds.has(animeId)) return `${POSTER_SCHEME}${animeId}`
+  return remoteUrl
+}
+
 /** "just now" / "5 min ago" / "3 h ago" / "2 d ago", for offline stamps (#568). */
 export function formatAgo(ts: number, now: number = Date.now()): string {
   const min = Math.floor(Math.max(0, now - ts) / 60_000)

@@ -25,7 +25,9 @@ export function useShikimori(deps: {
   shikimoriStore: ReturnType<typeof useShikimoriStore>
 }): {
   shikiUser: Ref<ShikiUser | null>
-  shikiRate: Ref<ShikiUserRate | null>
+  shikiRate: Ref<ShikiUserRateResult | null>
+  /** The rate came from main's cached list (#570): offline, or the read failed. */
+  shikiRateStale: ComputedRef<boolean>
   shikiStatus: Ref<ShikiUserRateStatus>
   shikiEpisodes: Ref<number>
   shikiScore: Ref<number>
@@ -47,7 +49,8 @@ export function useShikimori(deps: {
   triggerSyncNow: () => Promise<void>
 } {
   const shikiUser = ref<ShikiUser | null>(null)
-  const shikiRate = ref<ShikiUserRate | null>(null)
+  const shikiRate = ref<ShikiUserRateResult | null>(null)
+  const shikiRateStale = computed(() => shikiRate.value?.stale === true)
   const shikiStatus = ref<ShikiUserRateStatus>('planned')
   const shikiEpisodes = ref(0)
   const shikiScore = ref(0)
@@ -235,6 +238,7 @@ export function useShikimori(deps: {
   return {
     shikiUser,
     shikiRate,
+    shikiRateStale,
     shikiStatus,
     shikiEpisodes,
     shikiScore,

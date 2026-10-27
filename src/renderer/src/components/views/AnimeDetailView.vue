@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
-import { getAnimeName as _getAnimeName } from '../../utils';
+import { getAnimeName as _getAnimeName, getPosterSrc, POSTER_SCHEME } from '../../utils';
 import { storeToRefs } from 'pinia';
 import CleanupModal from '../shared/CleanupModal.vue';
 import OfflineNotice from '../shared/OfflineNotice.vue';
@@ -55,9 +55,11 @@ const dataSource = ref<'api' | 'cache' | null>(null);
 const isOffline = computed(() => dataSource.value === 'cache');
 const { isOffline: appOffline } = storeToRefs(useOfflineStore());
 const cachedAt = ref<number | null>(null);
-// Offline (#568) a cache paint says when it was saved, in place of the chip.
+const cacheStale = ref(false);
+// A cache paint says when it was saved, in place of the chip: always offline
+// (#568), and online when the cache is past its 24 h TTL (#570).
 const savedBadge = computed(() => {
-  if (!appOffline.value || dataSource.value !== 'cache') return null;
+  if (dataSource.value !== 'cache' || (!appOffline.value && !cacheStale.value)) return null;
   const date = cachedAt.value
     ? new Date(cachedAt.value).toLocaleDateString([], {
         month: 'short',
@@ -65,7 +67,8 @@ const savedBadge = computed(() => {
         year: 'numeric'
       })
     : null;
-  return date ? `Saved ${date}, offline` : 'Saved, offline';
+  const saved = date ? `Saved ${date}` : 'Saved';
+  return appOffline.value ? `${saved}, offline` : saved;
 });
 
 let loadGeneration = 0;
@@ -284,11 +287,16 @@ async function loadDetail(): Promise<boolean> {
   const gen = ++loadGeneration;
   let renderedFromCache = false;
   try {
-    const cached = await window.api.getAnimeCache(props.animeId);
+    // The poster ids land with the cache, so a cached poster is the hero's first src.
+    const [cached] = await Promise.all([
+      window.api.getAnimeCache(props.animeId),
+      libraryStore.loadPosterIds()
+    ]);
     if (cached && !disposed && gen === loadGeneration) {
       anime.value = cached.data;
       dataSource.value = 'cache';
       cachedAt.value = cached.cachedAt;
+      cacheStale.value = cached.stale;
       loading.value = false;
       renderedFromCache = true;
       // Single file scan per open (#196) — the background getAnime refresh below
@@ -498,11 +506,16 @@ watch([translationType, selectedAuthor], () => {
 const posterSrc = ref('');
 const posterFallbackAttempted = ref(false);
 
+function remotePoster(val: AnimeDetail): string {
+  return val.posterUrl || val.posterUrlSmall;
+}
+
+// The cached poster first (#570), then the remote one, then `getCachedPoster`.
 watch(
-  anime,
-  async (val) => {
+  [anime, () => libraryStore.posterIds],
+  ([val]) => {
     if (val) {
-      posterSrc.value = val.posterUrl || val.posterUrlSmall;
+      posterSrc.value = getPosterSrc(val.id, remotePoster(val), libraryStore.posterIds);
       posterFallbackAttempted.value = false;
     }
   },
@@ -510,6 +523,10 @@ watch(
 );
 
 async function onPosterError(): Promise<void> {
+  if (anime.value && posterSrc.value.startsWith(POSTER_SCHEME)) {
+    posterSrc.value = remotePoster(anime.value);
+    return;
+  }
   if (posterFallbackAttempted.value) return;
   posterFallbackAttempted.value = true;
   const cached = await window.api.getCachedPoster(props.animeId);

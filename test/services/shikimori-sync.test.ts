@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
 const ensureFreshToken = vi.fn()
@@ -41,7 +44,10 @@ function emptyRate(target_id: number) {
   }
 }
 
-function makeService(initial: Record<string, unknown> = {}): {
+function makeService(
+  initial: Record<string, unknown> = {},
+  snapshotsPath?: string
+): {
   store: InMemoryStorage
   broadcast: Broadcast
   svc: ReturnType<typeof createShikimoriSyncService>
@@ -61,7 +67,8 @@ function makeService(initial: Record<string, unknown> = {}): {
     syncStatusChannel: CHANNELS.syncStatus,
     offlineQueueChangedChannel: CHANNELS.offlineQueueChanged,
     rateUpdatedChannel: CHANNELS.rateUpdated,
-    animeDetailsUpdatedChannel: CHANNELS.animeDetailsUpdated
+    animeDetailsUpdatedChannel: CHANNELS.animeDetailsUpdated,
+    snapshotsPath
   })
   return { store, broadcast, svc }
 }
@@ -809,6 +816,110 @@ describe('ShikimoriSyncService — friends-activity snapshot (#568)', () => {
     svc.clearOfflineSnapshots()
     expect(svc.getCachedCalendar()).toBeNull()
     expect(svc.getCachedFriendsActivity()).toBeNull()
+  })
+})
+
+// The disk half of #568's rule (#570): both snapshots persist to
+// `userData/shikimori-snapshots.json`, for the signed-in user only.
+describe('ShikimoriSyncService — snapshots on disk (#570)', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shiki-snapshots-'))
+    file = path.join(dir, 'shikimori-snapshots.json')
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  function readFile(): Record<string, unknown> {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
+  }
+
+  // Red on main: no file, so a re-created service starts empty.
+  it('both snapshots survive a service re-create from the same userData dir', () => {
+    const first = makeService({}, file).svc
+    const cal = first.setCachedCalendar([calEntry('A')])
+    const fa = first.setCachedFriendsActivity(1, [])
+
+    const { svc } = makeService({}, file)
+    expect(svc.getCachedCalendar()).toEqual({
+      data: cal.data,
+      fetchedAt: cal.fetchedAt,
+      userId: 1,
+      invalidated: true
+    })
+    expect(svc.getCachedFriendsActivity()).toEqual({
+      data: [],
+      fetchedAt: fa.fetchedAt,
+      userId: 1
+    })
+  })
+
+  it('writes the documented shape with tmp + rename, leaving no tmp file', () => {
+    const { svc } = makeService({}, file)
+    svc.setCachedCalendar([calEntry('A')])
+    expect(readFile()).toMatchObject({
+      version: 1,
+      userId: 1,
+      calendar: { data: [calEntry('A')] }
+    })
+    expect(readFile()).not.toHaveProperty('friendsActivity')
+    expect(fs.readdirSync(dir)).toEqual(['shikimori-snapshots.json'])
+  })
+
+  it('a file written for user 7 is ignored and deleted when the stored user is 8', () => {
+    makeService({ shikimoriUser: { id: 7, nickname: 'a' } }, file).svc.setCachedCalendar([
+      calEntry('A')
+    ])
+    expect(fs.existsSync(file)).toBe(true)
+
+    const { svc } = makeService({ shikimoriUser: { id: 8, nickname: 'b' } }, file)
+    expect(svc.getCachedCalendar()).toBeNull()
+    expect(svc.getCachedFriendsActivity()).toBeNull()
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('a file is deleted when nobody is signed in', () => {
+    makeService({}, file).svc.setCachedFriendsActivity(1, [])
+    makeService({ shikimoriUser: null }, file)
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('a corrupt or unknown-version file is deleted', () => {
+    fs.writeFileSync(file, '{not json')
+    makeService({}, file)
+    expect(fs.existsSync(file)).toBe(false)
+
+    fs.writeFileSync(file, JSON.stringify({ version: 2, userId: 1, calendar: {} }))
+    expect(makeService({}, file).svc.getCachedCalendar()).toBeNull()
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('clearOfflineSnapshots() deletes the file', () => {
+    const { svc } = makeService({}, file)
+    svc.setCachedCalendar([calEntry('A')])
+    svc.clearOfflineSnapshots()
+    expect(fs.existsSync(file)).toBe(false)
+    expect(makeService({}, file).svc.getCachedCalendar()).toBeNull()
+  })
+
+  it("a fetch that outlived an account switch doesn't write the old user's data", () => {
+    const { svc, store } = makeService({}, file)
+    store.set('shikimoriUser', { id: 8, nickname: 'b' })
+    svc.setCachedCalendar([calEntry('B')])
+    svc.setCachedCalendar([calEntry('A')], 1)
+    svc.setCachedFriendsActivity(1, [])
+    expect(readFile()).toMatchObject({ userId: 8, calendar: { data: [calEntry('B')] } })
+    expect(readFile()).not.toHaveProperty('friendsActivity')
+  })
+
+  it('without a path the snapshots stay in memory and nothing is written', () => {
+    const { svc } = makeService()
+    svc.setCachedCalendar([calEntry('A')])
+    expect(fs.readdirSync(dir)).toEqual([])
   })
 })
 

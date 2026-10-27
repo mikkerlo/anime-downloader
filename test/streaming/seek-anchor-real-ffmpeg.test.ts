@@ -372,6 +372,7 @@ describe.skipIf(!hasFfmpeg)('probeSeekAnchor vs the live mux (real ffmpeg, synth
       senderId: 1,
       ready: false,
       prelude: [],
+      endPending: false,
       mkvPath: mkv,
       generation: 1,
       videoCodec: 'h264',

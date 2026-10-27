@@ -26,6 +26,7 @@ function mkSession(over: Partial<MseSession> = {}): MseSession {
     senderId: 1,
     ready: false,
     prelude: [],
+    endPending: false,
     mkvPath: '/tmp/show.mkv',
     generation: 1,
     videoCodec: 'h264',
@@ -259,6 +260,75 @@ describe('StreamingService player diagnostics', () => {
     expect(() =>
       svc.spawnFfmpegForSession(mkSession(), event, 'sid', 5).kill('SIGKILL')
     ).not.toThrow()
+  })
+})
+
+// #607: a run that ends before `player:stream-start` must not send its end. The
+// seek reply that lands after it clears the renderer's `streamEnded`, so an end
+// sent early is lost and `endOfStream()` never runs. The release half lives in
+// test/services/player-ipc-stream-end-held.test.ts.
+describe('StreamingService run end vs. the prelude (#607)', () => {
+  const channels = {
+    streamChunk: 'sc',
+    streamEnd: 'se',
+    streamError: 'sx',
+    streamProgress: 'sp'
+  }
+
+  let dir: string
+  let ffmpeg: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-end-held-'))
+    ffmpeg = path.join(dir, 'ffmpeg')
+    // A whole short run: one stdout write, then a clean exit.
+    fs.writeFileSync(ffmpeg, '#!/bin/sh\nprintf tail-run\n', { mode: 0o755 })
+  })
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  async function runToEnd(session: MseSession): Promise<[string, unknown][]> {
+    const sent: [string, unknown][] = []
+    const event = {
+      sender: {
+        isDestroyed: (): boolean => false,
+        send: (ch: string, payload: unknown): void => void sent.push([ch, payload])
+      }
+    }
+    const svc = createStreamingService({
+      getFfmpegPath: () => ffmpeg,
+      getFfprobePath: () => '/bin/ffprobe',
+      channels
+    })
+    const proc = svc.spawnFfmpegForSession(session, event, 'sid', 0)
+    // `close` fires after stdout has ended, so the service's `end` handler
+    // (registered first) has run by now.
+    await new Promise<void>((res) => proc.on('close', () => res()))
+    return sent
+  }
+
+  it('holds the end while the session is not ready, next to the prelude', async () => {
+    const session = mkSession({ ready: false })
+    const sent = await runToEnd(session)
+
+    // Before the fix the end went out here, ahead of the seek reply.
+    expect(sent).toEqual([])
+    expect(session.done).toBe(true)
+    expect(session.endPending).toBe(true)
+    expect(Buffer.concat(session.prelude).toString()).toBe('tail-run')
+  })
+
+  it('sends the end straight away once the session is ready', async () => {
+    const session = mkSession({ ready: true })
+    const sent = await runToEnd(session)
+
+    expect(session.endPending).toBe(false)
+    expect(session.prelude).toEqual([])
+    expect(sent.map(([ch]) => ch)).toEqual(['sc', 'se'])
+    expect((sent[0][1] as { data: Buffer }).data.toString()).toBe('tail-run')
+    expect(sent[1][1]).toEqual({ sessionId: 'sid' })
   })
 })
 

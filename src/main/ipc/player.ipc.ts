@@ -454,6 +454,7 @@ export function register({
         senderId: event.sender.id,
         ready: false,
         prelude: [],
+        endPending: false,
         mkvPath,
         generation: 0,
         videoCodec: probe.videoCodec,
@@ -615,6 +616,7 @@ export function register({
         senderId: event.sender.id,
         ready: false,
         prelude: [],
+        endPending: false,
         mkvPath,
         generation: 0,
         videoCodec: probe.videoCodec,
@@ -737,6 +739,7 @@ export function register({
       }
       session.pendingBytes = 0
       session.prelude = []
+      session.endPending = false
       session.done = false
       session.error = null
       // Hold new chunks in the prelude until the renderer has set its
@@ -763,7 +766,8 @@ export function register({
 
   // Handshake: renderer's MediaSource + SourceBuffer are ready to receive chunks.
   // Flush any buffered prelude (the MP4 moov header lives in here) and switch to
-  // forwarding subsequent chunks directly.
+  // forwarding subsequent chunks directly. A run that already ended while held
+  // sends its end right after the prelude, on the same sender (#607).
   ipcMain.handle(CHANNELS.PLAYER_STREAM_START, (event, sessionId: string) => {
     const session = streamingService.getSession(sessionId)
     if (!session) return
@@ -775,8 +779,12 @@ export function register({
       for (const chunk of session.prelude) {
         sender.send(EVENT_CHANNELS.PLAYER_STREAM_CHUNK, { sessionId, gen, data: chunk })
       }
+      if (session.endPending) {
+        sender.send(EVENT_CHANNELS.PLAYER_STREAM_END, { sessionId })
+      }
     }
     session.prelude = []
+    session.endPending = false
   })
 
   // Backpressure ack: renderer reports bytes it has appended into its SourceBuffer.

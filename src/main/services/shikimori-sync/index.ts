@@ -107,7 +107,7 @@ export interface ShikimoriSyncService {
   abortPrefetch(): void
   invalidateCalendarCache(): void
   getCachedCalendar(): CachedCalendar | null
-  /** `userId` defaults to the signed-in user. */
+  /** `userId` defaults to the signed-in user; stored only while that user is signed in. */
   setCachedCalendar(data: CalendarEntry[], userId?: number | null): CachedCalendar
   getCachedFriendsActivity(): CachedFriendsActivity | null
   setCachedFriendsActivity(userId: number, data: ShikiFriendActivityEntry[]): CachedFriendsActivity
@@ -580,8 +580,12 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     prefetchAbort = true
   }
 
+  function isCurrentUser(userId: number | null): boolean {
+    return userId === (currentUserId() ?? null)
+  }
+
   function ownSnapshot<T extends { userId: number | null }>(snapshot: T | null): T | null {
-    return snapshot && snapshot.userId === (currentUserId() ?? null) ? snapshot : null
+    return snapshot && isCurrentUser(snapshot.userId) ? snapshot : null
   }
 
   function invalidateCalendarCache(): void {
@@ -596,8 +600,10 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     data: CalendarEntry[],
     userId: number | null = currentUserId() ?? null
   ): CachedCalendar {
-    calendarCache = { data, fetchedAt: Date.now(), userId, invalidated: false }
-    return calendarCache
+    const snapshot: CachedCalendar = { data, fetchedAt: Date.now(), userId, invalidated: false }
+    // A fetch that outlived an account switch must not evict the new user's snapshot.
+    if (isCurrentUser(userId)) calendarCache = snapshot
+    return snapshot
   }
 
   function getCachedFriendsActivity(): CachedFriendsActivity | null {
@@ -608,8 +614,9 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     userId: number,
     data: ShikiFriendActivityEntry[]
   ): CachedFriendsActivity {
-    friendsActivityCache = { data, fetchedAt: Date.now(), userId }
-    return friendsActivityCache
+    const snapshot: CachedFriendsActivity = { data, fetchedAt: Date.now(), userId }
+    if (isCurrentUser(userId)) friendsActivityCache = snapshot
+    return snapshot
   }
 
   function clearOfflineSnapshots(): void {

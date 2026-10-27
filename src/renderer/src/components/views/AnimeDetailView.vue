@@ -264,9 +264,15 @@ onMounted(async () => {
   void hydrateSkipStatus();
 });
 
-// Back online with nothing painted (the offline no-cache notice): load once.
+// Back online: a cache paint refreshes once, as a reopen would; with nothing
+// painted (the offline no-cache notice) the page loads once.
 watch(appOffline, (offline) => {
-  if (offline || anime.value || loading.value || disposed) return;
+  if (offline || disposed) return;
+  if (anime.value) {
+    if (dataSource.value === 'cache') void refreshAnimeInBackground(loadGeneration);
+    return;
+  }
+  if (loading.value) return;
   loading.value = true;
   void loadDetail().then((current) => {
     if (current && anime.value) void shikimori.loadShikimoriData(chronology.loadRelated);

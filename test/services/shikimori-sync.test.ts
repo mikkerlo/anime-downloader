@@ -788,6 +788,20 @@ describe('ShikimoriSyncService — friends-activity snapshot (#568)', () => {
     expect(svc.getCachedFriendsActivity()).toBeNull()
   })
 
+  it("a fetch that outlived an account switch doesn't evict the new user's snapshots", () => {
+    const { svc, store } = makeService()
+    store.set('shikimoriUser', { id: 8, nickname: 'b' })
+    svc.setCachedCalendar([calEntry('B')])
+    svc.setCachedFriendsActivity(8, [])
+
+    // Results of fetches user 1 started, landing after the switch to 8.
+    expect(svc.setCachedCalendar([calEntry('A')], 1)).toMatchObject({ userId: 1 })
+    expect(svc.setCachedFriendsActivity(1, [])).toMatchObject({ userId: 1 })
+
+    expect(svc.getCachedCalendar()?.data.map((e) => e.name)).toEqual(['B'])
+    expect(svc.getCachedFriendsActivity()?.userId).toBe(8)
+  })
+
   it('clearOfflineSnapshots drops both snapshots', () => {
     const { svc } = makeService()
     svc.setCachedCalendar([calEntry('A')])

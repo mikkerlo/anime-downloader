@@ -356,6 +356,40 @@ describe('snapshots are per user (#568)', () => {
     expect(await activity(h)).toMatchObject({ fetchedAt: T0, stale: true })
   })
 
+  it("fetches that finish after a switch don't evict the new user's snapshots", async () => {
+    const h = harness()
+    h.store.set('shikimoriUser', { id: 8, nickname: 'other' })
+    await calendar(h)
+    await activity(h)
+
+    // User 7 starts both fetches; the account switches to 8 before they land.
+    h.store.set('shikimoriUser', { id: 7, nickname: 'me' })
+    let releaseCalendar!: () => void
+    let releaseActivity!: () => void
+    getCalendar.mockImplementationOnce(
+      () => new Promise((r) => (releaseCalendar = () => r([calendarRow(MAL)])))
+    )
+    getFriendsActivity.mockImplementationOnce(
+      () => new Promise((r) => (releaseActivity = () => r([activityRow()])))
+    )
+    vi.setSystemTime(T0 + HOUR)
+    const pendingCalendar = calendar(h, true)
+    const pendingActivity = activity(h)
+    await vi.waitFor(() => expect(getFriendsActivity).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(getCalendar).toHaveBeenCalledTimes(2))
+    h.store.set('shikimoriUser', { id: 8, nickname: 'other' })
+    releaseCalendar()
+    releaseActivity()
+    // The caller still gets its result.
+    const later = expect.toSatisfy((t: number) => t >= T0 + HOUR)
+    expect(await pendingCalendar).toMatchObject({ fetchedAt: later, stale: false })
+    expect(await pendingActivity).toMatchObject({ fetchedAt: later, stale: false })
+
+    h.offline.setManual(true)
+    expect(await calendar(h)).toMatchObject({ fetchedAt: T0, stale: true })
+    expect(await activity(h)).toMatchObject({ fetchedAt: T0, stale: true })
+  })
+
   it('logout clears both snapshots', async () => {
     const h = harness()
     await calendar(h)

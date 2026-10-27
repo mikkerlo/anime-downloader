@@ -258,6 +258,57 @@ describe('AnimeDetailView — offline (#568)', () => {
     wrapper.unmount()
   })
 
+  it('a cache paint made offline refreshes once on the online edge: chip gone, new episode listed', async () => {
+    const offline = offlineApi('offline-manual')
+    const ep = (n: number): EpisodeSummary => ({
+      id: 9 + n,
+      episodeInt: String(n),
+      episodeFull: `Episode ${n}`,
+      episodeType: 'tv',
+      isActive: 1
+    })
+    // Offline, main answers get-anime from the cache (one episode); back
+    // online, the API has a second one.
+    const getAnime = vi
+      .fn()
+      .mockResolvedValueOnce({ source: 'cache', data: detail() })
+      .mockResolvedValue({
+        source: 'api',
+        data: detail({ numberOfEpisodes: 2, episodes: [ep(1), ep(2)] })
+      })
+    const api = installApi({ getAnimeCache: staleCache(), getAnime, offline })
+    const byIds = (ids: number[]): { data: EpisodeDetail[] } => ({
+      data: ids.map((id) => ({ ...episodeDetail(700), id, episodeInt: String(id - 9) }))
+    })
+    api.getEpisodesBatchCached.mockImplementation(async (ids: number[]) => ({
+      ...byIds(ids.filter((id) => id === 10)),
+      source: 'cache'
+    }))
+    api.getEpisodesBatch.mockImplementation(async (ids: number[]) => byIds(ids))
+    const wrapper = mount(AnimeDetailView, { props: { animeId: 1 } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(true)
+    expect(getAnime).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('.ep-row')).toHaveLength(1)
+
+    offline.emit('online')
+    await flushPromises()
+
+    expect(getAnime).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="saved-offline-badge"]').exists()).toBe(false)
+    expect(wrapper.find('.chip.offline').exists()).toBe(false)
+    expect(wrapper.findAll('.ep-row')).toHaveLength(2)
+    expect(api.getEpisodesBatch).toHaveBeenCalledWith([11], 1)
+
+    offline.emit('offline-manual')
+    await flushPromises()
+    offline.emit('online')
+    await flushPromises()
+    // Now painted from the API: another edge doesn't refetch.
+    expect(getAnime).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('offline with no cache entry: the OfflineNotice; back online loads once', async () => {
     const offline = offlineApi('offline-manual')
     const getAnime = vi
@@ -280,6 +331,7 @@ describe('AnimeDetailView — offline (#568)', () => {
     expect(wrapper.find('h1').text()).toBe('Tesuto')
 
     offline.emit('offline-manual')
+    await flushPromises()
     offline.emit('online')
     await flushPromises()
     expect(getAnime).toHaveBeenCalledTimes(2)

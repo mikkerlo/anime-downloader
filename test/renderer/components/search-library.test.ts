@@ -160,7 +160,9 @@ describe('SearchView — offline (#568)', () => {
     expect(api.searchAnime).toHaveBeenCalledTimes(1)
     expect(wrapper.findAll('.poster-grid .acard')).toHaveLength(1)
 
+    // A full second edge, flushed in between so the watcher sees both.
     offline.emit('offline-auto')
+    await flushPromises()
     offline.emit('online')
     await flushPromises()
     expect(api.searchAnime).toHaveBeenCalledTimes(1)

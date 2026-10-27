@@ -1,6 +1,11 @@
 import * as shikimori from '../../shikimori'
 import { isNetworkError } from '../../lib/errors'
-import { consolidateQueue, type QueuedShikimoriUpdate } from '../../lib/shikimori-queue'
+import {
+  consolidateQueue,
+  dropFromParked,
+  type ParkedQueues,
+  type QueuedShikimoriUpdate
+} from '../../lib/shikimori-queue'
 import type { StorageService } from '../../store/types'
 
 export type ShikiSyncState = 'idle' | 'syncing'
@@ -169,17 +174,35 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
     else stopSyncTimer()
   }
 
-  function dropConsumedEntries(malId: number, consumedQueuedAts: number[]): number {
-    const consumed = new Set(consumedQueuedAts)
-    const queue = (store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]).filter(
-      (q) => !(q.malId === malId && consumed.has(q.queuedAt))
-    )
-    store.set('shikimoriUpdateQueue', queue)
-    broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
-    return queue.length
+  function currentUserId(): number | undefined {
+    return (store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id
   }
 
-  function reconcileCacheFromRate(malId: number, rate: shikimori.ShikiUserRate): void {
+  // The drain's owner may have logged out or been switched away mid-item: its
+  // entries are then parked, or gone after Discard, and never in the live queue
+  // (#588). A missing bucket stays missing.
+  function dropConsumedEntries(ownerId: number, malId: number, consumedQueuedAts: number[]): void {
+    let queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+    if (currentUserId() === ownerId) {
+      const consumed = new Set(consumedQueuedAts)
+      queue = queue.filter((q) => !(q.malId === malId && consumed.has(q.queuedAt)))
+      store.set('shikimoriUpdateQueue', queue)
+    } else {
+      const parked = (store.get('shikimoriParkedQueues') as ParkedQueues | undefined) ?? {}
+      const next = dropFromParked(parked, String(ownerId), malId, consumedQueuedAts)
+      if (next !== parked) store.set('shikimoriParkedQueues', next)
+    }
+    broadcast(deps.offlineQueueChangedChannel, { length: queue.length })
+  }
+
+  // An item in flight across a switch lands on the old account; the cache is
+  // the new one's by then (#588).
+  function reconcileCacheFromRate(
+    ownerId: number,
+    malId: number,
+    rate: shikimori.ShikiUserRate
+  ): void {
+    if (currentUserId() !== ownerId) return
     const cached = store.get('shikimoriUserRates') as {
       rate: Record<string, unknown> & {
         id?: number
@@ -230,6 +253,13 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
       accessToken = await shikimori.ensureFreshToken(store)
     } catch (err) {
       syncInProgress = false
+      // The previous account's refresh failed after a switch: not this
+      // session's error, and its timer is not this drain's to stop.
+      if (currentUserId() !== user.id) {
+        broadcastSyncStatus()
+        void syncShikimoriQueue()
+        return
+      }
       if (!isNetworkError(err)) {
         lastSyncError = err instanceof Error ? err.message : String(err)
         console.warn('[shikimori sync] auth refresh failed:', err)
@@ -245,8 +275,15 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
 
     const work = consolidateQueue(queue)
     let aborted = false
+    let ownerChanged = false
 
     for (const item of work) {
+      // A logout or account switch since the drain started: the rest of this
+      // work list is someone else's now, and this token is the old owner's.
+      if (currentUserId() !== user.id) {
+        ownerChanged = true
+        break
+      }
       try {
         const current = await shikimori.getUserRate(accessToken, user.id, item.malId)
 
@@ -260,7 +297,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
             item.after.score,
             item.after.rewatches
           )
-          reconcileCacheFromRate(item.malId, created)
+          reconcileCacheFromRate(user.id, item.malId, created)
         } else {
           const driftMatches =
             current.episodes === item.before.episodes &&
@@ -276,7 +313,7 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
               item.after.score,
               item.after.rewatches
             )
-            reconcileCacheFromRate(item.malId, updated)
+            reconcileCacheFromRate(user.id, item.malId, updated)
           } else if (shouldApplyOnDrift(current, item.after)) {
             const updated = await shikimori.updateUserRate(
               accessToken,
@@ -286,13 +323,13 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
               item.after.score,
               item.after.rewatches
             )
-            reconcileCacheFromRate(item.malId, updated)
+            reconcileCacheFromRate(user.id, item.malId, updated)
           } else {
-            reconcileCacheFromRate(item.malId, current)
+            reconcileCacheFromRate(user.id, item.malId, current)
           }
         }
 
-        dropConsumedEntries(item.malId, item.consumedQueuedAts)
+        dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
       } catch (err) {
         if (isNetworkError(err)) {
           aborted = true
@@ -305,19 +342,25 @@ export function createShikimoriSyncService(deps: ShikimoriSyncServiceDeps): Shik
           break
         }
         console.warn('[shikimori sync] dropping item', item.malId, err)
-        dropConsumedEntries(item.malId, item.consumedQueuedAts)
+        dropConsumedEntries(user.id, item.malId, item.consumedQueuedAts)
       }
 
       if (work.indexOf(item) < work.length - 1) await sleep(SYNC_ITEM_DELAY_MS)
     }
 
+    // The owner may have changed while the last item was awaiting the network.
+    if (currentUserId() !== user.id) ownerChanged = true
     syncInProgress = false
-    if (!aborted) {
+    // An owner change is not a sync result, so it leaves the last one standing.
+    if (!aborted && !ownerChanged) {
       lastSyncAt = Date.now()
       lastSyncError = null
     }
     adjustSyncTimer()
     broadcastSyncStatus()
+    // A restore that landed while this drain was mid-loop kicked a drain that
+    // returned at `syncInProgress`; without this it would wait for the timer.
+    if (ownerChanged) void syncShikimoriQueue()
   }
 
   function getStaleOrMissingMalIds(): number[] {

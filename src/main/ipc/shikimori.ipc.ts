@@ -12,7 +12,14 @@ import {
   type TasteRate
 } from '../recommendations'
 import { isNetworkError } from '../lib/errors'
-import { type QueuedShikimoriUpdate } from '../lib/shikimori-queue'
+import {
+  mergeQueues,
+  parkEntries,
+  takeParked,
+  UNKNOWN_OWNER,
+  type ParkedQueues,
+  type QueuedShikimoriUpdate
+} from '../lib/shikimori-queue'
 import { buildRateCacheEntries } from '../lib/shikimori-rate-cache'
 import { stampRateClocks } from '../store/sync-meta'
 import { CALENDAR_CACHE_TTL_MS, type CalendarEntry } from '../services/shikimori-sync'
@@ -81,7 +88,9 @@ export function register({
   runAutoDownloadTick,
   broadcast
 }: AppDeps) {
-  async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[]> {
+  // Null when the account changed while the list was in flight: it is the
+  // previous account's list and must not land in the new one's cache (#588).
+  async function fetchAndCacheShikimoriRates(status?: string): Promise<unknown[] | null> {
     const accessToken = await shikimori.ensureFreshToken(store)
     const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
     if (!user) throw new Error('Not logged in to Shikimori')
@@ -92,6 +101,7 @@ export function register({
     )
     const malIds = rates.map((r) => r.anime.id)
     const malMap = await lookupByMalIds(malIds)
+    if (currentUserId() !== user.id) return null
     const entries = buildRateCacheEntries(rates, malMap)
     if (!status) {
       store.set('shikimoriUserRates', entries)
@@ -102,6 +112,7 @@ export function register({
   function refreshShikimoriRatesInBackground(): void {
     fetchAndCacheShikimoriRates()
       .then((entries) => {
+        if (!entries) return
         sync.invalidateCalendarCache()
         // A full rate refresh can carry completions made outside the app (e.g.
         // on shikimori.one); clear the recs cache so it rebuilds from the
@@ -509,9 +520,44 @@ export function register({
     store.set('shikimoriRecommendations', [])
   }
 
+  function currentUserId(): number | undefined {
+    return (store.get('shikimoriUser') as shikimori.ShikiUser | null)?.id
+  }
+
+  function getParkedQueues(): ParkedQueues {
+    return (store.get('shikimoriParkedQueues') as ParkedQueues | undefined) ?? {}
+  }
+
+  function ownerKey(user: shikimori.ShikiUser): { id: string; nickname: string } {
+    return { id: String(user.id), nickname: user.nickname }
+  }
+
+  // Everything that describes the signed-in account's list. Cleared on logout
+  // and on an account switch, where B would otherwise inherit A's list (#588).
+  function resetUserScopedState(): void {
+    store.set('shikimoriUserRates', [])
+    store.set('shikimoriAnimeDetails', {})
+    store.set('shikimoriProfile', null)
+    store.set('shikimoriFriends', [])
+    store.set('shikimoriRecommendations', [])
+    sync.abortPrefetch()
+    sync.invalidateCalendarCache()
+  }
+
   function findCachedRate(malId: number): CachedRateEntry | undefined {
     const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
     return cached.find((e) => e.rate.target_id === malId)
+  }
+
+  // The rate cache belongs to whoever is signed in now. After a switch during a
+  // handler's network await it is someone else's, so the owner's basis is the
+  // entry the handler read before that await.
+  function ownersCachedRate(
+    owner: shikimori.ShikiUser,
+    malId: number,
+    cachedAtStart: CachedRateEntry | undefined
+  ): CachedRateEntry | undefined {
+    return currentUserId() === owner.id ? findCachedRate(malId) : cachedAtStart
   }
 
   // Writes `after` to Shikimori (creating the rate when `existing` is null),
@@ -542,6 +588,9 @@ export function register({
         )
     if (stamp)
       stampRateClocks(store, userId, malId, existing ? rateValues(existing) : NO_RATE_BEFORE, after)
+
+    // The write landed on the previous account; the cache is the new one's.
+    if (currentUserId() !== userId) return updatedRate
 
     if (idx !== -1) {
       cached[idx] = {
@@ -580,8 +629,11 @@ export function register({
   // Queues `after` for the drain and patches the cached entry optimistically
   // when there is one. `basis` is what the drain's drift check compares the
   // server against. Returns a synthetic rate so callers need no offline branch.
+  // `owner` is the user the handler started for: when a logout or account
+  // switch landed during its network await, the entry is kept for that owner
+  // instead of joining the new user's live queue (#588).
   function queueRate(
-    userId: number,
+    owner: shikimori.ShikiUser,
     malId: number,
     basis: { rateId: number | null; before: RateValues },
     after: RateValues,
@@ -589,11 +641,36 @@ export function register({
     stamp: boolean
   ): shikimori.ShikiUserRate {
     const { episodes, status, score, rewatches } = after
+    const synthetic = {
+      id: basis.rateId ?? -1,
+      score,
+      status,
+      episodes,
+      rewatches,
+      target_id: malId,
+      target_type: 'Anime'
+    } satisfies shikimori.ShikiUserRate
+    const entry = { malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() }
+    // Keyed by the owner the edit was made for, parked or live.
+    if (stamp) stampRateClocks(store, owner.id, malId, basis.before, after)
+
+    if (currentUserId() !== owner.id) {
+      store.set(
+        'shikimoriParkedQueues',
+        parkEntries(getParkedQueues(), ownerKey(owner), [entry], Date.now())
+      )
+      // The live length is unchanged; the broadcast tells Connectors to reload
+      // its kept-changes rows.
+      broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, {
+        length: (store.get('shikimoriUpdateQueue') as unknown[]).length
+      })
+      return synthetic
+    }
+
     const isExpiredSession = err instanceof shikimori.ShikiAuthError
     const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
-    queue.push({ malId, rateId: basis.rateId, before: basis.before, after, queuedAt: Date.now() })
+    queue.push(entry)
     store.set('shikimoriUpdateQueue', queue)
-    if (stamp) stampRateClocks(store, userId, malId, basis.before, after)
 
     const cached = store.get('shikimoriUserRates') as CachedRateEntry[]
     const idx = cached.findIndex((e) => e.rate.target_id === malId)
@@ -626,15 +703,7 @@ export function register({
       void maybeBroadcastCleanupPrompt(cached[idx].smotretAnime, malId, status, prevStatus)
     }
 
-    return {
-      id: basis.rateId ?? -1,
-      score,
-      status,
-      episodes,
-      rewatches,
-      target_id: malId,
-      target_type: 'Anime'
-    } satisfies shikimori.ShikiUserRate
+    return synthetic
   }
 
   // When the detail-prefetch worker finishes a run, the genres aggregation has
@@ -646,33 +715,65 @@ export function register({
     return shikimori.getAuthUrl()
   })
 
+  // The live queue only ever holds the signed-in user's changes (#588). Nothing
+  // is written until `getUser` resolves: saving B's credentials while
+  // `shikimoriUser` is still A would let a drain tick send A's queue with B's
+  // token. From there on everything is synchronous.
   ipcMain.handle(CHANNELS.SHIKIMORI_EXCHANGE_CODE, async (_event, code: string) => {
     const creds = await shikimori.exchangeCode(code)
-    store.set('shikimoriCredentials', creds)
     const user = await shikimori.getUser(creds.access_token)
+
+    const prev = (store.get('shikimoriUser') as shikimori.ShikiUser | null) ?? null
+    const live = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+    const switched = prev !== null && prev.id !== user.id
+    if (switched || (!prev && live.length > 0)) {
+      // Ownerless entries can't be replayed for whoever signs in, so they wait
+      // in a bucket that is never restored automatically.
+      const owner = prev ? ownerKey(prev) : { id: UNKNOWN_OWNER, nickname: '' }
+      store.set('shikimoriParkedQueues', parkEntries(getParkedQueues(), owner, live, Date.now()))
+      store.set('shikimoriUpdateQueue', [])
+    }
+    if (switched) resetUserScopedState()
+
+    store.set('shikimoriCredentials', creds)
     store.set('shikimoriUser', user)
     // A fresh session ends the expired state, and the queue the expiry retained
     // can drain now (#244).
     store.set('shikimoriSessionExpired', false)
+
+    const restored = takeParked(getParkedQueues(), String(user.id))
+    const queue = mergeQueues(
+      store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[],
+      restored.entries
+    )
+    if (restored.entries.length > 0) {
+      store.set('shikimoriUpdateQueue', queue)
+      store.set('shikimoriParkedQueues', restored.parked)
+    }
+    broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: queue.length })
+    if (switched || restored.entries.length > 0) refreshShikimoriRatesInBackground()
+
     sync.startSyncTimer()
     void sync.syncShikimoriQueue()
     sync.broadcastSyncStatus()
     return user
   })
 
-  ipcMain.handle(CHANNELS.SHIKIMORI_LOGOUT, () => {
+  ipcMain.handle(CHANNELS.SHIKIMORI_LOGOUT, (_event, opts?: ShikiLogoutOptions) => {
+    const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
+    if (user && opts?.pending !== 'discard') {
+      const queue = store.get('shikimoriUpdateQueue') as QueuedShikimoriUpdate[]
+      store.set(
+        'shikimoriParkedQueues',
+        parkEntries(getParkedQueues(), ownerKey(user), queue, Date.now())
+      )
+    }
     store.set('shikimoriCredentials', null)
     store.set('shikimoriUser', null)
-    store.set('shikimoriUserRates', [])
     store.set('shikimoriUpdateQueue', [])
-    store.set('shikimoriAnimeDetails', {})
-    store.set('shikimoriProfile', null)
-    store.set('shikimoriFriends', [])
-    store.set('shikimoriRecommendations', [])
+    resetUserScopedState()
     // Or disconnecting while expired would leave a sticky flag with no user.
     store.set('shikimoriSessionExpired', false)
-    sync.abortPrefetch()
-    sync.invalidateCalendarCache()
     sync.stopSyncTimer()
     broadcast(EVENT_CHANNELS.SHIKIMORI_OFFLINE_QUEUE_CHANGED, { length: 0 })
     sync.broadcastSyncStatus()
@@ -759,15 +860,16 @@ export function register({
       const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
       if (!user) throw new Error('Not logged in to Shikimori')
       const after = { episodes, status, score, rewatches }
+      const cachedAtStart = findCachedRate(malId)
 
       try {
         const accessToken = await shikimori.ensureFreshToken(store)
         const existing = await shikimori.getUserRate(accessToken, user.id, malId)
         return await sendRate(accessToken, user.id, malId, existing, after, true)
       } catch (err) {
-        const entry = findCachedRate(malId)
+        const entry = ownersCachedRate(user, malId, cachedAtStart)
         if (!isQueueableRateError(err) || !entry) throw err
-        return queueRate(user.id, malId, cachedBasis(entry), after, err, true)
+        return queueRate(user, malId, cachedBasis(entry), after, err, true)
       }
     }
   )
@@ -783,6 +885,7 @@ export function register({
     async (_event, malId: number, epNum: number): Promise<shikimori.ShikiUserRate | null> => {
       const user = store.get('shikimoriUser') as shikimori.ShikiUser | null
       if (!user || !Number.isInteger(epNum) || epNum <= 0) return null
+      const cachedAtStart = findCachedRate(malId)
 
       let accessToken: string
       let existing: shikimori.ShikiUserRate | null
@@ -791,10 +894,10 @@ export function register({
         existing = await shikimori.getUserRate(accessToken, user.id, malId)
       } catch (err) {
         if (!isQueueableRateError(err)) throw err
-        const entry = findCachedRate(malId)
+        const entry = ownersCachedRate(user, malId, cachedAtStart)
         const basis = entry ? cachedBasis(entry) : { rateId: null, before: NO_RATE_BEFORE }
         const next = nextWatchedRate(basis.before, epNum)
-        return next ? queueRate(user.id, malId, basis, next, err, true) : null
+        return next ? queueRate(user, malId, basis, next, err, true) : null
       }
 
       const before = existing ? rateValues(existing) : NO_RATE_BEFORE
@@ -804,7 +907,7 @@ export function register({
         return await sendRate(accessToken, user.id, malId, existing, next, true)
       } catch (err) {
         if (!isQueueableRateError(err)) throw err
-        return queueRate(user.id, malId, { rateId: existing?.id ?? null, before }, next, err, true)
+        return queueRate(user, malId, { rateId: existing?.id ?? null, before }, next, err, true)
       }
     }
   )
@@ -825,6 +928,7 @@ export function register({
       }
     }
     const entries = await fetchAndCacheShikimoriRates(status)
+    if (!entries) return status ? [] : (store.get('shikimoriUserRates') as unknown[])
     if (!status) void sync.prefetchShikimoriDetails()
     return entries
   })
@@ -849,6 +953,20 @@ export function register({
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_OFFLINE_QUEUE_LENGTH, () => {
     return (store.get('shikimoriUpdateQueue') as unknown[]).length
+  })
+
+  ipcMain.handle(CHANNELS.SHIKIMORI_GET_PARKED_QUEUES, (): ShikiParkedQueueSummary[] =>
+    Object.entries(getParkedQueues()).map(([key, bucket]) => ({
+      ownerId: key === UNKNOWN_OWNER ? null : Number(key),
+      nickname: bucket.nickname,
+      count: bucket.entries.length,
+      parkedAt: bucket.parkedAt
+    }))
+  )
+
+  ipcMain.handle(CHANNELS.SHIKIMORI_DISCARD_PARKED_QUEUE, (_event, ownerId: number | null) => {
+    const key = ownerId === null ? UNKNOWN_OWNER : String(ownerId)
+    store.set('shikimoriParkedQueues', takeParked(getParkedQueues(), key).parked)
   })
 
   ipcMain.handle(CHANNELS.SHIKIMORI_GET_SYNC_STATUS, () => sync.getSyncStatus())

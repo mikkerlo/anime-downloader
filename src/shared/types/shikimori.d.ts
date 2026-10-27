@@ -7,6 +7,18 @@ interface ShikiUser {
   avatar: string
 }
 
+interface ShikiLogoutOptions {
+  pending: 'keep' | 'discard'
+}
+
+/** Unsynced changes kept for an account other than the signed-in one. `ownerId` is null for the `'unknown'` bucket. */
+interface ShikiParkedQueueSummary {
+  ownerId: number | null
+  nickname: string
+  count: number
+  parkedAt: number
+}
+
 type ShikiUserRateStatus =
   | 'planned'
   | 'watching'

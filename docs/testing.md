@@ -1141,17 +1141,22 @@ end (`audioEnd()`, ffprobe's last packet) and fails when they are 5 ms or more
 apart. That comparison is the #560 guard. Before `endOfStream()` the range is
 the intersection of the tracks and ends with the picture at 100.02, so the
 spec waits for the call itself (#604). Before opening the player it wraps
-`MediaSource.prototype.endOfStream` and `SourceBuffer.prototype.appendBuffer`
-in the page and records each call's time and the source's `readyState`, marks
-the seek in the same timeline, and waits up to 20 s for an `endOfStream()`
-after the seek with no append after it. The `buffered after EOS` annotation
-carries the timeline from the seek on (append runs folded into one entry), so
-a red run shows whether the call never came or a later append re-opened the
-source. The intermittent local reds (#604) are the first kind: all of the
-run's appends land and `endOfStream()` is never called, because the seeked
-run's `player:stream-end` reached the renderer before the `player:stream-seek`
+`MediaSource.prototype.addSourceBuffer`, `MediaSource.prototype.endOfStream`
+and `SourceBuffer.prototype.appendBuffer` in the page and records each call's
+time and the source's `readyState` (the `addSourceBuffer` wrap maps each
+SourceBuffer to its MediaSource), and whether an `endOfStream()` threw. It
+marks the seek in the same timeline and waits up to 20 s for an
+`endOfStream()` after the seek that did not throw, with no append after it.
+The `buffered after EOS` annotation carries the timeline from the seek on
+(append runs folded into one entry), so a red run shows whether the call never
+came, threw, or was followed by an append that re-opened the source. The
+intermittent local reds (#604) are the first kind: all of the run's appends
+land and `endOfStream()` is never called, because the seeked run's
+`player:stream-end` reached the renderer before the `player:stream-seek`
 reply, which then clears it. That is a player race, not a spec timing
-problem, and the spec keeps failing on it.
+problem, and the spec keeps failing on it. Before the player opens, the spec
+calls `endOfStream()` on a closed MediaSource and asserts the wrapper records
+it as thrown, then drops that entry.
 
 Each case also records how long each phase took (`build`: the cached fixture
 plus the pre-launch ffmpeg checks; `launch`; `ready`: `ffmpegCheck()` and the

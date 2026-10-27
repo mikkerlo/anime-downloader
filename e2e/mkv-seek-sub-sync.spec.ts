@@ -75,6 +75,8 @@ interface MseEvent {
   /** The MediaSource's readyState when the call was made. */
   readyState: string
   bytes?: number
+  /** The call threw, e.g. InvalidStateError while the SourceBuffer is updating. */
+  threw?: true
 }
 
 // Records MediaSource.endOfStream and SourceBuffer.appendBuffer calls, so the
@@ -85,10 +87,11 @@ function instrumentMse(page: Page): Promise<void> {
     const timeline: MseEvent[] = []
     ;(window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline = timeline
     const owner = new WeakMap<SourceBuffer, MediaSource>()
-    const rec = (ev: MseEvent['ev'], ms: MediaSource | undefined, bytes?: number): void => {
+    const rec = (ev: MseEvent['ev'], ms: MediaSource | undefined, bytes?: number): MseEvent => {
       const e: MseEvent = { ev, t: performance.now(), readyState: ms?.readyState ?? 'unknown' }
       if (bytes !== undefined) e.bytes = bytes
       timeline.push(e)
+      return e
     }
     const addSourceBuffer = MediaSource.prototype.addSourceBuffer
     MediaSource.prototype.addSourceBuffer = function (type: string) {
@@ -99,8 +102,13 @@ function instrumentMse(page: Page): Promise<void> {
     }
     const endOfStream = MediaSource.prototype.endOfStream
     MediaSource.prototype.endOfStream = function (error?: EndOfStreamError) {
-      rec('endOfStream', this)
-      return endOfStream.call(this, error)
+      const e = rec('endOfStream', this)
+      try {
+        return endOfStream.call(this, error)
+      } catch (err) {
+        e.threw = true
+        throw err
+      }
     }
     const appendBuffer = SourceBuffer.prototype.appendBuffer
     SourceBuffer.prototype.appendBuffer = function (data: BufferSource) {
@@ -110,17 +118,23 @@ function instrumentMse(page: Page): Promise<void> {
   })
 }
 
-// True once the last endOfStream after the seek has no append after it.
+// True once the last endOfStream after the seek that didn't throw has no
+// append after it.
 function eosAfterSeek(timeline: MseEvent[]): boolean {
   let seek = -1
   let eos = -1
   let append = -1
   timeline.forEach((e, i) => {
     if (e.ev === 'seek') seek = i
-    else if (e.ev === 'endOfStream') eos = i
+    else if (e.ev === 'endOfStream' && !e.threw) eos = i
     else if (e.ev === 'appendBuffer') append = i
   })
   return seek >= 0 && eos > seek && eos > append
+}
+
+function eosThrewAfterSeek(timeline: MseEvent[]): boolean {
+  const seek = timeline.findIndex((e) => e.ev === 'seek')
+  return seek >= 0 && timeline.slice(seek).some((e) => e.ev === 'endOfStream' && e.threw)
 }
 
 // The timeline from the seek on, ms after it, with runs of appends folded into
@@ -153,7 +167,12 @@ function summarizeTimeline(timeline: MseEvent[]): unknown {
       if (!run.readyState.includes(e.readyState)) run.readyState.push(e.readyState)
     } else {
       run = null
-      after.push({ ev: e.ev, t: ms(e.t), readyState: e.readyState })
+      after.push({
+        ev: e.ev,
+        t: ms(e.t),
+        readyState: e.readyState,
+        ...(e.threw && { threw: true })
+      })
     }
   }
   return { before, after }
@@ -299,6 +318,20 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
 
         await page.waitForFunction(() => typeof (window as any).__openTestPlayer === 'function')
         await instrumentMse(page)
+        // The wrapper must record a throw: endOfStream on a closed source throws
+        // InvalidStateError. The probe entry is dropped before the player opens.
+        expect(
+          await page.evaluate(() => {
+            const timeline = (window as unknown as { __mseTimeline: MseEvent[] }).__mseTimeline
+            try {
+              new MediaSource().endOfStream()
+            } catch {
+              /* expected */
+            }
+            const probe = timeline.splice(0)
+            return probe.map((e) => ({ ev: e.ev, readyState: e.readyState, threw: e.threw }))
+          })
+        ).toEqual([{ ev: 'endOfStream', readyState: 'closed', threw: true }])
         // subtitleContent '' makes the embedded track arrive over
         // player:stream-subtitles, the real extraction path.
         await page.evaluate((filePath) => {
@@ -420,10 +453,12 @@ function runSeekCase(c: SeekCase): () => Promise<void> {
           const state = await videoState(page)
           const { buffered: ranges } = state
           const end = ranges.length > 0 ? ranges[ranges.length - 1][1] : 0
-          const timeline = summarizeTimeline(await mseTimeline(page))
+          const raw = await mseTimeline(page)
+          const timeline = summarizeTimeline(raw)
           const eos = JSON.stringify({ end, expectedEnd, final: state, timeline })
           test.info().annotations.push({ type: 'buffered after EOS', description: eos })
-          expect(eosCalled, `endOfStream never called after the seek: ${eos}`).toBe(true)
+          const missing = eosThrewAfterSeek(raw) ? 'threw' : 'was never called'
+          expect(eosCalled, `endOfStream ${missing} after the seek: ${eos}`).toBe(true)
           expect(Math.abs(end - expectedEnd), `buffered ends off the audio: ${eos}`).toBeLessThan(
             0.005
           )

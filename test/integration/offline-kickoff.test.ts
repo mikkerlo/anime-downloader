@@ -133,6 +133,30 @@ describe('the online edge drains the live queue only (#567 × #588)', () => {
     expect(store.get('shikimoriUpdateQueue')).toHaveLength(2)
   })
 
+  it('a 5xx during the online drain keeps that item and drains the rest (#602)', async () => {
+    getUserRate.mockImplementation(async (_t, _u, malId: number) => {
+      if (malId === 10) throw new ShikiApiError('Shikimori API error: 503', 503)
+      return serverRate(malId)
+    })
+    const { store, goOnline } = boot()
+    goOnline()
+    await settle()
+    expect(getUserRate.mock.calls.map((c) => c[2]).sort()).toEqual([10, 11])
+    const kept = store.get('shikimoriUpdateQueue') as Array<{ malId: number; queuedAt: number }>
+    expect(kept.map((q) => [q.malId, q.queuedAt])).toEqual([[10, 1]])
+    expect(store.get('shikimoriParkedQueues')).toEqual(PARKED)
+  })
+
+  it('an OfflineError mid-drain (offline again) stops it and keeps the queue', async () => {
+    const { OfflineError } = await import('../../src/main/lib/net')
+    getUserRate.mockRejectedValue(new OfflineError())
+    const { store, goOnline } = boot()
+    goOnline()
+    await settle()
+    expect(getUserRate).toHaveBeenCalledTimes(1)
+    expect(store.get('shikimoriUpdateQueue')).toHaveLength(2)
+  })
+
   it('a 429 during the online drain stops it and keeps the queue (#600)', async () => {
     getUserRate.mockReset().mockRejectedValue(new ShikiApiError('Shikimori API error: 429', 429))
     const { store, goOnline } = boot()

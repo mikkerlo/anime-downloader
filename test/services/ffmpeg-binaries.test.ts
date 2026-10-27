@@ -256,6 +256,39 @@ describe('ensureFfmpeg zip install', () => {
     expect(getFfmpegPath()).toBe('')
   })
 
+  // The other arm of the deferral: the switch flipped while a request was in
+  // flight, so the error is the transport's, not a refusal. Only a
+  // network-coded error defers; a bare TypeError is a bug and still fails.
+  it.each([
+    [
+      'a network-coded error defers',
+      () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENETUNREACH' } }),
+      'deferred'
+    ],
+    [
+      'a bare TypeError (a bug) still fails',
+      () => new TypeError("reading 'x' of undefined"),
+      'failed'
+    ]
+  ])('offline mid-request: %s', async (_name, makeErr, expected) => {
+    let offline = false
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      offline = true
+      throw makeErr()
+    })
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as Parameters<
+      typeof ensureFfmpeg
+    >[0]
+    const outcome = await ensureFfmpeg(win, () => offline).then(
+      (v) => v,
+      () => 'rejected'
+    )
+    const statuses = send.mock.calls.map((c) => c[1]?.status)
+    expect(statuses.at(-1)).toBe(expected)
+    expect(outcome).toBe(expected === 'deferred' ? '' : 'rejected')
+  })
+
   it('wraps an extractZip failure with the ffmpeg prefix and the recovery step', async () => {
     const notAZip = Buffer.from('definitely not a zip archive', 'utf8')
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {

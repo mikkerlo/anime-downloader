@@ -209,6 +209,30 @@ describe('first-launch binary installs', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it.each([
+    [
+      'a network-coded error defers',
+      () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }),
+      'deferred'
+    ],
+    ['a bare TypeError (a bug) still fails', () => new TypeError('x is not a function'), 'failed']
+  ])('fpcalc, offline mid-request: %s', async (_name, makeErr, expected) => {
+    fetchSpy.mockImplementation(async () => {
+      offline = true
+      throw makeErr()
+    })
+    offline = false
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } }
+    const outcome = await ensureFpcalc(win as never, isOffline).then(
+      (v) => v,
+      () => 'rejected'
+    )
+    const statuses = send.mock.calls.map((c) => (c[1] as { status: string }).status)
+    expect(statuses.at(-1)).toBe(expected)
+    expect(outcome).toBe(expected === 'deferred' ? '' : 'rejected')
+  })
+
   it('an install refused mid-way by the offline switch defers instead of reporting failure', async () => {
     // The install's own check said online; `fetchWithTimeout` then refuses.
     offline = false

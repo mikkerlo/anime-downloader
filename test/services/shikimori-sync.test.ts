@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 
 const ensureFreshToken = vi.fn()
@@ -447,6 +447,223 @@ describe('ShikimoriSyncService — syncShikimoriQueue happy path', () => {
   )
 })
 
+// A 5xx is often specific to one item, so the drain moves on and keeps the
+// edit. Only a continuous 24 h run of 5xx on its newest entry drops it (#599).
+describe('ShikimoriSyncService — 5xx keeps the edit (#599)', () => {
+  const RETRY = 'Shikimori server error — will retry'
+  const HOUR = 60 * 60 * 1000
+  const T0 = Date.UTC(2026, 9, 1)
+  const serverError = (status = 503) => new ShikiApiError(`Shikimori API error: ${status}`, status)
+  const queued = (malId: number, queuedAt: number) => ({
+    malId,
+    rateId: null,
+    queuedAt,
+    before: { episodes: 0, status: 'watching', score: 0, rewatches: 0 },
+    after: { episodes: 1, status: 'watching', score: 0, rewatches: 0 }
+  })
+  const serverRate = (malId: number) => ({
+    id: 900 + malId,
+    target_id: malId,
+    episodes: 0,
+    status: 'watching',
+    score: 0,
+    rewatches: 0
+  })
+  const applied = (malId: number) => ({ ...serverRate(malId), episodes: 1 })
+  type Entry = ReturnType<typeof queued> & {
+    firstServerErrorAt?: number
+    lastServerErrorAt?: number
+  }
+  const live = (store: InMemoryStorage) => store.get('shikimoriUpdateQueue') as Entry[]
+  type Svc = ReturnType<typeof makeService>['svc']
+
+  async function drainAt(svc: Svc, t: number): Promise<void> {
+    vi.setSystemTime(t)
+    const drain = svc.syncShikimoriQueue()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await drain
+    svc.stopSyncTimer()
+  }
+
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(T0)
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    warn.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('keeps every edit through a 2 h outage of 60 s ticks and reports the retry message', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1), queued(2, 2)] })
+    getUserRate.mockRejectedValue(serverError())
+
+    svc.startSyncTimer()
+    await vi.advanceTimersByTimeAsync(2 * HOUR + 1_000)
+    svc.stopSyncTimer()
+
+    expect(getUserRate).toHaveBeenCalledTimes(240)
+    expect(live(store).map((e) => e.malId)).toEqual([1, 2])
+    expect(svc.getSyncStatus()).toMatchObject({
+      state: 'idle',
+      lastSyncAt: 0,
+      lastSyncError: RETRY
+    })
+  })
+
+  it("doesn't advance lastSyncAt on a drain where one item hit a 5xx and another synced", async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockResolvedValueOnce(serverRate(1))
+    updateUserRate.mockResolvedValueOnce(applied(1))
+    await drainAt(svc, T0)
+    expect(svc.getSyncStatus().lastSyncAt).toBe(T0)
+
+    store.set('shikimoriUpdateQueue', [queued(2, 2), queued(3, 3)])
+    getUserRate.mockImplementation(async (_t: string, _u: number, malId: number) => {
+      if (malId === 2) throw serverError()
+      return serverRate(malId)
+    })
+    updateUserRate.mockImplementation(async (_t: string, id: number) => applied(id - 900))
+    await drainAt(svc, T0 + HOUR)
+
+    expect(updateUserRate).toHaveBeenLastCalledWith('access-token', 903, 1, 'watching', 0, 0)
+    expect(live(store).map((e) => e.malId)).toEqual([2])
+    expect(svc.getSyncStatus().lastSyncAt).toBe(T0)
+    expect(svc.getSyncStatus().lastSyncError).toBe(RETRY)
+  })
+
+  it.each([500, 502, 503])('keeps the edit and starts its clock on a %i', async (status) => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockRejectedValue(serverError(status))
+
+    await drainAt(svc, T0)
+
+    expect(live(store)).toEqual([
+      { ...queued(1, 1), firstServerErrorAt: T0, lastServerErrorAt: T0 }
+    ])
+    expect(svc.getSyncStatus().lastSyncError).toBe(RETRY)
+  })
+
+  // Retrying is safe only because the drift check sees the committed write.
+  it('reconciles instead of writing twice when updateUserRate landed but answered 500', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockResolvedValueOnce(serverRate(1))
+    updateUserRate.mockRejectedValueOnce(serverError(500))
+    await drainAt(svc, T0)
+    expect(live(store)).toHaveLength(1)
+
+    getUserRate.mockResolvedValueOnce(applied(1))
+    await drainAt(svc, T0 + 60_000)
+
+    expect(updateUserRate).toHaveBeenCalledTimes(1)
+    expect(live(store)).toEqual([])
+    expect(svc.getSyncStatus().lastSyncError).toBeNull()
+  })
+
+  it('reconciles instead of creating twice when createUserRate landed but answered 500', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockResolvedValueOnce(null)
+    createUserRate.mockRejectedValueOnce(serverError(500))
+    await drainAt(svc, T0)
+    expect(live(store)).toHaveLength(1)
+
+    getUserRate.mockResolvedValueOnce(applied(1))
+    await drainAt(svc, T0 + 60_000)
+
+    expect(createUserRate).toHaveBeenCalledTimes(1)
+    expect(updateUserRate).not.toHaveBeenCalled()
+    expect(live(store)).toEqual([])
+  })
+
+  it('drops the edit with a warning after 24 h of continuous 5xx', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockRejectedValue(serverError())
+
+    for (let t = T0; t < T0 + 24 * HOUR; t += HOUR / 2) await drainAt(svc, t)
+    expect(live(store)).toEqual([
+      { ...queued(1, 1), firstServerErrorAt: T0, lastServerErrorAt: T0 + 23.5 * HOUR }
+    ])
+
+    await drainAt(svc, T0 + 24 * HOUR)
+    expect(live(store)).toEqual([])
+    expect(warn).toHaveBeenCalledWith(
+      '[shikimori sync] dropping item',
+      1,
+      'after 24 h of server errors:',
+      'Shikimori API error: 503'
+    )
+  })
+
+  it('restarts the clock for a fresh edit, so the old entry’s 24 h mark drops nothing', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockRejectedValue(serverError())
+
+    let t = T0
+    for (; t < T0 + 12 * HOUR; t += HOUR / 2) await drainAt(svc, t)
+    store.set('shikimoriUpdateQueue', [...live(store), queued(1, 2)])
+    for (; t <= T0 + 24 * HOUR; t += HOUR / 2) await drainAt(svc, t)
+    expect(live(store)).toHaveLength(2)
+    expect(live(store)[1]).toMatchObject({ queuedAt: 2, firstServerErrorAt: T0 + 12 * HOUR })
+
+    for (; t < T0 + 36 * HOUR; t += HOUR / 2) await drainAt(svc, t)
+    expect(live(store)).toHaveLength(2)
+    await drainAt(svc, T0 + 36 * HOUR)
+    expect(live(store)).toEqual([])
+  })
+
+  it('restarts the clock after a gap of more than 1 h between 5xx instead of expiring', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockRejectedValue(serverError())
+
+    await drainAt(svc, T0)
+    await drainAt(svc, T0 + 25 * HOUR)
+
+    expect(live(store)).toEqual([
+      { ...queued(1, 1), firstServerErrorAt: T0 + 25 * HOUR, lastServerErrorAt: T0 + 25 * HOUR }
+    ])
+  })
+
+  it('leaves no entry, and so no clock, behind once the item succeeds', async () => {
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockRejectedValueOnce(serverError()).mockResolvedValueOnce(serverRate(1))
+    updateUserRate.mockResolvedValueOnce(applied(1))
+
+    await drainAt(svc, T0)
+    expect(live(store)[0].firstServerErrorAt).toBe(T0)
+    await drainAt(svc, T0 + 60_000)
+
+    expect(live(store)).toEqual([])
+    expect(svc.getSyncStatus()).toMatchObject({ lastSyncAt: T0 + 60_000, lastSyncError: null })
+  })
+
+  it("stamps the parked entry, not the new owner's queue, when the owner changed mid-item", async () => {
+    const bobs = [queued(77, 9)]
+    const { svc, store } = makeService({ shikimoriUpdateQueue: [queued(1, 1)] })
+    getUserRate.mockImplementationOnce(async () => {
+      store.set('shikimoriUser', { id: 2, nickname: 'b' })
+      store.set('shikimoriUpdateQueue', bobs)
+      store.set('shikimoriParkedQueues', {
+        '1': { nickname: 'a', entries: [queued(1, 1)], parkedAt: 5 }
+      })
+      throw serverError()
+    })
+    // Hold the re-kicked drain for the new owner at its token refresh.
+    ensureFreshToken
+      .mockResolvedValueOnce('access-token')
+      .mockReturnValueOnce(new Promise<string>(() => {}))
+
+    await svc.syncShikimoriQueue()
+
+    const parked = store.get('shikimoriParkedQueues') as Record<string, { entries: Entry[] }>
+    expect(parked['1'].entries).toEqual([
+      { ...queued(1, 1), firstServerErrorAt: T0, lastServerErrorAt: T0 }
+    ])
+    expect(live(store)).toEqual(bobs)
+  })
+})
+
 describe('ShikimoriSyncService — expired session', () => {
   function queuedService(initial: Record<string, unknown> = {}) {
     return makeService({
@@ -565,6 +782,20 @@ describe('ShikimoriSyncService — refreshShikimoriDetailsForMalId', () => {
     const result = await svc.refreshShikimoriDetailsForMalId(1)
     expect(result).toBeNull()
   })
+
+  it('logs a 5xx as one short line and returns null (#599)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { svc } = makeService()
+      getAnimeDetails.mockRejectedValue(new ShikiApiError('Shikimori API error: 502', 502))
+      expect(await svc.refreshShikimoriDetailsForMalId(1)).toBeNull()
+      expect(warn.mock.calls).toEqual([
+        ['[shikimori] single-show refresh: server error', 502, 'for', 1]
+      ])
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 function rate(target_id: number, status: string) {
@@ -646,6 +877,32 @@ describe('ShikimoriSyncService — prefetchShikimoriDetails genre coverage (#183
 
       expect(getAnimeDetails).toHaveBeenCalledTimes(1)
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('logs a 5xx as one short line and moves on to the next MAL ID (#599)', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { svc } = makeService({
+        shikimoriUserRates: [rate(10, 'watching'), rate(20, 'watching')],
+        shikimoriAnimeDetails: {}
+      })
+      getAnimeDetails
+        .mockRejectedValueOnce(new ShikiApiError('Shikimori API error: 503', 503))
+        .mockResolvedValue({ id: 20, name: 'x', genres: [] })
+
+      const run = svc.prefetchShikimoriDetails()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await run
+
+      expect(getAnimeDetails.mock.calls.map((c) => c[1])).toEqual([10, 20])
+      expect(warn.mock.calls).toEqual([
+        ['[shikimori prefetch] server error', 503, 'for', 10, 'skipping']
+      ])
+    } finally {
+      warn.mockRestore()
       vi.useRealTimers()
     }
   })
@@ -820,6 +1077,32 @@ describe('ShikimoriSyncService — owner guard', () => {
     expect(svc.getSyncStatus().lastSyncError).toBeNull()
     await vi.waitFor(() => expect(getUserRate).toHaveBeenCalledWith('access-token-b', 2, 77))
   })
+
+  // The new owner has nothing queued, so no drain of theirs would ever clear a
+  // message the old account's item left behind (#599 review).
+  it.each([
+    ['401', 401],
+    ['403', 403],
+    ['429', 429],
+    ['503', 503]
+  ])(
+    "an old-account %s on the item in flight across a switch doesn't reach the new owner's lastSyncError",
+    async (_label, status) => {
+      const { svc, store } = makeService({ shikimoriUpdateQueue: [entry(1, 1)] })
+      getUserRate.mockImplementationOnce(async () => {
+        store.set('shikimoriUser', { id: 2, nickname: 'b' })
+        store.set('shikimoriUpdateQueue', [])
+        store.set('shikimoriParkedQueues', {
+          '1': { nickname: 'a', entries: [entry(1, 1)], parkedAt: 5 }
+        } satisfies Parked)
+        throw new ShikiApiError(`Shikimori API error: ${status}`, status)
+      })
+
+      await svc.syncShikimoriQueue()
+
+      expect(svc.getSyncStatus()).toMatchObject({ queueLength: 0, lastSyncError: null })
+    }
+  )
 })
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {

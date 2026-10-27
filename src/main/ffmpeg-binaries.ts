@@ -8,7 +8,7 @@ import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
 import { fetchWithTimeout, OfflineError } from './lib/net'
-import { isNetworkError } from './lib/errors'
+import { isTransportError } from './lib/errors'
 
 const FFMPEG_VERSION = '6.1'
 const RELEASE_BASE = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}`
@@ -289,9 +289,9 @@ export async function ensureFfmpeg(
     // The app went offline mid-install (#567), e.g. between the ffmpeg and
     // ffprobe archives: skipped, not failed, so no error modal; the online
     // kick-off retries it.
-    if (err instanceof OfflineError || (isOffline() && isNetworkError(err))) {
+    if (err instanceof OfflineError || (isOffline() && isTransportError(err))) {
       sendProgress('deferred')
-      console.log('[ffmpeg] Offline: install deferred until the app is online')
+      console.log('[ffmpeg] Offline: install deferred until the app is online', err)
       return ''
     }
     // The renderer renders this verbatim (#469) — it is the only place a user

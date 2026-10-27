@@ -21,3 +21,26 @@ export function pruneExpiredTombstones(meta: SyncMeta, now: number): SyncMeta {
   }
   return { ...meta, titles }
 }
+
+/**
+ * A drive doc's tombstones without the ones older than `TOMBSTONE_MAX_AGE_MS`
+ * or for a title that has left the library's scope (S9 #584 calls this before
+ * its drive write). With a base, a deletion propagates without a tombstone,
+ * so dropping one only matters to a PC that first merges with no base.
+ */
+export function pruneDocTombstones(
+  tombstones: SyncDoc['tombstones'],
+  now: number,
+  scope: Iterable<string | number>
+): SyncDoc['tombstones'] {
+  const inScope = new Set([...scope].map(String))
+  const out: SyncDoc['tombstones'] = {}
+  for (const [animeId, stones] of Object.entries(tombstones)) {
+    if (!inScope.has(animeId)) continue
+    const kept = { ...stones }
+    if (isExpiredTombstone(kept.starred, now)) delete kept.starred
+    if (isExpiredTombstone(kept.priority, now)) delete kept.priority
+    if (kept.starred || kept.priority) out[animeId] = kept
+  }
+  return out
+}

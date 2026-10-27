@@ -31,3 +31,47 @@ export function watchSyncOf(row: {
 }): WatchProgressSync {
   return row.sync ?? legacyWatchSync(row)
 }
+
+// How far ahead of this PC's clock an imported `at` may be before it is clamped.
+export const MAX_FUTURE_SKEW_MS = 120_000
+
+/** The later of two clocks; on a tie, `a` (the local side). */
+export function laterClock<T extends SyncClock>(a: T, b: T): T {
+  return b.at > a.at ? b : a
+}
+
+/**
+ * `doc` with every clock more than `MAX_FUTURE_SKEW_MS` in the future moved
+ * back to `now`, and one report per clamp. The input is not modified.
+ */
+export function clampSyncDoc(
+  doc: SyncDoc,
+  now: number
+): { doc: SyncDoc; clamped: SyncClampReport[] } {
+  const out = structuredClone(doc)
+  const clamped: SyncClampReport[] = []
+  const clamp = (clock: SyncClock | undefined, path: string): void => {
+    if (!clock || clock.at - now <= MAX_FUTURE_SKEW_MS) return
+    clamped.push({ path, at: clock.at, clampedTo: now })
+    clock.at = now
+  }
+  for (const [id, title] of Object.entries(out.titles)) {
+    for (const [ep, entry] of Object.entries(title.watch ?? {})) {
+      clamp(entry.position, `titles.${id}.watch.${ep}.position`)
+      clamp(entry.watched, `titles.${id}.watch.${ep}.watched`)
+    }
+    clamp(title.starred, `titles.${id}.starred`)
+    clamp(title.priority, `titles.${id}.priority`)
+    if (title.rate) {
+      for (const field of ['episodes', 'status', 'score', 'rewatches'] as const) {
+        clamp(title.rate[field], `titles.${id}.rate.${field}`)
+      }
+    }
+  }
+  clamp(out.priorityOrder, 'priorityOrder')
+  for (const [id, stones] of Object.entries(out.tombstones)) {
+    clamp(stones.starred, `tombstones.${id}.starred`)
+    clamp(stones.priority, `tombstones.${id}.priority`)
+  }
+  return { doc: out, clamped }
+}

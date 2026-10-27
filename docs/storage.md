@@ -12,6 +12,10 @@ The main process is the store's only writer. `createStorageService` (`src/main/s
 
 External edits to `config.json` while the app runs are not observed (single-writer by design).
 
+### Merge bases: `userData/sync-bases/` (#572)
+
+Each PC keeps its own merge base per party in `userData/sync-bases/<party>.json`, where `<party>` is `library-<libraryId>` or `shikimori-<ownerId>`. A base is `{ baseVersion: 1, party, stateGeneration, doc }`, with `doc` a `SyncDoc` (see [Watch Progress](./watch-progress.md#the-syncdoc-and-the-merge-field-table-572)). Bases stay out of `config.json` because every store write re-serializes that whole file. `SyncBaseStore` (`src/main/lib/sync-state/bases.ts`) reads and writes them atomically: the new base goes to `<party>.json.tmp` and is then renamed over the old one, so a crash between the two leaves the old base intact. Its file system is injected, keeping `lib/sync-state/` free of `fs`. S9 (#584) is the first writer and deletes a library's base when the library is forgotten.
+
 ## Hot/Cold Storage
 
 In advanced storage mode, files are managed across two directories:

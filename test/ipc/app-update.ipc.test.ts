@@ -32,13 +32,23 @@ function registerRouter(opts: { offline?: boolean; lastUpdateCheck?: number } = 
   invoke: (channel: string) => Promise<unknown>
   send: Mock
   store: InMemoryStorage
+  /** Moves the stub offline service and fires its `onChange` listeners. */
+  setMode: (mode: OfflineMode) => void
 } {
   const send = vi.fn()
   ;(BrowserWindow.getAllWindows as Mock).mockReturnValue([{ webContents: { send } }])
   const store = new InMemoryStorage()
   // Suppress the boot-time check so each test drives handlers explicitly.
   store.set('lastUpdateCheck', opts.lastUpdateCheck ?? Date.now())
-  const offlineService = { isOffline: () => opts.offline ?? false }
+  let mode: OfflineMode = opts.offline ? 'offline-manual' : 'online'
+  const listeners: Array<(s: OfflineState) => void> = []
+  const offlineService = {
+    isOffline: () => mode !== 'online',
+    onChange: (l: (s: OfflineState) => void) => {
+      listeners.push(l)
+      return () => {}
+    }
+  }
   register({ store, offlineService } as unknown as AppDeps)
   const handlers = new Map<string, (...args: unknown[]) => unknown>(
     (ipcMain.handle as Mock).mock.calls.map(([channel, handler]) => [channel, handler])
@@ -46,7 +56,11 @@ function registerRouter(opts: { offline?: boolean; lastUpdateCheck?: number } = 
   return {
     invoke: async (channel) => handlers.get(channel)!({}),
     send,
-    store
+    store,
+    setMode: (next) => {
+      mode = next
+      for (const l of listeners) l({ mode, since: 0, lastProbeAt: null })
+    }
   }
 }
 
@@ -203,5 +217,22 @@ describe('update IPC — offline', () => {
   it('runs the startup check online (the control)', () => {
     registerRouter({ offline: false, lastUpdateCheck: 0 })
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('a daily check skipped at boot runs once on the first online edge', () => {
+    const { setMode } = registerRouter({ offline: true, lastUpdateCheck: 0 })
+    setMode('offline-auto')
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+    setMode('offline-auto')
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('an online edge runs no check when boot did not skip one', () => {
+    const { setMode } = registerRouter({ offline: true })
+    setMode('online')
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
   })
 })

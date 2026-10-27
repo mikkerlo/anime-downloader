@@ -11,6 +11,7 @@ import { EVENT_CHANNELS } from '../../src/shared/ipc/channels'
 import { createShikimoriSyncService } from '../../src/main/services/shikimori-sync'
 import { ensureFfmpeg, getFfmpegDir, clearFfmpegPaths } from '../../src/main/ffmpeg-binaries'
 import { ensureFpcalc, getFpcalcDir } from '../../src/main/fpcalc-binaries'
+import { setOfflineCheck } from '../../src/main/lib/net'
 import { InMemoryStorage } from '../helpers/in-memory-storage'
 import { makeDownloadManagerStub, makeSmotretApiStub, makeHarness } from '../helpers/app-harness'
 
@@ -206,6 +207,23 @@ describe('first-launch binary installs', () => {
   it('ensureFpcalc skips the download while offline', async () => {
     expect(await ensureFpcalc(undefined, isOffline)).toBe('')
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('an install refused mid-way by the offline switch defers instead of reporting failure', async () => {
+    // The install's own check said online; `fetchWithTimeout` then refuses.
+    offline = false
+    setOfflineCheck(() => true)
+    const send = vi.fn()
+    const win = { isDestroyed: () => false, webContents: { send } }
+    try {
+      expect(await ensureFpcalc(win as never, isOffline)).toBe('')
+    } finally {
+      setOfflineCheck(null)
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+    const statuses = send.mock.calls.map((c) => (c[1] as { status: string }).status)
+    expect(statuses).not.toContain('failed')
+    expect(statuses.at(-1)).toBe('deferred')
   })
 
   it('online, the same call does try the network (the control)', async () => {

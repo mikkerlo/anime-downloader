@@ -118,12 +118,25 @@ export function register({ store, offlineService }: AppDeps): void {
     }
   })
 
-  const lastCheck = (store.get('lastUpdateCheck') as number) || 0
-  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000 && !isOffline()) {
+  const runDailyCheck = (): void => {
     if (manualUpdate) {
       checkForUpdateManually().catch(() => {})
     } else {
       autoUpdater.checkForUpdates().catch(() => {})
     }
   }
+
+  // A daily check that boot skipped because the app was offline runs on the
+  // first online edge instead of waiting for the next launch (#567).
+  let skippedOffline = false
+  const lastCheck = (store.get('lastUpdateCheck') as number) || 0
+  if (Date.now() - lastCheck > 24 * 60 * 60 * 1000) {
+    if (isOffline()) skippedOffline = true
+    else runDailyCheck()
+  }
+  offlineService?.onChange((state) => {
+    if (!skippedOffline || state.mode !== 'online') return
+    skippedOffline = false
+    runDailyCheck()
+  })
 }

@@ -31,6 +31,7 @@ import { setNetworkObserver, setOfflineCheck } from './lib/net'
 import { installOfflineRequestGate } from './lib/offline-request-gate'
 import { createOfflineService } from './services/offline'
 import { createOfflineKickoff, type OfflineKickoff } from './services/offline/kickoff'
+import { createBinaryInstalls } from './lib/binary-installs'
 import { createAnimeVideoHandler } from './streaming/anime-video-protocol'
 import type { AnimeSearchResult, AnimeDetail } from './smotret-api'
 import { ensureFpcalc, getFpcalcPath } from './fpcalc-binaries'
@@ -782,6 +783,10 @@ async function bootstrap(): Promise<void> {
 
   createWindow()
   const mainWin = BrowserWindow.getAllWindows()[0]
+  const binaryInstalls = createBinaryInstalls({
+    ensureFfmpeg: () => ensureFfmpeg(mainWin, isOffline),
+    ensureFpcalc: () => ensureFpcalc(mainWin, isOffline)
+  })
 
   // First-launch binary downloads run in the background — nothing else in
   // bootstrap may wait on the network. checkFfmpeg() never rejects; a failed
@@ -789,14 +794,12 @@ async function bootstrap(): Promise<void> {
   // install is skipped rather than failed, and the online kick-off retries it.
   void (async () => {
     try {
-      await ensureFfmpeg(mainWin, isOffline)
+      await binaryInstalls.ffmpeg()
     } catch (err) {
       console.error('[ffmpeg] Failed to ensure ffmpeg:', err)
     }
     // Best-effort: skip-detector will surface a clear error if fpcalc is missing.
-    ensureFpcalc(mainWin, isOffline).catch((err) =>
-      console.error('[fpcalc] Failed to ensure fpcalc:', err)
-    )
+    binaryInstalls.fpcalc().catch((err) => console.error('[fpcalc] Failed to ensure fpcalc:', err))
     resolveFfmpegReady(await checkFfmpeg())
     // Crash recovery (#63): no locks exist at boot, so any 'deferred' episode
     // restored from queue.json gets its rename + merge now.
@@ -820,10 +823,7 @@ async function bootstrap(): Promise<void> {
     resumeDownloads: () => downloadManager.resumeAfterOffline(),
     suspendSyncplay: () => syncplay.suspendForOffline(),
     resumeSyncplay: () => syncplay.resumeAfterOffline(),
-    retryBinaries: async () => {
-      await ensureFfmpeg(mainWin, isOffline)
-      await ensureFpcalc(mainWin, isOffline)
-    },
+    retryBinaries: () => binaryInstalls.retry(),
     runAutoDownloadTick: () => runAutoDownloadTick('timer'),
     prefetchShikimoriDetails: () => shikimoriSyncService.prefetchShikimoriDetails()
   })

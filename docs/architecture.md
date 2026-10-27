@@ -128,11 +128,11 @@ For the per-domain IPC router split and the disposable subscription contract, se
 | Gate | Where | While offline |
 |---|---|---|
 | Renderer http(s) | `lib/offline-request-gate.ts`, installed next to `installShikimoriReferer` | `onBeforeRequest` cancels it |
-| Updates | `ipc/app.ipc.ts` | `UPDATE_CHECK` / `UPDATE_DOWNLOAD` broadcast `{ status: 'error', error: 'Offline' }`; the startup check is skipped |
+| Updates | `ipc/app.ipc.ts` | `UPDATE_CHECK` / `UPDATE_DOWNLOAD` broadcast `{ status: 'error', error: 'Offline' }`; a due daily check is skipped at boot and runs on the first online edge instead (the router's own `offlineService.onChange` listener) |
 | Syncplay | `syncplay.ts` (`setOfflineCheck`, `suspendForOffline`, `resumeAfterOffline`) | Every socket open is refused with `SYNCPLAY_OFFLINE_ERROR`; entering offline drops an open session without a retry; back online a dropped session reconnects if `autoReconnect` |
 | Auto-download | `auto-downloader.ts` (`isOffline` dep) | Every tick returns before the re-entrancy lock |
 | Shikimori background | `services/shikimori-sync` (`isOffline` dep), `ipc/shikimori.ipc.ts` | The drain (and so the 60 s timer) and the details prefetch return early; `refreshShikimoriRatesInBackground` too. Writes keep queueing |
-| First-launch binaries | `ensureFfmpeg` / `ensureFpcalc` (`isOffline` argument) | An install that would download is skipped (resolves `''`, no error modal) and retried by the online kick-off. A merge in that same session still sees ffmpeg as unavailable — `ffmpegReady` resolved at boot — as after any failed first install |
+| First-launch binaries | `ensureFfmpeg` / `ensureFpcalc` (`isOffline` argument) | An install that would download is skipped (resolves `''`, no error modal) and retried by the online kick-off. One that the offline switch interrupts mid-way — an `OfflineError`, e.g. between the ffmpeg and ffprobe archives, or a network error once offline — sends `status: 'deferred'` instead of `'failed'` and is retried the same way. Boot and the retry share one in-flight install per binary (`lib/binary-installs.ts`, `singleFlight`), so two never extract into the same directory. A merge in that same session still sees ffmpeg as unavailable — `ffmpegReady` resolved at boot — as after any failed first install |
 | Downloads | `download-manager.ts` | See its row above |
 
 The `test/net-adoption-guard.test.ts` AST guard pins it: no bare `fetch` outside `lib/net.ts`, `net.createConnection` only in `syncplay.ts`, `autoUpdater.` only in `ipc/app.ipc.ts`, and `bypassOffline` only in the probe.

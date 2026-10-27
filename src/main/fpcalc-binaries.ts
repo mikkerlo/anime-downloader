@@ -8,7 +8,8 @@ import { spawn } from 'child_process'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { extractZip } from './lib/unzip'
-import { fetchWithTimeout } from './lib/net'
+import { fetchWithTimeout, OfflineError } from './lib/net'
+import { isNetworkError } from './lib/errors'
 
 const FPCALC_VERSION = '1.5.1'
 const RELEASE_BASE = `https://github.com/acoustid/chromaprint/releases/download/v${FPCALC_VERSION}`
@@ -196,6 +197,11 @@ export async function ensureFpcalc(
     console.log(`[fpcalc] Installed at ${binary}`)
     return binary
   } catch (err) {
+    if (err instanceof OfflineError || (isOffline() && isNetworkError(err))) {
+      sendProgress('deferred')
+      console.log('[fpcalc] Offline: install deferred until the app is online')
+      return ''
+    }
     sendProgress('failed')
     console.error('[fpcalc] Failed to install:', err)
     throw err

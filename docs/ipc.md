@@ -89,7 +89,7 @@ Renderer composables that own broadcast subscriptions (e.g. `useShikimori`, `use
 | `ffmpeg:check` | invoke | Detect ffmpeg version + encoders |
 | `ffmpeg:delete` | invoke | Delete downloaded ffmpeg/ffprobe binaries |
 | `ffmpeg:download-progress` | send | FFmpeg/ffprobe download progress on first launch. Payload `{ status, progress?, message? }` — `message` is set only on `status: 'failed'` and carries the user-facing reason the install failed (#469): the `ffmpeg:`-prefixed extractor wrap, the `!res.ok` text, the unsupported-platform throw, or a dressed-up transport error. `useSettingsStore` parks it in `ffmpegError`, which keeps the first-launch overlay up with a Dismiss button instead of hiding it as though the install had worked |
-| `fpcalc:download-progress` | send | Chromaprint fpcalc download progress on first launch |
+| `fpcalc:download-progress` | send | Chromaprint fpcalc download progress on first launch. Both progress channels send `status: 'deferred'` when the app went offline mid-install (#567): the renderer drops the overlay without an error, and the online kick-off retries |
 | `skip-detector:analyze-show` | invoke | Run Chromaprint fingerprinting + pairwise comparison for the given anime's downloaded episodes; persists per-episode OP/ED boundaries |
 | `skip-detector:get-detections` | invoke | Returns cached `ShowSkipDetections` for an anime (or `null`) |
 | `skip-detector:detect-stream` | invoke | Fingerprint the currently-playing remote stream on demand and return OP/ED ranges only when they confidently match the show's locally-derived signatures |
